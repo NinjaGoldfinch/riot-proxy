@@ -1,0 +1,49 @@
+# §13 — alert on: any 401/403 from Riot, `application`-type 429s > 0,
+# hit ratio < 70 %.
+groups:
+  - name: riot-proxy
+    rules:
+      - alert: RiotKeyRejected
+        # A dev key expires every 24h; a production key being rejected means it
+        # was revoked or blacklisted. Either way, nothing works until it is fixed.
+        expr: increase(proxy_upstream_requests_total{status=~"401|403"}[10m]) > 0
+        for: 0m
+        labels: { severity: critical }
+        annotations:
+          summary: 'Riot API rejected our key ({{ $labels.method }})'
+          description: 'RIOT_API_KEY is expired, revoked or blacklisted. Rotate it and restart.'
+
+      - alert: AccountableRateLimit429
+        # §9.4: an application/method 429 means our Lua accounting is wrong.
+        # This is a bug, not weather.
+        expr: increase(proxy_rl_429_total{type=~"application|method"}[10m]) > 0
+        for: 0m
+        labels: { severity: warning }
+        annotations:
+          summary: 'Accountable 429 in {{ $labels.region }} ({{ $labels.type }})'
+          description: 'The limiter over-committed a bucket — inspect rl:* keys and the Lua script.'
+
+      - alert: CacheHitRatioLow
+        # NFR-4 targets > 85 %; 70 % is the point at which quota is at risk.
+        expr: proxy_cache_hit_ratio < 0.7
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: 'Cache hit ratio below 70 %'
+          description: 'Currently {{ $value | humanizePercentage }}. Check TTLs and traffic mix.'
+
+      - alert: UpstreamErrorRateHigh
+        expr: |
+          sum(rate(proxy_upstream_requests_total{status=~"5..|network"}[5m]))
+            / sum(rate(proxy_upstream_requests_total[5m])) > 0.1
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: 'More than 10 % of upstream calls are failing'
+
+      - alert: ProxyDown
+        expr: up{job="riot-proxy"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: 'riot-proxy is not being scraped'

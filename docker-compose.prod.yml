@@ -1,0 +1,125 @@
+# §3.3 / Phase 8 — the five-service single-VPS deployment.
+#
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# Everything reads from .env; only CADDY_DOMAIN and the Postgres password need
+# changing from the defaults before a real deploy.
+name: riot-proxy
+
+x-app: &app
+  build:
+    context: .
+    dockerfile: Dockerfile
+  restart: unless-stopped
+  env_file: .env
+  environment:
+    NODE_ENV: production
+    REDIS_URL: redis://redis:6379
+    DATABASE_URL: postgres://proxy:${POSTGRES_PASSWORD:-proxy}@postgres:5432/riotproxy
+    DDRAGON_DIR: /data/ddragon
+  volumes:
+    - ddragon:/data/ddragon
+  depends_on:
+    redis:
+      condition: service_healthy
+    postgres:
+      condition: service_healthy
+
+services:
+  api:
+    <<: *app
+    command: ['node', 'dist/index.js']
+    expose:
+      - '8080'
+
+  worker:
+    <<: *app
+    command: ['node', 'dist/worker.js']
+    # The worker has no HTTP surface, so the image healthcheck does not apply.
+    healthcheck:
+      disable: true
+
+  migrate:
+    <<: *app
+    command: ['node', 'dist/db/migrate.js']
+    restart: 'no'
+    healthcheck:
+      disable: true
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    # Persistence on (Phase 8.1): losing the limiter state on restart means a
+    # burst of requests against buckets Riot still considers full.
+    command:
+      ['redis-server', '--appendonly', 'yes', '--appendfsync', 'everysec', '--save', '300', '10']
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: proxy
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-proxy}
+      POSTGRES_DB: riotproxy
+    volumes:
+      - pg-data:/var/lib/postgresql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U proxy -d riotproxy']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # Nightly pg_dump into a mounted volume (Phase 8.1).
+  pg-backup:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-proxy}
+    volumes:
+      - pg-backups:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: ['/bin/sh', '-c']
+    command:
+      - |
+        while true; do
+          ts=$$(date +%Y%m%d-%H%M%S)
+          pg_dump -h postgres -U proxy -d riotproxy -Fc -f /backups/riotproxy-$$ts.dump \
+            && echo "backup ok $$ts" \
+            || echo "backup FAILED $$ts"
+          # Keep 14 days of dumps.
+          find /backups -name 'riotproxy-*.dump' -mtime +14 -delete
+          sleep 86400
+        done
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    environment:
+      CADDY_DOMAIN: ${CADDY_DOMAIN:-api.yourdomain.dev}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ddragon:/srv/ddragon:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - api
+
+volumes:
+  redis-data:
+  pg-data:
+  pg-backups:
+  ddragon:
+  caddy-data:
+  caddy-config:

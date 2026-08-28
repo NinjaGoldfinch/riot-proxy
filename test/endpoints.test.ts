@@ -1,0 +1,67 @@
+import './helpers/env.js';
+import { describe, expect, it } from 'vitest';
+import { buildPath } from '../src/riot/client.js';
+import { ENDPOINTS, METHOD_IDS, build, endpoint } from '../src/riot/endpoints.js';
+
+describe('endpoint specs (§5.3, §8.2)', () => {
+  it('declares a spec for every method id', () => {
+    expect(ENDPOINTS.map((e) => e.id).sort()).toEqual([...METHOD_IDS].sort());
+  });
+
+  it('uses the documented TTL table', () => {
+    expect(endpoint('account.byRiotId').ttlSeconds).toBe(86_400);
+    expect(endpoint('summoner.byPuuid').ttlSeconds).toBe(3600);
+    expect(endpoint('league.entriesByPuuid').ttlSeconds).toBe(300);
+    expect(endpoint('match.idsByPuuid').ttlSeconds).toBe(120);
+    expect(endpoint('spectator.activeGame').ttlSeconds).toBe(30);
+    expect(endpoint('platform.championRotations').ttlSeconds).toBe(21_600);
+    expect(endpoint('status.platformData').ttlSeconds).toBe(60);
+  });
+
+  it('treats matches and timelines as immutable', () => {
+    for (const id of ['match.byId', 'match.timeline'] as const) {
+      expect(endpoint(id).immutable).toBe(true);
+      expect(endpoint(id).ttlSeconds).toBe(Infinity);
+    }
+  });
+
+  it('routes account-v1 and match-v5 regionally, everything else per platform (§5.1)', () => {
+    const regional = ENDPOINTS.filter((e) => e.host === 'regional').map((e) => e.id);
+    expect(regional.sort()).toEqual(
+      [
+        'account.byPuuid',
+        'account.byRiotId',
+        'match.byId',
+        'match.idsByPuuid',
+        'match.timeline',
+      ].sort(),
+    );
+  });
+
+  it('builds regional URLs for account lookups', () => {
+    const req = build.accountByRiotId('europe', 'Faker', 'KR1');
+    expect(req.host).toBe('europe.api.riotgames.com');
+    expect(req.path).toBe('/riot/account/v1/accounts/by-riot-id/Faker/KR1');
+    expect(req.scope).toBe('europe');
+  });
+
+  it('encodes Riot IDs containing spaces and non-ASCII characters', () => {
+    const req = build.accountByRiotId('europe', 'Hide on bush', 'KR1');
+    expect(req.path).toBe('/riot/account/v1/accounts/by-riot-id/Hide%20on%20bush/KR1');
+  });
+
+  it('builds platform URLs for summoner lookups', () => {
+    const req = build.summonerByPuuid('euw1', 'PUUID');
+    expect(req.host).toBe('euw1.api.riotgames.com');
+    expect(req.path).toBe('/lol/summoner/v4/summoners/by-puuid/PUUID');
+  });
+
+  it('serialises query params and omits empty ones', () => {
+    const req = build.matchIdsByPuuid('europe', 'P', { start: 0, count: 20, queue: undefined });
+    expect(buildPath(req)).toBe('/lol/match/v5/matches/by-puuid/P/ids?start=0&count=20');
+  });
+
+  it('omits the query string entirely when there are no params', () => {
+    expect(buildPath(build.championRotations('euw1'))).toBe('/lol/platform/v3/champion-rotations');
+  });
+});

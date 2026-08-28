@@ -1,0 +1,32 @@
+# Phase 8.1 — TLS termination plus static Data Dragon assets.
+#
+# Data Dragon is served directly off disk rather than through the proxy (§1
+# non-goals, §5.6): those files are not rate limited and have no business
+# occupying an api worker.
+
+{$CADDY_DOMAIN} {
+	encode zstd gzip
+
+	# Mirrored Data Dragon files, written by the `ddragon:sync` job.
+	handle_path /ddragon/* {
+		root * /srv/ddragon
+		file_server browse
+		header Cache-Control "public, max-age=604800, immutable"
+	}
+
+	# Prometheus and the health probes stay on the local network only.
+	@internal {
+		path /metrics /readyz
+		not remote_ip private_ranges
+	}
+	respond @internal 403
+
+	handle {
+		reverse_proxy api:8080 {
+			# WebSocket upgrade passes through untouched.
+			header_up X-Real-IP {remote_host}
+			health_uri /healthz
+			health_interval 30s
+		}
+	}
+}
