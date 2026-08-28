@@ -3,3 +3,6 @@ node_modules
 data
 src/db/migrations
 package-lock.json
+
+# The spec is a source document, reproduced verbatim — do not reformat it.
+docs/
