@@ -1,5 +1,11 @@
 import { config } from '../config.js';
-import { platformHost, regionHost, type Platform, type Region } from './routing.js';
+import {
+  platformHost,
+  regionHost,
+  type AccountRegion,
+  type Platform,
+  type Region,
+} from './routing.js';
 
 /**
  * §5.3 + §8.2 as code. A "method id" is Riot's rate-limit method granularity —
@@ -164,7 +170,10 @@ function onPlatform(method: MethodId, platform: Platform, path: string, query = 
  * IDs legitimately contain spaces and non-ASCII characters.
  */
 export const build = {
-  accountByRiotId(region: Region, gameName: string, tagLine: string): BuiltRequest {
+  // `AccountRegion`, not `Region`: account-v1 is not served on `sea`, and the
+  // compiler is a better place to learn that than a 403 in production. Callers
+  // convert explicitly with `accountRegion` / `platformToAccountRegion`.
+  accountByRiotId(region: AccountRegion, gameName: string, tagLine: string): BuiltRequest {
     return regional(
       'account.byRiotId',
       region,
@@ -172,7 +181,7 @@ export const build = {
     );
   },
 
-  accountByPuuid(region: Region, puuid: string): BuiltRequest {
+  accountByPuuid(region: AccountRegion, puuid: string): BuiltRequest {
     return regional(
       'account.byPuuid',
       region,

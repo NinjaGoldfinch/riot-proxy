@@ -2,6 +2,7 @@ import './helpers/env.js';
 import { describe, expect, it } from 'vitest';
 import { buildPath } from '../src/riot/client.js';
 import { ENDPOINTS, METHOD_IDS, build, endpoint } from '../src/riot/endpoints.js';
+import { accountRegion } from '../src/riot/routing.js';
 
 describe('endpoint specs (§5.3, §8.2)', () => {
   it('declares a spec for every method id', () => {
@@ -43,6 +44,23 @@ describe('endpoint specs (§5.3, §8.2)', () => {
     expect(req.host).toBe('europe.api.riotgames.com');
     expect(req.path).toBe('/riot/account/v1/accounts/by-riot-id/Faker/KR1');
     expect(req.scope).toBe('europe');
+  });
+
+  it('only accepts account hosts, so a sea caller must convert first', () => {
+    // @ts-expect-error — 'sea' does not serve account-v1; this is the whole point.
+    build.accountByRiotId('sea', 'NinjaGoldfinch', 'OCENZ');
+
+    const byRiotId = build.accountByRiotId(accountRegion('sea'), 'NinjaGoldfinch', 'OCENZ');
+    expect(byRiotId.host).toBe('asia.api.riotgames.com');
+    expect(byRiotId.scope).toBe('asia');
+
+    const byPuuid = build.accountByPuuid(accountRegion('sea'), 'PUUID');
+    expect(byPuuid.host).toBe('asia.api.riotgames.com');
+    expect(byPuuid.scope).toBe('asia');
+  });
+
+  it('still routes sea match-v5 to the sea host', () => {
+    expect(build.matchById('sea', 'OC1_123').host).toBe('sea.api.riotgames.com');
   });
 
   it('encodes Riot IDs containing spaces and non-ASCII characters', () => {

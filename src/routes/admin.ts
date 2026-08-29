@@ -15,7 +15,7 @@ import { ProxyError } from '../errors.js';
 import { fetcher } from '../fetcher.js';
 import { logger } from '../logger.js';
 import { build } from '../riot/endpoints.js';
-import { assertPlatform, platformToRegion } from '../riot/routing.js';
+import { assertPlatform, platformToAccountRegion } from '../riot/routing.js';
 import { JOB, backfillQueue, ddragonQueue, type BackfillPlayerJob } from '../jobs/queues.js';
 import {
   GameNameParam,
@@ -135,7 +135,7 @@ const adminRoutes: FastifyPluginAsync = async (fastify) => {
         if (!body.gameName || !body.tagLine) {
           throw new ProxyError('VALIDATION', 'Provide either puuid, or gameName and tagLine');
         }
-        const region = platformToRegion(platform);
+        const region = platformToAccountRegion(platform);
         const { data } = await fetcher.fetch<{
           puuid: string;
           gameName?: string;

@@ -2,7 +2,7 @@ import { Type } from '@sinclair/typebox';
 import type { FastifyPluginAsync } from 'fastify';
 import { fetcher } from '../fetcher.js';
 import { build } from '../riot/endpoints.js';
-import { assertRegion } from '../riot/routing.js';
+import { accountRegion, assertRegion } from '../riot/routing.js';
 import { send } from './helpers.js';
 import {
   GameNameParam,
@@ -38,7 +38,9 @@ const riotRoutes: FastifyPluginAsync = async (fastify) => {
         tagLine: string;
       };
       const result = await fetcher.fetch(
-        build.accountByRiotId(assertRegion(region), gameName, tagLine),
+        // `sea` is what our own platform↔region table hands a SEA consumer,
+        // so accept it and send it to a host that serves account-v1.
+        build.accountByRiotId(accountRegion(assertRegion(region)), gameName, tagLine),
       );
       return send(reply, result);
     },
@@ -55,7 +57,9 @@ const riotRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const { region, puuid } = request.params as { region: string; puuid: string };
-      const result = await fetcher.fetch(build.accountByPuuid(assertRegion(region), puuid));
+      const result = await fetcher.fetch(
+        build.accountByPuuid(accountRegion(assertRegion(region)), puuid),
+      );
       return send(reply, result);
     },
   );
