@@ -7,6 +7,7 @@ import {
   QUEUE_NAMES,
   closeQueues,
   ddragonQueue,
+  jobKey,
   maintenanceQueue,
   pollQueue,
 } from './jobs/queues.js';
@@ -50,6 +51,10 @@ function startWorker(queueName: string): Worker {
 /**
  * §10 — repeatable schedulers. Each tick fans out to one job per tracked
  * player, so adding or removing a tracked player needs no scheduler changes.
+ *
+ * BullMQ 6 dropped the `repeat` job option; a schedule is now its own entity,
+ * upserted by id. The id doubles as the de-duplication key, so a restart
+ * re-points the existing schedule rather than stacking a second one.
  */
 async function scheduleRepeatables(): Promise<void> {
   const repeatables: {
@@ -66,12 +71,14 @@ async function scheduleRepeatables(): Promise<void> {
   ];
 
   for (const { queue, name, everySeconds, data } of repeatables) {
-    await queue.add(name, data ?? {}, {
-      repeat: { every: everySeconds * 1000 },
-      // A stable jobId keeps restarts from stacking duplicate schedules.
-      jobId: `repeat:${name}`,
-      removeOnComplete: { age: 3600, count: 100 },
-    });
+    // Each job the scheduler emits is named `repeat:<schedulerId>:<millis>`, so
+    // a colon in the id would push that past the three parts BullMQ allows.
+    // `jobKey` strips the colons our job names carry.
+    await queue.upsertJobScheduler(
+      jobKey(name),
+      { every: everySeconds * 1000 },
+      { name, data: data ?? {}, opts: { removeOnComplete: { age: 3600, count: 100 } } },
+    );
     logger.info({ job: name, everySeconds }, 'repeatable scheduled');
   }
 }

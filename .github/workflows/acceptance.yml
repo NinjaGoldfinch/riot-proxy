@@ -1,0 +1,131 @@
+name: Acceptance
+
+# The only workflow that talks to the real Riot API, so it never runs on a PR:
+# it needs a live key, spends real quota, and takes minutes. Dispatch it by
+# hand, or let the nightly run cover it — note that a *development* key expires
+# every 24 h, so a scheduled run needs a personal or production key in secrets.
+on:
+  workflow_dispatch:
+    inputs:
+      riot_id:
+        description: 'Riot ID to test against, as Name#TAG'
+        required: false
+        type: string
+      platform:
+        description: 'Platform routing value (oc1, euw1, na1, …)'
+        required: false
+        type: string
+      phase2_requests:
+        description: 'Phase 2 burst size (the spec asks for 500)'
+        required: false
+        default: '60'
+        type: string
+      live_game:
+        description: 'Phase 6 live check — waits up to 30 min for you to start a game'
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    # 04:00 UTC, well clear of peak so the burst competes with nothing.
+    - cron: '0 4 * * *'
+
+# Every run shares one Riot key and one set of rate-limit buckets. Overlapping
+# runs would make each other's 429 assertions meaningless.
+concurrency:
+  group: acceptance
+  cancel-in-progress: false
+
+jobs:
+  acceptance:
+    name: Live acceptance checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    services:
+      redis:
+        image: redis:8-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: proxy
+          POSTGRES_PASSWORD: proxy
+          POSTGRES_DB: riotproxy
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U proxy -d riotproxy"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      RIOT_API_KEY: ${{ secrets.RIOT_API_KEY }}
+      RIOT_USER_AGENT: riot-proxy/1.0 (+https://github.com/${{ github.repository }})
+      REDIS_URL: redis://localhost:6379
+      DATABASE_URL: postgres://proxy:proxy@localhost:5432/riotproxy
+      # AUTH_DISABLED refuses to boot under NODE_ENV=production, by design.
+      NODE_ENV: development
+      AUTH_DISABLED: 'true'
+      LOG_LEVEL: warn
+      # Phase 2 measures how long the limiter makes callers wait. The default
+      # 2 s budget sheds them instead, which measures nothing.
+      CLIENT_WAIT_BUDGET_MS: '300000'
+      # Phase 6 waits one poll interval for the fan-out; 15 s keeps the job short.
+      TRACK_POLL_LIVE_S: '15'
+      ACCEPTANCE_RIOT_ID: ${{ inputs.riot_id || vars.ACCEPTANCE_RIOT_ID }}
+      ACCEPTANCE_PLATFORM: ${{ inputs.platform || vars.ACCEPTANCE_PLATFORM || 'oc1' }}
+      ACCEPTANCE_PHASE2_REQUESTS: ${{ inputs.phase2_requests || '60' }}
+      ACCEPTANCE_LIVE_GAME: ${{ inputs.live_game && '1' || '0' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+
+      - run: npm ci
+
+      # Secrets are not readable from a workflow-level `if:`, so the guard has
+      # to be a step. A fork or an unconfigured repo should no-op, not fail.
+      - name: Check for a Riot key
+        id: guard
+        run: |
+          if [ -z "${RIOT_API_KEY}" ]; then
+            echo "have_key=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Acceptance skipped::No RIOT_API_KEY secret is configured."
+          elif [ -z "${ACCEPTANCE_RIOT_ID}" ]; then
+            echo "have_key=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Acceptance skipped::Set the ACCEPTANCE_RIOT_ID repository variable (Name#TAG)."
+          else
+            echo "have_key=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Migrate
+        if: steps.guard.outputs.have_key == 'true'
+        run: npm run migrate
+
+      # A key that expired overnight is the most likely failure, and it should
+      # read as "rotate the key", not as a broken proxy.
+      - name: Verify the key is live
+        if: steps.guard.outputs.have_key == 'true'
+        run: |
+          status=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "X-Riot-Token: ${RIOT_API_KEY}" \
+            "https://americas.api.riotgames.com/riot/account/v1/accounts/by-riot-id/Faker/KR1")
+          if [ "$status" = "401" ] || [ "$status" = "403" ]; then
+            echo "::error title=Riot key rejected::Riot returned $status. Development keys expire every 24 h — rotate the RIOT_API_KEY secret."
+            exit 1
+          fi
+          echo "Riot key accepted (probe returned $status)."
+
+      - name: Acceptance checks
+        if: steps.guard.outputs.have_key == 'true'
+        run: npm run test:acceptance

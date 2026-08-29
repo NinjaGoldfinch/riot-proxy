@@ -84,6 +84,31 @@ export function platformToRegion(platform: Platform): Region {
   return PLATFORM_TO_REGION[platform];
 }
 
+/**
+ * account-v1 is *not* served on every regional host: Riot only routes it to
+ * americas/asia/europe. `sea` is a match-v5 host and 404s for account paths,
+ * so SEA platforms have to borrow their nearest account host. The data is the
+ * same whichever one you ask — account-v1 is a global service.
+ */
+export const ACCOUNT_REGIONS = ['americas', 'asia', 'europe'] as const;
+export type AccountRegion = (typeof ACCOUNT_REGIONS)[number];
+
+const REGION_TO_ACCOUNT_REGION: Record<Region, AccountRegion> = {
+  americas: 'americas',
+  asia: 'asia',
+  europe: 'europe',
+  sea: 'asia',
+};
+
+export function accountRegion(region: Region): AccountRegion {
+  return REGION_TO_ACCOUNT_REGION[region];
+}
+
+/** The account host for a platform, skipping the invalid `sea` hop. */
+export function platformToAccountRegion(platform: Platform): AccountRegion {
+  return accountRegion(PLATFORM_TO_REGION[platform]);
+}
+
 /** All platforms routed through a given regional host. */
 export function regionToPlatforms(region: Region): Platform[] {
   return PLATFORMS.filter((p) => PLATFORM_TO_REGION[p] === region);

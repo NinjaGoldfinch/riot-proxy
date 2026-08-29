@@ -15,6 +15,7 @@ import { syncDdragon } from '../static/ddragon.js';
 import {
   JOB,
   archiveQueue,
+  jobKey,
   pollQueue,
   type ArchiveMatchJob,
   type BackfillPlayerJob,
@@ -53,7 +54,7 @@ async function fanOut(jobName: string): Promise<number> {
       opts: {
         // De-duplicate: if the previous tick's job for this player is still
         // queued, do not stack another one on top of it.
-        jobId: `${jobName}:${p.puuid}:${Math.floor(Date.now() / 1000)}`,
+        jobId: jobKey(jobName, p.puuid, Math.floor(Date.now() / 1000)),
         removeOnComplete: { age: 600, count: 200 },
       },
     })),
@@ -181,7 +182,7 @@ export async function pollMatches(job: Job<PollPlayerJob>): Promise<void> {
       name: JOB.archiveMatch,
       data: { matchId, puuid, fetchTimeline: config.ARCHIVE_TIMELINES } satisfies ArchiveMatchJob,
       // Idempotency: the same match never queues twice.
-      opts: { jobId: `archive:${matchId}` },
+      opts: { jobId: jobKey('archive', matchId) },
     })),
   );
 
@@ -244,7 +245,7 @@ export async function backfillPlayer(job: Job<BackfillPlayerJob>): Promise<{ que
             puuid,
             fetchTimeline: fetchTimeline ?? config.ARCHIVE_TIMELINES,
           } satisfies ArchiveMatchJob,
-          opts: { jobId: `archive:${matchId}`, priority: 10 },
+          opts: { jobId: jobKey('archive', matchId), priority: 10 },
         })),
       );
       queued += unarchived.length;

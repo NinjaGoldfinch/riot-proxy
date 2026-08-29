@@ -4,6 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { Pool } from 'undici';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RiotError } from '../src/errors.js';
+import { registry } from '../src/metrics.js';
 import { RiotClient } from '../src/riot/client.js';
 import { build } from '../src/riot/endpoints.js';
 import type { RateLimiter } from '../src/riot/limiter.js';
@@ -165,6 +166,30 @@ describe('riot client (§5.2, §5.5)', () => {
 
     await expect(client.request(REQ)).resolves.toMatchObject({ data: { ok: true } });
     expect(limiter.freeze).toHaveBeenCalledWith('euw1', 2, 'application');
+    await client.close();
+  });
+
+  it('counts each 429 exactly once (§13)', async () => {
+    // The counter was incremented both here and inside `limiter.freeze`, so
+    // accountable 429s — the only types that freeze — read double.
+    const read = async (type: string) => {
+      const metric = registry.getSingleMetric('proxy_rl_429_total');
+      const collected = await metric?.get();
+      return (
+        collected?.values.find((v) => v.labels['region'] === 'euw1' && v.labels['type'] === type)
+          ?.value ?? 0
+      );
+    };
+
+    const before = await read('application');
+    queue.push(
+      { status: 429, headers: { 'x-rate-limit-type': 'application', 'retry-after': '1' } },
+      { status: 200, body: { ok: true } },
+    );
+    const { client } = makeClient();
+    await expect(client.request(REQ)).resolves.toMatchObject({ data: { ok: true } });
+
+    expect((await read('application')) - before).toBe(1);
     await client.close();
   });
 

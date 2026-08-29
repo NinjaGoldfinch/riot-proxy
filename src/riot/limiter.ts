@@ -1,7 +1,7 @@
 import type { Redis } from 'ioredis';
 import { config, KEY_SCOPE } from '../config.js';
 import { logger } from '../logger.js';
-import { rl429Total, rlWaitSeconds } from '../metrics.js';
+import { rlWaitSeconds } from '../metrics.js';
 import { redis as defaultRedis } from '../redis.js';
 import { ACQUIRE_SCRIPT, SYNC_SCRIPT } from './limiter-scripts.js';
 
@@ -297,7 +297,9 @@ export class RateLimiter {
   async freeze(scope: string, seconds: number, type = 'unknown'): Promise<void> {
     const ms = Math.max(1, Math.ceil(seconds * 1000));
     await this.redis.set(frozenKey(scope), type, 'PX', ms);
-    rl429Total.inc({ region: scope, type });
+    // `proxy_rl_429_total` is owned by the client, which observes every 429.
+    // Counting here as well double-counted exactly the accountable types
+    // (§9.4 freezes only those), inflating the series §13 alerts on.
     logger.warn({ scope, seconds, type }, 'rate limit scope frozen');
   }
 

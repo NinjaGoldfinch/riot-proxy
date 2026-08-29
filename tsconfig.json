@@ -20,5 +20,11 @@
     "declaration": false,
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "*.config.ts", "drizzle.config.ts"]
+  "include": [
+    "src/**/*.ts",
+    "test/**/*.ts",
+    "acceptance/**/*.ts",
+    "*.config.ts",
+    "drizzle.config.ts"
+  ]
 }

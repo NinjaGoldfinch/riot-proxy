@@ -1,4 +1,4 @@
-import { eq, sql as raw } from 'drizzle-orm';
+import { eq, inArray, sql as raw } from 'drizzle-orm';
 import { archivedMatchesTotal } from '../metrics.js';
 import { db } from './index.js';
 import { matchParticipants, matches } from './schema.js';
@@ -129,10 +129,14 @@ export async function countArchivedMatches(): Promise<number> {
 /** Which of these match IDs are already archived — used to skip backfill work. */
 export async function filterUnarchived(matchIds: string[]): Promise<string[]> {
   if (matchIds.length === 0) return [];
+  // `sql\`… = ANY(${array})\`` expands a JS array to a parenthesised
+  // placeholder list — `= ANY(($1, $2, …))` — which Postgres reads as a row
+  // constructor and rejects. `inArray` emits a plain `in (…)` instead.
+  // Callers batch at 100 ids, well inside the bind-parameter limit.
   const rows = await db
     .select({ matchId: matches.matchId })
     .from(matches)
-    .where(raw`${matches.matchId} = ANY(${matchIds})`);
+    .where(inArray(matches.matchId, matchIds));
   const known = new Set(rows.map((r) => r.matchId));
   return matchIds.filter((id) => !known.has(id));
 }

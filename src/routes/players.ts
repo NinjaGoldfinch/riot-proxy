@@ -5,7 +5,7 @@ import { ProxyError } from '../errors.js';
 import { fetcher, type FetchResult } from '../fetcher.js';
 import { logger } from '../logger.js';
 import { build } from '../riot/endpoints.js';
-import { assertPlatform, platformToRegion } from '../riot/routing.js';
+import { assertPlatform, platformToAccountRegion, platformToRegion } from '../riot/routing.js';
 import { applyCacheHeaders } from './helpers.js';
 import { PassthroughResponse, PlatformParam, PuuidParam, errorResponses } from './schemas.js';
 
@@ -38,13 +38,15 @@ const playerRoutes: FastifyPluginAsync = async (fastify) => {
       };
 
       const platform = assertPlatform(platformRaw ?? config.DEFAULT_PLATFORM);
+      // `region` is echoed to the caller as the match-v5 host for their
+      // platform; account-v1 needs its own, which for SEA is not the same.
       const region = platformToRegion(platform);
 
       const warnings: string[] = [];
 
       // Fan out concurrently; per-part caching still applies (§6.3).
       const [account, summoner, league, mastery] = await Promise.allSettled([
-        fetcher.fetch(build.accountByPuuid(region, puuid)),
+        fetcher.fetch(build.accountByPuuid(platformToAccountRegion(platform), puuid)),
         fetcher.fetch(build.summonerByPuuid(platform, puuid)),
         fetcher.fetch(build.leagueEntriesByPuuid(platform, puuid)),
         fetcher.fetch(build.masteryTopByPuuid(platform, puuid, topMastery)),
