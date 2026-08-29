@@ -46,6 +46,17 @@ export const JOB = {
   maintenance: 'maintenance',
 } as const;
 
+/**
+ * BullMQ rejects a custom job id containing ':' unless it splits into exactly
+ * three parts — the shape it reserves for its own repeatable-job keys. Our job
+ * names are already colon-namespaced ('poll:live'), so composing ids by hand
+ * lands on the wrong side of that rule. Join with '-' and strip any colons the
+ * parts bring with them.
+ */
+export function jobKey(...parts: (string | number)[]): string {
+  return parts.map((part) => String(part).replaceAll(':', '-')).join('-');
+}
+
 export interface ArchiveMatchJob {
   matchId: string;
   puuid?: string;

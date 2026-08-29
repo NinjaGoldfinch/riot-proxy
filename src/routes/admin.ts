@@ -16,7 +16,13 @@ import { fetcher } from '../fetcher.js';
 import { logger } from '../logger.js';
 import { build } from '../riot/endpoints.js';
 import { assertPlatform, platformToAccountRegion } from '../riot/routing.js';
-import { JOB, backfillQueue, ddragonQueue, type BackfillPlayerJob } from '../jobs/queues.js';
+import {
+  JOB,
+  backfillQueue,
+  ddragonQueue,
+  jobKey,
+  type BackfillPlayerJob,
+} from '../jobs/queues.js';
 import {
   GameNameParam,
   PassthroughResponse,
@@ -219,7 +225,7 @@ const adminRoutes: FastifyPluginAsync = async (fastify) => {
       const body = request.body as BackfillPlayerJob;
       assertPlatform(body.platform);
       const job = await backfillQueue.add(JOB.backfillPlayer, body, {
-        jobId: `backfill:${body.puuid}`,
+        jobId: jobKey('backfill', body.puuid),
       });
       return { ok: true, jobId: job.id };
     },
