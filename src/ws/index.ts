@@ -3,7 +3,8 @@ import type { FastifyPluginAsync } from 'fastify';
 // and the (socket, request) handler signature.
 import type { WebSocket } from '@fastify/websocket';
 import '@fastify/websocket';
-import { resolveConsumer, bearerFrom } from '../auth/plugin.js';
+import { resolveConsumer, bearerFrom, DEV_CONSUMER } from '../auth/plugin.js';
+import { config } from '../config.js';
 import { CHANNEL_PATTERN, parseEvent, topicFromChannel } from '../events/index.js';
 import { logger } from '../logger.js';
 import { wsConnections } from '../metrics.js';
@@ -178,7 +179,11 @@ const wsRoutes: FastifyPluginAsync = async (fastify) => {
       socket.on('message', (raw: Buffer) => handle(raw.toString()));
 
       const token = bearerFrom(request);
-      const consumer = token ? await resolveConsumer(token) : undefined;
+      const consumer = config.authDisabled
+        ? DEV_CONSUMER
+        : token
+          ? await resolveConsumer(token)
+          : undefined;
 
       if (!consumer) {
         socket.send(

@@ -27,6 +27,19 @@ declare module 'fastify' {
   }
 }
 
+/**
+ * Stand-in consumer used when AUTH_DISABLED=true (development only). It is
+ * never persisted, so it cannot outlive the process or leak into Postgres.
+ * The quota is deliberately generous — the point of the flag is to get out of
+ * the way while testing.
+ */
+export const DEV_CONSUMER: AuthenticatedConsumer = Object.freeze({
+  id: 'dev-local',
+  name: 'dev-local',
+  scopes: ['read', 'admin'],
+  quotaPerMin: 100_000,
+});
+
 /** §7.2 — `auth:{key_hash}` caches the consumer row for 300 s. */
 const AUTH_CACHE_TTL = 300;
 const NEGATIVE_AUTH_TTL = 30;
@@ -123,8 +136,20 @@ function cidrMatch(addr: string, cidr: string): boolean {
 }
 
 const authPlugin: FastifyPluginAsync = async (fastify) => {
+  if (config.authDisabled) {
+    logger.warn(
+      'AUTH_DISABLED=true — every request runs as the synthetic dev-local consumer (read+admin)',
+    );
+  }
+
   fastify.addHook('onRequest', async (request: FastifyRequest) => {
     if (request.routeOptions.config?.public) return;
+
+    // Local testing: no key, no scope check, no admin IP allowlist.
+    if (config.authDisabled) {
+      request.consumer = DEV_CONSUMER;
+      return;
+    }
 
     const token = bearerFrom(request);
     if (!token) throw ProxyError.unauthorized();

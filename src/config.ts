@@ -45,6 +45,12 @@ const EnvSchema = Type.Object({
 
   ADMIN_IP_ALLOWLIST: Type.String({ default: '' }),
   BOOTSTRAP_ADMIN_KEY: Type.String({ default: '' }),
+  /**
+   * Local testing escape hatch: skip consumer key checks entirely and treat
+   * every request as a synthetic `dev-local` consumer with read+admin scope.
+   * Refused outright when NODE_ENV=production (see `parseEnv`).
+   */
+  AUTH_DISABLED: Type.Boolean({ default: false }),
 });
 
 export type Env = Static<typeof EnvSchema>;
@@ -66,6 +72,15 @@ function parseEnv(source: NodeJS.ProcessEnv): Env {
       .join('\n');
     throw new Error(`Invalid environment configuration:\n${errors}`);
   }
+
+  // A misplaced AUTH_DISABLED in production would silently expose the whole
+  // admin surface, so fail loudly at boot instead of degrading quietly.
+  if (converted.AUTH_DISABLED && converted.NODE_ENV === 'production') {
+    throw new Error(
+      'Invalid environment configuration:\n  AUTH_DISABLED cannot be enabled when NODE_ENV=production',
+    );
+  }
+
   return converted;
 }
 
@@ -104,6 +119,7 @@ export const config = {
   KEY_SCOPE,
   ttlOverrides,
   adminIpAllowlist,
+  authDisabled: env.AUTH_DISABLED,
   isProduction: env.NODE_ENV === 'production',
   isTest: env.NODE_ENV === 'test',
 } as const;
