@@ -260,10 +260,16 @@ export async function forgetJob(redis: Redis, queue: string, jobId: string): Pro
   await redis.zrem(`bull:${queue}:completed`, jobId);
 }
 
+/**
+ * `prioritized` is easy to forget and expensive to miss: BullMQ parks any job
+ * enqueued with a `priority` there rather than in `wait`, so a probe that polls
+ * only wait/active/delayed reads an empty queue while the work is still
+ * pending. It is a zset, like delayed, so the read below already covers it.
+ */
 export async function jobIdsInState(
   redis: Redis,
   queue: string,
-  state: 'wait' | 'active' | 'failed' | 'completed' | 'delayed',
+  state: 'wait' | 'active' | 'failed' | 'completed' | 'delayed' | 'prioritized',
 ): Promise<string[]> {
   const key = `bull:${queue}:${state}`;
   const type = await redis.type(key);

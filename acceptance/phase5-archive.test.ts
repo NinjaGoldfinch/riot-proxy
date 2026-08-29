@@ -31,14 +31,38 @@ interface Stats {
 let puuid = '';
 let redis: Redis;
 let matchIds: string[] = [];
+let backfillJobId = '';
+let backfillSettled = false;
 
 async function archivedCount(): Promise<number> {
   return (await get<Stats>('/v1/admin/stats')).body.archivedMatches;
 }
 
+/**
+ * Two ways this probe can read idle while the backfill is very much alive, both
+ * of which end the sampler early and let the run reach the inconclusive green
+ * path without ever pacing anything:
+ *
+ *  - the archive jobs a backfill enqueues carry `priority: 10`, and BullMQ
+ *    parks prioritized work outside `wait`;
+ *  - the backfill only creates that work part-way through its own run, so every
+ *    queue is legitimately empty until it does.
+ *
+ * So: count `prioritized`, and refuse to call anything idle until the backfill
+ * we submitted has settled. `failed` counts as settled — the assertion after
+ * the drain reports a broken backfill far better than a ten-minute timeout.
+ */
 async function queuesIdle(): Promise<boolean> {
+  if (!backfillSettled) {
+    const settled = [
+      ...(await jobIdsInState(redis, 'backfill', 'completed')),
+      ...(await jobIdsInState(redis, 'backfill', 'failed')),
+    ];
+    if (!settled.includes(backfillJobId)) return false;
+    backfillSettled = true;
+  }
   for (const queue of ['backfill', 'archive'] as const) {
-    for (const state of ['wait', 'active', 'delayed'] as const) {
+    for (const state of ['wait', 'active', 'delayed', 'prioritized'] as const) {
       if ((await jobIdsInState(redis, queue, state)).length > 0) return false;
     }
   }
@@ -81,6 +105,8 @@ describe.skipIf(!enabled)('Phase 5 — archive and backfill', () => {
     });
     expect(enqueued.status, JSON.stringify(enqueued.body)).toBe(200);
     expect(enqueued.body.ok).toBe(true);
+    backfillJobId = enqueued.body.jobId;
+    backfillSettled = false;
 
     // Sample interactive latency while the bulk work is actually in flight.
     const during: number[] = [];
