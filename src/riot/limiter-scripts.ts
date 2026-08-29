@@ -101,7 +101,12 @@ for i = 0, bucket_count - 1 do
 
   local ours = tonumber(redis.call('GET', key) or '0')
   if count > ours then
-    redis.call('SET', key, count)
+    -- KEEPTTL matters: a plain SET drops the key's expiry, and the PTTL check
+    -- below would then re-arm a *full* window from now. That slides our window
+    -- boundary forward on every sync until traffic pauses, at which point the
+    -- bucket resets while Riot's own window is still half-full — which is an
+    -- accountable 429 waiting to happen (§9.4).
+    redis.call('SET', key, count, 'KEEPTTL')
     local pttl = redis.call('PTTL', key)
     if pttl < 0 then
       redis.call('EXPIRE', key, window)

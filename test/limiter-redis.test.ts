@@ -2,6 +2,7 @@ import './helpers/env.js';
 import { Redis } from 'ioredis';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { KEY_SCOPE } from '../src/config.js';
+import { registry } from '../src/metrics.js';
 import { RateLimitBudgetExceeded, RateLimiter } from '../src/riot/limiter.js';
 
 /**
@@ -117,14 +118,46 @@ describe.runIf(process.env['SKIP_REDIS_TESTS'] !== '1')('rate limiter against Re
     await expect(limiter.acquire(SCOPE, 'other', { waitBudgetMs: 0 })).resolves.toBeDefined();
   });
 
+  it('syncs Riot counts without moving the window boundary (§9.1)', async ({ skip }) => {
+    if (!available) return skip();
+    const limiter = new RateLimiter(redis);
+    await redis.set(`rl:cfg:app:${KEY_SCOPE}:${SCOPE}`, '100:120');
+    limiter.clearLocalConfig();
+
+    // One acquisition opens the window and arms its expiry.
+    await limiter.acquire(SCOPE, 'm', { waitBudgetMs: 0 });
+    const key = `rl:app:${KEY_SCOPE}:${SCOPE}:100:120`;
+    await redis.pexpire(key, 30_000); // pretend the window is most of the way through
+
+    await limiter.observeHeaders(SCOPE, 'm', {
+      'x-app-rate-limit': '100:120',
+      'x-app-rate-limit-count': '47:120',
+    });
+
+    expect(Number(await redis.get(key))).toBe(47);
+    // A plain SET would have cleared the expiry and re-armed the full 120 s,
+    // decoupling our window from Riot's.
+    const pttl = await redis.pttl(key);
+    expect(pttl).toBeGreaterThan(0);
+    expect(pttl).toBeLessThanOrEqual(30_000);
+  });
+
   it('freezes the whole scope after a 429 with Retry-After (§9.4)', async ({ skip }) => {
     if (!available) return skip();
     const limiter = new RateLimiter(redis);
     await redis.set(`rl:cfg:app:${KEY_SCOPE}:${SCOPE}`, '100:10');
     limiter.clearLocalConfig();
 
+    const metric = registry.getSingleMetric('proxy_rl_429_total');
+    const count429 = async () =>
+      (await metric?.get())?.values.reduce((sum, v) => sum + v.value, 0) ?? 0;
+    const before = await count429();
+
     await limiter.freeze(SCOPE, 2, 'application');
     expect(await limiter.isFrozen(SCOPE)).toBeGreaterThan(0);
+    // Freezing is a policy action, not an observation — the client owns the
+    // counter, and counting here too would double every accountable 429.
+    expect(await count429()).toBe(before);
     await expect(limiter.acquire(SCOPE, 'm', { waitBudgetMs: 0 })).rejects.toBeInstanceOf(
       RateLimitBudgetExceeded,
     );
