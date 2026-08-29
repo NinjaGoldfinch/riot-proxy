@@ -50,20 +50,29 @@ async function isUp(baseUrl: string): Promise<boolean> {
  * upstream calls, it only sweeps leaked single-flight locks) and see whether
  * anything picks it up.
  */
+/** States a job sits in while nothing has picked it up yet. */
+const PENDING = new Set(['waiting', 'waiting-children', 'prioritized', 'delayed']);
+
 async function workerAlive(redis: Redis, timeoutMs: number): Promise<boolean> {
   const queue = new Queue(CANARY_QUEUE, { connection: redis });
-  const job = await queue.add(CANARY_JOB, {}, { jobId: `probe-${Date.now()}`, attempts: 1 });
+  const job = await queue.add(
+    CANARY_JOB,
+    {},
+    { jobId: `probe-${Date.now()}`, attempts: 1, removeOnComplete: true, removeOnFail: true },
+  );
   try {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
-      // Claimed at all is the signal we want; a pass that errored still proves
-      // a consumer exists, which is the only question being asked here.
-      const state = await job.getState();
-      if (state === 'active' || state === 'completed' || state === 'failed') return true;
+      // Anything but a pending state means something claimed it, which is the
+      // only question being asked — a pass that errored still proves a
+      // consumer. That includes 'unknown': the job removes itself on finishing,
+      // and having just created it, it cannot have gone missing any other way.
+      if (!PENDING.has(await job.getState())) return true;
       if (Date.now() >= deadline) return false;
       await new Promise((r) => setTimeout(r, 250));
     }
   } finally {
+    // Only bites when nothing ran it; a consumed job has already cleaned up.
     await job.remove().catch(() => {});
     await queue.close();
   }
@@ -90,9 +99,26 @@ export async function setup(): Promise<void> {
     return;
   }
   const { baseUrl, redisUrl } = acceptance;
-  const redis = new Redis(redisUrl, { maxRetriesPerRequest: null });
+
+  // Setup-scoped, and deliberately fail-fast. ioredis defaults to retrying a
+  // connection forever with commands parked in an offline queue, which would
+  // turn an unreachable Redis into a hang inside the probe below rather than a
+  // message. Nothing here can run without Redis anyway.
+  const redis = new Redis(redisUrl, {
+    lazyConnect: true,
+    enableOfflineQueue: false,
+    maxRetriesPerRequest: 1,
+    retryStrategy: () => null,
+  });
+  redis.on('error', () => {}); // surfaced by the connect() rejection instead
 
   try {
+    try {
+      await redis.connect();
+    } catch {
+      throw new Error(`cannot reach Redis at ${redisUrl} — the acceptance suite needs it`);
+    }
+
     const apiUp = await isUp(baseUrl);
     const workerUp = await workerAlive(redis, PROBE_MS);
 
@@ -118,7 +144,7 @@ export async function setup(): Promise<void> {
       throw new Error('no worker is draining the queues — phases 5 and 6 cannot run');
     }
   } finally {
-    await redis.quit();
+    redis.disconnect();
   }
 }
 
