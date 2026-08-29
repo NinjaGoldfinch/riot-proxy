@@ -39,6 +39,22 @@ describe('config (§14, §7.4)', () => {
     expect(parseEnv({ RIOT_API_KEY: 'RGAPI-abc-def-ghi', PORT: '' }).PORT).toBe(8080);
   });
 
+  it('defaults AUTH_DISABLED off and coerces it when set', () => {
+    const key = 'RGAPI-abc-def-ghi';
+    expect(parseEnv({ RIOT_API_KEY: key }).AUTH_DISABLED).toBe(false);
+    expect(parseEnv({ RIOT_API_KEY: key, AUTH_DISABLED: 'true' }).AUTH_DISABLED).toBe(true);
+  });
+
+  it('refuses to boot with AUTH_DISABLED in production', () => {
+    expect(() =>
+      parseEnv({
+        RIOT_API_KEY: 'RGAPI-abc-def-ghi',
+        AUTH_DISABLED: 'true',
+        NODE_ENV: 'production',
+      }),
+    ).toThrowError(/AUTH_DISABLED/);
+  });
+
   it('rejects out-of-range values', () => {
     expect(() =>
       parseEnv({ RIOT_API_KEY: 'RGAPI-abc-def-ghi', BULK_USAGE_CEILING: '2' }),

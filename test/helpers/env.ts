@@ -11,6 +11,9 @@ import { config as loadDotenv } from 'dotenv';
 loadDotenv({ quiet: true });
 
 process.env['NODE_ENV'] = 'test';
+// The suite asserts the auth rejections themselves, so a developer's local
+// AUTH_DISABLED=true must never bleed in and silently neuter those tests.
+process.env['AUTH_DISABLED'] = 'false';
 process.env['RIOT_API_KEY'] ??= 'RGAPI-test-key-0000-0000-000000000000';
 process.env['LOG_LEVEL'] = 'silent';
 process.env['REDIS_URL'] ??= 'redis://localhost:6379';

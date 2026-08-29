@@ -47,6 +47,21 @@ curl -H "Authorization: Bearer rpx_..." \
   http://localhost:8080/v1/riot/accounts/by-riot-id/europe/Faker/KR1
 ```
 
+### Testing without a key
+
+To poke at the API locally without minting a key first, set `AUTH_DISABLED=true`
+in `.env` and restart. Every request then runs as a synthetic `dev-local`
+consumer with `read` + `admin` scope, a 100k/min quota and no admin IP
+allowlist — including the `/v1/ws` handshake.
+
+```bash
+curl http://localhost:8080/v1/riot/accounts/by-riot-id/europe/Faker/KR1
+```
+
+This is a development convenience and the service **refuses to start** with it
+set while `NODE_ENV=production`. The test suite pins it off, so the auth tests
+keep asserting real rejections.
+
 ---
 
 ## Consumer guide
@@ -60,6 +75,8 @@ Authorization: Bearer rpx_<32 chars>
 
 Every request needs a key except `/healthz` and `/metrics`. Keys carry scopes
 (`read`, `admin`) and a per-minute quota, both set when the key is created.
+For local testing the key check can be turned off entirely — see
+[Testing without a key](#testing-without-a-key).
 
 ### Response headers
 
@@ -297,6 +314,7 @@ jobs are idempotent and run at bulk priority.
 | `ARCHIVE_TIMELINES`                          | `false`                                           | Timelines are large; opt in                             |
 | `ADMIN_IP_ALLOWLIST`                         | —                                                 | CSV of IPs/CIDRs; empty means key scope is enough       |
 | `BOOTSTRAP_ADMIN_KEY`                        | —                                                 | Seeds one admin key on `npm run migrate`                |
+| `AUTH_DISABLED`                              | `false`                                           | Dev only: skip key checks; refused in production        |
 | `LOG_LEVEL`                                  | `info`                                            |                                                         |
 
 `KEY_SCOPE` is derived, not configured.
