@@ -268,6 +268,7 @@ export async function jobIdsInState(
   const key = `bull:${queue}:${state}`;
   const type = await redis.type(key);
   if (type === 'list') return redis.lrange(key, 0, -1);
-  if (type === 'zset') return redis.zrange(key, 0, -1);
+  // ioredis 6 types `stop` as string | Buffer; only `start` still takes a number.
+  if (type === 'zset') return redis.zrange(key, 0, '-1');
   return [];
 }
