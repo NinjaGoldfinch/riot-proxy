@@ -21,7 +21,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:acceptance": "vitest run --config vitest.acceptance.config.ts"
   },
   "dependencies": {
     "@fastify/rate-limit": "^10.3.0",

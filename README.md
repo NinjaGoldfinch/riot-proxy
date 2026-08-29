@@ -111,7 +111,7 @@ One envelope, always:
 
 | Method & path                                                    | Upstream            | Notes                                                                               |
 | ---------------------------------------------------------------- | ------------------- | ----------------------------------------------------------------------------------- |
-| `GET /v1/riot/accounts/by-riot-id/{region}/{gameName}/{tagLine}` | account-v1          | Canonical entry point. `region` = `americas`/`europe`/`asia`/`sea`                  |
+| `GET /v1/riot/accounts/by-riot-id/{region}/{gameName}/{tagLine}` | account-v1          | Canonical entry point. `sea` is accepted and routed to `asia` (see below)           |
 | `GET /v1/riot/accounts/by-puuid/{region}/{puuid}`                | account-v1          |                                                                                     |
 | `GET /v1/lol/summoners/by-puuid/{platform}/{puuid}`              | summoner-v4         |                                                                                     |
 | `GET /v1/lol/league/entries/by-puuid/{platform}/{puuid}`         | league-v4           |                                                                                     |
@@ -131,6 +131,13 @@ One envelope, always:
 **Platforms:** `na1` `br1` `la1` `la2` `euw1` `eun1` `tr1` `ru` `kr` `jp1`
 `oc1` `ph2` `sg2` `th2` `tw2` `vn2`.
 **Regions:** `americas` `europe` `asia` `sea`.
+
+Riot serves account-v1 on `americas`, `asia` and `europe` only — there is no
+account-v1 on the `sea` host, and asking for one there is a 404. The proxy
+routes any `sea` account lookup to `asia` for you, so a SEA platform such as
+`oc1` resolves by Riot ID without the caller having to know this. account-v1 is
+a global service, so the answer is identical whichever host serves it. match-v5
+is unaffected: `sea` is a real match host and SEA matches stay there.
 
 Match IDs carry their own platform prefix (`EUW1_7381937461`); pass a region
 that disagrees with it and you get `BAD_REGION` rather than a confusing 404.
@@ -357,7 +364,7 @@ usually just means yesterday's key.
 ```bash
 npm run dev           # api, watch mode
 npm run dev:worker    # worker, watch mode
-npm test              # 106 tests
+npm test              # unit + integration, no Riot key needed
 npm run lint          # eslint
 npm run typecheck     # tsc --noEmit
 npm run format        # prettier
@@ -366,6 +373,60 @@ npm run format        # prettier
 Tests that need Redis or Postgres skip themselves when those are unreachable, so
 `npm test` works with nothing running — but `docker compose up -d` first gets
 you the limiter, HTTP-surface and WebSocket suites too.
+
+### Acceptance checks
+
+`npm test` stubs every upstream call. The checks that can only be answered by
+the real Riot API live in `acceptance/` and are run separately:
+
+```bash
+ACCEPTANCE_RIOT_ID='Name#TAG' ACCEPTANCE_PLATFORM=oc1 npm run test:acceptance
+```
+
+They reuse an api and worker already listening on `PORT`, and start their own
+pair if nothing is. Without a real `RIOT_API_KEY` and an `ACCEPTANCE_RIOT_ID`
+the whole suite skips itself with a printed reason, so it is safe to run
+anywhere.
+
+| Phase | File                         | What it proves                                                                                                                                                      |
+| ----- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1     | `phase1-lookups.test.ts`     | Riot ID resolves, account-v1 never dispatches to a host that lacks it, match by id, archived re-read costs no upstream call, `BAD_REGION` on a contradictory region |
+| 2     | `phase2-rate-limits.test.ts` | A burst on one method takes zero `application`/`method` 429s, the scope is never frozen, and p95 limiter wait fits the buckets the limiter learned                  |
+| 5     | `phase5-archive.test.ts`     | A backfill archives what it fetches, `proxy_upstream_requests_total` stays flat on re-request, interactive p95 holds up while bulk work runs                        |
+| 6     | `phase6-events.test.ts`      | A SEA player tracks by Riot ID, the poll tick fans out jobs the queue accepts, and an event reaches a subscribed socket on its topic only                           |
+
+| Variable                     | Default                  |                                              |
+| ---------------------------- | ------------------------ | -------------------------------------------- |
+| `ACCEPTANCE_RIOT_ID`         | —                        | Required, as `Name#TAG`                      |
+| `ACCEPTANCE_PLATFORM`        | `oc1`                    | Platform routing value                       |
+| `ACCEPTANCE_BASE_URL`        | `http://127.0.0.1:$PORT` | Target proxy                                 |
+| `ACCEPTANCE_API_KEY`         | —                        | Consumer key; omit when `AUTH_DISABLED=true` |
+| `ACCEPTANCE_PHASE2_REQUESTS` | `60`                     | Burst size — the spec asks for 500           |
+| `ACCEPTANCE_BACKFILL_LIMIT`  | `40`                     | Matches to walk back                         |
+| `ACCEPTANCE_LIVE_GAME`       | off                      | Opt in to the live game check                |
+| `ACCEPTANCE_KEEP_TRACKED`    | off                      | Leave the player tracked afterwards          |
+
+Two things the suite cannot decide for you:
+
+- **Phase 2 measures nothing under the default `CLIENT_WAIT_BUDGET_MS=2000`.**
+  Callers get shed instead of queued, so raise it (the CI job uses 300 s) to
+  reproduce the spec's "500 requests, all served".
+- **Phase 5 is inconclusive against a warm archive.** If every match is already
+  stored the backfill has no work to pace, and the run says so rather than
+  reporting a green tick — use a fresh database, or a limit past the archived
+  depth.
+
+Phase 6's real gate needs a human in a real game, so it is split: the tracking,
+fan-out and delivery path is asserted automatically, and the game itself is
+opt-in.
+
+```bash
+ACCEPTANCE_LIVE_GAME=1 ACCEPTANCE_RIOT_ID='Name#TAG' npm run test:acceptance
+```
+
+That waits up to 30 minutes for `game.started`, then for the `match.archived`
+that follows it. CI runs everything else nightly (`.github/workflows/acceptance.yml`),
+and skips itself when no `RIOT_API_KEY` secret is configured.
 
 ### Layout
 
@@ -385,6 +446,9 @@ src/
    ├─ endpoints.ts method ids, URLs, TTLs
    ├─ client.ts    undici pools + §5.5 error policy
    └─ limiter.ts   header-driven token buckets
+
+test/              unit + integration, every upstream call stubbed
+acceptance/        live checks against the real Riot API (opt-in)
 ```
 
 ---
