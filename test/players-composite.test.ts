@@ -171,10 +171,35 @@ describe('composite profile (§6.3)', () => {
 });
 
 describe('composite match page (§6.3)', () => {
+  /** A match-v5 payload, with enough of the bulk to prove the page sheds it. */
+  const riotMatch = (matchId: string, puuid = PUUID) => ({
+    metadata: { matchId, participants: [puuid, 'other'] },
+    info: {
+      queueId: 420,
+      gameMode: 'CLASSIC',
+      gameDuration: 1834,
+      gameEndTimestamp: 1_756_001_894_000,
+      teams: [{ teamId: 100, win: true, bans: [{ championId: 64 }] }],
+      participants: [
+        {
+          puuid,
+          win: true,
+          championId: 64,
+          championName: 'LeeSin',
+          kills: 8,
+          deaths: 3,
+          assists: 11,
+          challenges: { kda: 6.33, soloKills: 2 },
+        },
+        { puuid: 'other', win: false, championId: 266, championName: 'Aatrox' },
+      ],
+    },
+  });
+
   const page = (ids: string[]) => {
     replies.set('match.idsByPuuid', { data: ids });
     replies.set('match.byId', (req) => ({
-      data: { metadata: { matchId: req.path.split('/').pop() } },
+      data: riotMatch(req.path.split('/').pop() ?? ''),
     }));
   };
 
@@ -224,7 +249,7 @@ describe('composite match page (§6.3)', () => {
     replies.set('match.byId', (req) =>
       req.path.endsWith('OC1_2')
         ? { error: ProxyError.upstream('match gone') }
-        : { data: { metadata: { matchId: 'OC1_1' } } },
+        : { data: riotMatch('OC1_1') },
     );
 
     const res = await app.inject({
@@ -249,6 +274,61 @@ describe('composite match page (§6.3)', () => {
     });
     expect(res.statusCode).toBe(502);
     expect(res.json().error.code).toBe('UPSTREAM_ERROR');
+  });
+
+  it('returns a summary of the player’s own line, not the match behind it', async ({ skip }) => {
+    if (!available || !app) return skip();
+    page(['OC1_1']);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/v1/players/${PUUID}/matches?platform=oc1&count=1`,
+      headers: auth(),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().matches[0]).toEqual({
+      matchId: 'OC1_1',
+      queueId: 420,
+      gameMode: 'CLASSIC',
+      gameDuration: 1834,
+      gameEndTimestamp: 1_756_001_894_000,
+      player: {
+        puuid: PUUID,
+        win: true,
+        championId: 64,
+        championName: 'LeeSin',
+        kills: 8,
+        deaths: 3,
+        assists: 11,
+      },
+    });
+
+    // The bulk an overview panel never reads: the other nine players, their
+    // challenges, the team objectives. Fetched and archived, just not returned.
+    expect(res.body).not.toContain('challenges');
+    expect(res.body).not.toContain('Aatrox');
+    expect(res.body).not.toContain('bans');
+  });
+
+  it('names a match that does not mention the player rather than serving it', async ({ skip }) => {
+    if (!available || !app) return skip();
+    replies.set('match.idsByPuuid', { data: ['OC1_1', 'OC1_2'] });
+    replies.set('match.byId', (req) =>
+      req.path.endsWith('OC1_2')
+        ? { data: riotMatch('OC1_2', 'somebody-else') }
+        : { data: riotMatch('OC1_1') },
+    );
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/v1/players/${PUUID}/matches?platform=oc1&count=2`,
+      headers: auth(),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().matches).toHaveLength(1);
+    expect(res.json().warnings).toEqual([expect.stringContaining('match OC1_2 unavailable')]);
   });
 
   it('caps the fan-out well below match-v5’s own limit of 100', async ({ skip }) => {

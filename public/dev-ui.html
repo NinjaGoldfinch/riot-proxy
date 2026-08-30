@@ -667,7 +667,7 @@
 
         $('matches').replaceChildren(
           ...(page.matches.length
-            ? page.matches.map((match) => renderMatch(match, page.puuid))
+            ? page.matches.map(renderMatch)
             : [el('div', { className: 'panel kv', textContent: 'no matches on this page' })]),
         );
 
@@ -680,16 +680,18 @@
         if (page.warnings?.length) message(page.warnings.join('\n'), 'warn');
       }
 
-      function renderMatch(match, puuid) {
-        const info = match.info ?? {};
-        const me = (info.participants ?? []).find((p) => p.puuid === puuid);
-        if (!me)
-          return el('div', { className: 'match', textContent: match.metadata?.matchId ?? '?' });
+      /* The page hands us one summary per match — the player's own line in it,
+         already picked out server-side — rather than the whole game. Anything
+         not here (the other nine players, the timeline) is a single
+         /v1/lol/matches/{region}/{matchId} call away. */
+      function renderMatch(match) {
+        const me = match.player;
+        if (!me) return el('div', { className: 'match', textContent: match.matchId ?? '?' });
 
         const kda = me.deaths === 0 ? 'perfect' : ((me.kills + me.assists) / me.deaths).toFixed(2);
-        const minutes = (info.gameDuration ?? 0) / 60;
+        const minutes = (match.gameDuration ?? 0) / 60;
         const cs = (me.totalMinionsKilled ?? 0) + (me.neutralMinionsKilled ?? 0);
-        const when = info.gameEndTimestamp ?? info.gameCreation;
+        const when = match.gameEndTimestamp ?? match.gameCreation;
         const items = [0, 1, 2, 3, 4, 5, 6].map((i) => me[`item${i}`]);
 
         return el('div', { className: `match ${me.win ? 'win' : 'loss'}` }, [
@@ -707,10 +709,10 @@
             el('div', {
               className: 'meta',
               textContent: [
-                QUEUES[info.queueId] ?? `queue ${info.queueId}`,
+                QUEUES[match.queueId] ?? `queue ${match.queueId}`,
                 `${Math.floor(minutes)}m${String(Math.round((minutes % 1) * 60)).padStart(2, '0')}s`,
                 when ? new Date(when).toLocaleString() : '',
-                match.metadata?.matchId ?? '',
+                match.matchId ?? '',
               ]
                 .filter(Boolean)
                 .join(' · '),
