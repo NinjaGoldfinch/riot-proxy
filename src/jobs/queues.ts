@@ -57,6 +57,40 @@ export function jobKey(...parts: (string | number)[]): string {
   return parts.map((part) => String(part).replaceAll(':', '-')).join('-');
 }
 
+/**
+ * Ordering inside the archive queue, and the one BullMQ detail that is easy to
+ * get backwards: the worker pops the plain `wait` list first and only falls
+ * back to the prioritized set once it is empty, so a job with *no* priority
+ * outranks every prioritized job. Every archive job therefore carries an
+ * explicit priority — omitting one would silently promote it above the
+ * freshest game in the queue.
+ *
+ * 1 is the highest priority; larger numbers yield to smaller ones.
+ */
+export const ARCHIVE_PRIORITY = {
+  /** A game that has just finished for a tracked player. */
+  live: 1,
+} as const;
+
+/** BullMQ rejects a priority above 2^21 - 1. */
+export const MAX_PRIORITY = 2_097_151;
+
+export const BACKFILL_PRIORITY_BASE = 10;
+/** Matches are ranked in blocks of ten, so a page's worth shares a rank. */
+export const BACKFILL_PRIORITY_BLOCK = 10;
+
+/**
+ * Recency wins: a player's most recent ten games are archived before anyone's
+ * hundredth, so someone who has just been looked up sees their history fill in
+ * from the top rather than waiting on a stranger's 2022 season.
+ *
+ * `index` is the match's position in the player's history, newest first.
+ */
+export function backfillPriority(index: number): number {
+  const depth = Math.floor(Math.max(0, index) / BACKFILL_PRIORITY_BLOCK);
+  return Math.min(MAX_PRIORITY, BACKFILL_PRIORITY_BASE + depth);
+}
+
 export interface ArchiveMatchJob {
   matchId: string;
   puuid?: string;

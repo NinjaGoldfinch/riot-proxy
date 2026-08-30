@@ -13,8 +13,10 @@ import { build } from '../riot/endpoints.js';
 import { assertPlatform, platformToRegion, regionFromMatchId } from '../riot/routing.js';
 import { syncDdragon } from '../static/ddragon.js';
 import {
+  ARCHIVE_PRIORITY,
   JOB,
   archiveQueue,
+  backfillPriority,
   jobKey,
   pollQueue,
   type ArchiveMatchJob,
@@ -181,8 +183,10 @@ export async function pollMatches(job: Job<PollPlayerJob>): Promise<void> {
     unarchived.map((matchId) => ({
       name: JOB.archiveMatch,
       data: { matchId, puuid, fetchTimeline: config.ARCHIVE_TIMELINES } satisfies ArchiveMatchJob,
-      // Idempotency: the same match never queues twice.
-      opts: { jobId: jobKey('archive', matchId) },
+      // Idempotency: the same match never queues twice. A game that has just
+      // finished is the most valuable thing in the queue, so it takes the top
+      // priority rather than the implicit one (see ARCHIVE_PRIORITY).
+      opts: { jobId: jobKey('archive', matchId), priority: ARCHIVE_PRIORITY.live },
     })),
   );
 
@@ -235,7 +239,11 @@ export async function backfillPlayer(job: Job<BackfillPlayerJob>): Promise<{ que
     );
     if (!ids || ids.length === 0) break;
 
+    // Rank by position in the *history*, not position in this filtered list:
+    // skipping ten already-archived matches must not promote the eleventh.
+    const depthOf = new Map(ids.map((id, index) => [id, start + index]));
     const unarchived = await filterUnarchived(ids);
+
     if (unarchived.length > 0) {
       await archiveQueue.addBulk(
         unarchived.map((matchId) => ({
@@ -245,7 +253,10 @@ export async function backfillPlayer(job: Job<BackfillPlayerJob>): Promise<{ que
             puuid,
             fetchTimeline: fetchTimeline ?? config.ARCHIVE_TIMELINES,
           } satisfies ArchiveMatchJob,
-          opts: { jobId: jobKey('archive', matchId), priority: 10 },
+          opts: {
+            jobId: jobKey('archive', matchId),
+            priority: backfillPriority(depthOf.get(matchId) ?? start),
+          },
         })),
       );
       queued += unarchived.length;
