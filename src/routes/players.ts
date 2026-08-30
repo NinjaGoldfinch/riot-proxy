@@ -24,7 +24,7 @@ import {
   PlatformParam,
   PuuidParam,
   TagLineParam,
-  errorResponses,
+  upstreamErrors,
 } from './schemas.js';
 
 /**
@@ -88,7 +88,7 @@ const playerRoutes: FastifyPluginAsync = async (fastify) => {
           topMastery: Type.Optional(Type.Integer({ minimum: 1, maximum: 20, default: 5 })),
           refresh: RefreshQuery,
         }),
-        response: { 200: PassthroughResponse, ...errorResponses },
+        response: { 200: PassthroughResponse, ...upstreamErrors },
       },
     },
     async (request, reply) => {
@@ -123,7 +123,7 @@ const playerRoutes: FastifyPluginAsync = async (fastify) => {
           topMastery: Type.Optional(Type.Integer({ minimum: 1, maximum: 20, default: 5 })),
           refresh: RefreshQuery,
         }),
-        response: { 200: PassthroughResponse, ...errorResponses },
+        response: { 200: PassthroughResponse, ...upstreamErrors },
       },
     },
     async (request, reply) => {
@@ -180,7 +180,7 @@ const playerRoutes: FastifyPluginAsync = async (fastify) => {
         tags: ['players'],
         params: Type.Object({ puuid: PuuidParam }),
         querystring: MatchPageQuery,
-        response: { 200: MatchPageResponse, ...errorResponses },
+        response: { 200: MatchPageResponse, ...upstreamErrors },
       },
     },
     async (request, reply) => {

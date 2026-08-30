@@ -9,7 +9,7 @@ import {
   LimitsResponse,
   ReadyResponse,
   ScopeParam,
-  errorResponses,
+  localErrors,
 } from './schemas.js';
 import { Type } from '@sinclair/typebox';
 
@@ -105,7 +105,7 @@ const healthRoutes: FastifyPluginAsync = async (fastify) => {
           'freeze on it has left to run. The scope is a host, not a game region: platform ' +
           'endpoints bucket by platform (`euw1`), account-v1 and match-v5 by region (`europe`).',
         params: Type.Object({ scope: ScopeParam }),
-        response: { 200: LimitsResponse, ...errorResponses },
+        response: { 200: LimitsResponse, ...localErrors },
       },
     },
     async (request) => {

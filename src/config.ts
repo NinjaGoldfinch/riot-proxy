@@ -81,6 +81,17 @@ const EnvSchema = Type.Object({
    * debugging page that advertises whether auth is off has no business being.
    */
   DEV_UI: Type.Optional(Type.Boolean()),
+
+  /**
+   * Serve the OpenAPI document and the API reference at `/docs`.
+   *
+   * Unlike DEV_UI this defaults **on in production**: a published API's
+   * reference is part of its contract, not a debugging tool, and one you need a
+   * key to read is one nobody reads. Turning it off removes `/docs`,
+   * `/openapi.json` and `/openapi.yaml` together — see the note in
+   * `src/docs/plugin.ts` about why they share one flag.
+   */
+  DOCS_UI: Type.Boolean({ default: true }),
 });
 
 export type Env = Static<typeof EnvSchema>;
@@ -151,6 +162,7 @@ export const config = {
   adminIpAllowlist,
   authDisabled: env.AUTH_DISABLED,
   devUi: env.DEV_UI ?? env.NODE_ENV !== 'production',
+  docsUi: env.DOCS_UI,
   isProduction: env.NODE_ENV === 'production',
   isTest: env.NODE_ENV === 'test',
 } as const;

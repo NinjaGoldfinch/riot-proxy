@@ -3,6 +3,7 @@ import websocket from '@fastify/websocket';
 import Fastify, { LogController } from 'fastify';
 import authPlugin from './auth/plugin.js';
 import { config } from './config.js';
+import { docsSpec, docsUi } from './docs/plugin.js';
 import { ProxyError, RiotError } from './errors.js';
 import { logger } from './logger.js';
 import { requestsTotal } from './metrics.js';
@@ -14,6 +15,7 @@ import healthRoutes from './routes/health.js';
 import lolRoutes from './routes/lol.js';
 import playerRoutes from './routes/players.js';
 import riotRoutes from './routes/riot.js';
+import { sharedSchemas } from './routes/schemas.js';
 import staticRoutes from './routes/static.js';
 import wsRoutes from './ws/index.js';
 
@@ -98,6 +100,20 @@ export async function buildApp() {
       );
   });
 
+  /**
+   * §12.3's parameters and the §6.1 error envelope, registered once (#61).
+   * Must come before the route plugins: a route referencing `ErrorResponse#`
+   * cannot compile its validator until the reference resolves.
+   */
+  for (const schema of sharedSchemas) app.addSchema(schema);
+
+  /**
+   * Before the route plugins, and it has to be: `@fastify/swagger` collects
+   * routes through an `onRoute` hook, which only fires for routes registered
+   * after it (#64).
+   */
+  if (config.docsUi) await app.register(docsSpec);
+
   await app.register(healthRoutes);
   await app.register(riotRoutes);
   await app.register(lolRoutes);
@@ -108,10 +124,22 @@ export async function buildApp() {
   await app.register(wsRoutes);
   // Development-only browser client (§ none — it is a tool, not a contract).
   if (config.devUi) await app.register(devUiRoutes);
+  // After the routes: the page can only describe what is already registered.
+  if (config.docsUi) await app.register(docsUi);
 
   /** §13 — one structured line per request. */
   app.addHook('onResponse', async (request, reply) => {
     const route = request.routeOptions.url ?? request.url;
+
+    /**
+     * Except the reference's own assets. Scalar's bundle is 3.7 MB across
+     * several requests and one page load would otherwise bury a minute of real
+     * traffic. `logLevel: 'silent'` on the plugin does not cover this: that
+     * setting governs the route's own Fastify logger, and this line is ours —
+     * emitted from a hook that calls the module-level logger directly. The
+     * metric is still incremented, so the traffic remains visible in aggregate.
+     */
+    const isDocsAsset = route.startsWith('/docs');
     const cacheState = (reply.getHeader('X-Cache') as string | undefined)?.toLowerCase() ?? 'none';
 
     requestsTotal.inc({
@@ -119,6 +147,8 @@ export async function buildApp() {
       status: String(reply.statusCode),
       cache: normaliseCacheLabel(cacheState),
     });
+
+    if (isDocsAsset) return;
 
     logger.info(
       {

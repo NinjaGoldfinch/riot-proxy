@@ -21,6 +21,7 @@ import { wsHub } from '../src/ws/index.js';
  */
 let app: App | undefined;
 let adminKey = '';
+let adminId = '';
 let available = false;
 
 const TEST_PUUID = `docs-schemas-${'x'.repeat(60)}`;
@@ -39,6 +40,7 @@ beforeAll(async () => {
     scopes: ['read', 'admin'],
   });
   adminKey = admin?.key ?? '';
+  adminId = admin?.id ?? '';
 
   // A player row has to exist for the list route to prove anything.
   await upsertPlayer({
@@ -102,10 +104,12 @@ describe('admin list schemas (#60)', () => {
     const res = await app.inject({ method: 'GET', url: '/v1/admin/consumers', headers: auth() });
     expect(res.statusCode).toBe(200);
 
-    const [row] = await listConsumers();
-    expect(row, 'no consumer rows to compare against').toBeDefined();
+    // The consumer this test created, not whichever row the table returns
+    // first — the shared dev database has others, with other scopes.
+    const row = (await listConsumers()).find((c) => c.id === adminId);
+    expect(row, 'the consumer this test created is missing from the query').toBeDefined();
 
-    const serialised = res.json().consumers.find((c: { id: string }) => c.id === row!.id);
+    const serialised = res.json().consumers.find((c: { id: string }) => c.id === adminId);
     expect(
       serialised,
       'the consumer the query returned is missing from the response',
