@@ -327,6 +327,7 @@ Rules the limiter must implement:
 | `GET /v1/lol/status/{platform}` | lol-status-v4 | |
 | `GET /v1/static/versions` · `GET /v1/static/champions` … | local ddragon mirror | no upstream call |
 | `GET /v1/players/{puuid}/profile` | **composite** | account + summoner + league + top mastery in one call (§6.3) |
+| `GET /v1/players/{puuid}/matches` | **composite** | an id page plus a summary of each match on it (§6.3) |
 | `WS /v1/ws` | realtime | §11 |
 | `GET /healthz` · `GET /metrics` | — | liveness; Prometheus |
 
@@ -341,6 +342,13 @@ The proxy's biggest ergonomic win: endpoints that fan out to several Riot calls 
 - Fan-out happens concurrently; per-part cache still applies.
 - Partial failure returns the parts that succeeded plus a `warnings[]` array — never fail the
   whole composite because mastery timed out.
+- A composite may project what it returns; §6.1's passthrough rule governs the single-resource
+  routes. `GET /v1/players/{puuid}/matches` returns one summary per match — the requesting
+  player's own line in it, under Riot's field names, nothing renamed and nothing computed —
+  because ten full match-v5 payloads is around a megabyte of response for an overview panel.
+  Storage is unaffected: matches are archived whole (§7.3), so the complete document, the other
+  nine participants and the timeline stay one `GET /v1/lol/matches/{region}/{matchId}` away, at
+  zero upstream cost.
 
 ---
 

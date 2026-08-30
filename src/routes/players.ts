@@ -15,9 +15,11 @@ import {
   type Platform,
 } from '../riot/routing.js';
 import { applyCacheHeaders } from './helpers.js';
+import { summariseMatch, type MatchSummary } from './match-summary.js';
 import {
   GameNameParam,
   MatchPageQuery,
+  MatchPageResponse,
   PassthroughResponse,
   PlatformParam,
   PuuidParam,
@@ -164,6 +166,12 @@ const playerRoutes: FastifyPluginAsync = async (fastify) => {
    * concurrently. Matches are immutable, so a second page view is served from
    * the Postgres archive at zero upstream cost (§7.3) — which is what makes
    * paging through a history affordable at all.
+   *
+   * What comes back is a summary per match, not the match: an overview panel
+   * needs a champion, a scoreline and six items, and a page of ten full
+   * payloads is about a megabyte of response to carry that. The full document
+   * stays one call away at `/v1/lol/matches/{region}/{matchId}`, served from
+   * the archive — see `match-summary.ts`.
    */
   fastify.get(
     '/v1/players/:puuid/matches',
@@ -172,7 +180,7 @@ const playerRoutes: FastifyPluginAsync = async (fastify) => {
         tags: ['players'],
         params: Type.Object({ puuid: PuuidParam }),
         querystring: MatchPageQuery,
-        response: { 200: PassthroughResponse, ...errorResponses },
+        response: { 200: MatchPageResponse, ...errorResponses },
       },
     },
     async (request, reply) => {
@@ -419,7 +427,12 @@ interface MatchPageBody {
   start: number;
   count: number;
   matchIds: string[];
-  matches: unknown[];
+  /**
+   * One summary per id that resolved — the requesting player's line in each
+   * game, not the game (`match-summary.ts`). Shorter than `matchIds` when a
+   * match could not be fetched; `warnings[]` names the ones missing.
+   */
+  matches: MatchSummary[];
   /** A full page came back, so there is probably another one behind it. */
   hasMore: boolean;
   /**
@@ -468,10 +481,24 @@ async function composeMatches(opts: {
   const part = collector(warnings);
   // Failed matches are dropped rather than left as holes; `warnings[]` names
   // each one, so a caller that cares can still tell what is missing.
-  const matches: unknown[] = [];
-  settled.forEach((result, index) => {
-    const match = part(`match ${matchIds[index]}`, result);
-    if (match !== null) matches.push(match);
+  const matches: MatchSummary[] = [];
+  matchIds.forEach((id, index) => {
+    const result = settled[index];
+    if (!result) return;
+
+    const match = part(`match ${id}`, result);
+    if (match === null) return;
+
+    // Fetched but unsummarisable means the payload holds no participant for
+    // this PUUID — an archive row under the wrong id, or a malformed match.
+    // Same treatment as a failed fetch: named, and left off the page.
+    const summary = summariseMatch(match, puuid, id);
+    if (summary === null) {
+      warnings.push(`match ${id} unavailable (no participant for this player)`);
+      logger.debug({ matchId: id, puuid }, 'match holds no participant for the requested player');
+      return;
+    }
+    matches.push(summary);
   });
 
   const body: MatchPageBody = {

@@ -50,6 +50,9 @@ missing. Phases refer to §15 of [the spec](docs/riot-proxy-spec.md).
       whose previous one has not run (#48)
 - [x] The cache hit ratio is a counter pair the query windows, not a gauge
       averaging since boot — `CacheHitRatioLow` can fire again (#49)
+- [x] The composite match page returns a summary per match — the requesting
+      player's own line — instead of ten full match-v5 payloads; the whole
+      document stays available per match from the archive
 
 ## Next
 

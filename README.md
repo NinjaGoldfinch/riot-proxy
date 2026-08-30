@@ -159,7 +159,7 @@ One envelope, always:
 | `GET /v1/lol/status/{platform}`                                  | lol-status-v4       |                                                                                      |
 | `GET /v1/players/{puuid}/profile`                                | **composite**       | `?platform&topMastery` — account + summoner + league + mastery in one call           |
 | `GET /v1/players/by-riot-id/{gameName}/{tagLine}/profile`        | **composite**       | The same document, entered by Riot ID                                                |
-| `GET /v1/players/{puuid}/matches`                                | **composite**       | `?platform&start&count&queue&type` — an id page plus every match on it, `count ≤ 20` |
+| `GET /v1/players/{puuid}/matches`                                | **composite**       | `?platform&start&count&queue&type` — an id page plus a summary of each, `count ≤ 20` |
 | `GET /v1/static/versions`                                        | local mirror        | No upstream call                                                                     |
 | `GET /v1/static/{file}`                                          | local mirror        | `champions`, `items`, `runes`, `summoner-spells`, `profile-icons`, `maps`, `queues`  |
 | `WS /v1/ws`                                                      | realtime            | See below                                                                            |
@@ -207,18 +207,47 @@ curl '…/v1/players/by-riot-id/NinjaGoldfinch/OCENZ/profile?platform=oc1'
 every match on it, fanned out concurrently. Rendering ten games otherwise costs
 eleven requests against a default quota of 60/min, so three pages exhausts it.
 
+What comes back per match is a summary — the requesting player's own line in
+that game — not the game. A match-v5 payload carries ten participants of ~130
+fields each plus a ~100-field `challenges` object apiece, so a page of ten is
+around a megabyte of response to render a champion icon, a scoreline and six
+items:
+
 ```json
 {
   "puuid": "…", "platform": "oc1", "region": "sea",
   "start": 0, "count": 10,
-  "matchIds": [ … ], "matches": [ … ], "hasMore": true, "warnings": []
+  "matchIds": [ … ], "hasMore": true, "warnings": [],
+  "matches": [
+    {
+      "matchId": "OC1_1234567890",
+      "queueId": 420, "gameMode": "CLASSIC", "gameVersion": "15.16.673.9260",
+      "gameCreation": 1756000000000, "gameEndTimestamp": 1756001894000,
+      "gameDuration": 1834, "endOfGameResult": "GameComplete",
+      "player": {
+        "championId": 64, "championName": "LeeSin", "champLevel": 16,
+        "win": true, "teamId": 100, "teamPosition": "JUNGLE",
+        "kills": 8, "deaths": 3, "assists": 11,
+        "totalMinionsKilled": 42, "neutralMinionsKilled": 128,
+        "goldEarned": 13240, "visionScore": 31,
+        "item0": 3142, "item6": 3364, "summoner1Id": 11, "summoner2Id": 4,
+        "perks": { "keystone": 8010, "primaryStyle": 8000, "subStyle": 8300 }
+      }
+    }
+  ]
 }
 ```
 
+Field names and values are Riot's own — nothing is renamed, and nothing is
+computed for you. Nothing is lost either: every match is archived whole (§7.3),
+so the full document, the other nine players and the timeline are one
+`GET /v1/lol/matches/{region}/{matchId}` away, served from Postgres at zero
+upstream cost.
+
 `count` is capped at 20 rather than match-v5's 100: every id on the page is its
 own upstream call. `hasMore` says a full page came back, so page without
-guessing. Matches are immutable and archived (§7.3), so paging back through a
-history a second time costs no quota at all.
+guessing. Matches are immutable and archived, so paging back through a history a
+second time costs no quota at all.
 
 #### Asking for a fresh read
 

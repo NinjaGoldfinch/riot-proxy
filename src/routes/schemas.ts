@@ -1,6 +1,7 @@
 import { Type } from '@sinclair/typebox';
 import { ERROR_CODES } from '../errors.js';
 import { PLATFORMS, REGIONS } from '../riot/routing.js';
+import { MatchSummarySchema } from './match-summary.js';
 
 /**
  * §12.3 — closed enums for platform/region, clamped counts, and Riot ID length
@@ -88,6 +89,40 @@ export const MatchPageQuery = Type.Object({
   /** Spend quota to re-read the id list; rate limited per player. */
   refresh: Type.Optional(Type.Boolean({ default: false })),
 });
+
+/**
+ * The composite match page is the one response that is not a Riot payload: it
+ * is a document we assemble, and the matches on it are summaries (§6.3, and the
+ * rationale in `match-summary.ts`). So unlike every other route it declares a
+ * real response schema — which documents the shape and, because Fastify
+ * serialises against it, guarantees a full match payload cannot find its way
+ * back onto this endpoint.
+ */
+export const MatchPageResponse = Type.Object(
+  {
+    puuid: Type.String(),
+    platform: Type.String(),
+    region: Type.String(),
+    start: Type.Integer(),
+    count: Type.Integer(),
+    matchIds: Type.Array(Type.String()),
+    matches: Type.Array(MatchSummarySchema),
+    hasMore: Type.Boolean(),
+    matchIdsAgeSeconds: Type.Number(),
+    backfill: Type.Union([
+      Type.Object({
+        jobId: Type.String(),
+        status: Type.Unsafe<string>({ type: 'string', enum: ['queued', 'already-queued'] }),
+        limit: Type.Integer(),
+      }),
+      Type.Null(),
+    ]),
+    refreshed: Type.Boolean(),
+    refreshAvailableIn: Type.Number(),
+    warnings: Type.Array(Type.String()),
+  },
+  { $id: 'MatchPage' },
+);
 
 export const MasteryQuery = Type.Object({
   top: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
