@@ -242,6 +242,13 @@ cooldown without having to spend one to discover it.
 The match page also reports `backfill` the first time it queues a player's
 history, so a caller can say it is on its way.
 
+"First time" is recorded on the player, not inferred from the archive. Matches
+are shared between ten players, so a player's recent games can be sitting in the
+archive purely because a teammate was walked — which says nothing about whether
+anyone walked _them_. Only a completed walk stops another one; a walk still in
+flight is stopped by the queue's own de-duplication, so one that died half way
+is retried rather than mistaken for finished.
+
 On the match page a refresh re-reads the **id list only**. The matches behind it
 are immutable and already archived, so re-downloading them would cost quota to
 learn nothing.
@@ -383,7 +390,7 @@ under a distinct `neg:` prefix — a cached "not in game" is distinguishable fro
 | `poll:rank`       | every `TRACK_POLL_RANK_S` (600 s)  | league-v4 → `rank.changed`                       |
 | `poll:matches`    | every `TRACK_POLL_MATCH_S` (300 s) | new match IDs → `archive:match`                  |
 | `archive:match`   | on demand                          | fetch, upsert, `match.archived`                  |
-| `backfill:player` | admin, or a first lookup           | page 100 IDs at a time, bulk priority            |
+| `backfill:player` | admin, or a player never walked    | page 100 IDs at a time, bulk priority            |
 | `ddragon:sync`    | hourly                             | on a new patch, mirror data and emit `patch.new` |
 | `maintenance`     | daily                              | clear orphaned single-flight locks               |
 

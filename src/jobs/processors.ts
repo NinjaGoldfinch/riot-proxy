@@ -2,7 +2,12 @@ import type { Job } from 'bullmq';
 import { KEY_SCOPE } from '../config.js';
 import { config } from '../config.js';
 import { archiveMatch, archiveTimeline, filterUnarchived, type RiotMatch } from '../db/matches.js';
-import { listTrackedPlayers, setLastSeenMatch } from '../db/players.js';
+import {
+  listTrackedPlayers,
+  markBackfillComplete,
+  markBackfillStarted,
+  setLastSeenMatch,
+} from '../db/players.js';
 import { PATCH_TOPIC, playerTopic, publish } from '../events/index.js';
 import { fetcher } from '../fetcher.js';
 import { ProxyError } from '../errors.js';
@@ -224,12 +229,20 @@ export async function archiveMatchJob(job: Job<ArchiveMatchJob>): Promise<void> 
 
 const BACKFILL_PAGE = 100;
 
-export async function backfillPlayer(job: Job<BackfillPlayerJob>): Promise<{ queued: number }> {
+export async function backfillPlayer(
+  job: Job<BackfillPlayerJob>,
+): Promise<{ queued: number; depth: number }> {
   const { puuid, platform, limit = 500, fetchTimeline, reason } = job.data;
   const region = platformToRegion(assertPlatform(platform));
 
+  // #44 — claim the walk before doing any of it. If this job dies the stamp is
+  // left without a completion, which reads as "tried, did not finish" and lets
+  // the next lookup queue it again.
+  await markBackfillStarted(puuid, platform);
+
   let start = 0;
   let queued = 0;
+  let depth = 0;
 
   while (start < limit) {
     const count = Math.min(BACKFILL_PAGE, limit - start);
@@ -262,13 +275,18 @@ export async function backfillPlayer(job: Job<BackfillPlayerJob>): Promise<{ que
       queued += unarchived.length;
     }
 
-    await job.updateProgress(Math.min(100, Math.round(((start + ids.length) / limit) * 100)));
+    depth = start + ids.length;
+    await job.updateProgress(Math.min(100, Math.round((depth / limit) * 100)));
     if (ids.length < count) break; // Reached the end of this player's history.
     start += ids.length;
   }
 
-  logger.info({ puuid, queued, reason: reason ?? 'admin' }, 'backfill complete');
-  return { queued };
+  // Only now, on the way out: this is the record that stops the next lookup
+  // queueing the same walk again, so a partial walk must never write it.
+  await markBackfillComplete(puuid, depth);
+
+  logger.info({ puuid, queued, depth, reason: reason ?? 'admin' }, 'backfill complete');
+  return { queued, depth };
 }
 
 // ── ddragon:sync ─────────────────────────────────────────────────────────────

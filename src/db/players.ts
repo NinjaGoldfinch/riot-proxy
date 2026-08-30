@@ -17,31 +17,32 @@ export interface UpsertPlayerInput {
   lastSeenMatchId?: string | null;
 }
 
+/**
+ * Absent fields are left as they are rather than overwritten. The lookup path
+ * calls this with nothing but a PUUID and a platform, and must not blank the
+ * Riot ID an admin track put there — so only what the caller actually passed
+ * is written. Passing an explicit `null` still clears the column.
+ */
 export async function upsertPlayer(input: UpsertPlayerInput): Promise<Player> {
-  const values = {
-    puuid: input.puuid,
-    keyScope: KEY_SCOPE,
-    platform: input.platform,
-    gameName: input.gameName ?? null,
-    tagLine: input.tagLine ?? null,
+  const provided = {
+    ...(input.gameName !== undefined ? { gameName: input.gameName } : {}),
+    ...(input.tagLine !== undefined ? { tagLine: input.tagLine } : {}),
     ...(input.tracked !== undefined ? { tracked: input.tracked } : {}),
     ...(input.lastSeenMatchId !== undefined ? { lastSeenMatchId: input.lastSeenMatchId } : {}),
-    updatedAt: new Date(),
   };
 
   const [row] = await db
     .insert(players)
-    .values(values)
+    .values({
+      puuid: input.puuid,
+      keyScope: KEY_SCOPE,
+      platform: input.platform,
+      ...provided,
+      updatedAt: new Date(),
+    })
     .onConflictDoUpdate({
       target: [players.keyScope, players.puuid],
-      set: {
-        platform: values.platform,
-        gameName: values.gameName,
-        tagLine: values.tagLine,
-        ...(input.tracked !== undefined ? { tracked: input.tracked } : {}),
-        ...(input.lastSeenMatchId !== undefined ? { lastSeenMatchId: input.lastSeenMatchId } : {}),
-        updatedAt: values.updatedAt,
-      },
+      set: { platform: input.platform, ...provided, updatedAt: new Date() },
     })
     .returning();
 
@@ -82,5 +83,42 @@ export async function setLastSeenMatch(puuid: string, matchId: string): Promise<
   await db
     .update(players)
     .set({ lastSeenMatchId: matchId, updatedAt: new Date() })
+    .where(and(eq(players.keyScope, KEY_SCOPE), eq(players.puuid, puuid)));
+}
+
+/**
+ * #44 — a walk is starting. Upserts, because the admin backfill route can name
+ * a player nobody has looked up yet, and the stamp needs a row to live on.
+ *
+ * Recording the start rather than only the finish is what makes a walk that
+ * died mid-way distinguishable from one that never ran.
+ */
+export async function markBackfillStarted(puuid: string, platform: string): Promise<void> {
+  const now = new Date();
+  await db
+    .insert(players)
+    .values({
+      puuid,
+      keyScope: KEY_SCOPE,
+      platform,
+      historyBackfillStartedAt: now,
+      updatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: [players.keyScope, players.puuid],
+      set: { historyBackfillStartedAt: now, updatedAt: now },
+    });
+}
+
+/**
+ * The walk reached the end of the history (or its limit). `depth` is how many
+ * matches back it actually got, so a limit raised later can be told apart from
+ * a history that simply ran out.
+ */
+export async function markBackfillComplete(puuid: string, depth: number): Promise<void> {
+  const now = new Date();
+  await db
+    .update(players)
+    .set({ historyBackfilledAt: now, historyBackfillDepth: depth, updatedAt: now })
     .where(and(eq(players.keyScope, KEY_SCOPE), eq(players.puuid, puuid)));
 }

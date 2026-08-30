@@ -41,6 +41,21 @@ export const players = pgTable(
     tagLine: text('tag_line'),
     tracked: boolean('tracked').notNull().default(false),
     lastSeenMatchId: text('last_seen_match_id'),
+    /**
+     * Whether anyone has ever walked this player's history (#44). The archive
+     * cannot answer that question: matches are shared, so a player's games can
+     * be stored entirely because a teammate was walked. Only a row here means
+     * "we did this player".
+     *
+     * `startedAt` set with `backfilledAt` still null is a walk that is running
+     * or died mid-way — distinguishable from one that never ran, so a failed
+     * walk retries instead of counting as done. `depth` is how far back the
+     * walk actually got, so a `LOOKUP_BACKFILL_LIMIT` raised later can be told
+     * apart from a history that simply ended.
+     */
+    historyBackfillStartedAt: timestamp('history_backfill_started_at', { withTimezone: true }),
+    historyBackfilledAt: timestamp('history_backfilled_at', { withTimezone: true }),
+    historyBackfillDepth: integer('history_backfill_depth'),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
