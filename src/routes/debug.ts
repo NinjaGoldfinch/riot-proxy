@@ -8,7 +8,7 @@ import { endpoint, type BuiltRequest, type MethodId } from '../riot/endpoints.js
 import { METHOD_IDS } from '../riot/endpoints.js';
 import { isPlatform, isRegion, platformHost, regionHost } from '../riot/routing.js';
 import { applyCacheHeaders } from './helpers.js';
-import { PassthroughResponse, errorResponses } from './schemas.js';
+import { PassthroughResponse, localErrors, upstreamErrors } from './schemas.js';
 
 /**
  * Phase 1 — a raw passthrough for manual testing against a dev key. Admin
@@ -28,7 +28,7 @@ const debugRoutes: FastifyPluginAsync = async (fastify) => {
           method: Type.Optional(Type.Unsafe<string>({ type: 'string', enum: [...METHOD_IDS] })),
           noCache: Type.Optional(Type.Boolean({ default: false })),
         }),
-        response: { 200: PassthroughResponse, ...errorResponses },
+        response: { 200: PassthroughResponse, ...upstreamErrors },
       },
     },
     async (request, reply) => {
@@ -87,7 +87,7 @@ const debugRoutes: FastifyPluginAsync = async (fastify) => {
           path: Type.String(),
           method: Type.Unsafe<string>({ type: 'string', enum: [...METHOD_IDS] }),
         }),
-        response: { 200: PassthroughResponse, ...errorResponses },
+        response: { 200: PassthroughResponse, ...localErrors },
       },
     },
     async (request) => {

@@ -13,7 +13,7 @@ import {
   PlatformParam,
   PuuidParam,
   RegionParam,
-  errorResponses,
+  upstreamErrors,
 } from './schemas.js';
 
 /** §6.2 — the LoL surface. Every handler is a thin shell over `fetcher.fetch`. */
@@ -24,7 +24,7 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
       schema: {
         tags: ['lol'],
         params: Type.Object({ platform: PlatformParam, puuid: PuuidParam }),
-        response: { 200: PassthroughResponse, ...errorResponses },
+        response: { 200: PassthroughResponse, ...upstreamErrors },
       },
     },
     async (request, reply) => {
@@ -42,7 +42,7 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
       schema: {
         tags: ['lol'],
         params: Type.Object({ platform: PlatformParam, puuid: PuuidParam }),
-        response: { 200: PassthroughResponse, ...errorResponses },
+        response: { 200: PassthroughResponse, ...upstreamErrors },
       },
     },
     async (request, reply) => {
@@ -61,7 +61,7 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
         tags: ['lol'],
         params: Type.Object({ region: RegionParam, puuid: PuuidParam }),
         querystring: MatchIdsQuery,
-        response: { 200: PassthroughResponse, ...errorResponses },
+        response: { 200: PassthroughResponse, ...upstreamErrors },
       },
     },
     async (request, reply) => {
@@ -84,7 +84,7 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
       schema: {
         tags: ['lol'],
         params: Type.Object({ region: RegionParam, matchId: MatchIdParam }),
-        response: { 200: PassthroughResponse, ...errorResponses },
+        response: { 200: PassthroughResponse, ...upstreamErrors },
       },
     },
     async (request, reply) => {
@@ -102,7 +102,7 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
       schema: {
         tags: ['lol'],
         params: Type.Object({ region: RegionParam, matchId: MatchIdParam }),
-        response: { 200: PassthroughResponse, ...errorResponses },
+        response: { 200: PassthroughResponse, ...upstreamErrors },
       },
     },
     async (request, reply) => {
@@ -120,7 +120,7 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
       schema: {
         tags: ['lol'],
         params: Type.Object({ platform: PlatformParam, puuid: PuuidParam }),
-        response: { 200: PassthroughResponse, ...errorResponses },
+        response: { 200: PassthroughResponse, ...upstreamErrors },
       },
     },
     async (request, reply) => {
@@ -137,7 +137,7 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
         tags: ['lol'],
         params: Type.Object({ platform: PlatformParam, puuid: PuuidParam }),
         querystring: MasteryQuery,
-        response: { 200: PassthroughResponse, ...errorResponses },
+        response: { 200: PassthroughResponse, ...upstreamErrors },
       },
     },
     async (request, reply) => {
@@ -155,7 +155,7 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
       schema: {
         tags: ['lol'],
         params: Type.Object({ platform: PlatformParam }),
-        response: { 200: PassthroughResponse, ...errorResponses },
+        response: { 200: PassthroughResponse, ...upstreamErrors },
       },
     },
     async (request, reply) => {
@@ -170,7 +170,7 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
       schema: {
         tags: ['lol'],
         params: Type.Object({ platform: PlatformParam }),
-        response: { 200: PassthroughResponse, ...errorResponses },
+        response: { 200: PassthroughResponse, ...upstreamErrors },
       },
     },
     async (request, reply) => {

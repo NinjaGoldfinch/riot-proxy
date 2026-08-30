@@ -24,12 +24,16 @@ import {
   type BackfillPlayerJob,
 } from '../jobs/queues.js';
 import {
+  AdminStatsResponse,
+  ConsumerListResponse,
   GameNameParam,
   PassthroughResponse,
   PlatformParam,
+  PlayerListResponse,
   PuuidParam,
   TagLineParam,
-  errorResponses,
+  localErrors,
+  upstreamErrors,
 } from './schemas.js';
 
 /**
@@ -56,7 +60,7 @@ const adminRoutes: FastifyPluginAsync = async (fastify) => {
           ),
           quotaPerMin: Type.Optional(Type.Integer({ minimum: 1, maximum: 1_000_000 })),
         }),
-        response: { 200: PassthroughResponse, ...errorResponses },
+        response: { 200: PassthroughResponse, ...localErrors },
       },
     },
     async (request) => {
@@ -73,9 +77,22 @@ const adminRoutes: FastifyPluginAsync = async (fastify) => {
     },
   );
 
-  fastify.get('/v1/admin/consumers', adminScope, async () => ({
-    consumers: await listConsumers(),
-  }));
+  fastify.get(
+    '/v1/admin/consumers',
+    {
+      ...adminScope,
+      schema: {
+        tags: ['admin'],
+        summary: 'List consumers',
+        description:
+          'Every consumer, including revoked ones — `disabledAt` distinguishes them. The key ' +
+          'itself is never returned: only its sha256 is stored, and not even that is exposed ' +
+          'here. A plaintext key is shown exactly once, by `POST /v1/admin/consumers`.',
+        response: { 200: ConsumerListResponse, ...localErrors },
+      },
+    },
+    async () => ({ consumers: await listConsumers() }),
+  );
 
   fastify.delete(
     '/v1/admin/consumers/:id',
@@ -84,7 +101,7 @@ const adminRoutes: FastifyPluginAsync = async (fastify) => {
       schema: {
         tags: ['admin'],
         params: Type.Object({ id: Type.String({ format: 'uuid' }) }),
-        response: { 200: PassthroughResponse, ...errorResponses },
+        response: { 200: PassthroughResponse, ...localErrors },
       },
     },
     async (request) => {
@@ -98,9 +115,23 @@ const adminRoutes: FastifyPluginAsync = async (fastify) => {
 
   // ── tracked players ────────────────────────────────────────────────────────
 
-  fastify.get('/v1/admin/tracked-players', adminScope, async () => ({
-    players: await listPlayers(),
-  }));
+  fastify.get(
+    '/v1/admin/tracked-players',
+    {
+      ...adminScope,
+      schema: {
+        tags: ['admin'],
+        summary: 'List known players',
+        description:
+          'Every player row for the current `keyScope`, tracked or not — tracking is a flag on ' +
+          'the row, not a separate table, and an untracked row still carries the identity and ' +
+          'backfill state a later lookup reuses. Rows written under a previous Riot key are ' +
+          'not returned: PUUIDs are encrypted per key (§7.4).',
+        response: { 200: PlayerListResponse, ...localErrors },
+      },
+    },
+    async () => ({ players: await listPlayers() }),
+  );
 
   /**
    * Accepts either a PUUID or a Riot ID. Resolving the Riot ID here means the
@@ -120,7 +151,10 @@ const adminRoutes: FastifyPluginAsync = async (fastify) => {
           tagLine: Type.Optional(TagLineParam),
           tracked: Type.Optional(Type.Boolean({ default: true })),
         }),
-        response: { 200: PassthroughResponse, ...errorResponses },
+        // The one admin route that leaves the process: given a Riot ID rather
+        // than a PUUID it resolves the account upstream, so it inherits Riot's
+        // failures along with our own.
+        response: { 200: PassthroughResponse, ...upstreamErrors },
       },
     },
     async (request) => {
@@ -188,7 +222,7 @@ const adminRoutes: FastifyPluginAsync = async (fastify) => {
       schema: {
         tags: ['admin'],
         params: Type.Object({ puuid: PuuidParam }),
-        response: { 200: PassthroughResponse, ...errorResponses },
+        response: { 200: PassthroughResponse, ...localErrors },
       },
     },
     async (request) => {
@@ -211,7 +245,7 @@ const adminRoutes: FastifyPluginAsync = async (fastify) => {
         body: Type.Object({
           pattern: Type.String({ minLength: 1, maxLength: 200 }),
         }),
-        response: { 200: PassthroughResponse, ...errorResponses },
+        response: { 200: PassthroughResponse, ...localErrors },
       },
     },
     async (request) => {
@@ -235,7 +269,7 @@ const adminRoutes: FastifyPluginAsync = async (fastify) => {
           limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 10_000, default: 500 })),
           fetchTimeline: Type.Optional(Type.Boolean({ default: false })),
         }),
-        response: { 200: PassthroughResponse, ...errorResponses },
+        response: { 200: PassthroughResponse, ...localErrors },
       },
     },
     async (request) => {
@@ -256,7 +290,7 @@ const adminRoutes: FastifyPluginAsync = async (fastify) => {
         body: Type.Optional(
           Type.Object({ force: Type.Optional(Type.Boolean({ default: false })) }),
         ),
-        response: { 200: PassthroughResponse, ...errorResponses },
+        response: { 200: PassthroughResponse, ...localErrors },
       },
     },
     async (request) => {
@@ -268,11 +302,26 @@ const adminRoutes: FastifyPluginAsync = async (fastify) => {
 
   // ── status ─────────────────────────────────────────────────────────────────
 
-  fastify.get('/v1/admin/stats', adminScope, async () => ({
-    keyScope: config.KEY_SCOPE,
-    archivedMatches: await countArchivedMatches(),
-    trackedPlayers: (await listPlayers()).filter((p) => p.tracked).length,
-  }));
+  fastify.get(
+    '/v1/admin/stats',
+    {
+      ...adminScope,
+      schema: {
+        tags: ['admin'],
+        summary: 'Archive and tracking counts',
+        description:
+          '`archivedMatches` counts the whole archive, which is not key-scoped — match IDs are ' +
+          'not encrypted, so it survives a key rotation. `trackedPlayers` is scoped to the ' +
+          'current key and will read as zero immediately after one.',
+        response: { 200: AdminStatsResponse, ...localErrors },
+      },
+    },
+    async () => ({
+      keyScope: config.KEY_SCOPE,
+      archivedMatches: await countArchivedMatches(),
+      trackedPlayers: (await listPlayers()).filter((p) => p.tracked).length,
+    }),
+  );
 
   /** Revoking a key must take effect immediately, not after the 300 s auth TTL. */
   fastify.post(
@@ -283,7 +332,7 @@ const adminRoutes: FastifyPluginAsync = async (fastify) => {
         tags: ['admin'],
         params: Type.Object({ id: Type.String({ format: 'uuid' }) }),
         body: Type.Object({ keyHash: Type.String({ minLength: 64, maxLength: 64 }) }),
-        response: { 200: PassthroughResponse, ...errorResponses },
+        response: { 200: PassthroughResponse, ...localErrors },
       },
     },
     async (request) => {

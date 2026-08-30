@@ -24,19 +24,23 @@ const devUiRoutes: FastifyPluginAsync = async (fastify) => {
    * What the page cannot work out for itself: whether it needs to ask for a
    * key at all, and which platforms this build knows about.
    */
-  fastify.get('/dev/config.json', { config: { public: true } }, async (_request, reply) => {
-    reply.header('Cache-Control', 'no-store');
-    return {
-      authDisabled: config.authDisabled,
-      defaultPlatform: config.DEFAULT_PLATFORM,
-      regions: REGIONS,
-      platforms: PLATFORMS.map((value) => ({
-        value,
-        label: PLATFORM_LABELS[value],
-        region: platformToRegion(value),
-      })),
-    };
-  });
+  fastify.get(
+    '/dev/config.json',
+    { config: { public: true }, schema: { hide: true } },
+    async (_request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      return {
+        authDisabled: config.authDisabled,
+        defaultPlatform: config.DEFAULT_PLATFORM,
+        regions: REGIONS,
+        platforms: PLATFORMS.map((value) => ({
+          value,
+          label: PLATFORM_LABELS[value],
+          region: platformToRegion(value),
+        })),
+      };
+    },
+  );
 
   /**
    * `/dev/NinjaGoldfinch-OCENZ` is a client-side route, so every path under
@@ -57,8 +61,10 @@ const devUiRoutes: FastifyPluginAsync = async (fastify) => {
     return html;
   };
 
-  fastify.get('/dev', { config: { public: true } }, serve);
-  fastify.get('/dev/*', { config: { public: true } }, serve);
+  // Hidden from the OpenAPI document rather than described in it: the dev UI is
+  // a tool, not part of the contract, and it does not exist in production.
+  fastify.get('/dev', { config: { public: true }, schema: { hide: true } }, serve);
+  fastify.get('/dev/*', { config: { public: true }, schema: { hide: true } }, serve);
 };
 
 export default devUiRoutes;

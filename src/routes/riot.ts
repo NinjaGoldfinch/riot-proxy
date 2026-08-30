@@ -10,7 +10,7 @@ import {
   PuuidParam,
   RegionParam,
   TagLineParam,
-  errorResponses,
+  upstreamErrors,
 } from './schemas.js';
 
 /**
@@ -28,7 +28,7 @@ const riotRoutes: FastifyPluginAsync = async (fastify) => {
           gameName: GameNameParam,
           tagLine: TagLineParam,
         }),
-        response: { 200: PassthroughResponse, ...errorResponses },
+        response: { 200: PassthroughResponse, ...upstreamErrors },
       },
     },
     async (request, reply) => {
@@ -52,7 +52,7 @@ const riotRoutes: FastifyPluginAsync = async (fastify) => {
       schema: {
         tags: ['riot'],
         params: Type.Object({ region: RegionParam, puuid: PuuidParam }),
-        response: { 200: PassthroughResponse, ...errorResponses },
+        response: { 200: PassthroughResponse, ...upstreamErrors },
       },
     },
     async (request, reply) => {

@@ -74,6 +74,10 @@ export const PINNED: Record<string, string> = {
   // Pinned on so the /dev surface is always exercised, and never left to
   // NODE_ENV's default.
   DEV_UI: 'true',
+  // Likewise: pinned on so every app the suite builds carries the docs plugin,
+  // and the document is generated on every run rather than only when someone
+  // remembers to look at it.
+  DOCS_UI: 'true',
 };
 
 for (const [key, fallback] of Object.entries(CONNECTIONS)) {

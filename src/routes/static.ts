@@ -3,7 +3,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { ProxyError } from '../errors.js';
 import { DATA_FILES, currentVersion, fetchVersions, readStatic } from '../static/ddragon.js';
 import { applyCacheHeaders } from './helpers.js';
-import { PassthroughResponse, errorResponses } from './schemas.js';
+import { PassthroughResponse, localErrors } from './schemas.js';
 
 /**
  * §6.2 — the local Data Dragon mirror. These routes never make an upstream
@@ -22,7 +22,7 @@ const FILE_ALIASES: Record<string, string> = {
 const staticRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get(
     '/v1/static/versions',
-    { schema: { tags: ['static'], response: { 200: PassthroughResponse, ...errorResponses } } },
+    { schema: { tags: ['static'], response: { 200: PassthroughResponse, ...localErrors } } },
     async (_request, reply) => {
       const version = await currentVersion();
       const mirrored = await readStatic('versions', version);
@@ -45,7 +45,7 @@ const staticRoutes: FastifyPluginAsync = async (fastify) => {
           }),
         }),
         querystring: Type.Object({ version: Type.Optional(Type.String({ maxLength: 20 })) }),
-        response: { 200: PassthroughResponse, ...errorResponses },
+        response: { 200: PassthroughResponse, ...localErrors },
       },
     },
     async (request, reply) => {

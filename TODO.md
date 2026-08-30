@@ -53,6 +53,11 @@ missing. Phases refer to §15 of [the spec](docs/riot-proxy-spec.md).
 - [x] The composite match page returns a summary per match — the requesting
       player's own line — instead of ten full match-v5 payloads; the whole
       document stays available per match from the archive
+- [x] An OpenAPI document at `/openapi.json` and a browsable, callable API
+      reference at `/docs`, generated from the route schemas so the contract
+      cannot drift from what the server enforces (#58, stages #59–#66). The
+      README's consumer guide is gone, replaced by a link — the endpoint table
+      was hand-maintained and one forgotten row from being wrong.
 
 ## Next
 

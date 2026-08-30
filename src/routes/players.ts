@@ -1,4 +1,4 @@
-import { Type } from '@sinclair/typebox';
+import { Type, type Static } from '@sinclair/typebox';
 import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import { config } from '../config.js';
 import { upsertPlayer } from '../db/players.js';
@@ -20,11 +20,14 @@ import {
   GameNameParam,
   MatchPageQuery,
   MatchPageResponse,
-  PassthroughResponse,
+  MatchPageResponseSchema,
+  ProfileResponse,
+  ProfileResponseSchema,
+  BackfillNoticeSchema,
   PlatformParam,
   PuuidParam,
   TagLineParam,
-  errorResponses,
+  upstreamErrors,
 } from './schemas.js';
 
 /**
@@ -88,7 +91,7 @@ const playerRoutes: FastifyPluginAsync = async (fastify) => {
           topMastery: Type.Optional(Type.Integer({ minimum: 1, maximum: 20, default: 5 })),
           refresh: RefreshQuery,
         }),
-        response: { 200: PassthroughResponse, ...errorResponses },
+        response: { 200: ProfileResponse, ...upstreamErrors },
       },
     },
     async (request, reply) => {
@@ -123,7 +126,7 @@ const playerRoutes: FastifyPluginAsync = async (fastify) => {
           topMastery: Type.Optional(Type.Integer({ minimum: 1, maximum: 20, default: 5 })),
           refresh: RefreshQuery,
         }),
-        response: { 200: PassthroughResponse, ...errorResponses },
+        response: { 200: ProfileResponse, ...upstreamErrors },
       },
     },
     async (request, reply) => {
@@ -180,7 +183,7 @@ const playerRoutes: FastifyPluginAsync = async (fastify) => {
         tags: ['players'],
         params: Type.Object({ puuid: PuuidParam }),
         querystring: MatchPageQuery,
-        response: { 200: MatchPageResponse, ...errorResponses },
+        response: { 200: MatchPageResponse, ...upstreamErrors },
       },
     },
     async (request, reply) => {
@@ -251,26 +254,12 @@ function fulfilled(settled: PromiseSettledResult<FetchResult<unknown>>[]): Fetch
     .map((s) => s.value);
 }
 
-interface ProfileBody {
-  puuid: string;
-  platform: Platform;
-  region: string;
-  account: unknown;
-  summoner: unknown;
-  league: unknown;
-  mastery: unknown;
-  /**
-   * Per part, how long its content has been unchanged. The top-level
-   * `X-Cache-Age` is the stalest of these, which is the right answer for a
-   * cache header and the wrong one for a caller labelling four independent
-   * sections — an account that has not changed in a day would otherwise make a
-   * rank that moved a minute ago look a day old.
-   */
-  ageSeconds: Record<string, number | null>;
-  refreshed: boolean;
-  refreshAvailableIn: number;
-  warnings: string[];
-}
+/**
+ * Derived from the schema Fastify serialises with (#63), not declared beside
+ * it. The two used to be written out separately, which meant a field could be
+ * added to one and silently dropped by the other.
+ */
+type ProfileBody = Static<typeof ProfileResponseSchema>;
 
 async function composeProfile(opts: {
   platform: Platform;
@@ -362,11 +351,7 @@ async function rememberIdentity(
   }
 }
 
-interface BackfillNotice {
-  jobId: string;
-  status: 'queued' | 'already-queued';
-  limit: number;
-}
+type BackfillNotice = Static<typeof BackfillNoticeSchema>;
 
 /**
  * The first time anyone asks for a player, walk their whole history into the
@@ -420,32 +405,7 @@ async function maybeBackfill(opts: {
   }
 }
 
-interface MatchPageBody {
-  puuid: string;
-  platform: Platform;
-  region: string;
-  start: number;
-  count: number;
-  matchIds: string[];
-  /**
-   * One summary per id that resolved — the requesting player's line in each
-   * game, not the game (`match-summary.ts`). Shorter than `matchIds` when a
-   * match could not be fetched; `warnings[]` names the ones missing.
-   */
-  matches: MatchSummary[];
-  /** A full page came back, so there is probably another one behind it. */
-  hasMore: boolean;
-  /**
-   * How long the id list has been unchanged. The matches behind it are
-   * immutable, so this is the only age on the page that can mean anything.
-   */
-  matchIdsAgeSeconds: number;
-  /** Set when this lookup queued the player's history for archiving. */
-  backfill: BackfillNotice | null;
-  refreshed: boolean;
-  refreshAvailableIn: number;
-  warnings: string[];
-}
+type MatchPageBody = Static<typeof MatchPageResponseSchema>;
 
 async function composeMatches(opts: {
   platform: Platform;

@@ -78,6 +78,20 @@ jobs:
       - name: Migrate
         run: npm run migrate
 
+      # The committed document is the contract as shipped, so a change to it
+      # should be a reviewable diff in the pull request that causes it rather
+      # than something a consumer discovers. Runs after Migrate because
+      # `buildApp()` reaches `ready()` through the rate-limit plugin and the
+      # websocket hub, both of which want Redis — which the services above
+      # provide by this point.
+      - name: OpenAPI document is up to date
+        run: |
+          npm run docs:spec
+          git diff --exit-code -- openapi.json || {
+            echo "::error::openapi.json is stale. Run 'npm run docs:spec' and commit the result."
+            exit 1
+          }
+
       - name: Test
         run: npm test
 
