@@ -18,6 +18,7 @@
     "reset:cache": "tsx src/cli/reset-cache.ts",
     "reset:db": "tsx src/cli/reset-db.ts",
     "reset:all": "bash scripts/reset.sh",
+    "docs:spec": "tsx src/cli/write-spec.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",

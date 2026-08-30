@@ -51,9 +51,8 @@ Three things it does that calling Riot directly does not:
 
 - **It stays inside Riot's rate limits for you.** Limits are read from Riot's own
   response headers rather than assumed, and user-invoked requests are served
-  ahead of background work — bulk jobs stop taking tokens once a bucket is
-  ${Math.round(config.BULK_USAGE_CEILING * 100)} % full, so the rest stays free
-  for a request someone is waiting on.
+  ahead of background work. Bulk jobs stop taking tokens once a bucket is ${Math.round(config.BULK_USAGE_CEILING * 100)} % full,
+  so the rest stays free for a request someone is waiting on.
 - **It caches and archives.** Repeated reads are served from Redis; matches are
   immutable, so they are archived in Postgres and re-reading a player's history
   costs no quota at all.
@@ -128,16 +127,17 @@ why \`keyScope\` appears in \`/readyz\` and \`/v1/admin/stats\`. Match IDs are
 ## Costs
 
 - The composite endpoints accept \`?refresh=true\` to spend quota on re-reading
-  rather than serving cache. It is metered at one refresh per player per
-  ${REFRESH_COOLDOWN_S} s; the response says whether your claim won
-  (\`refreshed\`) and when the next one is available (\`refreshAvailableIn\`).
+  rather than serving cache. It is metered at one refresh per player per ${REFRESH_COOLDOWN_S} s.
+  The response says whether your claim won (\`refreshed\`) and when the next one
+  is available (\`refreshAvailableIn\`).
 - The first time anyone looks a player up, the proxy queues a walk of their
   whole match history${
     config.LOOKUP_BACKFILL_LIMIT > 0
-      ? ` — up to ${config.LOOKUP_BACKFILL_LIMIT.toLocaleString('en-US')} matches`
+      ? `, up to ${config.LOOKUP_BACKFILL_LIMIT.toLocaleString('en-US')} matches`
       : ' (disabled on this deployment)'
-  }. It runs at bulk priority, out of your way, and it is why the second page
-  view is free.
+  }.
+  It runs at bulk priority, out of your way, and it is why the second page view
+  is free.
 `.trim();
 
 /**

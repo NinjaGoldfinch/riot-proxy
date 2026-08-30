@@ -485,6 +485,7 @@ Every archive job therefore carries an explicit priority.
 | `BOOTSTRAP_ADMIN_KEY`                        | —                                                 | Seeds one admin key on `npm run migrate`                |
 | `AUTH_DISABLED`                              | `false`                                           | Dev only: skip key checks; refused in production        |
 | `DEV_UI`                                     | follows `NODE_ENV`                                | Serve the browser client at `/dev`; off in production   |
+| `DOCS_UI`                                    | `true`                                            | Serve `/docs`, `/openapi.json` and `/openapi.yaml`      |
 | `LOG_LEVEL`                                  | `info`                                            |                                                         |
 
 `KEY_SCOPE` is derived, not configured.
@@ -540,7 +541,14 @@ npm test              # unit + integration, no Riot key needed
 npm run lint          # eslint
 npm run typecheck     # tsc --noEmit
 npm run format        # prettier
+npm run docs:spec     # regenerate openapi.json from the route schemas
 ```
+
+`openapi.json` is generated, committed, and checked by CI: change a route's
+schema without regenerating it and the build fails. It is written against the
+schema defaults rather than your `.env`, so the committed file is the contract
+as shipped — a deployment that tunes anything gets a document that agrees with
+it from its own `/openapi.json`, which is generated live.
 
 Tests that need Redis or Postgres skip themselves when those are unreachable, so
 `npm test` works with nothing running — but `docker compose up -d` first gets
