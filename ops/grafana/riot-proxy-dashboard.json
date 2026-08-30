@@ -9,7 +9,8 @@
   "panels": [
     {
       "type": "stat",
-      "title": "Cache hit ratio",
+      "title": "Cache hit ratio (5m)",
+      "description": "Reads answered from cache or the archive, over all cacheable reads. Rate-based, so it reflects the last five minutes rather than the average since the process started.",
       "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
       "fieldConfig": {
         "defaults": {
@@ -24,7 +25,12 @@
           }
         }
       },
-      "targets": [{ "expr": "proxy_cache_hit_ratio", "legendFormat": "hit ratio" }]
+      "targets": [
+        {
+          "expr": "sum(rate(proxy_cache_reads_total{state=~\"hit|neg|stale\"}[5m])) / sum(rate(proxy_cache_reads_total[5m]))",
+          "legendFormat": "hit ratio"
+        }
+      ]
     },
     {
       "type": "stat",

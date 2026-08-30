@@ -41,9 +41,24 @@ export const rl429Total = new Counter({
   registers: [registry],
 });
 
-export const cacheHitRatio = new Gauge({
-  name: 'proxy_cache_hit_ratio',
-  help: 'Rolling cache hit ratio across all cacheable reads',
+/**
+ * §13 wants a cache hit ratio. It is exposed as a counter pair rather than a
+ * ready-made ratio so the *window* belongs to whoever asks the question.
+ *
+ * A gauge cannot carry one. The previous one divided two process-lifetime
+ * counters, so it reported the average since boot and grew steadily less able
+ * to move: after a week of healthy traffic a total cache outage barely dented
+ * it, and `CacheHitRatioLow` — which alerts below 70 % — quietly stopped being
+ * able to fire. It was also per-process, so api and worker each published their
+ * own and the alert's bare comparison matched them one at a time.
+ *
+ * `sum(rate(...))` over a label selector answers all of that: recent by
+ * construction, and aggregated across processes before the division.
+ */
+export const cacheReadsTotal = new Counter({
+  name: 'proxy_cache_reads_total',
+  help: 'Cacheable reads served, by cache outcome',
+  labelNames: ['state'] as const,
   registers: [registry],
 });
 
@@ -67,20 +82,13 @@ export const archivedMatchesTotal = new Counter({
 });
 
 /**
- * The hit ratio gauge needs its own accounting: a Counter pair would force
- * every scrape to do the division in PromQL, and §13 alerts on the gauge.
+ * Outcomes that spared an upstream call. `stale` counts as a hit because the
+ * caller was answered from cache; the refresh it triggers is counted separately
+ * when it runs.
  */
-let hits = 0;
-let total = 0;
+export const CACHE_HIT_STATES = ['hit', 'neg', 'stale'] as const;
+export type CacheOutcome = 'hit' | 'miss' | 'neg' | 'stale';
 
-export function recordCacheOutcome(state: 'hit' | 'miss' | 'neg' | 'stale'): void {
-  total += 1;
-  if (state === 'hit' || state === 'neg' || state === 'stale') hits += 1;
-  cacheHitRatio.set(total === 0 ? 0 : hits / total);
-}
-
-export function resetCacheRatio(): void {
-  hits = 0;
-  total = 0;
-  cacheHitRatio.set(0);
+export function recordCacheOutcome(state: CacheOutcome): void {
+  cacheReadsTotal.inc({ state });
 }
