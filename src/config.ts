@@ -35,8 +35,8 @@ const EnvSchema = Type.Object({
    * §9.3 with the reserve set deliberately: bulk work stops taking tokens once
    * a bucket is this full, so the remainder stays free for user-invoked
    * requests. 0.80 keeps a fifth of every bucket for them — the spec's opening
-   * figure was 0.75, tightened here because bulk has more to do than it did
-   * when that number was chosen.
+   * figure was 0.75, tightened here because a first lookup now queues a full
+   * history behind it and bulk has far more to do than it used to.
    */
   BULK_USAGE_CEILING: Type.Number({ default: 0.8, minimum: 0, maximum: 1 }),
   STALE_WHILE_REVALIDATE: Type.Boolean({ default: true }),
@@ -65,6 +65,13 @@ const EnvSchema = Type.Object({
    * Refused outright when NODE_ENV=production (see `parseEnv`).
    */
   AUTH_DISABLED: Type.Boolean({ default: false }),
+
+  /**
+   * Serve the throwaway browser UI under `/dev` (see `public/dev-ui.html`).
+   * Left unset it follows NODE_ENV: on everywhere but production, where a
+   * debugging page that advertises whether auth is off has no business being.
+   */
+  DEV_UI: Type.Optional(Type.Boolean()),
 });
 
 export type Env = Static<typeof EnvSchema>;
@@ -134,6 +141,7 @@ export const config = {
   ttlOverrides,
   adminIpAllowlist,
   authDisabled: env.AUTH_DISABLED,
+  devUi: env.DEV_UI ?? env.NODE_ENV !== 'production',
   isProduction: env.NODE_ENV === 'production',
   isTest: env.NODE_ENV === 'test',
 } as const;

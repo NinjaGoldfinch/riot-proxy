@@ -68,6 +68,9 @@ export const PINNED: Record<string, string> = {
   // The suite asserts the auth rejections themselves, so a local
   // AUTH_DISABLED=true must never bleed in and silently neuter those tests.
   AUTH_DISABLED: 'false',
+  // Pinned on so the /dev surface is always exercised, and never left to
+  // NODE_ENV's default.
+  DEV_UI: 'true',
 };
 
 for (const [key, fallback] of Object.entries(CONNECTIONS)) {

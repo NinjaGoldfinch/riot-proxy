@@ -288,3 +288,45 @@ describe('admin IP allowlist (§12.1)', () => {
     expect(ipAllowed(undefined, ['127.0.0.1'])).toBe(false);
   });
 });
+
+/**
+ * The dev UI is a tool, not a contract, but two things about it are load-
+ * bearing: the page has to load without a key (a browser has nowhere to put
+ * one before it renders the field), and the API calls it makes must not.
+ */
+describe('dev UI (/dev)', () => {
+  it('serves the page without a key', async ({ skip }) => {
+    if (!available || !app) return skip();
+    const res = await app.inject({ method: 'GET', url: '/dev' });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toContain('text/html');
+    expect(res.body).toContain('riot-proxy');
+  });
+
+  it('serves the same document for a client-side profile route', async ({ skip }) => {
+    if (!available || !app) return skip();
+    const root = await app.inject({ method: 'GET', url: '/dev' });
+    const deep = await app.inject({ method: 'GET', url: '/dev/NinjaGoldfinch-OCENZ?platform=oc1' });
+    expect(deep.statusCode).toBe(200);
+    expect(deep.body).toBe(root.body);
+  });
+
+  it('publishes the platform table the page builds its selector from', async ({ skip }) => {
+    if (!available || !app) return skip();
+    const res = await app.inject({ method: 'GET', url: '/dev/config.json' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body).toMatchObject({ authDisabled: false, defaultPlatform: 'euw1' });
+    expect(body.platforms).toContainEqual({ value: 'oc1', label: 'Oceania', region: 'sea' });
+  });
+
+  it('still requires a key for the data the page fetches', async ({ skip }) => {
+    if (!available || !app) return skip();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/players/by-riot-id/NinjaGoldfinch/OCENZ/profile?platform=oc1',
+    });
+    expect(res.statusCode).toBe(401);
+    expect(res.json().error.code).toBe('UNAUTHORIZED');
+  });
+});
