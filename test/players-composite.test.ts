@@ -14,6 +14,7 @@ import { ProxyError } from '../src/errors.js';
 type Reply = { data: unknown } | { error: unknown };
 
 const calls: BuiltRequest[] = [];
+const bypassFlags: { method: MethodId; bypass: boolean }[] = [];
 let replies = new Map<MethodId, Reply | ((req: BuiltRequest) => Reply)>();
 
 vi.mock('../src/fetcher.js', async (importOriginal) => {
@@ -21,8 +22,9 @@ vi.mock('../src/fetcher.js', async (importOriginal) => {
   return {
     ...actual,
     fetcher: {
-      fetch: async (req: BuiltRequest) => {
+      fetch: async (req: BuiltRequest, opts?: { bypassCache?: boolean }) => {
         calls.push(req);
+        bypassFlags.push({ method: req.method, bypass: opts?.bypassCache === true });
         const entry = replies.get(req.method);
         const reply = typeof entry === 'function' ? entry(req) : entry;
         if (!reply) throw ProxyError.notFound(`no stub for ${req.method}`);
@@ -36,6 +38,7 @@ vi.mock('../src/fetcher.js', async (importOriginal) => {
 const { buildApp } = await import('../src/app.js');
 const { closeDb, pingDb } = await import('../src/db/index.js');
 const { closeRedis, redis } = await import('../src/redis.js');
+const { config } = await import('../src/config.js');
 const { wsHub } = await import('../src/ws/index.js');
 const { createTestConsumer, removeTestConsumers, testConsumerName } =
   await import('./helpers/consumers.js');
@@ -74,10 +77,20 @@ afterAll(async () => {
   await Promise.allSettled([closeRedis(), closeDb()]);
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   calls.length = 0;
+  bypassFlags.length = 0;
   replies = new Map();
+  if (available) {
+    // Each test starts with the refresh window open.
+    const keys = await redis.keys(`refresh:${config.KEY_SCOPE}:*`);
+    if (keys.length) await redis.del(...keys);
+  }
 });
+
+const bypassed = (method: MethodId) =>
+  calls.filter((c) => c.method === method).length > 0 &&
+  bypassFlags.filter((f) => f.method === method).every((f) => f.bypass);
 
 describe('composite profile (§6.3)', () => {
   it('resolves a Riot ID and reuses that account as the composite part', async ({ skip }) => {
@@ -248,5 +261,136 @@ describe('composite match page (§6.3)', () => {
     expect(res.statusCode).toBe(400);
     expect(res.json().error.code).toBe('VALIDATION');
     expect(calls).toHaveLength(0);
+  });
+});
+
+/**
+ * A profile view must not spend upstream quota on a player nobody asked to
+ * re-read — that is what the cache is for — and the manual override that does
+ * spend it has to be metered where a browser cannot route around it.
+ */
+describe('manual refresh (60s per player)', () => {
+  const stubProfile = () => {
+    replies.set('account.byRiotId', { data: { puuid: PUUID, gameName: 'N', tagLine: 'OCE' } });
+    replies.set('account.byPuuid', { data: { puuid: PUUID } });
+    replies.set('summoner.byPuuid', { data: { summonerLevel: 1 } });
+    replies.set('league.entriesByPuuid', { data: [] });
+    replies.set('mastery.topByPuuid', { data: [] });
+  };
+
+  it('reads through the cache when no refresh is asked for', async ({ skip }) => {
+    if (!available || !app) return skip();
+    stubProfile();
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/v1/players/${PUUID}/profile`,
+      headers: auth(),
+    });
+
+    expect(res.json()).toMatchObject({ refreshed: false, refreshAvailableIn: 0 });
+    expect(bypassFlags.every((f) => !f.bypass)).toBe(true);
+  });
+
+  it('bypasses the cache on the first refresh and refuses the next for 60s', async ({ skip }) => {
+    if (!available || !app) return skip();
+    stubProfile();
+
+    const first = await app.inject({
+      method: 'GET',
+      url: `/v1/players/${PUUID}/profile?refresh=true`,
+      headers: auth(),
+    });
+    expect(first.json()).toMatchObject({ refreshed: true, refreshAvailableIn: 60 });
+    expect(bypassed('summoner.byPuuid')).toBe(true);
+
+    bypassFlags.length = 0;
+    const second = await app.inject({
+      method: 'GET',
+      url: `/v1/players/${PUUID}/profile?refresh=true`,
+      headers: auth(),
+    });
+    // Not an error: whoever won the window wrote these values seconds ago.
+    expect(second.statusCode).toBe(200);
+    expect(second.json().refreshed).toBe(false);
+    expect(second.json().refreshAvailableIn).toBeGreaterThan(0);
+    expect(second.json().refreshAvailableIn).toBeLessThanOrEqual(60);
+    expect(bypassFlags.every((f) => !f.bypass)).toBe(true);
+  });
+
+  it('reports the running cooldown to a plain lookup, so a UI can show it', async ({ skip }) => {
+    if (!available || !app) return skip();
+    stubProfile();
+
+    await app.inject({
+      method: 'GET',
+      url: `/v1/players/${PUUID}/profile?refresh=true`,
+      headers: auth(),
+    });
+    const plain = await app.inject({
+      method: 'GET',
+      url: `/v1/players/${PUUID}/profile`,
+      headers: auth(),
+    });
+    expect(plain.json().refreshAvailableIn).toBeGreaterThan(0);
+  });
+
+  it('keys the window on the PUUID, whichever way the profile was entered', async ({ skip }) => {
+    if (!available || !app) return skip();
+    stubProfile();
+
+    const byRiotId = await app.inject({
+      method: 'GET',
+      url: '/v1/players/by-riot-id/N/OCE/profile?platform=oc1&refresh=true',
+      headers: auth(),
+    });
+    expect(byRiotId.json().refreshed).toBe(true);
+    // The Riot ID mapping is only consulted for the PUUID it carries, so the
+    // account part is re-read by PUUID along with everything else.
+    expect(methodsCalled()).toContain('account.byPuuid');
+
+    const byPuuid = await app.inject({
+      method: 'GET',
+      url: `/v1/players/${PUUID}/profile?refresh=true`,
+      headers: auth(),
+    });
+    expect(byPuuid.json().refreshed).toBe(false);
+  });
+
+  it('refreshes only the id list, never the immutable matches behind it', async ({ skip }) => {
+    if (!available || !app) return skip();
+    replies.set('match.idsByPuuid', { data: ['OC1_1'] });
+    replies.set('match.byId', { data: { metadata: { matchId: 'OC1_1' } } });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/v1/players/${PUUID}/matches?platform=oc1&refresh=true`,
+      headers: auth(),
+    });
+
+    expect(res.json()).toMatchObject({ refreshed: true, refreshAvailableIn: 60 });
+    expect(bypassed('match.idsByPuuid')).toBe(true);
+    // Re-downloading an archived match would cost quota to learn nothing.
+    expect(bypassFlags.filter((f) => f.method === 'match.byId').every((f) => !f.bypass)).toBe(true);
+  });
+
+  it('meters matches and profile independently, so one Update covers both', async ({ skip }) => {
+    if (!available || !app) return skip();
+    stubProfile();
+    replies.set('match.idsByPuuid', { data: [] });
+
+    const profile = await app.inject({
+      method: 'GET',
+      url: `/v1/players/${PUUID}/profile?refresh=true`,
+      headers: auth(),
+    });
+    const matches = await app.inject({
+      method: 'GET',
+      url: `/v1/players/${PUUID}/matches?platform=oc1&refresh=true`,
+      headers: auth(),
+    });
+
+    expect(profile.json().refreshed).toBe(true);
+    expect(matches.json().refreshed).toBe(true);
   });
 });
