@@ -499,6 +499,43 @@ Tests that need Redis or Postgres skip themselves when those are unreachable, so
 `npm test` works with nothing running — but `docker compose up -d` first gets
 you the limiter, HTTP-surface and WebSocket suites too.
 
+### Starting over
+
+Three levels of teardown, smallest first. All of them refuse to run while
+`NODE_ENV=production` unless you pass `--force` (`--yes` for `reset:all`).
+
+```bash
+npm run reset:cache   # cached responses, negative markers, single-flight locks
+npm run reset:db      # truncate every table; schema and migrations stay put
+npm run reset:all     # volumes, dist/, data/, node_modules → rebuild from scratch
+```
+
+`reset:cache` deletes only keys under this deployment's `KEY_SCOPE` (§7.4), so a
+Redis shared with another proxy — or holding the previous Riot key's namespace —
+is left alone. It leaves the limiter's learned buckets, the job queues, consumer
+quotas and the auth cache in place, since none of those are cache.
+
+```bash
+npm run reset:cache -- --limiter   # also drop the learned rate-limit buckets
+npm run reset:cache -- --all       # FLUSHDB: everything, every key scope
+npm run reset:db -- --keep-consumers   # keep minted API keys
+```
+
+Dropping the limiter buckets means the next few requests re-learn the windows
+from Riot's response headers, which is safe but briefly conservative. `--all`
+also drops queued jobs, so anything mid-backfill is lost — re-enqueue it.
+
+`reset:all` is the full remake: `docker compose down -v`, remove `dist/`,
+`data/` and `node_modules`, bring the stack back up on its healthchecks, then
+`npm ci`, `npm run migrate` and `npm run build`. It never touches `.env` — that
+holds your Riot key — and copies `.env.example` over only if no `.env` exists.
+It asks first; `--yes` skips the prompt and `--keep-deps` skips the reinstall.
+
+Everything `reset:cache` and `reset:db` delete is re-derivable from Riot, at the
+cost of the quota to re-fetch it. The match archive is the expensive one: it is
+the only store here holding data Riot will not serve again cheaply, so prefer
+`--keep-consumers` and a targeted cache purge over `reset:all` on a warm box.
+
 ### Acceptance checks
 
 `npm test` stubs every upstream call. The checks that can only be answered by
