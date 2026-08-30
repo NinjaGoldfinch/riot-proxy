@@ -543,6 +543,15 @@ cost of the quota to re-fetch it. The match archive is the expensive one: it is
 the only store here holding data Riot will not serve again cheaply, so prefer
 `--keep-consumers` and a targeted cache purge over `reset:all` on a warm box.
 
+These are the only tools here that destroy data, so they are tested as
+processes rather than as functions — `test/reset-{cache,db,script}.test.ts`
+assert the exit codes and the refusals a developer would actually hit. The
+suite never points them at what you are working in: the cache tests run against
+Redis logical database **15**, the database tests create a throwaway database
+and drop it afterwards, and `reset.sh` is exercised only along the paths that
+refuse, with a fake `docker` ahead of the real one on `PATH` to prove it never
+reaches the destructive half. `shellcheck scripts/*.sh` runs in CI.
+
 ### Acceptance checks
 
 `npm test` stubs every upstream call. The checks that can only be answered by
