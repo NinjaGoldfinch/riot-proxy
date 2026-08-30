@@ -17,7 +17,7 @@ describe('config (§14, §7.4)', () => {
     expect(env.NEG_TTL_SECONDS).toBe(30);
     expect(env.SF_LOCK_MS).toBe(5000);
     expect(env.CLIENT_WAIT_BUDGET_MS).toBe(2000);
-    expect(env.BULK_USAGE_CEILING).toBe(0.75);
+    expect(env.BULK_USAGE_CEILING).toBe(0.8);
     expect(env.TRACK_POLL_LIVE_S).toBe(60);
     expect(env.TRACK_POLL_RANK_S).toBe(600);
     expect(env.TRACK_POLL_MATCH_S).toBe(300);
