@@ -4,6 +4,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { OpenAPIV3_1 } from 'openapi-types';
 import fp from 'fastify-plugin';
 import { ENDPOINTS, type EndpointSpec } from '../riot/endpoints.js';
+import { CODE_SAMPLES, ERROR_EXAMPLES, RIOT_EXAMPLES } from './examples.js';
 import { openApiDocument } from './openapi.js';
 
 /**
@@ -45,10 +46,39 @@ const ttlBadge = (s: number): string => {
   return `Cache ${s} s`;
 };
 
+interface MediaType {
+  schema?: Record<string, unknown>;
+  example?: unknown;
+  examples?: Record<string, { summary: string; value: unknown }>;
+}
+
 interface Operation {
   tags?: string[];
   security?: unknown[];
   'x-badges'?: { name: string }[];
+  'x-codeSamples'?: { lang: string; label: string; source: string }[];
+  responses?: Record<string, { content?: Record<string, MediaType> }>;
+}
+
+/**
+ * Examples are attached here rather than on the routes, so that describing a
+ * body and constraining one stay separable (#63). Riot's `200`s keep their
+ * empty schema and gain an example; nothing below can reach a validator or a
+ * serialiser.
+ */
+function attachExamples(path: string, op: Operation): void {
+  const json = (status: string) => op.responses?.[status]?.content?.['application/json'];
+
+  const riot = RIOT_EXAMPLES[path];
+  if (riot !== undefined) {
+    const media = json('200');
+    if (media) media.example = riot;
+  }
+
+  for (const [status, example] of Object.entries(ERROR_EXAMPLES)) {
+    const media = json(status);
+    if (media) media.examples = { [example.summary]: example };
+  }
 }
 
 /**
@@ -114,6 +144,11 @@ export const docsSpec: FastifyPluginAsync = fp(async (fastify) => {
 
           const badges = badgesFor(path, op);
           if (badges.length > 0) op['x-badges'] = badges.map((name) => ({ name }));
+
+          attachExamples(path, op);
+
+          const samples = CODE_SAMPLES[path];
+          if (samples) op['x-codeSamples'] = samples;
         }
       }
       return documentObject.openapiObject;

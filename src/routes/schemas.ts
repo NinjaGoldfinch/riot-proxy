@@ -136,38 +136,132 @@ export const MatchPageQuery = Type.Object({
 });
 
 /**
- * The composite match page is the one response that is not a Riot payload: it
- * is a document we assemble, and the matches on it are summaries (§6.3, and the
- * rationale in `match-summary.ts`). So unlike every other route it declares a
- * real response schema — which documents the shape and, because Fastify
- * serialises against it, guarantees a full match payload cannot find its way
- * back onto this endpoint.
+ * The composite bodies (#63). These are the proxy's own documents rather than
+ * Riot's, so §6.1's argument for leaving responses unconstrained does not reach
+ * them: they get real schemas, Fastify serialises against them, and the types
+ * in `players.ts` are derived from them with `Static<>` so the two cannot drift.
+ *
+ * The Riot-shaped parts inside them stay unconstrained. `account`, `summoner`,
+ * `league`, `mastery` and the match documents behind the summaries are still
+ * Riot's payloads, and validating their shape here would break the proxy the
+ * next time Riot adds a field.
  */
-export const MatchPageResponse = Type.Object(
+
+/** A part of a composite that failed is `null`, not absent. */
+const NullableAge = Type.Union([Type.Number(), Type.Null()]);
+
+/**
+ * A Riot payload embedded in one of our documents. `{}` rather than a typed
+ * schema: fast-json-stringify passes an empty schema through untouched, which
+ * is exactly the passthrough guarantee, and the alternative would strip every
+ * field Riot adds.
+ */
+const RiotPart = Type.Unsafe<unknown>({
+  description: "Riot's payload, verbatim, or `null` if that part failed — see `warnings`.",
+});
+
+export const BackfillNoticeSchema = Type.Object(
+  {
+    jobId: Type.String(),
+    status: Type.Unsafe<string>({
+      type: 'string',
+      enum: ['queued', 'already-queued'],
+      description: '`already-queued` means another request got there first, not that it failed.',
+    }),
+    limit: Type.Integer({ description: 'How far back the walk will go, in matches.' }),
+  },
+  {
+    $id: 'BackfillNotice',
+    description:
+      "Present when this lookup queued the player's history for archiving — the first time " +
+      'anyone asks for a player. The walk runs at bulk priority, out of the way of interactive ' +
+      'traffic, and is why the second page view costs no quota.',
+  },
+);
+export const BackfillNotice = Type.Unsafe<Static<typeof BackfillNoticeSchema>>({
+  $ref: 'BackfillNotice#',
+});
+
+export const ProfileResponseSchema = Type.Object(
+  {
+    puuid: Type.String(),
+    platform: Type.String(),
+    region: Type.String(),
+    account: RiotPart,
+    summoner: RiotPart,
+    league: RiotPart,
+    mastery: RiotPart,
+    /**
+     * Modelled as four named fields rather than an open map, because that is
+     * what it is — and an open `Record<string, number | null>` is the shape
+     * fast-json-stringify quietly drops the nulls out of.
+     */
+    ageSeconds: Type.Object(
+      {
+        account: NullableAge,
+        summoner: NullableAge,
+        league: NullableAge,
+        mastery: NullableAge,
+      },
+      {
+        description:
+          'Per part, how long its content has been unchanged. `X-Cache-Age` is the stalest of ' +
+          'these — the right answer for a cache header and the wrong one for labelling four ' +
+          'independent sections, since an account untouched for a day would otherwise make a ' +
+          'rank that moved a minute ago look a day old.',
+      },
+    ),
+    refreshed: Type.Boolean({
+      description: 'Whether this request won the refresh window and went upstream.',
+    }),
+    refreshAvailableIn: Type.Number({
+      description: 'Seconds until another `?refresh=true` is allowed for this player; 0 when now.',
+    }),
+    warnings: Type.Array(Type.String(), {
+      description:
+        'Names each part that could not be fetched. A composite returns what it has rather than ' +
+        'failing whole, so this is how a caller tells a missing section from an empty one.',
+    }),
+  },
+  { $id: 'ProfileBody' },
+);
+export const ProfileResponse = Type.Unsafe<Static<typeof ProfileResponseSchema>>({
+  $ref: 'ProfileBody#',
+});
+
+export const MatchPageResponseSchema = Type.Object(
   {
     puuid: Type.String(),
     platform: Type.String(),
     region: Type.String(),
     start: Type.Integer(),
     count: Type.Integer(),
-    matchIds: Type.Array(Type.String()),
-    matches: Type.Array(MatchSummarySchema),
-    hasMore: Type.Boolean(),
-    matchIdsAgeSeconds: Type.Number(),
-    backfill: Type.Union([
-      Type.Object({
-        jobId: Type.String(),
-        status: Type.Unsafe<string>({ type: 'string', enum: ['queued', 'already-queued'] }),
-        limit: Type.Integer(),
-      }),
-      Type.Null(),
-    ]),
+    matchIds: Type.Array(Type.String(), {
+      description: 'The id page as Riot returned it, including ids no summary could be built for.',
+    }),
+    matches: Type.Array(MatchSummarySchema, {
+      description:
+        "One summary per id that resolved — the requesting player's line in each game, not the " +
+        'game. Shorter than `matchIds` when a match could not be fetched.',
+    }),
+    hasMore: Type.Boolean({
+      description: 'A full page came back, so there is probably another behind it. Page on this.',
+    }),
+    matchIdsAgeSeconds: Type.Number({
+      description:
+        'How long the id list has been unchanged. The matches behind it are immutable, so this ' +
+        'is the only age on the page that can mean anything.',
+    }),
+    backfill: Type.Union([BackfillNotice, Type.Null()]),
     refreshed: Type.Boolean(),
     refreshAvailableIn: Type.Number(),
     warnings: Type.Array(Type.String()),
   },
   { $id: 'MatchPage' },
 );
+export const MatchPageResponse = Type.Unsafe<Static<typeof MatchPageResponseSchema>>({
+  $ref: 'MatchPage#',
+});
 
 /**
  * §9 — `/v1/admin/limits/:scope` reports one bucket, and a bucket is keyed by
@@ -369,4 +463,7 @@ export const sharedSchemas = [
   PuuidParamSchema,
   MatchIdParamSchema,
   ScopeParamSchema,
+  BackfillNoticeSchema,
+  ProfileResponseSchema,
+  MatchPageResponseSchema,
 ];

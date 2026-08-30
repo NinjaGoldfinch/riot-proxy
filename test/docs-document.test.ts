@@ -110,10 +110,16 @@ describe('shared components (#61)', () => {
   it('registers the envelope and the parameters under their own names', ({ skip }) => {
     if (!available || !doc) return skip();
     expect(Object.keys(doc.components?.schemas ?? {}).sort()).toEqual([
+      'BackfillNotice',
       'ErrorResponse',
       'GameNameParam',
       'MatchIdParam',
+      'MatchPage',
+      // Extracted on its own because `match-summary.ts` gives it a `$id`: the
+      // summary is the shape a caller renders, so it earns a sidebar entry.
+      'MatchSummary',
       'PlatformParam',
+      'ProfileBody',
       'PuuidParam',
       'RegionParam',
       'ScopeParam',
@@ -123,12 +129,20 @@ describe('shared components (#61)', () => {
 
   it('references the envelope instead of copying it 182 times', ({ skip }) => {
     if (!available || !doc) return skip();
-    // The envelope's distinctive field appears once: in the component itself.
-    const copies = (JSON.stringify(doc).match(/"retryAfter"/g) ?? []).length;
-    expect(copies).toBe(1);
-
-    const err = doc.paths['/v1/lol/status/{platform}'].get.responses['429'];
-    expect(err.content['application/json'].schema.$ref).toContain('ErrorResponse');
+    let referenced = 0;
+    let inlined = 0;
+    for (const ops of Object.values(doc.paths ?? {}))
+      for (const op of Object.values(ops as Record<string, any>))
+        for (const [status, response] of Object.entries(op.responses ?? {})) {
+          if (Number(status) < 400) continue;
+          const schema = (response as any).content?.['application/json']?.schema;
+          if (schema?.$ref?.includes('ErrorResponse')) referenced++;
+          else if (schema?.properties?.error) inlined++;
+        }
+    // Every one of them, and the definition still exists exactly once.
+    expect(inlined).toBe(0);
+    expect(referenced).toBeGreaterThan(150);
+    expect(doc.components.schemas.ErrorResponse.properties.error).toBeDefined();
   });
 
   it('describes a PUUID once, and the routes point at it', ({ skip }) => {
@@ -141,6 +155,107 @@ describe('shared components (#61)', () => {
       (p: { name: string }) => p.name === 'puuid',
     );
     expect(param.schema.$ref).toContain('PuuidParam');
+  });
+});
+
+describe('the composite bodies (#63)', () => {
+  it('names the fields a caller has to write code against', ({ skip }) => {
+    if (!available || !doc) return skip();
+    const profile = doc.components.schemas.ProfileBody;
+    expect(Object.keys(profile.properties).sort()).toEqual([
+      'account',
+      'ageSeconds',
+      'league',
+      'mastery',
+      'platform',
+      'puuid',
+      'refreshAvailableIn',
+      'refreshed',
+      'region',
+      'summoner',
+      'warnings',
+    ]);
+    // ageSeconds is four named parts, not an open map — the shape
+    // fast-json-stringify drops the nulls out of.
+    expect(Object.keys(profile.properties.ageSeconds.properties).sort()).toEqual([
+      'account',
+      'league',
+      'mastery',
+      'summoner',
+    ]);
+  });
+
+  it("leaves Riot's parts unconstrained inside our own document", ({ skip }) => {
+    if (!available || !doc) return skip();
+    const profile = doc.components.schemas.ProfileBody;
+    // No `type`, no `properties`: an empty schema, which is what makes the
+    // passthrough guarantee survive being embedded in a described body.
+    for (const part of ['account', 'summoner', 'league', 'mastery']) {
+      expect(profile.properties[part].type, `${part} must stay unconstrained`).toBeUndefined();
+      expect(
+        profile.properties[part].properties,
+        `${part} must stay unconstrained`,
+      ).toBeUndefined();
+    }
+  });
+
+  it('points the match page at the shared backfill notice', ({ skip }) => {
+    if (!available || !doc) return skip();
+    const page = doc.components.schemas.MatchPage;
+    expect(page.properties.hasMore.description).toContain('Page on this');
+    const backfill = JSON.stringify(page.properties.backfill);
+    expect(backfill).toContain('BackfillNotice');
+  });
+});
+
+describe('examples (#63)', () => {
+  it("shows what Riot's bodies look like without constraining them", ({ skip }) => {
+    if (!available || !doc) return skip();
+    const media =
+      doc.paths['/v1/lol/summoners/by-puuid/{platform}/{puuid}'].get.responses['200'].content[
+        'application/json'
+      ];
+    // An example and an empty schema: documented, not validated. If these ever
+    // swap round, the proxy breaks the next time Riot adds a field.
+    expect(media.example).toMatchObject({ summonerLevel: 412 });
+    expect(Object.keys(media.schema ?? {})).toEqual([]);
+  });
+
+  it('uses identifiers nobody could mistake for a real account', ({ skip }) => {
+    if (!available || !doc) return skip();
+    const json = JSON.stringify(doc);
+    const puuids = json.match(/"puuid":\s*"([^"]+)"/g) ?? [];
+    expect(puuids.length).toBeGreaterThan(0);
+    for (const p of puuids) expect(p).toContain('EXAMPLE-puuid-not-a-real-account');
+  });
+
+  it('tells the two throttles apart, which is the whole point', ({ skip }) => {
+    if (!available || !doc) return skip();
+    const responses = doc.paths['/v1/lol/status/{platform}'].get.responses;
+    const quota = Object.values(responses['429'].content['application/json'].examples)[0] as any;
+    const upstream = Object.values(responses['503'].content['application/json'].examples)[0] as any;
+
+    expect(quota.value.error.code).toBe('QUOTA_EXCEEDED');
+    expect(quota.value.error.retryAfter).toBeTypeOf('number');
+    expect(quota.summary).toContain('Your quota');
+
+    expect(upstream.value.error.code).toBe('UPSTREAM_UNAVAILABLE');
+    expect(upstream.summary).toContain('affects everyone');
+  });
+
+  it('does not offer an error example a route cannot produce', ({ skip }) => {
+    if (!available || !doc) return skip();
+    // The static mirror has no 502 response at all, so there is nothing to
+    // attach a 502 example to.
+    expect(doc.paths['/v1/static/{file}'].get.responses['502']).toBeUndefined();
+  });
+
+  it('carries a paging loop driven by hasMore', ({ skip }) => {
+    if (!available || !doc) return skip();
+    const samples = doc.paths['/v1/players/{puuid}/matches'].get['x-codeSamples'];
+    expect(samples).toHaveLength(1);
+    expect(samples[0].source).toContain('page.hasMore');
+    expect(samples[0].source).toContain('Retry-After');
   });
 });
 
