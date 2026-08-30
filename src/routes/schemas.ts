@@ -1,3 +1,13 @@
+/**
+ * Type-only, for its side effect: `@fastify/swagger` augments `FastifySchema`
+ * with the documentation keys — `tags`, `summary`, `description`, `hide`,
+ * `operationId`. Without it in the program those keys are not typed at all, and
+ * the `tags` already scattered through the route files only compiled because
+ * TypeScript skips the excess-property check when `response` is also present.
+ * A schema with `hide` and nothing else does not get that reprieve. Imported
+ * here because every route file imports this one.
+ */
+import type {} from '@fastify/swagger';
 import { Type } from '@sinclair/typebox';
 import { ERROR_CODES } from '../errors.js';
 import { PLATFORMS, REGIONS } from '../riot/routing.js';
@@ -123,6 +133,105 @@ export const MatchPageResponse = Type.Object(
   },
   { $id: 'MatchPage' },
 );
+
+/**
+ * §9 — `/v1/admin/limits/:scope` reports one bucket, and a bucket is keyed by
+ * whichever host serves the endpoint: platform hosts for the game APIs, region
+ * hosts for account-v1 and match-v5. So the param is the union of both, not a
+ * platform — passing `europe` here is as valid as passing `euw1`.
+ */
+export const ScopeParam = Type.Unsafe<string>({
+  type: 'string',
+  enum: [...PLATFORMS, ...REGIONS],
+  description: 'A rate-limit bucket: either a platform host (euw1) or a region host (europe)',
+});
+
+/** An ISO-8601 timestamp column that the row may not have set yet. */
+const NullableTimestamp = Type.Union([Type.String({ format: 'date-time' }), Type.Null()]);
+
+/**
+ * The proxy's own payloads, not Riot's — so unlike the passthrough routes these
+ * are real schemas. Fastify serialises against them, which is the point: a
+ * `keyHash` added to the consumers table can never reach this endpoint by
+ * accident, because a field this object does not name is not emitted.
+ *
+ * Both are `db.select()` on the whole table, so every column belongs here. A
+ * column added to `consumers` or `players` and not added here disappears from
+ * the response silently — the tests in `test/docs-schemas.test.ts` assert the
+ * full body for exactly that reason.
+ */
+export const ConsumerSummary = Type.Object(
+  {
+    id: Type.String({ format: 'uuid' }),
+    name: Type.String(),
+    scopes: Type.Array(Type.Unsafe<string>({ type: 'string', enum: ['read', 'admin'] })),
+    quotaPerMin: Type.Integer({ description: 'Requests per minute allowed to this consumer' }),
+    createdAt: Type.String({ format: 'date-time' }),
+    disabledAt: {
+      ...NullableTimestamp,
+      description: 'Set when the key was revoked; revoked consumers are kept, never deleted',
+    },
+  },
+  { $id: 'ConsumerSummary' },
+);
+
+export const PlayerSummary = Type.Object(
+  {
+    puuid: Type.String(),
+    keyScope: Type.String({
+      description: 'Fingerprint of the Riot key this PUUID was encrypted for',
+    }),
+    platform: Type.String(),
+    gameName: Type.Union([Type.String(), Type.Null()]),
+    tagLine: Type.Union([Type.String(), Type.Null()]),
+    tracked: Type.Boolean(),
+    lastSeenMatchId: {
+      ...Type.Union([Type.String(), Type.Null()]),
+      description: 'Cursor the match poller resumes from (#46)',
+    },
+    historyBackfillStartedAt: {
+      ...NullableTimestamp,
+      description: 'Set with historyBackfilledAt still null means a walk that died mid-way',
+    },
+    historyBackfilledAt: NullableTimestamp,
+    historyBackfillDepth: Type.Union([Type.Integer(), Type.Null()]),
+    updatedAt: Type.String({ format: 'date-time' }),
+  },
+  { $id: 'PlayerSummary' },
+);
+
+export const ConsumerListResponse = Type.Object({ consumers: Type.Array(ConsumerSummary) });
+
+export const PlayerListResponse = Type.Object({ players: Type.Array(PlayerSummary) });
+
+export const AdminStatsResponse = Type.Object({
+  keyScope: Type.String(),
+  archivedMatches: Type.Integer(),
+  trackedPlayers: Type.Integer(),
+});
+
+export const LimitsResponse = Type.Object({
+  scope: Type.String(),
+  usage: Type.Unsafe<unknown>({ description: 'Per-bucket token usage as the limiter sees it' }),
+  frozenMs: Type.Union([Type.Number(), Type.Null()], {
+    description: 'Milliseconds until a 429-induced freeze on this bucket lifts, or null',
+  }),
+});
+
+/** §6.2 / FR-12 — liveness. */
+export const HealthResponse = Type.Object({ ok: Type.Boolean() });
+
+/**
+ * §6.2 — readiness. The 503 is the interesting one: it carries the same shape
+ * as the 200, so the individual `redis` / `postgres` booleans say which
+ * dependency is the reason the service is not ready.
+ */
+export const ReadyResponse = Type.Object({
+  ok: Type.Boolean(),
+  redis: Type.Boolean(),
+  postgres: Type.Boolean(),
+  keyScope: Type.String(),
+});
 
 export const MasteryQuery = Type.Object({
   top: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),

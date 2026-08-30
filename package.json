@@ -29,7 +29,9 @@
   },
   "dependencies": {
     "@fastify/rate-limit": "^11.2.0",
+    "@fastify/swagger": "^9.8.1",
     "@fastify/websocket": "^11.3.0",
+    "@scalar/fastify-api-reference": "^1.67.0",
     "@sinclair/typebox": "^0.34.52",
     "bullmq": "^6.3.2",
     "dotenv": "^17.4.2",
