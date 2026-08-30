@@ -54,6 +54,15 @@ const EnvSchema = Type.Object({
    */
   LOOKUP_BACKFILL_LIMIT: Type.Integer({ default: 10_000, minimum: 0, maximum: 10_000 }),
 
+  /**
+   * How far back one `poll:matches` tick will page to find where it left off
+   * (#46). The steady-state cost is unchanged — the cursor is on the first page
+   * — so this only spends anything after the ticks themselves stopped. A gap
+   * deeper than this is handed to a backfill rather than chased inline; `0`
+   * restores the old fixed window and lets a deep gap go unrepaired.
+   */
+  TRACK_CATCHUP_LIMIT: Type.Integer({ default: 500, minimum: 0, maximum: 10_000 }),
+
   DDRAGON_DIR: Type.String({ default: './data/ddragon' }),
   DDRAGON_LOCALE: Type.String({ default: 'en_US' }),
 

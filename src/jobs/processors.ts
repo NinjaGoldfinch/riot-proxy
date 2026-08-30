@@ -3,6 +3,7 @@ import { KEY_SCOPE } from '../config.js';
 import { config } from '../config.js';
 import { archiveMatch, archiveTimeline, filterUnarchived, type RiotMatch } from '../db/matches.js';
 import {
+  getPlayer,
   listTrackedPlayers,
   markBackfillComplete,
   markBackfillStarted,
@@ -22,6 +23,7 @@ import {
   JOB,
   archiveQueue,
   backfillPriority,
+  enqueueBackfill,
   jobKey,
   pollDedupeId,
   pollQueue,
@@ -180,32 +182,112 @@ export async function pollRank(job: Job<PollPlayerJob>): Promise<void> {
 
 // ── poll:matches ─────────────────────────────────────────────────────────────
 
-export async function pollMatches(job: Job<PollPlayerJob>): Promise<void> {
+/** The steady-state window: what one tick reads when nothing has gone wrong. */
+const POLL_PAGE = 5;
+/** Catch-up pages are only read after falling behind, so they are read wide. */
+const CATCHUP_PAGE = 100;
+
+/**
+ * Page back to where the last tick got to, rather than reading a fixed window
+ * off the top (#46).
+ *
+ * `last_seen_match_id` has always been written here and never read. A fixed
+ * window is fine while the ticks keep coming — nobody finishes five games in
+ * five minutes — but when they stop, for a redeploy or a stalled queue, every
+ * match that fell past the window was lost permanently. Nothing else walks a
+ * tracked player, so nothing repaired it.
+ *
+ * The cursor costs nothing in steady state: it is on the first page, so this is
+ * the same single call it always was. Depth is only spent in proportion to how
+ * long the ticks were away.
+ */
+export async function pollMatches(job: Job<PollPlayerJob>): Promise<{ queued: number }> {
   const { puuid, platform } = job.data;
   const region = platformToRegion(assertPlatform(platform));
+  const cap = config.TRACK_CATCHUP_LIMIT;
 
-  const { data: ids } = await fetcher.fetch<string[]>(
-    build.matchIdsByPuuid(region, puuid, { start: 0, count: 5 }),
-    BULK,
-  );
-  if (!ids || ids.length === 0) return;
+  const player = await getPlayer(puuid);
+  const cursor = player?.lastSeenMatchId ?? null;
 
-  const unarchived = await filterUnarchived(ids);
-  if (unarchived.length === 0) return;
+  const collected: string[] = [];
+  let start = 0;
+  let caughtUp = false;
+
+  for (;;) {
+    const count = start === 0 ? POLL_PAGE : CATCHUP_PAGE;
+    const { data: ids } = await fetcher.fetch<string[]>(
+      build.matchIdsByPuuid(region, puuid, { start, count }),
+      BULK,
+    );
+    if (!ids || ids.length === 0) {
+      caughtUp = true;
+      break;
+    }
+
+    // Everything above the cursor is new; the cursor itself we already have.
+    const cut = cursor === null ? -1 : ids.indexOf(cursor);
+    if (cut >= 0) {
+      collected.push(...ids.slice(0, cut));
+      caughtUp = true;
+      break;
+    }
+    collected.push(...ids);
+
+    // Nothing to catch up to (this player has never been polled), catching up
+    // turned off, or the end of their history. All three end the walk here.
+    if (cursor === null || cap <= 0 || ids.length < count) {
+      caughtUp = true;
+      break;
+    }
+
+    start += ids.length;
+    if (start >= cap) break;
+  }
+
+  if (!caughtUp) {
+    // Further behind than a tick should chase inline. The backfill exists for
+    // depth, deduplicates per match, and runs at a priority that will not
+    // crowd out live games, so hand it over rather than leaving the tail.
+    logger.warn({ puuid, cap }, 'match poll fell behind its catch-up limit; queuing a walk');
+    await enqueueBackfill({
+      puuid,
+      platform,
+      limit: config.LOOKUP_BACKFILL_LIMIT,
+      reason: 'catchup',
+    });
+  }
+
+  if (collected.length === 0) return { queued: 0 };
+
+  const unarchived = await filterUnarchived(collected);
+  if (unarchived.length === 0) return { queued: 0 };
+
+  const depthOf = new Map(collected.map((id, index) => [id, index]));
 
   await archiveQueue.addBulk(
-    unarchived.map((matchId) => ({
-      name: JOB.archiveMatch,
-      data: { matchId, puuid, fetchTimeline: config.ARCHIVE_TIMELINES } satisfies ArchiveMatchJob,
-      // Idempotency: the same match never queues twice. A game that has just
-      // finished is the most valuable thing in the queue, so it takes the top
-      // priority rather than the implicit one (see ARCHIVE_PRIORITY).
-      opts: { jobId: jobKey('archive', matchId), priority: ARCHIVE_PRIORITY.live },
-    })),
+    unarchived.map((matchId) => {
+      const depth = depthOf.get(matchId) ?? 0;
+      return {
+        name: JOB.archiveMatch,
+        data: { matchId, puuid, fetchTimeline: config.ARCHIVE_TIMELINES } satisfies ArchiveMatchJob,
+        // Idempotency: the same match never queues twice. A game that has just
+        // finished is the most valuable thing in the queue, so it takes the top
+        // priority rather than the implicit one (see ARCHIVE_PRIORITY). A
+        // catch-up tail is not fresh in that sense, though, and a long one
+        // would swamp the live band — so past the first page it is ranked by
+        // depth like any other walk (§9.3, #31).
+        opts: {
+          jobId: jobKey('archive', matchId),
+          priority: depth < POLL_PAGE ? ARCHIVE_PRIORITY.live : backfillPriority(depth),
+        },
+      };
+    }),
   );
 
-  const newest = ids[0];
+  const newest = collected[0];
   if (newest) await setLastSeenMatch(puuid, newest);
+
+  return { queued: unarchived.length };
 }
 
 // ── archive:match ────────────────────────────────────────────────────────────

@@ -298,7 +298,7 @@ that is set.
 | Endpoint                                    | Purpose                                                                |
 | ------------------------------------------- | ---------------------------------------------------------------------- |
 | `POST/GET/DELETE /v1/admin/consumers[/:id]` | Issue, list and revoke consumer keys                                   |
-| `GET/POST /v1/admin/tracked-players`        | List, or start tracking (by PUUID or Riot ID)                          |
+| `GET/POST /v1/admin/tracked-players`        | List, or start tracking (by PUUID or Riot ID); tracking queues a walk  |
 | `DELETE /v1/admin/tracked-players/:puuid`   | Stop tracking                                                          |
 | `POST /v1/admin/cache/purge`                | `{ "pattern": "summoner.byPuuid:*" }`, scoped to the current key scope |
 | `POST /v1/admin/backfill`                   | Walk a player's match history into the archive                         |
@@ -384,15 +384,15 @@ under a distinct `neg:` prefix — a cached "not in game" is distinguishable fro
 
 ### Background jobs
 
-| Job               | Schedule                           | Action                                           |
-| ----------------- | ---------------------------------- | ------------------------------------------------ |
-| `poll:live`       | every `TRACK_POLL_LIVE_S` (60 s)   | spectator-v5 → `game.started` / `game.ended`     |
-| `poll:rank`       | every `TRACK_POLL_RANK_S` (600 s)  | league-v4 → `rank.changed`                       |
-| `poll:matches`    | every `TRACK_POLL_MATCH_S` (300 s) | new match IDs → `archive:match`                  |
-| `archive:match`   | on demand                          | fetch, upsert, `match.archived`                  |
-| `backfill:player` | admin, or a player never walked    | page 100 IDs at a time, bulk priority            |
-| `ddragon:sync`    | hourly                             | on a new patch, mirror data and emit `patch.new` |
-| `maintenance`     | daily                              | clear orphaned single-flight locks               |
+| Job               | Schedule                           | Action                                              |
+| ----------------- | ---------------------------------- | --------------------------------------------------- |
+| `poll:live`       | every `TRACK_POLL_LIVE_S` (60 s)   | spectator-v5 → `game.started` / `game.ended`        |
+| `poll:rank`       | every `TRACK_POLL_RANK_S` (600 s)  | league-v4 → `rank.changed`                          |
+| `poll:matches`    | every `TRACK_POLL_MATCH_S` (300 s) | new match IDs since the last tick → `archive:match` |
+| `archive:match`   | on demand                          | fetch, upsert, `match.archived`                     |
+| `backfill:player` | admin, or a player never walked    | page 100 IDs at a time, bulk priority               |
+| `ddragon:sync`    | hourly                             | on a new patch, mirror data and emit `patch.new`    |
+| `maintenance`     | daily                              | clear orphaned single-flight locks                  |
 
 Each poll type is one repeatable tick that fans out to one job per tracked
 player, so adding or removing a tracked player needs no scheduler changes. All
@@ -402,15 +402,25 @@ The first time anyone looks up a player, their whole history is queued behind
 them. Matches are immutable, so a match stored now is one nobody ever spends
 quota on again (§7.3) — the archive is the highest-leverage thing this service
 does, and it used to fill only for tracked players and by hand. "First time"
-means none of their newest page is stored yet, so a player already being
-archived is left alone. `LOOKUP_BACKFILL_LIMIT` sets how far back to walk;
-`10000` is match-v5's own ceiling, i.e. all of it.
+means no completed walk is recorded against them — a fact kept on the player,
+not guessed from the archive, since matches are shared and a teammate's walk
+says nothing about this player. Tracking someone queues the same walk.
+`LOOKUP_BACKFILL_LIMIT` sets how far back to go; `10000` is match-v5's own
+ceiling, i.e. all of it.
 
 `archive:match` is ordered by how far back the match sits in its player's
 history, in blocks of ten, and the ordering is global rather than per player —
 so anyone's most recent ten games are archived before anyone's hundredth, and a
 player who has just been looked up sees their history fill in from the top. A
 game that has only just finished takes the top rank outright.
+
+`poll:matches` resumes from `last_seen_match_id` rather than reading a fixed
+window off the top. In steady state the cursor is on the first page, so a tick
+is the single call it has always been; when the ticks themselves stop — a
+redeploy, a stalled queue — it pages back in proportion to how long they were
+away, and matches past the first page are ranked by depth so a long tail cannot
+crowd out live games. `TRACK_CATCHUP_LIMIT` bounds that; a gap deeper than it is
+handed to a backfill rather than chased inline.
 
 One BullMQ detail worth knowing before adding another producer: the worker pops
 the plain `wait` list first and only falls back to the prioritized set once it
@@ -441,6 +451,7 @@ Every archive job therefore carries an explicit priority.
 | `DDRAGON_DIR` / `DDRAGON_LOCALE`             | `./data/ddragon` / `en_US`                        |                                                         |
 | `ARCHIVE_TIMELINES`                          | `false`                                           | Timelines are large; opt in                             |
 | `LOOKUP_BACKFILL_LIMIT`                      | `10000`                                           | History walked on a first lookup; `0` disables          |
+| `TRACK_CATCHUP_LIMIT`                        | `500`                                             | How far a match poll pages back to resume; `0` disables |
 | `ADMIN_IP_ALLOWLIST`                         | —                                                 | CSV of IPs/CIDRs; empty means key scope is enough       |
 | `BOOTSTRAP_ADMIN_KEY`                        | —                                                 | Seeds one admin key on `npm run migrate`                |
 | `AUTH_DISABLED`                              | `false`                                           | Dev only: skip key checks; refused in production        |
@@ -542,6 +553,15 @@ Everything `reset:cache` and `reset:db` delete is re-derivable from Riot, at the
 cost of the quota to re-fetch it. The match archive is the expensive one: it is
 the only store here holding data Riot will not serve again cheaply, so prefer
 `--keep-consumers` and a targeted cache purge over `reset:all` on a warm box.
+
+These are the only tools here that destroy data, so they are tested as
+processes rather than as functions — `test/reset-{cache,db,script}.test.ts`
+assert the exit codes and the refusals a developer would actually hit. The
+suite never points them at what you are working in: the cache tests run against
+Redis logical database **15**, the database tests create a throwaway database
+and drop it afterwards, and `reset.sh` is exercised only along the paths that
+refuse, with a fake `docker` ahead of the real one on `PATH` to prove it never
+reaches the destructive half. `shellcheck scripts/*.sh` runs in CI.
 
 ### Acceptance checks
 

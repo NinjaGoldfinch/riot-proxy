@@ -65,6 +65,13 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # The reset tooling is the one place in this repo where a bug deletes
+      # data rather than serving a wrong number, and shell is where an unquoted
+      # expansion turns `rm -rf "$dir"` into `rm -rf /`. shellcheck ships on
+      # ubuntu-latest, so this costs nothing.
+      - name: Shellcheck
+        run: shellcheck scripts/*.sh
+
       - name: Typecheck
         run: npm run typecheck
 

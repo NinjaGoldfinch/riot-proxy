@@ -42,6 +42,9 @@ missing. Phases refer to §15 of [the spec](docs/riot-proxy-spec.md).
 - [x] First-lookup backfill reads backfill state on the player instead of
       guessing from the shared archive, so a player whose teammate was walked
       first is no longer skipped forever (#44)
+- [x] Match polls resume from `last_seen_match_id` instead of a fixed window, so
+      a gap opened by downtime is repaired rather than lost; tracking a player
+      now walks their history too (#46)
 - [x] Poll fan-out de-duplicates on the job's lifecycle instead of on the
       clock, so a tick no longer stacks another job on every tracked player
       whose previous one has not run (#48)
