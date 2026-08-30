@@ -578,6 +578,14 @@ acceptance/        live checks against the real Riot API (opt-in)
 
 ---
 
+## Roadmap
+
+[TODO.md](TODO.md) is the map: what is done, what is in flight, and what is
+known to be missing. GitHub issues stay the source of truth for anything with a
+discussion attached.
+
+---
+
 ## Compliance
 
 - Register the app on the [Riot developer portal](https://developer.riotgames.com/)
