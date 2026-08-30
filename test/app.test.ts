@@ -265,6 +265,52 @@ describe('http surface', () => {
   });
 });
 
+/**
+ * §6.2 — the local mirror. `version` becomes a path segment, so the schema is
+ * the containment: before it carried a pattern, only `maxLength: 20` stood
+ * between a caller and `../../` out of DDRAGON_DIR, and that bound is a
+ * function of how deep the directory happens to sit (#51).
+ */
+describe('static mirror routes (§6.2)', () => {
+  it('rejects a traversal segment in ?version= before reading anything', async ({ skip }) => {
+    if (!available || !app) return skip();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/static/champions?version=../../tmp/probe',
+      headers: auth(readKey),
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe('VALIDATION');
+  });
+
+  it('rejects anything that is not a patch number', async ({ skip }) => {
+    if (!available || !app) return skip();
+    for (const version of ['latest', '16.17.1/..', '..', '16.17.1a']) {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/v1/static/champions?version=${encodeURIComponent(version)}`,
+        headers: auth(readKey),
+      });
+      expect(res.statusCode, version).toBe(400);
+      expect(res.json().error.code, version).toBe('VALIDATION');
+    }
+  });
+
+  it('accepts a well-formed version and 404s it as unsynced', async ({ skip }) => {
+    if (!available || !app) return skip();
+    // The distinction the pattern has to preserve: pinning a patch is a
+    // legitimate request, and a patch we never mirrored is a miss, not a
+    // malformed request.
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/static/champions?version=0.0.1',
+      headers: auth(readKey),
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error.code).toBe('NOT_FOUND');
+  });
+});
+
 describe('admin IP allowlist (§12.1)', () => {
   it('permits everything when the allowlist is empty', () => {
     expect(ipAllowed('203.0.113.9', [])).toBe(true);

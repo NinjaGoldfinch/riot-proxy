@@ -44,7 +44,14 @@ const staticRoutes: FastifyPluginAsync = async (fastify) => {
             enum: [...DATA_FILES, ...Object.keys(FILE_ALIASES)],
           }),
         }),
-        querystring: Type.Object({ version: Type.Optional(Type.String({ maxLength: 20 })) }),
+        querystring: Type.Object({
+          // A patch number and nothing else. `version` becomes a path segment in
+          // the mirror, so anything looser lets `..` walk out of DDRAGON_DIR;
+          // this fails closed with VALIDATION before the filesystem is touched.
+          version: Type.Optional(
+            Type.String({ maxLength: 20, pattern: '^[0-9]+(\\.[0-9]+)*$', examples: ['16.17.1'] }),
+          ),
+        }),
         response: { 200: PassthroughResponse, ...localErrors },
       },
     },

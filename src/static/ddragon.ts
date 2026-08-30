@@ -1,5 +1,5 @@
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { request } from 'undici';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
@@ -134,12 +134,30 @@ export async function syncDdragon(opts: { force?: boolean } = {}): Promise<SyncR
   return { version, changed: true, files: written };
 }
 
+/**
+ * Resolve `DDRAGON_DIR/{version}/{file}.json`, or undefined when either segment
+ * would leave the mirror.
+ *
+ * `version` reaches here from a query string and `join` normalises `..`, so an
+ * unchecked segment walks out of the directory. The route rejects anything that
+ * is not a version number before we get here; this is the second guard, for the
+ * other callers of an exported function, and it fails differently — the schema
+ * rejects, this returns "not synced".
+ */
+function staticPath(version: string, file: string): string | undefined {
+  const root = ddragonDir();
+  const candidate = resolve(join(root, version, `${file}.json`));
+  return candidate.startsWith(root + sep) ? candidate : undefined;
+}
+
 /** Read a mirrored file, or undefined when this patch was never synced. */
 export async function readStatic(file: string, version?: string): Promise<unknown | undefined> {
   const v = version ?? (await currentVersion());
   if (!v) return undefined;
+  const path = staticPath(v, file);
+  if (!path) return undefined;
   try {
-    const raw = await readFile(join(versionDir(v), `${file}.json`), 'utf8');
+    const raw = await readFile(path, 'utf8');
     return JSON.parse(raw) as unknown;
   } catch {
     return undefined;
