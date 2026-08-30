@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { Redis } from 'ioredis';
 import { config, KEY_SCOPE } from '../config.js';
 import { logger } from '../logger.js';
@@ -43,10 +44,22 @@ const cfgKey = {
   method: (scope: string, method: string) => `rl:cfg:m:${KEY_SCOPE}:${scope}:${method}`,
 };
 
+/**
+ * Bucket keys carry a version because a bucket's Redis type changed here: it
+ * used to be a string counter and is now a sorted set of admission timestamps.
+ * Reusing the old names would make every `ZREMRANGEBYSCORE` fail `WRONGTYPE`
+ * against live state — and, during a rolling deploy, make the old pods' `INCR`
+ * fail the moment a new pod created the sorted set — turning upstream requests
+ * into 500s until the stale keys expired. The abandoned keys carry a TTL of at
+ * most one window, so they clear themselves; nothing needs deleting by hand.
+ */
+const BUCKET_VERSION = 'v2';
+
 const bucketKey = {
-  app: (scope: string, w: LimitWindow) => `rl:app:${KEY_SCOPE}:${scope}:${w.limit}:${w.seconds}`,
+  app: (scope: string, w: LimitWindow) =>
+    `rl:app:${BUCKET_VERSION}:${KEY_SCOPE}:${scope}:${w.limit}:${w.seconds}`,
   method: (scope: string, method: string, w: LimitWindow) =>
-    `rl:m:${KEY_SCOPE}:${scope}:${method}:${w.limit}:${w.seconds}`,
+    `rl:m:${BUCKET_VERSION}:${KEY_SCOPE}:${scope}:${method}:${w.limit}:${w.seconds}`,
 };
 
 const frozenKey = (scope: string) => `rl:frozen:${KEY_SCOPE}:${scope}`;
@@ -173,9 +186,13 @@ export class RateLimiter {
           ? 0 // we are the interactive traffic; do not block ourselves
           : Number((await this.redis.get(waitersKey(scope))) ?? '0');
 
+        // Identifies this attempt's slot in every bucket, so a refusal part-way
+        // through can roll back exactly what it took.
+        const token = randomUUID();
+
         const raw = (await this.evalAcquire(
           [frozenKey(scope)],
-          [priority, config.BULK_USAGE_CEILING, waiters, count, ...buckets],
+          [priority, config.BULK_USAGE_CEILING, waiters, token, count, ...buckets],
         )) as [number, number, string];
 
         const [ok, waitMs, reason] = raw;
@@ -239,7 +256,9 @@ export class RateLimiter {
       (w) => bucketKey.method(scope, method, w),
     );
 
-    if (count > 0) tasks.push(this.evalSync([count, ...syncArgs]));
+    // Placeholder members are named after this token, so two syncs landing in
+    // the same Redis millisecond cannot write over each other's padding.
+    if (count > 0) tasks.push(this.evalSync([randomUUID(), count, ...syncArgs]));
 
     await Promise.allSettled(tasks);
   }
@@ -308,14 +327,25 @@ export class RateLimiter {
     return pttl > 0 ? pttl : 0;
   }
 
-  /** Current usage per app window — used by `/healthz` and the admin surface. */
+  /**
+   * Current usage per app window — used by `/healthz` and the admin surface.
+   * Counts what is still inside each window without trimming, so a read can
+   * never alter what the next acquisition sees.
+   */
   async usage(scope: string): Promise<{ window: string; used: number; limit: number }[]> {
     const windows = await this.windowsFor('app', scope, '');
     if (windows.length === 0) return [];
-    const values = await this.redis.mget(windows.map((w) => bucketKey.app(scope, w)));
+
+    const now = Date.now();
+    const pipeline = this.redis.pipeline();
+    for (const w of windows) {
+      pipeline.zcount(bucketKey.app(scope, w), `(${now - w.seconds * 1000}`, '+inf');
+    }
+    const results = await pipeline.exec();
+
     return windows.map((w, i) => ({
       window: `${w.limit}:${w.seconds}`,
-      used: Number(values[i] ?? '0'),
+      used: Number(results?.[i]?.[1] ?? 0),
       limit: w.limit,
     }));
   }

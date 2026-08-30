@@ -3,7 +3,7 @@ import { Redis } from 'ioredis';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { KEY_SCOPE } from '../src/config.js';
 import { registry } from '../src/metrics.js';
-import { RateLimitBudgetExceeded, RateLimiter } from '../src/riot/limiter.js';
+import { RateLimitBudgetExceeded, RateLimiter, delay } from '../src/riot/limiter.js';
 
 /**
  * The Lua acquisition path (§9.2) can only be tested against a real Redis —
@@ -28,6 +28,17 @@ beforeAll(async () => {
 afterAll(async () => {
   if (available) await redis.quit();
 });
+
+/** The most admissions recorded inside any `ms`-long span. */
+function worstBurst(stamps: number[], ms: number): number {
+  let worst = 0;
+  for (let i = 0; i < stamps.length; i += 1) {
+    let n = 0;
+    for (let j = i; j < stamps.length && stamps[j]! < stamps[i]! + ms; j += 1) n += 1;
+    worst = Math.max(worst, n);
+  }
+  return worst;
+}
 
 const SCOPE = 'test-region';
 
@@ -77,7 +88,7 @@ describe.runIf(process.env['SKIP_REDIS_TESTS'] !== '1')('rate limiter against Re
     // The rollback path in the Lua script means a partial acquisition can never
     // leak a token, so the count is exact rather than approximate.
     expect(admitted).toBe(10);
-    expect(await redis.get(`rl:app:${KEY_SCOPE}:${SCOPE}:10:10`)).toBe('10');
+    expect(await redis.zcard(`rl:app:v2:${KEY_SCOPE}:${SCOPE}:10:10`)).toBe(10);
   });
 
   it('requires a token from every window before dispatch (§9.2)', async ({ skip }) => {
@@ -94,7 +105,7 @@ describe.runIf(process.env['SKIP_REDIS_TESTS'] !== '1')('rate limiter against Re
     );
 
     // The refused attempt must not have consumed from the wider window.
-    expect(await redis.get(`rl:app:${KEY_SCOPE}:${SCOPE}:100:120`)).toBe('2');
+    expect(await redis.zcard(`rl:app:v2:${KEY_SCOPE}:${SCOPE}:100:120`)).toBe(2);
   });
 
   it('also enforces method buckets on top of app buckets', async ({ skip }) => {
@@ -118,29 +129,72 @@ describe.runIf(process.env['SKIP_REDIS_TESTS'] !== '1')('rate limiter against Re
     await expect(limiter.acquire(SCOPE, 'other', { waitBudgetMs: 0 })).resolves.toBeDefined();
   });
 
-  it('syncs Riot counts without moving the window boundary (§9.1)', async ({ skip }) => {
+  it('absorbs Riot counts without disturbing what we already admitted (§9.1)', async ({ skip }) => {
     if (!available) return skip();
     const limiter = new RateLimiter(redis);
     await redis.set(`rl:cfg:app:${KEY_SCOPE}:${SCOPE}`, '100:120');
     limiter.clearLocalConfig();
 
-    // One acquisition opens the window and arms its expiry.
     await limiter.acquire(SCOPE, 'm', { waitBudgetMs: 0 });
-    const key = `rl:app:${KEY_SCOPE}:${SCOPE}:100:120`;
-    await redis.pexpire(key, 30_000); // pretend the window is most of the way through
+    const key = `rl:app:v2:${KEY_SCOPE}:${SCOPE}:100:120`;
+    const [, ourScore] = await redis.zrange(key, 0, '0', 'WITHSCORES');
 
     await limiter.observeHeaders(SCOPE, 'm', {
       'x-app-rate-limit': '100:120',
       'x-app-rate-limit-count': '47:120',
     });
 
-    expect(Number(await redis.get(key))).toBe(47);
-    // A plain SET would have cleared the expiry and re-armed the full 120 s,
-    // decoupling our window from Riot's.
-    const pttl = await redis.pttl(key);
-    expect(pttl).toBeGreaterThan(0);
-    expect(pttl).toBeLessThanOrEqual(30_000);
+    // Riot's higher count wins, padded out to match.
+    expect(await redis.zcard(key)).toBe(47);
+    // Each admission ages out on its own timestamp, so absorbing an external
+    // count must not reschedule the one we made — under the counter this
+    // replaced, that was a re-armed expiry sliding our window away from Riot's.
+    const [, afterScore] = await redis.zrange(key, 0, '0', 'WITHSCORES');
+    expect(afterScore).toBe(ourScore);
   });
+
+  /**
+   * §9.2 / #17 — the property Riot actually enforces: never more than `limit`
+   * inside any rolling window, not merely inside one we chose ourselves.
+   *
+   * The counter this replaced pinned its expiry to our first request. Spend the
+   * allowance just before that lapses and a fresh one arrives immediately after,
+   * putting up to 2x the limit inside one of Riot's seconds — which is where the
+   * accountable 429s in the Phase 2 gate came from.
+   */
+  it('never admits more than `limit` in any rolling window, boundary included (§9.2)', async ({
+    skip,
+  }) => {
+    if (!available) return skip();
+    const limiter = new RateLimiter(redis);
+    await redis.set(`rl:cfg:app:${KEY_SCOPE}:${SCOPE}`, '5:1');
+    limiter.clearLocalConfig();
+
+    const admitted: number[] = [];
+    const take = async () => {
+      await limiter.acquire(SCOPE, 'm', { waitBudgetMs: 0 });
+      admitted.push(Date.now());
+    };
+
+    await take();
+    const opened = Date.now();
+
+    // Spend what is left of the allowance just before a fixed window would lapse.
+    await delay(Math.max(0, opened + 820 - Date.now()));
+    for (let i = 0; i < 4; i += 1) await take();
+
+    // Just past the old boundary, where a counter would hand out a full allowance.
+    await delay(Math.max(0, opened + 1060 - Date.now()));
+    for (let i = 0; i < 5; i += 1) {
+      try {
+        await take();
+      } catch {
+        /* refusing here is the point */
+      }
+    }
+
+    expect(worstBurst(admitted, 1000)).toBeLessThanOrEqual(5);
+  }, 15_000);
 
   it('freezes the whole scope after a 429 with Retry-After (§9.4)', async ({ skip }) => {
     if (!available) return skip();
@@ -200,13 +254,38 @@ describe.runIf(process.env['SKIP_REDIS_TESTS'] !== '1')('rate limiter against Re
 
     expect(await redis.get(`rl:cfg:app:${KEY_SCOPE}:${SCOPE}`)).toBe('20:1,100:120');
     expect(await redis.get(`rl:cfg:m:${KEY_SCOPE}:${SCOPE}:m`)).toBe('50:10');
-    // Riot says 18 of 20 used in the 1 s window — our counter must agree.
-    expect(await redis.get(`rl:app:${KEY_SCOPE}:${SCOPE}:20:1`)).toBe('18');
-    expect(await redis.get(`rl:app:${KEY_SCOPE}:${SCOPE}:100:120`)).toBe('40');
+    // Riot says 18 of 20 used in the 1 s window — our bucket must agree.
+    expect(await redis.zcard(`rl:app:v2:${KEY_SCOPE}:${SCOPE}:20:1`)).toBe(18);
+    expect(await redis.zcard(`rl:app:v2:${KEY_SCOPE}:${SCOPE}:100:120`)).toBe(40);
 
     limiter.clearLocalConfig();
     const usage = await limiter.usage(SCOPE);
     expect(usage).toContainEqual({ window: '20:1', used: 18, limit: 20 });
+  });
+
+  it('pads with placeholders unique to each sync (§9.1)', async ({ skip }) => {
+    if (!available) return skip();
+    const limiter = new RateLimiter(redis);
+    const key = `rl:app:v2:${KEY_SCOPE}:${SCOPE}:100:120`;
+    const headers = { 'x-app-rate-limit': '100:120', 'x-app-rate-limit-count': '3:120' };
+
+    await limiter.observeHeaders(SCOPE, 'm', headers);
+    const first = await redis.zrange(key, '0', '-1');
+    expect(first).toHaveLength(3);
+
+    // Drop one placeholder, as an acquisition rollback would, then re-sync. The
+    // bucket has to climb back to Riot's count, which it cannot do if the second
+    // sync picks names the first one already used — same-millisecond syncs would
+    // otherwise leave us admitting requests Riot has already counted.
+    await redis.zrem(key, first[0]!);
+    const second = await redis.zrange(key, '0', '-1');
+    expect(second).toHaveLength(2);
+
+    await limiter.observeHeaders(SCOPE, 'm', headers);
+    const third = await redis.zrange(key, '0', '-1');
+    expect(third).toHaveLength(3);
+    // `riot:<token>:<n>` — two syncs padded, so two distinct tokens.
+    expect(new Set(third.map((m) => m.split(':')[1])).size).toBe(2);
   });
 
   it('waits and succeeds once a window rolls over', async ({ skip }) => {
