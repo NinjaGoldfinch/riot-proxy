@@ -9,7 +9,7 @@ import { PassthroughResponse, localErrors } from './schemas.js';
  * §6.2 — the local Data Dragon mirror. These routes never make an upstream
  * call and never touch the limiter (§5.6).
  */
-const FILE_ALIASES: Record<string, string> = {
+export const FILE_ALIASES: Record<string, string> = {
   champions: 'champion',
   items: 'item',
   runes: 'runesReforged',

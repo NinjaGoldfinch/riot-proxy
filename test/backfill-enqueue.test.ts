@@ -1,6 +1,7 @@
 import './helpers/env.js';
 import { Queue } from 'bullmq';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { probeServices } from './helpers/services.js';
 import { enqueueBackfill } from '../src/jobs/queues.js';
 import { closeRedis, redis } from '../src/redis.js';
 
@@ -16,12 +17,10 @@ let queue: Queue;
 let available = false;
 
 beforeAll(async () => {
-  try {
+  available = await probeServices('backfill-enqueue.test.ts', async () => {
     await redis.ping();
-    available = true;
-  } catch {
-    available = false;
-  }
+    return true;
+  });
   if (available) queue = new Queue(`backfill-spec-${Date.now()}`, { connection: redis });
 });
 

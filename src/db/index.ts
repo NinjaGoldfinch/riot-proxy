@@ -16,7 +16,6 @@ export const sql = postgres(config.DATABASE_URL, {
 
 export const db = drizzle(sql, { schema });
 
-export type Database = typeof db;
 export { schema };
 
 export async function closeDb(): Promise<void> {

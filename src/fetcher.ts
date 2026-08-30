@@ -23,6 +23,19 @@ export interface FetchResult<T> {
   ageSeconds: number;
 }
 
+/**
+ * What `upstream()` hands back: the value, and the age the store recorded for
+ * it as it was written. Going upstream is not the same as getting something
+ * new — an unchanged payload keeps the timestamp it was first seen with — so
+ * the age has to come from the write rather than be assumed to be zero. It
+ * used to be read back off the key instead, which made it the third `GET` of
+ * that key in one request for a value the process already held.
+ */
+interface Fetched<T> {
+  value: T;
+  ageSeconds: number;
+}
+
 export interface FetchOptions {
   priority?: Priority;
   waitBudgetMs?: number;
@@ -80,19 +93,18 @@ export class Fetcher {
 
     // 4. Miss — coalesce, then go upstream (§8.4).
     recordCacheOutcome('miss');
-    const result = await this.flight.run<T>(key, {
+    const result = await this.flight.run<Fetched<T>>(key, {
       work: () => this.upstream<T>(req, key, negKey, opts),
-      peek: async () => {
-        const entry = await this.store.get<T>(key);
-        return entry?.value;
-      },
+      peek: () => this.peek<T>(key),
     });
 
-    // Going upstream is not the same as getting something new: the store keeps
-    // the original timestamp when the payload comes back unchanged, so read the
-    // age back rather than asserting a fetch means fresh data.
-    const stored = await this.store.get<T>(key);
-    return { data: result.value, cache: 'MISS', ageSeconds: stored?.ageSeconds ?? 0 };
+    return { data: result.value.value, cache: 'MISS', ageSeconds: result.value.ageSeconds };
+  }
+
+  /** A single-flight loser's view of the winner's write. */
+  private async peek<T>(key: string): Promise<Fetched<T> | undefined> {
+    const entry = await this.store.get<T>(key);
+    return entry ? { value: entry.value, ageSeconds: entry.ageSeconds } : undefined;
   }
 
   /** The upstream leg: limiter + HTTP + cache/archive writes and 404 negatives. */
@@ -101,7 +113,7 @@ export class Fetcher {
     key: string,
     negKey: string,
     opts: FetchOptions,
-  ): Promise<T> {
+  ): Promise<Fetched<T>> {
     try {
       const res = await this.client.request<T>(req, {
         priority: opts.priority ?? 'interactive',
@@ -109,9 +121,9 @@ export class Fetcher {
         ...(opts.signal ? { signal: opts.signal } : {}),
       });
 
-      await this.store.set(key, res.data, req.spec.ttlSeconds);
+      const firstSeen = await this.store.set(key, res.data, req.spec.ttlSeconds);
       this.writeArchive(req, res.data);
-      return res.data;
+      return { value: res.data, ageSeconds: ageFrom(firstSeen) };
     } catch (err) {
       if (err instanceof RiotError) {
         if (err.isNotFound && req.spec.negTtlSeconds > 0) {
@@ -125,7 +137,7 @@ export class Fetcher {
               { method: req.method, status: err.status },
               'serving stale on upstream 5xx',
             );
-            return stale.value;
+            return { value: stale.value, ageSeconds: stale.ageSeconds };
           }
         }
         throw err.toProxyError();
@@ -137,7 +149,7 @@ export class Fetcher {
         const stale = await this.store.get<T>(key);
         if (stale) {
           logger.warn({ method: req.method }, 'serving stale while rate limited');
-          return stale.value;
+          return { value: stale.value, ageSeconds: stale.ageSeconds };
         }
         throw ProxyError.rateLimited(Math.ceil(err.retryAfterMs / 1000));
       }
@@ -152,7 +164,7 @@ export class Fetcher {
     void this.flight
       .run(key, {
         work: () => this.upstream(req, key, negKey, { priority: 'bulk' }),
-        peek: async () => (await this.store.get(key))?.value,
+        peek: () => this.peek(key),
       })
       .catch((err: unknown) => {
         logger.debug({ err, method: req.method }, 'background refresh failed');
@@ -196,6 +208,11 @@ export class Fetcher {
       logger.warn({ err, matchId, method: req.method }, 'archive write failed');
     });
   }
+}
+
+/** The rounding `CacheStore.get` applies, so a write and a read-back agree. */
+function ageFrom(firstSeen: number): number {
+  return Math.max(0, Math.round((Date.now() - firstSeen) / 1000));
 }
 
 /** Recover the match id from the built path — the archive keys on it. */

@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql as raw } from 'drizzle-orm';
 import { KEY_SCOPE } from '../config.js';
 import { db } from './index.js';
 import { players, type Player } from './schema.js';
@@ -68,6 +68,19 @@ export async function listTrackedPlayers(): Promise<Player[]> {
 
 export async function listPlayers(): Promise<Player[]> {
   return db.select().from(players).where(eq(players.keyScope, KEY_SCOPE));
+}
+
+/**
+ * How many players this key scope is tracking. `listPlayers().filter(...)`
+ * answered the same question by pulling every row across the wire to produce
+ * one number; `countArchivedMatches` next door already had the right shape.
+ */
+export async function countTrackedPlayers(): Promise<number> {
+  const rows = await db
+    .select({ n: raw<number>`count(*)::int` })
+    .from(players)
+    .where(and(eq(players.keyScope, KEY_SCOPE), eq(players.tracked, true)));
+  return rows[0]?.n ?? 0;
 }
 
 export async function setTracked(puuid: string, tracked: boolean): Promise<boolean> {

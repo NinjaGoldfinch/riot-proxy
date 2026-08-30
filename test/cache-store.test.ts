@@ -1,5 +1,5 @@
 import './helpers/env.js';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CacheStore, STALE_MULTIPLIER } from '../src/cache/store.js';
 import { FakeRedis } from './helpers/fake-redis.js';
 
@@ -108,6 +108,42 @@ describe('unchanged payloads keep their age (§8.2)', () => {
     await redis.set('k', 'not json', 'EX', 60);
     await store.set('k', 'v', 60);
     expect((await store.get<string>('k'))?.value).toBe('v');
+  });
+});
+
+/**
+ * The read-back that decides whether the content is new earns its keep for a
+ * payload that can come back different. An immutable one cannot: its `s` is
+ * null and its `a` is never consulted for staleness, so asking would spend a
+ * GET, a parse and two serialisations of a several-hundred-kilobyte match on a
+ * timestamp nothing reads — once per archived match, across a whole backfill.
+ */
+describe('what a write costs (§8.2)', () => {
+  it('does not read an immutable entry back before writing it', async () => {
+    const reads = vi.spyOn(redis, 'get');
+    await store.set('match', { id: 1 }, Infinity);
+    expect(reads).not.toHaveBeenCalled();
+    reads.mockRestore();
+  });
+
+  it('still reads a mutable entry back, because the age depends on it', async () => {
+    await store.set('k', { lp: 64 }, 60);
+    const reads = vi.spyOn(redis, 'get');
+    await store.set('k', { lp: 64 }, 60);
+    expect(reads).toHaveBeenCalledWith('k');
+    reads.mockRestore();
+  });
+
+  it('hands the caller the epoch it wrote, so nothing has to read it back', async () => {
+    const firstSeen = await store.set('k', { lp: 64 }, 60);
+    const held = await store.set('k', { lp: 64 }, 60);
+    // The same content keeps the same epoch — that is the value a caller needs
+    // and the reason it cannot assume a write means age zero.
+    expect(held).toBe(firstSeen);
+
+    const moved = await store.set('k', { lp: 71 }, 60);
+    expect(moved).toBeGreaterThanOrEqual(firstSeen);
+    expect((await store.get('k'))?.ageSeconds).toBe(0);
   });
 });
 

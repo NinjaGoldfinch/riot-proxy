@@ -1,4 +1,4 @@
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { and, eq, isNull } from 'drizzle-orm';
 import { db } from './index.js';
 import { consumers, type Consumer } from './schema.js';
@@ -13,14 +13,6 @@ export function generateKey(): string {
 
 export function hashKey(key: string): string {
   return createHash('sha256').update(key).digest('hex');
-}
-
-/** Constant-time compare so a hash lookup cannot be timed. */
-export function hashesMatch(a: string, b: string): boolean {
-  const bufA = Buffer.from(a, 'utf8');
-  const bufB = Buffer.from(b, 'utf8');
-  if (bufA.length !== bufB.length) return false;
-  return timingSafeEqual(bufA, bufB);
 }
 
 export interface CreateConsumerInput {
@@ -71,6 +63,27 @@ export async function findConsumerByHash(keyHash: string): Promise<Consumer | un
     .select()
     .from(consumers)
     .where(and(eq(consumers.keyHash, keyHash), isNull(consumers.disabledAt)))
+    .limit(1);
+  return rows[0];
+}
+
+/**
+ * A consumer by id *and* key hash, disabled ones included.
+ *
+ * `revoke-cache` names a consumer in the path and a key in the body, and used
+ * to act on the body alone — so any uuid revoked any hash and the route's shape
+ * promised a relationship it did not enforce. Matching both in the query keeps
+ * the comparison where a hash lookup already lives, and `disabledAt` comes back
+ * with the row so the caller can still be told whether the key is live.
+ */
+export async function findConsumerByIdAndHash(
+  id: string,
+  keyHash: string,
+): Promise<Consumer | undefined> {
+  const rows = await db
+    .select()
+    .from(consumers)
+    .where(and(eq(consumers.id, id), eq(consumers.keyHash, keyHash)))
     .limit(1);
   return rows[0];
 }

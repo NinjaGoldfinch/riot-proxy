@@ -1,5 +1,6 @@
 import './helpers/env.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { probeServices } from './helpers/services.js';
 import { eq } from 'drizzle-orm';
 import { buildApp, type App } from '../src/app.js';
 import { closeDb, db, pingDb } from '../src/db/index.js';
@@ -27,12 +28,10 @@ let available = false;
 const TEST_PUUID = `docs-schemas-${'x'.repeat(60)}`;
 
 beforeAll(async () => {
-  try {
+  available = await probeServices('docs-schemas.test.ts', async () => {
     await redis.ping();
-    available = await pingDb();
-  } catch {
-    available = false;
-  }
+    return pingDb();
+  });
   if (!available) return;
 
   const admin = await createTestConsumer({

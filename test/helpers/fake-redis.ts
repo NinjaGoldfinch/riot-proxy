@@ -105,12 +105,44 @@ export class FakeRedis {
     return 'PONG';
   }
 
+  /**
+   * Enough of a pipeline for the callers that batch: commands are queued by
+   * name and replayed against this instance, so `exec()` returns ioredis'
+   * `[error, result]` pairs without every command needing its own stub.
+   */
+  pipeline(): FakePipeline {
+    return new FakePipeline(this);
+  }
+
   reset(): void {
     this.store.clear();
   }
 
   get size(): number {
     return this.store.size;
+  }
+}
+
+type Command = (...args: never[]) => Promise<unknown>;
+
+class FakePipeline {
+  private readonly queued: [string, unknown[]][] = [];
+
+  constructor(private readonly redis: FakeRedis) {}
+
+  pttl(key: string): this {
+    this.queued.push(['pttl', [key]]);
+    return this;
+  }
+
+  async exec(): Promise<[Error | null, unknown][]> {
+    const target = this.redis as unknown as Record<string, Command>;
+    return Promise.all(
+      this.queued.map(async ([name, args]): Promise<[Error | null, unknown]> => [
+        null,
+        await target[name]!(...(args as never[])),
+      ]),
+    );
   }
 }
 

@@ -65,6 +65,20 @@ const bucketKey = {
 const frozenKey = (scope: string) => `rl:frozen:${KEY_SCOPE}:${scope}`;
 const waitersKey = (scope: string) => `rl:waiters:${KEY_SCOPE}:${scope}`;
 
+/**
+ * How long one announced interactive waiter stands for.
+ *
+ * It is renewed on every acquisition attempt the caller makes, so a request
+ * genuinely still queueing keeps its slot however long it waits, and the only
+ * entries that reach this age belong to a process that is gone. That is the
+ * whole difference from the counter this replaced: its TTL was re-armed by
+ * *any* interactive request on the scope, so on a service with traffic more
+ * often than once a minute — the normal state — a count leaked by a SIGKILL
+ * was never recovered, and every bulk acquisition on that scope returned
+ * `interactive-queue-busy` for good.
+ */
+const WAITER_TTL_MS = 60_000;
+
 /** Limit configs change rarely; a short local TTL keeps acquire() to one round trip. */
 const CONFIG_CACHE_MS = 10_000;
 
@@ -157,12 +171,16 @@ export class RateLimiter {
     const started = Date.now();
     const deadline = started + budgetMs;
 
-    // Interactive requests announce themselves so bulk work can stand aside (§9.3).
+    // Interactive requests announce themselves so bulk work can stand aside
+    // (§9.3). The announcement is made by the acquire script rather than here:
+    // it is one member of one sorted set, written in the round trip that was
+    // happening anyway, and renewed by every attempt this call makes.
     const trackWaiters = priority === 'interactive';
-    if (trackWaiters) {
-      await this.redis.incr(waitersKey(scope));
-      await this.redis.expire(waitersKey(scope), 60);
-    }
+
+    // Identifies this call in every bucket it takes a slot in — so a refusal
+    // part-way through can roll back exactly what it took — and in the waiter
+    // set, so the `finally` withdraws this caller and nobody else.
+    const token = randomUUID();
 
     try {
       for (;;) {
@@ -182,17 +200,9 @@ export class RateLimiter {
           count += 1;
         }
 
-        const waiters = trackWaiters
-          ? 0 // we are the interactive traffic; do not block ourselves
-          : Number((await this.redis.get(waitersKey(scope))) ?? '0');
-
-        // Identifies this attempt's slot in every bucket, so a refusal part-way
-        // through can roll back exactly what it took.
-        const token = randomUUID();
-
         const raw = (await this.evalAcquire(
-          [frozenKey(scope)],
-          [priority, config.BULK_USAGE_CEILING, waiters, token, count, ...buckets],
+          [frozenKey(scope), waitersKey(scope)],
+          [priority, config.BULK_USAGE_CEILING, token, WAITER_TTL_MS, count, ...buckets],
         )) as [number, number, string];
 
         const [ok, waitMs, reason] = raw;
@@ -216,7 +226,7 @@ export class RateLimiter {
       }
     } finally {
       if (trackWaiters) {
-        await this.redis.decr(waitersKey(scope)).catch(() => undefined);
+        await this.redis.zrem(waitersKey(scope), token).catch(() => undefined);
       }
     }
   }

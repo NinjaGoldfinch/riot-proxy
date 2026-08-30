@@ -46,6 +46,12 @@ jobs:
       DATABASE_URL: postgres://proxy:proxy@localhost:5432/riotproxy
       NODE_ENV: test
       LOG_LEVEL: silent
+      # Every integration suite skips itself when Redis or Postgres is out of
+      # reach, which is what keeps `npm test` runnable on a laptop with nothing
+      # up — and what makes a green run ambiguous, because "260 passed" and
+      # "260 passed, most of them nothing" print identically. Both services are
+      # provided above, so here the skip is a lie worth failing on.
+      REQUIRE_SERVICES: '1'
 
     steps:
       - uses: actions/checkout@v7

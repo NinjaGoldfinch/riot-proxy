@@ -1,5 +1,6 @@
 import './helpers/env.js';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { probeServices } from './helpers/services.js';
 import type { BuiltRequest } from '../src/riot/endpoints.js';
 import type { BackfillPlayerJob } from '../src/jobs/queues.js';
 
@@ -93,12 +94,10 @@ const poll = () =>
   } as never);
 
 beforeAll(async () => {
-  try {
+  available = await probeServices('poll-catchup.test.ts', async () => {
     await redis.ping();
-    available = true;
-  } catch {
-    available = false;
-  }
+    return true;
+  });
 });
 
 afterAll(async () => {

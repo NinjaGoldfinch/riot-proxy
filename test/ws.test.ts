@@ -2,6 +2,7 @@ import './helpers/env.js';
 import type { AddressInfo } from 'node:net';
 import WebSocket from 'ws';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { probeServices } from './helpers/services.js';
 import { buildApp, type App } from '../src/app.js';
 import { closeDb, pingDb } from '../src/db/index.js';
 import { createTestConsumer, removeTestConsumers, testConsumerName } from './helpers/consumers.js';
@@ -16,12 +17,10 @@ let key = '';
 let available = false;
 
 beforeAll(async () => {
-  try {
+  available = await probeServices('ws.test.ts', async () => {
     await redis.ping();
-    available = await pingDb();
-  } catch {
-    available = false;
-  }
+    return pingDb();
+  });
   if (!available) return;
 
   const consumer = await createTestConsumer({ name: testConsumerName('ws'), scopes: ['read'] });

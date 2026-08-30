@@ -1,5 +1,6 @@
 import './helpers/env.js';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { probeServices } from './helpers/services.js';
 import type { BuiltRequest, MethodId } from '../src/riot/endpoints.js';
 import type { BackfillPlayerJob } from '../src/jobs/queues.js';
 import type { UpsertPlayerInput } from '../src/db/players.js';
@@ -99,12 +100,10 @@ const page = (start = 0, count = 10) =>
   `/v1/players/${PUUID}/matches?platform=oc1&start=${start}&count=${count}`;
 
 beforeAll(async () => {
-  try {
+  available = await probeServices('lookup-backfill.test.ts', async () => {
     await redis.ping();
-    available = await pingDb();
-  } catch {
-    available = false;
-  }
+    return pingDb();
+  });
   if (!available) return;
 
   const consumer = await createTestConsumer({
