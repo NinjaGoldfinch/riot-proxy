@@ -167,6 +167,68 @@ describe('http surface', () => {
     expect(res.json().error.code).toBe('NOT_FOUND');
   });
 
+  /**
+   * §12.1 / FR-13. Every other 429 assertion in this suite covers Riot's
+   * upstream limiter, which is a different mechanism — so the consumer-quota
+   * response went unchecked, and returned a 500 for as long as it has existed.
+   */
+  it('answers 429 QUOTA_EXCEEDED once a consumer spends its quota (§12.1)', async ({ skip }) => {
+    if (!available || !app) return skip();
+    const limited = await createTestConsumer({
+      name: testConsumerName('quota'),
+      scopes: ['read', 'admin'],
+      quotaPerMin: 2,
+    });
+    // A route that costs nothing upstream: the quota is what is under test.
+    const spend = () =>
+      app!.inject({ method: 'GET', url: '/v1/admin/stats', headers: auth(limited?.key ?? '') });
+
+    expect((await spend()).statusCode).toBe(200);
+    expect((await spend()).statusCode).toBe(200);
+
+    const denied = await spend();
+    expect(denied.statusCode).toBe(429);
+    expect(denied.json().error.code).toBe('QUOTA_EXCEEDED');
+    // Without Retry-After a client has nothing to back off against.
+    expect(Number(denied.headers['retry-after'])).toBeGreaterThan(0);
+  });
+
+  /**
+   * Nothing else pins the hook ordering this depends on. `@fastify/rate-limit`
+   * attaches its check via `onRoute`, so it runs as a route-level hook — after
+   * the instance-level `onRequest` in auth/plugin.ts that sets
+   * `request.consumer`. If the plugin ever moved to an instance-level hook the
+   * limiter would see no consumer, silently fall back to keying by IP, and
+   * every consumer sharing an address would share one quota.
+   */
+  it('meters each consumer separately rather than by address (§12.1)', async ({ skip }) => {
+    if (!available || !app) return skip();
+    const small = await createTestConsumer({
+      name: testConsumerName('quota-small'),
+      scopes: ['read', 'admin'],
+      quotaPerMin: 2,
+    });
+    const large = await createTestConsumer({
+      name: testConsumerName('quota-large'),
+      scopes: ['read', 'admin'],
+      quotaPerMin: 5,
+    });
+    const hit = (key: string) =>
+      app!.inject({ method: 'GET', url: '/v1/admin/stats', headers: auth(key) });
+
+    // Spend the small quota to exhaustion. inject() reports one client address,
+    // so an IP-keyed bucket would now be spent for both consumers.
+    await hit(small?.key ?? '');
+    await hit(small?.key ?? '');
+    expect((await hit(small?.key ?? '')).statusCode).toBe(429);
+
+    const other = await hit(large?.key ?? '');
+    expect(other.statusCode).toBe(200);
+    // Its own limit, and its own untouched bucket — the IP fallback would show 60.
+    expect(other.headers['x-ratelimit-limit']).toBe('5');
+    expect(other.headers['x-ratelimit-remaining']).toBe('4');
+  });
+
   it('creates and revokes a consumer through the admin surface (FR-14)', async ({ skip }) => {
     if (!available || !app) return skip();
     const created = await app.inject({
