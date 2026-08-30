@@ -78,9 +78,23 @@ missing. Phases refer to §15 of [the spec](docs/riot-proxy-spec.md).
         schemas for our own payloads, so `GET /v1/admin/consumers` can never
         grow a `keyHash`. `GET /v1/admin/limits/:scope` now 400s on a scope that
         is not a host, where it used to answer 200 with an empty bucket.
-  - [ ] Stages 2–7 (#61–#66) — shared components, the document's own content,
-        response examples, serving it, the committed snapshot, and retiring the
-        README's consumer guide.
+  - [x] Stage 2 (#61) — the envelope is registered once and referenced, not
+        copied 182 times, and every route now claims only the failures it can
+        actually produce. There is no `publicErrors` set: the public routes
+        produce no envelope at all.
+  - [x] Stage 3 (#62) — the document has its own content, all of it generated
+        from config rather than typed, so a `CACHE_TTL_OVERRIDES` change cannot
+        leave the reference stating something that used to be true. §11 is
+        prose on the `ws` tag, since 3.1 cannot express a WebSocket.
+  - [x] Stage 4 (#63) — our own bodies have real schemas and the types are
+        derived from them; Riot's keep an empty schema and gain an example.
+        Error examples tell the quota 429 and the limiter 503 apart.
+  - [x] Stage 5 (#64), in part — the plugins are registered and `/docs`,
+        `/openapi.json` and `/openapi.yaml` are served, public and quota-exempt.
+        Pulled forward because stages 2–4 could not be verified without a page.
+        Outstanding: the Dockerfile and Caddy notes.
+  - [ ] Stage 6 (#65) — commit `openapi.json` and fail CI when it drifts.
+  - [ ] Stage 7 (#66) — retire the README's consumer guide in favour of `/docs`.
 
 ### Follow-ups from this round
 
