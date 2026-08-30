@@ -122,26 +122,32 @@ return { 1, 0, 'ok' }
  * them, so they age out later than the requests they stand for. That errs
  * towards holding back, which is the safe direction.
  *
- * ARGV[1]                            number of buckets
- * ARGV[2+3i], ARGV[3+3i], ARGV[4+3i] bucket key, riot count, window seconds
+ * ARGV[1]                            token unique to this sync
+ * ARGV[2]                            number of buckets
+ * ARGV[3+3i], ARGV[4+3i], ARGV[5+3i] bucket key, riot count, window seconds
  */
 export const SYNC_SCRIPT = `
-local bucket_count = tonumber(ARGV[1])
+local token        = ARGV[1]
+local bucket_count = tonumber(ARGV[2])
 
 local t      = redis.call('TIME')
 local now_ms = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
 
 for i = 0, bucket_count - 1 do
-  local key       = ARGV[2 + i * 3]
-  local count     = tonumber(ARGV[3 + i * 3])
-  local window_ms = tonumber(ARGV[4 + i * 3]) * 1000
+  local key       = ARGV[3 + i * 3]
+  local count     = tonumber(ARGV[4 + i * 3])
+  local window_ms = tonumber(ARGV[5 + i * 3]) * 1000
 
   redis.call('ZREMRANGEBYSCORE', key, '-inf', now_ms - window_ms)
   local ours = redis.call('ZCARD', key)
 
   if count > ours then
+    -- Name placeholders after this sync's token, not the clock: two syncs in
+    -- the same millisecond would otherwise pick overlapping names, and ZADD of
+    -- an existing member leaves the cardinality — the whole point of the
+    -- padding — short of what Riot has already counted.
     for n = ours + 1, count do
-      redis.call('ZADD', key, now_ms, 'riot:' .. now_ms .. ':' .. n)
+      redis.call('ZADD', key, now_ms, 'riot:' .. token .. ':' .. n)
     end
     redis.call('PEXPIRE', key, window_ms + 5000)
   end

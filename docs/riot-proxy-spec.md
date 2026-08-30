@@ -398,8 +398,8 @@ CREATE TABLE match_participants (              -- optional denormalization for f
 | `c:{scope}:{endpoint}:{args-hash}` | cached JSON response | per §8.2 |
 | `neg:{scope}:{endpoint}:{args-hash}` | `"404"` marker | 30–60 s |
 | `sf:{cache-key}` | single-flight lock (SET NX PX) | 5 s |
-| `rl:app:{region}:{window}` | app bucket state | window-scoped |
-| `rl:m:{region}:{method}:{window}` | method bucket state | window-scoped |
+| `rl:app:v2:{region}:{window}` | app bucket state (sorted set of admission timestamps) | window-scoped |
+| `rl:m:v2:{region}:{method}:{window}` | method bucket state (sorted set of admission timestamps) | window-scoped |
 | `q:{consumer}:{minute}` | consumer quota counter | 90 s |
 | `auth:{key_hash}` | cached consumer row | 300 s |
 | pub/sub `evt:{topic}` | realtime events | — |

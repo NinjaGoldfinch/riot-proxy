@@ -44,10 +44,22 @@ const cfgKey = {
   method: (scope: string, method: string) => `rl:cfg:m:${KEY_SCOPE}:${scope}:${method}`,
 };
 
+/**
+ * Bucket keys carry a version because a bucket's Redis type changed here: it
+ * used to be a string counter and is now a sorted set of admission timestamps.
+ * Reusing the old names would make every `ZREMRANGEBYSCORE` fail `WRONGTYPE`
+ * against live state — and, during a rolling deploy, make the old pods' `INCR`
+ * fail the moment a new pod created the sorted set — turning upstream requests
+ * into 500s until the stale keys expired. The abandoned keys carry a TTL of at
+ * most one window, so they clear themselves; nothing needs deleting by hand.
+ */
+const BUCKET_VERSION = 'v2';
+
 const bucketKey = {
-  app: (scope: string, w: LimitWindow) => `rl:app:${KEY_SCOPE}:${scope}:${w.limit}:${w.seconds}`,
+  app: (scope: string, w: LimitWindow) =>
+    `rl:app:${BUCKET_VERSION}:${KEY_SCOPE}:${scope}:${w.limit}:${w.seconds}`,
   method: (scope: string, method: string, w: LimitWindow) =>
-    `rl:m:${KEY_SCOPE}:${scope}:${method}:${w.limit}:${w.seconds}`,
+    `rl:m:${BUCKET_VERSION}:${KEY_SCOPE}:${scope}:${method}:${w.limit}:${w.seconds}`,
 };
 
 const frozenKey = (scope: string) => `rl:frozen:${KEY_SCOPE}:${scope}`;
@@ -244,7 +256,9 @@ export class RateLimiter {
       (w) => bucketKey.method(scope, method, w),
     );
 
-    if (count > 0) tasks.push(this.evalSync([count, ...syncArgs]));
+    // Placeholder members are named after this token, so two syncs landing in
+    // the same Redis millisecond cannot write over each other's padding.
+    if (count > 0) tasks.push(this.evalSync([randomUUID(), count, ...syncArgs]));
 
     await Promise.allSettled(tasks);
   }
