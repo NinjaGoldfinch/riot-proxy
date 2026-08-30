@@ -85,6 +85,8 @@ export const MatchPageQuery = Type.Object({
   type: Type.Optional(
     Type.Unsafe<string>({ type: 'string', enum: ['ranked', 'normal', 'tourney', 'tutorial'] }),
   ),
+  /** Spend quota to re-read the id list; rate limited per player. */
+  refresh: Type.Optional(Type.Boolean({ default: false })),
 });
 
 export const MasteryQuery = Type.Object({

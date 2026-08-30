@@ -197,6 +197,34 @@ own upstream call. `hasMore` says a full page came back, so page without
 guessing. Matches are immutable and archived (§7.3), so paging back through a
 history a second time costs no quota at all.
 
+#### Asking for a fresh read
+
+Both composites read through the cache: viewing a player costs nothing upstream
+while the cache holds them, and only an outright miss goes to Riot. `?refresh=true`
+is the way to say "I know something has changed" — metered at one refresh per
+player per 60 seconds, in Redis, so it holds across api replicas.
+
+Losing that race is not an error. Whoever won it wrote fresh values seconds ago,
+so the cache read you fall back to is the very data you asked for. Every
+response says which happened:
+
+| Field                | Meaning                                                   |
+| -------------------- | --------------------------------------------------------- |
+| `refreshed`          | This request went upstream rather than reading the cache  |
+| `refreshAvailableIn` | Seconds until the next manual refresh; `0` when available |
+
+Both are present whether or not you asked for a refresh, so a UI can show the
+cooldown without having to spend one to discover it.
+
+On the match page a refresh re-reads the **id list only**. The matches behind it
+are immutable and already archived, so re-downloading them would cost quota to
+learn nothing.
+
+The profile also reports each part's own `ageSeconds`. The top-level
+`X-Cache-Age` is the stalest of the four, which is right for a cache header and
+wrong for anyone labelling four independent sections — an account unchanged for
+a day should not make a rank that moved a minute ago look a day old.
+
 ### WebSocket
 
 ```

@@ -4,6 +4,7 @@ import { config } from '../config.js';
 import { ProxyError } from '../errors.js';
 import { fetcher, type FetchResult } from '../fetcher.js';
 import { logger } from '../logger.js';
+import { redis } from '../redis.js';
 import { build } from '../riot/endpoints.js';
 import {
   assertPlatform,
@@ -28,7 +29,49 @@ import {
  *
  * Partial failure returns the parts that succeeded plus `warnings[]` — a
  * mastery timeout must never fail the whole document.
+ *
+ * Reads are cache-first: viewing a profile costs nothing upstream while the
+ * cache holds it, and only an outright miss goes to Riot. Spending quota to
+ * refresh a player who has not played since the last look is the caller's
+ * decision to make, so it takes an explicit `?refresh=true` — metered by
+ * `refreshWindow` below.
  */
+
+/**
+ * §12.1 in spirit: `refresh` is the one thing a consumer can ask for that is
+ * guaranteed to cost upstream quota, so it is metered per player here rather
+ * than trusted to whatever UI is driving it.
+ */
+export const REFRESH_COOLDOWN_S = 60;
+
+interface RefreshState {
+  /** This request won the window and went upstream. */
+  refreshed: boolean;
+  /** Seconds until another manual refresh is allowed; 0 when allowed now. */
+  availableIn: number;
+}
+
+/**
+ * Claim the refresh window for a player, or report how long is left on it.
+ *
+ * Losing the race is not an error: whoever won it wrote fresh values less than
+ * a minute ago, so the cache read the caller falls back to is the very data
+ * they asked to be fetched.
+ */
+async function refreshWindow(
+  part: string,
+  identity: string,
+  claim: boolean,
+): Promise<RefreshState> {
+  const key = `refresh:${config.KEY_SCOPE}:${part}:${identity}`;
+  if (claim && (await redis.set(key, '1', 'EX', REFRESH_COOLDOWN_S, 'NX'))) {
+    return { refreshed: true, availableIn: REFRESH_COOLDOWN_S };
+  }
+  const ttl = await redis.ttl(key);
+  return { refreshed: false, availableIn: ttl > 0 ? ttl : 0 };
+}
+
+const RefreshQuery = Type.Optional(Type.Boolean({ default: false }));
 const playerRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get(
     '/v1/players/:puuid/profile',
@@ -39,19 +82,22 @@ const playerRoutes: FastifyPluginAsync = async (fastify) => {
         querystring: Type.Object({
           platform: Type.Optional(PlatformParam),
           topMastery: Type.Optional(Type.Integer({ minimum: 1, maximum: 20, default: 5 })),
+          refresh: RefreshQuery,
         }),
         response: { 200: PassthroughResponse, ...errorResponses },
       },
     },
     async (request, reply) => {
       const { puuid } = request.params as { puuid: string };
-      const { platform: platformRaw, topMastery = 5 } = request.query as {
-        platform?: string;
-        topMastery?: number;
-      };
+      const {
+        platform: platformRaw,
+        topMastery = 5,
+        refresh = false,
+      } = request.query as { platform?: string; topMastery?: number; refresh?: boolean };
 
       const platform = assertPlatform(platformRaw ?? config.DEFAULT_PLATFORM);
-      return finish(reply, await composeProfile({ platform, puuid, topMastery }));
+      const window = await refreshWindow('profile', puuid, refresh);
+      return finish(reply, await composeProfile({ platform, puuid, topMastery, window }));
     },
   );
 
@@ -71,20 +117,23 @@ const playerRoutes: FastifyPluginAsync = async (fastify) => {
         querystring: Type.Object({
           platform: Type.Optional(PlatformParam),
           topMastery: Type.Optional(Type.Integer({ minimum: 1, maximum: 20, default: 5 })),
+          refresh: RefreshQuery,
         }),
         response: { 200: PassthroughResponse, ...errorResponses },
       },
     },
     async (request, reply) => {
       const { gameName, tagLine } = request.params as { gameName: string; tagLine: string };
-      const { platform: platformRaw, topMastery = 5 } = request.query as {
-        platform?: string;
-        topMastery?: number;
-      };
+      const {
+        platform: platformRaw,
+        topMastery = 5,
+        refresh = false,
+      } = request.query as { platform?: string; topMastery?: number; refresh?: boolean };
 
       const platform = assertPlatform(platformRaw ?? config.DEFAULT_PLATFORM);
-      // A miss here is a 404 for the whole request: without a PUUID there is
-      // nothing left to fan out to.
+      // Always the cached mapping, even on a refresh: it is only here to turn
+      // the Riot ID into a PUUID, which is what the cooldown is keyed on. A
+      // refresh then re-fetches the account by PUUID along with the rest.
       const account = await fetcher.fetch<{ puuid?: string }>(
         build.accountByRiotId(platformToAccountRegion(platform), gameName, tagLine),
       );
@@ -94,7 +143,17 @@ const playerRoutes: FastifyPluginAsync = async (fastify) => {
         throw ProxyError.notFound(`Riot ID '${gameName}#${tagLine}' did not resolve to a PUUID`);
       }
 
-      return finish(reply, await composeProfile({ platform, puuid, topMastery, account }));
+      const window = await refreshWindow('profile', puuid, refresh);
+      return finish(
+        reply,
+        await composeProfile({
+          platform,
+          puuid,
+          topMastery,
+          window,
+          ...(window.refreshed ? {} : { account }),
+        }),
+      );
     },
   );
 
@@ -122,16 +181,22 @@ const playerRoutes: FastifyPluginAsync = async (fastify) => {
         count = 10,
         queue,
         type,
+        refresh = false,
       } = request.query as {
         platform?: string;
         start?: number;
         count?: number;
         queue?: number;
         type?: string;
+        refresh?: boolean;
       };
 
       const platform = assertPlatform(platformRaw ?? config.DEFAULT_PLATFORM);
-      return finish(reply, await composeMatches({ platform, puuid, start, count, queue, type }));
+      const window = await refreshWindow('matches', puuid, refresh);
+      return finish(
+        reply,
+        await composeMatches({ platform, puuid, start, count, queue, type, window }),
+      );
     },
   );
 };
@@ -184,6 +249,16 @@ interface ProfileBody {
   summoner: unknown;
   league: unknown;
   mastery: unknown;
+  /**
+   * Per part, how long its content has been unchanged. The top-level
+   * `X-Cache-Age` is the stalest of these, which is the right answer for a
+   * cache header and the wrong one for a caller labelling four independent
+   * sections — an account that has not changed in a day would otherwise make a
+   * rank that moved a minute ago look a day old.
+   */
+  ageSeconds: Record<string, number | null>;
+  refreshed: boolean;
+  refreshAvailableIn: number;
   warnings: string[];
 }
 
@@ -191,10 +266,14 @@ async function composeProfile(opts: {
   platform: Platform;
   puuid: string;
   topMastery: number;
+  window: RefreshState;
   /** Already-fetched account part, when the caller entered by Riot ID. */
   account?: FetchResult<unknown>;
 }): Promise<Composed<ProfileBody>> {
-  const { platform, puuid, topMastery } = opts;
+  const { platform, puuid, topMastery, window } = opts;
+  // A won refresh bypasses the read on every part; the writes still happen, so
+  // the next plain lookup serves what this one fetched.
+  const fresh = { bypassCache: window.refreshed };
   // `region` is echoed to the caller as the match-v5 host for their platform;
   // account-v1 needs its own, which for SEA is not the same.
   const region = platformToRegion(platform);
@@ -203,15 +282,17 @@ async function composeProfile(opts: {
   const settled = await Promise.allSettled([
     opts.account
       ? Promise.resolve(opts.account)
-      : fetcher.fetch(build.accountByPuuid(platformToAccountRegion(platform), puuid)),
-    fetcher.fetch(build.summonerByPuuid(platform, puuid)),
-    fetcher.fetch(build.leagueEntriesByPuuid(platform, puuid)),
-    fetcher.fetch(build.masteryTopByPuuid(platform, puuid, topMastery)),
+      : fetcher.fetch(build.accountByPuuid(platformToAccountRegion(platform), puuid), fresh),
+    fetcher.fetch(build.summonerByPuuid(platform, puuid), fresh),
+    fetcher.fetch(build.leagueEntriesByPuuid(platform, puuid), fresh),
+    fetcher.fetch(build.masteryTopByPuuid(platform, puuid, topMastery), fresh),
   ]);
 
   const warnings: string[] = [];
   const part = collector(warnings);
   const [account, summoner, league, mastery] = settled;
+  const age = (s: PromiseSettledResult<FetchResult<unknown>>) =>
+    s.status === 'fulfilled' ? s.value.ageSeconds : null;
 
   const body: ProfileBody = {
     puuid,
@@ -221,6 +302,14 @@ async function composeProfile(opts: {
     summoner: part('summoner', summoner),
     league: part('league', league),
     mastery: part('mastery', mastery),
+    ageSeconds: {
+      account: age(account),
+      summoner: age(summoner),
+      league: age(league),
+      mastery: age(mastery),
+    },
+    refreshed: window.refreshed,
+    refreshAvailableIn: window.availableIn,
     warnings,
   };
 
@@ -243,6 +332,13 @@ interface MatchPageBody {
   matches: unknown[];
   /** A full page came back, so there is probably another one behind it. */
   hasMore: boolean;
+  /**
+   * How long the id list has been unchanged. The matches behind it are
+   * immutable, so this is the only age on the page that can mean anything.
+   */
+  matchIdsAgeSeconds: number;
+  refreshed: boolean;
+  refreshAvailableIn: number;
   warnings: string[];
 }
 
@@ -253,13 +349,20 @@ async function composeMatches(opts: {
   count: number;
   queue?: number;
   type?: string;
+  window: RefreshState;
 }): Promise<Composed<MatchPageBody>> {
-  const { platform, puuid, start, count, queue, type } = opts;
+  const { platform, puuid, start, count, queue, type, window } = opts;
   const region = platformToRegion(platform);
 
-  // The id page is the one part that cannot fail softly: no ids, no matches.
+  /**
+   * The id page is the one part that cannot fail softly: no ids, no matches —
+   * and the only part a refresh touches. Matches themselves are immutable and
+   * archived (§7.3), so bypassing their cache would re-download games that
+   * cannot have changed.
+   */
   const ids = await fetcher.fetch<string[]>(
     build.matchIdsByPuuid(region, puuid, { start, count, queue, type }),
+    { bypassCache: window.refreshed },
   );
   const matchIds = Array.isArray(ids.data) ? ids.data : [];
 
@@ -286,6 +389,9 @@ async function composeMatches(opts: {
     matchIds,
     matches,
     hasMore: matchIds.length === count,
+    matchIdsAgeSeconds: ids.ageSeconds,
+    refreshed: window.refreshed,
+    refreshAvailableIn: window.availableIn,
     warnings,
   };
 
