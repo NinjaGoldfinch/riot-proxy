@@ -309,6 +309,17 @@ Each poll type is one repeatable tick that fans out to one job per tracked
 player, so adding or removing a tracked player needs no scheduler changes. All
 jobs are idempotent and run at bulk priority.
 
+`archive:match` is ordered by how far back the match sits in its player's
+history, in blocks of ten, and the ordering is global rather than per player —
+so anyone's most recent ten games are archived before anyone's hundredth, and a
+player who has just been looked up sees their history fill in from the top. A
+game that has only just finished takes the top rank outright.
+
+One BullMQ detail worth knowing before adding another producer: the worker pops
+the plain `wait` list first and only falls back to the prioritized set once it
+is empty, so a job queued with _no_ priority outranks every prioritized job.
+Every archive job therefore carries an explicit priority.
+
 ---
 
 ## Configuration
