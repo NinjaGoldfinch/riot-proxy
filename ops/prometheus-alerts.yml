@@ -25,7 +25,15 @@ groups:
 
       - alert: CacheHitRatioLow
         # NFR-4 targets > 85 %; 70 % is the point at which quota is at risk.
-        expr: proxy_cache_hit_ratio < 0.7
+        #
+        # Summed before the division, so this is the ratio across the whole
+        # deployment rather than one api process at a time. With no traffic both
+        # rates are zero, the division is NaN, and the comparison drops the
+        # sample — an idle proxy is not a failing one, and the `for` timer
+        # restarts when traffic resumes.
+        expr: |
+          sum(rate(proxy_cache_reads_total{state=~"hit|neg|stale"}[5m]))
+            / sum(rate(proxy_cache_reads_total[5m])) < 0.7
         for: 15m
         labels: { severity: warning }
         annotations:
