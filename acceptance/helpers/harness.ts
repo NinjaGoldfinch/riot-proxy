@@ -251,16 +251,6 @@ export function redisClient(): Redis {
 }
 
 /**
- * BullMQ dedupes on custom job id and keeps completed/failed jobs around, so a
- * re-run of the same backfill is silently dropped. Clear the key first.
- */
-export async function forgetJob(redis: Redis, queue: string, jobId: string): Promise<void> {
-  await redis.del(`bull:${queue}:${jobId}`);
-  await redis.zrem(`bull:${queue}:failed`, jobId);
-  await redis.zrem(`bull:${queue}:completed`, jobId);
-}
-
-/**
  * `prioritized` is easy to forget and expensive to miss: BullMQ parks any job
  * enqueued with a `priority` there rather than in `wait`, so a probe that polls
  * only wait/active/delayed reads an empty queue while the work is still
