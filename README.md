@@ -25,7 +25,12 @@ involved in producing or managing Riot Games properties.
 
 ## Quick start
 
+Node 26 is required, not merely recommended — `npm install` refuses to run on
+anything else. `.nvmrc` pins it, so `nvm use` (or your version manager's
+equivalent) is enough; the Dockerfile and CI are on the same major.
+
 ```bash
+nvm use                   # Node 26, per .nvmrc
 cp .env.example .env      # then set RIOT_API_KEY
 docker compose up -d      # redis + postgres
 npm install
