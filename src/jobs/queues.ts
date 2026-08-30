@@ -58,6 +58,28 @@ export function jobKey(...parts: (string | number)[]): string {
 }
 
 /**
+ * The de-duplication id for one poll of one player.
+ *
+ * Deliberately *not* a `jobId`. A custom job id is matched against finished
+ * jobs BullMQ has retained as well as pending ones — the trap behind #18 — so a
+ * stable job id here would silence a player's polling for the whole
+ * `removeOnComplete` window after every successful tick. That is why the id
+ * used to carry a timestamp, and why it then de-duplicated nothing: ticks are
+ * further apart than a second, so every tick minted a fresh id.
+ *
+ * A deduplication id is keyed on the job's *lifecycle* instead. BullMQ writes
+ * `de:{id}` with no expiry when the job is created and deletes it when the job
+ * reaches completed or failed, so the window is exactly "still pending or
+ * running" — what the fan-out wanted all along, and immune to retention.
+ *
+ * The job name is part of the id because all three poll types share one queue,
+ * and the de-duplication namespace is per queue.
+ */
+export function pollDedupeId(jobName: string, puuid: string): string {
+  return jobKey(jobName, puuid);
+}
+
+/**
  * Ordering inside the archive queue, and the one BullMQ detail that is easy to
  * get backwards: the worker pops the plain `wait` list first and only falls
  * back to the prioritized set once it is empty, so a job with *no* priority
