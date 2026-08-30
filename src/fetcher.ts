@@ -88,7 +88,11 @@ export class Fetcher {
       },
     });
 
-    return { data: result.value, cache: 'MISS', ageSeconds: 0 };
+    // Going upstream is not the same as getting something new: the store keeps
+    // the original timestamp when the payload comes back unchanged, so read the
+    // age back rather than asserting a fetch means fresh data.
+    const stored = await this.store.get<T>(key);
+    return { data: result.value, cache: 'MISS', ageSeconds: stored?.ageSeconds ?? 0 };
   }
 
   /** The upstream leg: limiter + HTTP + cache/archive writes and 404 negatives. */

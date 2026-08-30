@@ -88,10 +88,18 @@ For local testing the key check can be turned off entirely — see
 | Header        | Meaning                                                                           |
 | ------------- | --------------------------------------------------------------------------------- |
 | `X-Cache`     | `HIT` · `MISS` · `HIT-NEG` (cached 404) · `STALE` (served stale while refreshing) |
-| `X-Cache-Age` | Age of the served payload, in seconds                                             |
+| `X-Cache-Age` | Age of the served payload, in seconds — see below                                 |
 | `Retry-After` | Present on `RATE_LIMITED` and `QUOTA_EXCEEDED`                                    |
 
 Successful responses are Riot's payloads, passed through unmodified.
+
+`X-Cache-Age` is the age of the _content_, not of the last fetch. A re-read that
+comes back byte-identical keeps the timestamp the payload was first seen with,
+so `X-Cache: MISS` alongside `X-Cache-Age: 71000` is not a contradiction — it
+means the proxy asked Riot and the player has not done anything since. That is
+what makes it safe to drive a "last updated" label off: an age that has not
+moved means the data has not either. Freshness and Redis expiry are tracked
+separately, so holding the age still never keeps an entry alive past its TTL.
 
 ### Errors
 

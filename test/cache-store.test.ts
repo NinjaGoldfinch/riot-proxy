@@ -67,3 +67,53 @@ describe('cache store (§8.2, §8.5)', () => {
     expect(await store.get('c:scope:league.entriesByPuuid:h:3')).toBeDefined();
   });
 });
+
+/**
+ * A refresh that returns what we already had has not updated anything. If the
+ * timestamp moved anyway, `X-Cache-Age` would answer "how long since we last
+ * asked" while claiming to answer "how old is this data" — and every label
+ * built on it would announce news that did not happen.
+ */
+describe('unchanged payloads keep their age (§8.2)', () => {
+  it('holds the timestamp still when the value is re-written identically', async () => {
+    await store.set('k', { lp: 64 }, 60);
+    await new Promise((r) => setTimeout(r, 60));
+    await store.set('k', { lp: 64 }, 60);
+
+    const entry = await store.get<{ lp: number }>('k');
+    expect(entry?.ageSeconds).toBe(0); // rounds to 0s, but the epoch is the old one
+    expect(await ageMs('k')).toBeGreaterThanOrEqual(50);
+  });
+
+  it('moves the timestamp as soon as the content differs', async () => {
+    await store.set('k', { lp: 64 }, 60);
+    await new Promise((r) => setTimeout(r, 60));
+    await store.set('k', { lp: 71 }, 60);
+
+    expect(await ageMs('k')).toBeLessThan(40);
+  });
+
+  it('still refreshes the expiry, so a held timestamp cannot strand an entry', async () => {
+    await store.set('k', 'v', 0.05);
+    await new Promise((r) => setTimeout(r, 80));
+    expect((await store.get<string>('k'))?.stale).toBe(true);
+
+    // Same value, so the age is held — but the soft TTL has to start again or
+    // the entry would be permanently stale and re-fetched on every read.
+    await store.set('k', 'v', 60);
+    expect((await store.get<string>('k'))?.stale).toBe(false);
+  });
+
+  it('treats a malformed entry as new data rather than trusting it', async () => {
+    await redis.set('k', 'not json', 'EX', 60);
+    await store.set('k', 'v', 60);
+    expect((await store.get<string>('k'))?.value).toBe('v');
+  });
+});
+
+/** The envelope's epoch, which `ageSeconds` rounds away at this resolution. */
+async function ageMs(key: string): Promise<number> {
+  const raw = await redis.get(key);
+  const env = JSON.parse(raw as string) as { a: number };
+  return Date.now() - env.a;
+}
