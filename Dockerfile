@@ -11,6 +11,9 @@ RUN npm ci
 
 COPY tsconfig.json tsconfig.build.json ./
 COPY src ./src
+# Not compiled, just served — the dev UI is off by default in production, but
+# an image where turning DEV_UI on 404s would be a worse kind of surprise.
+COPY public ./public
 RUN npm run build
 
 # Drop dev dependencies from the tree we are about to copy forward.
@@ -25,6 +28,7 @@ ENV NODE_ENV=production
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/package.json ./package.json
+COPY --from=build /app/public ./public
 COPY src/db/migrations ./dist/db/migrations
 
 RUN mkdir -p /data/ddragon && chown -R node:node /data /app

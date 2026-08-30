@@ -9,6 +9,7 @@ import { requestsTotal } from './metrics.js';
 import { redis } from './redis.js';
 import adminRoutes from './routes/admin.js';
 import debugRoutes from './routes/debug.js';
+import devUiRoutes from './routes/dev-ui.js';
 import healthRoutes from './routes/health.js';
 import lolRoutes from './routes/lol.js';
 import playerRoutes from './routes/players.js';
@@ -105,6 +106,8 @@ export async function buildApp() {
   await app.register(adminRoutes);
   await app.register(debugRoutes);
   await app.register(wsRoutes);
+  // Development-only browser client (§ none — it is a tool, not a contract).
+  if (config.devUi) await app.register(devUiRoutes);
 
   /** §13 — one structured line per request. */
   app.addHook('onResponse', async (request, reply) => {

@@ -67,6 +67,28 @@ This is a development convenience and the service **refuses to start** with it
 set while `NODE_ENV=production`. The test suite pins it off, so the auth tests
 keep asserting real rejections.
 
+### The browser client
+
+`http://localhost:8080/dev` is a single self-contained page for looking at what
+the API actually returns — summoner, ranked, top mastery and a paged match
+history, with the proxy headers and the raw JSON alongside each section. A
+profile is a URL you can paste:
+
+```
+http://localhost:8080/dev/NinjaGoldfinch-OCENZ?platform=oc1
+```
+
+It is served from this origin, so its `fetch` calls are same-origin and the
+service needs no CORS layer. The page itself is public — a browser has nowhere
+to put a key before it renders the field — and every `/v1` call it makes is
+authenticated like any other; with `AUTH_DISABLED=true` it hides the field
+entirely. Icons come straight from the Data Dragon CDN, which is not rate
+limited (§5.6) and was never mirrored.
+
+`DEV_UI` follows `NODE_ENV` unless you set it: on everywhere but production,
+where a page that advertises whether auth is off has no business being. No build
+step and no dependencies — edit `public/dev-ui.html` and reload.
+
 ---
 
 ## Consumer guide
@@ -141,6 +163,7 @@ One envelope, always:
 | `GET /v1/static/versions`                                        | local mirror        | No upstream call                                                                     |
 | `GET /v1/static/{file}`                                          | local mirror        | `champions`, `items`, `runes`, `summoner-spells`, `profile-icons`, `maps`, `queues`  |
 | `WS /v1/ws`                                                      | realtime            | See below                                                                            |
+| `GET /dev`                                                       | dev tool            | Browser client, when `DEV_UI` is on — see below                                      |
 | `GET /healthz` · `/readyz` · `/metrics`                          | —                   | Public                                                                               |
 
 **Platforms:** `na1` `br1` `la1` `la2` `euw1` `eun1` `tr1` `ru` `kr` `jp1`
@@ -414,6 +437,7 @@ Every archive job therefore carries an explicit priority.
 | `ADMIN_IP_ALLOWLIST`                         | —                                                 | CSV of IPs/CIDRs; empty means key scope is enough       |
 | `BOOTSTRAP_ADMIN_KEY`                        | —                                                 | Seeds one admin key on `npm run migrate`                |
 | `AUTH_DISABLED`                              | `false`                                           | Dev only: skip key checks; refused in production        |
+| `DEV_UI`                                     | follows `NODE_ENV`                                | Serve the browser client at `/dev`; off in production   |
 | `LOG_LEVEL`                                  | `info`                                            |                                                         |
 
 `KEY_SCOPE` is derived, not configured.

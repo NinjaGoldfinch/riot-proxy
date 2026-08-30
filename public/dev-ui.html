@@ -1,0 +1,908 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>riot-proxy dev UI</title>
+    <style>
+      :root {
+        --bg: #0e1116;
+        --panel: #161b22;
+        --line: #262d38;
+        --text: #d7dee8;
+        --dim: #7d8794;
+        --accent: #58a6ff;
+        --win: #2ea043;
+        --loss: #d1444a;
+        --warn: #d29922;
+        --mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font:
+          14px/1.5 system-ui,
+          -apple-system,
+          'Segoe UI',
+          sans-serif;
+      }
+      main {
+        max-width: 980px;
+        margin: 0 auto;
+        padding: 24px 16px 80px;
+      }
+      h1 {
+        font: 600 15px/1 var(--mono);
+        letter-spacing: 0.04em;
+        margin: 0 0 16px;
+        color: var(--dim);
+      }
+      h2 {
+        font: 600 12px/1 var(--mono);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--dim);
+        margin: 0 0 10px;
+      }
+      section {
+        margin-top: 24px;
+      }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 14px;
+      }
+      form {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      input,
+      select,
+      button {
+        font: inherit;
+        color: var(--text);
+        background: #0b0e13;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 7px 9px;
+      }
+      input:focus,
+      select:focus {
+        outline: 1px solid var(--accent);
+        border-color: var(--accent);
+      }
+      #riotId {
+        flex: 1 1 240px;
+        font-family: var(--mono);
+      }
+      button {
+        cursor: pointer;
+        background: #1f2733;
+      }
+      button:hover:not(:disabled) {
+        border-color: var(--accent);
+      }
+      button:disabled {
+        opacity: 0.45;
+        cursor: default;
+      }
+      label.inline {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--dim);
+        font-size: 12px;
+      }
+      .toolbar {
+        display: flex;
+        gap: 14px;
+        align-items: center;
+        flex-wrap: wrap;
+        margin-top: 10px;
+      }
+      .msg {
+        margin-top: 14px;
+        padding: 10px 12px;
+        border-radius: 4px;
+        font-family: var(--mono);
+        font-size: 12.5px;
+        white-space: pre-wrap;
+      }
+      .msg.err {
+        background: #2b1416;
+        border: 1px solid #5c2126;
+        color: #ff9c9c;
+      }
+      .msg.info {
+        background: #12202e;
+        border: 1px solid #1f3d58;
+        color: #9ecbff;
+      }
+      .msg.warn {
+        background: #2a2210;
+        border: 1px solid #55461a;
+        color: #e3c07b;
+      }
+      .chip {
+        font: 11px/1 var(--mono);
+        color: var(--dim);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 4px 8px;
+        white-space: nowrap;
+      }
+      .chips {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        margin-bottom: 10px;
+      }
+      .panel-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 12px;
+      }
+      .panel-head .chips {
+        margin-bottom: 10px;
+      }
+      #refresh {
+        flex: none;
+        font-family: var(--mono);
+        font-size: 12px;
+      }
+      /* ── summoner ─────────────────────────────────────────────────────── */
+      .summoner {
+        display: flex;
+        gap: 14px;
+        align-items: center;
+      }
+      .summoner img {
+        width: 64px;
+        height: 64px;
+        border-radius: 6px;
+        border: 1px solid var(--line);
+        background: #0b0e13;
+      }
+      .summoner .name {
+        font:
+          600 20px/1.2 system-ui,
+          sans-serif;
+      }
+      .summoner .tag {
+        color: var(--dim);
+        font-weight: 400;
+      }
+      .kv {
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--dim);
+        word-break: break-all;
+      }
+      /* ── grids ────────────────────────────────────────────────────────── */
+      .grid {
+        display: grid;
+        gap: 10px;
+        grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+      }
+      .rank .queue {
+        font: 600 11px/1 var(--mono);
+        letter-spacing: 0.06em;
+        color: var(--dim);
+        text-transform: uppercase;
+      }
+      .rank .tier {
+        font:
+          600 17px/1.4 system-ui,
+          sans-serif;
+      }
+      .mastery {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .mastery figure {
+        margin: 0;
+        width: 64px;
+        text-align: center;
+      }
+      .mastery img {
+        width: 48px;
+        height: 48px;
+        border-radius: 5px;
+        border: 1px solid var(--line);
+      }
+      .mastery figcaption {
+        font: 11px/1.3 var(--mono);
+        color: var(--dim);
+        margin-top: 4px;
+      }
+      /* ── matches ──────────────────────────────────────────────────────── */
+      .match {
+        display: grid;
+        /* `minmax(0, …)` rather than `1fr`: the meta line is long enough to
+           set a min-content width that would otherwise push the KDA column
+           off the right edge instead of wrapping. */
+        grid-template-columns: 48px minmax(0, 1fr) auto auto;
+        gap: 12px;
+        align-items: center;
+        padding: 10px 12px;
+        border: 1px solid var(--line);
+        border-left-width: 3px;
+        border-radius: 5px;
+        background: var(--panel);
+        margin-bottom: 8px;
+      }
+      @media (max-width: 760px) {
+        .match {
+          grid-template-columns: 48px minmax(0, 1fr);
+        }
+        .match .items,
+        .match .kda {
+          grid-column: 2;
+          text-align: left;
+        }
+      }
+      .match.win {
+        border-left-color: var(--win);
+      }
+      .match.loss {
+        border-left-color: var(--loss);
+      }
+      .match img.champ {
+        width: 48px;
+        height: 48px;
+        border-radius: 5px;
+      }
+      .match .meta {
+        font: 11px/1.5 var(--mono);
+        color: var(--dim);
+      }
+      .match .champ-name {
+        font-weight: 600;
+      }
+      .match .kda {
+        font-family: var(--mono);
+        text-align: right;
+        white-space: nowrap;
+      }
+      .match .kda small {
+        display: block;
+        color: var(--dim);
+      }
+      .items {
+        display: flex;
+        gap: 2px;
+      }
+      .items span,
+      .items img {
+        width: 24px;
+        height: 24px;
+        border-radius: 3px;
+        border: 1px solid var(--line);
+        background: #0b0e13;
+        display: block;
+      }
+      .pager {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        margin-top: 12px;
+      }
+      /* ── raw ──────────────────────────────────────────────────────────── */
+      details {
+        margin-top: 10px;
+        border-top: 1px dashed var(--line);
+        padding-top: 8px;
+      }
+      summary {
+        cursor: pointer;
+        font: 11px/1 var(--mono);
+        color: var(--dim);
+        letter-spacing: 0.06em;
+      }
+      pre {
+        font: 12px/1.5 var(--mono);
+        background: #0b0e13;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 10px;
+        overflow: auto;
+        max-height: 460px;
+        margin: 8px 0 0;
+      }
+      .hidden {
+        display: none !important;
+      }
+      footer {
+        margin-top: 40px;
+        color: var(--dim);
+        font: 11px/1.6 var(--mono);
+      }
+      a {
+        color: var(--accent);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>riot-proxy · dev ui</h1>
+
+      <div class="panel">
+        <form id="search">
+          <input
+            id="riotId"
+            placeholder="GameName#TAG"
+            autocomplete="off"
+            spellcheck="false"
+            required
+          />
+          <select id="platform" title="Platform routing value"></select>
+          <button type="submit" id="go">Look up</button>
+        </form>
+        <div class="toolbar">
+          <label class="inline" id="tokenWrap">
+            key
+            <input
+              id="token"
+              type="password"
+              placeholder="rpx_…"
+              autocomplete="off"
+              size="18"
+              style="font-family: var(--mono)"
+            />
+          </label>
+          <label class="inline">
+            page size
+            <select id="pageSize">
+              <option>5</option>
+              <option selected>10</option>
+              <option>20</option>
+            </select>
+          </label>
+          <label class="inline"> <input type="checkbox" id="rawAll" /> expand all raw JSON </label>
+        </div>
+        <div id="msg" class="msg hidden"></div>
+      </div>
+
+      <section id="profileSection" class="hidden">
+        <h2>Summoner</h2>
+        <div class="panel">
+          <div class="panel-head">
+            <div class="chips" id="profileChips"></div>
+            <button type="button" id="refresh" title="Re-read this player from Riot">Update</button>
+          </div>
+          <div class="summoner">
+            <img id="pIcon" alt="" width="64" height="64" />
+            <div>
+              <div class="name"><span id="pName">—</span><span class="tag" id="pTag"></span></div>
+              <div class="kv" id="pLevel"></div>
+              <div class="kv" id="pPuuid"></div>
+            </div>
+          </div>
+          <details class="rawBlock">
+            <summary>raw · /v1/players/by-riot-id/…/profile</summary>
+            <pre id="rawProfile"></pre>
+          </details>
+        </div>
+      </section>
+
+      <section id="rankSection" class="hidden">
+        <h2>Ranked</h2>
+        <div class="chips" id="rankChips"></div>
+        <div class="grid" id="ranks"></div>
+      </section>
+
+      <section id="masterySection" class="hidden">
+        <h2>Top mastery</h2>
+        <div class="chips" id="masteryChips"></div>
+        <div class="panel"><div class="mastery" id="mastery"></div></div>
+      </section>
+
+      <section id="matchSection" class="hidden">
+        <h2>Matches</h2>
+        <div class="chips" id="matchChips"></div>
+        <div id="matches"></div>
+        <div class="pager">
+          <button id="prev" type="button">← newer</button>
+          <button id="next" type="button">older →</button>
+          <span class="chip" id="pageLabel"></span>
+        </div>
+        <details class="rawBlock">
+          <summary>raw · /v1/players/{puuid}/matches</summary>
+          <pre id="rawMatches"></pre>
+        </details>
+      </section>
+
+      <footer>
+        Development tool. Not endorsed by Riot Games. Icons from
+        <a href="https://developer.riotgames.com/docs/lol#data-dragon">Data Dragon</a>.
+      </footer>
+    </main>
+
+    <script type="module">
+      const $ = (id) => document.getElementById(id);
+      const DDRAGON = 'https://ddragon.leagueoflegends.com';
+
+      /* Enough of the queue table to label a normal history; anything else
+         falls back to the raw id rather than lying about it. */
+      const QUEUES = {
+        0: 'Custom',
+        400: 'Draft Pick',
+        420: 'Ranked Solo/Duo',
+        430: 'Blind Pick',
+        440: 'Ranked Flex',
+        450: 'ARAM',
+        490: 'Quickplay',
+        700: 'Clash',
+        720: 'ARAM Clash',
+        830: 'Co-op vs AI (Intro)',
+        840: 'Co-op vs AI (Beginner)',
+        850: 'Co-op vs AI (Intermediate)',
+        1700: 'Arena',
+        1710: 'Arena',
+        1900: 'URF',
+      };
+
+      let cfg = { authDisabled: false, defaultPlatform: 'euw1', platforms: [] };
+      let dd = null; // { version, championById }
+      let state = { riotId: null, puuid: null, platform: null, start: 0 };
+      let cooldownTimer = null;
+
+      /* ── plumbing ──────────────────────────────────────────────────── */
+
+      function message(text, kind = 'info') {
+        const el = $('msg');
+        el.textContent = text;
+        el.className = `msg ${kind}`;
+        el.classList.toggle('hidden', !text);
+      }
+
+      /** One call to the proxy, unwrapping its error envelope (§6.1). */
+      async function api(path) {
+        const headers = { accept: 'application/json' };
+        const token = $('token').value.trim();
+        if (token) headers.authorization = `Bearer ${token}`;
+
+        const res = await fetch(path, { headers });
+        const body = await res.json().catch(() => null);
+        if (!res.ok) {
+          const err = body?.error;
+          throw new Error(
+            err ? `${err.code} (${res.status}): ${err.message}` : `HTTP ${res.status}`,
+          );
+        }
+        return {
+          data: body,
+          cache: res.headers.get('X-Cache') ?? '—',
+          age: res.headers.get('X-Cache-Age') ?? '—',
+        };
+      }
+
+      /** Data Dragon is a public CDN and deliberately not proxied (§5.6). */
+      async function ddragon() {
+        if (dd) return dd;
+        const versions = await (await fetch(`${DDRAGON}/api/versions.json`)).json();
+        const version = versions[0];
+        const champs = await (
+          await fetch(`${DDRAGON}/cdn/${version}/data/en_US/champion.json`)
+        ).json();
+        const championById = new Map();
+        for (const champ of Object.values(champs.data)) {
+          championById.set(Number(champ.key), champ);
+        }
+        dd = { version, championById };
+        return dd;
+      }
+
+      const champIcon = (id) => {
+        const champ = dd?.championById.get(Number(id));
+        return champ ? `${DDRAGON}/cdn/${dd.version}/img/champion/${champ.id}.png` : '';
+      };
+      const champName = (id, fallback) => dd?.championById.get(Number(id))?.name ?? fallback ?? id;
+
+      const el = (tag, props = {}, children = []) => {
+        const node = Object.assign(document.createElement(tag), props);
+        for (const child of [].concat(children)) {
+          if (child) node.append(child);
+        }
+        return node;
+      };
+
+      const chip = (text) => el('span', { className: 'chip', textContent: text });
+
+      /**
+       * `age: 4231` is a header value; `changed 1h ago` is an answer. The proxy
+       * holds this timestamp still when a re-fetch comes back identical, so a
+       * label that has not moved means the data genuinely has not.
+       */
+      function ago(seconds) {
+        const n = Number(seconds);
+        if (seconds === null || !Number.isFinite(n)) return 'age unknown';
+        if (n < 60) return `changed ${n}s ago`;
+        if (n < 3600) return `changed ${Math.floor(n / 60)}m ago`;
+        if (n < 86400) return `changed ${Math.floor(n / 3600)}h ago`;
+        return `changed ${Math.floor(n / 86400)}d ago`;
+      }
+
+      /**
+       * The Update button is the only thing here that deliberately spends
+       * upstream quota, so it stays disabled for as long as the proxy says the
+       * cooldown has left to run — the server enforces the same window, this
+       * just stops the click being wasted.
+       */
+      function cooldown(seconds) {
+        clearInterval(cooldownTimer);
+        let left = Math.max(0, Math.ceil(Number(seconds) || 0));
+        const tick = () => {
+          const button = $('refresh');
+          button.disabled = left > 0;
+          button.textContent = left > 0 ? `Update (${left}s)` : 'Update';
+          if (left <= 0) clearInterval(cooldownTimer);
+          left -= 1;
+        };
+        tick();
+        cooldownTimer = setInterval(tick, 1000);
+      }
+      const show = (id, on = true) => $(id).classList.toggle('hidden', !on);
+      const json = (id, value) => ($(id).textContent = JSON.stringify(value, null, 2));
+
+      /* ── Riot ID parsing ───────────────────────────────────────────── */
+
+      /**
+       * `/dev/NinjaGoldfinch-OCENZ` and `NinjaGoldfinch#OCENZ` are the same
+       * thing. Tag lines never contain `-`, so the *last* one separates them —
+       * game names legitimately do.
+       */
+      function parseRiotId(raw) {
+        const value = raw.trim();
+        if (!value) return null;
+        const hash = value.lastIndexOf('#');
+        const dash = value.lastIndexOf('-');
+        const at = hash >= 0 ? hash : dash;
+        if (at <= 0 || at === value.length - 1) return null;
+        return { gameName: value.slice(0, at), tagLine: value.slice(at + 1) };
+      }
+
+      /* ── rendering ─────────────────────────────────────────────────── */
+
+      function renderProfile(result) {
+        const p = result.data;
+        json('rawProfile', p);
+
+        const ages = p.ageSeconds ?? {};
+        $('profileChips').replaceChildren(
+          chip(`X-Cache: ${result.cache}`),
+          chip(ago(ages.summoner ?? ages.account)),
+          chip(`platform: ${p.platform}`),
+          chip(`region: ${p.region}`),
+        );
+        // Each section carries its own age: they are four independent Riot
+        // calls and go stale at four different rates.
+        $('rankChips').replaceChildren(chip(ago(ages.league)));
+        $('masteryChips').replaceChildren(chip(ago(ages.mastery)));
+
+        const account = p.account ?? {};
+        const summoner = p.summoner ?? {};
+        $('pName').textContent = account.gameName ?? '(unknown)';
+        $('pTag').textContent = account.tagLine ? `#${account.tagLine}` : '';
+        $('pLevel').textContent = summoner.summonerLevel
+          ? `level ${summoner.summonerLevel}`
+          : 'summoner-v4 unavailable';
+        $('pPuuid').textContent = p.puuid;
+        $('pIcon').src = summoner.profileIconId
+          ? `${DDRAGON}/cdn/${dd.version}/img/profileicon/${summoner.profileIconId}.png`
+          : '';
+        show('profileSection');
+        cooldown(p.refreshAvailableIn);
+
+        renderRanks(p.league ?? []);
+        renderMastery(p.mastery ?? []);
+
+        if (p.warnings?.length) message(p.warnings.join('\n'), 'warn');
+      }
+
+      function renderRanks(entries) {
+        const ranked = entries.filter((e) => e.tier);
+        show('rankSection', entries.length > 0);
+        $('ranks').replaceChildren(
+          ...(ranked.length
+            ? ranked.map((e) => {
+                const games = (e.wins ?? 0) + (e.losses ?? 0);
+                const wr = games ? Math.round((e.wins / games) * 100) : 0;
+                return el('div', { className: 'panel rank' }, [
+                  el('div', { className: 'queue', textContent: e.queueType ?? 'unknown queue' }),
+                  el('div', {
+                    className: 'tier',
+                    textContent: `${e.tier} ${e.rank ?? ''} · ${e.leaguePoints ?? 0} LP`.trim(),
+                  }),
+                  el('div', {
+                    className: 'kv',
+                    textContent: `${e.wins ?? 0}W ${e.losses ?? 0}L · ${wr}% over ${games}`,
+                  }),
+                  rawBlock('league entry', e),
+                ]);
+              })
+            : [el('div', { className: 'panel kv', textContent: 'unranked in every queue' })]),
+        );
+      }
+
+      function renderMastery(list) {
+        show('masterySection', list.length > 0);
+        $('mastery').replaceChildren(
+          ...list.map((m) =>
+            el('figure', {}, [
+              el('img', {
+                src: champIcon(m.championId),
+                alt: champName(m.championId),
+                title: champName(m.championId),
+                loading: 'lazy',
+              }),
+              el('figcaption', {
+                textContent: `M${m.championLevel} · ${Intl.NumberFormat().format(m.championPoints)}`,
+              }),
+            ]),
+          ),
+        );
+      }
+
+      function renderMatches(result) {
+        const page = result.data;
+        json('rawMatches', page);
+        $('matchChips').replaceChildren(
+          chip(`X-Cache: ${result.cache}`),
+          chip(ago(page.matchIdsAgeSeconds)),
+          chip(`ids: ${page.matchIds.length}`),
+          ...(page.backfill
+            ? [chip(`history ${page.backfill.status} (${page.backfill.limit} max)`)]
+            : []),
+        );
+
+        $('matches').replaceChildren(
+          ...(page.matches.length
+            ? page.matches.map((match) => renderMatch(match, page.puuid))
+            : [el('div', { className: 'panel kv', textContent: 'no matches on this page' })]),
+        );
+
+        $('pageLabel').textContent = `${page.start + 1}–${page.start + page.matchIds.length}`;
+        $('prev').disabled = page.start === 0;
+        $('next').disabled = !page.hasMore;
+        show('matchSection');
+        applyRawToggle();
+
+        if (page.warnings?.length) message(page.warnings.join('\n'), 'warn');
+      }
+
+      function renderMatch(match, puuid) {
+        const info = match.info ?? {};
+        const me = (info.participants ?? []).find((p) => p.puuid === puuid);
+        if (!me)
+          return el('div', { className: 'match', textContent: match.metadata?.matchId ?? '?' });
+
+        const kda = me.deaths === 0 ? 'perfect' : ((me.kills + me.assists) / me.deaths).toFixed(2);
+        const minutes = (info.gameDuration ?? 0) / 60;
+        const cs = (me.totalMinionsKilled ?? 0) + (me.neutralMinionsKilled ?? 0);
+        const when = info.gameEndTimestamp ?? info.gameCreation;
+        const items = [0, 1, 2, 3, 4, 5, 6].map((i) => me[`item${i}`]);
+
+        return el('div', { className: `match ${me.win ? 'win' : 'loss'}` }, [
+          el('img', {
+            className: 'champ',
+            src: champIcon(me.championId),
+            alt: champName(me.championId, me.championName),
+            loading: 'lazy',
+          }),
+          el('div', {}, [
+            el('div', {
+              className: 'champ-name',
+              textContent: `${champName(me.championId, me.championName)} · ${me.win ? 'Victory' : 'Defeat'}`,
+            }),
+            el('div', {
+              className: 'meta',
+              textContent: [
+                QUEUES[info.queueId] ?? `queue ${info.queueId}`,
+                `${Math.floor(minutes)}m${String(Math.round((minutes % 1) * 60)).padStart(2, '0')}s`,
+                when ? new Date(when).toLocaleString() : '',
+                match.metadata?.matchId ?? '',
+              ]
+                .filter(Boolean)
+                .join(' · '),
+            }),
+          ]),
+          el(
+            'div',
+            { className: 'items' },
+            items.map((id) =>
+              id
+                ? el('img', {
+                    src: `${DDRAGON}/cdn/${dd.version}/img/item/${id}.png`,
+                    alt: '',
+                    loading: 'lazy',
+                  })
+                : el('span'),
+            ),
+          ),
+          el('div', { className: 'kda' }, [
+            el('div', { textContent: `${me.kills}/${me.deaths}/${me.assists}` }),
+            el('small', {
+              textContent: `${kda} KDA · ${cs} CS (${minutes ? (cs / minutes).toFixed(1) : '0.0'}/m)`,
+            }),
+          ]),
+        ]);
+      }
+
+      function rawBlock(label, value) {
+        const block = el('details', { className: 'rawBlock' }, [
+          el('summary', { textContent: `raw · ${label}` }),
+          el('pre', { textContent: JSON.stringify(value, null, 2) }),
+        ]);
+        block.open = $('rawAll').checked;
+        return block;
+      }
+
+      function applyRawToggle() {
+        const open = $('rawAll').checked;
+        for (const block of document.querySelectorAll('details.rawBlock')) block.open = open;
+      }
+
+      /* ── flow ──────────────────────────────────────────────────────── */
+
+      /**
+       * What actually came of pressing Update. A refresh that returns the same
+       * bytes is a normal outcome and worth saying out loud — otherwise the
+       * only feedback is a set of labels that deliberately did not move.
+       */
+      function refreshOutcome(profile) {
+        if (!profile.refreshed) {
+          return `Already updated less than a minute ago — showing that data.`;
+        }
+        const ages = Object.values(profile.ageSeconds ?? {}).filter((n) => typeof n === 'number');
+        return ages.some((n) => n < 5)
+          ? 'Updated — new data from Riot.'
+          : 'Updated — Riot returned the same data, so nothing here has changed.';
+      }
+
+      /**
+       * A plain lookup never asks the proxy to go upstream — whatever is
+       * cached is what a player looked like, and a cache miss fetches on its
+       * own. `refresh` is only ever set by the Update button.
+       */
+      async function load(riotId, platform, { push = true, refresh = false } = {}) {
+        const parsed = parseRiotId(riotId);
+        if (!parsed) {
+          message('Enter a Riot ID as GameName#TAG (or GameName-TAG).', 'err');
+          return;
+        }
+
+        $('go').disabled = $('refresh').disabled = true;
+        message(refresh ? 'Updating…' : 'Loading…');
+        try {
+          await ddragon();
+          const path =
+            `/v1/players/by-riot-id/${encodeURIComponent(parsed.gameName)}` +
+            `/${encodeURIComponent(parsed.tagLine)}/profile` +
+            `?platform=${platform}&topMastery=8${refresh ? '&refresh=true' : ''}`;
+          const profile = await api(path);
+
+          state = { riotId, puuid: profile.data.puuid, platform, start: 0 };
+          // Set before rendering, so a warning from the document itself wins.
+          message(refresh ? refreshOutcome(profile.data) : '');
+          renderProfile(profile);
+          applyRawToggle();
+          await loadMatches({ refresh });
+
+          if (push) {
+            const slug = `${parsed.gameName}-${parsed.tagLine}`;
+            history.pushState({}, '', `/dev/${encodeURIComponent(slug)}?platform=${platform}`);
+          }
+        } catch (err) {
+          message(String(err.message ?? err), 'err');
+          for (const id of ['profileSection', 'rankSection', 'masterySection', 'matchSection']) {
+            show(id, false);
+          }
+          // Nothing rendered, so nothing set the cooldown — leave the button
+          // usable rather than stuck on the `disabled` set at the top.
+          cooldown(0);
+        } finally {
+          $('go').disabled = false;
+        }
+      }
+
+      async function loadMatches({ refresh = false } = {}) {
+        if (!state.puuid) return;
+        $('prev').disabled = $('next').disabled = true;
+        try {
+          const count = Number($('pageSize').value);
+          renderMatches(
+            await api(
+              `/v1/players/${state.puuid}/matches` +
+                `?platform=${state.platform}&start=${state.start}&count=${count}` +
+                (refresh ? '&refresh=true' : ''),
+            ),
+          );
+        } catch (err) {
+          message(String(err.message ?? err), 'err');
+          show('matchSection', false);
+        }
+      }
+
+      function page(delta) {
+        const count = Number($('pageSize').value);
+        state.start = Math.max(0, state.start + delta * count);
+        void loadMatches();
+      }
+
+      /* ── boot ──────────────────────────────────────────────────────── */
+
+      async function boot() {
+        try {
+          cfg = await (await fetch('/dev/config.json')).json();
+        } catch {
+          message('Could not read /dev/config.json — is the API running?', 'err');
+        }
+
+        const select = $('platform');
+        select.replaceChildren(
+          ...cfg.platforms.map((p) =>
+            el('option', { value: p.value, textContent: `${p.value} · ${p.label}` }),
+          ),
+        );
+
+        // The dev consumer needs no key, so do not ask for one (§7.1).
+        show('tokenWrap', !cfg.authDisabled);
+        $('token').value = localStorage.getItem('riot-proxy.token') ?? '';
+        $('token').addEventListener('change', () =>
+          localStorage.setItem('riot-proxy.token', $('token').value.trim()),
+        );
+
+        const url = new URL(location.href);
+        const slug = decodeURIComponent(url.pathname.replace(/^\/dev\/?/, ''));
+        const platform =
+          url.searchParams.get('platform') ??
+          localStorage.getItem('riot-proxy.platform') ??
+          cfg.defaultPlatform;
+        select.value = cfg.platforms.some((p) => p.value === platform)
+          ? platform
+          : cfg.defaultPlatform;
+
+        select.addEventListener('change', () =>
+          localStorage.setItem('riot-proxy.platform', select.value),
+        );
+        $('search').addEventListener('submit', (event) => {
+          event.preventDefault();
+          void load($('riotId').value, select.value);
+        });
+        $('refresh').addEventListener('click', () => {
+          if (state.riotId) void load(state.riotId, state.platform, { push: false, refresh: true });
+        });
+        $('prev').addEventListener('click', () => page(-1));
+        $('next').addEventListener('click', () => page(1));
+        $('pageSize').addEventListener('change', () => {
+          state.start = 0;
+          void loadMatches();
+        });
+        $('rawAll').addEventListener('change', applyRawToggle);
+        addEventListener('popstate', () => location.reload());
+
+        if (slug) {
+          const parsed = parseRiotId(slug);
+          if (parsed) {
+            $('riotId').value = `${parsed.gameName}#${parsed.tagLine}`;
+            await load(slug, select.value, { push: false });
+            return;
+          }
+        }
+        $('riotId').focus();
+      }
+
+      void boot();
+    </script>
+  </body>
+</html>
