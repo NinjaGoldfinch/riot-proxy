@@ -557,8 +557,14 @@ through the same limiter as the API, always at `bulk` priority.
 ### 12.3 Input validation
 
 - TypeBox schemas on every route: platform/region against the closed enum from §5.1;
-  `count` clamped to 1–100; Riot ID lengths (gameName 3–16, tagLine 3–5) enforced before any
+  `count` clamped to 1–100; Riot ID lengths (gameName 1–16, tagLine 1–5) enforced before any
   upstream call.
+- The Riot ID **maxima** are Riot's documented caps, so anything longer is rejected without
+  spending quota. The **minima** are deliberately just "non-empty": Riot's 3-character floor
+  is an account-creation rule rather than an API contract, and accounts below it exist (the
+  2-character region tag lines from the Riot ID rollout). Validation here must never be
+  stricter than the upstream it protects — a wrong 400 costs a real player, a wasted lookup
+  costs one request.
 
 ### 12.4 ToS compliance notes
 

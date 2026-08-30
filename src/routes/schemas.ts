@@ -20,12 +20,17 @@ export const RegionParam = Type.Unsafe<string>({
 });
 
 /**
- * Riot ID bounds per §12.3. NOTE: Riot has issued tag lines shorter than three
- * characters; if you see legitimate 400s, relax `minLength` here first.
+ * Riot ID bounds per §12.3. The maxima are Riot's documented hard caps, so a
+ * longer value cannot name a real account and is worth rejecting for free. The
+ * minima are only "non-empty": Riot's 3-character floor is an account-creation
+ * rule, not an API contract, and legacy and staff accounts sit below it (the
+ * 2-character region tag lines handed out during the Riot ID rollout, for one).
+ * Rejecting those here would 400 a real player to save a request we can afford.
+ * See NinjaGoldfinch/riot-proxy#11.
  */
-export const GAME_NAME_MIN = 3;
+export const GAME_NAME_MIN = 1;
 export const GAME_NAME_MAX = 16;
-export const TAG_LINE_MIN = 3;
+export const TAG_LINE_MIN = 1;
 export const TAG_LINE_MAX = 5;
 
 export const GameNameParam = Type.String({

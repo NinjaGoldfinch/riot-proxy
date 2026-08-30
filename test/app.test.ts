@@ -124,14 +124,15 @@ describe('http surface', () => {
     expect(res.json().error.code).toBe('VALIDATION');
   });
 
-  it('rejects a Riot ID outside the configured length bounds', async ({ skip }) => {
+  it("rejects a Riot ID past Riot's documented maxima (§12.3)", async ({ skip }) => {
     if (!available || !app) return skip();
     const res = await app.inject({
       method: 'GET',
-      url: '/v1/riot/accounts/by-riot-id/europe/ab/KR1',
+      url: '/v1/riot/accounts/by-riot-id/europe/Faker/TOOLONG',
       headers: auth(readKey),
     });
     expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe('VALIDATION');
   });
 
   it('403s a read key on an admin route (§12.1)', async ({ skip }) => {
