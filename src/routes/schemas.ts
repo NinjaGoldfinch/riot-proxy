@@ -72,6 +72,21 @@ export const MatchIdsQuery = Type.Object({
   endTime: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 
+/**
+ * §6.3 — the composite match page. `count` is clamped far below match-v5's own
+ * 100 because every id on the page becomes its own upstream call; 20 is the
+ * most a single request should be allowed to fan out to.
+ */
+export const MatchPageQuery = Type.Object({
+  platform: Type.Optional(PlatformParam),
+  start: Type.Optional(Type.Integer({ minimum: 0, maximum: 10_000, default: 0 })),
+  count: Type.Optional(Type.Integer({ minimum: 1, maximum: 20, default: 10 })),
+  queue: Type.Optional(Type.Integer({ minimum: 0, maximum: 5000 })),
+  type: Type.Optional(
+    Type.Unsafe<string>({ type: 'string', enum: ['ranked', 'normal', 'tourney', 'tutorial'] }),
+  ),
+});
+
 export const MasteryQuery = Type.Object({
   top: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
 });

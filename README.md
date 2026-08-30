@@ -122,24 +122,26 @@ One envelope, always:
 
 ### Endpoints
 
-| Method & path                                                    | Upstream            | Notes                                                                               |
-| ---------------------------------------------------------------- | ------------------- | ----------------------------------------------------------------------------------- |
-| `GET /v1/riot/accounts/by-riot-id/{region}/{gameName}/{tagLine}` | account-v1          | Canonical entry point. `sea` is accepted and routed to `asia` (see below)           |
-| `GET /v1/riot/accounts/by-puuid/{region}/{puuid}`                | account-v1          |                                                                                     |
-| `GET /v1/lol/summoners/by-puuid/{platform}/{puuid}`              | summoner-v4         |                                                                                     |
-| `GET /v1/lol/league/entries/by-puuid/{platform}/{puuid}`         | league-v4           |                                                                                     |
-| `GET /v1/lol/matches/ids/{region}/{puuid}`                       | match-v5            | `?start&count&queue&type&startTime&endTime`, `count ≤ 100`                          |
-| `GET /v1/lol/matches/{region}/{matchId}`                         | match-v5            | Served from the Postgres archive when present                                       |
-| `GET /v1/lol/matches/{region}/{matchId}/timeline`                | match-v5            | Archived likewise                                                                   |
-| `GET /v1/lol/spectator/active/{platform}/{puuid}`                | spectator-v5        | 404 = not in game, negative-cached 30 s                                             |
-| `GET /v1/lol/mastery/by-puuid/{platform}/{puuid}`                | champion-mastery-v4 | `?top=N` for the top-N variant                                                      |
-| `GET /v1/lol/rotations/{platform}`                               | champion-rotations  |                                                                                     |
-| `GET /v1/lol/status/{platform}`                                  | lol-status-v4       |                                                                                     |
-| `GET /v1/players/{puuid}/profile`                                | **composite**       | `?platform&topMastery` — account + summoner + league + mastery in one call          |
-| `GET /v1/static/versions`                                        | local mirror        | No upstream call                                                                    |
-| `GET /v1/static/{file}`                                          | local mirror        | `champions`, `items`, `runes`, `summoner-spells`, `profile-icons`, `maps`, `queues` |
-| `WS /v1/ws`                                                      | realtime            | See below                                                                           |
-| `GET /healthz` · `/readyz` · `/metrics`                          | —                   | Public                                                                              |
+| Method & path                                                    | Upstream            | Notes                                                                                |
+| ---------------------------------------------------------------- | ------------------- | ------------------------------------------------------------------------------------ |
+| `GET /v1/riot/accounts/by-riot-id/{region}/{gameName}/{tagLine}` | account-v1          | Canonical entry point. `sea` is accepted and routed to `asia` (see below)            |
+| `GET /v1/riot/accounts/by-puuid/{region}/{puuid}`                | account-v1          |                                                                                      |
+| `GET /v1/lol/summoners/by-puuid/{platform}/{puuid}`              | summoner-v4         |                                                                                      |
+| `GET /v1/lol/league/entries/by-puuid/{platform}/{puuid}`         | league-v4           |                                                                                      |
+| `GET /v1/lol/matches/ids/{region}/{puuid}`                       | match-v5            | `?start&count&queue&type&startTime&endTime`, `count ≤ 100`                           |
+| `GET /v1/lol/matches/{region}/{matchId}`                         | match-v5            | Served from the Postgres archive when present                                        |
+| `GET /v1/lol/matches/{region}/{matchId}/timeline`                | match-v5            | Archived likewise                                                                    |
+| `GET /v1/lol/spectator/active/{platform}/{puuid}`                | spectator-v5        | 404 = not in game, negative-cached 30 s                                              |
+| `GET /v1/lol/mastery/by-puuid/{platform}/{puuid}`                | champion-mastery-v4 | `?top=N` for the top-N variant                                                       |
+| `GET /v1/lol/rotations/{platform}`                               | champion-rotations  |                                                                                      |
+| `GET /v1/lol/status/{platform}`                                  | lol-status-v4       |                                                                                      |
+| `GET /v1/players/{puuid}/profile`                                | **composite**       | `?platform&topMastery` — account + summoner + league + mastery in one call           |
+| `GET /v1/players/by-riot-id/{gameName}/{tagLine}/profile`        | **composite**       | The same document, entered by Riot ID                                                |
+| `GET /v1/players/{puuid}/matches`                                | **composite**       | `?platform&start&count&queue&type` — an id page plus every match on it, `count ≤ 20` |
+| `GET /v1/static/versions`                                        | local mirror        | No upstream call                                                                     |
+| `GET /v1/static/{file}`                                          | local mirror        | `champions`, `items`, `runes`, `summoner-spells`, `profile-icons`, `maps`, `queues`  |
+| `WS /v1/ws`                                                      | realtime            | See below                                                                            |
+| `GET /healthz` · `/readyz` · `/metrics`                          | —                   | Public                                                                               |
 
 **Platforms:** `na1` `br1` `la1` `la2` `euw1` `eun1` `tr1` `ru` `kr` `jp1`
 `oc1` `ph2` `sg2` `th2` `tw2` `vn2`.
@@ -155,7 +157,7 @@ is unaffected: `sea` is a real match host and SEA matches stay there.
 Match IDs carry their own platform prefix (`EUW1_7381937461`); pass a region
 that disagrees with it and you get `BAD_REGION` rather than a confusing 404.
 
-### The composite profile endpoint
+### The composite endpoints
 
 Fans out to four Riot calls concurrently, each individually cached, and returns
 one document. A part that fails is `null` and explained in `warnings[]` — a
@@ -168,6 +170,32 @@ mastery timeout never fails the whole response.
   "warnings": []
 }
 ```
+
+A browser only ever has the name a player types, so the same document is
+reachable by Riot ID. The account lookup happens server-side and its result is
+reused as the composite's `account` part, rather than costing the caller a round
+trip whose only purpose is to feed the next one:
+
+```bash
+curl '…/v1/players/by-riot-id/NinjaGoldfinch/OCENZ/profile?platform=oc1'
+```
+
+`GET /v1/players/{puuid}/matches` is the same idea for history: one id page plus
+every match on it, fanned out concurrently. Rendering ten games otherwise costs
+eleven requests against a default quota of 60/min, so three pages exhausts it.
+
+```json
+{
+  "puuid": "…", "platform": "oc1", "region": "sea",
+  "start": 0, "count": 10,
+  "matchIds": [ … ], "matches": [ … ], "hasMore": true, "warnings": []
+}
+```
+
+`count` is capped at 20 rather than match-v5's 100: every id on the page is its
+own upstream call. `hasMore` says a full page came back, so page without
+guessing. Matches are immutable and archived (§7.3), so paging back through a
+history a second time costs no quota at all.
 
 ### WebSocket
 
