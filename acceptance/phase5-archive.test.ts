@@ -3,7 +3,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { acceptance, cfg } from './helpers/env.js';
 import {
   counter,
-  forgetJob,
   get,
   jobIdsInState,
   metrics,
@@ -95,16 +94,19 @@ describe.skipIf(!enabled)('Phase 5 — archive and backfill', () => {
     const startedAt = await archivedCount();
     const upstreamBefore = await metrics();
 
-    // BullMQ dedupes on job id and retains finished jobs, so a repeat run is
-    // silently dropped unless the previous one is forgotten first.
-    await forgetJob(redis, 'backfill', `backfill-${puuid}`);
-    const enqueued = await post<{ ok: boolean; jobId: string }>('/v1/admin/backfill', {
-      puuid,
-      platform,
-      limit: backfillLimit,
-    });
+    const enqueued = await post<{ ok: boolean; jobId: string; status: string }>(
+      '/v1/admin/backfill',
+      {
+        puuid,
+        platform,
+        limit: backfillLimit,
+      },
+    );
     expect(enqueued.status, JSON.stringify(enqueued.body)).toBe(200);
     expect(enqueued.body.ok).toBe(true);
+    // A retained finished job no longer swallows the request, so this must be a
+    // real enqueue — otherwise the whole phase measures nothing.
+    expect(enqueued.body.status, JSON.stringify(enqueued.body)).toBe('queued');
     backfillJobId = enqueued.body.jobId;
     backfillSettled = false;
 

@@ -76,6 +76,59 @@ export interface PollPlayerJob {
   platform: string;
 }
 
+/**
+ * §10 — a stable job id de-duplicates concurrent backfills for one player, but
+ * BullMQ honours that id against *finished* jobs it has retained too: an hour
+ * for completed, a day for failed. That made a re-request a silent no-op with a
+ * response indistinguishable from a real enqueue, and recovering from a failed
+ * backfill meant deleting the key in Redis by hand.
+ *
+ * So de-duplicate only while a backfill is actually pending. A repeat costs
+ * almost nothing — `filterUnarchived` skips whatever is already stored — so a
+ * retained finished job is dropped rather than honoured.
+ */
+const PENDING_JOB_STATES = new Set([
+  'waiting',
+  'waiting-children',
+  'active',
+  'delayed',
+  'prioritized',
+]);
+
+export interface BackfillEnqueueResult {
+  jobId: string;
+  /** Which of the two actually happened, so a caller can tell them apart. */
+  status: 'queued' | 'already-queued';
+}
+
+/**
+ * `queue` is injectable so this can be exercised against a throwaway queue: the
+ * real one is drained by whatever worker happens to be running, which would
+ * make the outcome depend on the machine.
+ */
+export async function enqueueBackfill(
+  data: BackfillPlayerJob,
+  queue: Queue = backfillQueue,
+): Promise<BackfillEnqueueResult> {
+  const jobId = jobKey('backfill', data.puuid);
+  const existing = await queue.getJob(jobId);
+
+  if (existing) {
+    if (PENDING_JOB_STATES.has(await existing.getState())) {
+      return { jobId, status: 'already-queued' };
+    }
+    try {
+      await existing.remove();
+    } catch {
+      // Claimed between the state read and the remove, so it is pending after all.
+      return { jobId, status: 'already-queued' };
+    }
+  }
+
+  const job = await queue.add(JOB.backfillPlayer, data, { jobId });
+  return { jobId: job.id ?? jobId, status: 'queued' };
+}
+
 export async function closeQueues(): Promise<void> {
   await Promise.allSettled(allQueues.map((q) => q.close()));
 }
