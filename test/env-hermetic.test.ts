@@ -28,7 +28,7 @@ describe('test environment (§4.2)', () => {
     expect(config.STALE_WHILE_REVALIDATE).toBe(true);
     expect(config.AUTH_DISABLED).toBe(false);
     expect(config.NODE_ENV).toBe('test');
-    expect(config.BULK_USAGE_CEILING).toBe(0.75);
+    expect(config.BULK_USAGE_CEILING).toBe(0.8);
     expect(config.DEFAULT_PLATFORM).toBe('euw1');
   });
 });

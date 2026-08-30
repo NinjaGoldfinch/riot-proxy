@@ -31,7 +31,14 @@ const EnvSchema = Type.Object({
   NEG_TTL_ACCOUNT_SECONDS: Type.Integer({ default: 300, minimum: 1 }),
   SF_LOCK_MS: Type.Integer({ default: 5000, minimum: 100 }),
   CLIENT_WAIT_BUDGET_MS: Type.Integer({ default: 2000, minimum: 0 }),
-  BULK_USAGE_CEILING: Type.Number({ default: 0.75, minimum: 0, maximum: 1 }),
+  /**
+   * §9.3 with the reserve set deliberately: bulk work stops taking tokens once
+   * a bucket is this full, so the remainder stays free for user-invoked
+   * requests. 0.80 keeps a fifth of every bucket for them — the spec's opening
+   * figure was 0.75, tightened here because bulk has more to do than it did
+   * when that number was chosen.
+   */
+  BULK_USAGE_CEILING: Type.Number({ default: 0.8, minimum: 0, maximum: 1 }),
   STALE_WHILE_REVALIDATE: Type.Boolean({ default: true }),
 
   TRACK_POLL_LIVE_S: Type.Integer({ default: 60, minimum: 10 }),

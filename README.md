@@ -326,7 +326,7 @@ jobs are idempotent and run at bulk priority.
 | `NEG_TTL_ACCOUNT_SECONDS`                    | `300`                                             | Typo'd Riot IDs                                         |
 | `SF_LOCK_MS`                                 | `5000`                                            | Cross-instance single-flight lock                       |
 | `CLIENT_WAIT_BUDGET_MS`                      | `2000`                                            | Max limiter wait for a client request                   |
-| `BULK_USAGE_CEILING`                         | `0.75`                                            | Bulk work stops here                                    |
+| `BULK_USAGE_CEILING`                         | `0.80`                                            | Bulk work stops here, keeping 20% for callers           |
 | `STALE_WHILE_REVALIDATE`                     | `true`                                            |                                                         |
 | `TRACK_POLL_LIVE_S` / `_RANK_S` / `_MATCH_S` | `60` / `600` / `300`                              |                                                         |
 | `DDRAGON_SYNC_S`                             | `3600`                                            | Version check cadence                                   |
@@ -338,6 +338,15 @@ jobs are idempotent and run at bulk priority.
 | `LOG_LEVEL`                                  | `info`                                            |                                                         |
 
 `KEY_SCOPE` is derived, not configured.
+
+`BULK_USAGE_CEILING` reads backwards at a glance: `0.80` means bulk work stops
+once a bucket is 80% full, so a fifth of every bucket is kept back for requests
+a person is waiting on. Bulk also stands aside entirely while an interactive
+request is queued (§9.3) — the ceiling is the quieter half of that guarantee,
+covering the case where nobody happens to be waiting at this instant but will
+be a moment later. The spec opens at 75%; the extra 5% is a deliberate
+deviation, taken because bulk has more to do than it did when that number was
+chosen.
 
 ---
 
