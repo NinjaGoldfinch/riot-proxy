@@ -20,7 +20,6 @@ export const DATA_FILES = [
   'summoner',
   'profileicon',
   'map',
-  'queue',
 ] as const;
 
 export type DataFile = (typeof DATA_FILES)[number];

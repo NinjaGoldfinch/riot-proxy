@@ -309,6 +309,17 @@ describe('static mirror routes (§6.2)', () => {
     expect(res.statusCode).toBe(404);
     expect(res.json().error.code).toBe('NOT_FOUND');
   });
+
+  it('no longer advertises queues, which Data Dragon does not serve (#52)', async ({ skip }) => {
+    if (!available || !app) return skip();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/static/queues',
+      headers: auth(readKey),
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe('VALIDATION');
+  });
 });
 
 describe('admin IP allowlist (§12.1)', () => {

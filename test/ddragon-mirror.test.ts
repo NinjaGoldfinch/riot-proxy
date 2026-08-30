@@ -37,7 +37,7 @@ await writeFile(join(base, 'secret.json'), JSON.stringify({ probe: 'leaked' }));
 // Set before config.ts is first imported: it reads env once, at import time.
 process.env.DDRAGON_DIR = mirror;
 
-const { ddragonDir, readStatic } = await import('../src/static/ddragon.js');
+const { DATA_FILES, ddragonDir, readStatic } = await import('../src/static/ddragon.js');
 
 afterAll(() => vi.restoreAllMocks());
 
@@ -61,5 +61,14 @@ describe('data dragon mirror (§5.6)', () => {
     // The route constrains `file` to an enum, but the check covers the whole
     // resolved path rather than trusting one caller to have done that.
     expect(await readStatic('../../secret', VERSION)).toBeUndefined();
+  });
+
+  /**
+   * Data Dragon does not serve `queue.json` — it 403s. Queue metadata lives at
+   * static.developer.riotgames.com, outside Data Dragon entirely, so mirroring
+   * it here only ever cost a request and a warning per sync (#52).
+   */
+  it('does not claim queue.json is a Data Dragon file (#52)', () => {
+    expect(DATA_FILES).not.toContain('queue');
   });
 });

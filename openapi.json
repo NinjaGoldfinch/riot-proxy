@@ -4083,14 +4083,12 @@
                 "summoner",
                 "profileicon",
                 "map",
-                "queue",
                 "champions",
                 "items",
                 "runes",
                 "summoner-spells",
                 "profile-icons",
-                "maps",
-                "queues"
+                "maps"
               ]
             },
             "in": "path",

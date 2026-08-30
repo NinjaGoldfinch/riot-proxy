@@ -79,7 +79,11 @@ missing. Phases refer to §15 of [the spec](docs/riot-proxy-spec.md).
 - [ ] No metrics for either addition — lookup-triggered backfills and refresh
       claims are only visible in the logs. Both belong in §13.
 - [ ] The dev UI hardcodes a subset of queue ids and skips summoner spells and
-      runes. Everything it needs is already in the Data Dragon mirror.
+      runes. Summoner spells and runes are already in the Data Dragon mirror;
+      queue ids are not, and never will be — they live at
+      `https://static.developer.riotgames.com/docs/lol/queues.json`, which is
+      un-versioned and outside Data Dragon (#52). Serving them needs a decision
+      about where non-patch-versioned static data lives.
 - [ ] `BULK_USAGE_CEILING` now defaults to 0.80 where §9.3 and Appendix A of
       the spec both say 75%. The spec is reproduced verbatim and was not
       edited; the deviation is deliberate and recorded in the README.

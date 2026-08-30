@@ -16,7 +16,6 @@ const FILE_ALIASES: Record<string, string> = {
   'summoner-spells': 'summoner',
   'profile-icons': 'profileicon',
   maps: 'map',
-  queues: 'queue',
 };
 
 const staticRoutes: FastifyPluginAsync = async (fastify) => {
