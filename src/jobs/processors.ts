@@ -225,7 +225,7 @@ export async function archiveMatchJob(job: Job<ArchiveMatchJob>): Promise<void> 
 const BACKFILL_PAGE = 100;
 
 export async function backfillPlayer(job: Job<BackfillPlayerJob>): Promise<{ queued: number }> {
-  const { puuid, platform, limit = 500, fetchTimeline } = job.data;
+  const { puuid, platform, limit = 500, fetchTimeline, reason } = job.data;
   const region = platformToRegion(assertPlatform(platform));
 
   let start = 0;
@@ -267,7 +267,7 @@ export async function backfillPlayer(job: Job<BackfillPlayerJob>): Promise<{ que
     start += ids.length;
   }
 
-  logger.info({ puuid, queued }, 'backfill complete');
+  logger.info({ puuid, queued, reason: reason ?? 'admin' }, 'backfill complete');
   return { queued };
 }
 

@@ -56,6 +56,9 @@ export const PINNED: Record<string, string> = {
   TRACK_POLL_MATCH_S: '300',
   DDRAGON_SYNC_S: '3600',
   ARCHIVE_TIMELINES: 'false',
+  // Off by default so no test accidentally queues a 10 000-match walk; the
+  // tests that care about it assert the enqueue directly.
+  LOOKUP_BACKFILL_LIMIT: '0',
 
   DDRAGON_DIR: './data/ddragon',
   DDRAGON_LOCALE: 'en_US',

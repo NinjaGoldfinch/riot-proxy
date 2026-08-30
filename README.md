@@ -216,6 +216,9 @@ response says which happened:
 Both are present whether or not you asked for a refresh, so a UI can show the
 cooldown without having to spend one to discover it.
 
+The match page also reports `backfill` the first time it queues a player's
+history, so a caller can say it is on its way.
+
 On the match page a refresh re-reads the **id list only**. The matches behind it
 are immutable and already archived, so re-downloading them would cost quota to
 learn nothing.
@@ -357,13 +360,21 @@ under a distinct `neg:` prefix — a cached "not in game" is distinguishable fro
 | `poll:rank`       | every `TRACK_POLL_RANK_S` (600 s)  | league-v4 → `rank.changed`                       |
 | `poll:matches`    | every `TRACK_POLL_MATCH_S` (300 s) | new match IDs → `archive:match`                  |
 | `archive:match`   | on demand                          | fetch, upsert, `match.archived`                  |
-| `backfill:player` | admin                              | page 100 IDs at a time, bulk priority            |
+| `backfill:player` | admin, or a first lookup           | page 100 IDs at a time, bulk priority            |
 | `ddragon:sync`    | hourly                             | on a new patch, mirror data and emit `patch.new` |
 | `maintenance`     | daily                              | clear orphaned single-flight locks               |
 
 Each poll type is one repeatable tick that fans out to one job per tracked
 player, so adding or removing a tracked player needs no scheduler changes. All
 jobs are idempotent and run at bulk priority.
+
+The first time anyone looks up a player, their whole history is queued behind
+them. Matches are immutable, so a match stored now is one nobody ever spends
+quota on again (§7.3) — the archive is the highest-leverage thing this service
+does, and it used to fill only for tracked players and by hand. "First time"
+means none of their newest page is stored yet, so a player already being
+archived is left alone. `LOOKUP_BACKFILL_LIMIT` sets how far back to walk;
+`10000` is match-v5's own ceiling, i.e. all of it.
 
 `archive:match` is ordered by how far back the match sits in its player's
 history, in blocks of ten, and the ordering is global rather than per player —
@@ -399,6 +410,7 @@ Every archive job therefore carries an explicit priority.
 | `DDRAGON_SYNC_S`                             | `3600`                                            | Version check cadence                                   |
 | `DDRAGON_DIR` / `DDRAGON_LOCALE`             | `./data/ddragon` / `en_US`                        |                                                         |
 | `ARCHIVE_TIMELINES`                          | `false`                                           | Timelines are large; opt in                             |
+| `LOOKUP_BACKFILL_LIMIT`                      | `10000`                                           | History walked on a first lookup; `0` disables          |
 | `ADMIN_IP_ALLOWLIST`                         | —                                                 | CSV of IPs/CIDRs; empty means key scope is enough       |
 | `BOOTSTRAP_ADMIN_KEY`                        | —                                                 | Seeds one admin key on `npm run migrate`                |
 | `AUTH_DISABLED`                              | `false`                                           | Dev only: skip key checks; refused in production        |
