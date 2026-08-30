@@ -72,6 +72,25 @@ jobs:
       - name: Test
         run: npm test
 
+      # The suite must not depend on the machine it runs on. Every value here is
+      # one a developer might plausibly keep in .env; all of them used to be
+      # inherited verbatim, and STALE_WHILE_REVALIDATE used to turn a test red.
+      # AUTH_DISABLED is the dangerous direction — it would make the auth
+      # rejection tests pass without asserting anything.
+      - name: Test (hostile environment)
+        env:
+          STALE_WHILE_REVALIDATE: 'false'
+          AUTH_DISABLED: 'true'
+          DEFAULT_PLATFORM: na1
+          NEG_TTL_SECONDS: '999'
+          BULK_USAGE_CEILING: '0.1'
+          SF_LOCK_MS: '100'
+          CLIENT_WAIT_BUDGET_MS: '0'
+          ARCHIVE_TIMELINES: 'true'
+          LOG_LEVEL: debug
+          ADMIN_IP_ALLOWLIST: 10.0.0.1
+        run: npm test
+
       - name: Build
         run: npm run build
 
