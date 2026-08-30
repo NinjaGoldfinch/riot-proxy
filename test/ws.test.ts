@@ -3,8 +3,8 @@ import type { AddressInfo } from 'node:net';
 import WebSocket from 'ws';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp, type App } from '../src/app.js';
-import { createConsumer } from '../src/db/consumers.js';
 import { closeDb, pingDb } from '../src/db/index.js';
+import { createTestConsumer, removeTestConsumers, testConsumerName } from './helpers/consumers.js';
 import { publish } from '../src/events/index.js';
 import { closeRedis, redis } from '../src/redis.js';
 import { wsHub } from '../src/ws/index.js';
@@ -24,7 +24,7 @@ beforeAll(async () => {
   }
   if (!available) return;
 
-  const consumer = await createConsumer({ name: `ws-test-${Date.now()}`, scopes: ['read'] });
+  const consumer = await createTestConsumer({ name: testConsumerName('ws'), scopes: ['read'] });
   key = consumer?.key ?? '';
 
   app = await buildApp();
@@ -36,6 +36,7 @@ beforeAll(async () => {
 afterAll(async () => {
   if (app) await app.close();
   await wsHub.stop();
+  if (available) await removeTestConsumers();
   await Promise.allSettled([closeRedis(), closeDb()]);
 });
 

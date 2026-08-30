@@ -1,8 +1,13 @@
 import './helpers/env.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp, type App } from '../src/app.js';
-import { createConsumer } from '../src/db/consumers.js';
 import { closeDb, pingDb } from '../src/db/index.js';
+import {
+  createTestConsumer,
+  removeTestConsumers,
+  testConsumerName,
+  trackTestConsumer,
+} from './helpers/consumers.js';
 import { ipAllowed } from '../src/auth/plugin.js';
 import { closeRedis, redis } from '../src/redis.js';
 import { wsHub } from '../src/ws/index.js';
@@ -26,9 +31,9 @@ beforeAll(async () => {
   }
   if (!available) return;
 
-  const read = await createConsumer({ name: `test-read-${Date.now()}`, scopes: ['read'] });
-  const admin = await createConsumer({
-    name: `test-admin-${Date.now()}`,
+  const read = await createTestConsumer({ name: testConsumerName('read'), scopes: ['read'] });
+  const admin = await createTestConsumer({
+    name: testConsumerName('admin'),
     scopes: ['read', 'admin'],
   });
   readKey = read?.key ?? '';
@@ -41,6 +46,8 @@ beforeAll(async () => {
 afterAll(async () => {
   if (app) await app.close();
   await wsHub.stop();
+  // Before the handles close: the delete needs the pool.
+  if (available) await removeTestConsumers();
   await Promise.allSettled([closeRedis(), closeDb()]);
 });
 
@@ -166,11 +173,13 @@ describe('http surface', () => {
       method: 'POST',
       url: '/v1/admin/consumers',
       headers: auth(adminKey),
-      payload: { name: 'created-by-test', quotaPerMin: 10 },
+      payload: { name: testConsumerName('created-by-test'), quotaPerMin: 10 },
     });
     expect(created.statusCode).toBe(200);
     const body = created.json();
     expect(body.key).toMatch(/^rpx_/);
+    // Revoking below is a soft delete, so this row still needs sweeping up.
+    trackTestConsumer(body.id);
 
     const revoked = await app.inject({
       method: 'DELETE',
