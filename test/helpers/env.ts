@@ -59,6 +59,9 @@ export const PINNED: Record<string, string> = {
   // Off by default so no test accidentally queues a 10 000-match walk; the
   // tests that care about it assert the enqueue directly.
   LOOKUP_BACKFILL_LIMIT: '0',
+  // Likewise: the default would let a poll page back 500 matches. The catch-up
+  // tests turn it on themselves.
+  TRACK_CATCHUP_LIMIT: '0',
 
   DDRAGON_DIR: './data/ddragon',
   DDRAGON_LOCALE: 'en_US',

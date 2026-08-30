@@ -16,7 +16,13 @@ import { fetcher } from '../fetcher.js';
 import { logger } from '../logger.js';
 import { build } from '../riot/endpoints.js';
 import { assertPlatform, platformToAccountRegion } from '../riot/routing.js';
-import { JOB, enqueueBackfill, ddragonQueue, type BackfillPlayerJob } from '../jobs/queues.js';
+import {
+  JOB,
+  enqueueBackfill,
+  ddragonQueue,
+  type BackfillEnqueueResult,
+  type BackfillPlayerJob,
+} from '../jobs/queues.js';
 import {
   GameNameParam,
   PassthroughResponse,
@@ -146,15 +152,32 @@ const adminRoutes: FastifyPluginAsync = async (fastify) => {
         tagLine = data.tagLine ?? body.tagLine;
       }
 
-      const player = await upsertPlayer({
-        puuid,
-        platform,
-        gameName,
-        tagLine,
-        tracked: body.tracked ?? true,
-      });
+      const tracked = body.tracked ?? true;
+      const player = await upsertPlayer({ puuid, platform, gameName, tagLine, tracked });
       logger.info({ puuid: player.puuid, tracked: player.tracked }, 'tracked player upserted');
-      return player;
+
+      // #46 — tracking only ever archived what the poller happened to catch
+      // from then on, so a player tracked today had no history at all and
+      // nothing to reconcile a gap against. Walk them the way a first lookup
+      // does (#44), and for the same reason: matches are immutable, so this is
+      // quota spent once. A player already walked is left alone.
+      let backfill: BackfillEnqueueResult | null = null;
+      if (tracked && !player.historyBackfilledAt && config.LOOKUP_BACKFILL_LIMIT > 0) {
+        try {
+          backfill = await enqueueBackfill({
+            puuid,
+            platform,
+            limit: config.LOOKUP_BACKFILL_LIMIT,
+            reason: 'track',
+          });
+          logger.info({ puuid, ...backfill }, 'queued backfill on track');
+        } catch (err) {
+          // Tracking succeeded. A queue that is down must not undo that.
+          logger.warn({ err, puuid }, 'could not queue backfill on track');
+        }
+      }
+
+      return { ...player, backfill };
     },
   );
 

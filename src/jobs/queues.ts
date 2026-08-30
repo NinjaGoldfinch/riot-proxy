@@ -104,7 +104,7 @@ export interface BackfillPlayerJob {
   limit?: number;
   fetchTimeline?: boolean;
   /** Why it was queued, for the log line that says how it got here. */
-  reason?: 'admin' | 'lookup';
+  reason?: 'admin' | 'lookup' | 'track' | 'catchup';
 }
 
 export interface PollPlayerJob {
