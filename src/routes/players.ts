@@ -1,7 +1,7 @@
 import { Type } from '@sinclair/typebox';
 import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import { config } from '../config.js';
-import { filterUnarchived } from '../db/matches.js';
+import { upsertPlayer } from '../db/players.js';
 import { ProxyError } from '../errors.js';
 import { fetcher, type FetchResult } from '../fetcher.js';
 import { enqueueBackfill } from '../jobs/queues.js';
@@ -321,7 +321,37 @@ async function composeProfile(opts: {
     throw ProxyError.notFound('No profile data available for this PUUID');
   }
 
+  await rememberIdentity(puuid, platform, body.account);
+
   return { body, ...summarise(fulfilled(settled)) };
+}
+
+/**
+ * Keep what the account part told us about who this PUUID is. The row is where
+ * backfill state lives (#44), and this is the one path that sees a Riot ID
+ * without an admin typing it, so a player looked up by name arrives already
+ * named rather than as a bare PUUID.
+ */
+async function rememberIdentity(
+  puuid: string,
+  platform: Platform,
+  account: unknown,
+): Promise<void> {
+  const identity = account as { gameName?: unknown; tagLine?: unknown } | null;
+  const gameName = typeof identity?.gameName === 'string' ? identity.gameName : undefined;
+  const tagLine = typeof identity?.tagLine === 'string' ? identity.tagLine : undefined;
+
+  try {
+    await upsertPlayer({
+      puuid,
+      platform,
+      ...(gameName !== undefined ? { gameName } : {}),
+      ...(tagLine !== undefined ? { tagLine } : {}),
+    });
+  } catch (err) {
+    // Bookkeeping. A profile is still a profile without it.
+    logger.warn({ err, puuid }, 'could not record player identity');
+  }
 }
 
 interface BackfillNotice {
@@ -337,22 +367,34 @@ interface BackfillNotice {
  * work runs at `bulk` priority behind `BULK_USAGE_CEILING`, so it cannot eat
  * the headroom this very request came out of.
  *
- * "First time" means none of the newest page is stored yet. A player already
- * being archived by tracking or an earlier lookup is left alone.
+ * "First time" is a fact about the player, kept on the player (#44). It used to
+ * be inferred from the archive — no stored matches on the newest page meant new
+ * — but matches are shared between ten players, so a single game archived
+ * because a teammate was walked was enough to classify someone as already
+ * known and skip them permanently. The more the archive filled, the more people
+ * it silently locked out.
+ *
+ * So the ids are not consulted at all. A completed walk is the only thing that
+ * stops another one; a walk that is merely in flight is stopped a layer down by
+ * `enqueueBackfill`, which means a walk that died mid-way is retried here
+ * rather than mistaken for a finished one.
  */
 async function maybeBackfill(opts: {
   puuid: string;
   platform: Platform;
   start: number;
-  matchIds: string[];
 }): Promise<BackfillNotice | null> {
   const limit = config.LOOKUP_BACKFILL_LIMIT;
-  // Deep pages say nothing about whether the player is new to us.
-  if (limit <= 0 || opts.start !== 0 || opts.matchIds.length === 0) return null;
+  // A deep page is someone paging through a history whose first page already
+  // had its chance to trigger this.
+  if (limit <= 0 || opts.start !== 0) return null;
 
   try {
-    const unarchived = await filterUnarchived(opts.matchIds);
-    if (unarchived.length < opts.matchIds.length) return null;
+    // Upserting is what creates the row on the lookup path — until now only an
+    // admin track wrote one — and it returns the state, so asking whether they
+    // are new and recording that we saw them is a single round trip.
+    const player = await upsertPlayer({ puuid: opts.puuid, platform: opts.platform });
+    if (player.historyBackfilledAt) return null;
 
     const { jobId, status } = await enqueueBackfill({
       puuid: opts.puuid,
@@ -416,9 +458,7 @@ async function composeMatches(opts: {
   );
   const matchIds = Array.isArray(ids.data) ? ids.data : [];
 
-  // Before the fan-out, which archives what it fetches and would make a first
-  // lookup look like a returning one.
-  const backfill = await maybeBackfill({ puuid, platform, start, matchIds });
+  const backfill = await maybeBackfill({ puuid, platform, start });
 
   const settled = await Promise.allSettled(
     matchIds.map((id) => fetcher.fetch(build.matchById(region, id))),

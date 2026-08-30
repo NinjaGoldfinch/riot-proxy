@@ -39,6 +39,9 @@ missing. Phases refer to §15 of [the spec](docs/riot-proxy-spec.md).
 - [x] `?refresh=true`, metered at one per player per 60 s (#33)
 - [x] First lookup of a player archives their whole history (#34)
 - [x] A minimal browser client at `/dev` (#35)
+- [x] First-lookup backfill reads backfill state on the player instead of
+      guessing from the shared archive, so a player whose teammate was walked
+      first is no longer skipped forever (#44)
 
 ## Next
 
@@ -57,9 +60,6 @@ missing. Phases refer to §15 of [the spec](docs/riot-proxy-spec.md).
       Update spends two windows. It is right for the UI, which calls both, and
       arbitrary for anyone calling one — worth collapsing to a single window
       per player if a second consumer ever appears.
-- [ ] The first-lookup backfill judges "new to us" from the newest page alone.
-      A player archived by tracking but never walked back is therefore skipped;
-      an explicit archived-depth check would catch them.
 - [ ] No metrics for either addition — lookup-triggered backfills and refresh
       claims are only visible in the logs. Both belong in §13.
 - [ ] The dev UI hardcodes a subset of queue ids and skips summoner spells and

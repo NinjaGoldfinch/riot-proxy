@@ -242,6 +242,13 @@ cooldown without having to spend one to discover it.
 The match page also reports `backfill` the first time it queues a player's
 history, so a caller can say it is on its way.
 
+"First time" is recorded on the player, not inferred from the archive. Matches
+are shared between ten players, so a player's recent games can be sitting in the
+archive purely because a teammate was walked — which says nothing about whether
+anyone walked _them_. Only a completed walk stops another one; a walk still in
+flight is stopped by the queue's own de-duplication, so one that died half way
+is retried rather than mistaken for finished.
+
 On the match page a refresh re-reads the **id list only**. The matches behind it
 are immutable and already archived, so re-downloading them would cost quota to
 learn nothing.
@@ -383,7 +390,7 @@ under a distinct `neg:` prefix — a cached "not in game" is distinguishable fro
 | `poll:rank`       | every `TRACK_POLL_RANK_S` (600 s)  | league-v4 → `rank.changed`                       |
 | `poll:matches`    | every `TRACK_POLL_MATCH_S` (300 s) | new match IDs → `archive:match`                  |
 | `archive:match`   | on demand                          | fetch, upsert, `match.archived`                  |
-| `backfill:player` | admin, or a first lookup           | page 100 IDs at a time, bulk priority            |
+| `backfill:player` | admin, or a player never walked    | page 100 IDs at a time, bulk priority            |
 | `ddragon:sync`    | hourly                             | on a new patch, mirror data and emit `patch.new` |
 | `maintenance`     | daily                              | clear orphaned single-flight locks               |
 
@@ -498,6 +505,43 @@ npm run format        # prettier
 Tests that need Redis or Postgres skip themselves when those are unreachable, so
 `npm test` works with nothing running — but `docker compose up -d` first gets
 you the limiter, HTTP-surface and WebSocket suites too.
+
+### Starting over
+
+Three levels of teardown, smallest first. All of them refuse to run while
+`NODE_ENV=production` unless you pass `--force` (`--yes` for `reset:all`).
+
+```bash
+npm run reset:cache   # cached responses, negative markers, single-flight locks
+npm run reset:db      # truncate every table; schema and migrations stay put
+npm run reset:all     # volumes, dist/, data/, node_modules → rebuild from scratch
+```
+
+`reset:cache` deletes only keys under this deployment's `KEY_SCOPE` (§7.4), so a
+Redis shared with another proxy — or holding the previous Riot key's namespace —
+is left alone. It leaves the limiter's learned buckets, the job queues, consumer
+quotas and the auth cache in place, since none of those are cache.
+
+```bash
+npm run reset:cache -- --limiter   # also drop the learned rate-limit buckets
+npm run reset:cache -- --all       # FLUSHDB: everything, every key scope
+npm run reset:db -- --keep-consumers   # keep minted API keys
+```
+
+Dropping the limiter buckets means the next few requests re-learn the windows
+from Riot's response headers, which is safe but briefly conservative. `--all`
+also drops queued jobs, so anything mid-backfill is lost — re-enqueue it.
+
+`reset:all` is the full remake: `docker compose down -v`, remove `dist/`,
+`data/` and `node_modules`, bring the stack back up on its healthchecks, then
+`npm ci`, `npm run migrate` and `npm run build`. It never touches `.env` — that
+holds your Riot key — and copies `.env.example` over only if no `.env` exists.
+It asks first; `--yes` skips the prompt and `--keep-deps` skips the reinstall.
+
+Everything `reset:cache` and `reset:db` delete is re-derivable from Riot, at the
+cost of the quota to re-fetch it. The match archive is the expensive one: it is
+the only store here holding data Riot will not serve again cheaply, so prefer
+`--keep-consumers` and a targeted cache purge over `reset:all` on a warm box.
 
 ### Acceptance checks
 
