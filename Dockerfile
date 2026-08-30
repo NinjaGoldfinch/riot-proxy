@@ -4,7 +4,9 @@
 FROM node:26-alpine AS build
 WORKDIR /app
 
-COPY package.json package-lock.json ./
+# .npmrc carries engine-strict, so a base image on the wrong Node fails here
+# rather than at some confusing point later in the build.
+COPY package.json package-lock.json .npmrc ./
 RUN npm ci
 
 COPY tsconfig.json tsconfig.build.json ./
