@@ -53,6 +53,11 @@ missing. Phases refer to §15 of [the spec](docs/riot-proxy-spec.md).
 - [x] The composite match page returns a summary per match — the requesting
       player's own line — instead of ten full match-v5 payloads; the whole
       document stays available per match from the archive
+- [x] An OpenAPI document at `/openapi.json` and a browsable, callable API
+      reference at `/docs`, generated from the route schemas so the contract
+      cannot drift from what the server enforces (#58, stages #59–#66). The
+      README's consumer guide is gone, replaced by a link — the endpoint table
+      was hand-maintained and one forgotten row from being wrong.
 
 ## Next
 
@@ -61,40 +66,6 @@ missing. Phases refer to §15 of [the spec](docs/riot-proxy-spec.md).
 - [ ] Production readiness — compose, dashboards, production key (#9)
 - [ ] Obtain a Riot API key and run the live acceptance checks (#10)
 - [ ] Re-resolve tracked players after a key rotation (#13)
-- [ ] An OpenAPI document and a browsable, callable API reference at `/docs`
-      (#58) — planned in [docs/openapi-docs-plan.md](docs/openapi-docs-plan.md),
-      broken into stages #59–#66. Generated from the route schemas rather than
-      hand-written, so the contract cannot drift from what the server enforces;
-      served with Scalar, which unlike ReDoc's open-source build has a request
-      console. **In flight — stages 0 and 1 done:**
-  - [x] Stage 0 (#59) — the spike passed. Both plugins register under Fastify 5,
-        the document comes out as OpenAPI 3.1, and the TypeBox enums survive.
-        Two corrections to the plan: `logLevel: 'silent'` does not suppress the
-        §13 request line (that line is our own `onResponse` hook, not
-        Fastify's), and `/v1/ws` needs no `hide` because it never reaches the
-        document at all.
-  - [x] Stage 1 (#60) — the seven routes that had no schema have one, the three
-        `/dev` routes are hidden, and nothing in the document is untagged. Real
-        schemas for our own payloads, so `GET /v1/admin/consumers` can never
-        grow a `keyHash`. `GET /v1/admin/limits/:scope` now 400s on a scope that
-        is not a host, where it used to answer 200 with an empty bucket.
-  - [x] Stage 2 (#61) — the envelope is registered once and referenced, not
-        copied 182 times, and every route now claims only the failures it can
-        actually produce. There is no `publicErrors` set: the public routes
-        produce no envelope at all.
-  - [x] Stage 3 (#62) — the document has its own content, all of it generated
-        from config rather than typed, so a `CACHE_TTL_OVERRIDES` change cannot
-        leave the reference stating something that used to be true. §11 is
-        prose on the `ws` tag, since 3.1 cannot express a WebSocket.
-  - [x] Stage 4 (#63) — our own bodies have real schemas and the types are
-        derived from them; Riot's keep an empty schema and gain an example.
-        Error examples tell the quota 429 and the limiter 503 apart.
-  - [x] Stage 5 (#64), in part — the plugins are registered and `/docs`,
-        `/openapi.json` and `/openapi.yaml` are served, public and quota-exempt.
-        Pulled forward because stages 2–4 could not be verified without a page.
-        Outstanding: the Dockerfile and Caddy notes.
-  - [ ] Stage 6 (#65) — commit `openapi.json` and fail CI when it drifts.
-  - [ ] Stage 7 (#66) — retire the README's consumer guide in favour of `/docs`.
 
 ### Follow-ups from this round
 

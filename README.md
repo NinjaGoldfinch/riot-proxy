@@ -89,252 +89,62 @@ limited (§5.6) and was never mirrored.
 where a page that advertises whether auth is off has no business being. No build
 step and no dependencies — edit `public/dev-ui.html` and reload.
 
+It is not the API reference and does not try to be: this page answers "show me
+this account", `/docs` answers "what does this route return". `DOCS_UI` defaults
+on in production for exactly the reason `DEV_UI` defaults off.
+
 ---
 
-## Consumer guide
+## Using the API
 
-### Base URL and auth
+The contract lives at **`/docs`** — a browsable reference with a working request
+console, generated from the same schemas the server validates against. It cannot
+describe an endpoint this build does not serve, or omit one it does, which is
+what the table that used to live here could not promise. `/openapi.json` and
+`/openapi.yaml` serve the document itself, for client generators and contract
+tests.
 
 ```
 https://api.yourdomain.dev/v1
 Authorization: Bearer rpx_<32 chars>
 ```
 
-Every request needs a key except `/healthz` and `/metrics`. Keys carry scopes
-(`read`, `admin`) and a per-minute quota, both set when the key is created.
-For local testing the key check can be turned off entirely — see
+Every request needs a key except `/healthz`, `/readyz` and `/metrics`. Keys
+carry scopes (`read`, `admin`) and a per-minute quota, both set when the key is
+issued. For local testing the check can be turned off entirely — see
 [Testing without a key](#testing-without-a-key).
 
-### Response headers
+Start with the composites under `/v1/players`. They fan out to several Riot
+calls concurrently and return one document, which is what a profile page
+actually needs; the passthrough routes under `/v1/riot` and `/v1/lol` are the
+escape hatch, not the front door. Realtime is a WebSocket at `/v1/ws`, and the
+protocol is documented under the `ws` tag on the same page — OpenAPI cannot
+express a socket, so it is written out as prose there rather than faked as an
+operation.
 
-| Header        | Meaning                                                                           |
-| ------------- | --------------------------------------------------------------------------------- |
-| `X-Cache`     | `HIT` · `MISS` · `HIT-NEG` (cached 404) · `STALE` (served stale while refreshing) |
-| `X-Cache-Age` | Age of the served payload, in seconds — see below                                 |
-| `Retry-After` | Present on `RATE_LIMITED` and `QUOTA_EXCEEDED`                                    |
+Three things surprise people, and all three are in the reference for the same
+reason they are here:
 
-Successful responses are Riot's payloads, passed through unmodified.
+- **`X-Cache: MISS` with a large `X-Cache-Age` is not a contradiction.** The age
+  describes the _content_, not the fetch. A re-read that comes back
+  byte-identical keeps the timestamp the payload was first seen with, so a MISS
+  with an age of 71 000 means the proxy asked Riot and the player has not done
+  anything since. That is what makes the header safe to drive a "last updated"
+  label off.
+- **`sea` account lookups are routed to `asia`.** Riot serves account-v1 on
+  `americas`, `asia` and `europe` only; there is no `sea` host, and asking for
+  one is a 404. The proxy redirects it for you, so a SEA platform like `oc1`
+  resolves by Riot ID without the caller knowing any of this. account-v1 is
+  global, so the answer is identical either way. match-v5 is unaffected — `sea`
+  is a real match host and SEA matches stay there.
+- **`QUOTA_EXCEEDED` and `RATE_LIMITED` are opposite problems.** The first is
+  your own per-minute allowance and is fixed by slowing down. The second is the
+  proxy declining to hold your request any longer while it waits on Riot's
+  budget: nothing you did, and every consumer sees it at once.
 
-`X-Cache-Age` is the age of the _content_, not of the last fetch. A re-read that
-comes back byte-identical keeps the timestamp the payload was first seen with,
-so `X-Cache: MISS` alongside `X-Cache-Age: 71000` is not a contradiction — it
-means the proxy asked Riot and the player has not done anything since. That is
-what makes it safe to drive a "last updated" label off: an age that has not
-moved means the data has not either. Freshness and Redis expiry are tracked
-separately, so holding the age still never keeps an entry alive past its TTL.
-
-### Errors
-
-One envelope, always:
-
-```json
-{ "error": { "code": "RATE_LIMITED", "message": "…", "retryAfter": 3 } }
-```
-
-| Code             | Status | Meaning                                                         |
-| ---------------- | ------ | --------------------------------------------------------------- |
-| `UNAUTHORIZED`   | 401    | Missing, unknown or disabled key                                |
-| `FORBIDDEN`      | 403    | Key lacks the required scope, or admin IP not allowlisted       |
-| `QUOTA_EXCEEDED` | 429    | Your consumer quota, not Riot's — retry after `retryAfter`      |
-| `NOT_FOUND`      | 404    | Riot returned 404 (also served from the negative cache)         |
-| `BAD_REGION`     | 400    | Unknown platform/region, or a match ID that belongs elsewhere   |
-| `VALIDATION`     | 400    | Failed a schema constraint (`count > 100`, bad Riot ID length…) |
-| `RATE_LIMITED`   | 503    | The upstream limiter wait exceeded your request budget          |
-| `UPSTREAM_ERROR` | 502    | Riot failed, or rejected our key — never your problem to fix    |
-
-### Endpoints
-
-| Method & path                                                    | Upstream            | Notes                                                                                |
-| ---------------------------------------------------------------- | ------------------- | ------------------------------------------------------------------------------------ |
-| `GET /v1/riot/accounts/by-riot-id/{region}/{gameName}/{tagLine}` | account-v1          | Canonical entry point. `sea` is accepted and routed to `asia` (see below)            |
-| `GET /v1/riot/accounts/by-puuid/{region}/{puuid}`                | account-v1          |                                                                                      |
-| `GET /v1/lol/summoners/by-puuid/{platform}/{puuid}`              | summoner-v4         |                                                                                      |
-| `GET /v1/lol/league/entries/by-puuid/{platform}/{puuid}`         | league-v4           |                                                                                      |
-| `GET /v1/lol/matches/ids/{region}/{puuid}`                       | match-v5            | `?start&count&queue&type&startTime&endTime`, `count ≤ 100`                           |
-| `GET /v1/lol/matches/{region}/{matchId}`                         | match-v5            | Served from the Postgres archive when present                                        |
-| `GET /v1/lol/matches/{region}/{matchId}/timeline`                | match-v5            | Archived likewise                                                                    |
-| `GET /v1/lol/spectator/active/{platform}/{puuid}`                | spectator-v5        | 404 = not in game, negative-cached 30 s                                              |
-| `GET /v1/lol/mastery/by-puuid/{platform}/{puuid}`                | champion-mastery-v4 | `?top=N` for the top-N variant                                                       |
-| `GET /v1/lol/rotations/{platform}`                               | champion-rotations  |                                                                                      |
-| `GET /v1/lol/status/{platform}`                                  | lol-status-v4       |                                                                                      |
-| `GET /v1/players/{puuid}/profile`                                | **composite**       | `?platform&topMastery` — account + summoner + league + mastery in one call           |
-| `GET /v1/players/by-riot-id/{gameName}/{tagLine}/profile`        | **composite**       | The same document, entered by Riot ID                                                |
-| `GET /v1/players/{puuid}/matches`                                | **composite**       | `?platform&start&count&queue&type` — an id page plus a summary of each, `count ≤ 20` |
-| `GET /v1/static/versions`                                        | local mirror        | No upstream call                                                                     |
-| `GET /v1/static/{file}`                                          | local mirror        | `champions`, `items`, `runes`, `summoner-spells`, `profile-icons`, `maps`, `queues`  |
-| `WS /v1/ws`                                                      | realtime            | See below                                                                            |
-| `GET /dev`                                                       | dev tool            | Browser client, when `DEV_UI` is on — see below                                      |
-| `GET /healthz` · `/readyz` · `/metrics`                          | —                   | Public                                                                               |
-
-**Platforms:** `na1` `br1` `la1` `la2` `euw1` `eun1` `tr1` `ru` `kr` `jp1`
-`oc1` `ph2` `sg2` `th2` `tw2` `vn2`.
-**Regions:** `americas` `europe` `asia` `sea`.
-
-Riot serves account-v1 on `americas`, `asia` and `europe` only — there is no
-account-v1 on the `sea` host, and asking for one there is a 404. The proxy
-routes any `sea` account lookup to `asia` for you, so a SEA platform such as
-`oc1` resolves by Riot ID without the caller having to know this. account-v1 is
-a global service, so the answer is identical whichever host serves it. match-v5
-is unaffected: `sea` is a real match host and SEA matches stay there.
-
-Match IDs carry their own platform prefix (`EUW1_7381937461`); pass a region
-that disagrees with it and you get `BAD_REGION` rather than a confusing 404.
-
-### The composite endpoints
-
-Fans out to four Riot calls concurrently, each individually cached, and returns
-one document. A part that fails is `null` and explained in `warnings[]` — a
-mastery timeout never fails the whole response.
-
-```json
-{
-  "puuid": "…", "platform": "euw1", "region": "europe",
-  "account": { … }, "summoner": { … }, "league": [ … ], "mastery": [ … ],
-  "warnings": []
-}
-```
-
-A browser only ever has the name a player types, so the same document is
-reachable by Riot ID. The account lookup happens server-side and its result is
-reused as the composite's `account` part, rather than costing the caller a round
-trip whose only purpose is to feed the next one:
-
-```bash
-curl '…/v1/players/by-riot-id/NinjaGoldfinch/OCENZ/profile?platform=oc1'
-```
-
-`GET /v1/players/{puuid}/matches` is the same idea for history: one id page plus
-every match on it, fanned out concurrently. Rendering ten games otherwise costs
-eleven requests against a default quota of 60/min, so three pages exhausts it.
-
-What comes back per match is a summary — the requesting player's own line in
-that game — not the game. A match-v5 payload carries ten participants of ~130
-fields each plus a ~100-field `challenges` object apiece, so a page of ten is
-around a megabyte of response to render a champion icon, a scoreline and six
-items:
-
-```json
-{
-  "puuid": "…", "platform": "oc1", "region": "sea",
-  "start": 0, "count": 10,
-  "matchIds": [ … ], "hasMore": true, "warnings": [],
-  "matches": [
-    {
-      "matchId": "OC1_1234567890",
-      "queueId": 420, "gameMode": "CLASSIC", "gameVersion": "15.16.673.9260",
-      "gameCreation": 1756000000000, "gameEndTimestamp": 1756001894000,
-      "gameDuration": 1834, "endOfGameResult": "GameComplete",
-      "player": {
-        "championId": 64, "championName": "LeeSin", "champLevel": 16,
-        "win": true, "teamId": 100, "teamPosition": "JUNGLE",
-        "kills": 8, "deaths": 3, "assists": 11,
-        "totalMinionsKilled": 42, "neutralMinionsKilled": 128,
-        "goldEarned": 13240, "visionScore": 31,
-        "item0": 3142, "item6": 3364, "summoner1Id": 11, "summoner2Id": 4,
-        "perks": { "keystone": 8010, "primaryStyle": 8000, "subStyle": 8300 }
-      }
-    }
-  ]
-}
-```
-
-Field names and values are Riot's own — nothing is renamed, and nothing is
-computed for you. Nothing is lost either: every match is archived whole (§7.3),
-so the full document, the other nine players and the timeline are one
-`GET /v1/lol/matches/{region}/{matchId}` away, served from Postgres at zero
-upstream cost.
-
-`count` is capped at 20 rather than match-v5's 100: every id on the page is its
-own upstream call. `hasMore` says a full page came back, so page without
-guessing. Matches are immutable and archived, so paging back through a history a
-second time costs no quota at all.
-
-#### Asking for a fresh read
-
-Both composites read through the cache: viewing a player costs nothing upstream
-while the cache holds them, and only an outright miss goes to Riot. `?refresh=true`
-is the way to say "I know something has changed" — metered at one refresh per
-player per 60 seconds, in Redis, so it holds across api replicas.
-
-Losing that race is not an error. Whoever won it wrote fresh values seconds ago,
-so the cache read you fall back to is the very data you asked for. Every
-response says which happened:
-
-| Field                | Meaning                                                   |
-| -------------------- | --------------------------------------------------------- |
-| `refreshed`          | This request went upstream rather than reading the cache  |
-| `refreshAvailableIn` | Seconds until the next manual refresh; `0` when available |
-
-Both are present whether or not you asked for a refresh, so a UI can show the
-cooldown without having to spend one to discover it.
-
-The match page also reports `backfill` the first time it queues a player's
-history, so a caller can say it is on its way.
-
-"First time" is recorded on the player, not inferred from the archive. Matches
-are shared between ten players, so a player's recent games can be sitting in the
-archive purely because a teammate was walked — which says nothing about whether
-anyone walked _them_. Only a completed walk stops another one; a walk still in
-flight is stopped by the queue's own de-duplication, so one that died half way
-is retried rather than mistaken for finished.
-
-On the match page a refresh re-reads the **id list only**. The matches behind it
-are immutable and already archived, so re-downloading them would cost quota to
-learn nothing.
-
-The profile also reports each part's own `ageSeconds`. The top-level
-`X-Cache-Age` is the stalest of the four, which is right for a cache header and
-wrong for anyone labelling four independent sections — an account unchanged for
-a day should not make a rank that moved a minute ago look a day old.
-
-### WebSocket
-
-```
-wss://api.yourdomain.dev/v1/ws?token=rpx_…
-```
-
-```jsonc
-// client → server
-{ "op": "subscribe",   "topics": ["player:<puuid>", "patch"] }
-{ "op": "unsubscribe", "topics": ["player:<puuid>"] }
-{ "op": "ping" }
-```
-
-```jsonc
-// server → client
-{ "op": "ready", "consumer": "my-website" }
-{ "op": "subscribed", "topics": ["player:…"] }
-{ "event": "game.started", "topic": "player:…", "at": 1730000000000, "data": { … } }
-```
-
-| Event            | Payload                                            |
-| ---------------- | -------------------------------------------------- |
-| `game.started`   | `{ puuid, platform, gameId, championId, queueId }` |
-| `game.ended`     | `{ puuid, gameId }`                                |
-| `rank.changed`   | `{ puuid, queue, before, after }`                  |
-| `match.archived` | `{ puuid, matchId }`                               |
-| `patch.new`      | `{ version }`                                      |
-
-Events only reach a player topic if that player is **tracked** (see admin
-below) — Riot has no webhooks, so everything realtime is poll-derived.
-The server pings every 30 s and drops a socket after two missed pongs.
-
-### Admin
-
-Requires an `admin`-scoped key, and a source IP in `ADMIN_IP_ALLOWLIST` when
-that is set.
-
-| Endpoint                                    | Purpose                                                                |
-| ------------------------------------------- | ---------------------------------------------------------------------- |
-| `POST/GET/DELETE /v1/admin/consumers[/:id]` | Issue, list and revoke consumer keys                                   |
-| `GET/POST /v1/admin/tracked-players`        | List, or start tracking (by PUUID or Riot ID); tracking queues a walk  |
-| `DELETE /v1/admin/tracked-players/:puuid`   | Stop tracking                                                          |
-| `POST /v1/admin/cache/purge`                | `{ "pattern": "summoner.byPuuid:*" }`, scoped to the current key scope |
-| `POST /v1/admin/backfill`                   | Walk a player's match history into the archive                         |
-| `POST /v1/admin/ddragon/sync`               | Force a Data Dragon re-sync                                            |
-| `GET /v1/admin/limits/:scope`               | Current bucket usage and freeze state                                  |
-| `GET /v1/admin/stats`                       | Archive size, tracked player count, key scope                          |
-| `GET /v1/admin/debug/riot`                  | Raw passthrough for manual testing                                     |
+`/docs` is endpoint-shaped — what a route takes and returns. The browser client
+at [`/dev`](#the-browser-client) is player-shaped — show me this account. They
+answer different questions and both link to the other.
 
 ---
 

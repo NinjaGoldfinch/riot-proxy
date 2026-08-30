@@ -108,14 +108,15 @@ One envelope, always:
 | \`FORBIDDEN\` | 403 | Key lacks the scope, or the admin IP allowlist rejected it |
 | \`NOT_FOUND\` | 404 | Riot has no such resource, or we do not serve it |
 | \`QUOTA_EXCEEDED\` | 429 | **Your** per-minute quota. \`Retry-After\` is the window |
-| \`UPSTREAM_ERROR\` | 502 | Riot answered, unusably |
-| \`UPSTREAM_UNAVAILABLE\` | 503 | Riot is down, or our limiter is shedding load |
+| \`UPSTREAM_ERROR\` | 502 | Riot failed, or rejected our key — never yours to fix |
+| \`RATE_LIMITED\` | 503 | The wait for Riot's own limiter exceeded your request budget |
 | \`INTERNAL\` | 500 | Ours |
 
 The two throttles are worth telling apart, because they are not the same
-problem. A 429 is your own quota and is fixed by slowing down. A 503 is the
-limiter refusing to spend Riot budget it does not have, and affects every
-consumer at once.
+problem. \`QUOTA_EXCEEDED\` is **your** per-minute allowance and is fixed by
+slowing down. \`RATE_LIMITED\` is the proxy declining to hold your request any
+longer while it waits for Riot's budget — nothing you did, and every consumer
+sees it at once.
 
 ## Key scope
 

@@ -3,6 +3,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp, type App } from '../src/app.js';
 import { closeDb, pingDb } from '../src/db/index.js';
 import { closeRedis, redis } from '../src/redis.js';
+import { ERROR_CODES } from '../src/errors.js';
+import { ERROR_EXAMPLES } from '../src/docs/examples.js';
 import { wsHub } from '../src/ws/index.js';
 
 /**
@@ -239,8 +241,33 @@ describe('examples (#63)', () => {
     expect(quota.value.error.retryAfter).toBeTypeOf('number');
     expect(quota.summary).toContain('Your quota');
 
-    expect(upstream.value.error.code).toBe('UPSTREAM_UNAVAILABLE');
+    expect(upstream.value.error.code).toBe('RATE_LIMITED');
     expect(upstream.summary).toContain('affects everyone');
+  });
+
+  it('names only error codes that exist, in both the prose and the examples', ({ skip }) => {
+    if (!available || !doc) return skip();
+    // The schemas take their enum from ERROR_CODES and cannot drift. The prose
+    // table and the examples are hand-written and can — this caught the
+    // reference documenting an `UPSTREAM_UNAVAILABLE` that the service has
+    // never been able to return.
+    const documented = new Set<string>();
+    for (const [, code] of (doc.info.description as string).matchAll(
+      /^\| `([A-Z_]+)` \| \d{3} \|/gm,
+    )) {
+      if (code) documented.add(code);
+    }
+    expect(documented.size).toBeGreaterThan(0);
+    for (const code of documented) {
+      expect(ERROR_CODES, `${code} is documented but not a real error code`).toContain(code);
+    }
+    // And every real code is documented, so a new one cannot ship unmentioned.
+    expect([...documented].sort()).toEqual([...ERROR_CODES].sort());
+
+    for (const example of Object.values(ERROR_EXAMPLES)) {
+      const code = (example.value as { error: { code: string } }).error.code;
+      expect(ERROR_CODES, `${code} is used in an example but is not a real code`).toContain(code);
+    }
   });
 
   it('does not offer an error example a route cannot produce', ({ skip }) => {

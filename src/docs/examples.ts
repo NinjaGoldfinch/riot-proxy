@@ -168,15 +168,15 @@ export const ERROR_EXAMPLES: Record<string, { summary: string; value: unknown }>
     },
   },
   '502': {
-    summary: 'Riot answered, unusably',
+    summary: 'Riot failed, or rejected our key',
     value: { error: { code: 'UPSTREAM_ERROR', message: 'Upstream returned 500' } },
   },
   '503': {
-    summary: 'Riot is down, or our limiter is shedding load — affects everyone, not just you',
+    summary: 'The upstream limiter, not your quota — affects everyone, not just you',
     value: {
       error: {
-        code: 'UPSTREAM_UNAVAILABLE',
-        message: 'Rate limit budget exhausted for this scope',
+        code: 'RATE_LIMITED',
+        message: 'Upstream rate limit wait exceeded the request budget',
         retryAfter: 4,
       },
     },
