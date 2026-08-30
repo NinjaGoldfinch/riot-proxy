@@ -1,4 +1,4 @@
-import type { Job } from 'bullmq';
+import type { Job, Queue } from 'bullmq';
 import { KEY_SCOPE } from '../config.js';
 import { config } from '../config.js';
 import { archiveMatch, archiveTimeline, filterUnarchived, type RiotMatch } from '../db/matches.js';
@@ -25,6 +25,7 @@ import {
   backfillPriority,
   enqueueBackfill,
   jobKey,
+  pollDedupeId,
   pollQueue,
   type ArchiveMatchJob,
   type BackfillPlayerJob,
@@ -51,19 +52,24 @@ const STATE_TTL = 7 * 24 * 3600;
  * One repeatable tick per poll type fans out to one job per tracked player.
  * Cheaper than maintaining N repeatable jobs, and tracked-player changes take
  * effect on the next tick with no scheduler churn.
+ *
+ * The returned count is how many tracked players the tick fanned out for, not
+ * how many jobs it created: `pollDedupeId` drops the ones already pending.
+ *
+ * `queue` is injectable for the same reason `enqueueBackfill`'s is — the real
+ * poll queue is drained by whatever worker happens to be running, which would
+ * make the de-duplication assertions depend on the machine.
  */
-async function fanOut(jobName: string): Promise<number> {
+export async function fanOut(jobName: string, queue: Queue = pollQueue): Promise<number> {
   const players = await listTrackedPlayers();
   if (players.length === 0) return 0;
 
-  await pollQueue.addBulk(
+  await queue.addBulk(
     players.map((p) => ({
       name: jobName,
       data: { puuid: p.puuid, platform: p.platform } satisfies PollPlayerJob,
       opts: {
-        // De-duplicate: if the previous tick's job for this player is still
-        // queued, do not stack another one on top of it.
-        jobId: jobKey(jobName, p.puuid, Math.floor(Date.now() / 1000)),
+        deduplication: { id: pollDedupeId(jobName, p.puuid) },
         removeOnComplete: { age: 600, count: 200 },
       },
     })),
@@ -115,9 +121,12 @@ export async function pollLive(job: Job<PollPlayerJob>): Promise<void> {
     await redis.del(key);
     await publish('game.ended', playerTopic(puuid), { puuid, gameId: Number(previous) });
     // The match becomes available shortly after the game ends; nudge the match
-    // poller rather than waiting for its next tick.
+    // poller rather than waiting for its next tick. Shares the fan-out's
+    // de-duplication id: a nudge and a tick are the same work, and whichever is
+    // already pending covers both games if two end inside the delay.
     await pollQueue.add(JOB.pollMatches, { puuid, platform } satisfies PollPlayerJob, {
       delay: 60_000,
+      deduplication: { id: pollDedupeId(JOB.pollMatches, puuid) },
     });
   }
 }
