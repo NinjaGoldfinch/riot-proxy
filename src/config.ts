@@ -47,6 +47,13 @@ const EnvSchema = Type.Object({
   DDRAGON_SYNC_S: Type.Integer({ default: 3600, minimum: 60 }),
   ARCHIVE_TIMELINES: Type.Boolean({ default: false }),
 
+  /**
+   * How far back to walk a player's history the first time anyone looks them
+   * up. 10 000 is match-v5's own `start` ceiling, so the default means "all of
+   * it"; 0 turns the behaviour off and leaves backfills to the admin route.
+   */
+  LOOKUP_BACKFILL_LIMIT: Type.Integer({ default: 10_000, minimum: 0, maximum: 10_000 }),
+
   DDRAGON_DIR: Type.String({ default: './data/ddragon' }),
   DDRAGON_LOCALE: Type.String({ default: 'en_US' }),
 

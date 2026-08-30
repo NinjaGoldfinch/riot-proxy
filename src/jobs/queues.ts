@@ -103,6 +103,8 @@ export interface BackfillPlayerJob {
   /** Total matches to walk back through; paged 100 at a time (§10). */
   limit?: number;
   fetchTimeline?: boolean;
+  /** Why it was queued, for the log line that says how it got here. */
+  reason?: 'admin' | 'lookup';
 }
 
 export interface PollPlayerJob {

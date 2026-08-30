@@ -1,8 +1,10 @@
 import { Type } from '@sinclair/typebox';
 import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import { config } from '../config.js';
+import { filterUnarchived } from '../db/matches.js';
 import { ProxyError } from '../errors.js';
 import { fetcher, type FetchResult } from '../fetcher.js';
+import { enqueueBackfill } from '../jobs/queues.js';
 import { logger } from '../logger.js';
 import { redis } from '../redis.js';
 import { build } from '../riot/endpoints.js';
@@ -322,6 +324,52 @@ async function composeProfile(opts: {
   return { body, ...summarise(fulfilled(settled)) };
 }
 
+interface BackfillNotice {
+  jobId: string;
+  status: 'queued' | 'already-queued';
+  limit: number;
+}
+
+/**
+ * The first time anyone asks for a player, walk their whole history into the
+ * archive rather than only the page that was asked for. Matches are immutable,
+ * so every one stored now is one nobody ever spends quota on again — and the
+ * work runs at `bulk` priority behind `BULK_USAGE_CEILING`, so it cannot eat
+ * the headroom this very request came out of.
+ *
+ * "First time" means none of the newest page is stored yet. A player already
+ * being archived by tracking or an earlier lookup is left alone.
+ */
+async function maybeBackfill(opts: {
+  puuid: string;
+  platform: Platform;
+  start: number;
+  matchIds: string[];
+}): Promise<BackfillNotice | null> {
+  const limit = config.LOOKUP_BACKFILL_LIMIT;
+  // Deep pages say nothing about whether the player is new to us.
+  if (limit <= 0 || opts.start !== 0 || opts.matchIds.length === 0) return null;
+
+  try {
+    const unarchived = await filterUnarchived(opts.matchIds);
+    if (unarchived.length < opts.matchIds.length) return null;
+
+    const { jobId, status } = await enqueueBackfill({
+      puuid: opts.puuid,
+      platform: opts.platform,
+      limit,
+      reason: 'lookup',
+    });
+    logger.info({ puuid: opts.puuid, jobId, status, limit }, 'queued backfill on first lookup');
+    return { jobId, status, limit };
+  } catch (err) {
+    // Archiving is an optimisation. A queue that is down must not take the
+    // match history down with it.
+    logger.warn({ err, puuid: opts.puuid }, 'could not queue lookup backfill');
+    return null;
+  }
+}
+
 interface MatchPageBody {
   puuid: string;
   platform: Platform;
@@ -337,6 +385,8 @@ interface MatchPageBody {
    * immutable, so this is the only age on the page that can mean anything.
    */
   matchIdsAgeSeconds: number;
+  /** Set when this lookup queued the player's history for archiving. */
+  backfill: BackfillNotice | null;
   refreshed: boolean;
   refreshAvailableIn: number;
   warnings: string[];
@@ -366,6 +416,10 @@ async function composeMatches(opts: {
   );
   const matchIds = Array.isArray(ids.data) ? ids.data : [];
 
+  // Before the fan-out, which archives what it fetches and would make a first
+  // lookup look like a returning one.
+  const backfill = await maybeBackfill({ puuid, platform, start, matchIds });
+
   const settled = await Promise.allSettled(
     matchIds.map((id) => fetcher.fetch(build.matchById(region, id))),
   );
@@ -390,6 +444,7 @@ async function composeMatches(opts: {
     matches,
     hasMore: matchIds.length === count,
     matchIdsAgeSeconds: ids.ageSeconds,
+    backfill,
     refreshed: window.refreshed,
     refreshAvailableIn: window.availableIn,
     warnings,
