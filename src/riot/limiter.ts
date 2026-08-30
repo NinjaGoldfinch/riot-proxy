@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { Redis } from 'ioredis';
 import { config, KEY_SCOPE } from '../config.js';
 import { logger } from '../logger.js';
@@ -173,9 +174,13 @@ export class RateLimiter {
           ? 0 // we are the interactive traffic; do not block ourselves
           : Number((await this.redis.get(waitersKey(scope))) ?? '0');
 
+        // Identifies this attempt's slot in every bucket, so a refusal part-way
+        // through can roll back exactly what it took.
+        const token = randomUUID();
+
         const raw = (await this.evalAcquire(
           [frozenKey(scope)],
-          [priority, config.BULK_USAGE_CEILING, waiters, count, ...buckets],
+          [priority, config.BULK_USAGE_CEILING, waiters, token, count, ...buckets],
         )) as [number, number, string];
 
         const [ok, waitMs, reason] = raw;
@@ -308,14 +313,25 @@ export class RateLimiter {
     return pttl > 0 ? pttl : 0;
   }
 
-  /** Current usage per app window — used by `/healthz` and the admin surface. */
+  /**
+   * Current usage per app window — used by `/healthz` and the admin surface.
+   * Counts what is still inside each window without trimming, so a read can
+   * never alter what the next acquisition sees.
+   */
   async usage(scope: string): Promise<{ window: string; used: number; limit: number }[]> {
     const windows = await this.windowsFor('app', scope, '');
     if (windows.length === 0) return [];
-    const values = await this.redis.mget(windows.map((w) => bucketKey.app(scope, w)));
+
+    const now = Date.now();
+    const pipeline = this.redis.pipeline();
+    for (const w of windows) {
+      pipeline.zcount(bucketKey.app(scope, w), `(${now - w.seconds * 1000}`, '+inf');
+    }
+    const results = await pipeline.exec();
+
     return windows.map((w, i) => ({
       window: `${w.limit}:${w.seconds}`,
-      used: Number(values[i] ?? '0'),
+      used: Number(results?.[i]?.[1] ?? 0),
       limit: w.limit,
     }));
   }
