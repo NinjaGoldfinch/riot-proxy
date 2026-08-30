@@ -37,13 +37,26 @@ export async function getArchivedTimeline(matchId: string): Promise<unknown | un
   return rows[0]?.timeline ?? undefined;
 }
 
-export async function hasArchivedMatch(matchId: string): Promise<boolean> {
+/**
+ * The archived bodies for a page of match ids, keyed by id and missing the ones
+ * that are not stored.
+ *
+ * `getArchivedMatch` answers for one match, which is right for `Fetcher`: it
+ * looks a single request up in the archive before spending quota on it. The
+ * composite match page is the one caller that turns a single request into
+ * twenty of them, and a fully archived page — the case the archive exists to
+ * make cheap — then issued twenty single-row queries against a pool of ten, so
+ * half of them waited on the other half before the page could be assembled
+ * (#54). Same bind-parameter reasoning as `filterUnarchived`; the page's
+ * `count` is capped at 20.
+ */
+export async function getArchivedMatches(matchIds: string[]): Promise<Map<string, unknown>> {
+  if (matchIds.length === 0) return new Map();
   const rows = await db
-    .select({ matchId: matches.matchId })
+    .select({ matchId: matches.matchId, data: matches.data })
     .from(matches)
-    .where(eq(matches.matchId, matchId))
-    .limit(1);
-  return rows.length > 0;
+    .where(inArray(matches.matchId, matchIds));
+  return new Map(rows.map((row) => [row.matchId, row.data]));
 }
 
 /**

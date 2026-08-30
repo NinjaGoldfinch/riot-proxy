@@ -1,7 +1,9 @@
 import './helpers/env.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { probeServices } from './helpers/services.js';
 import { buildApp, type App } from '../src/app.js';
 import { closeDb, pingDb } from '../src/db/index.js';
+import { hashKey } from '../src/db/consumers.js';
 import {
   createTestConsumer,
   removeTestConsumers,
@@ -23,12 +25,10 @@ let adminKey = '';
 let available = false;
 
 beforeAll(async () => {
-  try {
+  available = await probeServices('app.test.ts', async () => {
     await redis.ping();
-    available = await pingDb();
-  } catch {
-    available = false;
-  }
+    return pingDb();
+  });
   if (!available) return;
 
   const read = await createTestConsumer({ name: testConsumerName('read'), scopes: ['read'] });
@@ -262,6 +262,144 @@ describe('http surface', () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ ok: true, deleted: expect.any(Number) });
+  });
+});
+
+/**
+ * `revoke-cache` names a consumer in the path and a key in the body. It used to
+ * act on the body alone, validating `:id` and then never reading it — so any
+ * uuid revoked any hash, and `stillActive` answered about whichever key was
+ * passed rather than about the consumer in the URL. Admin-scoped and
+ * IP-allowlisted, so this was coherence rather than a way in (#56).
+ */
+describe('admin revoke-cache (§12.1)', () => {
+  const create = async (name: string) => {
+    const res = await app!.inject({
+      method: 'POST',
+      url: '/v1/admin/consumers',
+      headers: auth(adminKey),
+      payload: { name: testConsumerName(name), quotaPerMin: 10 },
+    });
+    const body = res.json() as { id: string; key: string };
+    trackTestConsumer(body.id);
+    return body;
+  };
+
+  const revoke = (id: string, keyHash: string) =>
+    app!.inject({
+      method: 'POST',
+      url: `/v1/admin/consumers/${id}/revoke-cache`,
+      headers: auth(adminKey),
+      payload: { keyHash },
+    });
+
+  it('drops the auth cache entry for a key that is that consumer’s', async ({ skip }) => {
+    if (!available || !app) return skip();
+    const consumer = await create('revoke-match');
+
+    const res = await revoke(consumer.id, hashKey(consumer.key));
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, id: consumer.id, stillActive: true });
+  });
+
+  it('refuses a hash that belongs to a different consumer', async ({ skip }) => {
+    if (!available || !app) return skip();
+    const [mine, theirs] = [await create('revoke-mine'), await create('revoke-theirs')];
+
+    const res = await revoke(mine.id, hashKey(theirs.key));
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error.code).toBe('NOT_FOUND');
+  });
+
+  it('reports a revoked consumer as no longer active', async ({ skip }) => {
+    if (!available || !app) return skip();
+    const consumer = await create('revoke-disabled');
+    await app.inject({
+      method: 'DELETE',
+      url: `/v1/admin/consumers/${consumer.id}`,
+      headers: auth(adminKey),
+    });
+
+    const res = await revoke(consumer.id, hashKey(consumer.key));
+    // The row survives the soft delete, so the pair still matches — and the
+    // answer the caller wanted is that the key is dead.
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ stillActive: false });
+  });
+});
+
+/**
+ * `/v1/admin/debug/cache` reports what is stored for a built request without
+ * fetching it. Its scope used to be cast rather than checked, so a value that
+ * was neither a platform nor a region built a nonsense host and answered with
+ * the cache key of a request that could not exist (#56).
+ */
+describe('admin debug routes', () => {
+  const inspect = (query: string) =>
+    app!.inject({ method: 'GET', url: `/v1/admin/debug/cache?${query}`, headers: auth(adminKey) });
+
+  it('reports a miss for a request nothing has cached', async ({ skip }) => {
+    if (!available || !app) return skip();
+    const res = await inspect(
+      'scope=euw1&path=/lol/summoner/v4/summoners/by-puuid/x&method=summoner.byPuuid',
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ present: false, ageSeconds: null, stale: null });
+    expect(res.json().key).toContain('summoner.byPuuid');
+  });
+
+  it('accepts a region as well as a platform', async ({ skip }) => {
+    if (!available || !app) return skip();
+    const res = await inspect('scope=europe&path=/lol/match/v5/matches/EUW1_1&method=match.byId');
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('refuses a scope that is neither, rather than keying a fictional host', async ({ skip }) => {
+    if (!available || !app) return skip();
+    const res = await inspect(
+      'scope=narnia&path=/lol/status/v4/platform-data&method=status.platformData',
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe('BAD_REGION');
+  });
+
+  it('rejects an unknown method before building anything', async ({ skip }) => {
+    if (!available || !app) return skip();
+    const res = await inspect('scope=euw1&path=/whatever&method=not.a.method');
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe('VALIDATION');
+  });
+
+  it('refuses a debug passthrough path that is not a path', async ({ skip }) => {
+    if (!available || !app) return skip();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/admin/debug/riot?scope=euw1&path=lol/status/v4/platform-data',
+      headers: auth(adminKey),
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe('VALIDATION');
+  });
+});
+
+describe('admin stats', () => {
+  it('counts the archive and this key scope’s tracked players', async ({ skip }) => {
+    if (!available || !app) return skip();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/admin/stats',
+      headers: auth(adminKey),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      keyScope: expect.any(String),
+      archivedMatches: expect.any(Number),
+      trackedPlayers: expect.any(Number),
+    });
+    expect(res.json().trackedPlayers).toBeGreaterThanOrEqual(0);
   });
 });
 

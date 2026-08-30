@@ -13,7 +13,8 @@ import { closeRedis, redis } from '../redis.js';
 
 const USAGE = `Usage: npm run reset:cache [-- --limiter] [--all]
 
-  (default)   cached responses, negative markers and single-flight locks
+  (default)   cached responses, negative markers, single-flight locks and
+              announced rate-limit waiters
   --limiter   also the learned rate-limit buckets and their config
   --all       FLUSHDB: the above plus BullMQ queues, consumer quotas, the
               auth cache and worker poll state, for every key scope
@@ -58,9 +59,19 @@ async function main(): Promise<void> {
     return;
   }
 
-  const patterns = [`c:${KEY_SCOPE}:*`, `neg:${KEY_SCOPE}:*`, `sf:c:${KEY_SCOPE}:*`];
-  // Limiter keys carry the scope in the middle of the key, not at the front:
-  // `rl:app:{version}:{scope}:...`. One glob covers every rl: shape.
+  const patterns = [
+    `c:${KEY_SCOPE}:*`,
+    `neg:${KEY_SCOPE}:*`,
+    `sf:c:${KEY_SCOPE}:*`,
+    // Announced interactive waiters are in-flight state, not learned limiter
+    // config: they describe requests this process is serving right now, so a
+    // reset should take them the way it takes the single-flight locks beside
+    // them. Grouping them with `--limiter` made the obvious local remedy for a
+    // stuck scope the one flag nobody would think to pass.
+    `rl:waiters:${KEY_SCOPE}:*`,
+  ];
+  // The rest of the limiter's keys carry the scope in the middle, not at the
+  // front: `rl:app:{version}:{scope}:...`. One glob covers every rl: shape.
   if (values.limiter) patterns.push(`rl:*${KEY_SCOPE}*`);
 
   let total = 0;

@@ -1,5 +1,6 @@
 import './helpers/env.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { probeServices } from './helpers/services.js';
 import { buildApp, type App } from '../src/app.js';
 import { closeDb, pingDb } from '../src/db/index.js';
 import { closeRedis, redis } from '../src/redis.js';
@@ -69,12 +70,10 @@ const operations = (d: Record<string, any>): string[] =>
     .sort();
 
 beforeAll(async () => {
-  try {
+  available = await probeServices('docs-document.test.ts', async () => {
     await redis.ping();
-    available = await pingDb();
-  } catch {
-    available = false;
-  }
+    return pingDb();
+  });
   if (!available) return;
   app = await buildApp();
   await app.ready();

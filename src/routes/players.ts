@@ -1,11 +1,13 @@
 import { Type, type Static } from '@sinclair/typebox';
 import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import { config } from '../config.js';
+import { getArchivedMatches } from '../db/matches.js';
 import { upsertPlayer } from '../db/players.js';
 import { ProxyError } from '../errors.js';
 import { fetcher, type FetchResult } from '../fetcher.js';
 import { enqueueBackfill } from '../jobs/queues.js';
 import { logger } from '../logger.js';
+import { recordCacheOutcome } from '../metrics.js';
 import { redis } from '../redis.js';
 import { build } from '../riot/endpoints.js';
 import {
@@ -407,6 +409,28 @@ async function maybeBackfill(opts: {
 
 type MatchPageBody = Static<typeof MatchPageResponseSchema>;
 
+/**
+ * The page's archived matches in one query.
+ *
+ * Reaching around `Fetcher.readArchive` is the awkward part, and it is confined
+ * to here: this route already knows these ids are matches, and it is the only
+ * one whose fan-out multiplies a single request into a page's worth of archive
+ * lookups. Everything this misses still goes through the fetcher, archive check
+ * included, so the fan-out's behaviour is unchanged — only its cost is.
+ *
+ * A degraded archive must not fail a page, exactly as in `readArchive`: an
+ * unreachable Postgres reads as "nothing primed" and every match falls through.
+ */
+async function readArchivedPage(matchIds: string[]): Promise<Map<string, unknown>> {
+  if (matchIds.length === 0) return new Map();
+  try {
+    return await getArchivedMatches(matchIds);
+  } catch (err) {
+    logger.warn({ err, matches: matchIds.length }, 'batched archive read failed');
+    return new Map();
+  }
+}
+
 async function composeMatches(opts: {
   platform: Platform;
   puuid: string;
@@ -433,8 +457,20 @@ async function composeMatches(opts: {
 
   const backfill = await maybeBackfill({ puuid, platform, start });
 
+  // Ask the archive for the whole page at once, then fan out over what it did
+  // not have. A hit here is the same answer `Fetcher` would have produced from
+  // the archive itself — immutable, so age zero — for a twentieth of the
+  // queries (#54).
+  const archived = await readArchivedPage(matchIds);
   const settled = await Promise.allSettled(
-    matchIds.map((id) => fetcher.fetch(build.matchById(region, id))),
+    matchIds.map((id) => {
+      const stored = archived.get(id);
+      if (stored === undefined) return fetcher.fetch(build.matchById(region, id));
+      // The read the fetcher would have counted, counted here instead: the
+      // cache hit rate §13 watches must not drop because the query moved.
+      recordCacheOutcome('hit');
+      return Promise.resolve({ data: stored, cache: 'HIT' as const, ageSeconds: 0 });
+    }),
   );
 
   const warnings: string[] = [];

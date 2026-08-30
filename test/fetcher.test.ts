@@ -36,6 +36,12 @@ const SPECTATOR = build.activeGame('euw1', 'PUUID-TEST');
 
 beforeEach(() => redis.reset());
 
+/** The cache keys currently written, read off the store rather than rebuilt. */
+async function cacheKeys(): Promise<string[]> {
+  const [, keys] = await redis.scan('0', 'MATCH', 'c:*', 'COUNT', 500);
+  return keys;
+}
+
 describe('fetcher read path (§3.2)', () => {
   it('reports MISS then HIT, and only calls upstream once', async () => {
     const { fetcher, calls } = makeFetcher(async () => ({ level: 1 }));
@@ -129,6 +135,37 @@ describe('fetcher read path (§3.2)', () => {
     expect(err).toBeInstanceOf(ProxyError);
     expect(err.code).toBe('RATE_LIMITED');
     expect(err.retryAfter).toBe(5);
+  });
+
+  it('reports a re-fetch that changed nothing at the age it already had', async () => {
+    // A miss that goes upstream and comes back identical has not learnt
+    // anything new, and `X-Cache-Age` has to keep saying so. The age used to be
+    // read back off the key for this — a third GET of a value the process was
+    // already holding.
+    const { fetcher, store } = makeFetcher(async () => ({ level: 1 }));
+
+    await fetcher.fetch(REQ);
+
+    // Age the entry: rewind the stored epoch a minute, as a quiet hour would.
+    const key = (await cacheKeys())[0]!;
+    const env = JSON.parse((await redis.get(key)) as string) as { a: number };
+    await redis.set(key, JSON.stringify({ ...env, a: env.a - 60_000 }));
+
+    // Straight past the cache, so this goes upstream — and gets the same
+    // payload back, which the store recognises and keeps the epoch for.
+    const refreshed = await fetcher.fetch(REQ, { bypassCache: true });
+    expect(refreshed.cache).toBe('MISS');
+    expect(refreshed.ageSeconds).toBe(60);
+    expect((await store.get(key))?.ageSeconds).toBe(60);
+  });
+
+  it('reports age zero when the payload actually changed', async () => {
+    let n = 0;
+    const { fetcher } = makeFetcher(async () => ({ n: (n += 1) }));
+
+    await fetcher.fetch(REQ);
+    const second = await fetcher.fetch(REQ, { bypassCache: true });
+    expect(second.ageSeconds).toBe(0);
   });
 
   it('sanitises an upstream auth failure into UPSTREAM_ERROR (§12.2)', async () => {

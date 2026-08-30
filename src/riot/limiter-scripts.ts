@@ -23,11 +23,17 @@
  * Time comes from Redis rather than the caller so several api instances agree
  * on the window even when their clocks do not.
  *
+ * Interactive waiters are announced here too (§9.3), as members of a sorted set
+ * scored by their own expiry. That is the same shape as the buckets, and for
+ * the same reason: an entry that nothing renews ages out on its own, so a
+ * caller killed mid-wait cannot leave a bulk-blocking waiter behind forever.
+ *
  * KEYS[1]                            frozen-scope marker for this region
+ * KEYS[2]                            interactive waiters for this region
  * ARGV[1]                            priority: 'interactive' | 'bulk'
  * ARGV[2]                            bulk usage ceiling, 0..1 (§9.3)
- * ARGV[3]                            current interactive waiter count
- * ARGV[4]                            token unique to this acquisition
+ * ARGV[3]                            token unique to this acquisition
+ * ARGV[4]                            how long an announced waiter stands, ms
  * ARGV[5]                            number of buckets
  * ARGV[6+3i], ARGV[7+3i], ARGV[8+3i] bucket key, limit, window seconds
  *
@@ -36,16 +42,32 @@
  */
 export const ACQUIRE_SCRIPT = `
 local frozen_key   = KEYS[1]
+local waiters_key  = KEYS[2]
 local priority     = ARGV[1]
 local ceiling      = tonumber(ARGV[2])
-local waiters      = tonumber(ARGV[3])
-local token        = ARGV[4]
+local token        = ARGV[3]
+local waiter_ttl   = tonumber(ARGV[4])
 local bucket_count = tonumber(ARGV[5])
 
 local t      = redis.call('TIME')
 local now_ms = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
 
--- 1. A frozen scope beats everything: Riot told us to wait (§9.4).
+-- 1. Waiter bookkeeping (§9.3). An interactive caller announces itself and
+--    renews that announcement on every attempt it makes; a bulk caller drops
+--    whatever has aged out and counts what is left. The renewal is what makes
+--    the expiry safe: only this member's own score is refreshed, so unrelated
+--    interactive traffic can no longer hold a dead caller's slot open the way
+--    it held the counter's TTL open.
+local waiters = 0
+if priority == 'interactive' then
+  redis.call('ZADD', waiters_key, now_ms + waiter_ttl, token)
+  redis.call('PEXPIRE', waiters_key, waiter_ttl + 5000)
+else
+  redis.call('ZREMRANGEBYSCORE', waiters_key, '-inf', now_ms)
+  waiters = redis.call('ZCARD', waiters_key)
+end
+
+-- 2. A frozen scope beats everything: Riot told us to wait (§9.4).
 local frozen_ttl = redis.call('PTTL', frozen_key)
 if frozen_ttl > 0 then
   return { 0, frozen_ttl, 'frozen' }
@@ -66,7 +88,7 @@ local function wait_for_slot(key, window_ms)
   return wait
 end
 
--- 2. Bulk fairness (§9.3): bulk work yields to interactive traffic and refuses
+-- 3. Bulk fairness (§9.3): bulk work yields to interactive traffic and refuses
 --    to push any bucket past the ceiling.
 if priority == 'bulk' then
   if waiters > 0 then
@@ -83,7 +105,7 @@ if priority == 'bulk' then
   end
 end
 
--- 3. Take one slot in every bucket, rolling back on the first refusal so a
+-- 4. Take one slot in every bucket, rolling back on the first refusal so a
 --    partial acquisition can never leak slots.
 local taken = {}
 for i = 0, bucket_count - 1 do

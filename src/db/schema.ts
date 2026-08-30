@@ -105,4 +105,3 @@ export type Consumer = typeof consumers.$inferSelect;
 export type NewConsumer = typeof consumers.$inferInsert;
 export type Player = typeof players.$inferSelect;
 export type NewPlayer = typeof players.$inferInsert;
-export type MatchRow = typeof matches.$inferSelect;

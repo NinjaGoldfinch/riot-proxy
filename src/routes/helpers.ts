@@ -12,8 +12,3 @@ export function send<T>(reply: FastifyReply, result: FetchResult<T>): T {
   applyCacheHeaders(reply, result.cache, result.ageSeconds);
   return result.data;
 }
-
-/** Route-level tag used by the request metric label, kept short and stable. */
-export function routeLabel(url: string | undefined): string {
-  return url ?? 'unknown';
-}

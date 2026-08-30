@@ -1,6 +1,7 @@
 import './helpers/env.js';
 import { Redis } from 'ioredis';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { requireServices } from './helpers/services.js';
 import { KEY_SCOPE } from '../src/config.js';
 import { registry } from '../src/metrics.js';
 import { RateLimitBudgetExceeded, RateLimiter, delay } from '../src/riot/limiter.js';
@@ -23,6 +24,7 @@ beforeAll(async () => {
   } catch {
     available = false;
   }
+  requireServices(available, 'limiter-redis.test.ts');
 });
 
 afterAll(async () => {
@@ -239,6 +241,83 @@ describe.runIf(process.env['SKIP_REDIS_TESTS'] !== '1')('rate limiter against Re
 
     // Interactive traffic still gets the remaining tokens.
     await expect(limiter.acquire(SCOPE, 'm', { waitBudgetMs: 0 })).resolves.toBeDefined();
+  });
+
+  /**
+   * The interactive waiter count is what makes bulk work stand aside (§9.3),
+   * and it used to be a counter with a sliding TTL: `INCR`, then `EXPIRE 60`
+   * re-armed by every later interactive request. A process killed between the
+   * increment and its `finally` left the count one too high, and on a service
+   * with interactive traffic more often than once a minute — the state in which
+   * the leak happens — the key never expired, so every bulk acquisition on that
+   * scope returned `interactive-queue-busy` for good. Nothing errored: polling,
+   * backfill and archive writes for that platform simply stopped.
+   */
+  describe('announced interactive waiters (§9.3)', () => {
+    const waiters = `rl:waiters:${KEY_SCOPE}:${SCOPE}`;
+
+    it('holds bulk back while an interactive request is actually queueing', async ({ skip }) => {
+      if (!available) return skip();
+      const limiter = new RateLimiter(redis);
+      await redis.set(`rl:cfg:app:${KEY_SCOPE}:${SCOPE}`, '1:10');
+      limiter.clearLocalConfig();
+
+      // One interactive caller in flight, still waiting for the window.
+      await limiter.acquire(SCOPE, 'm', { waitBudgetMs: 0 });
+      const queueing = limiter.acquire(SCOPE, 'm', { waitBudgetMs: 1500 });
+      await delay(150);
+      expect(await redis.zcard(waiters)).toBe(1);
+
+      await expect(
+        limiter.acquire(SCOPE, 'm', { priority: 'bulk', waitBudgetMs: 0 }),
+      ).rejects.toBeInstanceOf(RateLimitBudgetExceeded);
+
+      await queueing.catch(() => undefined);
+      // And withdraws itself on the way out, however it left.
+      expect(await redis.zcard(waiters)).toBe(0);
+    }, 10_000);
+
+    it('recovers from a waiter leaked by a killed process, under live traffic', async ({
+      skip,
+    }) => {
+      if (!available) return skip();
+      const limiter = new RateLimiter(redis);
+      await redis.set(`rl:cfg:app:${KEY_SCOPE}:${SCOPE}`, '100:10');
+      limiter.clearLocalConfig();
+
+      // A waiter whose process is gone: announced, never withdrawn. Its expiry
+      // is a second from now, which is what a SIGKILL leaves behind.
+      const now = Date.now();
+      await redis.zadd(waiters, now + 1000, 'orphan-from-a-dead-pod');
+      await expect(
+        limiter.acquire(SCOPE, 'm', { priority: 'bulk', waitBudgetMs: 0 }),
+      ).rejects.toBeInstanceOf(RateLimitBudgetExceeded);
+
+      // Interactive traffic keeps arriving throughout, which is exactly what
+      // used to keep the leaked count alive: each request re-armed the key's
+      // TTL. Nothing here refreshes the orphan's own score.
+      for (let i = 0; i < 4; i += 1) {
+        await limiter.acquire(SCOPE, 'm', { waitBudgetMs: 0 });
+        await delay(300);
+      }
+
+      await expect(
+        limiter.acquire(SCOPE, 'm', { priority: 'bulk', waitBudgetMs: 0 }),
+      ).resolves.toBeDefined();
+      expect(await redis.zcard(waiters)).toBe(0);
+    }, 10_000);
+
+    it('does not count bulk callers as waiters, so they cannot block each other', async ({
+      skip,
+    }) => {
+      if (!available) return skip();
+      const limiter = new RateLimiter(redis);
+      await redis.set(`rl:cfg:app:${KEY_SCOPE}:${SCOPE}`, '100:10');
+      limiter.clearLocalConfig();
+
+      await limiter.acquire(SCOPE, 'm', { priority: 'bulk', waitBudgetMs: 0 });
+      expect(await redis.zcard(waiters)).toBe(0);
+    });
   });
 
   it('learns limits from response headers and absorbs external usage (§9.1)', async ({ skip }) => {

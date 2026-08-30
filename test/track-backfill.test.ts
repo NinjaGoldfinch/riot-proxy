@@ -1,5 +1,6 @@
 import './helpers/env.js';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { probeServices } from './helpers/services.js';
 import type { BackfillPlayerJob } from '../src/jobs/queues.js';
 import type { UpsertPlayerInput } from '../src/db/players.js';
 import type { Player } from '../src/db/schema.js';
@@ -69,12 +70,10 @@ const track = (body: Record<string, unknown>) => ({
 });
 
 beforeAll(async () => {
-  try {
+  available = await probeServices('track-backfill.test.ts', async () => {
     await redis.ping();
-    available = await pingDb();
-  } catch {
-    available = false;
-  }
+    return pingDb();
+  });
   if (!available) return;
 
   const consumer = await createTestConsumer({
