@@ -46,11 +46,15 @@ export async function buildApp() {
     keyGenerator: (request) => request.consumer?.id ?? request.ip,
     // Health and metrics must stay reachable when a consumer is over quota.
     allowList: (request) => Boolean(request.routeOptions.config?.public),
+    // The plugin *throws* whatever this returns rather than sending it as a
+    // body, so it has to be the error itself. Returning `.toEnvelope()` handed
+    // the error handler a bare object, which `toProxyError` cannot recognise —
+    // and every over-quota request came back as a 500.
     errorResponseBuilder: (_request, context) => {
       const retryAfter = Math.ceil(Number(context.ttl) / 1000);
       return new ProxyError('QUOTA_EXCEEDED', `Quota of ${context.max}/min exceeded`, {
         retryAfter,
-      }).toEnvelope();
+      });
     },
   });
 

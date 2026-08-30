@@ -167,6 +167,32 @@ describe('http surface', () => {
     expect(res.json().error.code).toBe('NOT_FOUND');
   });
 
+  /**
+   * §12.1 / FR-13. Every other 429 assertion in this suite covers Riot's
+   * upstream limiter, which is a different mechanism — so the consumer-quota
+   * response went unchecked, and returned a 500 for as long as it has existed.
+   */
+  it('answers 429 QUOTA_EXCEEDED once a consumer spends its quota (§12.1)', async ({ skip }) => {
+    if (!available || !app) return skip();
+    const limited = await createTestConsumer({
+      name: testConsumerName('quota'),
+      scopes: ['read', 'admin'],
+      quotaPerMin: 2,
+    });
+    // A route that costs nothing upstream: the quota is what is under test.
+    const spend = () =>
+      app!.inject({ method: 'GET', url: '/v1/admin/stats', headers: auth(limited?.key ?? '') });
+
+    expect((await spend()).statusCode).toBe(200);
+    expect((await spend()).statusCode).toBe(200);
+
+    const denied = await spend();
+    expect(denied.statusCode).toBe(429);
+    expect(denied.json().error.code).toBe('QUOTA_EXCEEDED');
+    // Without Retry-After a client has nothing to back off against.
+    expect(Number(denied.headers['retry-after'])).toBeGreaterThan(0);
+  });
+
   it('creates and revokes a consumer through the admin surface (FR-14)', async ({ skip }) => {
     if (!available || !app) return skip();
     const created = await app.inject({
