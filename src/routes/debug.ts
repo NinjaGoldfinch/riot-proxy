@@ -97,7 +97,17 @@ const debugRoutes: FastifyPluginAsync = async (fastify) => {
         method: string;
       };
       const lower = scope.toLowerCase();
-      const host = isRegion(lower) ? regionHost(lower) : platformHost(lower as never);
+      // Same three lines as the sibling route above. `as never` silenced the
+      // compiler for a value nothing had checked, so a scope that is neither a
+      // platform nor a region built a nonsense host and reported the cache key
+      // of a request that could not exist.
+      const host = isRegion(lower)
+        ? regionHost(lower)
+        : isPlatform(lower)
+          ? platformHost(lower)
+          : undefined;
+      if (!host) throw ProxyError.badRegion(`'${scope}' is neither a platform nor a region`);
+
       const key = cacheKey({
         method: method as MethodId,
         host,

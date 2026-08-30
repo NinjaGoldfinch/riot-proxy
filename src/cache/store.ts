@@ -11,9 +11,6 @@ import { scopedPurgePattern } from './keys.js';
  */
 export const STALE_MULTIPLIER = 4;
 
-/** Immutable payloads (matches, timelines) never expire out of Redis. */
-export const NO_EXPIRY = Infinity;
-
 /** Redis caps EXPIRE at ~68 years; anything beyond a month is effectively forever. */
 const MAX_TTL_SECONDS = 30 * 24 * 3600;
 
@@ -70,6 +67,9 @@ export class CacheStore {
   /**
    * @param ttlSeconds soft TTL. Hard TTL (Redis expiry) is `ttl × STALE_MULTIPLIER`
    *        when stale-while-revalidate is on, otherwise the soft TTL itself.
+   * @returns the epoch this content was first seen with — what `X-Cache-Age`
+   *          is measured from. Handed back so a caller that has just written
+   *          does not have to read the key again to learn it.
    *
    * A re-fetch that comes back byte-identical keeps the timestamp the content
    * was first seen with. `X-Cache-Age` then answers "how old is this data",
@@ -78,10 +78,18 @@ export class CacheStore {
    * news. Expiry is driven by `s` and the Redis TTL, both set from `now`, so
    * holding `a` back never keeps an entry alive or makes it stale early.
    */
-  async set<T>(key: string, value: T, ttlSeconds: number): Promise<void> {
+  async set<T>(key: string, value: T, ttlSeconds: number): Promise<number> {
     const now = Date.now();
     const immutable = !Number.isFinite(ttlSeconds);
-    const firstSeen = (await this.unchangedSince(key, value)) ?? now;
+
+    // Only a mutable payload can come back different from what is already
+    // stored, so only a mutable payload needs the read-back that decides. An
+    // immutable one has `s: null` and an `a` nothing consults for staleness —
+    // the archive path reports it as age zero regardless — so asking would
+    // spend a GET, a parse and two serialisations of a several-hundred-kilobyte
+    // match to compute a timestamp no reader ever sees. Backfill drives that
+    // over a whole history.
+    const firstSeen = immutable ? now : ((await this.unchangedSince(key, value)) ?? now);
 
     const env: Envelope<T> = {
       v: value,
@@ -92,13 +100,14 @@ export class CacheStore {
 
     if (immutable) {
       await this.redis.set(key, payload, 'EX', MAX_TTL_SECONDS);
-      return;
+      return firstSeen;
     }
 
     const hardTtl = config.STALE_WHILE_REVALIDATE
       ? Math.ceil(ttlSeconds * STALE_MULTIPLIER)
       : Math.ceil(ttlSeconds);
     await this.redis.set(key, payload, 'EX', Math.max(1, Math.min(hardTtl, MAX_TTL_SECONDS)));
+    return firstSeen;
   }
 
   /**

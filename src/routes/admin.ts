@@ -6,11 +6,11 @@ import { config } from '../config.js';
 import {
   createConsumer,
   disableConsumer,
-  findConsumerByHash,
+  findConsumerByIdAndHash,
   listConsumers,
 } from '../db/consumers.js';
 import { countArchivedMatches } from '../db/matches.js';
-import { listPlayers, setTracked, upsertPlayer } from '../db/players.js';
+import { countTrackedPlayers, listPlayers, setTracked, upsertPlayer } from '../db/players.js';
 import { ProxyError } from '../errors.js';
 import { fetcher } from '../fetcher.js';
 import { logger } from '../logger.js';
@@ -319,11 +319,20 @@ const adminRoutes: FastifyPluginAsync = async (fastify) => {
     async () => ({
       keyScope: config.KEY_SCOPE,
       archivedMatches: await countArchivedMatches(),
-      trackedPlayers: (await listPlayers()).filter((p) => p.tracked).length,
+      trackedPlayers: await countTrackedPlayers(),
     }),
   );
 
-  /** Revoking a key must take effect immediately, not after the 300 s auth TTL. */
+  /**
+   * Revoking a key must take effect immediately, not after the 300 s auth TTL.
+   *
+   * The path names the consumer and the body names the key, and the two have to
+   * agree: the handler used to read the body alone, so any uuid revoked any
+   * hash and `stillActive` was an answer about whatever key was passed rather
+   * than about the consumer in the URL. Admin-scoped and IP-allowlisted, so
+   * this was never a way in — but the route promised a relationship it did not
+   * enforce, and now it enforces it.
+   */
   fastify.post(
     '/v1/admin/consumers/:id/revoke-cache',
     {
@@ -336,10 +345,14 @@ const adminRoutes: FastifyPluginAsync = async (fastify) => {
       },
     },
     async (request) => {
+      const { id } = request.params as { id: string };
       const { keyHash } = request.body as { keyHash: string };
-      const exists = await findConsumerByHash(keyHash);
+
+      const consumer = await findConsumerByIdAndHash(id, keyHash);
+      if (!consumer) throw ProxyError.notFound('No consumer with that id and key hash');
+
       await invalidateAuthCache(keyHash);
-      return { ok: true, stillActive: Boolean(exists) };
+      return { ok: true, id, stillActive: consumer.disabledAt === null };
     },
   );
 };

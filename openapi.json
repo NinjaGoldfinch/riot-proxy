@@ -4065,8 +4065,10 @@
           {
             "schema": {
               "maxLength": 20,
+              "pattern": "^[0-9]+(\\.[0-9]+)*$",
               "type": "string"
             },
+            "example": "16.17.1",
             "in": "query",
             "name": "version",
             "required": false
@@ -4081,14 +4083,12 @@
                 "summoner",
                 "profileicon",
                 "map",
-                "queue",
                 "champions",
                 "items",
                 "runes",
                 "summoner-spells",
                 "profile-icons",
-                "maps",
-                "queues"
+                "maps"
               ]
             },
             "in": "path",

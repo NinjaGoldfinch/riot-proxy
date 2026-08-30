@@ -1,5 +1,6 @@
 import './helpers/env.js';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { probeServices } from './helpers/services.js';
 import type { BuiltRequest, MethodId } from '../src/riot/endpoints.js';
 import { ProxyError } from '../src/errors.js';
 
@@ -35,11 +36,34 @@ vi.mock('../src/fetcher.js', async (importOriginal) => {
   };
 });
 
+/**
+ * The archive read the match page primes itself with (#54). Empty by default,
+ * so every other test in this file exercises the fan-out exactly as before;
+ * the ids each call asked for are recorded, because "one query, not twenty" is
+ * the thing being fixed and is otherwise invisible from the response.
+ */
+const archiveQueries: string[][] = [];
+let archivedMatches = new Map<string, unknown>();
+
+vi.mock('../src/db/matches.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/db/matches.js')>();
+  return {
+    ...actual,
+    getArchivedMatches: async (ids: string[]) => {
+      archiveQueries.push(ids);
+      return new Map(
+        ids.filter((id) => archivedMatches.has(id)).map((id) => [id, archivedMatches.get(id)]),
+      );
+    },
+  };
+});
+
 const { buildApp } = await import('../src/app.js');
 const { closeDb, pingDb } = await import('../src/db/index.js');
 const { closeRedis, redis } = await import('../src/redis.js');
 const { config } = await import('../src/config.js');
 const { wsHub } = await import('../src/ws/index.js');
+const { registry } = await import('../src/metrics.js');
 const { createTestConsumer, removeTestConsumers, testConsumerName } =
   await import('./helpers/consumers.js');
 
@@ -52,12 +76,10 @@ const auth = () => ({ authorization: `Bearer ${key}` });
 const methodsCalled = () => calls.map((c) => c.method);
 
 beforeAll(async () => {
-  try {
+  available = await probeServices('players-composite.test.ts', async () => {
     await redis.ping();
-    available = await pingDb();
-  } catch {
-    available = false;
-  }
+    return pingDb();
+  });
   if (!available) return;
 
   const consumer = await createTestConsumer({
@@ -80,6 +102,8 @@ afterAll(async () => {
 beforeEach(async () => {
   calls.length = 0;
   bypassFlags.length = 0;
+  archiveQueries.length = 0;
+  archivedMatches = new Map();
   replies = new Map();
   if (available) {
     // Each test starts with the refresh window open.
@@ -87,6 +111,14 @@ beforeEach(async () => {
     if (keys.length) await redis.del(...keys);
   }
 });
+
+/** `proxy_cache_reads_total{state="hit"}`, across every label set. */
+async function cacheHits(): Promise<number> {
+  const metric = await registry.getSingleMetric('proxy_cache_reads_total')?.get();
+  return (metric?.values ?? [])
+    .filter((v) => v.labels['state'] === 'hit')
+    .reduce((sum, v) => sum + v.value, 0);
+}
 
 const bypassed = (method: MethodId) =>
   calls.filter((c) => c.method === method).length > 0 &&
@@ -329,6 +361,72 @@ describe('composite match page (§6.3)', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json().matches).toHaveLength(1);
     expect(res.json().warnings).toEqual([expect.stringContaining('match OC1_2 unavailable')]);
+  });
+
+  /**
+   * Paging a history is affordable *because* matches are archived — but the
+   * fan-out asked the archive for them one at a time, so a fully archived page
+   * of twenty issued twenty single-row queries against a pool of ten, and half
+   * of them waited on the other half before the page could be assembled (#54).
+   */
+  it('asks the archive for the whole page in one query', async ({ skip }) => {
+    if (!available || !app) return skip();
+    const ids = Array.from({ length: 20 }, (_, i) => `OC1_${i}`);
+    replies.set('match.idsByPuuid', { data: ids });
+    archivedMatches = new Map(ids.map((id) => [id, riotMatch(id)]));
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/v1/players/${PUUID}/matches?platform=oc1&count=20`,
+      headers: auth(),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().matches).toHaveLength(20);
+    expect(archiveQueries).toEqual([ids]);
+    // Nothing was left for the fetcher: an archived match is the answer.
+    expect(methodsCalled()).not.toContain('match.byId');
+  });
+
+  it('still counts each archived match as a cache hit', async ({ skip }) => {
+    if (!available || !app) return skip();
+    const ids = ['OC1_1', 'OC1_2'];
+    replies.set('match.idsByPuuid', { data: ids });
+    archivedMatches = new Map(ids.map((id) => [id, riotMatch(id)]));
+    const before = await cacheHits();
+
+    await app.inject({
+      method: 'GET',
+      url: `/v1/players/${PUUID}/matches?platform=oc1&count=2`,
+      headers: auth(),
+    });
+
+    // The fetcher counted these when it made the query; moving the query must
+    // not quietly drop the hit rate §13 watches.
+    expect(await cacheHits()).toBe(before + 2);
+  });
+
+  it('fans out for exactly the matches the archive did not have', async ({ skip }) => {
+    if (!available || !app) return skip();
+    page(['OC1_1', 'OC1_2', 'OC1_3']);
+    archivedMatches = new Map([['OC1_2', riotMatch('OC1_2')]]);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/v1/players/${PUUID}/matches?platform=oc1&count=3`,
+      headers: auth(),
+    });
+
+    expect(res.statusCode).toBe(200);
+    // Reassembled in id order, so `matches[]` still lines up with `matchIds[]`.
+    expect(res.json().matches.map((m: { matchId: string }) => m.matchId)).toEqual([
+      'OC1_1',
+      'OC1_2',
+      'OC1_3',
+    ]);
+    expect(
+      calls.filter((c) => c.method === 'match.byId').map((c) => c.path.split('/').pop()),
+    ).toEqual(['OC1_1', 'OC1_3']);
   });
 
   it('caps the fan-out well below match-v5’s own limit of 100', async ({ skip }) => {

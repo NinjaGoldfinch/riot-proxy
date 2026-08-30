@@ -59,6 +59,27 @@ missing. Phases refer to §15 of [the spec](docs/riot-proxy-spec.md).
       README's consumer guide is gone, replaced by a link — the endpoint table
       was hand-maintained and one forgotten row from being wrong.
 
+### From the full read of `src/`
+
+- [x] `?version=` on the static routes is a patch number and nothing else, so
+      it cannot walk out of `DDRAGON_DIR` (#51); `queue` is gone from the
+      mirror's file list, where it named a file Data Dragon does not serve (#52)
+- [x] A cache miss no longer reads back what it just wrote: immutable payloads
+      skip the unchanged-content check entirely, and the age a write computed is
+      handed to the caller instead of fetched again (#53)
+- [x] The composite match page asks the archive for its whole page in one
+      query, rather than one per match against a pool of ten (#54)
+- [x] Interactive waiters are a score-trimmed sorted set, so one leaked by a
+      killed process expires on its own instead of blocking every bulk
+      acquisition on that scope forever; `reset:cache` claims them by default
+      (#55)
+- [x] Six dead exports gone, `revoke-cache` enforces the consumer its path
+      names, the debug cache route checks its scope instead of casting it, and
+      two per-item loops became one query and one pipeline (#56)
+- [x] Coverage for the job processors, the Data Dragon mirror and the debug
+      routes, and `REQUIRE_SERVICES=1` in CI so a suite that skipped itself
+      fails instead of reading as green (#57)
+
 ## Next
 
 ### Open
@@ -79,7 +100,11 @@ missing. Phases refer to §15 of [the spec](docs/riot-proxy-spec.md).
 - [ ] No metrics for either addition — lookup-triggered backfills and refresh
       claims are only visible in the logs. Both belong in §13.
 - [ ] The dev UI hardcodes a subset of queue ids and skips summoner spells and
-      runes. Everything it needs is already in the Data Dragon mirror.
+      runes. Summoner spells and runes are already in the Data Dragon mirror;
+      queue ids are not, and never will be — they live at
+      `https://static.developer.riotgames.com/docs/lol/queues.json`, which is
+      un-versioned and outside Data Dragon (#52). Serving them needs a decision
+      about where non-patch-versioned static data lives.
 - [ ] `BULK_USAGE_CEILING` now defaults to 0.80 where §9.3 and Appendix A of
       the spec both say 75%. The spec is reproduced verbatim and was not
       edited; the deviation is deliberate and recorded in the README.

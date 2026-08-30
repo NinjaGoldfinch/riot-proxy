@@ -1,6 +1,7 @@
 import './helpers/env.js';
 import { Queue, Worker } from 'bullmq';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { probeServices } from './helpers/services.js';
 import type { Player } from '../src/db/schema.js';
 
 /**
@@ -91,12 +92,10 @@ async function drainOne(): Promise<void> {
 }
 
 beforeAll(async () => {
-  try {
+  available = await probeServices('poll-fanout.test.ts', async () => {
     await redis.ping();
-    available = true;
-  } catch {
-    available = false;
-  }
+    return true;
+  });
   // A throwaway queue: the real `poll` queue is drained by whatever worker is
   // running on this machine, which would consume the jobs mid-assertion.
   if (available) queue = new Queue(`poll-spec-${process.pid}`, { connection: redis });

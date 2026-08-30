@@ -403,14 +403,17 @@ export async function maintenance(): Promise<{ locksCleared: number }> {
   do {
     const [next, keys] = await redis.scan(cursor, 'MATCH', 'sf:*', 'COUNT', 500);
     cursor = next;
-    for (const key of keys) {
-      const ttl = await redis.pttl(key);
-      // -1 means "no expiry": a lock that outlived its PX, i.e. a leak.
-      if (ttl === -1) {
-        await redis.del(key);
-        cleared += 1;
-      }
-    }
+    if (keys.length === 0) continue;
+
+    // One pipeline per scanned page rather than a PTTL per key, serially: the
+    // scan already batches, and the round trips were the whole cost of the job.
+    const pipeline = redis.pipeline();
+    for (const key of keys) pipeline.pttl(key);
+    const ttls = await pipeline.exec();
+
+    // -1 means "no expiry": a lock that outlived its PX, i.e. a leak.
+    const orphaned = keys.filter((_, i) => Number(ttls?.[i]?.[1] ?? 0) === -1);
+    if (orphaned.length > 0) cleared += await redis.del(...orphaned);
   } while (cursor !== '0');
 
   logger.info({ locksCleared: cleared }, 'maintenance complete');

@@ -1,6 +1,7 @@
 import './helpers/env.js';
 import postgres from 'postgres';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { requireServices } from './helpers/services.js';
 import { runCli } from './helpers/cli.js';
 
 /**
@@ -40,6 +41,7 @@ beforeAll(async () => {
   } finally {
     await admin.end({ timeout: 5 });
   }
+  requireServices(available, 'reset-db.test.ts');
 
   if (!available) return;
   sql = postgres(testUrl, { max: 2, connect_timeout: 5, onnotice: () => {} });
