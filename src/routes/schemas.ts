@@ -11,7 +11,12 @@ import type {} from '@fastify/swagger';
 import { Type, type Static } from '@sinclair/typebox';
 import { ERROR_CODES } from '../errors.js';
 import { PLATFORMS, REGIONS } from '../riot/routing.js';
-import { MetricsSnapshot, type MetricsSnapshotData } from '../stats/schema.js';
+import {
+  MetricsHistoryPoint,
+  MetricsSnapshot,
+  type MetricsHistoryPointData,
+  type MetricsSnapshotData,
+} from '../stats/schema.js';
 import { MatchSummarySchema } from './match-summary.js';
 
 /**
@@ -351,6 +356,18 @@ export const AdminStatsResponse = Type.Object({
  */
 export const MetricsResponse = Type.Unsafe<MetricsSnapshotData>({ $ref: 'MetricsSnapshot#' });
 
+export const MetricsHistoryResponse = Type.Object({
+  intervalS: Type.Integer({
+    description: 'Seconds between points (`METRICS_HISTORY_INTERVAL_S`)',
+  }),
+  maxPoints: Type.Integer({
+    description: 'Retention cap — the list holds at most this many points, oldest dropped first',
+  }),
+  points: Type.Array(Type.Unsafe<MetricsHistoryPointData>({ $ref: 'MetricsHistoryPoint#' }), {
+    description: 'Oldest first',
+  }),
+});
+
 export const LimitsResponse = Type.Object({
   scope: Type.String(),
   usage: Type.Unsafe<unknown>({ description: 'Per-bucket token usage as the limiter sees it' }),
@@ -466,6 +483,7 @@ export const localErrors = {
 export const sharedSchemas = [
   ErrorResponse,
   MetricsSnapshot,
+  MetricsHistoryPoint,
   PlatformParamSchema,
   RegionParamSchema,
   GameNameParamSchema,

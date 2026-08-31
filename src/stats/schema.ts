@@ -27,6 +27,13 @@ export const QueueCounts = Type.Object({
   }),
 });
 
+/** One rate-limit window's usage, as the dashboard meters it. */
+const LimiterWindow = Type.Object({
+  window: Type.String({ description: '`limit:seconds`, as Riot states it' }),
+  used: Type.Integer(),
+  limit: Type.Integer(),
+});
+
 export const MetricsSnapshot = Type.Object(
   {
     /** Bumped only when a field changes meaning; additions do not bump it. */
@@ -63,15 +70,34 @@ export const MetricsSnapshot = Type.Object(
     limiter: Type.Array(
       Type.Object({
         scope: Type.String({ description: 'A platform or region host, e.g. `euw1`, `europe`' }),
+        // A union of literals rather than the Type.Unsafe enum the route params
+        // use: this schema is also run through Value.Check in tests, and
+        // Type.Unsafe has no Kind for the value checker to visit.
+        kind: Type.Union(
+          [Type.Literal('platform'), Type.Literal('region'), Type.Literal('other')],
+          {
+            description:
+              'Which host family the scope belongs to. `other` should never appear against the ' +
+              'real API — it means the scope string is not in the routing table.',
+          },
+        ),
+        label: Type.String({ description: 'Human-readable name, e.g. `EU West` for `euw1`' }),
         frozenMs: Type.Number({
           description: 'Time until a 429-induced freeze lifts; 0 when open',
         }),
-        windows: Type.Array(
+        windows: Type.Array(LimiterWindow, {
+          description: 'The app-level windows — the quota every call on this scope shares',
+        }),
+        methods: Type.Array(
           Type.Object({
-            window: Type.String({ description: '`limit:seconds`, as Riot states it' }),
-            used: Type.Integer(),
-            limit: Type.Integer(),
+            method: Type.String({ description: 'Endpoint id, e.g. `match.byId`' }),
+            windows: Type.Array(LimiterWindow),
           }),
+          {
+            description:
+              'Per-method windows Riot has taught this deployment, one entry per endpoint ' +
+              'that has answered on this scope',
+          },
         ),
       }),
       { description: 'One entry per rate-limit scope this deployment has talked to' },
@@ -85,3 +111,45 @@ export const MetricsSnapshot = Type.Object(
 );
 
 export type MetricsSnapshotData = Static<typeof MetricsSnapshot>;
+
+/**
+ * One point of the metrics history — a deliberately compact cut of the
+ * snapshot, recorded every `METRICS_HISTORY_INTERVAL_S` seconds into a capped
+ * Redis list so a dashboard opened cold can draw the last day, not just what
+ * it happens to witness. Queues are summed across all queues: history answers
+ * "was there a backlog at 3am", and the per-queue split for *now* is in the
+ * live snapshot.
+ */
+export const MetricsHistoryPoint = Type.Object(
+  {
+    t: Type.Integer({ description: 'Epoch milliseconds when the point was recorded' }),
+    totals: Type.Object({
+      archivedMatches: Type.Integer(),
+      trackedPlayers: Type.Integer(),
+      knownPlayers: Type.Integer(),
+    }),
+    queues: Type.Object({
+      active: Type.Integer({ description: 'Running at the instant of the point, all queues' }),
+      pending: Type.Integer({
+        description: 'waiting + prioritized + delayed, summed across queues',
+      }),
+      failed: Type.Integer(),
+    }),
+    cache: Type.Object(
+      {
+        hit: Type.Integer(),
+        miss: Type.Integer(),
+        neg: Type.Integer(),
+        stale: Type.Integer(),
+      },
+      {
+        description:
+          'Cumulative counters of the api process that recorded the point — diff consecutive ' +
+          'points for a rate, and treat a negative step as that process restarting.',
+      },
+    ),
+  },
+  { $id: 'MetricsHistoryPoint' },
+);
+
+export type MetricsHistoryPointData = Static<typeof MetricsHistoryPoint>;

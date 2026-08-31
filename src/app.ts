@@ -20,6 +20,7 @@ import riotRoutes from './routes/riot.js';
 import { sharedSchemas } from './routes/schemas.js';
 import staticRoutes from './routes/static.js';
 import { metricsBroadcaster } from './stats/broadcaster.js';
+import { metricsHistory } from './stats/history.js';
 import wsRoutes from './ws/index.js';
 
 export async function buildApp() {
@@ -126,9 +127,15 @@ export async function buildApp() {
   await app.register(debugRoutes);
   await app.register(wsRoutes);
   // The `metrics` topic's clock. Idle while nothing is subscribed, and stopped
-  // with the app so tests and write-spec runs never leave a timer behind.
+  // with the app so tests and write-spec runs never leave a timer behind. The
+  // history recorder is its always-on sibling: one compact point a minute,
+  // recorded whether or not a dashboard is open.
   metricsBroadcaster.start();
-  app.addHook('onClose', async () => metricsBroadcaster.stop());
+  metricsHistory.start();
+  app.addHook('onClose', async () => {
+    metricsBroadcaster.stop();
+    metricsHistory.stop();
+  });
   // Development-only browser client (§ none — it is a tool, not a contract).
   if (config.devUi) await app.register(devUiRoutes);
   // The operational dashboard — on in production, unlike the dev UI.
