@@ -49,6 +49,7 @@ const EXPECTED_OPERATIONS = [
   'GET /v1/admin/metrics/history',
   'GET /v1/admin/stats',
   'GET /v1/admin/tracked-players',
+  'GET /v1/lol/analytics/champions',
   'GET /v1/lol/league/apex/{platform}/{tier}/{queue}',
   'GET /v1/lol/league/entries/by-puuid/{platform}/{puuid}',
   'GET /v1/lol/league/entries/{platform}/{queue}/{tier}/{division}',
@@ -67,6 +68,7 @@ const EXPECTED_OPERATIONS = [
   'GET /v1/riot/accounts/by-riot-id/{region}/{gameName}/{tagLine}',
   'GET /v1/static/versions',
   'GET /v1/static/{file}',
+  'POST /v1/admin/analytics/champions/recompute',
   'POST /v1/admin/backfill',
   'POST /v1/admin/cache/purge',
   'POST /v1/admin/consumers',
@@ -135,6 +137,7 @@ describe('shared components (#61)', () => {
     expect(Object.keys(doc.components?.schemas ?? {}).sort()).toEqual([
       'ApexTierParam',
       'BackfillNotice',
+      'ChampionStatEntry',
       'DivisionParam',
       'ErrorResponse',
       'GameNameParam',

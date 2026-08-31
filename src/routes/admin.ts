@@ -10,6 +10,7 @@ import {
   listConsumers,
 } from '../db/consumers.js';
 import { getCrawl, finishCrawl, listCrawls } from '../db/ladder.js';
+import { assertRankedQueue } from '../riot/ladder.js';
 import { countArchivedMatches } from '../db/matches.js';
 import type { LadderCrawl } from '../db/schema.js';
 import { countTrackedPlayers, listPlayers, setTracked, upsertPlayer } from '../db/players.js';
@@ -19,7 +20,7 @@ import { logger } from '../logger.js';
 import { build } from '../riot/endpoints.js';
 import { assertPlatform, platformToAccountRegion } from '../riot/routing.js';
 import { clearCrawlState, pendingLegs } from '../jobs/ladder-state.js';
-import { startCrawl } from '../jobs/processors.js';
+import { enqueueChampionAggregate, startCrawl } from '../jobs/processors.js';
 import {
   JOB,
   enqueueBackfill,
@@ -351,6 +352,37 @@ const adminRoutes: FastifyPluginAsync = async (fastify) => {
       await clearCrawlState(id);
       logger.info({ crawlId: id, dropped }, 'ladder crawl cancelled');
       return { ok: true, crawlId: id, status: 'cancelled', droppedJobs: dropped };
+    },
+  );
+
+  /**
+   * Recompute the champion aggregates for one ladder, without waiting for a
+   * crawl to finish — for a deployment whose archive filled up by other means,
+   * or after a schema change to the aggregation itself.
+   */
+  fastify.post(
+    '/v1/admin/analytics/champions/recompute',
+    {
+      ...adminScope,
+      schema: {
+        tags: ['admin'],
+        summary: 'Recompute champion aggregates from the archive',
+        body: Type.Object({
+          platform: Type.Optional(PlatformParam),
+          queue: Type.Optional(RankedQueueParam),
+        }),
+        response: { 202: PassthroughResponse, ...localErrors },
+      },
+    },
+    async (request, reply) => {
+      const body = request.body as { platform?: string; queue?: string };
+      const platform = assertPlatform(body.platform ?? config.DEFAULT_PLATFORM);
+      const queue = assertRankedQueue(body.queue ?? config.ladderQueues[0] ?? 'RANKED_SOLO_5x5');
+
+      await enqueueChampionAggregate(platform, queue);
+      // 202 for the same reason the crawl trigger is: the answer is "it is
+      // queued", and the table scan behind it runs on the worker.
+      return reply.code(202).send({ ok: true, platform, queue });
     },
   );
 

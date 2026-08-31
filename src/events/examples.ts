@@ -1,5 +1,5 @@
 import type { EventName, ProxyEvent } from './index.js';
-import { METRICS_TOPIC, PATCH_TOPIC, playerTopic } from './topics.js';
+import { LADDER_TOPIC, METRICS_TOPIC, PATCH_TOPIC, playerTopic } from './topics.js';
 
 /**
  * One worked sample per event, for the reference (#74). §11 is documented as
@@ -51,6 +51,21 @@ export const EVENT_EXAMPLES: { [E in EventName]: ProxyEvent<E> } = {
     topic: PATCH_TOPIC,
     at: 1_756_000_000_000,
     data: { version: '15.16.1' },
+  },
+  'ladder.crawl.completed': {
+    event: 'ladder.crawl.completed',
+    // Admin-only, like the topic: these are numbers about what the proxy spent
+    // its key on, not about a player.
+    topic: LADDER_TOPIC,
+    at: 1_756_000_000_000,
+    data: {
+      crawlId: '0f2a…',
+      platform: 'euw1',
+      queue: 'RANKED_SOLO_5x5',
+      entries: 1870,
+      players: 50,
+      durationS: 42,
+    },
   },
   'metrics.snapshot': {
     event: 'metrics.snapshot',

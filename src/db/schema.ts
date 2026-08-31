@@ -200,6 +200,52 @@ export const leagueEntries = pgTable(
   ],
 );
 
+/**
+ * What the archive says, once the ladder gives it a tier (#90).
+ *
+ * Recomputed from `matches` × `match_participants` × `league_entries` rather
+ * than accumulated on archive-write: the archive is immutable, so a recompute
+ * is idempotent and needs no reconciliation, and the ladder underneath it
+ * moves — a player promoted since the last crawl should count in their new
+ * tier, which an incremental counter could never go back and fix.
+ *
+ * A table rather than a materialized view because the unit of work is one
+ * (platform, queue) — the thing a crawl finishes — and `REFRESH MATERIALIZED
+ * VIEW` has no `WHERE`: a Korean crawl completing would recompute EUW as well.
+ * The table also carries `computed_at`, which a view has nowhere to put.
+ *
+ * `patch` is `gameVersion`'s major.minor. Data Dragon's own version list is a
+ * different numbering — its third component is a Data Dragon build, not a game
+ * one — so mapping onto it would still group by major.minor and would make the
+ * aggregate depend on the mirror being present.
+ */
+export const championStats = pgTable(
+  'champion_stats',
+  {
+    keyScope: text('key_scope').notNull(),
+    platform: text('platform').notNull(),
+    queue: text('queue').notNull(),
+    tier: text('tier').notNull(),
+    patch: text('patch').notNull(),
+    championId: integer('champion_id').notNull(),
+    games: integer('games').notNull(),
+    wins: integer('wins').notNull(),
+    computedAt: timestamp('computed_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({
+      columns: [t.keyScope, t.platform, t.queue, t.tier, t.patch, t.championId],
+    }),
+    /**
+     * The read route's shape: a slice is one (platform, queue, patch) and
+     * optionally one tier, ordered by how often a champion was played. The
+     * primary key cannot serve it — `patch` sits behind `tier` there, and the
+     * common question is "this patch, all tiers".
+     */
+    index('champion_stats_slice_idx').on(t.keyScope, t.platform, t.queue, t.patch, t.tier, t.games),
+  ],
+);
+
 export type Consumer = typeof consumers.$inferSelect;
 export type NewConsumer = typeof consumers.$inferInsert;
 export type Player = typeof players.$inferSelect;
@@ -208,3 +254,4 @@ export type LadderCrawl = typeof ladderCrawls.$inferSelect;
 export type NewLadderCrawl = typeof ladderCrawls.$inferInsert;
 export type LeagueEntry = typeof leagueEntries.$inferSelect;
 export type NewLeagueEntry = typeof leagueEntries.$inferInsert;
+export type ChampionStat = typeof championStats.$inferSelect;

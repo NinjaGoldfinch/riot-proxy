@@ -9,6 +9,7 @@ import {
   upsertLeagueEntries,
   type LeagueEntryInput,
 } from '../db/ladder.js';
+import { recomputeChampionStats } from '../db/analytics.js';
 import { archiveMatch, archiveTimeline, filterUnarchived, type RiotMatch } from '../db/matches.js';
 import type { LadderCrawl } from '../db/schema.js';
 import {
@@ -19,7 +20,7 @@ import {
   setLastSeenMatch,
   upsertDiscoveredPlayers,
 } from '../db/players.js';
-import { PATCH_TOPIC, playerTopic, publish } from '../events/index.js';
+import { LADDER_TOPIC, PATCH_TOPIC, playerTopic, publish } from '../events/index.js';
 import { fetcher } from '../fetcher.js';
 import { ProxyError } from '../errors.js';
 import { logger } from '../logger.js';
@@ -59,6 +60,7 @@ import {
   jobKey,
   ladderLegId,
   ladderQueue,
+  maintenanceQueue,
   pollDedupeId,
   pollQueue,
   type ArchiveMatchJob,
@@ -605,17 +607,53 @@ async function endLeg(crawlId: string, legId: string, outcome: 'done' | 'failed'
 
   const finished = await finishCrawl(crawlId, failed ? 'failed' : 'completed');
   await clearCrawlState(crawlId);
-  if (finished) {
-    logger.info(
-      {
-        crawlId,
-        status: finished.status,
-        entries: finished.entriesSeen,
-        pages: finished.pagesFetched,
-      },
-      'ladder crawl finished',
-    );
-  }
+  if (!finished) return;
+
+  logger.info(
+    {
+      crawlId,
+      status: finished.status,
+      entries: finished.entriesSeen,
+      pages: finished.pagesFetched,
+    },
+    'ladder crawl finished',
+  );
+
+  // Only a clean run. A crawl that gave up has seen part of a ladder, and
+  // aggregating a part of one as though it were the whole thing is worse than
+  // leaving the previous numbers in place.
+  if (finished.status !== 'completed') return;
+
+  const durationS = Math.round(
+    ((finished.finishedAt ?? new Date()).getTime() - finished.startedAt.getTime()) / 1000,
+  );
+  await publish('ladder.crawl.completed', LADDER_TOPIC, {
+    crawlId,
+    platform: finished.platform,
+    queue: finished.queue,
+    entries: finished.entriesSeen,
+    players: finished.playersDiscovered,
+    durationS,
+  });
+
+  await enqueueChampionAggregate(finished.platform, finished.queue);
+}
+
+/**
+ * Queue a recompute for one ladder.
+ *
+ * Lifecycle-scoped de-duplication rather than a stable `jobId`: BullMQ matches
+ * a job id against finished jobs it has retained, so a stable one would make
+ * the *second* crawl of the day a silent no-op (#18). What this drops instead
+ * is only a recompute that has not run yet — and one that has not run yet will
+ * read the same tables the dropped one would have.
+ */
+export async function enqueueChampionAggregate(platform: string, queue: string): Promise<void> {
+  await maintenanceQueue.add(
+    JOB.aggregateChampions,
+    { platform, queue } satisfies AggregateChampionsJob,
+    { deduplication: { id: jobKey(JOB.aggregateChampions, platform, queue) } },
+  );
 }
 
 /**
@@ -806,6 +844,37 @@ async function runningCrawl(crawlId: string): Promise<LadderCrawl | undefined> {
   return crawl?.status === 'running' ? crawl : undefined;
 }
 
+// ── aggregate:champions ──────────────────────────────────────────────────────
+
+export interface AggregateChampionsJob {
+  platform: string;
+  queue: string;
+}
+
+/**
+ * Read the archive back into `champion_stats` (§7 of the plan).
+ *
+ * On the `maintenance` queue rather than `ladder`, because it is not part of
+ * the crawl: it touches Riot not at all, and a crawl should be free to finish
+ * — and free the ladder for the next one — without waiting on a table scan.
+ * Nothing here is prioritized, matching the daily job beside it; giving one of
+ * two jobs on a queue a priority would put the other permanently ahead of it.
+ */
+export async function aggregateChampions(
+  job: Job<AggregateChampionsJob>,
+): Promise<{ rows: number; games: number }> {
+  const platform = assertPlatform(job.data.platform);
+  const queue = assertRankedQueue(job.data.queue);
+
+  const started = Date.now();
+  const result = await recomputeChampionStats(platform, queue);
+  logger.info(
+    { platform, queue, rows: result.rows, games: result.games, ms: Date.now() - started },
+    'champion aggregates recomputed',
+  );
+  return { rows: result.rows, games: result.games };
+}
+
 // ── ddragon:sync ─────────────────────────────────────────────────────────────
 
 export async function ddragonSync(job: Job<{ force?: boolean }>): Promise<void> {
@@ -884,6 +953,9 @@ export async function dispatch(job: Job): Promise<unknown> {
         break;
       case JOB.ladderWalk:
         result = await ladderWalk(job as Job<LadderWalkJob>);
+        break;
+      case JOB.aggregateChampions:
+        result = await aggregateChampions(job as Job<AggregateChampionsJob>);
         break;
       case JOB.ddragonSync:
         result = await ddragonSync(job as Job<{ force?: boolean }>);

@@ -74,7 +74,19 @@ vi.mock('../src/fetcher.js', async (importOriginal) => {
 const fetchOpts: { priority?: string; waitBudgetMs?: number }[] = [];
 
 /** The crawl row, as the database would hold it. */
-let crawlRow: { id: string; status: string } = { id: CRAWL_ID, status: 'running' };
+const CRAWL_STARTED = new Date('2026-09-01T00:00:00Z');
+const baseCrawl = {
+  id: CRAWL_ID,
+  status: 'running',
+  platform: 'euw1',
+  queue: 'RANKED_SOLO_5x5',
+  startedAt: CRAWL_STARTED,
+  finishedAt: null as Date | null,
+  entriesSeen: 1870,
+  playersDiscovered: 50,
+  pagesFetched: 3,
+};
+let crawlRow: typeof baseCrawl = { ...baseCrawl };
 let createResult: { created: boolean } = { created: true };
 const upserted: { crawlId: string; entries: LeagueEntryInput[] }[] = [];
 const counters: Record<string, number> = {};
@@ -90,7 +102,7 @@ vi.mock('../src/db/ladder.js', async (importOriginal) => {
       // The real one is guarded on `status = 'running'`; so is this, because
       // the completion path relies on exactly one caller winning.
       if (crawlRow.status !== 'running') return undefined;
-      crawlRow = { ...crawlRow, status };
+      crawlRow = { ...crawlRow, status, finishedAt: new Date(CRAWL_STARTED.getTime() + 42_000) };
       finished.push({ id, status });
       return crawlRow;
     },
@@ -109,6 +121,20 @@ vi.mock('../src/db/ladder.js', async (importOriginal) => {
   };
 });
 
+const published: { event: string; topic: string; data: Record<string, unknown> }[] = [];
+vi.mock('../src/events/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/events/index.js')>();
+  return {
+    ...actual,
+    publish: async (event: string, topic: string, data: Record<string, unknown>) => {
+      published.push({ event, topic, data });
+    },
+  };
+});
+
+/** Aggregation jobs a completed crawl queued. */
+const aggregates: Record<string, unknown>[] = [];
+
 /** Jobs the fan-out added, in the order it added them. */
 const added: { name: string; data: Record<string, unknown>; opts: Record<string, unknown> }[] = [];
 vi.mock('../src/jobs/queues.js', async (importOriginal) => {
@@ -119,6 +145,12 @@ vi.mock('../src/jobs/queues.js', async (importOriginal) => {
       addBulk: async (jobs: typeof added) => {
         added.push(...jobs);
         return jobs;
+      },
+    },
+    maintenanceQueue: {
+      add: async (_name: string, data: Record<string, unknown>) => {
+        aggregates.push(data);
+        return {};
       },
     },
   };
@@ -157,7 +189,9 @@ beforeEach(() => {
   failFatally = false;
   fetchCalls = 0;
   for (const k of Object.keys(counters)) delete counters[k];
-  crawlRow = { id: CRAWL_ID, status: 'running' };
+  crawlRow = { ...baseCrawl };
+  published.length = 0;
+  aggregates.length = 0;
   createResult = { created: true };
   (redis as unknown as { reset: () => void }).reset();
 });
@@ -328,7 +362,7 @@ describe('ladder:walk — paging', () => {
   });
 
   it('stops when the crawl is no longer running', async () => {
-    crawlRow = { id: CRAWL_ID, status: 'cancelled' };
+    crawlRow = { ...baseCrawl, status: 'cancelled' };
     pages.set('DIAMOND:I:1', entryPage(205));
 
     const result = await ladderWalk(walkJob());
@@ -427,6 +461,56 @@ describe('completion', () => {
       job({ crawlId: CRAWL_ID, platform: 'euw1', queue: 'RANKED_SOLO_5x5', tier: 'MASTER' }),
     );
     expect(finished).toEqual([{ id: CRAWL_ID, status: 'completed' }]);
+  });
+
+  it('announces the finished crawl and queues its aggregate', async () => {
+    await trackLegs(CRAWL_ID, [ladderLegId(JOB.ladderApex, CRAWL_ID, 'MASTER')]);
+    await ladderApex(
+      job({ crawlId: CRAWL_ID, platform: 'euw1', queue: 'RANKED_SOLO_5x5', tier: 'MASTER' }),
+    );
+
+    expect(published).toHaveLength(1);
+    expect(published[0]?.event).toBe('ladder.crawl.completed');
+    // Admin-scoped, like `metrics`: these are numbers about what the proxy
+    // spent its key on.
+    expect(published[0]?.topic).toBe('ladder');
+    expect(published[0]?.data).toEqual({
+      crawlId: CRAWL_ID,
+      platform: 'euw1',
+      queue: 'RANKED_SOLO_5x5',
+      entries: 1870,
+      players: 50,
+      durationS: 42,
+    });
+
+    // The archive only becomes readable once something reads it.
+    expect(aggregates).toEqual([{ platform: 'euw1', queue: 'RANKED_SOLO_5x5' }]);
+  });
+
+  it('says nothing, and aggregates nothing, for a crawl that gave up', async () => {
+    // Half a ladder aggregated as though it were a whole one is worse than
+    // leaving the previous numbers in place.
+    await trackLegs(CRAWL_ID, [ladderLegId(JOB.ladderWalk, CRAWL_ID, 'DIAMOND', 'I')]);
+    failAtCall = 1;
+    failFatally = true;
+    await expect(
+      ladderWalk(
+        job(
+          {
+            crawlId: CRAWL_ID,
+            platform: 'euw1',
+            queue: 'RANKED_SOLO_5x5',
+            tier: 'DIAMOND',
+            division: 'I',
+          },
+          2,
+        ),
+      ),
+    ).rejects.toThrow('fell over');
+
+    expect(finished).toEqual([{ id: CRAWL_ID, status: 'failed' }]);
+    expect(published).toHaveLength(0);
+    expect(aggregates).toHaveLength(0);
   });
 
   it("clears the crawl's cursors on the way out", async () => {

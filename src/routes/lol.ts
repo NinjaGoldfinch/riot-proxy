@@ -1,5 +1,7 @@
 import { Type } from '@sinclair/typebox';
 import type { FastifyPluginAsync } from 'fastify';
+import { config } from '../config.js';
+import { latestPatch, listChampionStats } from '../db/analytics.js';
 import { ProxyError } from '../errors.js';
 import { fetcher } from '../fetcher.js';
 import { build } from '../riot/endpoints.js';
@@ -8,11 +10,14 @@ import {
   assertDivision,
   assertPagedTier,
   assertRankedQueue,
+  assertTier,
 } from '../riot/ladder.js';
 import { assertPlatform, assertRegion, regionFromMatchId } from '../riot/routing.js';
 import { send } from './helpers.js';
 import {
   ApexTierParam,
+  ChampionStatsQuery,
+  ChampionStatsResponse,
   DivisionParam,
   LadderPageQuery,
   LadderTierParam,
@@ -24,6 +29,7 @@ import {
   PuuidParam,
   RankedQueueParam,
   RegionParam,
+  localErrors,
   upstreamErrors,
 } from './schemas.js';
 
@@ -255,6 +261,88 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
     },
   );
 
+  /**
+   * What the crawl is for: pick and win rates per champion, at a tier.
+   *
+   * The one route in this file that never touches Riot — it reads
+   * `champion_stats`, which a `maintenance` job recomputes from the archive
+   * after a crawl completes. Empty until a crawl has run and been aggregated,
+   * which is the honest answer rather than a 404: the endpoint exists, the
+   * numbers do not yet.
+   */
+  fastify.get(
+    '/v1/lol/analytics/champions',
+    {
+      schema: {
+        tags: ['lol'],
+        summary: 'Champion pick and win rates by tier',
+        description:
+          'Aggregated from the match archive, with each participant placed at the tier the ' +
+          'latest ladder crawl found them at. Recomputed per (platform, queue) when a crawl ' +
+          'completes.',
+        querystring: ChampionStatsQuery,
+        response: { 200: ChampionStatsResponse, ...localErrors },
+      },
+    },
+    async (request, reply) => {
+      const query = request.query as {
+        platform?: string;
+        queue?: string;
+        tier?: string;
+        patch?: string;
+        limit?: number;
+      };
+      const platform = assertPlatform(query.platform ?? config.DEFAULT_PLATFORM);
+      const queue = assertRankedQueue(query.queue ?? config.ladderQueues[0] ?? 'RANKED_SOLO_5x5');
+      const tier = query.tier ? assertTier(query.tier) : undefined;
+      // Newest aggregated patch by default: asking for "champion win rates"
+      // without a patch means the current one, not every patch ever archived
+      // averaged into a single meaningless number.
+      const patch = query.patch ?? (await latestPatch(platform, queue));
+
+      const rows = patch
+        ? await listChampionStats({
+            platform,
+            queue,
+            patch,
+            ...(tier ? { tier } : {}),
+            ...(query.limit ? { limit: query.limit } : {}),
+          })
+        : [];
+
+      const totalGames = rows.reduce((total, row) => total + row.games, 0);
+      // A recompute writes the whole slice at once, so any row's stamp is the
+      // slice's; the newest is taken in case a partial write is ever visible.
+      const computedAt = rows.reduce<Date | null>(
+        (newest, row) => (!newest || row.computedAt > newest ? row.computedAt : newest),
+        null,
+      );
+
+      // Derived from immutable archive rows, and only ever replaced wholesale
+      // by a recompute — so it is safe to hold, and holding it is what keeps a
+      // dashboard polling this off the database.
+      reply.header('Cache-Control', 'public, max-age=300');
+
+      return {
+        platform,
+        queue,
+        tier: tier ?? null,
+        patch: patch ?? null,
+        computedAt: computedAt ? computedAt.toISOString() : null,
+        totalGames,
+        champions: rows.map((row) => ({
+          championId: row.championId,
+          tier: row.tier,
+          patch: row.patch,
+          games: row.games,
+          wins: row.wins,
+          winRate: round(row.wins / row.games),
+          share: totalGames > 0 ? round(row.games / totalGames) : 0,
+        })),
+      };
+    },
+  );
+
   fastify.get(
     '/v1/lol/status/:platform',
     {
@@ -270,6 +358,11 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
     },
   );
 };
+
+/** Four decimal places: enough for a win rate, short of implying precision. */
+function round(value: number): number {
+  return Math.round(value * 10_000) / 10_000;
+}
 
 /**
  * Match IDs carry their own platform prefix (`EUW1_…`). When the caller's

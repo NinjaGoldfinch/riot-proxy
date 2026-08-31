@@ -452,6 +452,72 @@ export const LadderCrawlStartedResponse = Type.Object({
   },
 });
 
+/**
+ * A champion's line in one slice of the aggregate.
+ *
+ * `share` is this champion's fraction of the picks in the slice, not Riot's
+ * pick rate: a match is not played "in" a tier — its ten participants can sit
+ * in ten different ones — so the denominator a true pick rate needs (games in
+ * this tier) is not a number this table has. The share is well defined, is
+ * what a chart of the slice actually plots, and does not pretend otherwise.
+ */
+export const ChampionStatEntry = Type.Object(
+  {
+    championId: Type.Integer(),
+    tier: Type.String(),
+    patch: Type.String(),
+    games: Type.Integer(),
+    wins: Type.Integer(),
+    winRate: Type.Number({ minimum: 0, maximum: 1 }),
+    share: {
+      ...Type.Number({ minimum: 0, maximum: 1 }),
+      description: "This champion's games as a fraction of the slice's games",
+    },
+  },
+  { $id: 'ChampionStatEntry' },
+);
+
+export const ChampionStatsResponse = Type.Object({
+  platform: Type.String(),
+  queue: Type.String(),
+  tier: {
+    ...Type.Union([Type.String(), Type.Null()]),
+    description: 'Null when the slice spans every tier the crawl reached',
+  },
+  patch: {
+    ...Type.Union([Type.String(), Type.Null()]),
+    description: '`gameVersion` major.minor. Null when nothing has been aggregated yet',
+  },
+  computedAt: {
+    ...NullableTimestamp,
+    description: 'When this slice was last recomputed from the archive',
+  },
+  totalGames: {
+    ...Type.Integer(),
+    description: 'Games in the slice — the denominator behind `share`',
+  },
+  champions: Type.Array(
+    Type.Unsafe<Static<typeof ChampionStatEntry>>({
+      $ref: 'ChampionStatEntry#',
+    }),
+  ),
+});
+
+export const ChampionStatsQuery = Type.Object({
+  platform: Type.Optional(PlatformParam),
+  queue: Type.Optional(RankedQueueParam),
+  tier: Type.Optional(Type.Unsafe<string>({ type: 'string', enum: [...TIERS] })),
+  patch: Type.Optional(
+    Type.String({
+      minLength: 3,
+      maxLength: 8,
+      pattern: '^[0-9]+\\.[0-9]+$',
+      description: 'Defaults to the newest patch this deployment has aggregated',
+    }),
+  ),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500, default: 200 })),
+});
+
 export const AdminStatsResponse = Type.Object({
   keyScope: Type.String(),
   archivedMatches: Type.Integer(),
@@ -605,6 +671,7 @@ export const sharedSchemas = [
   LadderTierParamSchema,
   DivisionParamSchema,
   ScopeParamSchema,
+  ChampionStatEntry,
   BackfillNoticeSchema,
   ProfileResponseSchema,
   MatchPageResponseSchema,

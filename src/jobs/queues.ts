@@ -58,6 +58,7 @@ export const JOB = {
   ladderCrawl: 'ladder:crawl',
   ladderApex: 'ladder:apex',
   ladderWalk: 'ladder:walk',
+  aggregateChampions: 'aggregate:champions',
   maintenance: 'maintenance',
 } as const;
 
