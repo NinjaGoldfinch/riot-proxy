@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { and, eq, isNull } from 'drizzle-orm';
+import { DEFAULT_QUOTA_PER_MIN } from '../quotas.js';
 import { db } from './index.js';
 import { consumers, type Consumer } from './schema.js';
 
@@ -50,7 +51,7 @@ export async function createConsumer(
       name: input.name,
       keyHash,
       scopes: input.scopes ?? ['read'],
-      quotaPerMin: input.quotaPerMin ?? 600,
+      quotaPerMin: input.quotaPerMin ?? DEFAULT_QUOTA_PER_MIN,
     })
     .returning();
 

@@ -1,4 +1,5 @@
 import { config } from '../config.js';
+import { ANON_QUOTA_PER_MIN, DEFAULT_QUOTA_PER_MIN } from '../quotas.js';
 import { ENDPOINTS, type EndpointSpec } from '../riot/endpoints.js';
 import { REFRESH_COOLDOWN_S } from '../routes/players.js';
 
@@ -70,7 +71,8 @@ Authorization: Bearer rpx_…
 Keys are issued by an operator (\`POST /v1/admin/consumers\`) and shown exactly
 once — only a SHA-256 of the key is stored, so a lost key is reissued, never
 recovered. Each key carries its own per-minute quota, independent of Riot's
-limits; the default is 600/min and unauthenticated callers get 60/min.
+limits; the default is ${DEFAULT_QUOTA_PER_MIN}/min and unauthenticated callers
+get ${ANON_QUOTA_PER_MIN}/min.
 
 ## Response headers
 

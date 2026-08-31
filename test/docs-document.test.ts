@@ -5,6 +5,7 @@ import { buildApp, type App } from '../src/app.js';
 import { closeDb, pingDb } from '../src/db/index.js';
 import { closeRedis, redis } from '../src/redis.js';
 import { ERROR_CODES } from '../src/errors.js';
+import { ANON_QUOTA_PER_MIN, DEFAULT_QUOTA_PER_MIN } from '../src/quotas.js';
 import { ERROR_EXAMPLES } from '../src/docs/examples.js';
 import { wsHub } from '../src/ws/index.js';
 
@@ -371,6 +372,14 @@ describe('the document itself (#62)', () => {
     // LOOKUP_BACKFILL_LIMIT is 0 in the test env, and the prose says so rather
     // than advertising a walk that will not happen.
     expect(d).toContain('(disabled on this deployment)');
+  });
+
+  it('quotes the quotas the service enforces, not numbers typed here', ({ skip }) => {
+    if (!available || !doc) return skip();
+    // Prettier wraps the template literal, so a sentence is not a line.
+    const prose = (doc.info.description as string).replace(/\s+/g, ' ');
+    expect(prose).toContain(`the default is ${DEFAULT_QUOTA_PER_MIN}/min`);
+    expect(prose).toContain(`unauthenticated callers get ${ANON_QUOTA_PER_MIN}/min`);
   });
 
   it('badges each route with what it costs', ({ skip }) => {

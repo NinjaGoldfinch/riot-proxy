@@ -7,6 +7,7 @@ import { docsSpec, docsUi } from './docs/plugin.js';
 import { ProxyError, RiotError } from './errors.js';
 import { logger } from './logger.js';
 import { requestsTotal } from './metrics.js';
+import { ANON_QUOTA_PER_MIN } from './quotas.js';
 import { redis } from './redis.js';
 import adminRoutes from './routes/admin.js';
 import debugRoutes from './routes/debug.js';
@@ -44,7 +45,7 @@ export async function buildApp() {
     nameSpace: 'q:',
     // The default is a fallback for unauthenticated routes; authenticated
     // requests get the consumer's own `quota_per_min` (§7.1).
-    max: (request) => request.consumer?.quotaPerMin ?? 60,
+    max: (request) => request.consumer?.quotaPerMin ?? ANON_QUOTA_PER_MIN,
     timeWindow: '1 minute',
     keyGenerator: (request) => request.consumer?.id ?? request.ip,
     // Health and metrics must stay reachable when a consumer is over quota.
