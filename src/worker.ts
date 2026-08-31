@@ -1,6 +1,7 @@
 import { Worker, type Job } from 'bullmq';
 import { config } from './config.js';
 import { closeDb } from './db/index.js';
+import { startHeartbeat, stopHeartbeat } from './jobs/heartbeat.js';
 import { dispatch } from './jobs/processors.js';
 import {
   JOB,
@@ -87,11 +88,17 @@ async function main(): Promise<void> {
   await scheduleRepeatables();
 
   const workers = Object.values(QUEUE_NAMES).map(startWorker);
+  // Only now: the point of the heartbeat is that something is consuming the
+  // queues, so it must not start beating before anything is.
+  const heartbeat = startHeartbeat();
   logger.info({ queues: Object.values(QUEUE_NAMES) }, 'riot-proxy worker started');
 
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'worker shutting down');
     try {
+      // Before draining, not after: from here on nothing new is picked up, and
+      // `close()` waits for jobs in flight — which can take a limiter budget.
+      await stopHeartbeat(heartbeat);
       // `close()` waits for in-flight jobs so a poll is never half-applied.
       await Promise.allSettled(workers.map((w) => w.close()));
       await closeQueues();

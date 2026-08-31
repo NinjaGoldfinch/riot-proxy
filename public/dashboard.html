@@ -54,6 +54,15 @@
         text-transform: uppercase;
         color: var(--dim);
         margin: 0 0 10px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      /* A panel heading's indicator sits at the far end of it. */
+      h2 .status {
+        margin-left: auto;
+        text-transform: none;
+        letter-spacing: 0;
       }
       section {
         margin-top: 24px;
@@ -403,7 +412,12 @@
 
       <section class="cols">
         <div class="panel">
-          <h2>Queues</h2>
+          <h2>
+            Queues
+            <span class="status" id="worker"
+              ><span id="workerDot" class="dot"></span><span id="workerState">—</span></span
+            >
+          </h2>
           <div class="scroll"><table id="queues"></table></div>
         </div>
         <div class="panel">
@@ -562,6 +576,22 @@
             `<div class="delta">${delta > 0 ? '+' + fmt(delta) + ' since last tick' : ''}</div></div>`
           );
         }).join('');
+      }
+
+      /**
+       * Queue counts come from Redis and say nothing about whether anything is
+       * draining them — a crashed worker and an idle one are both all-zero
+       * `active`. So the heartbeat gets a dot of its own, next to the counts it
+       * qualifies (#80).
+       */
+      function renderWorker(snap) {
+        const worker = snap.worker;
+        if (!worker) return; // an older api instance; say nothing rather than lie
+        const ago = worker.lastSeenMs;
+        $('workerDot').className = 'dot ' + (worker.alive ? 'live' : 'down');
+        $('workerState').textContent = worker.alive
+          ? 'worker up' + (ago >= 1000 ? ' · ' + Math.round(ago / 1000) + 's ago' : '')
+          : 'worker down';
       }
 
       function renderQueues(snap) {
@@ -861,6 +891,7 @@
 
       function render(snap, atMs) {
         renderTiles(snap);
+        renderWorker(snap);
         renderQueues(snap);
         renderLimiter(snap);
         renderCache(snap);

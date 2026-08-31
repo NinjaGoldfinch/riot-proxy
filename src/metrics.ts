@@ -75,6 +75,42 @@ export const jobsTotal = new Counter({
   registers: [registry],
 });
 
+/**
+ * Why a whole-history walk was queued, and whether it became a job (#81).
+ *
+ * `proxy_jobs_total{job="backfill:player"}` counts walks that *ran*, which
+ * answers a different question: a first lookup queueing one (#44) and an
+ * operator asking for one by hand are the same execution, and only the
+ * `reason` on the job tells them apart. Until now that was a log line.
+ *
+ * `status` carries `enqueueBackfill`'s own verdict, so a lookup that coalesced
+ * onto a walk already pending is visible as demand rather than as nothing
+ * happening — the same distinction the refresh counter below draws.
+ */
+export const backfillsQueuedTotal = new Counter({
+  name: 'proxy_backfills_queued_total',
+  help: 'Player backfills requested, by what asked for one and what came of it',
+  labelNames: ['reason', 'status'] as const,
+  registers: [registry],
+});
+
+/**
+ * `?refresh=true` against the per-player cooldown window (#33, #81).
+ *
+ * Losing the window is not an error — the caller is served data someone else
+ * fetched seconds ago — so nothing counted either outcome, and how often
+ * callers actually spend quota on re-reads versus being coalesced was
+ * unanswerable. `part` is labelled because the window is currently held per
+ * route part, so this also measures what collapsing it to one window per
+ * player would cost.
+ */
+export const refreshClaimsTotal = new Counter({
+  name: 'proxy_refresh_claims_total',
+  help: 'Explicit ?refresh=true claims, by route part and whether the window was won',
+  labelNames: ['part', 'outcome'] as const,
+  registers: [registry],
+});
+
 export const archivedMatchesTotal = new Counter({
   name: 'proxy_archived_matches_total',
   help: 'Matches upserted into the Postgres archive',

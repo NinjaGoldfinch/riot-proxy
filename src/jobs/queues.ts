@@ -1,4 +1,5 @@
 import { Queue, type JobsOptions } from 'bullmq';
+import { backfillsQueuedTotal } from '../metrics.js';
 import { redis } from '../redis.js';
 
 /** §10 — one queue per concern so priorities and retention can differ. */
@@ -173,18 +174,30 @@ export async function enqueueBackfill(
 
   if (existing) {
     if (PENDING_JOB_STATES.has(await existing.getState())) {
-      return { jobId, status: 'already-queued' };
+      return record(data, { jobId, status: 'already-queued' });
     }
     try {
       await existing.remove();
     } catch {
       // Claimed between the state read and the remove, so it is pending after all.
-      return { jobId, status: 'already-queued' };
+      return record(data, { jobId, status: 'already-queued' });
     }
   }
 
   const job = await queue.add(JOB.backfillPlayer, data, { jobId });
-  return { jobId: job.id ?? jobId, status: 'queued' };
+  return record(data, { jobId: job.id ?? jobId, status: 'queued' });
+}
+
+/**
+ * Counted here rather than at each call site: every path into a backfill goes
+ * through this function, and the two outcomes it distinguishes are exactly the
+ * ones worth telling apart (#81). `reason` is optional on the job — the admin
+ * route accepts a body without one — and an unlabelled series would silently
+ * merge with a named one, so it falls back to what that route means.
+ */
+function record(data: BackfillPlayerJob, result: BackfillEnqueueResult): BackfillEnqueueResult {
+  backfillsQueuedTotal.inc({ reason: data.reason ?? 'admin', status: result.status });
+  return result;
 }
 
 export async function closeQueues(): Promise<void> {
