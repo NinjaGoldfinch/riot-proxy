@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
+import { DEFAULT_QUOTA_PER_MIN } from '../quotas.js';
 import { closeDb, db } from './index.js';
 import { createConsumer } from './consumers.js';
 
@@ -19,7 +20,7 @@ async function main(): Promise<void> {
     const created = await createConsumer({
       name: 'bootstrap-admin',
       scopes: ['read', 'admin'],
-      quotaPerMin: 600,
+      quotaPerMin: DEFAULT_QUOTA_PER_MIN,
       key: config.BOOTSTRAP_ADMIN_KEY,
       ifNotExists: true,
     });

@@ -9,11 +9,7 @@ import { CHANNEL_PATTERN, parseEvent, topicFromChannel } from '../events/index.j
 import { logger } from '../logger.js';
 import { wsConnections } from '../metrics.js';
 import { subscriber } from '../redis.js';
-
-/** §11 — heartbeat every 30 s, drop after two missed pongs. */
-const HEARTBEAT_MS = 30_000;
-const MAX_MISSED_PONGS = 2;
-const MAX_TOPICS_PER_SOCKET = 200;
+import { HEARTBEAT_MS, MAX_MISSED_PONGS, MAX_TOPICS_PER_SOCKET } from './constants.js';
 
 interface Client {
   socket: WebSocket;

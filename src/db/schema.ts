@@ -11,6 +11,7 @@ import {
   timestamp,
   uuid,
 } from 'drizzle-orm/pg-core';
+import { DEFAULT_QUOTA_PER_MIN } from '../quotas.js';
 
 /** §7.1 — downstream projects. Only the sha256 of the bearer token is stored. */
 export const consumers = pgTable('consumers', {
@@ -21,7 +22,7 @@ export const consumers = pgTable('consumers', {
     .array()
     .notNull()
     .default(sql`'{read}'`),
-  quotaPerMin: integer('quota_per_min').notNull().default(600),
+  quotaPerMin: integer('quota_per_min').notNull().default(DEFAULT_QUOTA_PER_MIN),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   disabledAt: timestamp('disabled_at', { withTimezone: true }),
 });
