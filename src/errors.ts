@@ -24,7 +24,12 @@ export interface ErrorEnvelope {
   };
 }
 
-const DEFAULT_STATUS: Record<ErrorCode, number> = {
+/**
+ * The status each code returns unless a call site overrides it. Exported
+ * because the reference's error table is generated from it (#73) — the table
+ * used to restate all nine numbers from memory.
+ */
+export const DEFAULT_STATUS: Record<ErrorCode, number> = {
   UNAUTHORIZED: 401,
   FORBIDDEN: 403,
   QUOTA_EXCEEDED: 429,

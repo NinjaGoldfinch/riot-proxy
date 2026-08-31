@@ -4,8 +4,12 @@ import { probeServices } from './helpers/services.js';
 import { buildApp, type App } from '../src/app.js';
 import { closeDb, pingDb } from '../src/db/index.js';
 import { closeRedis, redis } from '../src/redis.js';
-import { ERROR_CODES } from '../src/errors.js';
+import { DEFAULT_STATUS, ERROR_CODES, type ErrorCode } from '../src/errors.js';
 import { ERROR_EXAMPLES } from '../src/docs/examples.js';
+import { EVENT_EXAMPLES } from '../src/events/examples.js';
+import { ANON_QUOTA_PER_MIN, DEFAULT_QUOTA_PER_MIN } from '../src/quotas.js';
+import { KEY_PREFIX } from '../src/keys.js';
+import { HEARTBEAT_MS, MAX_MISSED_PONGS, MAX_TOPICS_PER_SOCKET } from '../src/ws/constants.js';
 import { wsHub } from '../src/ws/index.js';
 
 /**
@@ -63,6 +67,16 @@ const EXPECTED_OPERATIONS = [
   'POST /v1/admin/ddragon/sync',
   'POST /v1/admin/tracked-players',
 ];
+
+/**
+ * Named in prose but deliberately absent from `paths`. `/v1/ws` never reaches
+ * the document at all — @fastify/websocket registers no operation
+ * @fastify/swagger can see — and the docs and dev routes are hidden, `/docs`
+ * from itself included.
+ */
+const NOT_OPERATIONS = new Set(['/v1/ws', '/openapi.json', '/openapi.yaml', '/dev']);
+const isOperation = (path: string): boolean =>
+  !NOT_OPERATIONS.has(path) && !path.startsWith('/docs');
 
 const operations = (d: Record<string, any>): string[] =>
   Object.entries(d.paths ?? {})
@@ -269,6 +283,23 @@ describe('examples (#63)', () => {
     }
   });
 
+  it('states the status each code actually returns', ({ skip }) => {
+    if (!available || !doc) return skip();
+    // Close to tautological now that the table is generated from
+    // `DEFAULT_STATUS`. It earns its place by catching the regression where
+    // someone reverts the table to nine hand-written rows.
+    let checked = 0;
+    for (const [, code, status] of (doc.info.description as string).matchAll(
+      /^\| `([A-Z_]+)` \| (\d{3}) \|/gm,
+    )) {
+      checked += 1;
+      expect(Number(status), `${code} is documented as ${status}`).toBe(
+        DEFAULT_STATUS[code as ErrorCode],
+      );
+    }
+    expect(checked).toBe(ERROR_CODES.length);
+  });
+
   it('does not offer an error example a route cannot produce', ({ skip }) => {
     if (!available || !doc) return skip();
     // The static mirror has no 502 response at all, so there is nothing to
@@ -346,16 +377,27 @@ describe('the document itself (#62)', () => {
     if (!available || !doc) return skip();
     const ws = doc.tags.find((t: { name: string }) => t.name === 'ws');
     expect(ws.description).toContain('?token=');
-    for (const event of [
-      'game.started',
-      'game.ended',
-      'rank.changed',
-      'match.archived',
-      'patch.new',
-    ]) {
+    // Iterated rather than listed: the samples are the source the tag is
+    // rendered from, so a renamed field fails here as well as failing to
+    // compile — and a new event cannot ship undocumented.
+    for (const [event, sample] of Object.entries(EVENT_EXAMPLES)) {
       expect(ws.description, `${event} missing from the ws tag`).toContain(event);
+      for (const field of Object.keys(sample.data)) {
+        expect(ws.description, `${event}.${field} missing from the ws tag`).toContain(`"${field}"`);
+      }
     }
     expect(ws.description).toContain('only ever fires for a _tracked_ player');
+  });
+
+  it('states the socket limits the hub enforces, and the topic ceiling', ({ skip }) => {
+    if (!available || !doc) return skip();
+    const ws = doc.tags.find((t: { name: string }) => t.name === 'ws');
+    expect(ws.description).toContain(`pings every ${HEARTBEAT_MS / 1000} s`);
+    expect(ws.description).toContain(`misses ${MAX_MISSED_PONGS} consecutive pongs`);
+    // The 200-topic cap is silent at runtime — a client that subscribes past it
+    // is acknowledged and simply not subscribed — so the reference is the only
+    // place it can be discovered.
+    expect(ws.description).toContain(`at most ${MAX_TOPICS_PER_SOCKET} topics`);
   });
 
   it('generates its numbers from config rather than stating them', ({ skip }) => {
@@ -371,6 +413,52 @@ describe('the document itself (#62)', () => {
     // LOOKUP_BACKFILL_LIMIT is 0 in the test env, and the prose says so rather
     // than advertising a walk that will not happen.
     expect(d).toContain('(disabled on this deployment)');
+  });
+
+  it('quotes the quotas the service enforces, not numbers typed here', ({ skip }) => {
+    if (!available || !doc) return skip();
+    // Prettier wraps the template literal, so a sentence is not a line.
+    const prose = (doc.info.description as string).replace(/\s+/g, ' ');
+    expect(prose).toContain(`the default is ${DEFAULT_QUOTA_PER_MIN}/min`);
+    expect(prose).toContain(`unauthenticated callers get ${ANON_QUOTA_PER_MIN}/min`);
+    expect(prose).toContain(`Authorization: Bearer ${KEY_PREFIX}`);
+  });
+
+  it('names only routes that exist', ({ skip }) => {
+    if (!available || !doc) return skip();
+    // The prose names routes by path, and the prose and the route table are
+    // generated from different things — so a rename leaves a dead pointer in
+    // the document a consumer is reading to find that exact route, and nothing
+    // else in the suite would notice.
+    const prose = [
+      doc.info.description as string,
+      ...(doc.tags as { description?: string }[]).map((t) => t.description ?? ''),
+      ...Object.values(
+        doc.components.securitySchemes as Record<string, { description?: string }>,
+      ).map((s) => s.description ?? ''),
+    ].join('\n\n');
+
+    const routed = new Set(Object.keys(doc.paths));
+    let checked = 0;
+
+    // Both forms the prose uses: `POST /v1/admin/consumers` when the reader is
+    // being told to call something, and a bare `/readyz` when it is being
+    // pointed at. The method is optional and the trailing `[^`]*` is what lets
+    // `/v1/ws?token=…` match with its query string while capturing only the
+    // path — without it that one is skipped in silence and the exemption above
+    // is never exercised.
+    for (const [, path] of prose.matchAll(
+      /`(?:(?:GET|POST|PATCH|PUT|DELETE) )?(\/[A-Za-z0-9/_{}.-]*)[^`]*`/g,
+    )) {
+      if (!isOperation(path!)) continue;
+      checked += 1;
+      expect(routed, `the prose names ${path}, which is not a route`).toContain(path!);
+    }
+
+    // A regex over prose passes vacuously when it matches nothing, which is the
+    // failure this guards against: reformat one line and the assertion quietly
+    // stops running.
+    expect(checked).toBeGreaterThan(2);
   });
 
   it('badges each route with what it costs', ({ skip }) => {

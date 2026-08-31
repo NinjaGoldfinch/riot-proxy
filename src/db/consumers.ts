@@ -1,10 +1,9 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { and, eq, isNull } from 'drizzle-orm';
+import { KEY_PREFIX } from '../keys.js';
+import { DEFAULT_QUOTA_PER_MIN } from '../quotas.js';
 import { db } from './index.js';
 import { consumers, type Consumer } from './schema.js';
-
-/** §12.1 — `rpx_<32 chars>`; only the sha256 is ever persisted. */
-export const KEY_PREFIX = 'rpx_';
 
 export function generateKey(): string {
   // 24 random bytes → 32 base64url characters, no padding.
@@ -50,7 +49,7 @@ export async function createConsumer(
       name: input.name,
       keyHash,
       scopes: input.scopes ?? ['read'],
-      quotaPerMin: input.quotaPerMin ?? 600,
+      quotaPerMin: input.quotaPerMin ?? DEFAULT_QUOTA_PER_MIN,
     })
     .returning();
 

@@ -180,7 +180,7 @@ replicas over-committing a bucket.
 
 Two priorities: `interactive` (client requests) and `bulk` (worker backfill).
 Bulk stands aside while interactive requests are queued, and refuses to push any
-bucket past `BULK_USAGE_CEILING` (default 75 %), which keeps user latency flat
+bucket past `BULK_USAGE_CEILING` (default 80 %), which keeps user latency flat
 during large backfills.
 
 On a 429: with `Retry-After` and a type header, the whole scope freezes until
@@ -270,33 +270,34 @@ Every archive job therefore carries an explicit priority.
 
 ## Configuration
 
-| Env var                                      | Default                                           | Notes                                                   |
-| -------------------------------------------- | ------------------------------------------------- | ------------------------------------------------------- |
-| `RIOT_API_KEY`                               | —                                                 | **Required.** The secret this project exists to protect |
-| `RIOT_USER_AGENT`                            | `riot-proxy/1.0 …`                                | Sent upstream so Riot can identify you                  |
-| `PORT` / `HOST`                              | `8080` / `0.0.0.0`                                |                                                         |
-| `REDIS_URL`                                  | `redis://localhost:6379`                          |                                                         |
-| `DATABASE_URL`                               | `postgres://proxy:proxy@localhost:5432/riotproxy` |                                                         |
-| `DEFAULT_PLATFORM`                           | `euw1`                                            | Used by the composite endpoint                          |
-| `CACHE_TTL_OVERRIDES`                        | —                                                 | CSV, e.g. `league=120,spectator=20`                     |
-| `NEG_TTL_SECONDS`                            | `30`                                              | Spectator 404s                                          |
-| `NEG_TTL_ACCOUNT_SECONDS`                    | `300`                                             | Typo'd Riot IDs                                         |
-| `SF_LOCK_MS`                                 | `5000`                                            | Cross-instance single-flight lock                       |
-| `CLIENT_WAIT_BUDGET_MS`                      | `2000`                                            | Max limiter wait for a client request                   |
-| `BULK_USAGE_CEILING`                         | `0.80`                                            | Bulk work stops here, keeping 20% for callers           |
-| `STALE_WHILE_REVALIDATE`                     | `true`                                            |                                                         |
-| `TRACK_POLL_LIVE_S` / `_RANK_S` / `_MATCH_S` | `60` / `600` / `300`                              |                                                         |
-| `DDRAGON_SYNC_S`                             | `3600`                                            | Version check cadence                                   |
-| `DDRAGON_DIR` / `DDRAGON_LOCALE`             | `./data/ddragon` / `en_US`                        |                                                         |
-| `ARCHIVE_TIMELINES`                          | `false`                                           | Timelines are large; opt in                             |
-| `LOOKUP_BACKFILL_LIMIT`                      | `10000`                                           | History walked on a first lookup; `0` disables          |
-| `TRACK_CATCHUP_LIMIT`                        | `500`                                             | How far a match poll pages back to resume; `0` disables |
-| `ADMIN_IP_ALLOWLIST`                         | —                                                 | CSV of IPs/CIDRs; empty means key scope is enough       |
-| `BOOTSTRAP_ADMIN_KEY`                        | —                                                 | Seeds one admin key on `npm run migrate`                |
-| `AUTH_DISABLED`                              | `false`                                           | Dev only: skip key checks; refused in production        |
-| `DEV_UI`                                     | follows `NODE_ENV`                                | Serve the browser client at `/dev`; off in production   |
-| `DOCS_UI`                                    | `true`                                            | Serve `/docs`, `/openapi.json` and `/openapi.yaml`      |
-| `LOG_LEVEL`                                  | `info`                                            |                                                         |
+| Env var                                      | Default                                           | Notes                                                       |
+| -------------------------------------------- | ------------------------------------------------- | ----------------------------------------------------------- |
+| `RIOT_API_KEY`                               | —                                                 | **Required.** The secret this project exists to protect     |
+| `RIOT_USER_AGENT`                            | `riot-proxy/1.0 …`                                | Sent upstream so Riot can identify you                      |
+| `PORT` / `HOST`                              | `8080` / `0.0.0.0`                                |                                                             |
+| `NODE_ENV`                                   | `development`                                     | `production` refuses `AUTH_DISABLED` and turns `DEV_UI` off |
+| `REDIS_URL`                                  | `redis://localhost:6379`                          |                                                             |
+| `DATABASE_URL`                               | `postgres://proxy:proxy@localhost:5432/riotproxy` |                                                             |
+| `DEFAULT_PLATFORM`                           | `euw1`                                            | Used by the composite endpoint                              |
+| `CACHE_TTL_OVERRIDES`                        | —                                                 | CSV, e.g. `league=120,spectator=20`                         |
+| `NEG_TTL_SECONDS`                            | `30`                                              | Spectator 404s                                              |
+| `NEG_TTL_ACCOUNT_SECONDS`                    | `300`                                             | Typo'd Riot IDs                                             |
+| `SF_LOCK_MS`                                 | `5000`                                            | Cross-instance single-flight lock                           |
+| `CLIENT_WAIT_BUDGET_MS`                      | `2000`                                            | Max limiter wait for a client request                       |
+| `BULK_USAGE_CEILING`                         | `0.80`                                            | Bulk work stops here, keeping 20% for callers               |
+| `STALE_WHILE_REVALIDATE`                     | `true`                                            |                                                             |
+| `TRACK_POLL_LIVE_S` / `_RANK_S` / `_MATCH_S` | `60` / `600` / `300`                              |                                                             |
+| `DDRAGON_SYNC_S`                             | `3600`                                            | Version check cadence                                       |
+| `DDRAGON_DIR` / `DDRAGON_LOCALE`             | `./data/ddragon` / `en_US`                        |                                                             |
+| `ARCHIVE_TIMELINES`                          | `false`                                           | Timelines are large; opt in                                 |
+| `LOOKUP_BACKFILL_LIMIT`                      | `10000`                                           | History walked on a first lookup; `0` disables              |
+| `TRACK_CATCHUP_LIMIT`                        | `500`                                             | How far a match poll pages back to resume; `0` disables     |
+| `ADMIN_IP_ALLOWLIST`                         | —                                                 | CSV of IPs/CIDRs; empty means key scope is enough           |
+| `BOOTSTRAP_ADMIN_KEY`                        | —                                                 | Seeds one admin key on `npm run migrate`                    |
+| `AUTH_DISABLED`                              | `false`                                           | Dev only: skip key checks; refused in production            |
+| `DEV_UI`                                     | follows `NODE_ENV`                                | Serve the browser client at `/dev`; off in production       |
+| `DOCS_UI`                                    | `true`                                            | Serve `/docs`, `/openapi.json` and `/openapi.yaml`          |
+| `LOG_LEVEL`                                  | `info`                                            |                                                             |
 
 `KEY_SCOPE` is derived, not configured.
 
@@ -362,7 +363,14 @@ it from its own `/openapi.json`, which is generated live.
 
 Tests that need Redis or Postgres skip themselves when those are unreachable, so
 `npm test` works with nothing running — but `docker compose up -d` first gets
-you the limiter, HTTP-surface and WebSocket suites too.
+you the limiter, HTTP-surface and WebSocket suites too. `REQUIRE_SERVICES=1`
+turns that skip into a failure naming the suite that went quiet; CI sets it, so
+a green build there means every assertion actually ran.
+
+The README is tested too (`test/docs-readme.test.ts`): its settings table, cache
+TTLs, commands, layout diagram and every path it names are asserted against the
+code they describe, so the half of the documentation that is not generated
+cannot drift silently either.
 
 ### Starting over
 
@@ -441,6 +449,7 @@ anywhere.
 | `ACCEPTANCE_BACKFILL_LIMIT`  | `40`                     | Matches to walk back                         |
 | `ACCEPTANCE_LIVE_GAME`       | off                      | Opt in to the live game check                |
 | `ACCEPTANCE_KEEP_TRACKED`    | off                      | Leave the player tracked afterwards          |
+| `ACCEPTANCE_LOG_LEVEL`       | `warn`                   | Log level for the api/worker it starts       |
 
 Two things the suite cannot decide for you:
 
@@ -477,9 +486,9 @@ src/
 ├─ logger.ts       pino + key redaction ├─ jobs/             BullMQ queues + processors
 ├─ metrics.ts      prom-client          ├─ ws/               realtime hub
 ├─ events/         topics + pub/sub     ├─ static/           Data Dragon mirror
-└─ riot/                                └─ auth/             consumer auth + scopes
-   ├─ routing.ts   platform ↔ region
-   ├─ endpoints.ts method ids, URLs, TTLs
+└─ riot/                                ├─ auth/             consumer auth + scopes
+   ├─ routing.ts   platform ↔ region    ├─ docs/             OpenAPI document + /docs
+   ├─ endpoints.ts ids, URLs, TTLs      └─ cli/             key minting, resets, spec
    ├─ client.ts    undici pools + §5.5 error policy
    └─ limiter.ts   header-driven token buckets
 

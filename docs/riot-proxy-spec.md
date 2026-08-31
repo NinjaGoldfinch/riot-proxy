@@ -27,8 +27,8 @@
 13. [Observability](#13-observability)
 14. [Configuration reference](#14-configuration-reference)
 15. [Implementation guide (step-by-step)](#15-implementation-guide)
-16. [Appendix A — important values quick reference](#appendix-a)
-17. [Appendix B — external documentation links](#appendix-b)
+16. [Appendix A — important values quick reference](#appendix-a--important-values-quick-reference)
+17. [Appendix B — external documentation links](#appendix-b--external-documentation-links)
 
 ---
 
