@@ -68,6 +68,16 @@ const EXPECTED_OPERATIONS = [
   'POST /v1/admin/tracked-players',
 ];
 
+/**
+ * Named in prose but deliberately absent from `paths`. `/v1/ws` never reaches
+ * the document at all — @fastify/websocket registers no operation
+ * @fastify/swagger can see — and the docs and dev routes are hidden, `/docs`
+ * from itself included.
+ */
+const NOT_OPERATIONS = new Set(['/v1/ws', '/openapi.json', '/openapi.yaml', '/dev']);
+const isOperation = (path: string): boolean =>
+  !NOT_OPERATIONS.has(path) && !path.startsWith('/docs');
+
 const operations = (d: Record<string, any>): string[] =>
   Object.entries(d.paths ?? {})
     .flatMap(([path, ops]) => Object.keys(ops as object).map((m) => `${m.toUpperCase()} ${path}`))
@@ -412,6 +422,43 @@ describe('the document itself (#62)', () => {
     expect(prose).toContain(`the default is ${DEFAULT_QUOTA_PER_MIN}/min`);
     expect(prose).toContain(`unauthenticated callers get ${ANON_QUOTA_PER_MIN}/min`);
     expect(prose).toContain(`Authorization: Bearer ${KEY_PREFIX}`);
+  });
+
+  it('names only routes that exist', ({ skip }) => {
+    if (!available || !doc) return skip();
+    // The prose names routes by path, and the prose and the route table are
+    // generated from different things — so a rename leaves a dead pointer in
+    // the document a consumer is reading to find that exact route, and nothing
+    // else in the suite would notice.
+    const prose = [
+      doc.info.description as string,
+      ...(doc.tags as { description?: string }[]).map((t) => t.description ?? ''),
+      ...Object.values(
+        doc.components.securitySchemes as Record<string, { description?: string }>,
+      ).map((s) => s.description ?? ''),
+    ].join('\n\n');
+
+    const routed = new Set(Object.keys(doc.paths));
+    let checked = 0;
+
+    // Both forms the prose uses: `POST /v1/admin/consumers` when the reader is
+    // being told to call something, and a bare `/readyz` when it is being
+    // pointed at. The method is optional and the trailing `[^`]*` is what lets
+    // `/v1/ws?token=…` match with its query string while capturing only the
+    // path — without it that one is skipped in silence and the exemption above
+    // is never exercised.
+    for (const [, path] of prose.matchAll(
+      /`(?:(?:GET|POST|PATCH|PUT|DELETE) )?(\/[A-Za-z0-9/_{}.-]*)[^`]*`/g,
+    )) {
+      if (!isOperation(path!)) continue;
+      checked += 1;
+      expect(routed, `the prose names ${path}, which is not a route`).toContain(path!);
+    }
+
+    // A regex over prose passes vacuously when it matches nothing, which is the
+    // failure this guards against: reformat one line and the assertion quietly
+    // stops running.
+    expect(checked).toBeGreaterThan(2);
   });
 
   it('badges each route with what it costs', ({ skip }) => {
