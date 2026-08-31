@@ -156,6 +156,39 @@ describe('the configuration table', () => {
   });
 });
 
+/**
+ * A `KEY=…` line, commented or not. A commented entry documents an opt-in —
+ * `# DEV_UI=true` says "this exists and is off" — so it counts as documented.
+ */
+const ENV_DOCUMENTED = new Set(
+  [...read('.env.example').matchAll(/^#?\s*([A-Z][A-Z0-9_]*)=/gm)].map((m) => m[1]!),
+);
+
+/**
+ * `.env.example` is the first file a new developer opens and the only
+ * documentation most settings have. It is not generated, on purpose: the
+ * comments explaining each knob are TS block comments in `src/config.ts` that
+ * TypeBox cannot see, and two of the values differ from the schema default
+ * deliberately. So the key set is asserted and nothing about the values is.
+ */
+describe('.env.example', () => {
+  it('documents every setting the schema accepts', () => {
+    // The risk is quiet and one-directional: a setting added to `EnvSchema` and
+    // not here is invisible — the service starts fine on the default and nobody
+    // learns the knob exists. That is how `DOCS_UI` would have gone unmentioned.
+    for (const key of Object.keys(properties)) {
+      expect(ENV_DOCUMENTED, `${key} is in EnvSchema but not in .env.example`).toContain(key);
+    }
+  });
+
+  it('does not advertise a setting the schema has dropped', () => {
+    // Worse than a missing one: it reads as supported and does nothing.
+    for (const key of ENV_DOCUMENTED) {
+      expect(properties, `.env.example sets ${key}, which EnvSchema ignores`).toHaveProperty(key);
+    }
+  });
+});
+
 describe('numbers quoted beside the setting they come from', () => {
   it('matches the schema every time', () => {
     // `TRACK_POLL_LIVE_S` (60 s), `BULK_USAGE_CEILING` (default 75 %) — the
