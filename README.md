@@ -286,6 +286,7 @@ Every archive job therefore carries an explicit priority.
 | `CLIENT_WAIT_BUDGET_MS`                      | `2000`                                            | Max limiter wait for a client request                       |
 | `BULK_USAGE_CEILING`                         | `0.80`                                            | Bulk work stops here, keeping 20% for callers               |
 | `STALE_WHILE_REVALIDATE`                     | `true`                                            |                                                             |
+| `METRICS_INTERVAL_S`                         | `5`                                               | `metrics` WS topic cadence; idle while nobody subscribes    |
 | `TRACK_POLL_LIVE_S` / `_RANK_S` / `_MATCH_S` | `60` / `600` / `300`                              |                                                             |
 | `DDRAGON_SYNC_S`                             | `3600`                                            | Version check cadence                                       |
 | `DDRAGON_DIR` / `DDRAGON_LOCALE`             | `./data/ddragon` / `en_US`                        |                                                             |
@@ -297,6 +298,7 @@ Every archive job therefore carries an explicit priority.
 | `AUTH_DISABLED`                              | `false`                                           | Dev only: skip key checks; refused in production            |
 | `DEV_UI`                                     | follows `NODE_ENV`                                | Serve the browser client at `/dev`; off in production       |
 | `DOCS_UI`                                    | `true`                                            | Serve `/docs`, `/openapi.json` and `/openapi.yaml`          |
+| `DASHBOARD_UI`                               | `true`                                            | Serve the operational dashboard at `/dashboard`             |
 | `LOG_LEVEL`                                  | `info`                                            |                                                             |
 
 `KEY_SCOPE` is derived, not configured.

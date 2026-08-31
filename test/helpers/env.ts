@@ -56,6 +56,7 @@ export const PINNED: Record<string, string> = {
   TRACK_POLL_MATCH_S: '300',
   DDRAGON_SYNC_S: '3600',
   ARCHIVE_TIMELINES: 'false',
+  METRICS_INTERVAL_S: '5',
   // Off by default so no test accidentally queues a 10 000-match walk; the
   // tests that care about it assert the enqueue directly.
   LOOKUP_BACKFILL_LIMIT: '0',
@@ -78,6 +79,8 @@ export const PINNED: Record<string, string> = {
   // and the document is generated on every run rather than only when someone
   // remembers to look at it.
   DOCS_UI: 'true',
+  // Pinned on so the /dashboard routes are always exercised.
+  DASHBOARD_UI: 'true',
 };
 
 for (const [key, fallback] of Object.entries(CONNECTIONS)) {

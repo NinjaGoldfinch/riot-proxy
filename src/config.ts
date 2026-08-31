@@ -83,6 +83,22 @@ const EnvSchema = Type.Object({
   DEV_UI: Type.Optional(Type.Boolean()),
 
   /**
+   * Tick cadence of the `metrics` WebSocket topic, in seconds. The snapshot
+   * queries (row counts, queue counts, limiter state) are only spent while at
+   * least one socket is subscribed, so a small value costs nothing at rest.
+   */
+  METRICS_INTERVAL_S: Type.Integer({ default: 5, minimum: 1, maximum: 300 }),
+
+  /**
+   * Serve the operational dashboard at `/dashboard` (see
+   * `public/dashboard.html`). Like DOCS_UI this defaults **on in production**:
+   * the dashboard is an operator tool for the deployed service, and the page
+   * itself is inert — every byte of data behind it requires an admin-scoped
+   * key and passes the admin IP allowlist.
+   */
+  DASHBOARD_UI: Type.Boolean({ default: true }),
+
+  /**
    * Serve the OpenAPI document and the API reference at `/docs`.
    *
    * Unlike DEV_UI this defaults **on in production**: a published API's
@@ -162,6 +178,7 @@ export const config = {
   adminIpAllowlist,
   authDisabled: env.AUTH_DISABLED,
   devUi: env.DEV_UI ?? env.NODE_ENV !== 'production',
+  dashboardUi: env.DASHBOARD_UI,
   docsUi: env.DOCS_UI,
   isProduction: env.NODE_ENV === 'production',
   isTest: env.NODE_ENV === 'test',
