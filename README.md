@@ -245,15 +245,19 @@ under a distinct `neg:` prefix — a cached "not in game" is distinguishable fro
 
 ### Background jobs
 
-| Job               | Schedule                           | Action                                              |
-| ----------------- | ---------------------------------- | --------------------------------------------------- |
-| `poll:live`       | every `TRACK_POLL_LIVE_S` (60 s)   | spectator-v5 → `game.started` / `game.ended`        |
-| `poll:rank`       | every `TRACK_POLL_RANK_S` (600 s)  | league-v4 → `rank.changed`                          |
-| `poll:matches`    | every `TRACK_POLL_MATCH_S` (300 s) | new match IDs since the last tick → `archive:match` |
-| `archive:match`   | on demand                          | fetch, upsert, `match.archived`                     |
-| `backfill:player` | admin, or a player never walked    | page 100 IDs at a time, bulk priority               |
-| `ddragon:sync`    | hourly                             | on a new patch, mirror data and emit `patch.new`    |
-| `maintenance`     | daily                              | clear orphaned single-flight locks                  |
+| Job                   | Schedule                           | Action                                               |
+| --------------------- | ---------------------------------- | ---------------------------------------------------- |
+| `poll:live`           | every `TRACK_POLL_LIVE_S` (60 s)   | spectator-v5 → `game.started` / `game.ended`         |
+| `poll:rank`           | every `TRACK_POLL_RANK_S` (600 s)  | league-v4 → `rank.changed`                           |
+| `poll:matches`        | every `TRACK_POLL_MATCH_S` (300 s) | new match IDs since the last tick → `archive:match`  |
+| `archive:match`       | on demand                          | fetch, upsert, `match.archived`                      |
+| `backfill:player`     | admin, or a player never walked    | page 100 IDs at a time, bulk priority                |
+| `ddragon:sync`        | hourly                             | on a new patch, mirror data and emit `patch.new`     |
+| `ladder:crawl`        | `LADDER_CRAWL_S` (off), or admin   | fan out one leg per apex league and (tier, division) |
+| `ladder:apex`         | per crawl                          | one request per apex league, upserted whole          |
+| `ladder:walk`         | per crawl                          | page a (tier, division) until an empty page          |
+| `aggregate:champions` | on a completed crawl, or admin     | recompute `champion_stats` from the archive          |
+| `maintenance`         | daily                              | clear orphaned single-flight locks                   |
 
 Each poll type is one repeatable tick that fans out to one job per tracked
 player, so adding or removing a tracked player needs no scheduler changes. All
@@ -292,37 +296,43 @@ Every archive job therefore carries an explicit priority.
 
 ## Configuration
 
-| Env var                                      | Default                                           | Notes                                                       |
-| -------------------------------------------- | ------------------------------------------------- | ----------------------------------------------------------- |
-| `RIOT_API_KEY`                               | —                                                 | **Required.** The secret this project exists to protect     |
-| `RIOT_USER_AGENT`                            | `riot-proxy/1.0 …`                                | Sent upstream so Riot can identify you                      |
-| `PORT` / `HOST`                              | `8080` / `0.0.0.0`                                |                                                             |
-| `NODE_ENV`                                   | `development`                                     | `production` refuses `AUTH_DISABLED` and turns `DEV_UI` off |
-| `REDIS_URL`                                  | `redis://localhost:6379`                          |                                                             |
-| `DATABASE_URL`                               | `postgres://proxy:proxy@localhost:5432/riotproxy` |                                                             |
-| `DEFAULT_PLATFORM`                           | `euw1`                                            | Used by the composite endpoint                              |
-| `CACHE_TTL_OVERRIDES`                        | —                                                 | CSV, e.g. `league=120,spectator=20`                         |
-| `NEG_TTL_SECONDS`                            | `30`                                              | Spectator 404s                                              |
-| `NEG_TTL_ACCOUNT_SECONDS`                    | `300`                                             | Typo'd Riot IDs                                             |
-| `SF_LOCK_MS`                                 | `5000`                                            | Cross-instance single-flight lock                           |
-| `CLIENT_WAIT_BUDGET_MS`                      | `2000`                                            | Max limiter wait for a client request                       |
-| `BULK_USAGE_CEILING`                         | `0.80`                                            | Bulk work stops here, keeping 20% for callers               |
-| `STALE_WHILE_REVALIDATE`                     | `true`                                            |                                                             |
-| `METRICS_INTERVAL_S`                         | `5`                                               | `metrics` WS topic cadence; idle while nobody subscribes    |
-| `METRICS_HISTORY_INTERVAL_S`                 | `60`                                              | Metrics history point cadence; always on, capped list       |
-| `TRACK_POLL_LIVE_S` / `_RANK_S` / `_MATCH_S` | `60` / `600` / `300`                              |                                                             |
-| `DDRAGON_SYNC_S`                             | `3600`                                            | Version check cadence                                       |
-| `DDRAGON_DIR` / `DDRAGON_LOCALE`             | `./data/ddragon` / `en_US`                        |                                                             |
-| `ARCHIVE_TIMELINES`                          | `false`                                           | Timelines are large; opt in                                 |
-| `LOOKUP_BACKFILL_LIMIT`                      | `10000`                                           | History walked on a first lookup; `0` disables              |
-| `TRACK_CATCHUP_LIMIT`                        | `500`                                             | How far a match poll pages back to resume; `0` disables     |
-| `ADMIN_IP_ALLOWLIST`                         | —                                                 | CSV of IPs/CIDRs; empty means key scope is enough           |
-| `BOOTSTRAP_ADMIN_KEY`                        | —                                                 | Seeds one admin key on `npm run migrate`                    |
-| `AUTH_DISABLED`                              | `false`                                           | Dev only: skip key checks; refused in production            |
-| `DEV_UI`                                     | follows `NODE_ENV`                                | Serve the browser client at `/dev`; off in production       |
-| `DOCS_UI`                                    | `true`                                            | Serve `/docs`, `/openapi.json` and `/openapi.yaml`          |
-| `DASHBOARD_UI`                               | `true`                                            | Serve the operational dashboard at `/dashboard`             |
-| `LOG_LEVEL`                                  | `info`                                            |                                                             |
+| Env var                                      | Default                                           | Notes                                                        |
+| -------------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------ |
+| `RIOT_API_KEY`                               | —                                                 | **Required.** The secret this project exists to protect      |
+| `RIOT_USER_AGENT`                            | `riot-proxy/1.0 …`                                | Sent upstream so Riot can identify you                       |
+| `PORT` / `HOST`                              | `8080` / `0.0.0.0`                                |                                                              |
+| `NODE_ENV`                                   | `development`                                     | `production` refuses `AUTH_DISABLED` and turns `DEV_UI` off  |
+| `REDIS_URL`                                  | `redis://localhost:6379`                          |                                                              |
+| `DATABASE_URL`                               | `postgres://proxy:proxy@localhost:5432/riotproxy` |                                                              |
+| `DEFAULT_PLATFORM`                           | `euw1`                                            | Used by the composite endpoint                               |
+| `CACHE_TTL_OVERRIDES`                        | —                                                 | CSV, e.g. `league=120,spectator=20`                          |
+| `NEG_TTL_SECONDS`                            | `30`                                              | Spectator 404s                                               |
+| `NEG_TTL_ACCOUNT_SECONDS`                    | `300`                                             | Typo'd Riot IDs                                              |
+| `SF_LOCK_MS`                                 | `5000`                                            | Cross-instance single-flight lock                            |
+| `CLIENT_WAIT_BUDGET_MS`                      | `2000`                                            | Max limiter wait for a client request                        |
+| `BULK_USAGE_CEILING`                         | `0.80`                                            | Bulk work stops here, keeping 20% for callers                |
+| `STALE_WHILE_REVALIDATE`                     | `true`                                            |                                                              |
+| `METRICS_INTERVAL_S`                         | `5`                                               | `metrics` WS topic cadence; idle while nobody subscribes     |
+| `METRICS_HISTORY_INTERVAL_S`                 | `60`                                              | Metrics history point cadence; always on, capped list        |
+| `TRACK_POLL_LIVE_S` / `_RANK_S` / `_MATCH_S` | `60` / `600` / `300`                              |                                                              |
+| `DDRAGON_SYNC_S`                             | `3600`                                            | Version check cadence                                        |
+| `DDRAGON_DIR` / `DDRAGON_LOCALE`             | `./data/ddragon` / `en_US`                        |                                                              |
+| `ARCHIVE_TIMELINES`                          | `false`                                           | Timelines are large; opt in                                  |
+| `LOOKUP_BACKFILL_LIMIT`                      | `10000`                                           | History walked on a first lookup; `0` disables               |
+| `TRACK_CATCHUP_LIMIT`                        | `500`                                             | How far a match poll pages back to resume; `0` disables      |
+| `LADDER_CRAWL_S`                             | `0`                                               | Ladder crawl cadence; `0` means admin-trigger only           |
+| `LADDER_QUEUES`                              | `RANKED_SOLO_5x5`                                 | CSV; `RANKED_FLEX_SR` is the other one                       |
+| `LADDER_PLATFORMS`                           | —                                                 | CSV; empty means `DEFAULT_PLATFORM`                          |
+| `LADDER_TIER_FLOOR`                          | `MASTER`                                          | Lowest tier a crawl enumerates                               |
+| `LADDER_BACKFILL_TIER_FLOOR`                 | `CHALLENGER`                                      | Lowest tier whose match histories get walked                 |
+| `LADDER_BACKFILL_LIMIT`                      | `100`                                             | Matches per discovered player; `0` discovers without walking |
+| `ADMIN_IP_ALLOWLIST`                         | —                                                 | CSV of IPs/CIDRs; empty means key scope is enough            |
+| `BOOTSTRAP_ADMIN_KEY`                        | —                                                 | Seeds one admin key on `npm run migrate`                     |
+| `AUTH_DISABLED`                              | `false`                                           | Dev only: skip key checks; refused in production             |
+| `DEV_UI`                                     | follows `NODE_ENV`                                | Serve the browser client at `/dev`; off in production        |
+| `DOCS_UI`                                    | `true`                                            | Serve `/docs`, `/openapi.json` and `/openapi.yaml`           |
+| `DASHBOARD_UI`                               | `true`                                            | Serve the operational dashboard at `/dashboard`              |
+| `LOG_LEVEL`                                  | `info`                                            |                                                              |
 
 `KEY_SCOPE` is derived, not configured.
 
@@ -473,6 +483,7 @@ anywhere.
 | `ACCEPTANCE_PHASE2_REQUESTS` | `60`                     | Burst size — the spec asks for 500           |
 | `ACCEPTANCE_BACKFILL_LIMIT`  | `40`                     | Matches to walk back                         |
 | `ACCEPTANCE_LIVE_GAME`       | off                      | Opt in to the live game check                |
+| `ACCEPTANCE_LADDER`          | off                      | Opt in to running a real ladder crawl        |
 | `ACCEPTANCE_KEEP_TRACKED`    | off                      | Leave the player tracked afterwards          |
 | `ACCEPTANCE_LOG_LEVEL`       | `warn`                   | Log level for the api/worker it starts       |
 
@@ -495,8 +506,21 @@ ACCEPTANCE_LIVE_GAME=1 ACCEPTANCE_RIOT_ID='Name#TAG' npm run test:acceptance
 ```
 
 That waits up to 30 minutes for `game.started`, then for the `match.archived`
-that follows it. CI runs everything else nightly (`.github/workflows/acceptance.yml`),
-and skips itself when no `RIOT_API_KEY` secret is configured.
+that follows it.
+
+Phase 7 is split for a different reason. The crawl itself is three requests at a
+`MASTER` floor — one per apex league — but what it _discovers_ is not: every
+entry above the server's `LADDER_BACKFILL_TIER_FLOOR` queues a match-history
+walk, and the suite cannot see or change that setting because it belongs to the
+server it is pointed at. So the surface is asserted for free and the crawl is a
+second opt-in.
+
+```bash
+ACCEPTANCE_LADDER=1 ACCEPTANCE_RIOT_ID='Name#TAG' npm run test:acceptance
+```
+
+CI runs everything else nightly (`.github/workflows/acceptance.yml`), and skips
+itself when no `RIOT_API_KEY` secret is configured.
 
 ### Layout
 

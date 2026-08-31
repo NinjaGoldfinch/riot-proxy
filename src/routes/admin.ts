@@ -9,17 +9,23 @@ import {
   findConsumerByIdAndHash,
   listConsumers,
 } from '../db/consumers.js';
+import { getCrawl, finishCrawl, listCrawls } from '../db/ladder.js';
+import { assertRankedQueue } from '../riot/ladder.js';
 import { countArchivedMatches } from '../db/matches.js';
+import type { LadderCrawl } from '../db/schema.js';
 import { countTrackedPlayers, listPlayers, setTracked, upsertPlayer } from '../db/players.js';
 import { ProxyError } from '../errors.js';
 import { fetcher } from '../fetcher.js';
 import { logger } from '../logger.js';
 import { build } from '../riot/endpoints.js';
 import { assertPlatform, platformToAccountRegion } from '../riot/routing.js';
+import { clearCrawlState, pendingLegs } from '../jobs/ladder-state.js';
+import { enqueueChampionAggregate, startCrawl } from '../jobs/processors.js';
 import {
   JOB,
   enqueueBackfill,
   ddragonQueue,
+  ladderQueue,
   type BackfillEnqueueResult,
   type BackfillPlayerJob,
 } from '../jobs/queues.js';
@@ -30,6 +36,10 @@ import {
   AdminStatsResponse,
   ConsumerListResponse,
   GameNameParam,
+  LadderCrawlBody,
+  LadderCrawlListResponse,
+  LadderCrawlStartedResponse,
+  RankedQueueParam,
   MetricsHistoryResponse,
   MetricsResponse,
   PassthroughResponse,
@@ -239,6 +249,143 @@ const adminRoutes: FastifyPluginAsync = async (fastify) => {
     },
   );
 
+  // ── ladder ─────────────────────────────────────────────────────────────────
+
+  /**
+   * Trigger a crawl. 202, because the answer is "it is running", not "here is
+   * the ladder" — the walk behind this takes minutes on a production key and
+   * hours on a dev one.
+   *
+   * The fan-out happens inline rather than through a `ladder:crawl` job: it
+   * makes no upstream calls, and doing it here is what lets the response carry
+   * a crawl id the caller can then poll, instead of a job id that names
+   * nothing in the database.
+   */
+  fastify.post(
+    '/v1/admin/ladder/crawl',
+    {
+      ...adminScope,
+      schema: {
+        tags: ['admin'],
+        summary: 'Start a ladder crawl',
+        body: LadderCrawlBody,
+        response: { 202: LadderCrawlStartedResponse, ...localErrors },
+      },
+    },
+    async (request, reply) => {
+      const body = request.body as { platform?: string; queue?: string; tierFloor?: string };
+      const { crawlId, created, legs } = await startCrawl({
+        platform: body.platform ?? config.DEFAULT_PLATFORM,
+        queue: body.queue ?? config.ladderQueues[0] ?? 'RANKED_SOLO_5x5',
+        ...(body.tierFloor !== undefined ? { tierFloor: body.tierFloor } : {}),
+      });
+
+      // Not a 409: a second trigger has not failed, it has been told which
+      // crawl is already answering its question. The caller polls the same id
+      // either way, and `status` is what tells the two apart.
+      return reply.code(202).send({
+        crawlId,
+        status: created ? 'started' : 'already-running',
+        legs,
+      });
+    },
+  );
+
+  fastify.get(
+    '/v1/admin/ladder/crawls',
+    {
+      ...adminScope,
+      schema: {
+        tags: ['admin'],
+        summary: 'Recent ladder crawls',
+        querystring: Type.Object({
+          platform: Type.Optional(PlatformParam),
+          queue: Type.Optional(RankedQueueParam),
+          limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, default: 20 })),
+        }),
+        response: { 200: LadderCrawlListResponse, ...localErrors },
+      },
+    },
+    async (request) => {
+      const { platform, queue, limit } = request.query as {
+        platform?: string;
+        queue?: string;
+        limit?: number;
+      };
+      const crawls = await listCrawls({
+        ...(platform ? { platform: assertPlatform(platform) } : {}),
+        ...(queue ? { queue } : {}),
+        ...(limit ? { limit } : {}),
+      });
+      return { crawls: await Promise.all(crawls.map(withPendingLegs)) };
+    },
+  );
+
+  /**
+   * Cancel. Three things have to happen and only two of them are the database:
+   * the row is marked, the legs still queued are dropped, and the ones already
+   * running notice on their own — a walk re-reads the crawl's status every ten
+   * pages, because BullMQ cannot take a job back once a worker holds it.
+   */
+  fastify.delete(
+    '/v1/admin/ladder/crawls/:id',
+    {
+      ...adminScope,
+      schema: {
+        tags: ['admin'],
+        summary: 'Cancel a running ladder crawl',
+        params: Type.Object({ id: Type.String({ format: 'uuid' }) }),
+        response: { 200: PassthroughResponse, ...localErrors },
+      },
+    },
+    async (request) => {
+      const { id } = request.params as { id: string };
+      const existing = await getCrawl(id);
+      if (!existing) throw ProxyError.notFound('No such ladder crawl for the current key scope');
+
+      const cancelled = await finishCrawl(id, 'cancelled');
+      if (!cancelled) {
+        throw new ProxyError('VALIDATION', `Crawl ${id} is already ${existing.status}`);
+      }
+
+      const dropped = await dropQueuedLegs(id);
+      await clearCrawlState(id);
+      logger.info({ crawlId: id, dropped }, 'ladder crawl cancelled');
+      return { ok: true, crawlId: id, status: 'cancelled', droppedJobs: dropped };
+    },
+  );
+
+  /**
+   * Recompute the champion aggregates for one ladder, without waiting for a
+   * crawl to finish — for a deployment whose archive filled up by other means,
+   * or after a schema change to the aggregation itself.
+   */
+  fastify.post(
+    '/v1/admin/analytics/champions/recompute',
+    {
+      ...adminScope,
+      schema: {
+        tags: ['admin'],
+        summary: 'Recompute champion aggregates from the archive',
+        body: Type.Object({
+          platform: Type.Optional(PlatformParam),
+          queue: Type.Optional(RankedQueueParam),
+        }),
+        response: { 202: PassthroughResponse, ...localErrors },
+      },
+    },
+    async (request, reply) => {
+      const body = request.body as { platform?: string; queue?: string };
+      const platform = assertPlatform(body.platform ?? config.DEFAULT_PLATFORM);
+      const queue = assertRankedQueue(body.queue ?? config.ladderQueues[0] ?? 'RANKED_SOLO_5x5');
+
+      await enqueueChampionAggregate(platform, queue);
+      // 202 for the same reason the crawl trigger is: the answer is "it is
+      // queued", and the table scan behind it runs on the worker.
+      return reply.code(202).send({ ok: true, platform, queue });
+    },
+  );
+
   // ── cache ──────────────────────────────────────────────────────────────────
 
   fastify.post(
@@ -409,5 +556,35 @@ const adminRoutes: FastifyPluginAsync = async (fastify) => {
     },
   );
 };
+
+/**
+ * Remove the legs of a cancelled crawl that have not started. An active job
+ * cannot be removed — BullMQ will not take work back from a worker that holds
+ * the lock — which is what the walk's own status check is for.
+ */
+async function dropQueuedLegs(crawlId: string): Promise<number> {
+  const jobs = await ladderQueue.getJobs(['waiting', 'delayed', 'prioritized']);
+  let dropped = 0;
+  for (const job of jobs) {
+    if ((job.data as { crawlId?: string }).crawlId !== crawlId) continue;
+    try {
+      await job.remove();
+      dropped += 1;
+    } catch {
+      // Claimed by a worker between the listing and the remove; it will stop
+      // itself on the next status check.
+    }
+  }
+  return dropped;
+}
+
+/**
+ * How much of a crawl is left, read from Redis rather than stored on the row:
+ * the set is written by the fan-out and drained by the legs themselves, so it
+ * is the only place that knows without asking BullMQ about every job.
+ */
+async function withPendingLegs(crawl: LadderCrawl) {
+  return { ...crawl, pendingLegs: crawl.status === 'running' ? await pendingLegs(crawl.id) : 0 };
+}
 
 export default adminRoutes;

@@ -1,4 +1,6 @@
 import { Queue, type JobsOptions } from 'bullmq';
+import { config } from '../config.js';
+import { logger } from '../logger.js';
 import { backfillsQueuedTotal } from '../metrics.js';
 import { redis } from '../redis.js';
 
@@ -8,6 +10,7 @@ export const QUEUE_NAMES = {
   archive: 'archive',
   backfill: 'backfill',
   ddragon: 'ddragon',
+  ladder: 'ladder',
   maintenance: 'maintenance',
 } as const;
 
@@ -29,9 +32,17 @@ export const pollQueue = makeQueue(QUEUE_NAMES.poll);
 export const archiveQueue = makeQueue(QUEUE_NAMES.archive);
 export const backfillQueue = makeQueue(QUEUE_NAMES.backfill);
 export const ddragonQueue = makeQueue(QUEUE_NAMES.ddragon);
+export const ladderQueue = makeQueue(QUEUE_NAMES.ladder);
 export const maintenanceQueue = makeQueue(QUEUE_NAMES.maintenance);
 
-export const allQueues = [pollQueue, archiveQueue, backfillQueue, ddragonQueue, maintenanceQueue];
+export const allQueues = [
+  pollQueue,
+  archiveQueue,
+  backfillQueue,
+  ddragonQueue,
+  ladderQueue,
+  maintenanceQueue,
+];
 
 /** Job name constants — shared by producers and the worker's processors. */
 export const JOB = {
@@ -44,6 +55,10 @@ export const JOB = {
   archiveMatch: 'archive:match',
   backfillPlayer: 'backfill:player',
   ddragonSync: 'ddragon:sync',
+  ladderCrawl: 'ladder:crawl',
+  ladderApex: 'ladder:apex',
+  ladderWalk: 'ladder:walk',
+  aggregateChampions: 'aggregate:champions',
   maintenance: 'maintenance',
 } as const;
 
@@ -114,11 +129,87 @@ export function backfillPriority(index: number): number {
   return Math.min(MAX_PRIORITY, BACKFILL_PRIORITY_BASE + depth);
 }
 
+/**
+ * Ordering inside the ladder queue. Same trap as `ARCHIVE_PRIORITY`: a job
+ * with no priority is popped before every prioritized one, so all three of
+ * these are explicit.
+ *
+ * The apex leagues come before the paged walks because they are three requests
+ * for the most valuable slice of the ladder — a crawl that gets no further has
+ * still produced something. The fan-out itself outranks both so a triggered
+ * crawl starts fanning out rather than queueing behind the previous one's tail.
+ */
+export const LADDER_PRIORITY = {
+  crawl: 1,
+  apex: 2,
+  walk: 3,
+} as const;
+
+export interface LadderCrawlJob {
+  platform: string;
+  queue: string;
+  tierFloor?: string;
+}
+
+export interface LadderApexJob {
+  crawlId: string;
+  platform: string;
+  queue: string;
+  tier: string;
+}
+
+export interface LadderWalkJob {
+  crawlId: string;
+  platform: string;
+  queue: string;
+  tier: string;
+  division: string;
+}
+
+/**
+ * One leg of a crawl — an apex league, or one (tier, division) walk. The id is
+ * both the BullMQ de-duplication id and the member of the outstanding-legs set
+ * that decides when the crawl is finished, so the two cannot drift apart.
+ *
+ * Lifecycle-scoped like `pollDedupeId`, and for the same reason: a stable
+ * `jobId` would be matched against retained finished jobs, so re-crawling a
+ * ladder within the retention window would silently drop its legs.
+ */
+export function ladderLegId(job: string, ...parts: string[]): string {
+  return jobKey(job, ...parts);
+}
+
 export interface ArchiveMatchJob {
   matchId: string;
   puuid?: string;
   fetchTimeline?: boolean;
 }
+
+/** Why a backfill was queued — the log line, the metric label, and the rank. */
+export const BACKFILL_REASONS = ['admin', 'lookup', 'track', 'catchup', 'ladder'] as const;
+export type BackfillReason = (typeof BACKFILL_REASONS)[number];
+
+/**
+ * Ordering inside the *backfill* queue. Not to be confused with
+ * `backfillPriority()` below, which ranks the archive jobs a walk produces.
+ *
+ * A crawl discovers thousands of players nobody asked about, so its walks sit
+ * in a band of their own beneath everything a person or a tracked player set
+ * off — someone looking up one player always beats the ladder.
+ *
+ * All five are listed because of the trap `ARCHIVE_PRIORITY` documents: the
+ * worker drains the unprioritized `wait` list before it touches the prioritized
+ * set, so leaving the existing reasons unranked would have put every one of
+ * them *ahead* of a band that was supposed to outrank the crawl — and made the
+ * crawl's own low rank meaningless.
+ */
+export const BACKFILL_PRIORITY: Record<BackfillReason, number> = {
+  lookup: 1,
+  track: 1,
+  admin: 1,
+  catchup: 1,
+  ladder: 10,
+};
 
 export interface BackfillPlayerJob {
   puuid: string;
@@ -126,8 +217,14 @@ export interface BackfillPlayerJob {
   /** Total matches to walk back through; paged 100 at a time (§10). */
   limit?: number;
   fetchTimeline?: boolean;
+  /**
+   * match-v5 queue id to restrict the id list to. A ladder walk sets it so the
+   * crawl pays for ranked games rather than every mode the player has touched;
+   * everything else walks the history whole.
+   */
+  queueId?: number;
   /** Why it was queued, for the log line that says how it got here. */
-  reason?: 'admin' | 'lookup' | 'track' | 'catchup';
+  reason?: BackfillReason;
 }
 
 export interface PollPlayerJob {
@@ -184,7 +281,10 @@ export async function enqueueBackfill(
     }
   }
 
-  const job = await queue.add(JOB.backfillPlayer, data, { jobId });
+  const job = await queue.add(JOB.backfillPlayer, data, {
+    jobId,
+    priority: BACKFILL_PRIORITY[data.reason ?? 'admin'],
+  });
   return record(data, { jobId: job.id ?? jobId, status: 'queued' });
 }
 
@@ -198,6 +298,49 @@ export async function enqueueBackfill(
 function record(data: BackfillPlayerJob, result: BackfillEnqueueResult): BackfillEnqueueResult {
   backfillsQueuedTotal.inc({ reason: data.reason ?? 'admin', status: result.status });
   return result;
+}
+
+/**
+ * The ladder crawl is the one repeatable that is off by default
+ * (`LADDER_CRAWL_S=0`), because it is the one that can spend a month of a dev
+ * key's budget on what it discovers. One schedule per (platform, queue), since
+ * a crawl is per ladder.
+ *
+ * Turning it back off has to remove the schedules, not merely stop adding
+ * them: a scheduler upserted by a previous boot lives in Redis and would keep
+ * firing against a config that says it should not.
+ */
+export async function scheduleLadderCrawls(): Promise<void> {
+  const wanted = config.ladderPlatforms.flatMap((platform) =>
+    config.ladderQueues.map((queue) => ({
+      schedulerId: jobKey(JOB.ladderCrawl, platform, queue),
+      data: { platform, queue },
+    })),
+  );
+
+  if (config.LADDER_CRAWL_S === 0) {
+    for (const { schedulerId } of wanted) {
+      const removed = await ladderQueue.removeJobScheduler(schedulerId);
+      if (removed) logger.info({ schedulerId }, 'ladder crawl schedule removed (LADDER_CRAWL_S=0)');
+    }
+    return;
+  }
+
+  for (const { schedulerId, data } of wanted) {
+    await ladderQueue.upsertJobScheduler(
+      schedulerId,
+      { every: config.LADDER_CRAWL_S * 1000 },
+      {
+        name: JOB.ladderCrawl,
+        data,
+        opts: {
+          priority: LADDER_PRIORITY.crawl,
+          removeOnComplete: { age: 3600, count: 100 },
+        },
+      },
+    );
+    logger.info({ ...data, everySeconds: config.LADDER_CRAWL_S }, 'ladder crawl scheduled');
+  }
 }
 
 export async function closeQueues(): Promise<void> {

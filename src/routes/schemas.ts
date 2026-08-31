@@ -10,7 +10,8 @@
 import type {} from '@fastify/swagger';
 import { Type, type Static } from '@sinclair/typebox';
 import { ERROR_CODES } from '../errors.js';
-import { APEX_TIERS, DIVISIONS, PAGED_TIERS, RANKED_QUEUES } from '../riot/ladder.js';
+import { CRAWL_STATUSES } from '../db/ladder.js';
+import { APEX_TIERS, DIVISIONS, PAGED_TIERS, RANKED_QUEUES, TIERS } from '../riot/ladder.js';
 import { PLATFORMS, REGIONS } from '../riot/routing.js';
 import {
   MetricsHistoryPoint,
@@ -398,6 +399,125 @@ export const ConsumerListResponse = Type.Object({ consumers: Type.Array(Consumer
 
 export const PlayerListResponse = Type.Object({ players: Type.Array(PlayerSummary) });
 
+/** One crawl run, as the admin listing and the trigger route report it. */
+export const LadderCrawlSummary = Type.Object(
+  {
+    id: Type.String({ format: 'uuid' }),
+    platform: Type.String(),
+    queue: Type.String(),
+    tierFloor: {
+      ...Type.String(),
+      description: 'How far down the ladder this run was told to enumerate',
+    },
+    status: Type.Unsafe<string>({ type: 'string', enum: [...CRAWL_STATUSES] }),
+    startedAt: Type.String({ format: 'date-time' }),
+    finishedAt: NullableTimestamp,
+    pagesFetched: Type.Integer(),
+    entriesSeen: Type.Integer(),
+    playersDiscovered: Type.Integer(),
+    backfillsEnqueued: Type.Integer(),
+    pendingLegs: {
+      ...Type.Integer(),
+      description:
+        'Apex leagues and (tier, division) walks still outstanding. 0 for a finished run.',
+    },
+  },
+  { $id: 'LadderCrawlSummary' },
+);
+
+export const LadderCrawlListResponse = Type.Object({ crawls: Type.Array(LadderCrawlSummary) });
+
+/**
+ * `tierFloor` bounds what the crawl enumerates. It is the one knob that turns
+ * three requests into twenty thousand, so it is spelled out rather than left
+ * to the reader to infer from the tier list.
+ */
+export const LadderCrawlBody = Type.Object({
+  platform: Type.Optional(PlatformParam),
+  queue: Type.Optional(RankedQueueParam),
+  tierFloor: Type.Optional({
+    ...Type.Unsafe<string>({ type: 'string', enum: [...TIERS] }),
+    description:
+      'Lowest tier to enumerate, inclusive. Defaults to LADDER_TIER_FLOOR. `MASTER` and above ' +
+      'is three requests per queue; `IRON` is the whole ladder, ~15–20 k pages.',
+  }),
+});
+
+export const LadderCrawlStartedResponse = Type.Object({
+  crawlId: Type.String({ format: 'uuid' }),
+  status: Type.Unsafe<string>({ type: 'string', enum: ['started', 'already-running'] }),
+  legs: {
+    ...Type.Integer(),
+    description: 'Jobs fanned out — one per apex league, one per (tier, division) below them',
+  },
+});
+
+/**
+ * A champion's line in one slice of the aggregate.
+ *
+ * `share` is this champion's fraction of the picks in the slice, not Riot's
+ * pick rate: a match is not played "in" a tier — its ten participants can sit
+ * in ten different ones — so the denominator a true pick rate needs (games in
+ * this tier) is not a number this table has. The share is well defined, is
+ * what a chart of the slice actually plots, and does not pretend otherwise.
+ */
+export const ChampionStatEntry = Type.Object(
+  {
+    championId: Type.Integer(),
+    tier: Type.String(),
+    patch: Type.String(),
+    games: Type.Integer(),
+    wins: Type.Integer(),
+    winRate: Type.Number({ minimum: 0, maximum: 1 }),
+    share: {
+      ...Type.Number({ minimum: 0, maximum: 1 }),
+      description: "This champion's games as a fraction of the slice's games",
+    },
+  },
+  { $id: 'ChampionStatEntry' },
+);
+
+export const ChampionStatsResponse = Type.Object({
+  platform: Type.String(),
+  queue: Type.String(),
+  tier: {
+    ...Type.Union([Type.String(), Type.Null()]),
+    description: 'Null when the slice spans every tier the crawl reached',
+  },
+  patch: {
+    ...Type.Union([Type.String(), Type.Null()]),
+    description: '`gameVersion` major.minor. Null when nothing has been aggregated yet',
+  },
+  computedAt: {
+    ...NullableTimestamp,
+    description: 'When this slice was last recomputed from the archive',
+  },
+  totalGames: {
+    ...Type.Integer(),
+    description: 'Games in the slice — the denominator behind `share`',
+  },
+  champions: Type.Array(
+    Type.Unsafe<Static<typeof ChampionStatEntry>>({
+      $ref: 'ChampionStatEntry#',
+    }),
+  ),
+});
+
+export const ChampionStatsQuery = Type.Object({
+  platform: Type.Optional(PlatformParam),
+  queue: Type.Optional(RankedQueueParam),
+  tier: Type.Optional(Type.Unsafe<string>({ type: 'string', enum: [...TIERS] })),
+  patch: Type.Optional(
+    Type.String({
+      minLength: 3,
+      maxLength: 8,
+      pattern: '^[0-9]+\\.[0-9]+$',
+      description: 'Defaults to the newest patch this deployment has aggregated',
+    }),
+  ),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500, default: 200 })),
+});
+
 export const AdminStatsResponse = Type.Object({
   keyScope: Type.String(),
   archivedMatches: Type.Integer(),
@@ -551,7 +671,9 @@ export const sharedSchemas = [
   LadderTierParamSchema,
   DivisionParamSchema,
   ScopeParamSchema,
+  ChampionStatEntry,
   BackfillNoticeSchema,
   ProfileResponseSchema,
   MatchPageResponseSchema,
+  LadderCrawlSummary,
 ];

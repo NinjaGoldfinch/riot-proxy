@@ -2,6 +2,15 @@ import { createHash } from 'node:crypto';
 import { Type, type Static } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
 import { config as loadDotenv } from 'dotenv';
+import {
+  RANKED_QUEUES,
+  TIERS,
+  isRankedQueue,
+  isTier,
+  type RankedQueue,
+  type Tier,
+} from './riot/ladder.js';
+import { isPlatform, type Platform } from './riot/routing.js';
 
 loadDotenv();
 
@@ -62,6 +71,51 @@ const EnvSchema = Type.Object({
    * restores the old fixed window and lets a deep gap go unrepaired.
    */
   TRACK_CATCHUP_LIMIT: Type.Integer({ default: 500, minimum: 0, maximum: 10_000 }),
+
+  /**
+   * How often to start a ladder crawl, in seconds. `0` — the default — means
+   * no repeatable is scheduled at all and a crawl only ever runs when the
+   * admin route triggers one.
+   *
+   * Off by default because the cost is not the crawl, it is what the crawl
+   * discovers: enumerating a full ladder is thousands of requests and walking
+   * the match history behind it is months of a dev key's budget (§2 of
+   * docs/ladder-crawl-plan.md). A cadence is opt-in for people who have
+   * measured their own budget.
+   */
+  LADDER_CRAWL_S: Type.Integer({ default: 0, minimum: 0, maximum: 604_800 }),
+
+  /** Which ranked ladders to crawl. CSV of `RANKED_SOLO_5x5`/`RANKED_FLEX_SR`. */
+  LADDER_QUEUES: Type.String({ default: 'RANKED_SOLO_5x5' }),
+
+  /** CSV of platforms to crawl. Empty means `DEFAULT_PLATFORM` alone. */
+  LADDER_PLATFORMS: Type.String({ default: '' }),
+
+  /**
+   * How far down the ladder to enumerate. `MASTER` is three requests per
+   * queue — the apex leagues come back whole — and is the only floor that is
+   * unambiguously safe on a dev key. `EMERALD` is ~2–3 k pages; `IRON` is the
+   * whole ladder, ~15–20 k.
+   */
+  LADDER_TIER_FLOOR: Type.String({ default: 'MASTER' }),
+
+  /**
+   * How far down the ladder to *walk match histories*, which is a separate
+   * question from how far down to enumerate. Enumerating a ladder is thousands
+   * of requests; walking the players behind it is millions, so the two floors
+   * move independently (§2 of docs/ladder-crawl-plan.md). Enumerating Emerald+
+   * while only backfilling Master+ is a sane dev-key configuration.
+   */
+  LADDER_BACKFILL_TIER_FLOOR: Type.String({ default: 'CHALLENGER' }),
+
+  /**
+   * Matches to walk back per discovered player. One page of ids — deliberately
+   * far short of `LOOKUP_BACKFILL_LIMIT`, because this runs for thousands of
+   * players nobody asked about. `0` discovers players without walking them at
+   * all, which is the cheapest useful mode: the ladder still lands, and the
+   * archive is left to the lookup path.
+   */
+  LADDER_BACKFILL_LIMIT: Type.Integer({ default: 100, minimum: 0, maximum: 10_000 }),
 
   DDRAGON_DIR: Type.String({ default: './data/ddragon' }),
   DDRAGON_LOCALE: Type.String({ default: 'en_US' }),
@@ -175,6 +229,54 @@ export function parseTtlOverrides(csv: string): Record<string, number> {
 
 export const ttlOverrides = parseTtlOverrides(env.CACHE_TTL_OVERRIDES);
 
+/**
+ * The crawl's scope, resolved and validated at boot rather than at 3 a.m. when
+ * the first repeatable fires. A typo in `LADDER_TIER_FLOOR` should stop the
+ * process, not one job.
+ */
+export const ladderQueues: RankedQueue[] = env.LADDER_QUEUES.split(',')
+  .map((s) => s.trim())
+  .filter(Boolean)
+  .map((value) => {
+    if (!isRankedQueue(value)) {
+      throw new Error(
+        `Invalid environment configuration:\n  LADDER_QUEUES: '${value}' is not one of ${RANKED_QUEUES.join(', ')}`,
+      );
+    }
+    return value;
+  });
+
+/** Empty means the one platform this deployment is pointed at. */
+export const ladderPlatforms: Platform[] = (env.LADDER_PLATFORMS.trim() || env.DEFAULT_PLATFORM)
+  .split(',')
+  .map((s) => s.trim().toLowerCase())
+  .filter(Boolean)
+  .map((value) => {
+    if (!isPlatform(value)) {
+      throw new Error(
+        `Invalid environment configuration:\n  LADDER_PLATFORMS: '${value}' is not a platform`,
+      );
+    }
+    return value;
+  });
+
+function tierSetting(name: string, raw: string): Tier {
+  const value = raw.trim().toUpperCase();
+  if (!isTier(value)) {
+    throw new Error(
+      `Invalid environment configuration:\n  ${name}: '${raw}' is not one of ${TIERS.join(', ')}`,
+    );
+  }
+  return value;
+}
+
+export const ladderTierFloor: Tier = tierSetting('LADDER_TIER_FLOOR', env.LADDER_TIER_FLOOR);
+
+export const ladderBackfillTierFloor: Tier = tierSetting(
+  'LADDER_BACKFILL_TIER_FLOOR',
+  env.LADDER_BACKFILL_TIER_FLOOR,
+);
+
 export const adminIpAllowlist = env.ADMIN_IP_ALLOWLIST.split(',')
   .map((s) => s.trim())
   .filter(Boolean);
@@ -183,6 +285,10 @@ export const config = {
   ...env,
   KEY_SCOPE,
   ttlOverrides,
+  ladderQueues,
+  ladderPlatforms,
+  ladderTierFloor,
+  ladderBackfillTierFloor,
   adminIpAllowlist,
   authDisabled: env.AUTH_DISABLED,
   devUi: env.DEV_UI ?? env.NODE_ENV !== 'production',

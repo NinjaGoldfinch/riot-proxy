@@ -34,6 +34,28 @@ const LimiterWindow = Type.Object({
   limit: Type.Integer(),
 });
 
+/**
+ * One crawl, as the dashboard watches it. `pendingLegs` is what turns a row
+ * into progress: 31 legs at the start, 0 at the end, and a number in between
+ * that moves even when a multi-hour walk has not finished a single one.
+ */
+const LadderCrawlProgress = Type.Object({
+  id: Type.String(),
+  platform: Type.String(),
+  queue: Type.String(),
+  tierFloor: Type.String(),
+  status: Type.String(),
+  startedAt: Type.String({ format: 'date-time' }),
+  finishedAt: Type.Union([Type.String({ format: 'date-time' }), Type.Null()]),
+  pagesFetched: Type.Integer(),
+  entriesSeen: Type.Integer(),
+  playersDiscovered: Type.Integer(),
+  backfillsEnqueued: Type.Integer(),
+  pendingLegs: Type.Integer({
+    description: 'Apex leagues and (tier, division) walks still outstanding',
+  }),
+});
+
 export const MetricsSnapshot = Type.Object(
   {
     /** Bumped only when a field changes meaning; additions do not bump it. */
@@ -130,6 +152,23 @@ export const MetricsSnapshot = Type.Object(
         }),
       },
       { description: 'Since this api instance started. Cumulative.' },
+    ),
+    /**
+     * The ladder crawl, which is the one piece of work here that runs for
+     * hours and inflates the queue depths beside it. Queue counts alone cannot
+     * say whether that backlog is a crawl doing its job or something stuck.
+     */
+    ladder: Type.Object(
+      {
+        running: Type.Array(LadderCrawlProgress, {
+          description: 'Crawls in flight, one per (platform, queue). Usually empty.',
+        }),
+        lastCompleted: Type.Union([LadderCrawlProgress, Type.Null()], {
+          description: 'The most recent finished run, however it ended',
+        }),
+        entries: Type.Integer({ description: 'League entries stored for this key scope' }),
+      },
+      { description: 'Deployment-wide: read from Postgres, not from this process' },
     ),
     process: Type.Object({
       uptimeSeconds: Type.Number(),

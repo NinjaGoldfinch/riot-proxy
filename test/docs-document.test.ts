@@ -35,6 +35,7 @@ let available = false;
  */
 const EXPECTED_OPERATIONS = [
   'DELETE /v1/admin/consumers/{id}',
+  'DELETE /v1/admin/ladder/crawls/{id}',
   'DELETE /v1/admin/tracked-players/{puuid}',
   'GET /healthz',
   'GET /metrics',
@@ -42,11 +43,13 @@ const EXPECTED_OPERATIONS = [
   'GET /v1/admin/consumers',
   'GET /v1/admin/debug/cache',
   'GET /v1/admin/debug/riot',
+  'GET /v1/admin/ladder/crawls',
   'GET /v1/admin/limits/{scope}',
   'GET /v1/admin/metrics',
   'GET /v1/admin/metrics/history',
   'GET /v1/admin/stats',
   'GET /v1/admin/tracked-players',
+  'GET /v1/lol/analytics/champions',
   'GET /v1/lol/league/apex/{platform}/{tier}/{queue}',
   'GET /v1/lol/league/entries/by-puuid/{platform}/{puuid}',
   'GET /v1/lol/league/entries/{platform}/{queue}/{tier}/{division}',
@@ -65,11 +68,13 @@ const EXPECTED_OPERATIONS = [
   'GET /v1/riot/accounts/by-riot-id/{region}/{gameName}/{tagLine}',
   'GET /v1/static/versions',
   'GET /v1/static/{file}',
+  'POST /v1/admin/analytics/champions/recompute',
   'POST /v1/admin/backfill',
   'POST /v1/admin/cache/purge',
   'POST /v1/admin/consumers',
   'POST /v1/admin/consumers/{id}/revoke-cache',
   'POST /v1/admin/ddragon/sync',
+  'POST /v1/admin/ladder/crawl',
   'POST /v1/admin/tracked-players',
 ];
 
@@ -132,9 +137,11 @@ describe('shared components (#61)', () => {
     expect(Object.keys(doc.components?.schemas ?? {}).sort()).toEqual([
       'ApexTierParam',
       'BackfillNotice',
+      'ChampionStatEntry',
       'DivisionParam',
       'ErrorResponse',
       'GameNameParam',
+      'LadderCrawlSummary',
       'LadderTierParam',
       'MatchIdParam',
       'MatchPage',

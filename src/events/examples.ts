@@ -1,5 +1,5 @@
 import type { EventName, ProxyEvent } from './index.js';
-import { METRICS_TOPIC, PATCH_TOPIC, playerTopic } from './topics.js';
+import { LADDER_TOPIC, METRICS_TOPIC, PATCH_TOPIC, playerTopic } from './topics.js';
 
 /**
  * One worked sample per event, for the reference (#74). §11 is documented as
@@ -52,6 +52,21 @@ export const EVENT_EXAMPLES: { [E in EventName]: ProxyEvent<E> } = {
     at: 1_756_000_000_000,
     data: { version: '15.16.1' },
   },
+  'ladder.crawl.completed': {
+    event: 'ladder.crawl.completed',
+    // Admin-only, like the topic: these are numbers about what the proxy spent
+    // its key on, not about a player.
+    topic: LADDER_TOPIC,
+    at: 1_756_000_000_000,
+    data: {
+      crawlId: '0f2a…',
+      platform: 'euw1',
+      queue: 'RANKED_SOLO_5x5',
+      entries: 1870,
+      players: 50,
+      durationS: 42,
+    },
+  },
   'metrics.snapshot': {
     event: 'metrics.snapshot',
     // Admin-only, like the topic itself. One queue and one limiter scope shown;
@@ -103,6 +118,28 @@ export const EVENT_EXAMPLES: { [E in EventName]: ProxyEvent<E> } = {
       flows: {
         backfillsQueued: { 'lookup:queued': 214, 'lookup:already-queued': 37, 'admin:queued': 3 },
         refreshClaims: { 'profile:claimed': 96, 'profile:coalesced': 311 },
+      },
+      ladder: {
+        // A crawl part way through a full ladder: the apex leagues are done
+        // and most of the paged walks are still going.
+        running: [
+          {
+            id: '0f2a…',
+            platform: 'euw1',
+            queue: 'RANKED_SOLO_5x5',
+            tierFloor: 'EMERALD',
+            status: 'running',
+            startedAt: '2026-09-01T02:00:00.000Z',
+            finishedAt: null,
+            pagesFetched: 412,
+            entriesSeen: 84_306,
+            playersDiscovered: 5102,
+            backfillsEnqueued: 5102,
+            pendingLegs: 6,
+          },
+        ],
+        lastCompleted: null,
+        entries: 84_306,
       },
       process: { uptimeSeconds: 86_400, rssBytes: 182_000_000 },
     },

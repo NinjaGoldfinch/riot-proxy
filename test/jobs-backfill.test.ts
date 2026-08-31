@@ -122,7 +122,7 @@ describe('backfill:player (§10)', () => {
       [100, 100],
       [200, 50],
     ]);
-    expect(result).toEqual({ queued: 250, depth: 250 });
+    expect(result).toEqual({ queued: 250, depth: 250, complete: true });
     expect(queued).toHaveLength(250);
   });
 
@@ -177,7 +177,7 @@ describe('backfill:player (§10)', () => {
 
     expect(queued).toEqual([]);
     // Still a completed walk: the archive holding everything is the goal state.
-    expect(result).toEqual({ queued: 0, depth: 100 });
+    expect(result).toEqual({ queued: 0, depth: 100, complete: true });
     expect(completions).toEqual([{ puuid: 'p', depth: 100 }]);
   });
 

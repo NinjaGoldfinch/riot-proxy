@@ -25,12 +25,23 @@ export const METRICS_TOPIC = 'metrics';
 export const FIREHOSE_TOPIC = 'firehose';
 
 /**
+ * Ladder crawls finishing. Admin-scoped for the same reason `metrics` is: a
+ * crawl's counters describe what this deployment is spending its key on, which
+ * is an operational fact about the proxy rather than anything about a player.
+ */
+export const LADDER_TOPIC = 'ladder';
+
+/**
  * Topics that expose operational internals — or, for the firehose, every
  * player's events at once — so holding them requires the `admin` scope. The
  * check is at subscribe time (`src/ws/index.ts`): a topic a socket can never
  * hold is one relay never has to re-authorise.
  */
-export const ADMIN_TOPICS: ReadonlySet<string> = new Set([METRICS_TOPIC, FIREHOSE_TOPIC]);
+export const ADMIN_TOPICS: ReadonlySet<string> = new Set([
+  METRICS_TOPIC,
+  FIREHOSE_TOPIC,
+  LADDER_TOPIC,
+]);
 
 /**
  * Channels are key-scoped like every other Redis key (§7.4), and it took a

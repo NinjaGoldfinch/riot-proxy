@@ -6,6 +6,8 @@
  */
 export class FakeRedis {
   private store = new Map<string, { value: string; expiresAt?: number }>();
+  /** Sets live beside the string store; a key is only ever one or the other. */
+  private sets = new Map<string, Set<string>>();
 
   private live(key: string): { value: string; expiresAt?: number } | undefined {
     const entry = this.store.get(key);
@@ -38,12 +40,45 @@ export class FakeRedis {
 
   async del(...keys: string[]): Promise<number> {
     let n = 0;
-    for (const key of keys) if (this.store.delete(key)) n += 1;
+    for (const key of keys) {
+      const had = this.store.delete(key);
+      if (this.sets.delete(key) || had) n += 1;
+    }
     return n;
   }
 
+  // ── sets ───────────────────────────────────────────────────────────────────
+  // The ladder crawl tracks its outstanding legs as a set, and the whole point
+  // of that choice is that SREM is idempotent where DECR is not — so the fake
+  // has to model membership rather than a count.
+
+  async sadd(key: string, ...members: string[]): Promise<number> {
+    const set = this.sets.get(key) ?? new Set<string>();
+    const before = set.size;
+    for (const member of members) set.add(member);
+    this.sets.set(key, set);
+    return set.size - before;
+  }
+
+  async srem(key: string, ...members: string[]): Promise<number> {
+    const set = this.sets.get(key);
+    if (!set) return 0;
+    let removed = 0;
+    for (const member of members) if (set.delete(member)) removed += 1;
+    if (set.size === 0) this.sets.delete(key);
+    return removed;
+  }
+
+  async scard(key: string): Promise<number> {
+    return this.sets.get(key)?.size ?? 0;
+  }
+
+  async smembers(key: string): Promise<string[]> {
+    return [...(this.sets.get(key) ?? [])];
+  }
+
   async exists(key: string): Promise<number> {
-    return this.live(key) ? 1 : 0;
+    return this.live(key) || this.sets.has(key) ? 1 : 0;
   }
 
   async incr(key: string): Promise<number> {
@@ -67,6 +102,9 @@ export class FakeRedis {
   }
 
   async expire(key: string, seconds: number): Promise<number> {
+    // Set expiry is not modelled: nothing under test reads it back, and a set
+    // that quietly vanished mid-test would hide the bug rather than find it.
+    if (this.sets.has(key)) return 1;
     const entry = this.live(key);
     if (!entry) return 0;
     this.store.set(key, { value: entry.value, expiresAt: Date.now() + seconds * 1000 });
@@ -114,8 +152,14 @@ export class FakeRedis {
     return new FakePipeline(this);
   }
 
+  /** `multi()` is a pipeline here — nothing under test depends on atomicity. */
+  multi(): FakePipeline {
+    return new FakePipeline(this);
+  }
+
   reset(): void {
     this.store.clear();
+    this.sets.clear();
   }
 
   get size(): number {
@@ -132,6 +176,16 @@ class FakePipeline {
 
   pttl(key: string): this {
     this.queued.push(['pttl', [key]]);
+    return this;
+  }
+
+  sadd(key: string, ...members: string[]): this {
+    this.queued.push(['sadd', [key, ...members]]);
+    return this;
+  }
+
+  expire(key: string, seconds: number): this {
+    this.queued.push(['expire', [key, seconds]]);
     return this;
   }
 

@@ -51,6 +51,17 @@ export const RANKED_QUEUES = ['RANKED_SOLO_5x5', 'RANKED_FLEX_SR'] as const;
 export type RankedQueue = (typeof RANKED_QUEUES)[number];
 
 /**
+ * match-v5's queue ids for the two ranked ladders. A crawl exists to answer
+ * questions about ranked play, so the backfill it triggers filters the id list
+ * to the queue the crawl is about rather than paying `match.byId` for a
+ * player's ARAM back-catalogue.
+ */
+export const QUEUE_IDS: Record<RankedQueue, number> = {
+  RANKED_SOLO_5x5: 420,
+  RANKED_FLEX_SR: 440,
+};
+
+/**
  * Riot's page size for the paged route. Not a request parameter — measured
  * against the live API and quoted here because the crawl's request math (§2 of
  * docs/ladder-crawl-plan.md) is built on it.
@@ -149,4 +160,9 @@ export function assertRankedQueue(value: string): RankedQueue {
 /** The tier and everything above it — how a tier floor becomes a work list. */
 export function tiersAtOrAbove(floor: Tier): Tier[] {
   return TIERS.slice(TIERS.indexOf(floor));
+}
+
+/** The same comparison for one tier, which is how a floor filters entries. */
+export function tierAtOrAbove(tier: Tier, floor: Tier): boolean {
+  return TIERS.indexOf(tier) >= TIERS.indexOf(floor);
 }

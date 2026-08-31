@@ -21,6 +21,19 @@ export interface EventPayloads {
   };
   'match.archived': { puuid?: string; matchId: string };
   'patch.new': { version: string };
+  /**
+   * A crawl finished cleanly. Carries the counters rather than a pointer to
+   * them, so a dashboard can render the run without a follow-up call — and it
+   * is what triggers the champion aggregate for that ladder.
+   */
+  'ladder.crawl.completed': {
+    crawlId: string;
+    platform: string;
+    queue: string;
+    entries: number;
+    players: number;
+    durationS: number;
+  };
   'metrics.snapshot': MetricsSnapshotData;
 }
 
@@ -44,6 +57,7 @@ export {
   PATCH_TOPIC,
   METRICS_TOPIC,
   FIREHOSE_TOPIC,
+  LADDER_TOPIC,
   ADMIN_TOPICS,
   channelFor,
   CHANNEL_PATTERN,

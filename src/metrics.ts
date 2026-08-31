@@ -111,6 +111,46 @@ export const refreshClaimsTotal = new Counter({
   registers: [registry],
 });
 
+/**
+ * The crawl, while it is running (#91).
+ *
+ * `proxy_jobs_total{job="ladder:walk"}` counts *jobs*, and a walk job is one
+ * (tier, division) from the first page to the last — so on a full ladder it
+ * moves 28 times over several hours and tells an operator nothing about
+ * whether the crawl is still advancing. Pages are the unit that moves.
+ *
+ * Labelled by platform and queue because a crawl is per ladder, and two of
+ * them sharing one rate-limit budget is precisely the situation worth being
+ * able to see.
+ */
+export const ladderPagesTotal = new Counter({
+  name: 'proxy_ladder_pages_total',
+  help: 'Ladder pages fetched, including the apex leagues (one page each)',
+  labelNames: ['platform', 'queue'] as const,
+  registers: [registry],
+});
+
+export const ladderEntriesTotal = new Counter({
+  name: 'proxy_ladder_entries_total',
+  help: 'League entries upserted by a crawl',
+  labelNames: ['platform', 'queue'] as const,
+  registers: [registry],
+});
+
+/**
+ * Buckets in minutes, not seconds: the fastest crawl this design contemplates
+ * is three apex requests, and the slowest is a full ladder on a dev key at
+ * five to seven hours (§2 of docs/ladder-crawl-plan.md). A default histogram
+ * would put every one of them in the overflow bucket.
+ */
+export const ladderCrawlDuration = new Histogram({
+  name: 'proxy_ladder_crawl_duration_seconds',
+  help: 'Wall-clock time of a completed ladder crawl',
+  labelNames: ['platform', 'queue', 'status'] as const,
+  buckets: [10, 60, 300, 900, 1800, 3600, 7200, 14_400, 28_800],
+  registers: [registry],
+});
+
 export const archivedMatchesTotal = new Counter({
   name: 'proxy_archived_matches_total',
   help: 'Matches upserted into the Postgres archive',

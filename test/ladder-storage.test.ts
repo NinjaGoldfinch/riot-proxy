@@ -4,7 +4,8 @@ import { and, eq, ne } from 'drizzle-orm';
 import { probeServices } from './helpers/services.js';
 import { KEY_SCOPE } from '../src/config.js';
 import { closeDb, db, pingDb } from '../src/db/index.js';
-import { ladderCrawls, leagueEntries } from '../src/db/schema.js';
+import { ladderCrawls, leagueEntries, players } from '../src/db/schema.js';
+import { getPlayer, setTracked, upsertDiscoveredPlayers, upsertPlayer } from '../src/db/players.js';
 import {
   bumpCrawlCounters,
   countLeagueEntries,
@@ -19,7 +20,7 @@ import {
   upsertLeagueEntries,
   type LeagueEntryInput,
 } from '../src/db/ladder.js';
-import { CURSOR_TTL_S, clearCursors, getCursor, setCursor } from '../src/jobs/ladder-cursor.js';
+import { CURSOR_TTL_S, clearCursors, getCursor, setCursor } from '../src/jobs/ladder-state.js';
 import { closeRedis, redis } from '../src/redis.js';
 
 /**
@@ -51,6 +52,7 @@ const entry = (puuid: string, over: Partial<LeagueEntryInput> = {}): LeagueEntry
 async function wipe(): Promise<void> {
   await db.delete(leagueEntries).where(eq(leagueEntries.platform, PLATFORM));
   await db.delete(ladderCrawls).where(eq(ladderCrawls.platform, PLATFORM));
+  await db.delete(players).where(eq(players.platform, PLATFORM));
 }
 
 beforeAll(async () => {
@@ -398,3 +400,84 @@ async function countCrawlRows(): Promise<number> {
   const rows = await db.select().from(ladderCrawls).where(eq(ladderCrawls.platform, PLATFORM));
   return rows.length;
 }
+
+/**
+ * Discovery's half of the storage (#89). These are here rather than beside the
+ * job tests because the rule that matters is not something the caller does —
+ * it is what the `ON CONFLICT` clause is allowed to touch, which only a real
+ * Postgres can answer.
+ */
+describe('discovered players', () => {
+  const puuid = (n: number) => `ladder-test-puuid-${String(n).padStart(4, '0')}`;
+
+  it('creates rows for players nobody had seen, untracked', async ({ skip }) => {
+    if (!available) return skip();
+    const rows = await upsertDiscoveredPlayers([
+      { puuid: puuid(1), platform: PLATFORM },
+      { puuid: puuid(2), platform: PLATFORM },
+    ]);
+
+    expect(rows.map((r) => r.puuid)).toEqual([puuid(1), puuid(2)]);
+    expect(rows.every((r) => r.tracked === false)).toBe(true);
+    expect(rows.every((r) => r.keyScope === KEY_SCOPE)).toBe(true);
+    // Nothing has walked them yet, which is what a repeat crawl reads.
+    expect(rows.every((r) => r.historyBackfillStartedAt === null)).toBe(true);
+  });
+
+  it('cannot turn tracking on, and cannot turn it off either', async ({ skip }) => {
+    if (!available) return skip();
+    // `tracked` is a 60-second spectator poll per player. A crawl that could
+    // set it would sign up thousands of them; a crawl that could clear it
+    // would silently stop polling someone an admin asked for.
+    await upsertPlayer({
+      puuid: puuid(3),
+      platform: PLATFORM,
+      gameName: 'Tracked',
+      tagLine: 'OCE',
+    });
+    await setTracked(puuid(3), true);
+
+    await upsertDiscoveredPlayers([{ puuid: puuid(3), platform: PLATFORM }]);
+
+    const after = await getPlayer(puuid(3));
+    expect(after?.tracked).toBe(true);
+    // And the identity an admin track put there survives, the same way
+    // `upsertPlayer` leaves absent fields alone.
+    expect(after?.gameName).toBe('Tracked');
+    expect(after?.tagLine).toBe('OCE');
+  });
+
+  it('reports what it found, so a repeat crawl knows whom it has walked', async ({ skip }) => {
+    if (!available) return skip();
+    const walkedAt = new Date('2026-08-01T00:00:00Z');
+    await db
+      .insert(players)
+      .values({
+        puuid: puuid(4),
+        keyScope: KEY_SCOPE,
+        platform: PLATFORM,
+        historyBackfillStartedAt: walkedAt,
+      })
+      .onConflictDoNothing();
+
+    const [row] = await upsertDiscoveredPlayers([{ puuid: puuid(4), platform: PLATFORM }]);
+    expect(row?.historyBackfillStartedAt?.toISOString()).toBe(walkedAt.toISOString());
+  });
+
+  it('takes a Riot page in one go rather than 205 round trips', async ({ skip }) => {
+    if (!available) return skip();
+    const page = Array.from({ length: 205 }, (_, i) => ({
+      puuid: puuid(100 + i),
+      platform: PLATFORM,
+    }));
+
+    const rows = await upsertDiscoveredPlayers(page);
+    expect(rows).toHaveLength(205);
+    expect(new Set(rows.map((r) => r.puuid)).size).toBe(205);
+  });
+
+  it('writes nothing for an empty page', async ({ skip }) => {
+    if (!available) return skip();
+    expect(await upsertDiscoveredPlayers([])).toEqual([]);
+  });
+});

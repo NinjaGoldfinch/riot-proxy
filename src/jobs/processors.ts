@@ -1,34 +1,78 @@
 import type { Job, Queue } from 'bullmq';
 import { KEY_SCOPE } from '../config.js';
 import { config } from '../config.js';
+import {
+  bumpCrawlCounters,
+  createCrawl,
+  finishCrawl,
+  getCrawl,
+  upsertLeagueEntries,
+  type LeagueEntryInput,
+} from '../db/ladder.js';
+import { recomputeChampionStats } from '../db/analytics.js';
 import { archiveMatch, archiveTimeline, filterUnarchived, type RiotMatch } from '../db/matches.js';
+import type { LadderCrawl } from '../db/schema.js';
 import {
   getPlayer,
   listTrackedPlayers,
   markBackfillComplete,
   markBackfillStarted,
   setLastSeenMatch,
+  upsertDiscoveredPlayers,
 } from '../db/players.js';
-import { PATCH_TOPIC, playerTopic, publish } from '../events/index.js';
+import { LADDER_TOPIC, PATCH_TOPIC, playerTopic, publish } from '../events/index.js';
 import { fetcher } from '../fetcher.js';
 import { ProxyError } from '../errors.js';
 import { logger } from '../logger.js';
-import { jobsTotal } from '../metrics.js';
+import {
+  jobsTotal,
+  ladderCrawlDuration,
+  ladderEntriesTotal,
+  ladderPagesTotal,
+} from '../metrics.js';
 import { redis } from '../redis.js';
 import { build } from '../riot/endpoints.js';
-import { assertPlatform, platformToRegion, regionFromMatchId } from '../riot/routing.js';
+import {
+  DIVISIONS,
+  QUEUE_IDS,
+  assertApexTier,
+  assertDivision,
+  assertPagedTier,
+  assertRankedQueue,
+  assertTier,
+  isApexTier,
+  tierAtOrAbove,
+  tiersAtOrAbove,
+  type ApexTier,
+  type PagedTier,
+  type RankedQueue,
+} from '../riot/ladder.js';
+import {
+  assertPlatform,
+  platformToRegion,
+  regionFromMatchId,
+  type Platform,
+} from '../riot/routing.js';
+import { clearCrawlState, getCursor, releaseLeg, setCursor, trackLegs } from './ladder-state.js';
 import { syncDdragon } from '../static/ddragon.js';
 import {
   ARCHIVE_PRIORITY,
   JOB,
+  LADDER_PRIORITY,
   archiveQueue,
   backfillPriority,
   enqueueBackfill,
   jobKey,
+  ladderLegId,
+  ladderQueue,
+  maintenanceQueue,
   pollDedupeId,
   pollQueue,
   type ArchiveMatchJob,
   type BackfillPlayerJob,
+  type LadderApexJob,
+  type LadderCrawlJob,
+  type LadderWalkJob,
   type PollPlayerJob,
 } from './queues.js';
 
@@ -322,8 +366,8 @@ const BACKFILL_PAGE = 100;
 
 export async function backfillPlayer(
   job: Job<BackfillPlayerJob>,
-): Promise<{ queued: number; depth: number }> {
-  const { puuid, platform, limit = 500, fetchTimeline, reason } = job.data;
+): Promise<{ queued: number; depth: number; complete: boolean }> {
+  const { puuid, platform, limit = 500, fetchTimeline, queueId, reason } = job.data;
   const region = platformToRegion(assertPlatform(platform));
 
   // #44 — claim the walk before doing any of it. If this job dies the stamp is
@@ -334,11 +378,16 @@ export async function backfillPlayer(
   let start = 0;
   let queued = 0;
   let depth = 0;
+  let ranOut = false;
 
   while (start < limit) {
     const count = Math.min(BACKFILL_PAGE, limit - start);
     const { data: ids } = await fetcher.fetch<string[]>(
-      build.matchIdsByPuuid(region, puuid, { start, count }),
+      build.matchIdsByPuuid(region, puuid, {
+        start,
+        count,
+        ...(queueId !== undefined ? { queue: queueId } : {}),
+      }),
       BULK,
     );
     if (!ids || ids.length === 0) break;
@@ -368,16 +417,485 @@ export async function backfillPlayer(
 
     depth = start + ids.length;
     await job.updateProgress(Math.min(100, Math.round((depth / limit) * 100)));
-    if (ids.length < count) break; // Reached the end of this player's history.
+    if (ids.length < count) {
+      ranOut = true; // Reached the end of this player's history.
+      break;
+    }
     start += ids.length;
   }
 
   // Only now, on the way out: this is the record that stops the next lookup
   // queueing the same walk again, so a partial walk must never write it.
-  await markBackfillComplete(puuid, depth);
+  //
+  // Nor may a *shallow* one. `historyBackfilledAt` means "someone has this
+  // player's history", and a walk that stopped at its own limit has only the
+  // top of it — so a 100-match ladder walk must not lock a player out of the
+  // 10 000-match walk their first lookup would have done. Two ways to have
+  // earned the stamp: the history ran out before the limit did, or the limit
+  // was at least as deep as the lookup path asks for.
+  //
+  // `ranOut` only counts for an unfiltered walk: running out of *ranked* ids
+  // says nothing about the rest of a player's history.
+  const complete = (ranOut && queueId === undefined) || limit >= config.LOOKUP_BACKFILL_LIMIT;
+  if (complete) await markBackfillComplete(puuid, depth);
 
-  logger.info({ puuid, queued, depth, reason: reason ?? 'admin' }, 'backfill complete');
-  return { queued, depth };
+  logger.info({ puuid, queued, depth, complete, reason: reason ?? 'admin' }, 'backfill complete');
+  return { queued, depth, complete };
+}
+
+// ── ladder:crawl / :apex / :walk ─────────────────────────────────────────────
+
+/**
+ * A ladder page can afford to wait a long time for a token. The default bulk
+ * budget is two minutes, which is tuned for a backfill that has somewhere else
+ * to be; a crawl has nowhere else to be, and failing the job means re-entering
+ * the queue behind everything else to fetch the very same page. Five minutes
+ * of waiting is cheaper than that, and a freeze longer than five minutes
+ * should surface as a retry rather than as a job that appears to hang.
+ */
+const LADDER_FETCH = { priority: 'bulk' as const, waitBudgetMs: 300_000 };
+
+/** How many pages a walk covers before re-reading the crawl's status. */
+const CANCEL_CHECK_PAGES = 10;
+
+/** league-v4's two response shapes, narrowed to what the ladder stores. */
+interface RiotLeagueEntry {
+  puuid?: string;
+  tier?: string;
+  rank?: string;
+  leaguePoints?: number;
+  wins?: number;
+  losses?: number;
+  veteran?: boolean;
+  inactive?: boolean;
+  freshBlood?: boolean;
+  hotStreak?: boolean;
+}
+
+interface RiotLeagueList {
+  tier?: string;
+  queue?: string;
+  entries?: RiotLeagueEntry[];
+}
+
+/**
+ * Riot's entry, as a row. The tier is passed in rather than read off the
+ * entry: the apex endpoints put it on the wrapper and leave it off every
+ * entry, and trusting the entry there would write 5 000 rows with no tier.
+ */
+function toEntry(raw: RiotLeagueEntry, tier: string): LeagueEntryInput | undefined {
+  if (!raw.puuid) return undefined;
+  return {
+    puuid: raw.puuid,
+    tier: assertTier(tier),
+    // Apex entries report `I` for everyone; paged entries carry the real one.
+    division: assertDivision(raw.rank ?? 'I'),
+    leaguePoints: raw.leaguePoints ?? 0,
+    wins: raw.wins ?? 0,
+    losses: raw.losses ?? 0,
+    veteran: raw.veteran ?? false,
+    inactive: raw.inactive ?? false,
+    freshBlood: raw.freshBlood ?? false,
+    hotStreak: raw.hotStreak ?? false,
+  };
+}
+
+/**
+ * A page landed. Prometheus counts what is moving right now; the crawl row
+ * carries the same numbers as the durable per-run summary. Both, because they
+ * answer different questions — "is this crawl advancing" is a rate, and
+ * "what did last night's run see" is a row.
+ */
+function countPage(platform: string, queue: string, entries: number): void {
+  ladderPagesTotal.inc({ platform, queue });
+  if (entries > 0) ladderEntriesTotal.inc({ platform, queue }, entries);
+}
+
+export interface StartCrawlInput {
+  platform: string;
+  queue: string;
+  tierFloor?: string;
+}
+
+export interface StartCrawlResult {
+  crawlId: string;
+  created: boolean;
+  legs: number;
+}
+
+/**
+ * Create the crawl and fan out one job per leg — one per apex league, one per
+ * (tier, division) below them.
+ *
+ * One job per (tier, division) rather than one per page is the whole reason
+ * this scales: a full ladder is 28 walk jobs, not 20 000 page jobs, and the
+ * Redis cursor is what lets a walk that died on page 400 resume there.
+ *
+ * Shared by the admin route and the repeatable, because both want the same
+ * answer and the fan-out is cheap — it makes no upstream calls, so doing it
+ * inside the request is what lets the route hand back a crawl id rather than a
+ * job id nobody can look anything up with.
+ */
+export async function startCrawl(input: StartCrawlInput): Promise<StartCrawlResult> {
+  const platform = assertPlatform(input.platform);
+  const queue = assertRankedQueue(input.queue);
+  const tierFloor = assertTier(input.tierFloor ?? config.ladderTierFloor);
+
+  const { crawl, created } = await createCrawl({ platform, queue, tierFloor });
+  if (!created) {
+    logger.info(
+      { crawlId: crawl.id, platform, queue },
+      'ladder crawl already running; returning the live one',
+    );
+    return { crawlId: crawl.id, created: false, legs: 0 };
+  }
+
+  const tiers = tiersAtOrAbove(tierFloor);
+  const apexTiers = tiers.filter((t): t is ApexTier => isApexTier(t));
+  const pagedTiers = tiers.filter((t): t is PagedTier => !isApexTier(t));
+
+  const legs = [
+    ...apexTiers.map((tier) => ({
+      name: JOB.ladderApex,
+      legId: ladderLegId(JOB.ladderApex, crawl.id, tier),
+      data: { crawlId: crawl.id, platform, queue, tier } satisfies LadderApexJob,
+      priority: LADDER_PRIORITY.apex,
+    })),
+    ...pagedTiers.flatMap((tier) =>
+      DIVISIONS.map((division) => ({
+        name: JOB.ladderWalk,
+        legId: ladderLegId(JOB.ladderWalk, crawl.id, tier, division),
+        data: { crawlId: crawl.id, platform, queue, tier, division } satisfies LadderWalkJob,
+        priority: LADDER_PRIORITY.walk,
+      })),
+    ),
+  ];
+
+  // Before the jobs, not after: a leg that runs and releases itself before the
+  // set knows about it would leave the crawl running with nothing outstanding.
+  await trackLegs(
+    crawl.id,
+    legs.map((l) => l.legId),
+  );
+
+  await ladderQueue.addBulk(
+    legs.map((leg) => ({
+      name: leg.name,
+      data: leg.data,
+      opts: {
+        priority: leg.priority,
+        deduplication: { id: leg.legId },
+        removeOnComplete: { age: 3600, count: 200 },
+      },
+    })),
+  );
+
+  logger.info(
+    { crawlId: crawl.id, platform, queue, tierFloor, legs: legs.length },
+    'ladder crawl started',
+  );
+  return { crawlId: crawl.id, created: true, legs: legs.length };
+}
+
+export async function ladderCrawl(job: Job<LadderCrawlJob>): Promise<StartCrawlResult> {
+  return startCrawl(job.data);
+}
+
+/**
+ * Whether BullMQ will hand this job back. `attemptsMade` counts the attempts
+ * *before* this one, and a job is retried while `attemptsMade + 1 < attempts`
+ * — so this is the last chance to release the leg, and not releasing it would
+ * leave the crawl running forever with nothing left to finish it. A crawl
+ * stuck `running` is worse than a failed one: the live-crawl index means it
+ * also blocks every future crawl of that ladder.
+ */
+function isFinalAttempt(job: Job): boolean {
+  return job.attemptsMade + 1 >= (job.opts.attempts ?? 1);
+}
+
+/**
+ * End of a leg. Only the caller that removed the last one finishes the crawl,
+ * and it is the same call that cleans the cursors up.
+ */
+async function endLeg(crawlId: string, legId: string, outcome: 'done' | 'failed'): Promise<void> {
+  const { last, failed } = await releaseLeg(crawlId, legId, outcome);
+  if (!last) return;
+
+  const finished = await finishCrawl(crawlId, failed ? 'failed' : 'completed');
+  await clearCrawlState(crawlId);
+  if (!finished) return;
+
+  logger.info(
+    {
+      crawlId,
+      status: finished.status,
+      entries: finished.entriesSeen,
+      pages: finished.pagesFetched,
+    },
+    'ladder crawl finished',
+  );
+
+  const durationS = Math.round(
+    ((finished.finishedAt ?? new Date()).getTime() - finished.startedAt.getTime()) / 1000,
+  );
+  ladderCrawlDuration.observe(
+    { platform: finished.platform, queue: finished.queue, status: finished.status },
+    durationS,
+  );
+
+  // Only a clean run. A crawl that gave up has seen part of a ladder, and
+  // aggregating a part of one as though it were the whole thing is worse than
+  // leaving the previous numbers in place.
+  if (finished.status !== 'completed') return;
+
+  await publish('ladder.crawl.completed', LADDER_TOPIC, {
+    crawlId,
+    platform: finished.platform,
+    queue: finished.queue,
+    entries: finished.entriesSeen,
+    players: finished.playersDiscovered,
+    durationS,
+  });
+
+  await enqueueChampionAggregate(finished.platform, finished.queue);
+}
+
+/**
+ * Queue a recompute for one ladder.
+ *
+ * Lifecycle-scoped de-duplication rather than a stable `jobId`: BullMQ matches
+ * a job id against finished jobs it has retained, so a stable one would make
+ * the *second* crawl of the day a silent no-op (#18). What this drops instead
+ * is only a recompute that has not run yet — and one that has not run yet will
+ * read the same tables the dropped one would have.
+ */
+export async function enqueueChampionAggregate(platform: string, queue: string): Promise<void> {
+  await maintenanceQueue.add(
+    JOB.aggregateChampions,
+    { platform, queue } satisfies AggregateChampionsJob,
+    { deduplication: { id: jobKey(JOB.aggregateChampions, platform, queue) } },
+  );
+}
+
+/**
+ * Ladder entry → match history. The pipeline behind this already exists —
+ * `backfill:player` walks the id list, `filterUnarchived` skips what is stored,
+ * `archive:match` fetches the rest — so this is the hand-off, and the restraint
+ * around it.
+ *
+ * Three pieces of restraint, in order of how much they save:
+ *
+ * 1. **The tier floor.** `LADDER_BACKFILL_TIER_FLOOR` is separate from the one
+ *    that bounds enumeration, because enumerating a ladder is thousands of
+ *    requests and walking the players behind it is millions. Entries below it
+ *    land in `league_entries` and go no further.
+ * 2. **Never tracked.** `upsertDiscoveredPlayers` cannot set `tracked`, so a
+ *    crawl can never sign thousands of players up for a 60-second poll.
+ * 3. **Walked once per crawl.** A player whose walk started after this crawl
+ *    did is skipped — repeat crawls should converge on what is new, not
+ *    re-walk the same ladder. Across crawls they are re-enqueued, which is the
+ *    point: `filterUnarchived` makes a second walk one request plus whatever
+ *    they have played since.
+ */
+async function discoverPlayers(
+  crawl: { id: string; startedAt: Date },
+  platform: Platform,
+  queue: RankedQueue,
+  entries: LeagueEntryInput[],
+): Promise<{ discovered: number; enqueued: number }> {
+  const floor = config.ladderBackfillTierFloor;
+  const eligible = entries.filter((e) => tierAtOrAbove(e.tier, floor));
+  if (eligible.length === 0) return { discovered: 0, enqueued: 0 };
+
+  const rows = await upsertDiscoveredPlayers(eligible.map((e) => ({ puuid: e.puuid, platform })));
+
+  let enqueued = 0;
+  const limit = config.LADDER_BACKFILL_LIMIT;
+  if (limit > 0) {
+    for (const row of rows) {
+      const walked = row.historyBackfillStartedAt;
+      if (walked && walked >= crawl.startedAt) continue;
+      try {
+        await enqueueBackfill({
+          puuid: row.puuid,
+          platform,
+          limit,
+          // The crawl is about one ranked ladder, so it pays for that ladder's
+          // games rather than the player's whole back-catalogue. The saving is
+          // in `match.byId`, which is one request per match either way.
+          queueId: QUEUE_IDS[queue],
+          reason: 'ladder',
+        });
+        enqueued += 1;
+      } catch (err) {
+        // Discovery is an optimisation on top of the ladder itself. A queue
+        // that is down must not fail the crawl that is filling `league_entries`.
+        logger.warn({ err, puuid: row.puuid }, 'could not queue ladder backfill');
+      }
+    }
+  }
+
+  await bumpCrawlCounters(crawl.id, {
+    playersDiscovered: rows.length,
+    backfillsEnqueued: enqueued,
+  });
+  return { discovered: rows.length, enqueued };
+}
+
+/** An apex league arrives whole: one request, one upsert, one leg done. */
+export async function ladderApex(job: Job<LadderApexJob>): Promise<{ entries: number }> {
+  const { crawlId } = job.data;
+  const platform = assertPlatform(job.data.platform);
+  const queue = assertRankedQueue(job.data.queue);
+  const tier = assertApexTier(job.data.tier);
+  const legId = ladderLegId(JOB.ladderApex, crawlId, tier);
+
+  try {
+    const crawl = await runningCrawl(crawlId);
+    if (!crawl) {
+      await endLeg(crawlId, legId, 'done');
+      return { entries: 0 };
+    }
+
+    const { data } = await fetcher.fetch<RiotLeagueList>(
+      build.apexLeague(platform, tier, queue),
+      LADDER_FETCH,
+    );
+
+    const entries = (data?.entries ?? [])
+      .map((raw) => toEntry(raw, tier))
+      .filter((e): e is LeagueEntryInput => e !== undefined);
+
+    await upsertLeagueEntries(crawlId, platform, queue, entries);
+    await countPage(platform, queue, entries.length);
+    await bumpCrawlCounters(crawlId, { pagesFetched: 1, entriesSeen: entries.length });
+    await discoverPlayers(crawl, platform, queue, entries);
+    await endLeg(crawlId, legId, 'done');
+
+    return { entries: entries.length };
+  } catch (err) {
+    if (isFinalAttempt(job)) await endLeg(crawlId, legId, 'failed');
+    throw err;
+  }
+}
+
+/**
+ * One (tier, division), page by page, until an empty one.
+ *
+ * Empty is the only reliable terminator. A short page looks like the end and
+ * is not: the ladder churns under the walk, so a page can come back with 180
+ * entries in the middle of a division that has thousands left.
+ *
+ * The cursor advances only after the page is stored, so a crash between the
+ * two re-walks a page rather than skipping it. `RateLimitBudgetExceeded`
+ * propagates untouched — BullMQ retries with backoff, and the walk resumes on
+ * the page it was refused rather than starting over.
+ */
+export async function ladderWalk(
+  job: Job<LadderWalkJob>,
+): Promise<{ pages: number; entries: number; done: boolean }> {
+  const { crawlId } = job.data;
+  const platform = assertPlatform(job.data.platform);
+  const queue = assertRankedQueue(job.data.queue);
+  const tier = assertPagedTier(job.data.tier);
+  const division = assertDivision(job.data.division);
+  const legId = ladderLegId(JOB.ladderWalk, crawlId, tier, division);
+
+  let pages = 0;
+  let entries = 0;
+
+  try {
+    let page = await getCursor(crawlId, tier, division);
+    let done = false;
+    let crawl = await runningCrawl(crawlId);
+
+    for (;;) {
+      // A cancel cannot reach a job that is already running, so a long walk
+      // asks. Once every ten pages: cheap next to the request it guards, and
+      // the crawl row is indexed by the id being read.
+      if (pages > 0 && pages % CANCEL_CHECK_PAGES === 0) crawl = await runningCrawl(crawlId);
+      if (!crawl) {
+        logger.info(
+          { crawlId, tier, division, page },
+          'ladder walk stopping; crawl is not running',
+        );
+        break;
+      }
+
+      const { data } = await fetcher.fetch<RiotLeagueEntry[]>(
+        build.leagueEntriesByTier(platform, queue, tier, division, page),
+        LADDER_FETCH,
+      );
+
+      if (!data || data.length === 0) {
+        done = true;
+        break;
+      }
+
+      const rows = data
+        .map((raw) => toEntry(raw, tier))
+        .filter((e): e is LeagueEntryInput => e !== undefined);
+
+      await upsertLeagueEntries(crawlId, platform, queue, rows);
+      await countPage(platform, queue, rows.length);
+      await bumpCrawlCounters(crawlId, { pagesFetched: 1, entriesSeen: rows.length });
+      await discoverPlayers(crawl, platform, queue, rows);
+      await setCursor(crawlId, tier, division, page + 1);
+
+      page += 1;
+      pages += 1;
+      entries += rows.length;
+      await job.updateProgress({ tier, division, page, entries });
+    }
+
+    await endLeg(crawlId, legId, 'done');
+    return { pages, entries, done };
+  } catch (err) {
+    if (isFinalAttempt(job)) await endLeg(crawlId, legId, 'failed');
+    throw err;
+  }
+}
+
+/**
+ * The crawl row, or undefined if it is no longer running — a cancelled or
+ * already-finished crawl should not keep spending quota. The row rather than a
+ * boolean because `started_at` is what tells discovery whom this crawl has
+ * already walked.
+ */
+async function runningCrawl(crawlId: string): Promise<LadderCrawl | undefined> {
+  const crawl = await getCrawl(crawlId);
+  return crawl?.status === 'running' ? crawl : undefined;
+}
+
+// ── aggregate:champions ──────────────────────────────────────────────────────
+
+export interface AggregateChampionsJob {
+  platform: string;
+  queue: string;
+}
+
+/**
+ * Read the archive back into `champion_stats` (§7 of the plan).
+ *
+ * On the `maintenance` queue rather than `ladder`, because it is not part of
+ * the crawl: it touches Riot not at all, and a crawl should be free to finish
+ * — and free the ladder for the next one — without waiting on a table scan.
+ * Nothing here is prioritized, matching the daily job beside it; giving one of
+ * two jobs on a queue a priority would put the other permanently ahead of it.
+ */
+export async function aggregateChampions(
+  job: Job<AggregateChampionsJob>,
+): Promise<{ rows: number; games: number }> {
+  const platform = assertPlatform(job.data.platform);
+  const queue = assertRankedQueue(job.data.queue);
+
+  const started = Date.now();
+  const result = await recomputeChampionStats(platform, queue);
+  logger.info(
+    { platform, queue, rows: result.rows, games: result.games, ms: Date.now() - started },
+    'champion aggregates recomputed',
+  );
+  return { rows: result.rows, games: result.games };
 }
 
 // ── ddragon:sync ─────────────────────────────────────────────────────────────
@@ -449,6 +967,18 @@ export async function dispatch(job: Job): Promise<unknown> {
         break;
       case JOB.backfillPlayer:
         result = await backfillPlayer(job as Job<BackfillPlayerJob>);
+        break;
+      case JOB.ladderCrawl:
+        result = await ladderCrawl(job as Job<LadderCrawlJob>);
+        break;
+      case JOB.ladderApex:
+        result = await ladderApex(job as Job<LadderApexJob>);
+        break;
+      case JOB.ladderWalk:
+        result = await ladderWalk(job as Job<LadderWalkJob>);
+        break;
+      case JOB.aggregateChampions:
+        result = await aggregateChampions(job as Job<AggregateChampionsJob>);
         break;
       case JOB.ddragonSync:
         result = await ddragonSync(job as Job<{ force?: boolean }>);
