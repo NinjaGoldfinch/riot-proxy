@@ -89,6 +89,7 @@ export const EVENT_EXAMPLES: { [E in EventName]: ProxyEvent<E> } = {
           waiting: 0,
           prioritized: 137,
           delayed: 0,
+          scheduled: 0,
           failed: 1,
           completed: 812,
         },
@@ -121,7 +122,8 @@ export const EVENT_EXAMPLES: { [E in EventName]: ProxyEvent<E> } = {
       },
       ladder: {
         // A crawl part way through a full ladder: the apex leagues are done
-        // and most of the paged walks are still going.
+        // and most of the paged walks are still going, so nothing has started
+        // collecting match ids yet.
         running: [
           {
             id: '0f2a…',
@@ -129,12 +131,15 @@ export const EVENT_EXAMPLES: { [E in EventName]: ProxyEvent<E> } = {
             queue: 'RANKED_SOLO_5x5',
             tierFloor: 'EMERALD',
             status: 'running',
+            phase: 'enumerate',
             startedAt: '2026-09-01T02:00:00.000Z',
             finishedAt: null,
             pagesFetched: 412,
             entriesSeen: 84_306,
             playersDiscovered: 5102,
-            backfillsEnqueued: 5102,
+            backfillsEnqueued: 0,
+            matchIdsSeen: 0,
+            matchesQueued: 0,
             pendingLegs: 6,
           },
         ],

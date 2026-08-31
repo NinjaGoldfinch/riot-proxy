@@ -1,18 +1,22 @@
 import './helpers/env.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BuiltRequest } from '../src/riot/endpoints.js';
-import type { BackfillPlayerJob } from '../src/jobs/queues.js';
 import type { Player } from '../src/db/schema.js';
 
 /**
- * Ladder entry → match history (#89), hermetic.
+ * Ladder entry → match history (#89), hermetic, and staged.
  *
- * The pipeline itself is old — `backfill:player` walks the ids,
- * `filterUnarchived` skips what is stored. What is new is the restraint around
- * the hand-off, and every part of it is here because without it a crawl does
- * something expensive and irreversible: signs thousands of players up for a
- * 60-second poll, re-walks the same ladder every crawl, or walks a player 100
- * matches deep and thereby marks their history "done" forever.
+ * The pipeline itself is old — pages of match ids, `filterUnarchived`,
+ * `archive:match`. What this file pins is the *order* it runs in, which is the
+ * one thing that decides whether a crawl pays for a match once or ten times.
+ *
+ * A match has ten participants. A crawl that walked a player's history the
+ * moment it discovered them would reach one game from ten walks spread across
+ * the whole run, and every one of those walks that happened before the match
+ * landed in Postgres would fetch it again — `filterUnarchived` can only skip
+ * what is already there. So enumeration discovers, the collect stage gathers
+ * every id into one set, and only when the last id is in does anything fetch a
+ * match.
  *
  * The suite pins both backfill limits off, so this file turns them on before
  * anything reads the config.
@@ -34,9 +38,10 @@ vi.mock('../src/redis.js', async () => {
 let apexEntries: unknown[] = [];
 /** One page for the paged walk; the second page is always empty. */
 let pagedEntries: unknown[] = [];
-/** Match-id pages the backfill walk reads, and the query it read them with. */
+/** Match-id pages the walk reads, and the query it read them with. */
 const idQueries: Record<string, unknown>[] = [];
-let history: string[] = [];
+/** Each player's history, newest first. Anyone unlisted has played nothing. */
+let histories = new Map<string, string[]>();
 
 vi.mock('../src/fetcher.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/fetcher.js')>();
@@ -46,14 +51,12 @@ vi.mock('../src/fetcher.js', async (importOriginal) => {
       fetch: async (req: BuiltRequest) => {
         if (req.method === 'league.entriesByTier') {
           const page = Number(req.query['page'] ?? 1);
-          return {
-            data: page === 1 ? pagedEntries : [],
-            cache: 'MISS' as const,
-            ageSeconds: 0,
-          };
+          return { data: page === 1 ? pagedEntries : [], cache: 'MISS' as const, ageSeconds: 0 };
         }
         if (req.method === 'match.idsByPuuid') {
           idQueries.push(req.query);
+          const puuid = decodeURIComponent(req.path.split('/').at(-2) ?? '');
+          const history = histories.get(puuid) ?? [];
           const start = Number(req.query['start'] ?? 0);
           const count = Number(req.query['count'] ?? 100);
           return {
@@ -72,13 +75,58 @@ vi.mock('../src/fetcher.js', async (importOriginal) => {
   };
 });
 
-let crawlStatus = 'running';
+/** The crawl row, as the database would hold it while it runs. */
+const baseCrawl = {
+  id: CRAWL_ID,
+  status: 'running',
+  phase: 'enumerate',
+  platform: 'euw1',
+  queue: 'RANKED_SOLO_5x5',
+  tierFloor: 'MASTER',
+  startedAt: CRAWL_STARTED,
+  finishedAt: null as Date | null,
+  pagesFetched: 0,
+  entriesSeen: 0,
+  playersDiscovered: 0,
+  backfillsEnqueued: 0,
+  matchIdsSeen: 0,
+  matchesQueued: 0,
+};
+let crawlRow: typeof baseCrawl = { ...baseCrawl };
+const counters: Record<string, number> = {};
+const finished: { id: string; status: string }[] = [];
+/** Whom the candidate query has to offer, in order. */
+let candidates: string[] = [];
+const candidateQueries: Record<string, unknown>[] = [];
+
 vi.mock('../src/db/ladder.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/db/ladder.js')>();
   return {
     ...actual,
-    getCrawl: async () => ({ id: CRAWL_ID, status: crawlStatus, startedAt: CRAWL_STARTED }),
-    finishCrawl: async () => undefined,
+    getCrawl: async () => crawlRow,
+    finishCrawl: async (id: string, status: string) => {
+      if (crawlRow.status !== 'running') return undefined;
+      crawlRow = { ...crawlRow, status, finishedAt: new Date(CRAWL_STARTED.getTime() + 42_000) };
+      finished.push({ id, status });
+      return crawlRow;
+    },
+    // Guarded exactly like the real one: only the caller that finds the crawl
+    // in the stage it is leaving gets to move it on.
+    advanceCrawlPhase: async (_id: string, from: string, to: string) => {
+      if (crawlRow.status !== 'running' || crawlRow.phase !== from) return undefined;
+      crawlRow = { ...crawlRow, phase: to };
+      return crawlRow;
+    },
+    // Keyset, like the real one: the caller hands back the last row it saw
+    // rather than a count, so a page cannot shift under it.
+    listCrawlBackfillCandidates: async (filter: Record<string, unknown>) => {
+      candidateQueries.push(filter);
+      const after = filter['after'] as { puuid: string } | undefined;
+      const start = after ? candidates.indexOf(after.puuid) + 1 : 0;
+      return candidates
+        .slice(start, start + Number(filter['limit']))
+        .map((puuid, i) => ({ puuid, leaguePoints: 1000 - (start + i) }));
+    },
     bumpCrawlCounters: async (_id: string, by: Record<string, number>) => {
       for (const [k, v] of Object.entries(by)) counters[k] = (counters[k] ?? 0) + v;
     },
@@ -86,11 +134,9 @@ vi.mock('../src/db/ladder.js', async (importOriginal) => {
   };
 });
 
-const counters: Record<string, number> = {};
-/** What `upsertDiscoveredPlayers` was handed, and what it hands back. */
+/** What `upsertDiscoveredPlayers` was handed. */
 const discovered: { puuid: string; platform: string }[] = [];
-/** Stamps the stored rows carry, by puuid. Absent means a player never walked. */
-let walkedAt = new Map<string, Date>();
+const started: string[] = [];
 const completions: { puuid: string; depth: number }[] = [];
 
 vi.mock('../src/db/players.js', async (importOriginal) => {
@@ -109,41 +155,76 @@ vi.mock('../src/db/players.js', async (importOriginal) => {
             tagLine: null,
             tracked: false,
             lastSeenMatchId: null,
-            historyBackfillStartedAt: walkedAt.get(r.puuid) ?? null,
+            historyBackfillStartedAt: null,
             historyBackfilledAt: null,
             historyBackfillDepth: null,
             updatedAt: new Date(),
           }) satisfies Player,
       );
     },
-    markBackfillStarted: async () => {},
+    markBackfillStarted: async (puuid: string) => {
+      started.push(puuid);
+    },
     markBackfillComplete: async (puuid: string, depth: number) => {
       completions.push({ puuid, depth });
     },
   };
 });
 
+/** Matches the archive already holds, so the stage can be seen skipping them. */
+let archived = new Set<string>();
 vi.mock('../src/db/matches.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/db/matches.js')>();
-  return { ...actual, filterUnarchived: async (ids: string[]) => ids };
+  return {
+    ...actual,
+    filterUnarchived: async (ids: string[]) => ids.filter((id) => !archived.has(id)),
+  };
 });
 
-const enqueued: (BackfillPlayerJob & { priority?: number })[] = [];
+interface AddedJob {
+  name: string;
+  data: Record<string, unknown>;
+  opts: Record<string, unknown>;
+}
+/** Jobs each queue was handed, in order. */
+const ladderJobs: AddedJob[] = [];
+const archiveJobs: AddedJob[] = [];
+const aggregates: Record<string, unknown>[] = [];
+
 vi.mock('../src/jobs/queues.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/jobs/queues.js')>();
   return {
     ...actual,
-    ladderQueue: { addBulk: async () => [] },
-    archiveQueue: { addBulk: async () => [] },
-    enqueueBackfill: async (data: BackfillPlayerJob) => {
-      enqueued.push({ ...data, priority: actual.BACKFILL_PRIORITY[data.reason ?? 'admin'] });
-      return { jobId: 'j', status: 'queued' as const };
+    ladderQueue: {
+      addBulk: async (jobs: AddedJob[]) => {
+        ladderJobs.push(...jobs);
+        return jobs;
+      },
+      add: async (name: string, data: Record<string, unknown>, opts: Record<string, unknown>) => {
+        ladderJobs.push({ name, data, opts });
+        return {};
+      },
+    },
+    archiveQueue: {
+      addBulk: async (jobs: AddedJob[]) => {
+        archiveJobs.push(...jobs);
+        return jobs;
+      },
+    },
+    maintenanceQueue: {
+      add: async (_name: string, data: Record<string, unknown>) => {
+        aggregates.push(data);
+        return {};
+      },
     },
   };
 });
 
-const { ladderApex, ladderWalk, backfillPlayer } = await import('../src/jobs/processors.js');
-const { BACKFILL_PRIORITY } = await import('../src/jobs/queues.js');
+const { ladderApex, ladderWalk, ladderCollect, ladderArchive, backfillPlayer } =
+  await import('../src/jobs/processors.js');
+const { ARCHIVE_PRIORITY, JOB, LADDER_PRIORITY, ladderLegId } =
+  await import('../src/jobs/queues.js');
+const { trackLegs } = await import('../src/jobs/ladder-state.js');
 const configModule = await import('../src/config.js');
 const { redis } = await import('../src/redis.js');
 
@@ -156,24 +237,22 @@ const entry = (puuid: string, over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
+const job = (data: Record<string, unknown>) =>
+  ({
+    data,
+    attemptsMade: 0,
+    opts: { attempts: 3 },
+    updateProgress: async () => {},
+  }) as never;
+
 const apexJob = (tier = 'CHALLENGER') =>
-  ({
-    data: { crawlId: CRAWL_ID, platform: 'euw1', queue: 'RANKED_SOLO_5x5', tier },
-    attemptsMade: 0,
-    opts: { attempts: 3 },
-    updateProgress: async () => {},
-  }) as never;
+  job({ crawlId: CRAWL_ID, platform: 'euw1', queue: 'RANKED_SOLO_5x5', tier });
 
-const walkJob = (data: Record<string, unknown>) =>
+const walkJob = (tier: string, division = 'I') =>
+  job({ crawlId: CRAWL_ID, platform: 'euw1', queue: 'RANKED_SOLO_5x5', tier, division });
+
+const backfillJob = (data: Record<string, unknown>) =>
   ({ data: { puuid: 'p', platform: 'oc1', ...data }, updateProgress: async () => {} }) as never;
-
-const ladderWalkJob = (tier: string, division = 'I') =>
-  ({
-    data: { crawlId: CRAWL_ID, platform: 'euw1', queue: 'RANKED_SOLO_5x5', tier, division },
-    attemptsMade: 0,
-    opts: { attempts: 3 },
-    updateProgress: async () => {},
-  }) as never;
 
 /** `config` is read at call time, so a test can move one field and put it back. */
 function withConfig(over: Record<string, unknown>, run: () => Promise<void>) {
@@ -188,36 +267,57 @@ function withConfig(over: Record<string, unknown>, run: () => Promise<void>) {
   });
 }
 
+/** The legs a crawl's fan-out would have registered, so one can end. */
+const legsFor = (...legIds: string[]) => trackLegs(CRAWL_ID, legIds);
+
+const apexLeg = (tier = 'CHALLENGER') => ladderLegId(JOB.ladderApex, CRAWL_ID, tier);
+
+/**
+ * Play the worker: run every ladder job that has been queued and not yet run,
+ * including the ones a stage transition adds while this loop is running.
+ */
+async function drainLadder(): Promise<void> {
+  for (let i = 0; i < ladderJobs.length; i += 1) {
+    const queued = ladderJobs[i]!;
+    if (queued.name === JOB.ladderCollect) await ladderCollect(job(queued.data));
+    else if (queued.name === JOB.ladderArchive) await ladderArchive(job(queued.data));
+  }
+}
+
 beforeEach(() => {
   apexEntries = [];
   pagedEntries = [];
   idQueries.length = 0;
   discovered.length = 0;
-  enqueued.length = 0;
+  started.length = 0;
   completions.length = 0;
-  history = Array.from({ length: 500 }, (_, i) => `OC1_${1000 - i}`);
-  walkedAt = new Map();
-  crawlStatus = 'running';
+  ladderJobs.length = 0;
+  archiveJobs.length = 0;
+  aggregates.length = 0;
+  candidates = [];
+  candidateQueries.length = 0;
+  finished.length = 0;
+  histories = new Map();
+  archived = new Set();
+  crawlRow = { ...baseCrawl };
   for (const k of Object.keys(counters)) delete counters[k];
   (redis as unknown as { reset: () => void }).reset();
 });
 
-describe('discovery', () => {
-  it('upserts every eligible player and queues a walk apiece', async () => {
+describe('enumeration', () => {
+  it('records every eligible player and fetches not one match id', async () => {
+    // The barrier, from the enumeration side. A page of the ladder produces
+    // player rows and nothing else; the walk that costs requests happens after
+    // the last leg, not on the page that discovered them.
     apexEntries = [entry('chall-1'), entry('chall-2')];
+    await legsFor(apexLeg(), 'another-leg');
 
     await ladderApex(apexJob());
 
     expect(discovered.map((d) => d.puuid)).toEqual(['chall-1', 'chall-2']);
-    expect(enqueued).toHaveLength(2);
-    expect(enqueued[0]).toMatchObject({
-      puuid: 'chall-1',
-      platform: 'euw1',
-      limit: 100,
-      reason: 'ladder',
-    });
     expect(counters['playersDiscovered']).toBe(2);
-    expect(counters['backfillsEnqueued']).toBe(2);
+    expect(idQueries).toHaveLength(0);
+    expect(ladderJobs).toHaveLength(0);
   });
 
   it('never asks for a player to be tracked', async () => {
@@ -226,6 +326,7 @@ describe('discovery', () => {
     // limiter. `upsertDiscoveredPlayers` cannot express it — this asserts the
     // caller does not try to smuggle it in another way.
     apexEntries = [entry('chall-1')];
+    await legsFor(apexLeg(), 'another-leg');
     await ladderApex(apexJob());
 
     expect(discovered[0]).toEqual({ puuid: 'chall-1', platform: 'euw1' });
@@ -237,47 +338,183 @@ describe('discovery', () => {
     // those entries in `league_entries` — it just does not walk their
     // histories, which is the whole reason the two floors are separate knobs.
     pagedEntries = [entry('diamond-1'), entry('diamond-2')];
-    await ladderWalk(ladderWalkJob('DIAMOND'));
+    await legsFor(ladderLegId(JOB.ladderWalk, CRAWL_ID, 'DIAMOND', 'I'), 'another-leg');
+
+    await ladderWalk(walkJob('DIAMOND'));
 
     expect(discovered).toHaveLength(0);
-    expect(enqueued).toHaveLength(0);
     // The entries themselves still went in, and the pages still counted.
     expect(counters['entriesSeen']).toBe(2);
+  });
+});
 
-    // The same page one tier up is walked.
+describe('the collect stage', () => {
+  it('waits for the last leg of the enumeration before it starts', async () => {
+    // Two legs outstanding. The first to finish must not start collecting:
+    // the second is still discovering players whose matches overlap the
+    // first's, and collecting them separately is what fetches a match twice.
+    candidates = ['chall-1'];
+    await legsFor(apexLeg('CHALLENGER'), apexLeg('MASTER'));
+
+    apexEntries = [entry('chall-1')];
+    await ladderApex(apexJob('CHALLENGER'));
+    expect(crawlRow.phase).toBe('enumerate');
+    expect(ladderJobs).toHaveLength(0);
+
     apexEntries = [entry('master-1')];
     await ladderApex(apexJob('MASTER'));
-    expect(enqueued.map((e) => e.puuid)).toEqual(['master-1']);
+    expect(crawlRow.phase).toBe('collect');
+    expect(ladderJobs.map((j) => j.name)).toEqual([JOB.ladderCollect]);
   });
 
-  it('skips a player this crawl has already walked', async () => {
-    // Convergence, not thrash: a leg that retries, or a page that overlaps,
-    // must not queue the same player twice inside one crawl.
-    walkedAt.set('chall-1', new Date(CRAWL_STARTED.getTime() + 60_000));
-    apexEntries = [entry('chall-1'), entry('chall-2')];
-
+  it('batches the candidates, and ranks them below the enumeration', async () => {
+    candidates = Array.from({ length: 30 }, (_, i) => `p-${i}`);
+    await legsFor(apexLeg());
     await ladderApex(apexJob());
 
-    expect(enqueued.map((e) => e.puuid)).toEqual(['chall-2']);
-    // Still discovered — the ladder row and the player row are both current.
-    expect(discovered).toHaveLength(2);
-    expect(counters['playersDiscovered']).toBe(2);
-    expect(counters['backfillsEnqueued']).toBe(1);
+    const collect = ladderJobs.filter((j) => j.name === JOB.ladderCollect);
+    expect(collect).toHaveLength(2); // 25 + 5
+    expect(collect[0]?.data['offset']).toBe(0);
+    expect(collect[1]?.data['offset']).toBe(25);
+    expect((collect[0]?.data['puuids'] as string[]).length).toBe(25);
+    expect((collect[1]?.data['puuids'] as string[]).length).toBe(5);
+    expect(collect[0]?.opts['priority']).toBe(LADDER_PRIORITY.collect);
+    expect(counters['backfillsEnqueued']).toBe(30);
   });
 
-  it('walks a player again on the next crawl', async () => {
-    // The other half of the same rule. A walk from before this crawl started is
-    // stale by definition, and `filterUnarchived` makes the repeat one request
-    // plus whatever they have played since.
-    walkedAt.set('chall-1', new Date(CRAWL_STARTED.getTime() - 86_400_000));
-    apexEntries = [entry('chall-1')];
-
+  it('asks only for players this crawl saw, and not the ones already walked', async () => {
+    candidates = ['chall-1'];
+    await legsFor(apexLeg());
     await ladderApex(apexJob());
-    expect(enqueued.map((e) => e.puuid)).toEqual(['chall-1']);
+
+    expect(candidateQueries[0]).toMatchObject({
+      crawlId: CRAWL_ID,
+      platform: 'euw1',
+      queue: 'RANKED_SOLO_5x5',
+      // Convergence, not thrash: a player walked since this crawl started has
+      // already produced their ids for it.
+      notWalkedSince: CRAWL_STARTED,
+    });
+    expect(candidateQueries[0]?.['tiers']).toEqual(['MASTER', 'GRANDMASTER', 'CHALLENGER']);
   });
 
-  it('discovers without walking when the limit is 0', async () => {
+  it('gathers ids into one set and touches the archive queue not at all', async () => {
+    histories.set('p-1', ['EUW1_1', 'EUW1_2']);
+    candidates = ['p-1'];
+    await legsFor(apexLeg());
+    await ladderApex(apexJob());
+
+    const collect = ladderJobs.find((j) => j.name === JOB.ladderCollect)!;
+    const result = await ladderCollect(job(collect.data));
+
+    expect(result).toMatchObject({ players: 1, ids: 2, newIds: 2 });
+    expect(started).toEqual(['p-1']);
+    // 420 is ranked solo: the crawl pays for the ladder it is about rather
+    // than the player's whole back-catalogue.
+    expect(idQueries[0]).toMatchObject({ queue: 420 });
+    expect(archiveJobs).toHaveLength(0);
+  });
+
+  it('counts a match shared by two players once', async () => {
+    // The point of the whole arrangement. Two Challengers who played each
+    // other produce the same match id, and the set collapses it — so the
+    // archive stage pays for that game once rather than twice.
+    histories.set('p-1', ['EUW1_1', 'EUW1_2']);
+    histories.set('p-2', ['EUW1_2', 'EUW1_3']);
+    candidates = ['p-1', 'p-2'];
+    await legsFor(apexLeg());
+    await ladderApex(apexJob());
+    await drainLadder();
+
+    expect(counters['matchIdsSeen']).toBe(3);
+    expect(archiveJobs.map((j) => j.data['matchId']).sort()).toEqual([
+      'EUW1_1',
+      'EUW1_2',
+      'EUW1_3',
+    ]);
+  });
+});
+
+describe('the archive stage', () => {
+  it('starts only once every collect job has finished', async () => {
+    histories.set('p-1', ['EUW1_1']);
+    histories.set('p-26', ['EUW1_2']);
+    candidates = Array.from({ length: 30 }, (_, i) => (i === 0 ? 'p-1' : `p-${i + 25}`));
+    await legsFor(apexLeg());
+    await ladderApex(apexJob());
+
+    const collect = ladderJobs.filter((j) => j.name === JOB.ladderCollect);
+    await ladderCollect(job(collect[0]!.data));
+    // Half the ids are in. Fetching now is exactly what the stage exists to
+    // prevent: the second batch may hold the other side of the same games.
+    expect(crawlRow.phase).toBe('collect');
+    expect(ladderJobs.some((j) => j.name === JOB.ladderArchive)).toBe(false);
+    expect(archiveJobs).toHaveLength(0);
+
+    await ladderCollect(job(collect[1]!.data));
+    expect(crawlRow.phase).toBe('archive');
+    await drainLadder();
+    expect(archiveJobs).toHaveLength(2);
+  });
+
+  it('skips what the archive already holds, and ranks the rest last', async () => {
+    histories.set('p-1', ['EUW1_1', 'EUW1_2']);
+    archived.add('EUW1_1');
+    candidates = ['p-1'];
+    await legsFor(apexLeg());
+    await ladderApex(apexJob());
+    await drainLadder();
+
+    expect(archiveJobs.map((j) => j.data['matchId'])).toEqual(['EUW1_2']);
+    expect(archiveJobs[0]?.opts['jobId']).toBe('archive-EUW1_2');
+    // Below every depth a lookup walk can reach, so a crawl's forty thousand
+    // matches never sit in front of the history somebody is watching fill in.
+    expect(archiveJobs[0]?.opts['priority']).toBe(ARCHIVE_PRIORITY.ladder);
+    expect(ARCHIVE_PRIORITY.ladder).toBeGreaterThan(ARCHIVE_PRIORITY.live);
+    expect(counters['matchIdsSeen']).toBe(2);
+    expect(counters['matchesQueued']).toBe(1);
+  });
+
+  it('finishes the crawl, announces it and queues the aggregate', async () => {
+    histories.set('p-1', ['EUW1_1']);
+    candidates = ['p-1'];
+    await legsFor(apexLeg());
+    await ladderApex(apexJob());
+    await drainLadder();
+
+    expect(finished).toEqual([{ id: CRAWL_ID, status: 'completed' }]);
+    expect(aggregates).toEqual([{ platform: 'euw1', queue: 'RANKED_SOLO_5x5' }]);
+  });
+
+  it('re-queues a batch it has already queued rather than dropping it', async () => {
+    // The ids are removed only once their archive jobs exist, so a crash in
+    // between re-reads the batch. Re-queueing costs nothing — the archive job
+    // id is the match id — while a pop would lose the matches silently.
+    histories.set('p-1', ['EUW1_1']);
+    candidates = ['p-1'];
+    await legsFor(apexLeg());
+    await ladderApex(apexJob());
+
+    const collect = ladderJobs.find((j) => j.name === JOB.ladderCollect)!;
+    await ladderCollect(job(collect.data));
+
+    const archive = ladderJobs.find((j) => j.name === JOB.ladderArchive)!;
+    expect(archive.opts['priority']).toBe(LADDER_PRIORITY.archive);
+
+    await ladderArchive(job(archive.data));
+    expect(archiveJobs).toHaveLength(1);
+    // The retry BullMQ would give a job that died after queueing: it re-reads
+    // a batch it has already queued, and the archive job id absorbs it.
+    crawlRow = { ...crawlRow, status: 'running', phase: 'archive' };
+    await ladderArchive(job(archive.data));
+    expect(archiveJobs).toHaveLength(1);
+  });
+});
+
+describe('a crawl with nothing to walk', () => {
+  it('ends at enumeration when the backfill limit is 0', async () => {
     apexEntries = [entry('chall-1')];
+    await legsFor(apexLeg());
 
     await withConfig({ LADDER_BACKFILL_LIMIT: 0 }, async () => {
       await ladderApex(apexJob());
@@ -286,67 +523,56 @@ describe('discovery', () => {
     // The cheapest useful mode: the ladder lands and the player row exists,
     // and the archive is left to the lookup path.
     expect(discovered.map((d) => d.puuid)).toEqual(['chall-1']);
-    expect(enqueued).toHaveLength(0);
-    expect(counters['playersDiscovered']).toBe(1);
-    expect(counters['backfillsEnqueued']).toBe(0);
+    expect(ladderJobs).toHaveLength(0);
+    expect(idQueries).toHaveLength(0);
+    expect(finished).toEqual([{ id: CRAWL_ID, status: 'completed' }]);
   });
 
-  it('ranks the crawl’s walks beneath everything a person set off', async () => {
-    apexEntries = [entry('chall-1')];
+  it('ends when every player it saw has been walked since it started', async () => {
+    candidates = [];
+    await legsFor(apexLeg());
     await ladderApex(apexJob());
 
-    expect(enqueued[0]?.priority).toBe(BACKFILL_PRIORITY.ladder);
-    expect(BACKFILL_PRIORITY.ladder).toBeGreaterThan(BACKFILL_PRIORITY.lookup);
-    // Every reason is ranked, because an unprioritized BullMQ job is popped
-    // before every prioritized one — leaving `lookup` unranked would have put
-    // it ahead of the band meant to outrank the crawl, not behind it.
-    expect(Object.values(BACKFILL_PRIORITY).every((p) => p > 0)).toBe(true);
+    // The fan-out holds a leg of its own precisely so this case releases it:
+    // no collect jobs, straight through the empty archive stage, done.
+    expect(ladderJobs.map((j) => j.name)).toEqual([JOB.ladderArchive]);
+    await drainLadder();
+    expect(finished).toEqual([{ id: CRAWL_ID, status: 'completed' }]);
   });
 });
 
-describe('what a ladder walk fetches, and what it claims afterwards', () => {
-  it('asks match-v5 only for the queue the crawl is about', async () => {
-    apexEntries = [entry('chall-1')];
-    await ladderApex(apexJob());
-
-    await backfillPlayer(walkJob({ limit: 100, queueId: enqueued[0]?.queueId, reason: 'ladder' }));
-    // 420 is ranked solo. The saving is in `match.byId` — one request per
-    // match — not in the id page, which costs the same either way.
-    expect(enqueued[0]?.queueId).toBe(420);
-    expect(idQueries[0]).toMatchObject({ queue: 420 });
-  });
-
+describe('what a ladder walk claims afterwards', () => {
   it('does not claim a player’s history from a hundred ranked games', async () => {
     // The regression this guards: `historyBackfilledAt` is what stops the first
     // lookup of a player walking their whole history. A ladder walk that set it
     // would lock every discovered player out of that walk permanently, on the
     // strength of 100 ranked games.
-    const result = await backfillPlayer(walkJob({ limit: 100, queueId: 420, reason: 'ladder' }));
+    histories.set(
+      'p-1',
+      Array.from({ length: 40 }, (_, i) => `EUW1_${i}`),
+    );
+    candidates = ['p-1'];
+    await legsFor(apexLeg());
+    await ladderApex(apexJob());
+    await drainLadder();
 
-    expect(result.complete).toBe(false);
     expect(completions).toEqual([]);
   });
 
-  it('does not claim it even when the ranked ids run out', async () => {
-    // Running out of *ranked* ids says nothing about the rest of a history.
-    history = ['OC1_1', 'OC1_2'];
-    const result = await backfillPlayer(walkJob({ limit: 100, queueId: 420, reason: 'ladder' }));
-
-    expect(result.depth).toBe(2);
-    expect(result.complete).toBe(false);
-  });
-
   it('claims it when an unfiltered walk reaches the end of a history', async () => {
-    history = ['OC1_1', 'OC1_2'];
-    const result = await backfillPlayer(walkJob({ limit: 500, reason: 'lookup' }));
+    histories.set('p', ['OC1_1', 'OC1_2']);
+    const result = await backfillPlayer(backfillJob({ limit: 500, reason: 'lookup' }));
 
     expect(result.complete).toBe(true);
     expect(completions).toEqual([{ puuid: 'p', depth: 2 }]);
   });
 
   it('claims it when the walk was allowed to go as deep as a lookup asks', async () => {
-    history = Array.from({ length: 300 }, (_, i) => `OC1_${i}`);
-    const result = await backfillPlayer(walkJob({ limit: 10_000, reason: 'admin' }));
+    histories.set(
+      'p',
+      Array.from({ length: 300 }, (_, i) => `OC1_${i}`),
+    );
+    const result = await backfillPlayer(backfillJob({ limit: 10_000, reason: 'admin' }));
 
     expect(result.complete).toBe(true);
   });
@@ -354,8 +580,11 @@ describe('what a ladder walk fetches, and what it claims afterwards', () => {
   it('does not claim it for a shallow admin walk either', async () => {
     // The same trap predates the ladder: `POST /v1/admin/backfill` defaults to
     // 500, and marking that complete blocked the 10 000-match lookup walk.
-    history = Array.from({ length: 900 }, (_, i) => `OC1_${i}`);
-    const result = await backfillPlayer(walkJob({ limit: 500, reason: 'admin' }));
+    histories.set(
+      'p',
+      Array.from({ length: 900 }, (_, i) => `OC1_${i}`),
+    );
+    const result = await backfillPlayer(backfillJob({ limit: 500, reason: 'admin' }));
 
     expect(result.depth).toBe(500);
     expect(result.complete).toBe(false);

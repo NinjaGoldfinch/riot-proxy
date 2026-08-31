@@ -37,9 +37,21 @@ const QUEUE_STATES = [
   'completed',
 ] as const;
 
-/** Exported for the history recorder, which cuts a compact point from the same reads. */
+/**
+ * Exported for the history recorder, which cuts a compact point from the same
+ * reads.
+ *
+ * `scheduled` rides along because a repeatable scheduler parks its next firing
+ * in `delayed` and leaves it there — so an idle deployment reads as a standing
+ * backlog of one per scheduler, which is not work anybody can drain. Counting
+ * them here rather than subtracting keeps the state columns literally what
+ * BullMQ holds, and lets each reader decide.
+ */
 export async function queueCounts(): Promise<MetricsSnapshotData['queues']> {
-  const counts = await Promise.all(allQueues.map((q) => q.getJobCounts(...QUEUE_STATES)));
+  const [counts, scheduled] = await Promise.all([
+    Promise.all(allQueues.map((q) => q.getJobCounts(...QUEUE_STATES))),
+    Promise.all(allQueues.map((q) => q.getJobSchedulersCount())),
+  ]);
   return Object.fromEntries(
     allQueues.map((q, i) => {
       const c = counts[i] ?? {};
@@ -50,6 +62,7 @@ export async function queueCounts(): Promise<MetricsSnapshotData['queues']> {
           waiting: c.waiting ?? 0,
           prioritized: c.prioritized ?? 0,
           delayed: c.delayed ?? 0,
+          scheduled: scheduled[i] ?? 0,
           failed: c.failed ?? 0,
           completed: c.completed ?? 0,
         },
@@ -141,12 +154,15 @@ async function progress(
     queue: crawl.queue,
     tierFloor: crawl.tierFloor,
     status: crawl.status,
+    phase: crawl.phase,
     startedAt: crawl.startedAt.toISOString(),
     finishedAt: crawl.finishedAt ? crawl.finishedAt.toISOString() : null,
     pagesFetched: crawl.pagesFetched,
     entriesSeen: crawl.entriesSeen,
     playersDiscovered: crawl.playersDiscovered,
     backfillsEnqueued: crawl.backfillsEnqueued,
+    matchIdsSeen: crawl.matchIdsSeen,
+    matchesQueued: crawl.matchesQueued,
     // A finished crawl's legs have been cleared, so the read is skipped rather
     // than reported as a spuriously exact zero from a key that is gone.
     pendingLegs: crawl.status === 'running' ? await pendingLegs(crawl.id) : 0,

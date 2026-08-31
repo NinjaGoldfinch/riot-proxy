@@ -29,6 +29,13 @@
       "when": 1798848000000,
       "tag": "0003_champion_stats",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1798934400000,
+      "tag": "0004_ladder_phases",
+      "breakpoints": true
     }
   ]
 }

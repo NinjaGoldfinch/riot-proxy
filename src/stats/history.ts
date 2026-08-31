@@ -46,7 +46,15 @@ export async function buildHistoryPoint(): Promise<MetricsHistoryPointData> {
   const summed = { active: 0, pending: 0, failed: 0 };
   for (const q of Object.values(queues)) {
     summed.active += q.active;
-    summed.pending += q.waiting + q.prioritized + q.delayed;
+    // Less the schedulers: each holds one job in `delayed` between firings, and
+    // charting those drew a flat line at the scheduler count instead of at zero.
+    //
+    // Off `delayed` alone, not off the total. A firing scheduler moves its
+    // placeholder into `waiting` before parking the next one, and that job is
+    // about to run — netting it out of the whole sum would discount real work
+    // exactly when there is some. Clamped for the same instant, when `delayed`
+    // is briefly one short of the scheduler count.
+    summed.pending += q.waiting + q.prioritized + Math.max(0, q.delayed - q.scheduled);
     summed.failed += q.failed;
   }
 

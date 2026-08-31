@@ -3,7 +3,7 @@ import { Value } from '@sinclair/typebox/value';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { probeServices } from './helpers/services.js';
 import { closeDb, pingDb } from '../src/db/index.js';
-import { closeQueues } from '../src/jobs/queues.js';
+import { closeQueues, ddragonQueue } from '../src/jobs/queues.js';
 import { closeRedis, redis } from '../src/redis.js';
 import {
   METRICS_HISTORY_KEY,
@@ -38,6 +38,41 @@ describe('metrics history (dashboard 24 h charts)', () => {
     if (!available) return skip();
     const point = await buildHistoryPoint();
     expect([...Value.Errors(MetricsHistoryPoint, point)]).toEqual([]);
+  });
+
+  /**
+   * The 24 h backlog chart used to draw a flat line at the scheduler count
+   * rather than at zero, because every repeatable parks a job in `delayed`
+   * between firings. Twenty at once, not one: the suite shares Redis, so a real
+   * enqueue landing between the two reads can move the number by a job or two —
+   * it cannot move it by twenty, which is what a regression here would do.
+   *
+   * On `ddragon` rather than `maintenance` because the snapshot suite asserts
+   * exact scheduler deltas on that queue, and vitest runs the files in parallel
+   * against one Redis.
+   */
+  it('charts work waiting, not the schedulers parked in delayed', async ({ skip }) => {
+    if (!available) return skip();
+    const ids = Array.from({ length: 20 }, (_, i) => `test-history-scheduler-${i}`);
+
+    const before = (await buildHistoryPoint()).queues.pending;
+    // `startDate` a year out, so each parks in `delayed` rather than running its
+    // first iteration immediately — a `waiting` job is real work and should
+    // count, which is the distinction under test.
+    const aYear = 31_536_000_000;
+    for (const id of ids) {
+      await ddragonQueue.upsertJobScheduler(
+        id,
+        { every: aYear, startDate: Date.now() + aYear },
+        { name: 'ddragon:sync', data: {} },
+      );
+    }
+    try {
+      const after = (await buildHistoryPoint()).queues.pending;
+      expect(after - before).toBeLessThan(ids.length / 2);
+    } finally {
+      for (const id of ids) await ddragonQueue.removeJobScheduler(id);
+    }
   });
 
   it('records one point per interval, however many instances tick', async ({ skip }) => {

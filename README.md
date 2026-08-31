@@ -245,23 +245,36 @@ under a distinct `neg:` prefix — a cached "not in game" is distinguishable fro
 
 ### Background jobs
 
-| Job                   | Schedule                           | Action                                               |
-| --------------------- | ---------------------------------- | ---------------------------------------------------- |
-| `poll:live`           | every `TRACK_POLL_LIVE_S` (60 s)   | spectator-v5 → `game.started` / `game.ended`         |
-| `poll:rank`           | every `TRACK_POLL_RANK_S` (600 s)  | league-v4 → `rank.changed`                           |
-| `poll:matches`        | every `TRACK_POLL_MATCH_S` (300 s) | new match IDs since the last tick → `archive:match`  |
-| `archive:match`       | on demand                          | fetch, upsert, `match.archived`                      |
-| `backfill:player`     | admin, or a player never walked    | page 100 IDs at a time, bulk priority                |
-| `ddragon:sync`        | hourly                             | on a new patch, mirror data and emit `patch.new`     |
-| `ladder:crawl`        | `LADDER_CRAWL_S` (off), or admin   | fan out one leg per apex league and (tier, division) |
-| `ladder:apex`         | per crawl                          | one request per apex league, upserted whole          |
-| `ladder:walk`         | per crawl                          | page a (tier, division) until an empty page          |
-| `aggregate:champions` | on a completed crawl, or admin     | recompute `champion_stats` from the archive          |
-| `maintenance`         | daily                              | clear orphaned single-flight locks                   |
+| Job                   | Schedule                           | Action                                                |
+| --------------------- | ---------------------------------- | ----------------------------------------------------- |
+| `poll:live`           | every `TRACK_POLL_LIVE_S` (60 s)   | spectator-v5 → `game.started` / `game.ended`          |
+| `poll:rank`           | every `TRACK_POLL_RANK_S` (600 s)  | league-v4 → `rank.changed`                            |
+| `poll:matches`        | every `TRACK_POLL_MATCH_S` (300 s) | new match IDs since the last tick → `archive:match`   |
+| `archive:match`       | on demand                          | fetch, upsert, `match.archived`                       |
+| `backfill:player`     | admin, or a player never walked    | page 100 IDs at a time, bulk priority                 |
+| `ddragon:sync`        | hourly                             | on a new patch, mirror data and emit `patch.new`      |
+| `ladder:crawl`        | `LADDER_CRAWL_S` (off), or admin   | fan out one leg per apex league and (tier, division)  |
+| `ladder:apex`         | per crawl                          | one request per apex league, upserted whole           |
+| `ladder:walk`         | per crawl                          | page a (tier, division) until an empty page           |
+| `ladder:collect`      | once the enumeration is done       | 25 discovered players' match ids into the crawl's set |
+| `ladder:archive`      | once every id is collected         | de-duplicate against the archive, queue what is new   |
+| `aggregate:champions` | on a completed crawl, or admin     | recompute `champion_stats` from the archive           |
+| `maintenance`         | daily                              | clear orphaned single-flight locks                    |
 
 Each poll type is one repeatable tick that fans out to one job per tracked
 player, so adding or removing a tracked player needs no scheduler changes. All
 jobs are idempotent and run at bulk priority.
+
+A crawl runs its five job types in three stages, and the order is the point.
+A match has ten participants, so walking each discovered player's history as
+the crawl found them would reach one game from ten walks spread over the whole
+run — and every walk that happened before that match landed would fetch it
+again, since a walk can only skip what the archive already holds. So the crawl
+**enumerates** the ladder first, then **collects** every discovered player's
+match ids into one set, and only when the last id is in does it **archive**:
+one `filterUnarchived` over the set, and one `match.byId` per match however
+many of its ten players the ladder holds. `phase` on the crawl row says which
+stage it is in, and `GET /dashboard` draws it.
 
 The first time anyone looks up a player, their whole history is queued behind
 them. Matches are immutable, so a match stored now is one nobody ever spends

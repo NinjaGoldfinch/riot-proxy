@@ -10,7 +10,7 @@
 import type {} from '@fastify/swagger';
 import { Type, type Static } from '@sinclair/typebox';
 import { ERROR_CODES } from '../errors.js';
-import { CRAWL_STATUSES } from '../db/ladder.js';
+import { CRAWL_PHASES, CRAWL_STATUSES } from '../db/ladder.js';
 import { APEX_TIERS, DIVISIONS, PAGED_TIERS, RANKED_QUEUES, TIERS } from '../riot/ladder.js';
 import { PLATFORMS, REGIONS } from '../riot/routing.js';
 import {
@@ -410,16 +410,35 @@ export const LadderCrawlSummary = Type.Object(
       description: 'How far down the ladder this run was told to enumerate',
     },
     status: Type.Unsafe<string>({ type: 'string', enum: [...CRAWL_STATUSES] }),
+    phase: {
+      ...Type.Unsafe<string>({ type: 'string', enum: [...CRAWL_PHASES] }),
+      description:
+        'Which stage a running crawl is in. `enumerate` walks the ladder, `collect` gathers ' +
+        'every discovered player’s match ids, and `archive` fetches the matches behind them — ' +
+        'in that order, so a match shared by ten players is fetched once.',
+    },
     startedAt: Type.String({ format: 'date-time' }),
     finishedAt: NullableTimestamp,
     pagesFetched: Type.Integer(),
     entriesSeen: Type.Integer(),
     playersDiscovered: Type.Integer(),
-    backfillsEnqueued: Type.Integer(),
+    backfillsEnqueued: {
+      ...Type.Integer(),
+      description: 'Players whose match history the collect stage was asked to walk',
+    },
+    matchIdsSeen: {
+      ...Type.Integer(),
+      description: 'Distinct matches those players have played, after de-duplication',
+    },
+    matchesQueued: {
+      ...Type.Integer(),
+      description: 'How many of those were not already archived, and so cost a fetch',
+    },
     pendingLegs: {
       ...Type.Integer(),
       description:
-        'Apex leagues and (tier, division) walks still outstanding. 0 for a finished run.',
+        'Legs of the current stage still outstanding — apex leagues and (tier, division) ' +
+        'walks, then match-id batches, then the archive hand-off. 0 for a finished run.',
     },
   },
   { $id: 'LadderCrawlSummary' },
@@ -443,9 +462,54 @@ export const LadderCrawlBody = Type.Object({
   }),
 });
 
+/**
+ * What the dashboard's start form needs and cannot work out: the ladders this
+ * deployment can crawl, and what it would do if the form were left alone.
+ *
+ * Served rather than hardcoded in the page because both halves have a source
+ * of truth in the repo — the tier and queue lists are league-v4's value space,
+ * and the defaults are `LADDER_*` — and a form that drifts from either offers
+ * a crawl the service will refuse.
+ */
+export const LadderOptionsResponse = Type.Object(
+  {
+    platforms: Type.Array(Type.Object({ id: Type.String(), label: Type.String() }), {
+      description: 'Every platform a crawl can name, with its human label',
+    }),
+    queues: Type.Array(Type.Unsafe<string>({ type: 'string', enum: [...RANKED_QUEUES] })),
+    tiers: {
+      ...Type.Array(Type.Unsafe<string>({ type: 'string', enum: [...TIERS] })),
+      description: 'Tier floors, ascending — `IRON` is the whole ladder, `CHALLENGER` is one call',
+    },
+    defaults: Type.Object({
+      platform: Type.String(),
+      queue: Type.String(),
+      tierFloor: { ...Type.String(), description: 'LADDER_TIER_FLOOR — how far down to enumerate' },
+      backfillTierFloor: {
+        ...Type.String(),
+        description: 'LADDER_BACKFILL_TIER_FLOOR — how far down to walk match histories',
+      },
+      backfillLimit: {
+        ...Type.Integer(),
+        description: 'LADDER_BACKFILL_LIMIT — matches per discovered player. 0 walks nobody.',
+      },
+    }),
+  },
+  { $id: 'LadderOptions' },
+);
+
 export const LadderCrawlStartedResponse = Type.Object({
   crawlId: Type.String({ format: 'uuid' }),
   status: Type.Unsafe<string>({ type: 'string', enum: ['started', 'already-running'] }),
+  /**
+   * Which ladder the id names. One live crawl is enforced per
+   * `(key_scope, platform, queue)`, so `already-running` is always about the
+   * ladder that was asked for — and saying so is what makes that legible:
+   * without it a caller watching one ladder start while another is running
+   * has an id and no way to tell the two apart.
+   */
+  platform: Type.String(),
+  queue: Type.String(),
   legs: {
     ...Type.Integer(),
     description: 'Jobs fanned out — one per apex league, one per (tier, division) below them',

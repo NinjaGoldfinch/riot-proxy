@@ -21,6 +21,11 @@ export const QueueCounts = Type.Object({
   waiting: Type.Integer(),
   prioritized: Type.Integer({ description: 'Waiting, in the priority set (backfills, archives)' }),
   delayed: Type.Integer(),
+  scheduled: Type.Integer({
+    description:
+      'Repeatable schedulers on this queue. Each parks its next firing in `delayed` ' +
+      'permanently, so subtract this to see work that is actually waiting.',
+  }),
   failed: Type.Integer({ description: 'Exhausted their retries; retained 24 h' }),
   completed: Type.Integer({
     description: 'Retained 1 h / 1000 jobs, so this is recent, not total',
@@ -45,12 +50,20 @@ const LadderCrawlProgress = Type.Object({
   queue: Type.String(),
   tierFloor: Type.String(),
   status: Type.String(),
+  phase: Type.String({
+    description:
+      'Which stage a running crawl is in: `enumerate`, `collect` (match ids) or `archive`',
+  }),
   startedAt: Type.String({ format: 'date-time' }),
   finishedAt: Type.Union([Type.String({ format: 'date-time' }), Type.Null()]),
   pagesFetched: Type.Integer(),
   entriesSeen: Type.Integer(),
   playersDiscovered: Type.Integer(),
   backfillsEnqueued: Type.Integer(),
+  matchIdsSeen: Type.Integer({ description: 'Distinct matches the crawl’s players have played' }),
+  matchesQueued: Type.Integer({
+    description: 'How many of those were not already archived, and so cost a fetch',
+  }),
   pendingLegs: Type.Integer({
     description: 'Apex leagues and (tier, division) walks still outstanding',
   }),
@@ -199,7 +212,9 @@ export const MetricsHistoryPoint = Type.Object(
     queues: Type.Object({
       active: Type.Integer({ description: 'Running at the instant of the point, all queues' }),
       pending: Type.Integer({
-        description: 'waiting + prioritized + delayed, summed across queues',
+        description:
+          "waiting + prioritized + delayed, summed across queues, less each queue's idle " +
+          'scheduler placeholders — so an idle deployment records a zero, not a floor',
       }),
       failed: Type.Integer(),
     }),

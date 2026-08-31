@@ -138,6 +138,28 @@ export const ladderEntriesTotal = new Counter({
 });
 
 /**
+ * The dedup dividend, as a rate. `proxy_ladder_match_ids_total` counts the
+ * distinct matches a crawl's players have played;
+ * `proxy_ladder_matches_queued_total` counts the ones that were not already in
+ * the archive and so cost a `match.byId`. The ratio between them is what the
+ * collect stage buys, and it is the number that says whether a crawl is worth
+ * repeating on the budget available.
+ */
+export const ladderMatchIdsTotal = new Counter({
+  name: 'proxy_ladder_match_ids_total',
+  help: 'Distinct match ids gathered by a crawl, after de-duplication',
+  labelNames: ['platform', 'queue'] as const,
+  registers: [registry],
+});
+
+export const ladderMatchesQueuedTotal = new Counter({
+  name: 'proxy_ladder_matches_queued_total',
+  help: 'Matches a crawl handed to the archive queue, having found them unarchived',
+  labelNames: ['platform', 'queue'] as const,
+  registers: [registry],
+});
+
+/**
  * Buckets in minutes, not seconds: the fastest crawl this design contemplates
  * is three apex requests, and the slowest is a full ladder on a dev key at
  * five to seven hours (§2 of docs/ladder-crawl-plan.md). A default histogram

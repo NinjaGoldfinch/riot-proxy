@@ -270,7 +270,15 @@ describe('ladder:crawl — the fan-out', () => {
       tierFloor: 'IRON',
     });
 
-    expect(result).toEqual({ crawlId: CRAWL_ID, created: false, legs: 0 });
+    // The ladder is named even when nothing was started, so a caller watching
+    // one ladder can tell this id is about the one it asked for.
+    expect(result).toEqual({
+      crawlId: CRAWL_ID,
+      created: false,
+      platform: 'euw1',
+      queue: 'RANKED_SOLO_5x5',
+      legs: 0,
+    });
     expect(added).toHaveLength(0);
     expect(await pendingLegs(CRAWL_ID)).toBe(0);
   });

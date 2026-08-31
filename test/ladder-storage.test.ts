@@ -15,6 +15,7 @@ import {
   getLatestCompletedCrawl,
   getLeagueEntry,
   getRunningCrawl,
+  listCrawlBackfillCandidates,
   listCrawls,
   listLeagueEntries,
   upsertLeagueEntries,
@@ -479,5 +480,165 @@ describe('discovered players', () => {
   it('writes nothing for an empty page', async ({ skip }) => {
     if (!available) return skip();
     expect(await upsertDiscoveredPlayers([])).toEqual([]);
+  });
+});
+
+/**
+ * Whom the collect stage will walk (§6 of docs/ladder-crawl-plan.md). The
+ * query is the whole hand-off between the two stages: enumeration leaves the
+ * ladder stamped with the crawl id, and this reads it back out.
+ *
+ * Against the real Postgres because every clause in it is a join or an index
+ * predicate — the left join in particular, which is the difference between
+ * finding the players a crawl just discovered and finding none of them.
+ */
+describe('the collect stage’s candidates', () => {
+  const puuid = (n: number) => `ladder-cand-puuid-${String(n).padStart(4, '0')}`;
+  const APEX = ['MASTER', 'GRANDMASTER', 'CHALLENGER'] as const;
+
+  /** A crawl with a ladder under it, ready to be read back. */
+  async function stamped(entries: LeagueEntryInput[]) {
+    const { crawl } = await createCrawl({ platform: PLATFORM, queue: QUEUE, tierFloor: 'MASTER' });
+    await upsertLeagueEntries(crawl.id, PLATFORM, QUEUE, entries);
+    return crawl;
+  }
+
+  const page = (crawlId: string, over: Record<string, unknown> = {}) =>
+    listCrawlBackfillCandidates({
+      crawlId,
+      platform: PLATFORM,
+      queue: QUEUE,
+      tiers: [...APEX],
+      notWalkedSince: new Date(),
+      limit: 100,
+      ...over,
+    });
+
+  const candidates = async (crawlId: string, over: Record<string, unknown> = {}) =>
+    (await page(crawlId, over)).map((c) => c.puuid);
+
+  it('finds the players this crawl just discovered', async ({ skip }) => {
+    if (!available) return skip();
+    // The left join earns its keep here: these players have no backfill stamp
+    // at all, and an inner join would return nobody.
+    const crawl = await stamped([
+      entry(puuid(1), { tier: 'CHALLENGER', leaguePoints: 900 }),
+      entry(puuid(2), { tier: 'MASTER', leaguePoints: 300 }),
+    ]);
+    await upsertDiscoveredPlayers([
+      { puuid: puuid(1), platform: PLATFORM },
+      { puuid: puuid(2), platform: PLATFORM },
+    ]);
+
+    // Best first, so a cancelled crawl has at least collected the top.
+    expect(await candidates(crawl.id)).toEqual([puuid(1), puuid(2)]);
+  });
+
+  it('stops at the backfill tier floor', async ({ skip }) => {
+    if (!available) return skip();
+    const crawl = await stamped([
+      entry(puuid(1), { tier: 'MASTER', leaguePoints: 300 }),
+      entry(puuid(2), { tier: 'DIAMOND', leaguePoints: 99 }),
+    ]);
+
+    // Diamond is on the ladder — enumeration stored it — and is not walked.
+    expect(await candidates(crawl.id)).toEqual([puuid(1)]);
+  });
+
+  it('skips a player already walked since the crawl started', async ({ skip }) => {
+    if (!available) return skip();
+    // Convergence, not thrash: a lookup that walked this player while the
+    // crawl was enumerating has already produced their ids.
+    const crawl = await stamped([
+      entry(puuid(1), { tier: 'CHALLENGER', leaguePoints: 900 }),
+      entry(puuid(2), { tier: 'CHALLENGER', leaguePoints: 800 }),
+    ]);
+    await upsertPlayer({ puuid: puuid(1), platform: PLATFORM });
+    await db
+      .update(players)
+      .set({ historyBackfillStartedAt: new Date(Date.now() + 60_000) })
+      .where(and(eq(players.keyScope, KEY_SCOPE), eq(players.puuid, puuid(1))));
+
+    expect(await candidates(crawl.id)).toEqual([puuid(2)]);
+  });
+
+  it('walks a player again on the next crawl', async ({ skip }) => {
+    if (!available) return skip();
+    // The other half of the same rule. A walk from before this crawl started
+    // is stale by definition, and the archive makes the repeat one request
+    // plus whatever they have played since.
+    const crawl = await stamped([entry(puuid(1), { tier: 'CHALLENGER', leaguePoints: 900 })]);
+    await upsertPlayer({ puuid: puuid(1), platform: PLATFORM });
+    await db
+      .update(players)
+      .set({ historyBackfillStartedAt: new Date(Date.now() - 86_400_000) })
+      .where(and(eq(players.keyScope, KEY_SCOPE), eq(players.puuid, puuid(1))));
+
+    expect(await candidates(crawl.id)).toEqual([puuid(1)]);
+  });
+
+  it('offers only the ladder this crawl saw', async ({ skip }) => {
+    if (!available) return skip();
+    // A player who fell off between runs keeps their `league_entries` row —
+    // that is what makes "dropped since" answerable — and must not be walked
+    // by a crawl that did not see them.
+    const first = await stamped([entry(puuid(1), { tier: 'CHALLENGER', leaguePoints: 900 })]);
+    await finishCrawl(first.id, 'completed');
+    const second = await stamped([entry(puuid(2), { tier: 'CHALLENGER', leaguePoints: 800 })]);
+
+    expect(await candidates(second.id)).toEqual([puuid(2)]);
+  });
+
+  it('pages by cursor, without showing one player twice', async ({ skip }) => {
+    if (!available) return skip();
+    // Every entry on the same LP, which is what a sort key without a tie-break
+    // cannot page through at all: the ties have no defined order, so "after
+    // 500 LP" is either everyone or nobody.
+    const crawl = await stamped(
+      Array.from({ length: 30 }, (_, i) =>
+        entry(puuid(200 + i), { tier: 'CHALLENGER', leaguePoints: 500 }),
+      ),
+    );
+
+    const first = await page(crawl.id, { limit: 25 });
+    const second = await page(crawl.id, { limit: 25, after: first.at(-1) });
+    expect(first).toHaveLength(25);
+    expect(second).toHaveLength(5);
+    expect(new Set([...first, ...second].map((c) => c.puuid)).size).toBe(30);
+  });
+
+  it('does not skip a player when an earlier page has since been walked', async ({ skip }) => {
+    if (!available) return skip();
+    // The failure a cursor exists to prevent. The jobs this paging feeds start
+    // running while it is still paging, and each stamps the players it takes —
+    // which removes them from this query. Under OFFSET the remaining rows
+    // shift left by however many were stamped, and the next page skips exactly
+    // that many players, silently.
+    const crawl = await stamped(
+      Array.from({ length: 6 }, (_, i) =>
+        entry(puuid(300 + i), { tier: 'CHALLENGER', leaguePoints: 900 - i }),
+      ),
+    );
+
+    const first = await page(crawl.id, { limit: 3 });
+    expect(first).toHaveLength(3);
+
+    // The workers get through the first page while the fan-out is mid-flight.
+    for (const c of first) {
+      await upsertPlayer({ puuid: c.puuid, platform: PLATFORM });
+      await db
+        .update(players)
+        .set({ historyBackfillStartedAt: new Date(Date.now() + 60_000) })
+        .where(and(eq(players.keyScope, KEY_SCOPE), eq(players.puuid, c.puuid)));
+    }
+
+    const second = await page(crawl.id, { limit: 3, after: first.at(-1) });
+    expect(second.map((c) => c.puuid)).toEqual([puuid(303), puuid(304), puuid(305)]);
+  });
+
+  it('asks nothing when the floor expands to no tiers', async ({ skip }) => {
+    if (!available) return skip();
+    const crawl = await stamped([entry(puuid(1), { tier: 'CHALLENGER' })]);
+    expect(await candidates(crawl.id, { tiers: [] })).toEqual([]);
   });
 });

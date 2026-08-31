@@ -123,12 +123,30 @@ export const ladderCrawls = pgTable(
      * looked below Master". */
     tierFloor: text('tier_floor').notNull(),
     status: text('status').notNull().default('running'),
+    /**
+     * Which of the three stages a running crawl is in: `enumerate` walks the
+     * ladder, `collect` asks every discovered player for their match ids, and
+     * `archive` fetches the matches behind them.
+     *
+     * They are stages rather than one interleaved pipeline because a match is
+     * shared by ten players. Fetching a player's matches the moment they are
+     * discovered means the ten participants of one game are discovered at ten
+     * different times, and whichever of them is walked first pays for the
+     * match the other nine would have found in the archive — but only if their
+     * walks happen *after* it landed. Holding every id until they are all in
+     * makes that a single de-duplicated set, so a match is fetched once.
+     */
+    phase: text('phase').notNull().default('enumerate'),
     startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
     finishedAt: timestamp('finished_at', { withTimezone: true }),
     pagesFetched: integer('pages_fetched').notNull().default(0),
     entriesSeen: integer('entries_seen').notNull().default(0),
     playersDiscovered: integer('players_discovered').notNull().default(0),
     backfillsEnqueued: integer('backfills_enqueued').notNull().default(0),
+    /** Distinct match ids the collect stage gathered, after de-duplication. */
+    matchIdsSeen: integer('match_ids_seen').notNull().default(0),
+    /** How many of those were not already archived, and so cost a fetch. */
+    matchesQueued: integer('matches_queued').notNull().default(0),
   },
   (t) => [
     /**

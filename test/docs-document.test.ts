@@ -44,6 +44,7 @@ const EXPECTED_OPERATIONS = [
   'GET /v1/admin/debug/cache',
   'GET /v1/admin/debug/riot',
   'GET /v1/admin/ladder/crawls',
+  'GET /v1/admin/ladder/options',
   'GET /v1/admin/limits/{scope}',
   'GET /v1/admin/metrics',
   'GET /v1/admin/metrics/history',
