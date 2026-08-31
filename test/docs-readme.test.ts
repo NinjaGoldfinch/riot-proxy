@@ -220,6 +220,12 @@ const CACHE_ROWS: Record<string, MethodId[]> = {
   'Account (either direction)': ['account.byRiotId', 'account.byPuuid'],
   Summoner: ['summoner.byPuuid'],
   'League entries': ['league.entriesByPuuid'],
+  'Ladder (apex + paged)': [
+    'league.challenger',
+    'league.grandmaster',
+    'league.master',
+    'league.entriesByTier',
+  ],
   Spectator: ['spectator.activeGame'],
   'Champion mastery': ['mastery.byPuuid', 'mastery.topByPuuid'],
   'Champion rotations': ['platform.championRotations'],

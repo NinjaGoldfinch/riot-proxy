@@ -6,6 +6,7 @@ import { closeDb, pingDb } from '../src/db/index.js';
 import { closeRedis, redis } from '../src/redis.js';
 import { DEFAULT_STATUS, ERROR_CODES, type ErrorCode } from '../src/errors.js';
 import { ERROR_EXAMPLES } from '../src/docs/examples.js';
+import { ENDPOINTS } from '../src/riot/endpoints.js';
 import { EVENT_EXAMPLES } from '../src/events/examples.js';
 import { ANON_QUOTA_PER_MIN, DEFAULT_QUOTA_PER_MIN } from '../src/quotas.js';
 import { KEY_PREFIX } from '../src/keys.js';
@@ -46,7 +47,9 @@ const EXPECTED_OPERATIONS = [
   'GET /v1/admin/metrics/history',
   'GET /v1/admin/stats',
   'GET /v1/admin/tracked-players',
+  'GET /v1/lol/league/apex/{platform}/{tier}/{queue}',
   'GET /v1/lol/league/entries/by-puuid/{platform}/{puuid}',
+  'GET /v1/lol/league/entries/{platform}/{queue}/{tier}/{division}',
   'GET /v1/lol/mastery/by-puuid/{platform}/{puuid}',
   'GET /v1/lol/matches/ids/{region}/{puuid}',
   'GET /v1/lol/matches/{region}/{matchId}',
@@ -127,9 +130,12 @@ describe('shared components (#61)', () => {
   it('registers the envelope and the parameters under their own names', ({ skip }) => {
     if (!available || !doc) return skip();
     expect(Object.keys(doc.components?.schemas ?? {}).sort()).toEqual([
+      'ApexTierParam',
       'BackfillNotice',
+      'DivisionParam',
       'ErrorResponse',
       'GameNameParam',
+      'LadderTierParam',
       'MatchIdParam',
       'MatchPage',
       // Extracted on its own because `match-summary.ts` gives it a `$id`: the
@@ -143,6 +149,7 @@ describe('shared components (#61)', () => {
       'PlatformParam',
       'ProfileBody',
       'PuuidParam',
+      'RankedQueueParam',
       'RegionParam',
       'ScopeParam',
       'TagLineParam',
@@ -411,7 +418,7 @@ describe('the document itself (#62)', () => {
     if (!available || !doc) return skip();
     const d = doc.info.description as string;
     // One row per method in ENDPOINTS, not a hand-written table.
-    expect((d.match(/^\| `[a-z]/gm) ?? []).length).toBe(12);
+    expect((d.match(/^\| `[a-z]/gm) ?? []).length).toBe(ENDPOINTS.length);
     expect(d).toContain('`account.byRiotId`');
     // BULK_USAGE_CEILING 0.8, REFRESH_COOLDOWN_S 60, LOOKUP_BACKFILL_LIMIT off
     // in the test env — each read, not typed.

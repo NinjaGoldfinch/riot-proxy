@@ -3,15 +3,26 @@ import type { FastifyPluginAsync } from 'fastify';
 import { ProxyError } from '../errors.js';
 import { fetcher } from '../fetcher.js';
 import { build } from '../riot/endpoints.js';
+import {
+  assertApexTier,
+  assertDivision,
+  assertPagedTier,
+  assertRankedQueue,
+} from '../riot/ladder.js';
 import { assertPlatform, assertRegion, regionFromMatchId } from '../riot/routing.js';
 import { send } from './helpers.js';
 import {
+  ApexTierParam,
+  DivisionParam,
+  LadderPageQuery,
+  LadderTierParam,
   MasteryQuery,
   MatchIdParam,
   MatchIdsQuery,
   PassthroughResponse,
   PlatformParam,
   PuuidParam,
+  RankedQueueParam,
   RegionParam,
   upstreamErrors,
 } from './schemas.js';
@@ -50,6 +61,86 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
       return send(
         reply,
         await fetcher.fetch(build.leagueEntriesByPuuid(assertPlatform(platform), puuid)),
+      );
+    },
+  );
+
+  /**
+   * The ladder, in the two shapes Riot serves it. Both are passthroughs like
+   * everything else here; the crawl (#88) drives the same builders from the
+   * worker at bulk priority rather than through these routes.
+   */
+  fastify.get(
+    '/v1/lol/league/apex/:platform/:tier/:queue',
+    {
+      schema: {
+        tags: ['lol'],
+        summary: 'Read a whole apex league',
+        params: Type.Object({
+          platform: PlatformParam,
+          tier: ApexTierParam,
+          queue: RankedQueueParam,
+        }),
+        response: { 200: PassthroughResponse, ...upstreamErrors },
+      },
+    },
+    async (request, reply) => {
+      const { platform, tier, queue } = request.params as {
+        platform: string;
+        tier: string;
+        queue: string;
+      };
+      return send(
+        reply,
+        await fetcher.fetch(
+          build.apexLeague(
+            assertPlatform(platform),
+            assertApexTier(tier),
+            assertRankedQueue(queue),
+          ),
+        ),
+      );
+    },
+  );
+
+  fastify.get(
+    '/v1/lol/league/entries/:platform/:queue/:tier/:division',
+    {
+      schema: {
+        tags: ['lol'],
+        summary: 'Walk one page of a tier and division',
+        description:
+          'One ~205-entry page of the ladder. Pages are 1-based; a page past the end of the ' +
+          'division returns an empty array rather than a 404.',
+        params: Type.Object({
+          platform: PlatformParam,
+          queue: RankedQueueParam,
+          tier: LadderTierParam,
+          division: DivisionParam,
+        }),
+        querystring: LadderPageQuery,
+        response: { 200: PassthroughResponse, ...upstreamErrors },
+      },
+    },
+    async (request, reply) => {
+      const { platform, queue, tier, division } = request.params as {
+        platform: string;
+        queue: string;
+        tier: string;
+        division: string;
+      };
+      const { page } = request.query as { page?: number };
+      return send(
+        reply,
+        await fetcher.fetch(
+          build.leagueEntriesByTier(
+            assertPlatform(platform),
+            assertRankedQueue(queue),
+            assertPagedTier(tier),
+            assertDivision(division),
+            page,
+          ),
+        ),
       );
     },
   );

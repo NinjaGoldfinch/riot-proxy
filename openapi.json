@@ -3,7 +3,7 @@
   "info": {
     "title": "riot-proxy",
     "version": "1.0.0",
-    "description": "A self-hosted middleman between [Riot's public API](https://developer.riotgames.com/)\nand everything downstream of it. It holds one Riot key, spends it carefully, and\ngives its consumers their own keys and their own quotas.\n\nThree things it does that calling Riot directly does not:\n\n- **It stays inside Riot's rate limits for you.** Limits are read from Riot's own\n  response headers rather than assumed, and user-invoked requests are served\n  ahead of background work. Bulk jobs stop taking tokens once a bucket is 80 % full,\n  so the rest stays free for a request someone is waiting on.\n- **It caches and archives.** Repeated reads are served from Redis; matches are\n  immutable, so they are archived in Postgres and re-reading a player's history\n  costs no quota at all.\n- **It composes.** The endpoints under `players` fan out to several Riot calls\n  and return one document, which is what a profile page actually needs.\n\n## Authentication\n\nEvery route outside `ops` needs a consumer key, as a bearer token:\n\n```\nAuthorization: Bearer rpx_…\n```\n\nKeys are issued by an operator (`POST /v1/admin/consumers`) and shown exactly\nonce — only a SHA-256 of the key is stored, so a lost key is reissued, never\nrecovered. Each key carries its own per-minute quota, independent of Riot's\nlimits; the default is 600/min and unauthenticated callers\nget 60/min.\n\n## Response headers\n\n| Header | Meaning |\n| --- | --- |\n| `X-Cache` | `HIT`, `MISS`, `STALE`, or `HIT-NEG` for a cached 404 |\n| `X-Cache-Age` | Age **of the content**, in seconds — not of the last fetch |\n| `Retry-After` | On 429 and 503, how long to wait before retrying |\n\n`X-Cache: MISS` with a large `X-Cache-Age` is not a contradiction. The age\ndescribes the payload, so a match served from the Postgres archive is a MISS\nagainst Redis and legitimately days old. That is the archive working.\n\n## Cache TTLs\n\n| Method | Host | Cache TTL | Negative TTL | Storage |\n| --- | --- | --- | --- | --- |\n| `account.byRiotId` | regional | 1 d | 5 m | — |\n| `account.byPuuid` | regional | 1 d | 5 m | — |\n| `summoner.byPuuid` | platform | 1 h | 30 s | — |\n| `league.entriesByPuuid` | platform | 5 m | 30 s | — |\n| `match.idsByPuuid` | regional | 2 m | 30 s | — |\n| `match.byId` | regional | never | 30 s | archived |\n| `match.timeline` | regional | never | 30 s | archived |\n| `spectator.activeGame` | platform | 30 s | 30 s | — |\n| `mastery.byPuuid` | platform | 1 h | 30 s | — |\n| `mastery.topByPuuid` | platform | 1 h | 30 s | — |\n| `platform.championRotations` | platform | 6 h | off | — |\n| `status.platformData` | platform | 1 m | off | — |\n\nNegative caching (§8.3) stores upstream 404s briefly so a mistyped Riot ID\ncannot be used to hammer Riot. `never` means immutable: the payload is\narchived in Postgres and re-read from there forever.\n\n## Errors\n\nOne envelope, always:\n\n```json\n{ \"error\": { \"code\": \"NOT_FOUND\", \"message\": \"…\", \"retryAfter\": 30 } }\n```\n\n| Code | Status | Means |\n| --- | --- | --- |\n| `VALIDATION` | 400 | The request failed this proxy's own schema |\n| `BAD_REGION` | 400 | Unknown platform or region |\n| `UNAUTHORIZED` | 401 | Missing or unrecognised consumer key |\n| `FORBIDDEN` | 403 | Key lacks the scope, or the admin IP allowlist rejected it |\n| `NOT_FOUND` | 404 | Riot has no such resource, or we do not serve it |\n| `QUOTA_EXCEEDED` | 429 | **Your** per-minute quota. `Retry-After` is the window |\n| `UPSTREAM_ERROR` | 502 | Riot failed, or rejected our key — never yours to fix |\n| `RATE_LIMITED` | 503 | The wait for Riot's own limiter exceeded your request budget |\n| `INTERNAL` | 500 | Ours |\n\nThe two throttles are worth telling apart, because they are not the same\nproblem. `QUOTA_EXCEEDED` is **your** per-minute allowance and is fixed by\nslowing down. `RATE_LIMITED` is the proxy declining to hold your request any\nlonger while it waits for Riot's budget — nothing you did, and every consumer\nsees it at once.\n\n## Key scope\n\nRiot encrypts PUUIDs per API key. A PUUID from another key will not resolve\nhere, and rotating this deployment's key strands every stored PUUID — which is\nwhy `keyScope` appears in `/readyz` and `/v1/admin/stats`. Match IDs are\n**not** encrypted, so the archive survives a rotation intact.\n\n## Costs\n\n- The composite endpoints accept `?refresh=true` to spend quota on re-reading\n  rather than serving cache. It is metered at one refresh per player per 60 s.\n  The response says whether your claim won (`refreshed`) and when the next one\n  is available (`refreshAvailableIn`).\n- The first time anyone looks a player up, the proxy queues a walk of their\n  whole match history, up to 10,000 matches.\n  It runs at bulk priority, out of your way, and it is why the second page view\n  is free.",
+    "description": "A self-hosted middleman between [Riot's public API](https://developer.riotgames.com/)\nand everything downstream of it. It holds one Riot key, spends it carefully, and\ngives its consumers their own keys and their own quotas.\n\nThree things it does that calling Riot directly does not:\n\n- **It stays inside Riot's rate limits for you.** Limits are read from Riot's own\n  response headers rather than assumed, and user-invoked requests are served\n  ahead of background work. Bulk jobs stop taking tokens once a bucket is 80 % full,\n  so the rest stays free for a request someone is waiting on.\n- **It caches and archives.** Repeated reads are served from Redis; matches are\n  immutable, so they are archived in Postgres and re-reading a player's history\n  costs no quota at all.\n- **It composes.** The endpoints under `players` fan out to several Riot calls\n  and return one document, which is what a profile page actually needs.\n\n## Authentication\n\nEvery route outside `ops` needs a consumer key, as a bearer token:\n\n```\nAuthorization: Bearer rpx_…\n```\n\nKeys are issued by an operator (`POST /v1/admin/consumers`) and shown exactly\nonce — only a SHA-256 of the key is stored, so a lost key is reissued, never\nrecovered. Each key carries its own per-minute quota, independent of Riot's\nlimits; the default is 600/min and unauthenticated callers\nget 60/min.\n\n## Response headers\n\n| Header | Meaning |\n| --- | --- |\n| `X-Cache` | `HIT`, `MISS`, `STALE`, or `HIT-NEG` for a cached 404 |\n| `X-Cache-Age` | Age **of the content**, in seconds — not of the last fetch |\n| `Retry-After` | On 429 and 503, how long to wait before retrying |\n\n`X-Cache: MISS` with a large `X-Cache-Age` is not a contradiction. The age\ndescribes the payload, so a match served from the Postgres archive is a MISS\nagainst Redis and legitimately days old. That is the archive working.\n\n## Cache TTLs\n\n| Method | Host | Cache TTL | Negative TTL | Storage |\n| --- | --- | --- | --- | --- |\n| `account.byRiotId` | regional | 1 d | 5 m | — |\n| `account.byPuuid` | regional | 1 d | 5 m | — |\n| `summoner.byPuuid` | platform | 1 h | 30 s | — |\n| `league.entriesByPuuid` | platform | 5 m | 30 s | — |\n| `league.challenger` | platform | 2 m | off | — |\n| `league.grandmaster` | platform | 2 m | off | — |\n| `league.master` | platform | 2 m | off | — |\n| `league.entriesByTier` | platform | 2 m | off | — |\n| `match.idsByPuuid` | regional | 2 m | 30 s | — |\n| `match.byId` | regional | never | 30 s | archived |\n| `match.timeline` | regional | never | 30 s | archived |\n| `spectator.activeGame` | platform | 30 s | 30 s | — |\n| `mastery.byPuuid` | platform | 1 h | 30 s | — |\n| `mastery.topByPuuid` | platform | 1 h | 30 s | — |\n| `platform.championRotations` | platform | 6 h | off | — |\n| `status.platformData` | platform | 1 m | off | — |\n\nNegative caching (§8.3) stores upstream 404s briefly so a mistyped Riot ID\ncannot be used to hammer Riot. `never` means immutable: the payload is\narchived in Postgres and re-read from there forever.\n\n## Errors\n\nOne envelope, always:\n\n```json\n{ \"error\": { \"code\": \"NOT_FOUND\", \"message\": \"…\", \"retryAfter\": 30 } }\n```\n\n| Code | Status | Means |\n| --- | --- | --- |\n| `VALIDATION` | 400 | The request failed this proxy's own schema |\n| `BAD_REGION` | 400 | Unknown platform or region |\n| `UNAUTHORIZED` | 401 | Missing or unrecognised consumer key |\n| `FORBIDDEN` | 403 | Key lacks the scope, or the admin IP allowlist rejected it |\n| `NOT_FOUND` | 404 | Riot has no such resource, or we do not serve it |\n| `QUOTA_EXCEEDED` | 429 | **Your** per-minute quota. `Retry-After` is the window |\n| `UPSTREAM_ERROR` | 502 | Riot failed, or rejected our key — never yours to fix |\n| `RATE_LIMITED` | 503 | The wait for Riot's own limiter exceeded your request budget |\n| `INTERNAL` | 500 | Ours |\n\nThe two throttles are worth telling apart, because they are not the same\nproblem. `QUOTA_EXCEEDED` is **your** per-minute allowance and is fixed by\nslowing down. `RATE_LIMITED` is the proxy declining to hold your request any\nlonger while it waits for Riot's budget — nothing you did, and every consumer\nsees it at once.\n\n## Key scope\n\nRiot encrypts PUUIDs per API key. A PUUID from another key will not resolve\nhere, and rotating this deployment's key strands every stored PUUID — which is\nwhy `keyScope` appears in `/readyz` and `/v1/admin/stats`. Match IDs are\n**not** encrypted, so the archive survives a rotation intact.\n\n## Costs\n\n- The composite endpoints accept `?refresh=true` to spend quota on re-reading\n  rather than serving cache. It is metered at one refresh per player per 60 s.\n  The response says whether your claim won (`refreshed`) and when the next one\n  is available (`refreshAvailableIn`).\n- The first time anyone looks a player up, the proxy queues a walk of their\n  whole match history, up to 10,000 matches.\n  It runs at bulk priority, out of your way, and it is why the second page view\n  is free.",
     "license": {
       "name": "MIT"
     }
@@ -523,6 +523,50 @@
         "title": "Match ID",
         "description": "Platform-prefixed match identifier, e.g. `EUW1_7381937461`. Unlike a PUUID this is not encrypted, so the match archive survives a key rotation.",
         "type": "string"
+      },
+      "RankedQueueParam": {
+        "type": "string",
+        "enum": [
+          "RANKED_SOLO_5x5",
+          "RANKED_FLEX_SR"
+        ],
+        "title": "Ranked queue",
+        "description": "Ranked ladder to read: `RANKED_SOLO_5x5` or `RANKED_FLEX_SR`."
+      },
+      "ApexTierParam": {
+        "type": "string",
+        "enum": [
+          "MASTER",
+          "GRANDMASTER",
+          "CHALLENGER"
+        ],
+        "title": "Apex tier",
+        "description": "A tier served whole by its own league endpoint — `MASTER`, `GRANDMASTER`, `CHALLENGER`. One request returns every entry, so these are not paged."
+      },
+      "LadderTierParam": {
+        "type": "string",
+        "enum": [
+          "IRON",
+          "BRONZE",
+          "SILVER",
+          "GOLD",
+          "PLATINUM",
+          "EMERALD",
+          "DIAMOND"
+        ],
+        "title": "Ladder tier",
+        "description": "A tier walked page by page — `IRON` through `DIAMOND`. The apex tiers are not valid here; read them from the apex league route instead."
+      },
+      "DivisionParam": {
+        "type": "string",
+        "enum": [
+          "I",
+          "II",
+          "III",
+          "IV"
+        ],
+        "title": "Division",
+        "description": "Division within a tier, `I` (highest) to `IV`."
       },
       "ScopeParam": {
         "type": "string",
@@ -2135,6 +2179,412 @@
             "name": "Cache 5 m"
           }
         ]
+      }
+    },
+    "/v1/lol/league/apex/{platform}/{tier}/{queue}": {
+      "get": {
+        "summary": "Read a whole apex league",
+        "tags": [
+          "lol"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "$ref": "#/components/schemas/PlatformParam"
+            },
+            "in": "path",
+            "name": "platform",
+            "required": true
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/ApexTierParam"
+            },
+            "in": "path",
+            "name": "tier",
+            "required": true
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/RankedQueueParam"
+            },
+            "in": "path",
+            "name": "queue",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "Unknown platform or region": {
+                    "summary": "Unknown platform or region",
+                    "value": {
+                      "error": {
+                        "code": "BAD_REGION",
+                        "message": "params/platform must be equal to one of the allowed values"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "Missing or unrecognised key": {
+                    "summary": "Missing or unrecognised key",
+                    "value": {
+                      "error": {
+                        "code": "UNAUTHORIZED",
+                        "message": "Missing or invalid consumer key"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "Key lacks the scope (or the admin IP allowlist rejected it)": {
+                    "summary": "Key lacks the scope (or the admin IP allowlist rejected it)",
+                    "value": {
+                      "error": {
+                        "code": "FORBIDDEN",
+                        "message": "This key does not carry the admin scope"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "No such resource": {
+                    "summary": "No such resource",
+                    "value": {
+                      "error": {
+                        "code": "NOT_FOUND",
+                        "message": "No account for that Riot ID"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "Your quota — slow down. Sent with Retry-After": {
+                    "summary": "Your quota — slow down. Sent with Retry-After",
+                    "value": {
+                      "error": {
+                        "code": "QUOTA_EXCEEDED",
+                        "message": "Quota of 600/min exceeded",
+                        "retryAfter": 37
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "Riot failed, or rejected our key": {
+                    "summary": "Riot failed, or rejected our key",
+                    "value": {
+                      "error": {
+                        "code": "UPSTREAM_ERROR",
+                        "message": "Upstream returned 500"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "The upstream limiter, not your quota — affects everyone, not just you": {
+                    "summary": "The upstream limiter, not your quota — affects everyone, not just you",
+                    "value": {
+                      "error": {
+                        "code": "RATE_LIMITED",
+                        "message": "Upstream rate limit wait exceeded the request budget",
+                        "retryAfter": 4
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/lol/league/entries/{platform}/{queue}/{tier}/{division}": {
+      "get": {
+        "summary": "Walk one page of a tier and division",
+        "tags": [
+          "lol"
+        ],
+        "description": "One ~205-entry page of the ladder. Pages are 1-based; a page past the end of the division returns an empty array rather than a 404.",
+        "parameters": [
+          {
+            "schema": {
+              "minimum": 1,
+              "maximum": 100000,
+              "default": 1,
+              "type": "integer"
+            },
+            "in": "query",
+            "name": "page",
+            "required": false
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/PlatformParam"
+            },
+            "in": "path",
+            "name": "platform",
+            "required": true
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/RankedQueueParam"
+            },
+            "in": "path",
+            "name": "queue",
+            "required": true
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/LadderTierParam"
+            },
+            "in": "path",
+            "name": "tier",
+            "required": true
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/DivisionParam"
+            },
+            "in": "path",
+            "name": "division",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "Unknown platform or region": {
+                    "summary": "Unknown platform or region",
+                    "value": {
+                      "error": {
+                        "code": "BAD_REGION",
+                        "message": "params/platform must be equal to one of the allowed values"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "Missing or unrecognised key": {
+                    "summary": "Missing or unrecognised key",
+                    "value": {
+                      "error": {
+                        "code": "UNAUTHORIZED",
+                        "message": "Missing or invalid consumer key"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "Key lacks the scope (or the admin IP allowlist rejected it)": {
+                    "summary": "Key lacks the scope (or the admin IP allowlist rejected it)",
+                    "value": {
+                      "error": {
+                        "code": "FORBIDDEN",
+                        "message": "This key does not carry the admin scope"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "No such resource": {
+                    "summary": "No such resource",
+                    "value": {
+                      "error": {
+                        "code": "NOT_FOUND",
+                        "message": "No account for that Riot ID"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "Your quota — slow down. Sent with Retry-After": {
+                    "summary": "Your quota — slow down. Sent with Retry-After",
+                    "value": {
+                      "error": {
+                        "code": "QUOTA_EXCEEDED",
+                        "message": "Quota of 600/min exceeded",
+                        "retryAfter": 37
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "Riot failed, or rejected our key": {
+                    "summary": "Riot failed, or rejected our key",
+                    "value": {
+                      "error": {
+                        "code": "UPSTREAM_ERROR",
+                        "message": "Upstream returned 500"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "The upstream limiter, not your quota — affects everyone, not just you": {
+                    "summary": "The upstream limiter, not your quota — affects everyone, not just you",
+                    "value": {
+                      "error": {
+                        "code": "RATE_LIMITED",
+                        "message": "Upstream rate limit wait exceeded the request budget",
+                        "retryAfter": 4
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/v1/lol/matches/ids/{region}/{puuid}": {
@@ -6766,6 +7216,10 @@
                 "account.byPuuid",
                 "summoner.byPuuid",
                 "league.entriesByPuuid",
+                "league.challenger",
+                "league.grandmaster",
+                "league.master",
+                "league.entriesByTier",
                 "match.idsByPuuid",
                 "match.byId",
                 "match.timeline",
@@ -6986,6 +7440,10 @@
                 "account.byPuuid",
                 "summoner.byPuuid",
                 "league.entriesByPuuid",
+                "league.challenger",
+                "league.grandmaster",
+                "league.master",
+                "league.entriesByTier",
                 "match.idsByPuuid",
                 "match.byId",
                 "match.timeline",
