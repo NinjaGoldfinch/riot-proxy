@@ -1,4 +1,5 @@
 import { config } from '../config.js';
+import type { ApexTier, Division, PagedTier, RankedQueue } from './ladder.js';
 import {
   platformHost,
   regionHost,
@@ -17,6 +18,10 @@ export const METHOD_IDS = [
   'account.byPuuid',
   'summoner.byPuuid',
   'league.entriesByPuuid',
+  'league.challenger',
+  'league.grandmaster',
+  'league.master',
+  'league.entriesByTier',
   'match.idsByPuuid',
   'match.byId',
   'match.timeline',
@@ -73,6 +78,42 @@ const SPECS: Record<MethodId, Omit<EndpointSpec, 'id'>> = {
     negTtlSeconds: config.NEG_TTL_SECONDS,
     immutable: false,
     overrideKey: 'league',
+  },
+  /**
+   * The three apex leagues and the paged tier walk share one override key: a
+   * ladder is a ladder, and the number people tune is "how stale may a ladder
+   * read be". Short and honest — ladders churn constantly, and caching page N
+   * for a crawler that visits it once per crawl is near-worthless anyway. What
+   * the TTL buys is deduplication between concurrent crawls and between a
+   * crawl and a consumer asking for the same page.
+   */
+  'league.challenger': {
+    host: 'platform',
+    ttlSeconds: 120,
+    negTtlSeconds: 0,
+    immutable: false,
+    overrideKey: 'ladder',
+  },
+  'league.grandmaster': {
+    host: 'platform',
+    ttlSeconds: 120,
+    negTtlSeconds: 0,
+    immutable: false,
+    overrideKey: 'ladder',
+  },
+  'league.master': {
+    host: 'platform',
+    ttlSeconds: 120,
+    negTtlSeconds: 0,
+    immutable: false,
+    overrideKey: 'ladder',
+  },
+  'league.entriesByTier': {
+    host: 'platform',
+    ttlSeconds: 120,
+    negTtlSeconds: 0,
+    immutable: false,
+    overrideKey: 'ladder',
   },
   'match.idsByPuuid': {
     host: 'regional',
@@ -165,6 +206,13 @@ function onPlatform(method: MethodId, platform: Platform, path: string, query = 
   };
 }
 
+/** Which league endpoint serves each apex tier, and under which method id. */
+const APEX_LEAGUES: Record<ApexTier, { method: MethodId; segment: string }> = {
+  MASTER: { method: 'league.master', segment: 'masterleagues' },
+  GRANDMASTER: { method: 'league.grandmaster', segment: 'grandmasterleagues' },
+  CHALLENGER: { method: 'league.challenger', segment: 'challengerleagues' },
+};
+
 /**
  * URL builders. Path segments coming from user input are encoded here — Riot
  * IDs legitimately contain spaces and non-ASCII characters.
@@ -202,6 +250,40 @@ export const build = {
       'league.entriesByPuuid',
       platform,
       `/lol/league/v4/entries/by-puuid/${encodeURIComponent(puuid)}`,
+    );
+  },
+
+  /**
+   * The apex leagues come back whole — one request per league, no paging — so
+   * one builder covers all three. The method ids stay distinct because the
+   * limiter buckets on them (§9.2), which is also why the tier cannot just be
+   * a path segment here.
+   */
+  apexLeague(platform: Platform, tier: ApexTier, queue: RankedQueue): BuiltRequest {
+    const { method, segment } = APEX_LEAGUES[tier];
+    return onPlatform(method, platform, `/lol/league/v4/${segment}/by-queue/${queue}`);
+  },
+
+  /**
+   * The rest of the ladder, ~205 entries at a time. Pages are 1-based and a
+   * page past the end is an empty array rather than a 404 — which is what
+   * makes "walk until empty" the crawl's terminator (§5 of the plan).
+   *
+   * Nothing here is encoded: unlike a Riot ID every segment is a member of a
+   * closed set the caller has already been narrowed to by `./ladder.js`.
+   */
+  leagueEntriesByTier(
+    platform: Platform,
+    queue: RankedQueue,
+    tier: PagedTier,
+    division: Division,
+    page = 1,
+  ): BuiltRequest {
+    return onPlatform(
+      'league.entriesByTier',
+      platform,
+      `/lol/league/v4/entries/${queue}/${tier}/${division}`,
+      { page },
     );
   },
 

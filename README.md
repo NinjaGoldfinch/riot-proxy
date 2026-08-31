@@ -226,6 +226,7 @@ lookups. Match IDs are not encrypted, so the archive survives key rotation.
 | Account (either direction) | 24 h                       |
 | Summoner                   | 3600 s                     |
 | League entries             | 300 s                      |
+| Ladder (apex + paged)      | 120 s                      |
 | Spectator                  | 30 s (+ 30 s negative)     |
 | Champion mastery           | 3600 s                     |
 | Champion rotations         | 6 h                        |

@@ -13,6 +13,8 @@ describe('endpoint specs (§5.3, §8.2)', () => {
     expect(endpoint('account.byRiotId').ttlSeconds).toBe(86_400);
     expect(endpoint('summoner.byPuuid').ttlSeconds).toBe(3600);
     expect(endpoint('league.entriesByPuuid').ttlSeconds).toBe(300);
+    expect(endpoint('league.challenger').ttlSeconds).toBe(120);
+    expect(endpoint('league.entriesByTier').ttlSeconds).toBe(120);
     expect(endpoint('match.idsByPuuid').ttlSeconds).toBe(120);
     expect(endpoint('spectator.activeGame').ttlSeconds).toBe(30);
     expect(endpoint('platform.championRotations').ttlSeconds).toBe(21_600);
@@ -72,6 +74,45 @@ describe('endpoint specs (§5.3, §8.2)', () => {
     const req = build.summonerByPuuid('euw1', 'PUUID');
     expect(req.host).toBe('euw1.api.riotgames.com');
     expect(req.path).toBe('/lol/summoner/v4/summoners/by-puuid/PUUID');
+  });
+
+  it('builds one request per apex league, each with its own method id', () => {
+    const challenger = build.apexLeague('euw1', 'CHALLENGER', 'RANKED_SOLO_5x5');
+    expect(challenger.method).toBe('league.challenger');
+    expect(challenger.host).toBe('euw1.api.riotgames.com');
+    expect(challenger.path).toBe('/lol/league/v4/challengerleagues/by-queue/RANKED_SOLO_5x5');
+    expect(challenger.scope).toBe('euw1');
+
+    expect(build.apexLeague('kr', 'GRANDMASTER', 'RANKED_FLEX_SR').path).toBe(
+      '/lol/league/v4/grandmasterleagues/by-queue/RANKED_FLEX_SR',
+    );
+    expect(build.apexLeague('kr', 'MASTER', 'RANKED_SOLO_5x5').method).toBe('league.master');
+  });
+
+  it('pages the tier walk from 1, and refuses apex tiers at compile time', () => {
+    const first = build.leagueEntriesByTier('euw1', 'RANKED_SOLO_5x5', 'DIAMOND', 'I');
+    expect(buildPath(first)).toBe('/lol/league/v4/entries/RANKED_SOLO_5x5/DIAMOND/I?page=1');
+
+    const later = build.leagueEntriesByTier('euw1', 'RANKED_SOLO_5x5', 'IRON', 'IV', 42);
+    expect(buildPath(later)).toBe('/lol/league/v4/entries/RANKED_SOLO_5x5/IRON/IV?page=42');
+
+    // @ts-expect-error — the paged route 400s on apex tiers; that is the whole
+    // point of splitting `PagedTier` off `Tier`.
+    build.leagueEntriesByTier('euw1', 'RANKED_SOLO_5x5', 'MASTER', 'I');
+  });
+
+  it('gives every ladder read one override key, distinct from per-player league entries', () => {
+    for (const id of [
+      'league.challenger',
+      'league.grandmaster',
+      'league.master',
+      'league.entriesByTier',
+    ] as const) {
+      expect(endpoint(id).overrideKey, id).toBe('ladder');
+      expect(endpoint(id).host, id).toBe('platform');
+      expect(endpoint(id).immutable, id).toBe(false);
+    }
+    expect(endpoint('league.entriesByPuuid').overrideKey).toBe('league');
   });
 
   it('serialises query params and omits empty ones', () => {

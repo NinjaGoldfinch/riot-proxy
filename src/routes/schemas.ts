@@ -10,6 +10,7 @@
 import type {} from '@fastify/swagger';
 import { Type, type Static } from '@sinclair/typebox';
 import { ERROR_CODES } from '../errors.js';
+import { APEX_TIERS, DIVISIONS, PAGED_TIERS, RANKED_QUEUES } from '../riot/ladder.js';
 import { PLATFORMS, REGIONS } from '../riot/routing.js';
 import {
   MetricsHistoryPoint,
@@ -111,6 +112,61 @@ export const MatchIdParamSchema = Type.String({
     'encrypted, so the match archive survives a key rotation.',
 });
 export const MatchIdParam = Type.Unsafe<string>({ $ref: 'MatchIdParam#' });
+
+/**
+ * league-v4's ladder parameters. The two tier enums are deliberately not one:
+ * the paged entries route 400s on an apex tier, so a schema that accepted
+ * `MASTER` there would document a request Riot refuses.
+ */
+export const RankedQueueParamSchema = Type.Unsafe<string>({
+  $id: 'RankedQueueParam',
+  type: 'string',
+  enum: [...RANKED_QUEUES],
+  title: 'Ranked queue',
+  description: 'Ranked ladder to read: `RANKED_SOLO_5x5` or `RANKED_FLEX_SR`.',
+});
+export const RankedQueueParam = Type.Unsafe<string>({ $ref: 'RankedQueueParam#' });
+
+export const ApexTierParamSchema = Type.Unsafe<string>({
+  $id: 'ApexTierParam',
+  type: 'string',
+  enum: [...APEX_TIERS],
+  title: 'Apex tier',
+  description:
+    'A tier served whole by its own league endpoint — `MASTER`, `GRANDMASTER`, `CHALLENGER`. ' +
+    'One request returns every entry, so these are not paged.',
+});
+export const ApexTierParam = Type.Unsafe<string>({ $ref: 'ApexTierParam#' });
+
+export const LadderTierParamSchema = Type.Unsafe<string>({
+  $id: 'LadderTierParam',
+  type: 'string',
+  enum: [...PAGED_TIERS],
+  title: 'Ladder tier',
+  description:
+    'A tier walked page by page — `IRON` through `DIAMOND`. The apex tiers are not valid here; ' +
+    'read them from the apex league route instead.',
+});
+export const LadderTierParam = Type.Unsafe<string>({ $ref: 'LadderTierParam#' });
+
+export const DivisionParamSchema = Type.Unsafe<string>({
+  $id: 'DivisionParam',
+  type: 'string',
+  enum: [...DIVISIONS],
+  title: 'Division',
+  description: 'Division within a tier, `I` (highest) to `IV`.',
+});
+export const DivisionParam = Type.Unsafe<string>({ $ref: 'DivisionParam#' });
+
+/**
+ * Pages are 1-based and ~205 entries wide. A page past the end of a division
+ * is an empty array, not a 404, so paging off the end is the documented way to
+ * learn where a ladder stops. The maximum is a sanity bound, well clear of the
+ * ~7 000 pages the largest division runs to.
+ */
+export const LadderPageQuery = Type.Object({
+  page: Type.Optional(Type.Integer({ minimum: 1, maximum: 100_000, default: 1 })),
+});
 
 /** §6.2 — match id list: `count` clamped to 1–100 by Riot's own limit. */
 export const MatchIdsQuery = Type.Object({
@@ -490,6 +546,10 @@ export const sharedSchemas = [
   TagLineParamSchema,
   PuuidParamSchema,
   MatchIdParamSchema,
+  RankedQueueParamSchema,
+  ApexTierParamSchema,
+  LadderTierParamSchema,
+  DivisionParamSchema,
   ScopeParamSchema,
   BackfillNoticeSchema,
   ProfileResponseSchema,
