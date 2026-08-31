@@ -1,4 +1,5 @@
 import { config } from '../config.js';
+import { DEFAULT_STATUS, type ErrorCode } from '../errors.js';
 import { ANON_QUOTA_PER_MIN, DEFAULT_QUOTA_PER_MIN } from '../quotas.js';
 import { ENDPOINTS, type EndpointSpec } from '../riot/endpoints.js';
 import { REFRESH_COOLDOWN_S } from '../routes/players.js';
@@ -32,6 +33,39 @@ function cacheTable(): string {
     '| Method | Host | Cache TTL | Negative TTL | Storage |',
     '| --- | --- | --- | --- | --- |',
     ...ENDPOINTS.map(row),
+  ].join('\n');
+}
+
+/**
+ * The "Means" column, and the table's row order — object key order is stable
+ * for string keys, so the two are the same list.
+ *
+ * Typed as a total record deliberately: a code added to `ERROR_CODES` and not
+ * described here is a type error, so the reference cannot be one release behind
+ * the service. Ordered by status, with `INTERNAL` last — it is the only row
+ * that is our fault rather than the caller's, which is why sorting on the
+ * status column would be worse than keeping the order editable here.
+ */
+const ERROR_MEANING: Record<ErrorCode, string> = {
+  VALIDATION: "The request failed this proxy's own schema",
+  BAD_REGION: 'Unknown platform or region',
+  UNAUTHORIZED: 'Missing or unrecognised consumer key',
+  FORBIDDEN: 'Key lacks the scope, or the admin IP allowlist rejected it',
+  NOT_FOUND: 'Riot has no such resource, or we do not serve it',
+  QUOTA_EXCEEDED: '**Your** per-minute quota. `Retry-After` is the window',
+  UPSTREAM_ERROR: 'Riot failed, or rejected our key — never yours to fix',
+  RATE_LIMITED: "The wait for Riot's own limiter exceeded your request budget",
+  INTERNAL: 'Ours',
+};
+
+/** §6.1 as a table. The status column is `DEFAULT_STATUS`, not a restatement. */
+function errorTable(): string {
+  const row = (code: ErrorCode) =>
+    `| \`${code}\` | ${DEFAULT_STATUS[code]} | ${ERROR_MEANING[code]} |`;
+  return [
+    '| Code | Status | Means |',
+    '| --- | --- | --- |',
+    ...(Object.keys(ERROR_MEANING) as ErrorCode[]).map(row),
   ].join('\n');
 }
 
@@ -102,17 +136,7 @@ One envelope, always:
 { "error": { "code": "NOT_FOUND", "message": "…", "retryAfter": 30 } }
 \`\`\`
 
-| Code | Status | Means |
-| --- | --- | --- |
-| \`VALIDATION\` | 400 | The request failed this proxy's own schema |
-| \`BAD_REGION\` | 400 | Unknown platform or region |
-| \`UNAUTHORIZED\` | 401 | Missing or unrecognised consumer key |
-| \`FORBIDDEN\` | 403 | Key lacks the scope, or the admin IP allowlist rejected it |
-| \`NOT_FOUND\` | 404 | Riot has no such resource, or we do not serve it |
-| \`QUOTA_EXCEEDED\` | 429 | **Your** per-minute quota. \`Retry-After\` is the window |
-| \`UPSTREAM_ERROR\` | 502 | Riot failed, or rejected our key — never yours to fix |
-| \`RATE_LIMITED\` | 503 | The wait for Riot's own limiter exceeded your request budget |
-| \`INTERNAL\` | 500 | Ours |
+${errorTable()}
 
 The two throttles are worth telling apart, because they are not the same
 problem. \`QUOTA_EXCEEDED\` is **your** per-minute allowance and is fixed by

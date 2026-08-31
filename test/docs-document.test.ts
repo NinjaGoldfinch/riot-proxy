@@ -4,7 +4,7 @@ import { probeServices } from './helpers/services.js';
 import { buildApp, type App } from '../src/app.js';
 import { closeDb, pingDb } from '../src/db/index.js';
 import { closeRedis, redis } from '../src/redis.js';
-import { ERROR_CODES } from '../src/errors.js';
+import { DEFAULT_STATUS, ERROR_CODES, type ErrorCode } from '../src/errors.js';
 import { ANON_QUOTA_PER_MIN, DEFAULT_QUOTA_PER_MIN } from '../src/quotas.js';
 import { ERROR_EXAMPLES } from '../src/docs/examples.js';
 import { wsHub } from '../src/ws/index.js';
@@ -268,6 +268,23 @@ describe('examples (#63)', () => {
       const code = (example.value as { error: { code: string } }).error.code;
       expect(ERROR_CODES, `${code} is used in an example but is not a real code`).toContain(code);
     }
+  });
+
+  it('states the status each code actually returns', ({ skip }) => {
+    if (!available || !doc) return skip();
+    // Close to tautological now that the table is generated from
+    // `DEFAULT_STATUS`. It earns its place by catching the regression where
+    // someone reverts the table to nine hand-written rows.
+    let checked = 0;
+    for (const [, code, status] of (doc.info.description as string).matchAll(
+      /^\| `([A-Z_]+)` \| (\d{3}) \|/gm,
+    )) {
+      checked += 1;
+      expect(Number(status), `${code} is documented as ${status}`).toBe(
+        DEFAULT_STATUS[code as ErrorCode],
+      );
+    }
+    expect(checked).toBe(ERROR_CODES.length);
   });
 
   it('does not offer an error example a route cannot produce', ({ skip }) => {
