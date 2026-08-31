@@ -99,6 +99,11 @@ export const EVENT_EXAMPLES: { [E in EventName]: ProxyEvent<E> } = {
           ],
         },
       ],
+      worker: { alive: true, lastSeenMs: 4_000 },
+      flows: {
+        backfillsQueued: { 'lookup:queued': 214, 'lookup:already-queued': 37, 'admin:queued': 3 },
+        refreshClaims: { 'profile:claimed': 96, 'profile:coalesced': 311 },
+      },
       process: { uptimeSeconds: 86_400, rssBytes: 182_000_000 },
     },
   },

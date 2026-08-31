@@ -2,8 +2,14 @@ import { KEY_SCOPE } from '../config.js';
 import { countActiveConsumers } from '../db/consumers.js';
 import { countArchivedMatches } from '../db/matches.js';
 import { countPlayers, countTrackedPlayers } from '../db/players.js';
+import { workerLiveness } from '../jobs/heartbeat.js';
 import { allQueues } from '../jobs/queues.js';
-import { cacheReadsTotal, type CacheOutcome } from '../metrics.js';
+import {
+  backfillsQueuedTotal,
+  cacheReadsTotal,
+  refreshClaimsTotal,
+  type CacheOutcome,
+} from '../metrics.js';
 import { limiter } from '../riot/limiter.js';
 import { PLATFORM_LABELS, REGION_LABELS, isPlatform, isRegion } from '../riot/routing.js';
 import type { MetricsSnapshotData } from './schema.js';
@@ -82,6 +88,29 @@ export async function cacheCounts(): Promise<MetricsSnapshotData['cache']> {
 }
 
 /**
+ * Flatten a labelled counter into `<a>:<b>` keys.
+ *
+ * The wire shape is a flat record rather than a nested one because these are
+ * sparse: a deployment nobody has called `?refresh=true` against publishes an
+ * empty object, and a reason that has never fired never appears. A fixed
+ * nesting would have to invent zeroes for every combination instead.
+ */
+async function labelledCounts(
+  counter: { get: () => Promise<{ values: { labels: Record<string, unknown>; value: number }[] }> },
+  first: string,
+  second: string,
+): Promise<Record<string, number>> {
+  const out: Record<string, number> = {};
+  const metric = await counter.get();
+  for (const { labels, value } of metric.values) {
+    const a = labels[first];
+    const b = labels[second];
+    if (typeof a === 'string' && typeof b === 'string') out[`${a}:${b}`] = value;
+  }
+  return out;
+}
+
+/**
  * The one builder behind both transports: `GET /v1/admin/metrics` returns this
  * and the `metrics` topic ticks it, so the two cannot disagree.
  *
@@ -98,6 +127,9 @@ export async function buildMetricsSnapshot(inputs: SnapshotInputs): Promise<Metr
     queues,
     limiterScopes,
     cache,
+    worker,
+    backfillsQueued,
+    refreshClaims,
   ] = await Promise.all([
     countArchivedMatches(),
     countTrackedPlayers(),
@@ -106,6 +138,9 @@ export async function buildMetricsSnapshot(inputs: SnapshotInputs): Promise<Metr
     queueCounts(),
     limiterState(),
     cacheCounts(),
+    workerLiveness(),
+    labelledCounts(backfillsQueuedTotal, 'reason', 'status'),
+    labelledCounts(refreshClaimsTotal, 'part', 'outcome'),
   ]);
 
   const memory = process.memoryUsage();
@@ -118,6 +153,8 @@ export async function buildMetricsSnapshot(inputs: SnapshotInputs): Promise<Metr
     events: inputs.wsEventCounts,
     cache,
     limiter: limiterScopes,
+    worker,
+    flows: { backfillsQueued, refreshClaims },
     process: { uptimeSeconds: process.uptime(), rssBytes: memory.rss },
   };
 }

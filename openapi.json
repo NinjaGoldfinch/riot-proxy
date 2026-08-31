@@ -71,6 +71,8 @@
           "events",
           "cache",
           "limiter",
+          "worker",
+          "flows",
           "process"
         ],
         "properties": {
@@ -309,6 +311,55 @@
                       }
                     }
                   }
+                }
+              }
+            }
+          },
+          "worker": {
+            "description": "Deployment-wide, unlike `ws` — the heartbeat is one key in Redis",
+            "type": "object",
+            "required": [
+              "alive",
+              "lastSeenMs"
+            ],
+            "properties": {
+              "alive": {
+                "description": "A heartbeat is present and unexpired",
+                "type": "boolean"
+              },
+              "lastSeenMs": {
+                "description": "Milliseconds since the last heartbeat; null when there is none",
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          },
+          "flows": {
+            "description": "Since this api instance started. Cumulative.",
+            "type": "object",
+            "required": [
+              "backfillsQueued",
+              "refreshClaims"
+            ],
+            "properties": {
+              "backfillsQueued": {
+                "description": "`<reason>:<queued|already-queued>`, e.g. `lookup:queued`",
+                "type": "object",
+                "additionalProperties": {
+                  "type": "integer"
+                }
+              },
+              "refreshClaims": {
+                "description": "`<part>:<claimed|coalesced>`, e.g. `profile:claimed`",
+                "type": "object",
+                "additionalProperties": {
+                  "type": "integer"
                 }
               }
             }
@@ -7120,7 +7171,7 @@
     },
     {
       "name": "ws",
-      "description": "```\nGET /v1/ws?token=rpx_…\n```\n\nA WebSocket. Auth is the same consumer key, in the query string rather than a\nheader, because a browser `WebSocket` cannot set one.\n\n**Client → server**\n\n```json\n{ \"op\": \"subscribe\",   \"topics\": [\"player:<puuid>\", \"patch\"] }\n{ \"op\": \"unsubscribe\", \"topics\": [\"player:<puuid>\"] }\n{ \"op\": \"ping\" }\n```\n\n**Server → client** — `ready` on connect, `subscribed` acknowledging a\nchange, `pong`, `error`, and the events themselves:\n\n```json\n{\n  \"event\": \"game.started\",\n  \"topic\": \"player:…\",\n  \"at\": 1756000000000,\n  \"data\": {\n    \"puuid\": \"…\",\n    \"platform\": \"euw1\",\n    \"gameId\": 1234567890,\n    \"championId\": 64,\n    \"queueId\": 420\n  }\n}\n\n{\n  \"event\": \"game.ended\",\n  \"topic\": \"player:…\",\n  \"at\": 1756000000000,\n  \"data\": {\n    \"puuid\": \"…\",\n    \"gameId\": 1234567890\n  }\n}\n\n{\n  \"event\": \"rank.changed\",\n  \"topic\": \"player:…\",\n  \"at\": 1756000000000,\n  \"data\": {\n    \"puuid\": \"…\",\n    \"queue\": \"RANKED_SOLO_5x5\",\n    \"before\": {\n      \"tier\": \"GOLD\",\n      \"rank\": \"I\",\n      \"lp\": 98\n    },\n    \"after\": {\n      \"tier\": \"PLATINUM\",\n      \"rank\": \"IV\",\n      \"lp\": 12\n    }\n  }\n}\n\n{\n  \"event\": \"match.archived\",\n  \"topic\": \"player:…\",\n  \"at\": 1756000000000,\n  \"data\": {\n    \"puuid\": \"…\",\n    \"matchId\": \"EUW1_7381937461\"\n  }\n}\n\n{\n  \"event\": \"patch.new\",\n  \"topic\": \"patch\",\n  \"at\": 1756000000000,\n  \"data\": {\n    \"version\": \"15.16.1\"\n  }\n}\n\n{\n  \"event\": \"metrics.snapshot\",\n  \"topic\": \"metrics\",\n  \"at\": 1756000000000,\n  \"data\": {\n    \"v\": 1,\n    \"keyScope\": \"a1b2c3d4\",\n    \"totals\": {\n      \"archivedMatches\": 48213,\n      \"trackedPlayers\": 12,\n      \"knownPlayers\": 3417,\n      \"activeConsumers\": 4\n    },\n    \"queues\": {\n      \"backfill\": {\n        \"active\": 2,\n        \"waiting\": 0,\n        \"prioritized\": 137,\n        \"delayed\": 0,\n        \"failed\": 1,\n        \"completed\": 812\n      }\n    },\n    \"ws\": {\n      \"connections\": 3,\n      \"subscriptions\": 7\n    },\n    \"events\": {\n      \"match.archived\": 812,\n      \"game.started\": 41\n    },\n    \"cache\": {\n      \"hit\": 10412,\n      \"miss\": 1733,\n      \"neg\": 88,\n      \"stale\": 402\n    },\n    \"limiter\": [\n      {\n        \"scope\": \"euw1\",\n        \"kind\": \"platform\",\n        \"label\": \"EU West\",\n        \"frozenMs\": 0,\n        \"windows\": [\n          {\n            \"window\": \"20:1\",\n            \"used\": 3,\n            \"limit\": 20\n          },\n          {\n            \"window\": \"100:120\",\n            \"used\": 41,\n            \"limit\": 100\n          }\n        ],\n        \"methods\": [\n          {\n            \"method\": \"summoner.byPuuid\",\n            \"windows\": [\n              {\n                \"window\": \"1600:60\",\n                \"used\": 12,\n                \"limit\": 1600\n              }\n            ]\n          }\n        ]\n      }\n    ],\n    \"process\": {\n      \"uptimeSeconds\": 86400,\n      \"rssBytes\": 182000000\n    }\n  }\n}\n```\n\nFour topics exist: `player:<puuid>`, `patch`, `metrics`\nand `firehose`.\n\n**A player topic only ever fires for a _tracked_ player.** Subscribing to an\nuntracked PUUID is accepted and then silent — nothing polls them, so there is\nnothing to report. Tracking is an operator action\n(`POST /v1/admin/tracked-players`).\n\n**`metrics` and `firehose` require an admin-scoped key** —\nand, when `ADMIN_IP_ALLOWLIST` is set, a source address on that list, the same\npair the `admin` routes check. Subscribing without it earns an `error` frame\n(`FORBIDDEN`) and the topic is not subscribed; the acknowledgement lists what\nthe socket actually holds. `metrics` publishes a `metrics.snapshot`\nevery 5 s while at least one socket is subscribed —\nthe same document `GET /v1/admin/metrics` returns. `firehose`\nmirrors every event the service publishes, whatever its topic — including every\ntracked player's, which is what makes it an admin surface.\n\nOne socket holds at most 200 topics. Subscribing past that\nis not an error and not honoured: the extra topics are dropped, and the\n`subscribed` acknowledgement lists what you actually hold — compare it with\nwhat you asked for rather than assuming. Above that ceiling, use more than one\nsocket.\n\nThe server pings every 30 s and drops a connection that\nmisses 2 consecutive pongs."
+      "description": "```\nGET /v1/ws?token=rpx_…\n```\n\nA WebSocket. Auth is the same consumer key, in the query string rather than a\nheader, because a browser `WebSocket` cannot set one.\n\n**Client → server**\n\n```json\n{ \"op\": \"subscribe\",   \"topics\": [\"player:<puuid>\", \"patch\"] }\n{ \"op\": \"unsubscribe\", \"topics\": [\"player:<puuid>\"] }\n{ \"op\": \"ping\" }\n```\n\n**Server → client** — `ready` on connect, `subscribed` acknowledging a\nchange, `pong`, `error`, and the events themselves:\n\n```json\n{\n  \"event\": \"game.started\",\n  \"topic\": \"player:…\",\n  \"at\": 1756000000000,\n  \"data\": {\n    \"puuid\": \"…\",\n    \"platform\": \"euw1\",\n    \"gameId\": 1234567890,\n    \"championId\": 64,\n    \"queueId\": 420\n  }\n}\n\n{\n  \"event\": \"game.ended\",\n  \"topic\": \"player:…\",\n  \"at\": 1756000000000,\n  \"data\": {\n    \"puuid\": \"…\",\n    \"gameId\": 1234567890\n  }\n}\n\n{\n  \"event\": \"rank.changed\",\n  \"topic\": \"player:…\",\n  \"at\": 1756000000000,\n  \"data\": {\n    \"puuid\": \"…\",\n    \"queue\": \"RANKED_SOLO_5x5\",\n    \"before\": {\n      \"tier\": \"GOLD\",\n      \"rank\": \"I\",\n      \"lp\": 98\n    },\n    \"after\": {\n      \"tier\": \"PLATINUM\",\n      \"rank\": \"IV\",\n      \"lp\": 12\n    }\n  }\n}\n\n{\n  \"event\": \"match.archived\",\n  \"topic\": \"player:…\",\n  \"at\": 1756000000000,\n  \"data\": {\n    \"puuid\": \"…\",\n    \"matchId\": \"EUW1_7381937461\"\n  }\n}\n\n{\n  \"event\": \"patch.new\",\n  \"topic\": \"patch\",\n  \"at\": 1756000000000,\n  \"data\": {\n    \"version\": \"15.16.1\"\n  }\n}\n\n{\n  \"event\": \"metrics.snapshot\",\n  \"topic\": \"metrics\",\n  \"at\": 1756000000000,\n  \"data\": {\n    \"v\": 1,\n    \"keyScope\": \"a1b2c3d4\",\n    \"totals\": {\n      \"archivedMatches\": 48213,\n      \"trackedPlayers\": 12,\n      \"knownPlayers\": 3417,\n      \"activeConsumers\": 4\n    },\n    \"queues\": {\n      \"backfill\": {\n        \"active\": 2,\n        \"waiting\": 0,\n        \"prioritized\": 137,\n        \"delayed\": 0,\n        \"failed\": 1,\n        \"completed\": 812\n      }\n    },\n    \"ws\": {\n      \"connections\": 3,\n      \"subscriptions\": 7\n    },\n    \"events\": {\n      \"match.archived\": 812,\n      \"game.started\": 41\n    },\n    \"cache\": {\n      \"hit\": 10412,\n      \"miss\": 1733,\n      \"neg\": 88,\n      \"stale\": 402\n    },\n    \"limiter\": [\n      {\n        \"scope\": \"euw1\",\n        \"kind\": \"platform\",\n        \"label\": \"EU West\",\n        \"frozenMs\": 0,\n        \"windows\": [\n          {\n            \"window\": \"20:1\",\n            \"used\": 3,\n            \"limit\": 20\n          },\n          {\n            \"window\": \"100:120\",\n            \"used\": 41,\n            \"limit\": 100\n          }\n        ],\n        \"methods\": [\n          {\n            \"method\": \"summoner.byPuuid\",\n            \"windows\": [\n              {\n                \"window\": \"1600:60\",\n                \"used\": 12,\n                \"limit\": 1600\n              }\n            ]\n          }\n        ]\n      }\n    ],\n    \"worker\": {\n      \"alive\": true,\n      \"lastSeenMs\": 4000\n    },\n    \"flows\": {\n      \"backfillsQueued\": {\n        \"lookup:queued\": 214,\n        \"lookup:already-queued\": 37,\n        \"admin:queued\": 3\n      },\n      \"refreshClaims\": {\n        \"profile:claimed\": 96,\n        \"profile:coalesced\": 311\n      }\n    },\n    \"process\": {\n      \"uptimeSeconds\": 86400,\n      \"rssBytes\": 182000000\n    }\n  }\n}\n```\n\nFour topics exist: `player:<puuid>`, `patch`, `metrics`\nand `firehose`.\n\n**A player topic only ever fires for a _tracked_ player.** Subscribing to an\nuntracked PUUID is accepted and then silent — nothing polls them, so there is\nnothing to report. Tracking is an operator action\n(`POST /v1/admin/tracked-players`).\n\n**`metrics` and `firehose` require an admin-scoped key** —\nand, when `ADMIN_IP_ALLOWLIST` is set, a source address on that list, the same\npair the `admin` routes check. Subscribing without it earns an `error` frame\n(`FORBIDDEN`) and the topic is not subscribed; the acknowledgement lists what\nthe socket actually holds. `metrics` publishes a `metrics.snapshot`\nevery 5 s while at least one socket is subscribed —\nthe same document `GET /v1/admin/metrics` returns. `firehose`\nmirrors every event the service publishes, whatever its topic — including every\ntracked player's, which is what makes it an admin surface.\n\nOne socket holds at most 200 topics. Subscribing past that\nis not an error and not honoured: the extra topics are dropped, and the\n`subscribed` acknowledgement lists what you actually hold — compare it with\nwhat you asked for rather than assuming. Above that ceiling, use more than one\nsocket.\n\nThe server pings every 30 s and drops a connection that\nmisses 2 consecutive pongs."
     },
     {
       "name": "ops",

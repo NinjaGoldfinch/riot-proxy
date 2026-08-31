@@ -102,6 +102,35 @@ export const MetricsSnapshot = Type.Object(
       }),
       { description: 'One entry per rate-limit scope this deployment has talked to' },
     ),
+    /**
+     * Whether anything is consuming the queues. Queue counts alone cannot say:
+     * a dead worker and an idle one both read all-zero `active` (#80).
+     */
+    worker: Type.Object(
+      {
+        alive: Type.Boolean({ description: 'A heartbeat is present and unexpired' }),
+        lastSeenMs: Type.Union([Type.Integer(), Type.Null()], {
+          description: 'Milliseconds since the last heartbeat; null when there is none',
+        }),
+      },
+      { description: 'Deployment-wide, unlike `ws` — the heartbeat is one key in Redis' },
+    ),
+    /**
+     * Work asked for, as against work done (#81). Both live in `queues` and
+     * `totals` once they become jobs; these count the asking, which is where
+     * the intent is — and, for the coalesced half, where it stops.
+     */
+    flows: Type.Object(
+      {
+        backfillsQueued: Type.Record(Type.String(), Type.Integer(), {
+          description: '`<reason>:<queued|already-queued>`, e.g. `lookup:queued`',
+        }),
+        refreshClaims: Type.Record(Type.String(), Type.Integer(), {
+          description: '`<part>:<claimed|coalesced>`, e.g. `profile:claimed`',
+        }),
+      },
+      { description: 'Since this api instance started. Cumulative.' },
+    ),
     process: Type.Object({
       uptimeSeconds: Type.Number(),
       rssBytes: Type.Integer(),
