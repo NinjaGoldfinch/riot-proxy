@@ -83,6 +83,15 @@ export async function countTrackedPlayers(): Promise<number> {
   return rows[0]?.n ?? 0;
 }
 
+/** Every player ever seen under this key scope, tracked or not. */
+export async function countPlayers(): Promise<number> {
+  const rows = await db
+    .select({ n: raw<number>`count(*)::int` })
+    .from(players)
+    .where(eq(players.keyScope, KEY_SCOPE));
+  return rows[0]?.n ?? 0;
+}
+
 export async function setTracked(puuid: string, tracked: boolean): Promise<boolean> {
   const rows = await db
     .update(players)

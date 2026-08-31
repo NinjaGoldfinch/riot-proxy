@@ -93,6 +93,22 @@ It is not the API reference and does not try to be: this page answers "show me
 this account", `/docs` answers "what does this route return". `DOCS_UI` defaults
 on in production for exactly the reason `DEV_UI` defaults off.
 
+### The dashboard
+
+`http://localhost:8080/dashboard` is the operator's view: archive and player
+totals, per-queue job counts, rate-limiter meters, cache hit ratio, and a live
+feed of every event the service publishes. It fetches `GET /v1/admin/metrics`
+once and then rides the `metrics` and `firehose` WebSocket topics, so the page
+updates in real time while it is open and costs nothing while it is not — the
+snapshot ticker only runs while someone is subscribed (`METRICS_INTERVAL_S`,
+default 5 s).
+
+Unlike the dev UI it ships in production (`DASHBOARD_UI`, default on): the page
+is inert HTML, and everything behind it needs an admin-scoped key — pasted once,
+kept in the browser — and passes `ADMIN_IP_ALLOWLIST` like any other admin call.
+Same rules as the dev UI otherwise: no build step, edit `public/dashboard.html`
+and reload.
+
 ---
 
 ## Using the API
@@ -286,6 +302,7 @@ Every archive job therefore carries an explicit priority.
 | `CLIENT_WAIT_BUDGET_MS`                      | `2000`                                            | Max limiter wait for a client request                       |
 | `BULK_USAGE_CEILING`                         | `0.80`                                            | Bulk work stops here, keeping 20% for callers               |
 | `STALE_WHILE_REVALIDATE`                     | `true`                                            |                                                             |
+| `METRICS_INTERVAL_S`                         | `5`                                               | `metrics` WS topic cadence; idle while nobody subscribes    |
 | `TRACK_POLL_LIVE_S` / `_RANK_S` / `_MATCH_S` | `60` / `600` / `300`                              |                                                             |
 | `DDRAGON_SYNC_S`                             | `3600`                                            | Version check cadence                                       |
 | `DDRAGON_DIR` / `DDRAGON_LOCALE`             | `./data/ddragon` / `en_US`                        |                                                             |
@@ -297,6 +314,7 @@ Every archive job therefore carries an explicit priority.
 | `AUTH_DISABLED`                              | `false`                                           | Dev only: skip key checks; refused in production            |
 | `DEV_UI`                                     | follows `NODE_ENV`                                | Serve the browser client at `/dev`; off in production       |
 | `DOCS_UI`                                    | `true`                                            | Serve `/docs`, `/openapi.json` and `/openapi.yaml`          |
+| `DASHBOARD_UI`                               | `true`                                            | Serve the operational dashboard at `/dashboard`             |
 | `LOG_LEVEL`                                  | `info`                                            |                                                             |
 
 `KEY_SCOPE` is derived, not configured.
@@ -488,8 +506,8 @@ src/
 ├─ events/         topics + pub/sub     ├─ static/           Data Dragon mirror
 └─ riot/                                ├─ auth/             consumer auth + scopes
    ├─ routing.ts   platform ↔ region    ├─ docs/             OpenAPI document + /docs
-   ├─ endpoints.ts ids, URLs, TTLs      └─ cli/             key minting, resets, spec
-   ├─ client.ts    undici pools + §5.5 error policy
+   ├─ endpoints.ts ids, URLs, TTLs      ├─ stats/            the metrics snapshot + its clock
+   ├─ client.ts    undici + §5.5 errors └─ cli/              key minting, resets, spec
    └─ limiter.ts   header-driven token buckets
 
 test/              unit + integration, every upstream call stubbed

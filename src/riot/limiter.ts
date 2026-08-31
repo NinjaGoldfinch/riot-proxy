@@ -360,6 +360,24 @@ export class RateLimiter {
     }));
   }
 
+  /**
+   * Every scope this deployment has been taught limits for — one config key per
+   * platform/region Riot has answered from, so the set is small and bounded by
+   * the routing table. SCAN rather than KEYS: the admin surface must not stall
+   * Redis under everything else.
+   */
+  async knownScopes(): Promise<string[]> {
+    const prefix = `rl:cfg:app:${KEY_SCOPE}:`;
+    const scopes: string[] = [];
+    let cursor = '0';
+    do {
+      const [next, keys] = await this.redis.scan(cursor, 'MATCH', `${prefix}*`, 'COUNT', 100);
+      cursor = next;
+      for (const key of keys) scopes.push(key.slice(prefix.length));
+    } while (cursor !== '0');
+    return scopes.sort();
+  }
+
   /** Test helper: forget locally cached limit configs. */
   clearLocalConfig(): void {
     this.localConfig.clear();

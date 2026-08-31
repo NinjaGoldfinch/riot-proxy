@@ -1,7 +1,7 @@
 import { config } from '../config.js';
 import { DEFAULT_STATUS, type ErrorCode } from '../errors.js';
 import { EVENT_EXAMPLES } from '../events/examples.js';
-import { PATCH_TOPIC } from '../events/topics.js';
+import { FIREHOSE_TOPIC, METRICS_TOPIC, PATCH_TOPIC } from '../events/topics.js';
 import { KEY_PREFIX } from '../keys.js';
 import { ANON_QUOTA_PER_MIN, DEFAULT_QUOTA_PER_MIN } from '../quotas.js';
 import { ENDPOINTS, type EndpointSpec } from '../riot/endpoints.js';
@@ -215,12 +215,23 @@ change, \`pong\`, \`error\`, and the events themselves:
 ${eventSamples}
 \`\`\`
 
-Two topics exist: \`player:<puuid>\` and \`${PATCH_TOPIC}\`.
+Four topics exist: \`player:<puuid>\`, \`${PATCH_TOPIC}\`, \`${METRICS_TOPIC}\`
+and \`${FIREHOSE_TOPIC}\`.
 
 **A player topic only ever fires for a _tracked_ player.** Subscribing to an
 untracked PUUID is accepted and then silent — nothing polls them, so there is
 nothing to report. Tracking is an operator action
 (\`POST /v1/admin/tracked-players\`).
+
+**\`${METRICS_TOPIC}\` and \`${FIREHOSE_TOPIC}\` require an admin-scoped key** —
+and, when \`ADMIN_IP_ALLOWLIST\` is set, a source address on that list, the same
+pair the \`admin\` routes check. Subscribing without it earns an \`error\` frame
+(\`FORBIDDEN\`) and the topic is not subscribed; the acknowledgement lists what
+the socket actually holds. \`${METRICS_TOPIC}\` publishes a \`metrics.snapshot\`
+every ${config.METRICS_INTERVAL_S} s while at least one socket is subscribed —
+the same document \`GET /v1/admin/metrics\` returns. \`${FIREHOSE_TOPIC}\`
+mirrors every event the service publishes, whatever its topic — including every
+tracked player's, which is what makes it an admin surface.
 
 One socket holds at most ${MAX_TOPICS_PER_SOCKET} topics. Subscribing past that
 is not an error and not honoured: the extra topics are dropped, and the
@@ -275,7 +286,8 @@ const tags = [
     description:
       'Operator surface. Requires the `admin` scope, and — when `ADMIN_IP_ALLOWLIST` is set — ' +
       'a source address on that list. Listed here because the shape of the operator API is ' +
-      'part of the contract; the routes themselves are gated.',
+      'part of the contract; the routes themselves are gated. A browser dashboard over ' +
+      '`GET /v1/admin/metrics` and the `metrics` and `firehose` topics is served at `/dashboard`.',
   },
 ];
 

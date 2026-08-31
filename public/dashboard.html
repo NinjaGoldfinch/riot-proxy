@@ -1,0 +1,712 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>riot-proxy dashboard</title>
+    <style>
+      :root {
+        --bg: #0e1116;
+        --panel: #161b22;
+        --line: #262d38;
+        --text: #d7dee8;
+        --dim: #7d8794;
+        --accent: #58a6ff;
+        --good: #2ea043;
+        --bad: #d1444a;
+        --warn: #d29922;
+        --mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font:
+          14px/1.5 system-ui,
+          -apple-system,
+          'Segoe UI',
+          sans-serif;
+      }
+      main {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 24px 16px 80px;
+      }
+      header {
+        display: flex;
+        align-items: baseline;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      h1 {
+        font: 600 15px/1 var(--mono);
+        letter-spacing: 0.04em;
+        margin: 0;
+        color: var(--dim);
+      }
+      h2 {
+        font: 600 12px/1 var(--mono);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--dim);
+        margin: 0 0 10px;
+      }
+      section {
+        margin-top: 24px;
+      }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 14px;
+      }
+      .status {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--dim);
+        font: 12px var(--mono);
+      }
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--dim);
+      }
+      .dot.live {
+        background: var(--good);
+      }
+      .dot.down {
+        background: var(--bad);
+      }
+      #scope {
+        font: 12px var(--mono);
+        color: var(--dim);
+        margin-left: auto;
+      }
+      /* ── stat tiles ─────────────────────────────────────────────────────── */
+      .tiles {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+        gap: 10px;
+      }
+      .tile {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 12px 14px;
+      }
+      .tile .label {
+        font: 600 11px/1 var(--mono);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--dim);
+      }
+      .tile .value {
+        font: 600 26px/1.3 var(--mono);
+        margin-top: 6px;
+      }
+      .tile .delta {
+        font: 12px var(--mono);
+        color: var(--good);
+        min-height: 18px;
+      }
+      /* ── tables ─────────────────────────────────────────────────────────── */
+      .scroll {
+        overflow-x: auto;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font: 12.5px var(--mono);
+      }
+      th,
+      td {
+        text-align: right;
+        padding: 6px 10px;
+        border-bottom: 1px solid var(--line);
+      }
+      th {
+        color: var(--dim);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        font-size: 11px;
+      }
+      th:first-child,
+      td:first-child {
+        text-align: left;
+      }
+      tr:last-child td {
+        border-bottom: 0;
+      }
+      td.alert {
+        color: var(--bad);
+        font-weight: 600;
+      }
+      td.dim {
+        color: var(--dim);
+      }
+      /* ── meters ─────────────────────────────────────────────────────────── */
+      .meter {
+        margin-top: 8px;
+      }
+      .meter .caption {
+        display: flex;
+        justify-content: space-between;
+        font: 12px var(--mono);
+        color: var(--dim);
+      }
+      .meter .track {
+        height: 6px;
+        border-radius: 4px;
+        background: #0b0e13;
+        border: 1px solid var(--line);
+        overflow: hidden;
+        margin-top: 3px;
+      }
+      .meter .fill {
+        height: 100%;
+        border-radius: 4px;
+        background: var(--accent);
+        transition: width 0.4s;
+      }
+      .meter .fill.warn {
+        background: var(--warn);
+      }
+      .meter .fill.bad {
+        background: var(--bad);
+      }
+      .frozen {
+        color: var(--bad);
+        font: 12px var(--mono);
+        margin-top: 6px;
+      }
+      /* ── two-column band ────────────────────────────────────────────────── */
+      .cols {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+        gap: 10px;
+      }
+      .kv {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        font: 12.5px var(--mono);
+        padding: 4px 0;
+      }
+      .kv .k {
+        color: var(--dim);
+        white-space: nowrap;
+      }
+      .kv span:last-child {
+        text-align: right;
+      }
+      svg text {
+        font: 11px var(--mono);
+        fill: var(--dim);
+      }
+      /* ── event feed ─────────────────────────────────────────────────────── */
+      #feed {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        font: 12.5px var(--mono);
+        max-height: 340px;
+        overflow-y: auto;
+      }
+      #feed li {
+        display: flex;
+        gap: 10px;
+        align-items: baseline;
+        padding: 4px 0;
+        border-bottom: 1px solid var(--line);
+      }
+      #feed li:last-child {
+        border-bottom: 0;
+      }
+      .badge {
+        font-size: 11px;
+        padding: 1px 7px;
+        border-radius: 9px;
+        border: 1px solid var(--line);
+        color: var(--accent);
+        white-space: nowrap;
+      }
+      .badge.archived {
+        color: var(--good);
+      }
+      .badge.game {
+        color: var(--warn);
+      }
+      #feed .detail {
+        color: var(--dim);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        flex: 1;
+      }
+      #feed .when {
+        color: var(--dim);
+        white-space: nowrap;
+      }
+      .empty {
+        color: var(--dim);
+        font: 12.5px var(--mono);
+      }
+      /* ── key prompt ─────────────────────────────────────────────────────── */
+      #gate {
+        position: fixed;
+        inset: 0;
+        background: rgba(10, 12, 16, 0.85);
+        display: none;
+        align-items: center;
+        justify-content: center;
+      }
+      #gate.open {
+        display: flex;
+      }
+      #gate form {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        width: min(420px, 90vw);
+      }
+      #gate p {
+        margin: 0;
+        color: var(--dim);
+        font-size: 13px;
+      }
+      #gate .gate-err {
+        color: var(--bad);
+        font: 12px var(--mono);
+        min-height: 16px;
+        margin: 0;
+      }
+      input,
+      button {
+        font: inherit;
+        color: var(--text);
+        background: #0b0e13;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 7px 9px;
+      }
+      input:focus {
+        outline: 1px solid var(--accent);
+        border-color: var(--accent);
+      }
+      #keyInput {
+        font-family: var(--mono);
+      }
+      button {
+        cursor: pointer;
+        background: #1f2733;
+      }
+      button:hover {
+        border-color: var(--accent);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>riot-proxy dashboard</h1>
+        <span class="status"
+          ><span id="wsDot" class="dot"></span><span id="wsState">connecting…</span></span
+        >
+        <span class="status" id="tickAge"></span>
+        <span id="scope"></span>
+      </header>
+
+      <section>
+        <div class="tiles" id="tiles"></div>
+      </section>
+
+      <section class="cols">
+        <div class="panel">
+          <h2>Queues</h2>
+          <div class="scroll"><table id="queues"></table></div>
+        </div>
+        <div class="panel">
+          <h2>Rate limiter</h2>
+          <div id="limiter"><p class="empty">No scopes yet — nothing has called Riot.</p></div>
+        </div>
+      </section>
+
+      <section class="cols">
+        <div class="panel">
+          <h2>Cache · this api process</h2>
+          <div class="kv">
+            <span class="k">hit ratio (last tick)</span><span id="cacheRatio">—</span>
+          </div>
+          <svg
+            id="spark"
+            viewBox="0 0 300 46"
+            width="100%"
+            height="46"
+            role="img"
+            aria-label="Cache hit ratio over recent ticks"
+          ></svg>
+          <div class="kv">
+            <span class="k">hit / miss / neg / stale</span><span id="cacheCounts">—</span>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>Realtime &amp; process</h2>
+          <div class="kv"><span class="k">ws connections</span><span id="wsConns">—</span></div>
+          <div class="kv"><span class="k">topic subscriptions</span><span id="wsSubs">—</span></div>
+          <div class="kv"><span class="k">events / min</span><span id="eventRates">—</span></div>
+          <div class="kv"><span class="k">api uptime</span><span id="uptime">—</span></div>
+          <div class="kv"><span class="k">api memory (rss)</span><span id="rss">—</span></div>
+        </div>
+      </section>
+
+      <section>
+        <div class="panel">
+          <h2>Recent events</h2>
+          <ul id="feed"></ul>
+          <p class="empty" id="feedEmpty">Waiting for the firehose…</p>
+        </div>
+      </section>
+    </main>
+
+    <div id="gate">
+      <form id="gateForm">
+        <h2>Admin key</h2>
+        <p>
+          The dashboard reads <code>/v1/admin/metrics</code> and the admin-only WebSocket topics, so
+          it needs an admin-scoped consumer key. Stored in this browser only.
+        </p>
+        <input id="keyInput" type="password" placeholder="rpx_…" autocomplete="off" />
+        <p class="gate-err" id="gateErr"></p>
+        <button type="submit">Connect</button>
+      </form>
+    </div>
+
+    <script>
+      'use strict';
+      const STORE = 'rp.dashboard.key';
+      const $ = (id) => document.getElementById(id);
+
+      const TILES = [
+        ['archivedMatches', 'Archived matches'],
+        ['trackedPlayers', 'Tracked players'],
+        ['knownPlayers', 'Known players'],
+        ['activeConsumers', 'Active consumers'],
+      ];
+      const QUEUE_COLS = ['active', 'waiting', 'prioritized', 'delayed', 'failed', 'completed'];
+
+      let key = localStorage.getItem(STORE) || '';
+      let authDisabled = false;
+      let ws = null;
+      let backoffMs = 1000;
+      let prev = null; // previous snapshot, for deltas
+      let prevAt = 0;
+      let lastTickAt = 0;
+      let optimisticMatches = 0; // match.archived frames since the last tick
+      const ratioHistory = []; // last 60 per-tick hit ratios, 0..1 or null
+      const feed = [];
+
+      const fmt = (n) => Number(n).toLocaleString('en-US');
+      const fmtDuration = (s) => {
+        s = Math.floor(s);
+        const d = Math.floor(s / 86400);
+        const h = Math.floor((s % 86400) / 3600);
+        const m = Math.floor((s % 3600) / 60);
+        return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m ${s % 60}s`;
+      };
+
+      // ── key gate ──────────────────────────────────────────────────────────
+      function askForKey(message) {
+        $('gateErr').textContent = message || '';
+        $('gate').classList.add('open');
+        $('keyInput').focus();
+      }
+      $('gateForm').addEventListener('submit', (e) => {
+        e.preventDefault();
+        key = $('keyInput').value.trim();
+        if (!key) return;
+        localStorage.setItem(STORE, key);
+        $('gate').classList.remove('open');
+        start();
+      });
+      function keyRejected(message) {
+        localStorage.removeItem(STORE);
+        key = '';
+        if (ws) {
+          ws.onclose = null;
+          ws.close();
+          ws = null;
+        }
+        setWsState('down', 'not authorised');
+        askForKey(message);
+      }
+
+      // ── rendering ─────────────────────────────────────────────────────────
+      function setWsState(cls, label) {
+        $('wsDot').className = 'dot' + (cls ? ' ' + cls : '');
+        $('wsState').textContent = label;
+      }
+
+      function renderTiles(snap) {
+        $('tiles').innerHTML = TILES.map(([field, label]) => {
+          const value = snap.totals[field];
+          const before = prev && prev.totals[field];
+          const delta = before != null ? value - before : 0;
+          const shown = field === 'archivedMatches' ? value + optimisticMatches : value;
+          return (
+            `<div class="tile"><div class="label">${label}</div>` +
+            `<div class="value">${fmt(shown)}</div>` +
+            `<div class="delta">${delta > 0 ? '+' + fmt(delta) + ' since last tick' : ''}</div></div>`
+          );
+        }).join('');
+      }
+
+      function renderQueues(snap) {
+        const names = Object.keys(snap.queues).sort();
+        const head =
+          '<tr><th>queue</th>' + QUEUE_COLS.map((c) => `<th>${c}</th>`).join('') + '</tr>';
+        const rows = names
+          .map((name) => {
+            const q = snap.queues[name];
+            const cells = QUEUE_COLS.map((c) => {
+              const cls = c === 'failed' && q[c] > 0 ? 'alert' : q[c] === 0 ? 'dim' : '';
+              return `<td class="${cls}">${fmt(q[c])}</td>`;
+            }).join('');
+            return `<tr><td>${name}</td>${cells}</tr>`;
+          })
+          .join('');
+        $('queues').innerHTML = head + rows;
+      }
+
+      function renderLimiter(snap) {
+        if (snap.limiter.length === 0) return; // keep the empty-state text
+        $('limiter').innerHTML = snap.limiter
+          .map((s) => {
+            const meters = s.windows
+              .map((w) => {
+                const share = w.limit > 0 ? w.used / w.limit : 0;
+                const cls = share >= 0.95 ? 'bad' : share >= 0.8 ? 'warn' : '';
+                return (
+                  `<div class="meter"><div class="caption"><span>${w.window}</span>` +
+                  `<span>${fmt(w.used)} / ${fmt(w.limit)}</span></div>` +
+                  `<div class="track"><div class="fill ${cls}" style="width:${Math.min(100, share * 100)}%"></div></div></div>`
+                );
+              })
+              .join('');
+            const frozen =
+              s.frozenMs > 0
+                ? `<div class="frozen">frozen — lifts in ${Math.ceil(s.frozenMs / 1000)}s</div>`
+                : '';
+            return `<div><div class="caption" style="font:600 12px var(--mono)">${s.scope}</div>${meters}${frozen}</div>`;
+          })
+          .join('<div style="height:12px"></div>');
+      }
+
+      function renderCache(snap) {
+        const c = snap.cache;
+        $('cacheCounts').textContent =
+          `${fmt(c.hit)} / ${fmt(c.miss)} / ${fmt(c.neg)} / ${fmt(c.stale)}`;
+
+        let ratio = null;
+        if (prev) {
+          const p = prev.cache;
+          const hits = c.hit + c.neg + c.stale - (p.hit + p.neg + p.stale);
+          const total = hits + (c.miss - p.miss);
+          if (total > 0) ratio = hits / total;
+        }
+        ratioHistory.push(ratio);
+        if (ratioHistory.length > 60) ratioHistory.shift();
+        $('cacheRatio').textContent =
+          ratio == null ? '— (no reads)' : Math.round(ratio * 100) + ' %';
+        renderSpark();
+      }
+
+      function renderSpark() {
+        const w = 300,
+          h = 46,
+          pad = 3;
+        const points = ratioHistory
+          .map((r, i) =>
+            r == null
+              ? null
+              : [
+                  pad + (i / Math.max(1, ratioHistory.length - 1)) * (w - 2 * pad),
+                  h - pad - r * (h - 2 * pad),
+                ],
+          )
+          .filter(Boolean);
+        const path = points
+          .map(([x, y], i) => `${i ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)}`)
+          .join(' ');
+        $('spark').innerHTML =
+          `<line x1="${pad}" y1="${h - pad}" x2="${w - pad}" y2="${h - pad}" stroke="var(--line)" stroke-width="1"/>` +
+          (points.length > 1
+            ? `<path d="${path}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"/>`
+            : '') +
+          (points.length > 0
+            ? `<circle cx="${points[points.length - 1][0].toFixed(1)}" cy="${points[points.length - 1][1].toFixed(1)}" r="3" fill="var(--accent)"/>`
+            : '');
+      }
+
+      function renderRealtime(snap, atMs) {
+        $('wsConns').textContent = fmt(snap.ws.connections);
+        $('wsSubs').textContent = fmt(snap.ws.subscriptions);
+        $('uptime').textContent = fmtDuration(snap.process.uptimeSeconds);
+        $('rss').textContent = Math.round(snap.process.rssBytes / 1_048_576) + ' MB';
+
+        if (prev && atMs > prevAt) {
+          const minutes = (atMs - prevAt) / 60_000;
+          const rates = Object.entries(snap.events)
+            .map(([name, n]) => [name, (n - (prev.events[name] || 0)) / minutes])
+            .filter(([, r]) => r > 0)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 3)
+            .map(([name, r]) => `${name} ${r < 10 ? r.toFixed(1) : Math.round(r)}`);
+          $('eventRates').textContent = rates.length ? rates.join(' · ') : 'quiet';
+        }
+      }
+
+      function render(snap, atMs) {
+        renderTiles(snap);
+        renderQueues(snap);
+        renderLimiter(snap);
+        renderCache(snap);
+        renderRealtime(snap, atMs);
+        $('scope').textContent = 'key scope ' + snap.keyScope;
+        prev = snap;
+        prevAt = atMs;
+        lastTickAt = Date.now();
+        optimisticMatches = 0;
+      }
+
+      // ── event feed ────────────────────────────────────────────────────────
+      function badgeClass(event) {
+        if (event === 'match.archived') return 'badge archived';
+        if (event.startsWith('game.')) return 'badge game';
+        return 'badge';
+      }
+      function describe(frame) {
+        const d = frame.data || {};
+        switch (frame.event) {
+          case 'match.archived':
+            return d.matchId || '';
+          case 'game.started':
+            return `${d.puuid ? d.puuid.slice(0, 12) + '…' : ''} queue ${d.queueId ?? '?'}`;
+          case 'game.ended':
+            return d.puuid ? d.puuid.slice(0, 12) + '…' : '';
+          case 'rank.changed': {
+            const t = (x) => (x ? `${x.tier ?? '?'} ${x.rank ?? ''} ${x.lp ?? '?'}lp` : 'unranked');
+            return `${t(d.before)} → ${t(d.after)}`;
+          }
+          case 'patch.new':
+            return d.version || '';
+          default:
+            return frame.topic;
+        }
+      }
+      function onEvent(frame) {
+        if (frame.event === 'metrics.snapshot') {
+          render(frame.data, frame.at);
+          return;
+        }
+        if (frame.event === 'match.archived' && prev) {
+          optimisticMatches += 1;
+          renderTiles(prev);
+        }
+        feed.unshift(frame);
+        if (feed.length > 50) feed.pop();
+        $('feedEmpty').style.display = 'none';
+        $('feed').innerHTML = feed
+          .map(
+            (f) =>
+              `<li><span class="${badgeClass(f.event)}">${f.event}</span>` +
+              `<span class="detail">${describe(f)}</span>` +
+              `<span class="when">${new Date(f.at).toLocaleTimeString()}</span></li>`,
+          )
+          .join('');
+      }
+
+      // ── transport ─────────────────────────────────────────────────────────
+      async function fetchSnapshot() {
+        const headers = key ? { Authorization: 'Bearer ' + key } : {};
+        const res = await fetch('/v1/admin/metrics', { headers });
+        if (res.status === 401 || res.status === 403) {
+          keyRejected('That key was rejected — it needs the admin scope.');
+          return;
+        }
+        if (!res.ok) throw new Error('metrics fetch failed: ' + res.status);
+        render(await res.json(), Date.now());
+      }
+
+      function connect() {
+        const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const token = key ? '?token=' + encodeURIComponent(key) : '';
+        ws = new WebSocket(`${proto}//${location.host}/v1/ws${token}`);
+        setWsState('', 'connecting…');
+
+        ws.onopen = () => {
+          backoffMs = 1000;
+          setWsState('live', 'live');
+          ws.send(JSON.stringify({ op: 'subscribe', topics: ['metrics', 'firehose'] }));
+        };
+        ws.onmessage = (e) => {
+          let frame;
+          try {
+            frame = JSON.parse(e.data);
+          } catch {
+            return;
+          }
+          if (frame.op === 'error') {
+            const code = frame.error && frame.error.code;
+            if (code === 'UNAUTHORIZED' || code === 'FORBIDDEN') {
+              keyRejected(frame.error.message || 'The key was rejected.');
+            }
+            return;
+          }
+          if (frame.event) onEvent(frame);
+        };
+        ws.onclose = () => {
+          setWsState('down', 'reconnecting…');
+          setTimeout(connect, backoffMs);
+          backoffMs = Math.min(backoffMs * 2, 30_000);
+        };
+      }
+
+      setInterval(() => {
+        $('tickAge').textContent = lastTickAt
+          ? `last tick ${Math.round((Date.now() - lastTickAt) / 1000)}s ago`
+          : '';
+      }, 1000);
+
+      async function start() {
+        try {
+          await fetchSnapshot();
+        } catch (err) {
+          console.error(err);
+        }
+        if (key || authDisabled) connect();
+      }
+
+      (async () => {
+        try {
+          const cfg = await (await fetch('/dashboard/config.json')).json();
+          authDisabled = Boolean(cfg.authDisabled);
+        } catch {
+          /* config route missing: assume auth is on */
+        }
+        if (!authDisabled && !key) askForKey('');
+        else start();
+      })();
+    </script>
+  </body>
+</html>

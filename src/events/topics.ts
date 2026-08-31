@@ -15,6 +15,20 @@ export function playerTopic(puuid: string): string {
 /** Global patch events, the same for every consumer. */
 export const PATCH_TOPIC = 'patch';
 
+/** Periodic operational snapshots, published while anyone is subscribed. */
+export const METRICS_TOPIC = 'metrics';
+
+/** Every event the service publishes, regardless of topic. */
+export const FIREHOSE_TOPIC = 'firehose';
+
+/**
+ * Topics that expose operational internals — or, for the firehose, every
+ * player's events at once — so holding them requires the `admin` scope. The
+ * check is at subscribe time (`src/ws/index.ts`): a topic a socket can never
+ * hold is one relay never has to re-authorise.
+ */
+export const ADMIN_TOPICS: ReadonlySet<string> = new Set([METRICS_TOPIC, FIREHOSE_TOPIC]);
+
 export const channelFor = (topic: string) => `evt:${topic}`;
 export const CHANNEL_PATTERN = 'evt:*';
 

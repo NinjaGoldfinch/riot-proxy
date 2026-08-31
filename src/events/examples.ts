@@ -1,5 +1,5 @@
 import type { EventName, ProxyEvent } from './index.js';
-import { PATCH_TOPIC, playerTopic } from './topics.js';
+import { METRICS_TOPIC, PATCH_TOPIC, playerTopic } from './topics.js';
 
 /**
  * One worked sample per event, for the reference (#74). §11 is documented as
@@ -51,5 +51,47 @@ export const EVENT_EXAMPLES: { [E in EventName]: ProxyEvent<E> } = {
     topic: PATCH_TOPIC,
     at: 1_756_000_000_000,
     data: { version: '15.16.1' },
+  },
+  'metrics.snapshot': {
+    event: 'metrics.snapshot',
+    // Admin-only, like the topic itself. One queue and one limiter scope shown;
+    // the real payload carries every queue and every scope the deployment has
+    // talked to.
+    topic: METRICS_TOPIC,
+    at: 1_756_000_000_000,
+    data: {
+      v: 1,
+      keyScope: 'a1b2c3d4',
+      totals: {
+        archivedMatches: 48_213,
+        trackedPlayers: 12,
+        knownPlayers: 3417,
+        activeConsumers: 4,
+      },
+      queues: {
+        backfill: {
+          active: 2,
+          waiting: 0,
+          prioritized: 137,
+          delayed: 0,
+          failed: 1,
+          completed: 812,
+        },
+      },
+      ws: { connections: 3, subscriptions: 7 },
+      events: { 'match.archived': 812, 'game.started': 41 },
+      cache: { hit: 10_412, miss: 1_733, neg: 88, stale: 402 },
+      limiter: [
+        {
+          scope: 'euw1',
+          frozenMs: 0,
+          windows: [
+            { window: '20:1', used: 3, limit: 20 },
+            { window: '100:120', used: 41, limit: 100 },
+          ],
+        },
+      ],
+      process: { uptimeSeconds: 86_400, rssBytes: 182_000_000 },
+    },
   },
 };

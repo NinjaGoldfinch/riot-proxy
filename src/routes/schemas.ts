@@ -11,6 +11,7 @@ import type {} from '@fastify/swagger';
 import { Type, type Static } from '@sinclair/typebox';
 import { ERROR_CODES } from '../errors.js';
 import { PLATFORMS, REGIONS } from '../riot/routing.js';
+import { MetricsSnapshot, type MetricsSnapshotData } from '../stats/schema.js';
 import { MatchSummarySchema } from './match-summary.js';
 
 /**
@@ -342,6 +343,14 @@ export const AdminStatsResponse = Type.Object({
   trackedPlayers: Type.Integer(),
 });
 
+/**
+ * The full operational snapshot — defined in `src/stats/schema.ts` because the
+ * `metrics` WebSocket topic publishes the identical document and the event
+ * catalogue derives its type from the same schema. Referenced rather than
+ * inlined so the reference names the shape once (#61).
+ */
+export const MetricsResponse = Type.Unsafe<MetricsSnapshotData>({ $ref: 'MetricsSnapshot#' });
+
 export const LimitsResponse = Type.Object({
   scope: Type.String(),
   usage: Type.Unsafe<unknown>({ description: 'Per-bucket token usage as the limiter sees it' }),
@@ -456,6 +465,7 @@ export const localErrors = {
  */
 export const sharedSchemas = [
   ErrorResponse,
+  MetricsSnapshot,
   PlatformParamSchema,
   RegionParamSchema,
   GameNameParamSchema,

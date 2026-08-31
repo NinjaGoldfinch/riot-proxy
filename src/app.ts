@@ -10,6 +10,7 @@ import { requestsTotal } from './metrics.js';
 import { ANON_QUOTA_PER_MIN } from './quotas.js';
 import { redis } from './redis.js';
 import adminRoutes from './routes/admin.js';
+import dashboardRoutes from './routes/dashboard.js';
 import debugRoutes from './routes/debug.js';
 import devUiRoutes from './routes/dev-ui.js';
 import healthRoutes from './routes/health.js';
@@ -18,6 +19,7 @@ import playerRoutes from './routes/players.js';
 import riotRoutes from './routes/riot.js';
 import { sharedSchemas } from './routes/schemas.js';
 import staticRoutes from './routes/static.js';
+import { metricsBroadcaster } from './stats/broadcaster.js';
 import wsRoutes from './ws/index.js';
 
 export async function buildApp() {
@@ -123,8 +125,14 @@ export async function buildApp() {
   await app.register(adminRoutes);
   await app.register(debugRoutes);
   await app.register(wsRoutes);
+  // The `metrics` topic's clock. Idle while nothing is subscribed, and stopped
+  // with the app so tests and write-spec runs never leave a timer behind.
+  metricsBroadcaster.start();
+  app.addHook('onClose', async () => metricsBroadcaster.stop());
   // Development-only browser client (§ none — it is a tool, not a contract).
   if (config.devUi) await app.register(devUiRoutes);
+  // The operational dashboard — on in production, unlike the dev UI.
+  if (config.dashboardUi) await app.register(dashboardRoutes);
   // After the routes: the page can only describe what is already registered.
   if (config.docsUi) await app.register(docsUi);
 

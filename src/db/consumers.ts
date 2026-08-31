@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, sql as raw } from 'drizzle-orm';
 import { KEY_PREFIX } from '../keys.js';
 import { DEFAULT_QUOTA_PER_MIN } from '../quotas.js';
 import { db } from './index.js';
@@ -90,6 +90,15 @@ export async function findConsumerByIdAndHash(
 export async function listConsumers(): Promise<Omit<Consumer, 'keyHash'>[]> {
   const rows = await db.select().from(consumers);
   return rows.map(({ keyHash: _keyHash, ...rest }) => rest);
+}
+
+/** Consumers whose key still works — revoked ones are kept but not counted. */
+export async function countActiveConsumers(): Promise<number> {
+  const rows = await db
+    .select({ n: raw<number>`count(*)::int` })
+    .from(consumers)
+    .where(isNull(consumers.disabledAt));
+  return rows[0]?.n ?? 0;
 }
 
 /** Soft delete: the hash stays so the key can never be silently reissued. */

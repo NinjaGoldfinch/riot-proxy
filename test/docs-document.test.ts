@@ -42,6 +42,7 @@ const EXPECTED_OPERATIONS = [
   'GET /v1/admin/debug/cache',
   'GET /v1/admin/debug/riot',
   'GET /v1/admin/limits/{scope}',
+  'GET /v1/admin/metrics',
   'GET /v1/admin/stats',
   'GET /v1/admin/tracked-players',
   'GET /v1/lol/league/entries/by-puuid/{platform}/{puuid}',
@@ -74,7 +75,7 @@ const EXPECTED_OPERATIONS = [
  * @fastify/swagger can see — and the docs and dev routes are hidden, `/docs`
  * from itself included.
  */
-const NOT_OPERATIONS = new Set(['/v1/ws', '/openapi.json', '/openapi.yaml', '/dev']);
+const NOT_OPERATIONS = new Set(['/v1/ws', '/openapi.json', '/openapi.yaml', '/dev', '/dashboard']);
 const isOperation = (path: string): boolean =>
   !NOT_OPERATIONS.has(path) && !path.startsWith('/docs');
 
@@ -133,6 +134,9 @@ describe('shared components (#61)', () => {
       // Extracted on its own because `match-summary.ts` gives it a `$id`: the
       // summary is the shape a caller renders, so it earns a sidebar entry.
       'MatchSummary',
+      // Registered because the `metrics` WS topic publishes the identical
+      // document — a named schema is what lets the ws prose point at it.
+      'MetricsSnapshot',
       'PlatformParam',
       'ProfileBody',
       'PuuidParam',
