@@ -9,6 +9,7 @@
       :root {
         --bg: #0e1116;
         --panel: #161b22;
+        --sunk: #0b0e13;
         --line: #262d38;
         --text: #d7dee8;
         --dim: #7d8794;
@@ -31,15 +32,16 @@
           'Segoe UI',
           sans-serif;
       }
-      main {
-        max-width: 1100px;
+      .wrap {
+        max-width: 1120px;
         margin: 0 auto;
-        padding: 24px 16px 80px;
+        padding: 20px 16px 64px;
       }
+      /* ── header ─────────────────────────────────────────────────────────── */
       header {
         display: flex;
-        align-items: baseline;
-        gap: 12px;
+        align-items: center;
+        gap: 14px;
         flex-wrap: wrap;
       }
       h1 {
@@ -47,31 +49,6 @@
         letter-spacing: 0.04em;
         margin: 0;
         color: var(--dim);
-      }
-      h2 {
-        font: 600 12px/1 var(--mono);
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        color: var(--dim);
-        margin: 0 0 10px;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-      }
-      /* A panel heading's indicator sits at the far end of it. */
-      h2 .status {
-        margin-left: auto;
-        text-transform: none;
-        letter-spacing: 0;
-      }
-      section {
-        margin-top: 24px;
-      }
-      .panel {
-        background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        padding: 14px;
       }
       .status {
         display: inline-flex;
@@ -85,6 +62,7 @@
         height: 8px;
         border-radius: 50%;
         background: var(--dim);
+        flex: none;
       }
       .dot.live {
         background: var(--good);
@@ -97,32 +75,149 @@
         color: var(--dim);
         margin-left: auto;
       }
+      /* ── tab bar ────────────────────────────────────────────────────────── */
+      nav {
+        display: flex;
+        gap: 2px;
+        margin-top: 16px;
+        border-bottom: 1px solid var(--line);
+        overflow-x: auto;
+      }
+      nav button {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        background: none;
+        border: 0;
+        border-bottom: 2px solid transparent;
+        color: var(--dim);
+        font: 600 12px/1 var(--mono);
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+        padding: 10px 13px;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      nav button:hover {
+        color: var(--text);
+      }
+      nav button[aria-selected='true'] {
+        color: var(--text);
+        border-bottom-color: var(--accent);
+      }
+      .tag {
+        font: 600 10px/1 var(--mono);
+        letter-spacing: 0;
+        padding: 2px 6px;
+        border-radius: 9px;
+        border: 1px solid var(--line);
+        color: var(--dim);
+      }
+      .tag.bad {
+        color: var(--bad);
+        border-color: var(--bad);
+      }
+      .tag.live {
+        color: var(--good);
+        border-color: var(--good);
+      }
+      .tag:empty {
+        display: none;
+      }
+      /* ── panels ─────────────────────────────────────────────────────────── */
+      .tab {
+        display: none;
+      }
+      .tab.on {
+        display: block;
+      }
+      section {
+        margin-top: 14px;
+      }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 14px;
+      }
+      h2 {
+        font: 600 12px/1 var(--mono);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--dim);
+        margin: 0 0 10px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      h2 .status {
+        margin-left: auto;
+        text-transform: none;
+        letter-spacing: 0;
+      }
+      .cols {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+        gap: 10px;
+      }
+      .empty {
+        color: var(--dim);
+        font: 12.5px var(--mono);
+        margin: 0;
+      }
       /* ── stat tiles ─────────────────────────────────────────────────────── */
       .tiles {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
         gap: 10px;
       }
       .tile {
         background: var(--panel);
         border: 1px solid var(--line);
         border-radius: 6px;
-        padding: 12px 14px;
+        padding: 11px 13px;
       }
       .tile .label {
-        font: 600 11px/1 var(--mono);
+        font: 600 10.5px/1 var(--mono);
         letter-spacing: 0.08em;
         text-transform: uppercase;
         color: var(--dim);
       }
       .tile .value {
-        font: 600 26px/1.3 var(--mono);
-        margin-top: 6px;
+        font: 600 24px/1.25 var(--mono);
+        margin-top: 5px;
       }
-      .tile .delta {
-        font: 12px var(--mono);
+      .tile .sub {
+        font: 11.5px var(--mono);
+        color: var(--dim);
+        min-height: 17px;
+      }
+      .tile .sub.good {
         color: var(--good);
-        min-height: 18px;
+      }
+      .tile .sub.bad {
+        color: var(--bad);
+      }
+      /* ── key/value rows ─────────────────────────────────────────────────── */
+      .kv {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        font: 12.5px var(--mono);
+        padding: 4px 0;
+      }
+      .kv .k {
+        color: var(--dim);
+        white-space: nowrap;
+      }
+      .kv span:last-child {
+        text-align: right;
+      }
+      /* Two columns of kv rows where the panel is wide enough for them. */
+      .kvgrid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        column-gap: 22px;
       }
       /* ── tables ─────────────────────────────────────────────────────────── */
       .scroll {
@@ -161,20 +256,57 @@
       span.dim {
         color: var(--dim);
       }
-      /* ── meters ─────────────────────────────────────────────────────────── */
+      /* ── charts ─────────────────────────────────────────────────────────── */
+      .chart .headline {
+        font: 12.5px var(--mono);
+        padding-bottom: 4px;
+      }
+      .chart .range {
+        display: flex;
+        justify-content: space-between;
+        font: 11px var(--mono);
+        color: var(--dim);
+        margin-top: 2px;
+      }
+      svg text {
+        font: 11px var(--mono);
+        fill: var(--dim);
+      }
+      /* ── limiter ────────────────────────────────────────────────────────── */
+      .scope + .scope {
+        margin-top: 14px;
+        border-top: 1px solid var(--line);
+        padding-top: 12px;
+      }
+      .scope-head {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        font: 600 12.5px var(--mono);
+      }
+      .scope-head .pct {
+        margin-left: auto;
+        color: var(--dim);
+      }
+      .scope-head .pct.warn {
+        color: var(--warn);
+      }
+      .scope-head .pct.bad {
+        color: var(--bad);
+      }
       .meter {
-        margin-top: 8px;
+        margin-top: 7px;
       }
       .meter .caption {
         display: flex;
         justify-content: space-between;
-        font: 12px var(--mono);
+        font: 11.5px var(--mono);
         color: var(--dim);
       }
       .meter .track {
-        height: 6px;
+        height: 5px;
         border-radius: 4px;
-        background: #0b0e13;
+        background: var(--sunk);
         border: 1px solid var(--line);
         overflow: hidden;
         margin-top: 3px;
@@ -196,10 +328,32 @@
         font: 12px var(--mono);
         margin-top: 6px;
       }
-      .methods {
+      details.methods {
         margin-top: 8px;
-        border-top: 1px solid var(--line);
-        padding-top: 6px;
+      }
+      details.methods summary {
+        cursor: pointer;
+        color: var(--dim);
+        font: 11.5px var(--mono);
+        list-style: none;
+      }
+      details.methods summary::marker,
+      details.methods summary::-webkit-details-marker {
+        display: none;
+      }
+      details.methods summary::before {
+        content: '▸ ';
+      }
+      details.methods[open] summary::before {
+        content: '▾ ';
+      }
+      details.methods summary:hover {
+        color: var(--text);
+      }
+      details.methods .body {
+        margin-top: 4px;
+        padding-left: 12px;
+        border-left: 1px solid var(--line);
       }
       .methods .kv {
         padding: 2px 0;
@@ -207,18 +361,7 @@
       .methods .hot {
         color: var(--warn);
       }
-      /* ── history charts ─────────────────────────────────────────────────── */
-      .chart .kv {
-        padding: 0 0 4px;
-      }
-      .chart .range {
-        display: flex;
-        justify-content: space-between;
-        font: 11px var(--mono);
-        color: var(--dim);
-        margin-top: 2px;
-      }
-      /* ── players ────────────────────────────────────────────────────────── */
+      /* ── pills, players, ladder ─────────────────────────────────────────── */
       .pill {
         font-size: 11px;
         padding: 1px 7px;
@@ -226,12 +369,22 @@
         border: 1px solid var(--line);
         white-space: nowrap;
       }
-      .pill.on {
+      .pill.on,
+      .pill.completed {
         color: var(--good);
         border-color: var(--good);
       }
       .pill.off {
         color: var(--dim);
+      }
+      .pill.running {
+        color: var(--accent);
+        border-color: var(--accent);
+      }
+      .pill.failed,
+      .pill.cancelled {
+        color: var(--bad);
+        border-color: var(--bad);
       }
       td .ok {
         color: var(--good);
@@ -239,34 +392,39 @@
       td .run {
         color: var(--warn);
       }
-      #playersMeta {
+      .meta {
         font: 12px var(--mono);
         color: var(--dim);
         margin: 0 0 8px;
       }
-      /* ── two-column band ────────────────────────────────────────────────── */
-      .cols {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-        gap: 10px;
+      .crawl + .crawl {
+        margin-top: 12px;
+        border-top: 1px solid var(--line);
+        padding-top: 10px;
       }
-      .kv {
+      .crawl-head {
         display: flex;
-        justify-content: space-between;
-        gap: 12px;
-        font: 12.5px var(--mono);
-        padding: 4px 0;
+        align-items: baseline;
+        gap: 10px;
+        font: 600 12.5px var(--mono);
+        margin-bottom: 4px;
       }
-      .kv .k {
+      .crawl-head .when {
+        margin-left: auto;
         color: var(--dim);
-        white-space: nowrap;
+        font-weight: 400;
       }
-      .kv span:last-child {
-        text-align: right;
+      /* Label and value read as one token, so they sit together and wrap as a
+         pair rather than being stretched apart by a grid track. */
+      .facts {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 2px 20px;
+        font: 12.5px var(--mono);
       }
-      svg text {
-        font: 11px var(--mono);
-        fill: var(--dim);
+      .facts span .k {
+        color: var(--dim);
+        margin-right: 6px;
       }
       /* ── event feed ─────────────────────────────────────────────────────── */
       #feed {
@@ -274,7 +432,7 @@
         margin: 0;
         padding: 0;
         font: 12.5px var(--mono);
-        max-height: 340px;
+        max-height: 60vh;
         overflow-y: auto;
       }
       #feed li {
@@ -301,6 +459,9 @@
       .badge.game {
         color: var(--warn);
       }
+      .badge.ladder {
+        color: var(--text);
+      }
       #feed .detail {
         color: var(--dim);
         overflow: hidden;
@@ -311,10 +472,6 @@
       #feed .when {
         color: var(--dim);
         white-space: nowrap;
-      }
-      .empty {
-        color: var(--dim);
-        font: 12.5px var(--mono);
       }
       /* ── key prompt ─────────────────────────────────────────────────────── */
       #gate {
@@ -353,7 +510,7 @@
       button {
         font: inherit;
         color: var(--text);
-        background: #0b0e13;
+        background: var(--sunk);
         border: 1px solid var(--line);
         border-radius: 4px;
         padding: 7px 9px;
@@ -365,111 +522,152 @@
       #keyInput {
         font-family: var(--mono);
       }
-      button {
+      #gate button {
         cursor: pointer;
         background: #1f2733;
       }
-      button:hover {
+      #gate button:hover {
         border-color: var(--accent);
       }
     </style>
   </head>
   <body>
-    <main>
+    <div class="wrap">
       <header>
-        <h1>riot-proxy dashboard</h1>
+        <h1>riot-proxy</h1>
         <span class="status"
           ><span id="wsDot" class="dot"></span><span id="wsState">connecting…</span></span
         >
         <span class="status" id="tickAge"></span>
+        <span class="status"
+          ><span id="workerDot" class="dot"></span><span id="workerState">worker —</span></span
+        >
         <span id="scope"></span>
       </header>
 
-      <section>
-        <div class="tiles" id="tiles"></div>
-      </section>
+      <!-- One page per question an operator actually arrives with; everything
+           else stays folded away until asked for. -->
+      <nav id="tabs" role="tablist">
+        <button role="tab" id="nav-overview" data-tab="overview">Overview</button>
+        <button role="tab" id="nav-queues" data-tab="queues">
+          Queues<span class="tag" id="tagQueues"></span>
+        </button>
+        <button role="tab" id="nav-ladder" data-tab="ladder">
+          Ladder<span class="tag" id="tagLadder"></span>
+        </button>
+        <button role="tab" id="nav-limiter" data-tab="limiter">
+          Limiter<span class="tag" id="tagLimiter"></span>
+        </button>
+        <button role="tab" id="nav-players" data-tab="players">Players</button>
+        <button role="tab" id="nav-events" data-tab="events">
+          Events<span class="tag" id="tagEvents"></span>
+        </button>
+      </nav>
 
-      <section class="cols">
-        <div class="panel chart">
-          <h2>Archive growth</h2>
-          <div class="kv"><span class="k" id="histMatchesLabel">last 24 h</span></div>
-          <svg id="histMatches" viewBox="0 0 300 80" width="100%" height="80" role="img"></svg>
-          <div class="range" id="histMatchesRange"></div>
-        </div>
-        <div class="panel chart">
-          <h2>Queue backlog</h2>
-          <div class="kv"><span class="k" id="histQueueLabel">last 24 h</span></div>
-          <svg id="histQueue" viewBox="0 0 300 80" width="100%" height="80" role="img"></svg>
-          <div class="range" id="histQueueRange"></div>
-        </div>
-        <div class="panel chart">
-          <h2>Cache hit ratio</h2>
-          <div class="kv"><span class="k" id="histCacheLabel">last 24 h</span></div>
-          <svg id="histCache" viewBox="0 0 300 80" width="100%" height="80" role="img"></svg>
-          <div class="range" id="histCacheRange"></div>
-        </div>
-      </section>
+      <!-- ── overview ─────────────────────────────────────────────────────── -->
+      <div class="tab" id="tab-overview">
+        <section>
+          <div class="tiles" id="tiles"></div>
+        </section>
 
-      <section class="cols">
-        <div class="panel">
-          <h2>
-            Queues
-            <span class="status" id="worker"
-              ><span id="workerDot" class="dot"></span><span id="workerState">—</span></span
-            >
-          </h2>
-          <div class="scroll"><table id="queues"></table></div>
-        </div>
-        <div class="panel">
-          <h2>Rate limiter</h2>
-          <div id="limiter"><p class="empty">No scopes yet — nothing has called Riot.</p></div>
-        </div>
-      </section>
-
-      <section class="cols">
-        <div class="panel">
-          <h2>Cache · this api process</h2>
-          <div class="kv">
-            <span class="k">hit ratio (last tick)</span><span id="cacheRatio">—</span>
+        <section class="cols">
+          <div class="panel chart">
+            <h2>Archive growth</h2>
+            <div class="headline" id="histMatchesLabel">last 24 h</div>
+            <svg id="histMatches" viewBox="0 0 300 72" width="100%" height="72" role="img"></svg>
+            <div class="range" id="histMatchesRange"></div>
           </div>
-          <svg
-            id="spark"
-            viewBox="0 0 300 46"
-            width="100%"
-            height="46"
-            role="img"
-            aria-label="Cache hit ratio over recent ticks"
-          ></svg>
-          <div class="kv">
-            <span class="k">hit / miss / neg / stale</span><span id="cacheCounts">—</span>
+          <div class="panel chart">
+            <h2>Queue backlog</h2>
+            <div class="headline" id="histQueueLabel">last 24 h</div>
+            <svg id="histQueue" viewBox="0 0 300 72" width="100%" height="72" role="img"></svg>
+            <div class="range" id="histQueueRange"></div>
           </div>
-        </div>
-        <div class="panel">
-          <h2>Realtime &amp; process</h2>
-          <div class="kv"><span class="k">ws connections</span><span id="wsConns">—</span></div>
-          <div class="kv"><span class="k">topic subscriptions</span><span id="wsSubs">—</span></div>
-          <div class="kv"><span class="k">events / min</span><span id="eventRates">—</span></div>
-          <div class="kv"><span class="k">api uptime</span><span id="uptime">—</span></div>
-          <div class="kv"><span class="k">api memory (rss)</span><span id="rss">—</span></div>
-        </div>
-      </section>
+          <div class="panel chart">
+            <h2>Cache hit ratio</h2>
+            <div class="headline" id="histCacheLabel">last 24 h</div>
+            <svg id="histCache" viewBox="0 0 300 72" width="100%" height="72" role="img"></svg>
+            <div class="range" id="histCacheRange"></div>
+          </div>
+        </section>
 
-      <section>
-        <div class="panel">
-          <h2>Players</h2>
-          <p id="playersMeta">loading…</p>
-          <div class="scroll"><table id="players"></table></div>
-        </div>
-      </section>
+        <section>
+          <div class="panel">
+            <h2>System</h2>
+            <div class="kvgrid" id="system"></div>
+          </div>
+        </section>
+      </div>
 
-      <section>
-        <div class="panel">
-          <h2>Recent events</h2>
-          <ul id="feed"></ul>
-          <p class="empty" id="feedEmpty">Waiting for the firehose…</p>
-        </div>
-      </section>
-    </main>
+      <!-- ── queues ───────────────────────────────────────────────────────── -->
+      <div class="tab" id="tab-queues">
+        <section>
+          <div class="panel">
+            <h2>Queues</h2>
+            <p class="meta" id="queuesMeta">loading…</p>
+            <div class="scroll"><table id="queues"></table></div>
+          </div>
+        </section>
+        <section>
+          <div class="panel">
+            <h2>Work requested</h2>
+            <div class="kvgrid" id="flows"></div>
+          </div>
+        </section>
+      </div>
+
+      <!-- ── ladder ───────────────────────────────────────────────────────── -->
+      <div class="tab" id="tab-ladder">
+        <section>
+          <div class="panel">
+            <h2>Crawls</h2>
+            <p class="meta" id="ladderMeta">loading…</p>
+            <div id="ladderRunning"></div>
+          </div>
+        </section>
+        <section>
+          <div class="panel">
+            <h2>Last completed</h2>
+            <div id="ladderLast"></div>
+          </div>
+        </section>
+      </div>
+
+      <!-- ── limiter ──────────────────────────────────────────────────────── -->
+      <div class="tab" id="tab-limiter">
+        <section>
+          <div class="panel">
+            <h2>Rate limiter</h2>
+            <p class="meta" id="limiterMeta"></p>
+            <div id="limiter">
+              <p class="empty">No scopes yet — nothing has called Riot.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- ── players ──────────────────────────────────────────────────────── -->
+      <div class="tab" id="tab-players">
+        <section>
+          <div class="panel">
+            <h2>Players</h2>
+            <p class="meta" id="playersMeta">loading…</p>
+            <div class="scroll"><table id="players"></table></div>
+          </div>
+        </section>
+      </div>
+
+      <!-- ── events ───────────────────────────────────────────────────────── -->
+      <div class="tab" id="tab-events">
+        <section>
+          <div class="panel">
+            <h2>Live events</h2>
+            <ul id="feed"></ul>
+            <p class="empty" id="feedEmpty">Waiting for the firehose…</p>
+          </div>
+        </section>
+      </div>
+    </div>
 
     <div id="gate">
       <form id="gateForm">
@@ -487,15 +685,11 @@
     <script>
       'use strict';
       const STORE = 'rp.dashboard.key';
+      const TAB_STORE = 'rp.dashboard.tab';
       const $ = (id) => document.getElementById(id);
 
-      const TILES = [
-        ['archivedMatches', 'Archived matches'],
-        ['trackedPlayers', 'Tracked players'],
-        ['knownPlayers', 'Known players'],
-        ['activeConsumers', 'Active consumers'],
-      ];
       const QUEUE_COLS = ['active', 'waiting', 'prioritized', 'delayed', 'failed', 'completed'];
+      const PENDING_COLS = ['active', 'waiting', 'prioritized', 'delayed'];
 
       let key = localStorage.getItem(STORE) || '';
       let authDisabled = false;
@@ -505,8 +699,9 @@
       let prevAt = 0;
       let lastTickAt = 0;
       let optimisticMatches = 0; // match.archived frames since the last tick
-      const ratioHistory = []; // last 60 per-tick hit ratios, 0..1 or null
+      let lastRatio = null; // cache hit ratio over the last tick, 0..1 or null
       const feed = [];
+      let unseenEvents = 0;
 
       const fmt = (n) => Number(n).toLocaleString('en-US');
       const fmtDuration = (s) => {
@@ -531,6 +726,32 @@
         if (s < 129600) return `${Math.round(s / 3600)}h ago`;
         return `${Math.round(s / 86400)}d ago`;
       };
+      const sumQueues = (snap, col) => Object.values(snap.queues).reduce((n, q) => n + q[col], 0);
+
+      // ── tabs ──────────────────────────────────────────────────────────────
+      const TABS = ['overview', 'queues', 'ladder', 'limiter', 'players', 'events'];
+      let activeTab = 'overview';
+
+      function showTab(name) {
+        if (!TABS.includes(name)) name = 'overview';
+        activeTab = name;
+        for (const t of TABS) {
+          $('tab-' + t).classList.toggle('on', t === name);
+          $('nav-' + t).setAttribute('aria-selected', String(t === name));
+        }
+        localStorage.setItem(TAB_STORE, name);
+        if (location.hash.slice(1) !== name) history.replaceState(null, '', '#' + name);
+        if (name === 'events') {
+          unseenEvents = 0;
+          $('tagEvents').textContent = '';
+        }
+      }
+      $('tabs').addEventListener('click', (e) => {
+        const button = e.target.closest('button[data-tab]');
+        if (button) showTab(button.dataset.tab);
+      });
+      window.addEventListener('hashchange', () => showTab(location.hash.slice(1)));
+      showTab(location.hash.slice(1) || localStorage.getItem(TAB_STORE) || 'overview');
 
       // ── key gate ──────────────────────────────────────────────────────────
       function askForKey(message) {
@@ -558,31 +779,67 @@
         askForKey(message);
       }
 
-      // ── rendering ─────────────────────────────────────────────────────────
+      // ── overview ──────────────────────────────────────────────────────────
       function setWsState(cls, label) {
         $('wsDot').className = 'dot' + (cls ? ' ' + cls : '');
         $('wsState').textContent = label;
       }
 
+      const tile = (label, value, sub, cls) =>
+        `<div class="tile"><div class="label">${label}</div>` +
+        `<div class="value">${value}</div>` +
+        `<div class="sub ${cls || ''}">${sub || ''}</div></div>`;
+
+      /**
+       * Five numbers, each answering a question on its own: is the archive
+       * growing, is work piling up, is the cache earning its keep, who do we
+       * know, and is the crawl doing anything. Everything else moved behind a
+       * tab.
+       */
       function renderTiles(snap) {
-        $('tiles').innerHTML = TILES.map(([field, label]) => {
-          const value = snap.totals[field];
-          const before = prev && prev.totals[field];
-          const delta = before != null ? value - before : 0;
-          const shown = field === 'archivedMatches' ? value + optimisticMatches : value;
-          return (
-            `<div class="tile"><div class="label">${label}</div>` +
-            `<div class="value">${fmt(shown)}</div>` +
-            `<div class="delta">${delta > 0 ? '+' + fmt(delta) + ' since last tick' : ''}</div></div>`
+        const archived = snap.totals.archivedMatches + optimisticMatches;
+        const grew = prev ? snap.totals.archivedMatches - prev.totals.archivedMatches : 0;
+
+        const pending = PENDING_COLS.reduce((n, c) => n + sumQueues(snap, c), 0);
+        const failed = sumQueues(snap, 'failed');
+
+        const running = snap.ladder ? snap.ladder.running.length : 0;
+
+        $('tiles').innerHTML =
+          tile(
+            'Archived matches',
+            fmt(archived),
+            grew > 0 ? '+' + fmt(grew) + ' this tick' : '',
+            'good',
+          ) +
+          tile(
+            'Queue backlog',
+            fmt(pending),
+            failed > 0 ? fmt(failed) + ' failed' : 'nothing failed',
+            failed > 0 ? 'bad' : '',
+          ) +
+          tile(
+            'Cache hit ratio',
+            lastRatio == null ? '—' : Math.round(lastRatio * 100) + ' %',
+            lastRatio == null ? 'no reads last tick' : 'over the last tick',
+          ) +
+          tile(
+            'Players',
+            fmt(snap.totals.knownPlayers),
+            fmt(snap.totals.trackedPlayers) + ' tracked',
+          ) +
+          tile(
+            'Ladder entries',
+            fmt(snap.ladder ? snap.ladder.entries : 0),
+            running > 0 ? running + ' crawl' + (running > 1 ? 's' : '') + ' running' : '',
           );
-        }).join('');
       }
 
       /**
        * Queue counts come from Redis and say nothing about whether anything is
        * draining them — a crashed worker and an idle one are both all-zero
-       * `active`. So the heartbeat gets a dot of its own, next to the counts it
-       * qualifies (#80).
+       * `active`. So the heartbeat gets a dot of its own, in the header where
+       * it qualifies every number below it (#80).
        */
       function renderWorker(snap) {
         const worker = snap.worker;
@@ -594,8 +851,62 @@
           : 'worker down';
       }
 
+      function renderSystem(snap, atMs) {
+        const rows = [
+          ['api uptime', fmtDuration(snap.process.uptimeSeconds)],
+          ['api memory (rss)', Math.round(snap.process.rssBytes / 1_048_576) + ' MB'],
+          ['ws connections', fmt(snap.ws.connections)],
+          ['topic subscriptions', fmt(snap.ws.subscriptions)],
+          ['active consumers', fmt(snap.totals.activeConsumers)],
+          ['events / min', eventRates(snap, atMs)],
+          [
+            'cache hit / miss / neg / stale',
+            `${fmt(snap.cache.hit)} / ${fmt(snap.cache.miss)} / ` +
+              `${fmt(snap.cache.neg)} / ${fmt(snap.cache.stale)}`,
+          ],
+        ];
+        $('system').innerHTML = rows
+          .map(([k, v]) => `<div class="kv"><span class="k">${k}</span><span>${v}</span></div>`)
+          .join('');
+      }
+
+      let eventRatesText = '—';
+      function eventRates(snap, atMs) {
+        if (prev && atMs > prevAt) {
+          const minutes = (atMs - prevAt) / 60_000;
+          const rates = Object.entries(snap.events)
+            .map(([name, n]) => [name, (n - (prev.events[name] || 0)) / minutes])
+            .filter(([, r]) => r > 0)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 3)
+            .map(([name, r]) => `${esc(name)} ${r < 10 ? r.toFixed(1) : Math.round(r)}`);
+          eventRatesText = rates.length ? rates.join(' · ') : 'quiet';
+        }
+        return eventRatesText;
+      }
+
+      /** The per-tick ratio the tile shows; the 24 h shape is on the chart. */
+      function trackCacheRatio(snap) {
+        lastRatio = null;
+        if (!prev) return;
+        const c = snap.cache;
+        const p = prev.cache;
+        const hits = c.hit + c.neg + c.stale - (p.hit + p.neg + p.stale);
+        const total = hits + (c.miss - p.miss);
+        if (total > 0) lastRatio = hits / total;
+      }
+
+      // ── queues ────────────────────────────────────────────────────────────
       function renderQueues(snap) {
         const names = Object.keys(snap.queues).sort();
+        const failed = sumQueues(snap, 'failed');
+        const pending = PENDING_COLS.reduce((n, c) => n + sumQueues(snap, c), 0);
+        $('tagQueues').textContent = failed > 0 ? fmt(failed) : '';
+        $('tagQueues').className = 'tag bad';
+        $('queuesMeta').textContent =
+          `${fmt(pending)} pending or running · ${fmt(failed)} failed · ` +
+          `${fmt(sumQueues(snap, 'completed'))} completed recently`;
+
         const head =
           '<tr><th>queue</th>' + QUEUE_COLS.map((c) => `<th>${c}</th>`).join('') + '</tr>';
         const rows = names
@@ -605,120 +916,164 @@
               const cls = c === 'failed' && q[c] > 0 ? 'alert' : q[c] === 0 ? 'dim' : '';
               return `<td class="${cls}">${fmt(q[c])}</td>`;
             }).join('');
-            return `<tr><td>${name}</td>${cells}</tr>`;
+            return `<tr><td>${esc(name)}</td>${cells}</tr>`;
           })
           .join('');
         $('queues').innerHTML = head + rows;
       }
 
+      /**
+       * Work asked for, as against work done: a lookup that coalesced onto a
+       * walk already pending is demand, and it never becomes a queue row (#81).
+       */
+      function renderFlows(snap) {
+        if (!snap.flows) return;
+        const rows = [
+          ...Object.entries(snap.flows.backfillsQueued).map(([k, n]) => ['backfill ' + k, n]),
+          ...Object.entries(snap.flows.refreshClaims).map(([k, n]) => ['refresh ' + k, n]),
+        ].sort((a, b) => b[1] - a[1]);
+        $('flows').innerHTML = rows.length
+          ? rows
+              .map(
+                ([k, n]) =>
+                  `<div class="kv"><span class="k">${esc(k)}</span><span>${fmt(n)}</span></div>`,
+              )
+              .join('')
+          : '<p class="empty">Nothing has been asked for since this api process started.</p>';
+      }
+
+      // ── ladder ────────────────────────────────────────────────────────────
+      function crawlCard(c) {
+        const facts = [
+          ['pages', fmt(c.pagesFetched)],
+          ['entries', fmt(c.entriesSeen)],
+          ['players', fmt(c.playersDiscovered)],
+          ['backfills', fmt(c.backfillsEnqueued)],
+        ];
+        if (c.status === 'running') facts.push(['legs left', fmt(c.pendingLegs)]);
+        const when =
+          c.status === 'running'
+            ? 'started ' + relTime(c.startedAt)
+            : relTime(c.finishedAt || c.startedAt);
+        return (
+          `<div class="crawl"><div class="crawl-head">` +
+          `<span>${esc(c.platform)} · ${esc(c.queue)}</span>` +
+          `<span class="pill ${esc(c.status)}">${esc(c.status)}</span>` +
+          `<span class="dim">from ${esc(c.tierFloor)}</span>` +
+          `<span class="when">${when}</span></div>` +
+          `<div class="facts">` +
+          facts.map(([k, v]) => `<span><span class="k">${k}</span>${v}</span>`).join('') +
+          `</div></div>`
+        );
+      }
+
+      function renderLadder(snap) {
+        const ladder = snap.ladder;
+        if (!ladder) return; // an older api instance
+        const running = ladder.running;
+        $('tagLadder').textContent = running.length ? String(running.length) : '';
+        $('tagLadder').className = 'tag live';
+        $('ladderMeta').textContent =
+          `${fmt(ladder.entries)} league entries stored · ` +
+          (running.length ? `${running.length} crawl(s) in flight` : 'nothing crawling');
+        $('ladderRunning').innerHTML = running.length
+          ? running.map(crawlCard).join('')
+          : '<p class="empty">No crawl running. Start one with POST /v1/admin/ladder/crawl.</p>';
+        $('ladderLast').innerHTML = ladder.lastCompleted
+          ? crawlCard(ladder.lastCompleted)
+          : '<p class="empty">No crawl has finished yet.</p>';
+      }
+
+      // ── limiter ───────────────────────────────────────────────────────────
+      // Re-rendering the panel each tick would slam every open method list
+      // shut, so which ones are open lives out here.
+      const limiterOpen = new Set();
+      $('limiter').addEventListener(
+        'toggle',
+        (e) => {
+          const el = e.target;
+          if (!el.dataset || !el.dataset.scope) return;
+          if (el.open) limiterOpen.add(el.dataset.scope);
+          else limiterOpen.delete(el.dataset.scope);
+        },
+        true, // `toggle` does not bubble
+      );
+
+      const share = (w) => (w.limit > 0 ? w.used / w.limit : 0);
+      const worstShare = (windows) => (windows.length ? Math.max(...windows.map(share)) : 0);
+      const heat = (s) => (s >= 0.95 ? 'bad' : s >= 0.8 ? 'warn' : '');
+
       function renderLimiter(snap) {
-        if (snap.limiter.length === 0) return; // keep the empty-state text
-        $('limiter').innerHTML = snap.limiter
+        const scopes = snap.limiter
+          .slice()
+          .sort((a, b) => worstShare(b.windows) - worstShare(a.windows));
+        const hot = scopes.filter((s) => worstShare(s.windows) >= 0.8).length;
+        const frozen = scopes.filter((s) => s.frozenMs > 0).length;
+        $('tagLimiter').textContent = frozen > 0 ? 'frozen' : hot > 0 ? String(hot) : '';
+        $('tagLimiter').className = 'tag ' + (frozen > 0 ? 'bad' : '');
+        $('limiterMeta').textContent = scopes.length
+          ? `${scopes.length} scope(s) talked to · busiest window ` +
+            `${Math.round(worstShare(scopes[0] ? scopes[0].windows : []) * 100)} %`
+          : '';
+        if (scopes.length === 0) return; // keep the empty-state text
+
+        $('limiter').innerHTML = scopes
           .map((s) => {
+            const top = worstShare(s.windows);
             const meters = s.windows
               .map((w) => {
-                const share = w.limit > 0 ? w.used / w.limit : 0;
-                const cls = share >= 0.95 ? 'bad' : share >= 0.8 ? 'warn' : '';
+                const used = share(w);
                 return (
                   `<div class="meter"><div class="caption"><span>${esc(w.window)}</span>` +
                   `<span>${fmt(w.used)} / ${fmt(w.limit)}</span></div>` +
-                  `<div class="track"><div class="fill ${cls}" style="width:${Math.min(100, share * 100)}%"></div></div></div>`
+                  `<div class="track"><div class="fill ${heat(used)}" ` +
+                  `style="width:${Math.min(100, used * 100)}%"></div></div></div>`
                 );
               })
               .join('');
-            const frozen =
+            const frozenNote =
               s.frozenMs > 0
                 ? `<div class="frozen">frozen — lifts in ${Math.ceil(s.frozenMs / 1000)}s</div>`
                 : '';
+
+            // Per-method windows are the long tail: dozens of rows that are
+            // almost always all-zero. They fold away, and the summary carries
+            // the one number worth reading without opening them.
             const methods = (s.methods || [])
               .filter((m) => m.windows.length > 0)
-              .map((m) => {
-                const worst = Math.max(
-                  ...m.windows.map((w) => (w.limit > 0 ? w.used / w.limit : 0)),
-                );
-                const shown = m.windows
-                  .map((w) => `${fmt(w.used)}/${fmt(w.limit)}·${esc(w.window.split(':')[1])}s`)
-                  .join(' · ');
-                return (
-                  `<div class="kv"><span class="k">${esc(m.method)}</span>` +
-                  `<span class="${worst >= 0.8 ? 'hot' : ''}">${shown}</span></div>`
-                );
-              })
-              .join('');
-            const title =
-              (s.label && s.label !== s.scope ? `${esc(s.label)} · ` : '') + esc(s.scope);
+              .sort((a, b) => worstShare(b.windows) - worstShare(a.windows));
+            let fold = '';
+            if (methods.length > 0) {
+              const busiest = worstShare(methods[0].windows);
+              const rows = methods
+                .map((m) => {
+                  const used = m.windows
+                    .map((w) => `${fmt(w.used)}/${fmt(w.limit)}·${esc(w.window.split(':')[1])}s`)
+                    .join(' · ');
+                  const cls = worstShare(m.windows) >= 0.8 ? 'hot' : '';
+                  return (
+                    `<div class="kv"><span class="k">${esc(m.method)}</span>` +
+                    `<span class="${cls}">${used}</span></div>`
+                  );
+                })
+                .join('');
+              fold =
+                `<details class="methods" data-scope="${esc(s.scope)}"` +
+                `${limiterOpen.has(s.scope) ? ' open' : ''}>` +
+                `<summary>${methods.length} method${methods.length > 1 ? 's' : ''}` +
+                `${busiest > 0 ? ` · busiest ${esc(methods[0].method)} ${Math.round(busiest * 100)} %` : ' · all idle'}` +
+                `</summary><div class="body">${rows}</div></details>`;
+            }
+
+            const label = s.label && s.label !== s.scope ? `${esc(s.label)} ` : '';
             return (
-              `<div><div class="caption" style="font:600 12px var(--mono)">${title}</div>` +
-              `${meters}${frozen}` +
-              (methods ? `<div class="methods">${methods}</div>` : '') +
-              `</div>`
+              `<div class="scope"><div class="scope-head">` +
+              `<span>${label}<span class="dim">${esc(s.scope)}</span></span>` +
+              `<span class="pct ${heat(top)}">${Math.round(top * 100)} %</span></div>` +
+              `${meters}${frozenNote}${fold}</div>`
             );
           })
-          .join('<div style="height:12px"></div>');
-      }
-
-      function renderCache(snap) {
-        const c = snap.cache;
-        $('cacheCounts').textContent =
-          `${fmt(c.hit)} / ${fmt(c.miss)} / ${fmt(c.neg)} / ${fmt(c.stale)}`;
-
-        let ratio = null;
-        if (prev) {
-          const p = prev.cache;
-          const hits = c.hit + c.neg + c.stale - (p.hit + p.neg + p.stale);
-          const total = hits + (c.miss - p.miss);
-          if (total > 0) ratio = hits / total;
-        }
-        ratioHistory.push(ratio);
-        if (ratioHistory.length > 60) ratioHistory.shift();
-        $('cacheRatio').textContent =
-          ratio == null ? '— (no reads)' : Math.round(ratio * 100) + ' %';
-        renderSpark();
-      }
-
-      function renderSpark() {
-        const w = 300,
-          h = 46,
-          pad = 3;
-        const points = ratioHistory
-          .map((r, i) =>
-            r == null
-              ? null
-              : [
-                  pad + (i / Math.max(1, ratioHistory.length - 1)) * (w - 2 * pad),
-                  h - pad - r * (h - 2 * pad),
-                ],
-          )
-          .filter(Boolean);
-        const path = points
-          .map(([x, y], i) => `${i ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)}`)
-          .join(' ');
-        $('spark').innerHTML =
-          `<line x1="${pad}" y1="${h - pad}" x2="${w - pad}" y2="${h - pad}" stroke="var(--line)" stroke-width="1"/>` +
-          (points.length > 1
-            ? `<path d="${path}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"/>`
-            : '') +
-          (points.length > 0
-            ? `<circle cx="${points[points.length - 1][0].toFixed(1)}" cy="${points[points.length - 1][1].toFixed(1)}" r="3" fill="var(--accent)"/>`
-            : '');
-      }
-
-      function renderRealtime(snap, atMs) {
-        $('wsConns').textContent = fmt(snap.ws.connections);
-        $('wsSubs').textContent = fmt(snap.ws.subscriptions);
-        $('uptime').textContent = fmtDuration(snap.process.uptimeSeconds);
-        $('rss').textContent = Math.round(snap.process.rssBytes / 1_048_576) + ' MB';
-
-        if (prev && atMs > prevAt) {
-          const minutes = (atMs - prevAt) / 60_000;
-          const rates = Object.entries(snap.events)
-            .map(([name, n]) => [name, (n - (prev.events[name] || 0)) / minutes])
-            .filter(([, r]) => r > 0)
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 3)
-            .map(([name, r]) => `${name} ${r < 10 ? r.toFixed(1) : Math.round(r)}`);
-          $('eventRates').textContent = rates.length ? rates.join(' · ') : 'quiet';
-        }
+          .join('');
       }
 
       // ── history charts ────────────────────────────────────────────────────
@@ -726,12 +1081,12 @@
         new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
       /**
-       * One line chart into a 300×80 viewBox. `series` is [{t, v}], oldest
+       * One line chart into a 300×72 viewBox. `series` is [{t, v}], oldest
        * first; a null v breaks the line (idle interval, process restart).
        */
       function drawSeries(svgEl, series, opts) {
         const w = 300,
-          h = 80,
+          h = 72,
           padX = 3,
           padT = 13,
           padB = 4;
@@ -781,7 +1136,7 @@
         const mLast = drawSeries($('histMatches'), mSeries, {});
         const growth = mLast.v - mSeries[0].v;
         $('histMatchesLabel').textContent =
-          `${fmt(mLast.v)} archived` + (growth > 0 ? ` · +${fmt(growth)} in range` : '');
+          growth > 0 ? `+${fmt(growth)} in range` : 'flat over the range';
         $('histMatchesRange').innerHTML = `<span>${range}</span><span>archived matches</span>`;
 
         const qSeries = pts.map((p) => ({ t: p.t, v: p.queues.pending + p.queues.active }));
@@ -858,8 +1213,8 @@
             : '');
 
         const head =
-          '<tr><th>player</th><th>platform</th><th>status</th><th>history backfill</th>' +
-          '<th>last seen match</th><th>updated</th></tr>';
+          '<tr><th>player</th><th>platform</th><th>status</th>' +
+          '<th>history backfill</th><th>updated</th></tr>';
         const rows = shown
           .map((p) => {
             const name = p.gameName
@@ -870,7 +1225,6 @@
               `<td>${esc(p.platform)}</td>` +
               `<td>${p.tracked ? '<span class="pill on">tracked</span>' : '<span class="pill off">seen</span>'}</td>` +
               `<td>${backfillCell(p)}</td>` +
-              `<td class="dim">${p.lastSeenMatchId ? esc(p.lastSeenMatchId) : '—'}</td>` +
               `<td class="dim">${relTime(p.updatedAt)}</td></tr>`
             );
           })
@@ -890,13 +1244,15 @@
       }
 
       function render(snap, atMs) {
+        trackCacheRatio(snap);
         renderTiles(snap);
         renderWorker(snap);
+        renderSystem(snap, atMs);
         renderQueues(snap);
+        renderFlows(snap);
+        renderLadder(snap);
         renderLimiter(snap);
-        renderCache(snap);
-        renderRealtime(snap, atMs);
-        $('scope').textContent = 'key scope ' + snap.keyScope;
+        $('scope').textContent = 'key scope ' + esc(snap.keyScope);
         prev = snap;
         prevAt = atMs;
         lastTickAt = Date.now();
@@ -907,6 +1263,7 @@
       function badgeClass(event) {
         if (event === 'match.archived') return 'badge archived';
         if (event.startsWith('game.')) return 'badge game';
+        if (event.startsWith('ladder.')) return 'badge ladder';
         return 'badge';
       }
       function describe(frame) {
@@ -922,6 +1279,8 @@
             const t = (x) => (x ? `${x.tier ?? '?'} ${x.rank ?? ''} ${x.lp ?? '?'}lp` : 'unranked');
             return `${t(d.before)} → ${t(d.after)}`;
           }
+          case 'ladder.crawl.completed':
+            return `${d.platform ?? '?'} · ${d.queue ?? '?'} · ${fmt(d.entries ?? 0)} entries`;
           case 'patch.new':
             return d.version || '';
           default:
@@ -943,11 +1302,16 @@
         $('feed').innerHTML = feed
           .map(
             (f) =>
-              `<li><span class="${badgeClass(f.event)}">${f.event}</span>` +
-              `<span class="detail">${describe(f)}</span>` +
+              `<li><span class="${badgeClass(f.event)}">${esc(f.event)}</span>` +
+              `<span class="detail">${esc(describe(f))}</span>` +
               `<span class="when">${new Date(f.at).toLocaleTimeString()}</span></li>`,
           )
           .join('');
+        if (activeTab !== 'events') {
+          unseenEvents = Math.min(99, unseenEvents + 1);
+          $('tagEvents').textContent = String(unseenEvents);
+          $('tagEvents').className = 'tag';
+        }
       }
 
       // ── transport ─────────────────────────────────────────────────────────

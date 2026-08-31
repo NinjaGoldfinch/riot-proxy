@@ -109,7 +109,8 @@ missing. Phases refer to §15 of [the spec](docs/riot-proxy-spec.md).
 - [ ] Production readiness — compose, dashboards, production key (#9)
 - [ ] Ladder crawl — enumerate a server's ranked ladder, walk every discovered
       player's matches, aggregate the archive (#85, phases L1–L6 in
-      [the plan](docs/ladder-crawl-plan.md); L1–L5 landed)
+      [the plan](docs/ladder-crawl-plan.md); all six landed, `LADDER_CRAWL_S=0`
+      until someone opts in)
 - [ ] Obtain a Riot API key and run the live acceptance checks (#10)
 - [ ] Re-resolve tracked players after a key rotation (#13)
 

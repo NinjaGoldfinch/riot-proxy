@@ -1,4 +1,4 @@
-import { and, desc, eq, sql as raw } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, sql as raw } from 'drizzle-orm';
 import { KEY_SCOPE } from '../config.js';
 import type { Division, RankedQueue, Tier } from '../riot/ladder.js';
 import { db } from './index.js';
@@ -102,6 +102,39 @@ export async function getLatestCompletedCrawl(
     .orderBy(desc(ladderCrawls.finishedAt))
     .limit(1);
   return rows[0];
+}
+
+/**
+ * Crawls in flight anywhere in this key scope — the snapshot's view, which is
+ * not per (platform, queue) like `getRunningCrawl`. Usually empty, and bounded
+ * by the live-crawl index at one row per ladder.
+ */
+export async function listRunningCrawls(): Promise<LadderCrawl[]> {
+  return db
+    .select()
+    .from(ladderCrawls)
+    .where(and(eq(ladderCrawls.keyScope, KEY_SCOPE), eq(ladderCrawls.status, 'running')))
+    .orderBy(desc(ladderCrawls.startedAt));
+}
+
+/** The most recent run that ended, however it ended. */
+export async function lastFinishedCrawl(): Promise<LadderCrawl | undefined> {
+  const rows = await db
+    .select()
+    .from(ladderCrawls)
+    .where(and(eq(ladderCrawls.keyScope, KEY_SCOPE), isNotNull(ladderCrawls.finishedAt)))
+    .orderBy(desc(ladderCrawls.finishedAt))
+    .limit(1);
+  return rows[0];
+}
+
+/** How much ladder this key scope holds, for the snapshot's totals. */
+export async function countAllLeagueEntries(): Promise<number> {
+  const rows = await db
+    .select({ n: raw<number>`count(*)::int` })
+    .from(leagueEntries)
+    .where(eq(leagueEntries.keyScope, KEY_SCOPE));
+  return rows[0]?.n ?? 0;
 }
 
 export interface ListCrawlsFilter {

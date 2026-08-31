@@ -119,6 +119,28 @@ export const EVENT_EXAMPLES: { [E in EventName]: ProxyEvent<E> } = {
         backfillsQueued: { 'lookup:queued': 214, 'lookup:already-queued': 37, 'admin:queued': 3 },
         refreshClaims: { 'profile:claimed': 96, 'profile:coalesced': 311 },
       },
+      ladder: {
+        // A crawl part way through a full ladder: the apex leagues are done
+        // and most of the paged walks are still going.
+        running: [
+          {
+            id: '0f2a…',
+            platform: 'euw1',
+            queue: 'RANKED_SOLO_5x5',
+            tierFloor: 'EMERALD',
+            status: 'running',
+            startedAt: '2026-09-01T02:00:00.000Z',
+            finishedAt: null,
+            pagesFetched: 412,
+            entriesSeen: 84_306,
+            playersDiscovered: 5102,
+            backfillsEnqueued: 5102,
+            pendingLegs: 6,
+          },
+        ],
+        lastCompleted: null,
+        entries: 84_306,
+      },
       process: { uptimeSeconds: 86_400, rssBytes: 182_000_000 },
     },
   },

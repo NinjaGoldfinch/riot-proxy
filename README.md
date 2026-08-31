@@ -483,6 +483,7 @@ anywhere.
 | `ACCEPTANCE_PHASE2_REQUESTS` | `60`                     | Burst size — the spec asks for 500           |
 | `ACCEPTANCE_BACKFILL_LIMIT`  | `40`                     | Matches to walk back                         |
 | `ACCEPTANCE_LIVE_GAME`       | off                      | Opt in to the live game check                |
+| `ACCEPTANCE_LADDER`          | off                      | Opt in to running a real ladder crawl        |
 | `ACCEPTANCE_KEEP_TRACKED`    | off                      | Leave the player tracked afterwards          |
 | `ACCEPTANCE_LOG_LEVEL`       | `warn`                   | Log level for the api/worker it starts       |
 
@@ -505,8 +506,21 @@ ACCEPTANCE_LIVE_GAME=1 ACCEPTANCE_RIOT_ID='Name#TAG' npm run test:acceptance
 ```
 
 That waits up to 30 minutes for `game.started`, then for the `match.archived`
-that follows it. CI runs everything else nightly (`.github/workflows/acceptance.yml`),
-and skips itself when no `RIOT_API_KEY` secret is configured.
+that follows it.
+
+Phase 7 is split for a different reason. The crawl itself is three requests at a
+`MASTER` floor — one per apex league — but what it _discovers_ is not: every
+entry above the server's `LADDER_BACKFILL_TIER_FLOOR` queues a match-history
+walk, and the suite cannot see or change that setting because it belongs to the
+server it is pointed at. So the surface is asserted for free and the crawl is a
+second opt-in.
+
+```bash
+ACCEPTANCE_LADDER=1 ACCEPTANCE_RIOT_ID='Name#TAG' npm run test:acceptance
+```
+
+CI runs everything else nightly (`.github/workflows/acceptance.yml`), and skips
+itself when no `RIOT_API_KEY` secret is configured.
 
 ### Layout
 

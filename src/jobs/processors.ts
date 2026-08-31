@@ -24,7 +24,12 @@ import { LADDER_TOPIC, PATCH_TOPIC, playerTopic, publish } from '../events/index
 import { fetcher } from '../fetcher.js';
 import { ProxyError } from '../errors.js';
 import { logger } from '../logger.js';
-import { jobsTotal } from '../metrics.js';
+import {
+  jobsTotal,
+  ladderCrawlDuration,
+  ladderEntriesTotal,
+  ladderPagesTotal,
+} from '../metrics.js';
 import { redis } from '../redis.js';
 import { build } from '../riot/endpoints.js';
 import {
@@ -495,6 +500,17 @@ function toEntry(raw: RiotLeagueEntry, tier: string): LeagueEntryInput | undefin
   };
 }
 
+/**
+ * A page landed. Prometheus counts what is moving right now; the crawl row
+ * carries the same numbers as the durable per-run summary. Both, because they
+ * answer different questions — "is this crawl advancing" is a rate, and
+ * "what did last night's run see" is a row.
+ */
+function countPage(platform: string, queue: string, entries: number): void {
+  ladderPagesTotal.inc({ platform, queue });
+  if (entries > 0) ladderEntriesTotal.inc({ platform, queue }, entries);
+}
+
 export interface StartCrawlInput {
   platform: string;
   queue: string;
@@ -619,14 +635,19 @@ async function endLeg(crawlId: string, legId: string, outcome: 'done' | 'failed'
     'ladder crawl finished',
   );
 
+  const durationS = Math.round(
+    ((finished.finishedAt ?? new Date()).getTime() - finished.startedAt.getTime()) / 1000,
+  );
+  ladderCrawlDuration.observe(
+    { platform: finished.platform, queue: finished.queue, status: finished.status },
+    durationS,
+  );
+
   // Only a clean run. A crawl that gave up has seen part of a ladder, and
   // aggregating a part of one as though it were the whole thing is worse than
   // leaving the previous numbers in place.
   if (finished.status !== 'completed') return;
 
-  const durationS = Math.round(
-    ((finished.finishedAt ?? new Date()).getTime() - finished.startedAt.getTime()) / 1000,
-  );
   await publish('ladder.crawl.completed', LADDER_TOPIC, {
     crawlId,
     platform: finished.platform,
@@ -746,6 +767,7 @@ export async function ladderApex(job: Job<LadderApexJob>): Promise<{ entries: nu
       .filter((e): e is LeagueEntryInput => e !== undefined);
 
     await upsertLeagueEntries(crawlId, platform, queue, entries);
+    await countPage(platform, queue, entries.length);
     await bumpCrawlCounters(crawlId, { pagesFetched: 1, entriesSeen: entries.length });
     await discoverPlayers(crawl, platform, queue, entries);
     await endLeg(crawlId, legId, 'done');
@@ -815,6 +837,7 @@ export async function ladderWalk(
         .filter((e): e is LeagueEntryInput => e !== undefined);
 
       await upsertLeagueEntries(crawlId, platform, queue, rows);
+      await countPage(platform, queue, rows.length);
       await bumpCrawlCounters(crawlId, { pagesFetched: 1, entriesSeen: rows.length });
       await discoverPlayers(crawl, platform, queue, rows);
       await setCursor(crawlId, tier, division, page + 1);

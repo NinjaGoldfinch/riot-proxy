@@ -1,8 +1,10 @@
 import { KEY_SCOPE } from '../config.js';
 import { countActiveConsumers } from '../db/consumers.js';
+import { countAllLeagueEntries, lastFinishedCrawl, listRunningCrawls } from '../db/ladder.js';
 import { countArchivedMatches } from '../db/matches.js';
 import { countPlayers, countTrackedPlayers } from '../db/players.js';
 import { workerLiveness } from '../jobs/heartbeat.js';
+import { pendingLegs } from '../jobs/ladder-state.js';
 import { allQueues } from '../jobs/queues.js';
 import {
   backfillsQueuedTotal,
@@ -12,6 +14,7 @@ import {
 } from '../metrics.js';
 import { limiter } from '../riot/limiter.js';
 import { PLATFORM_LABELS, REGION_LABELS, isPlatform, isRegion } from '../riot/routing.js';
+import type { LadderCrawl } from '../db/schema.js';
 import type { MetricsSnapshotData } from './schema.js';
 
 /**
@@ -111,6 +114,46 @@ async function labelledCounts(
 }
 
 /**
+ * The crawl block. `pendingLegs` comes from Redis rather than the row because
+ * that is where the fan-out records them — and it is the only number that
+ * moves while a multi-hour walk is between legs.
+ */
+async function ladderState(): Promise<MetricsSnapshotData['ladder']> {
+  const [running, last, entries] = await Promise.all([
+    listRunningCrawls(),
+    lastFinishedCrawl(),
+    countAllLeagueEntries(),
+  ]);
+
+  return {
+    running: await Promise.all(running.map((crawl) => progress(crawl))),
+    lastCompleted: last ? await progress(last) : null,
+    entries,
+  };
+}
+
+async function progress(
+  crawl: LadderCrawl,
+): Promise<MetricsSnapshotData['ladder']['running'][number]> {
+  return {
+    id: crawl.id,
+    platform: crawl.platform,
+    queue: crawl.queue,
+    tierFloor: crawl.tierFloor,
+    status: crawl.status,
+    startedAt: crawl.startedAt.toISOString(),
+    finishedAt: crawl.finishedAt ? crawl.finishedAt.toISOString() : null,
+    pagesFetched: crawl.pagesFetched,
+    entriesSeen: crawl.entriesSeen,
+    playersDiscovered: crawl.playersDiscovered,
+    backfillsEnqueued: crawl.backfillsEnqueued,
+    // A finished crawl's legs have been cleared, so the read is skipped rather
+    // than reported as a spuriously exact zero from a key that is gone.
+    pendingLegs: crawl.status === 'running' ? await pendingLegs(crawl.id) : 0,
+  };
+}
+
+/**
  * The one builder behind both transports: `GET /v1/admin/metrics` returns this
  * and the `metrics` topic ticks it, so the two cannot disagree.
  *
@@ -130,6 +173,7 @@ export async function buildMetricsSnapshot(inputs: SnapshotInputs): Promise<Metr
     worker,
     backfillsQueued,
     refreshClaims,
+    ladder,
   ] = await Promise.all([
     countArchivedMatches(),
     countTrackedPlayers(),
@@ -141,6 +185,7 @@ export async function buildMetricsSnapshot(inputs: SnapshotInputs): Promise<Metr
     workerLiveness(),
     labelledCounts(backfillsQueuedTotal, 'reason', 'status'),
     labelledCounts(refreshClaimsTotal, 'part', 'outcome'),
+    ladderState(),
   ]);
 
   const memory = process.memoryUsage();
@@ -155,6 +200,7 @@ export async function buildMetricsSnapshot(inputs: SnapshotInputs): Promise<Metr
     limiter: limiterScopes,
     worker,
     flows: { backfillsQueued, refreshClaims },
+    ladder,
     process: { uptimeSeconds: process.uptime(), rssBytes: memory.rss },
   };
 }
