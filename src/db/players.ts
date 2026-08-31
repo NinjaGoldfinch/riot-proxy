@@ -50,6 +50,53 @@ export async function upsertPlayer(input: UpsertPlayerInput): Promise<Player> {
   return row;
 }
 
+/**
+ * The ladder crawl's version of `upsertPlayer`: a page of them at once, and
+ * deliberately narrower.
+ *
+ * Narrower because of the one rule discovery must not break — **never
+ * auto-track**. `tracked = true` means a 60-second spectator poll, and a crawl
+ * turning it on for thousands of players would drown the limiter in exactly the
+ * traffic the tier floors exist to bound. The conflict clause here touches only
+ * `platform` and `updated_at`, so the invariant is the database's rather than a
+ * caller's to remember; the insert relies on the column default for new rows.
+ *
+ * A page at a time because a Riot page is ~205 players and `upsertPlayer` is
+ * one round trip apiece. The rows come back so the caller can read
+ * `history_backfill_started_at` without a second query — which is how a repeat
+ * crawl knows whom it has already walked.
+ */
+export async function upsertDiscoveredPlayers(
+  discovered: { puuid: string; platform: string }[],
+): Promise<Player[]> {
+  const rows: Player[] = [];
+  const now = new Date();
+
+  // Same batch size and reasoning as `upsertLeagueEntries` and the archive
+  // helpers: comfortably inside Postgres' bind-parameter ceiling.
+  for (let i = 0; i < discovered.length; i += 100) {
+    const batch = discovered.slice(i, i + 100);
+    const written = await db
+      .insert(players)
+      .values(
+        batch.map((p) => ({
+          puuid: p.puuid,
+          keyScope: KEY_SCOPE,
+          platform: p.platform,
+          updatedAt: now,
+        })),
+      )
+      .onConflictDoUpdate({
+        target: [players.keyScope, players.puuid],
+        set: { platform: raw`excluded.platform`, updatedAt: now },
+      })
+      .returning();
+    rows.push(...written);
+  }
+
+  return rows;
+}
+
 export async function getPlayer(puuid: string): Promise<Player | undefined> {
   const rows = await db
     .select()

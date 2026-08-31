@@ -99,6 +99,24 @@ const EnvSchema = Type.Object({
    */
   LADDER_TIER_FLOOR: Type.String({ default: 'MASTER' }),
 
+  /**
+   * How far down the ladder to *walk match histories*, which is a separate
+   * question from how far down to enumerate. Enumerating a ladder is thousands
+   * of requests; walking the players behind it is millions, so the two floors
+   * move independently (§2 of docs/ladder-crawl-plan.md). Enumerating Emerald+
+   * while only backfilling Master+ is a sane dev-key configuration.
+   */
+  LADDER_BACKFILL_TIER_FLOOR: Type.String({ default: 'CHALLENGER' }),
+
+  /**
+   * Matches to walk back per discovered player. One page of ids — deliberately
+   * far short of `LOOKUP_BACKFILL_LIMIT`, because this runs for thousands of
+   * players nobody asked about. `0` discovers players without walking them at
+   * all, which is the cheapest useful mode: the ladder still lands, and the
+   * archive is left to the lookup path.
+   */
+  LADDER_BACKFILL_LIMIT: Type.Integer({ default: 100, minimum: 0, maximum: 10_000 }),
+
   DDRAGON_DIR: Type.String({ default: './data/ddragon' }),
   DDRAGON_LOCALE: Type.String({ default: 'en_US' }),
 
@@ -242,15 +260,22 @@ export const ladderPlatforms: Platform[] = (env.LADDER_PLATFORMS.trim() || env.D
     return value;
   });
 
-export const ladderTierFloor: Tier = (() => {
-  const value = env.LADDER_TIER_FLOOR.trim().toUpperCase();
+function tierSetting(name: string, raw: string): Tier {
+  const value = raw.trim().toUpperCase();
   if (!isTier(value)) {
     throw new Error(
-      `Invalid environment configuration:\n  LADDER_TIER_FLOOR: '${env.LADDER_TIER_FLOOR}' is not one of ${TIERS.join(', ')}`,
+      `Invalid environment configuration:\n  ${name}: '${raw}' is not one of ${TIERS.join(', ')}`,
     );
   }
   return value;
-})();
+}
+
+export const ladderTierFloor: Tier = tierSetting('LADDER_TIER_FLOOR', env.LADDER_TIER_FLOOR);
+
+export const ladderBackfillTierFloor: Tier = tierSetting(
+  'LADDER_BACKFILL_TIER_FLOOR',
+  env.LADDER_BACKFILL_TIER_FLOOR,
+);
 
 export const adminIpAllowlist = env.ADMIN_IP_ALLOWLIST.split(',')
   .map((s) => s.trim())
@@ -263,6 +288,7 @@ export const config = {
   ladderQueues,
   ladderPlatforms,
   ladderTierFloor,
+  ladderBackfillTierFloor,
   adminIpAllowlist,
   authDisabled: env.AUTH_DISABLED,
   devUi: env.DEV_UI ?? env.NODE_ENV !== 'production',

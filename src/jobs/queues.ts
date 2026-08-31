@@ -184,14 +184,46 @@ export interface ArchiveMatchJob {
   fetchTimeline?: boolean;
 }
 
+/** Why a backfill was queued — the log line, the metric label, and the rank. */
+export const BACKFILL_REASONS = ['admin', 'lookup', 'track', 'catchup', 'ladder'] as const;
+export type BackfillReason = (typeof BACKFILL_REASONS)[number];
+
+/**
+ * Ordering inside the *backfill* queue. Not to be confused with
+ * `backfillPriority()` below, which ranks the archive jobs a walk produces.
+ *
+ * A crawl discovers thousands of players nobody asked about, so its walks sit
+ * in a band of their own beneath everything a person or a tracked player set
+ * off — someone looking up one player always beats the ladder.
+ *
+ * All five are listed because of the trap `ARCHIVE_PRIORITY` documents: the
+ * worker drains the unprioritized `wait` list before it touches the prioritized
+ * set, so leaving the existing reasons unranked would have put every one of
+ * them *ahead* of a band that was supposed to outrank the crawl — and made the
+ * crawl's own low rank meaningless.
+ */
+export const BACKFILL_PRIORITY: Record<BackfillReason, number> = {
+  lookup: 1,
+  track: 1,
+  admin: 1,
+  catchup: 1,
+  ladder: 10,
+};
+
 export interface BackfillPlayerJob {
   puuid: string;
   platform: string;
   /** Total matches to walk back through; paged 100 at a time (§10). */
   limit?: number;
   fetchTimeline?: boolean;
+  /**
+   * match-v5 queue id to restrict the id list to. A ladder walk sets it so the
+   * crawl pays for ranked games rather than every mode the player has touched;
+   * everything else walks the history whole.
+   */
+  queueId?: number;
   /** Why it was queued, for the log line that says how it got here. */
-  reason?: 'admin' | 'lookup' | 'track' | 'catchup';
+  reason?: BackfillReason;
 }
 
 export interface PollPlayerJob {
@@ -248,7 +280,10 @@ export async function enqueueBackfill(
     }
   }
 
-  const job = await queue.add(JOB.backfillPlayer, data, { jobId });
+  const job = await queue.add(JOB.backfillPlayer, data, {
+    jobId,
+    priority: BACKFILL_PRIORITY[data.reason ?? 'admin'],
+  });
   return record(data, { jobId: job.id ?? jobId, status: 'queued' });
 }
 

@@ -10,12 +10,14 @@ import {
   type LeagueEntryInput,
 } from '../db/ladder.js';
 import { archiveMatch, archiveTimeline, filterUnarchived, type RiotMatch } from '../db/matches.js';
+import type { LadderCrawl } from '../db/schema.js';
 import {
   getPlayer,
   listTrackedPlayers,
   markBackfillComplete,
   markBackfillStarted,
   setLastSeenMatch,
+  upsertDiscoveredPlayers,
 } from '../db/players.js';
 import { PATCH_TOPIC, playerTopic, publish } from '../events/index.js';
 import { fetcher } from '../fetcher.js';
@@ -26,17 +28,25 @@ import { redis } from '../redis.js';
 import { build } from '../riot/endpoints.js';
 import {
   DIVISIONS,
+  QUEUE_IDS,
   assertApexTier,
   assertDivision,
   assertPagedTier,
   assertRankedQueue,
   assertTier,
   isApexTier,
+  tierAtOrAbove,
   tiersAtOrAbove,
   type ApexTier,
   type PagedTier,
+  type RankedQueue,
 } from '../riot/ladder.js';
-import { assertPlatform, platformToRegion, regionFromMatchId } from '../riot/routing.js';
+import {
+  assertPlatform,
+  platformToRegion,
+  regionFromMatchId,
+  type Platform,
+} from '../riot/routing.js';
 import { clearCrawlState, getCursor, releaseLeg, setCursor, trackLegs } from './ladder-state.js';
 import { syncDdragon } from '../static/ddragon.js';
 import {
@@ -349,8 +359,8 @@ const BACKFILL_PAGE = 100;
 
 export async function backfillPlayer(
   job: Job<BackfillPlayerJob>,
-): Promise<{ queued: number; depth: number }> {
-  const { puuid, platform, limit = 500, fetchTimeline, reason } = job.data;
+): Promise<{ queued: number; depth: number; complete: boolean }> {
+  const { puuid, platform, limit = 500, fetchTimeline, queueId, reason } = job.data;
   const region = platformToRegion(assertPlatform(platform));
 
   // #44 — claim the walk before doing any of it. If this job dies the stamp is
@@ -361,11 +371,16 @@ export async function backfillPlayer(
   let start = 0;
   let queued = 0;
   let depth = 0;
+  let ranOut = false;
 
   while (start < limit) {
     const count = Math.min(BACKFILL_PAGE, limit - start);
     const { data: ids } = await fetcher.fetch<string[]>(
-      build.matchIdsByPuuid(region, puuid, { start, count }),
+      build.matchIdsByPuuid(region, puuid, {
+        start,
+        count,
+        ...(queueId !== undefined ? { queue: queueId } : {}),
+      }),
       BULK,
     );
     if (!ids || ids.length === 0) break;
@@ -395,16 +410,30 @@ export async function backfillPlayer(
 
     depth = start + ids.length;
     await job.updateProgress(Math.min(100, Math.round((depth / limit) * 100)));
-    if (ids.length < count) break; // Reached the end of this player's history.
+    if (ids.length < count) {
+      ranOut = true; // Reached the end of this player's history.
+      break;
+    }
     start += ids.length;
   }
 
   // Only now, on the way out: this is the record that stops the next lookup
   // queueing the same walk again, so a partial walk must never write it.
-  await markBackfillComplete(puuid, depth);
+  //
+  // Nor may a *shallow* one. `historyBackfilledAt` means "someone has this
+  // player's history", and a walk that stopped at its own limit has only the
+  // top of it — so a 100-match ladder walk must not lock a player out of the
+  // 10 000-match walk their first lookup would have done. Two ways to have
+  // earned the stamp: the history ran out before the limit did, or the limit
+  // was at least as deep as the lookup path asks for.
+  //
+  // `ranOut` only counts for an unfiltered walk: running out of *ranked* ids
+  // says nothing about the rest of a player's history.
+  const complete = (ranOut && queueId === undefined) || limit >= config.LOOKUP_BACKFILL_LIMIT;
+  if (complete) await markBackfillComplete(puuid, depth);
 
-  logger.info({ puuid, queued, depth, reason: reason ?? 'admin' }, 'backfill complete');
-  return { queued, depth };
+  logger.info({ puuid, queued, depth, complete, reason: reason ?? 'admin' }, 'backfill complete');
+  return { queued, depth, complete };
 }
 
 // ── ladder:crawl / :apex / :walk ─────────────────────────────────────────────
@@ -589,6 +618,71 @@ async function endLeg(crawlId: string, legId: string, outcome: 'done' | 'failed'
   }
 }
 
+/**
+ * Ladder entry → match history. The pipeline behind this already exists —
+ * `backfill:player` walks the id list, `filterUnarchived` skips what is stored,
+ * `archive:match` fetches the rest — so this is the hand-off, and the restraint
+ * around it.
+ *
+ * Three pieces of restraint, in order of how much they save:
+ *
+ * 1. **The tier floor.** `LADDER_BACKFILL_TIER_FLOOR` is separate from the one
+ *    that bounds enumeration, because enumerating a ladder is thousands of
+ *    requests and walking the players behind it is millions. Entries below it
+ *    land in `league_entries` and go no further.
+ * 2. **Never tracked.** `upsertDiscoveredPlayers` cannot set `tracked`, so a
+ *    crawl can never sign thousands of players up for a 60-second poll.
+ * 3. **Walked once per crawl.** A player whose walk started after this crawl
+ *    did is skipped — repeat crawls should converge on what is new, not
+ *    re-walk the same ladder. Across crawls they are re-enqueued, which is the
+ *    point: `filterUnarchived` makes a second walk one request plus whatever
+ *    they have played since.
+ */
+async function discoverPlayers(
+  crawl: { id: string; startedAt: Date },
+  platform: Platform,
+  queue: RankedQueue,
+  entries: LeagueEntryInput[],
+): Promise<{ discovered: number; enqueued: number }> {
+  const floor = config.ladderBackfillTierFloor;
+  const eligible = entries.filter((e) => tierAtOrAbove(e.tier, floor));
+  if (eligible.length === 0) return { discovered: 0, enqueued: 0 };
+
+  const rows = await upsertDiscoveredPlayers(eligible.map((e) => ({ puuid: e.puuid, platform })));
+
+  let enqueued = 0;
+  const limit = config.LADDER_BACKFILL_LIMIT;
+  if (limit > 0) {
+    for (const row of rows) {
+      const walked = row.historyBackfillStartedAt;
+      if (walked && walked >= crawl.startedAt) continue;
+      try {
+        await enqueueBackfill({
+          puuid: row.puuid,
+          platform,
+          limit,
+          // The crawl is about one ranked ladder, so it pays for that ladder's
+          // games rather than the player's whole back-catalogue. The saving is
+          // in `match.byId`, which is one request per match either way.
+          queueId: QUEUE_IDS[queue],
+          reason: 'ladder',
+        });
+        enqueued += 1;
+      } catch (err) {
+        // Discovery is an optimisation on top of the ladder itself. A queue
+        // that is down must not fail the crawl that is filling `league_entries`.
+        logger.warn({ err, puuid: row.puuid }, 'could not queue ladder backfill');
+      }
+    }
+  }
+
+  await bumpCrawlCounters(crawl.id, {
+    playersDiscovered: rows.length,
+    backfillsEnqueued: enqueued,
+  });
+  return { discovered: rows.length, enqueued };
+}
+
 /** An apex league arrives whole: one request, one upsert, one leg done. */
 export async function ladderApex(job: Job<LadderApexJob>): Promise<{ entries: number }> {
   const { crawlId } = job.data;
@@ -598,7 +692,8 @@ export async function ladderApex(job: Job<LadderApexJob>): Promise<{ entries: nu
   const legId = ladderLegId(JOB.ladderApex, crawlId, tier);
 
   try {
-    if (!(await stillRunning(crawlId))) {
+    const crawl = await runningCrawl(crawlId);
+    if (!crawl) {
       await endLeg(crawlId, legId, 'done');
       return { entries: 0 };
     }
@@ -614,6 +709,7 @@ export async function ladderApex(job: Job<LadderApexJob>): Promise<{ entries: nu
 
     await upsertLeagueEntries(crawlId, platform, queue, entries);
     await bumpCrawlCounters(crawlId, { pagesFetched: 1, entriesSeen: entries.length });
+    await discoverPlayers(crawl, platform, queue, entries);
     await endLeg(crawlId, legId, 'done');
 
     return { entries: entries.length };
@@ -651,12 +747,14 @@ export async function ladderWalk(
   try {
     let page = await getCursor(crawlId, tier, division);
     let done = false;
+    let crawl = await runningCrawl(crawlId);
 
     for (;;) {
       // A cancel cannot reach a job that is already running, so a long walk
       // asks. Once every ten pages: cheap next to the request it guards, and
       // the crawl row is indexed by the id being read.
-      if (pages % CANCEL_CHECK_PAGES === 0 && !(await stillRunning(crawlId))) {
+      if (pages > 0 && pages % CANCEL_CHECK_PAGES === 0) crawl = await runningCrawl(crawlId);
+      if (!crawl) {
         logger.info(
           { crawlId, tier, division, page },
           'ladder walk stopping; crawl is not running',
@@ -680,6 +778,7 @@ export async function ladderWalk(
 
       await upsertLeagueEntries(crawlId, platform, queue, rows);
       await bumpCrawlCounters(crawlId, { pagesFetched: 1, entriesSeen: rows.length });
+      await discoverPlayers(crawl, platform, queue, rows);
       await setCursor(crawlId, tier, division, page + 1);
 
       page += 1;
@@ -696,10 +795,15 @@ export async function ladderWalk(
   }
 }
 
-/** A cancelled or already-finished crawl should not keep spending quota. */
-async function stillRunning(crawlId: string): Promise<boolean> {
+/**
+ * The crawl row, or undefined if it is no longer running — a cancelled or
+ * already-finished crawl should not keep spending quota. The row rather than a
+ * boolean because `started_at` is what tells discovery whom this crawl has
+ * already walked.
+ */
+async function runningCrawl(crawlId: string): Promise<LadderCrawl | undefined> {
   const crawl = await getCrawl(crawlId);
-  return crawl?.status === 'running';
+  return crawl?.status === 'running' ? crawl : undefined;
 }
 
 // ── ddragon:sync ─────────────────────────────────────────────────────────────
