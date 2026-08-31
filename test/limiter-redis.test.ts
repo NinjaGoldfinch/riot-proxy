@@ -397,6 +397,20 @@ describe.runIf(process.env['SKIP_REDIS_TESTS'] !== '1')('rate limiter against Re
     expect(await limiter.knownScopes()).toContain(SCOPE);
   });
 
+  it('skips the rewrite once that config is actually stored', async ({ skip }) => {
+    if (!available) return skip();
+    const limiter = new RateLimiter(redis);
+    const headers = { 'x-app-rate-limit': '20:1,100:120' };
+    const appCfg = `rl:cfg:app:${KEY_SCOPE}:${SCOPE}`;
+
+    await limiter.observeHeaders(SCOPE, 'm', headers);
+    // A rewrite would re-arm the key's day-long TTL; the economy is the point
+    // of the check, and only the "matched an assumption" case was ever wrong.
+    await redis.persist(appCfg);
+    await limiter.observeHeaders(SCOPE, 'm', headers);
+    expect(await redis.ttl(appCfg)).toBe(-1);
+  });
+
   it('derives known scopes from method configs too', async ({ skip }) => {
     if (!available) return skip();
     // The state older deployments are left in: method configs stored, no app

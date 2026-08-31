@@ -142,6 +142,41 @@ describe('websocket (§11)', () => {
     socket.close();
   });
 
+  /**
+   * #83 — one Redis, two deployments. The channels were unscoped while every
+   * Redis key was not, so a `npm test` run published straight into a dev
+   * server's live feed, and its snapshots ticked back into the suite. The hub
+   * now psubscribes its own key scope, so a neighbour's traffic is not on a
+   * channel it is listening to at all.
+   */
+  it('does not relay events from another deployment on the same Redis', async ({ skip }) => {
+    if (!available) return skip();
+    const socket = new WebSocket(`${url}?token=${key}`);
+    await new Promise((r) => socket.once('open', r));
+
+    const received = collect(socket, (m) =>
+      m.some((x) => (x['data'] as { version?: string })?.version === 'ours'),
+    );
+    socket.send(JSON.stringify({ op: 'subscribe', topics: ['patch'] }));
+    await new Promise((r) => setTimeout(r, 150));
+
+    const foreign = (version: string) =>
+      JSON.stringify({ event: 'patch.new', topic: 'patch', at: Date.now(), data: { version } });
+
+    // A deployment holding a different Riot key, and the flat channel this
+    // service itself used before the fix — the shape the leak actually had.
+    await redis.publish('evt:0000dead:patch', foreign('theirs'));
+    await redis.publish('evt:patch', foreign('legacy'));
+    await publish('patch.new', 'patch', { version: 'ours' });
+
+    const msgs = await received;
+    const versions = msgs.map((m) => (m['data'] as { version?: string })?.version);
+    expect(versions).toContain('ours');
+    expect(versions).not.toContain('theirs');
+    expect(versions).not.toContain('legacy');
+    socket.close();
+  });
+
   it('supports unsubscribe and answers an application-level ping', async ({ skip }) => {
     if (!available) return skip();
     const socket = new WebSocket(`${url}?token=${key}`);
