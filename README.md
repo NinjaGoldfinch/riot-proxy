@@ -93,6 +93,22 @@ It is not the API reference and does not try to be: this page answers "show me
 this account", `/docs` answers "what does this route return". `DOCS_UI` defaults
 on in production for exactly the reason `DEV_UI` defaults off.
 
+### The dashboard
+
+`http://localhost:8080/dashboard` is the operator's view: archive and player
+totals, per-queue job counts, rate-limiter meters, cache hit ratio, and a live
+feed of every event the service publishes. It fetches `GET /v1/admin/metrics`
+once and then rides the `metrics` and `firehose` WebSocket topics, so the page
+updates in real time while it is open and costs nothing while it is not — the
+snapshot ticker only runs while someone is subscribed (`METRICS_INTERVAL_S`,
+default 5 s).
+
+Unlike the dev UI it ships in production (`DASHBOARD_UI`, default on): the page
+is inert HTML, and everything behind it needs an admin-scoped key — pasted once,
+kept in the browser — and passes `ADMIN_IP_ALLOWLIST` like any other admin call.
+Same rules as the dev UI otherwise: no build step, edit `public/dashboard.html`
+and reload.
+
 ---
 
 ## Using the API

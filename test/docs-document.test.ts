@@ -75,7 +75,7 @@ const EXPECTED_OPERATIONS = [
  * @fastify/swagger can see — and the docs and dev routes are hidden, `/docs`
  * from itself included.
  */
-const NOT_OPERATIONS = new Set(['/v1/ws', '/openapi.json', '/openapi.yaml', '/dev']);
+const NOT_OPERATIONS = new Set(['/v1/ws', '/openapi.json', '/openapi.yaml', '/dev', '/dashboard']);
 const isOperation = (path: string): boolean =>
   !NOT_OPERATIONS.has(path) && !path.startsWith('/docs');
 

@@ -286,7 +286,8 @@ const tags = [
     description:
       'Operator surface. Requires the `admin` scope, and — when `ADMIN_IP_ALLOWLIST` is set — ' +
       'a source address on that list. Listed here because the shape of the operator API is ' +
-      'part of the contract; the routes themselves are gated.',
+      'part of the contract; the routes themselves are gated. A browser dashboard over ' +
+      '`GET /v1/admin/metrics` and the `metrics` and `firehose` topics is served at `/dashboard`.',
   },
 ];
 
