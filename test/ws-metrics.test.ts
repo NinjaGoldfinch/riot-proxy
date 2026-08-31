@@ -99,11 +99,11 @@ function within(socket: WebSocket, windowMs: number): Promise<Record<string, unk
 const SAMPLE = EVENT_EXAMPLES['metrics.snapshot'].data;
 
 /**
- * Only snapshots this suite produced. The evt:* channels are shared across
- * everything on one Redis — a dev server with its own dashboard open ticks
- * snapshots onto the same 'metrics' topic while the suite runs, and an
- * assertion that counts *any* snapshot is flaky the moment one leaks in. Each
- * snapshot names its producer via keyScope, and the suite's is pinned.
+ * Only snapshots this suite produced. Channels are key-scoped now, so a dev
+ * server on the same Redis can no longer tick snapshots into this suite's
+ * relay — but concurrently running test files share the pinned KEY_SCOPE, so
+ * the filter stays: an assertion that counts *any* snapshot is flaky the
+ * moment a sibling suite's dashboard code ticks one.
  */
 const snapshotFrom = (scope: string) => (m: Record<string, unknown>) =>
   m['event'] === 'metrics.snapshot' && (m['data'] as { keyScope?: string })?.keyScope === scope;

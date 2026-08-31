@@ -1,6 +1,9 @@
 import type { Redis } from 'ioredis';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { acceptance, cfg } from './helpers/env.js';
+// The channel is key-scoped, and this suite shares the server's `.env`, so the
+// helper computes the same scope the relay under test subscribes to.
+import { channelFor } from '../src/events/topics.js';
 import {
   api,
   get,
@@ -111,7 +114,7 @@ describe.skipIf(!enabled)('Phase 6 — tracking and realtime events', () => {
     };
     // Give the hub a moment to register the subscription before publishing.
     await new Promise((r) => setTimeout(r, 250));
-    await publisher.publish(`evt:${topic}`, JSON.stringify(payload));
+    await publisher.publish(channelFor(topic), JSON.stringify(payload));
     await publisher.quit();
 
     const frame = await socket.next((f) => f.event === 'game.started', 10_000);
@@ -122,7 +125,7 @@ describe.skipIf(!enabled)('Phase 6 — tracking and realtime events', () => {
   it('ignores events for topics the socket did not subscribe to', async () => {
     const publisher = redisClient();
     await publisher.publish(
-      'evt:player:someone-else',
+      channelFor('player:someone-else'),
       JSON.stringify({
         event: 'game.started',
         topic: 'player:someone-else',
