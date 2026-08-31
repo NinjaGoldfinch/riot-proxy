@@ -9,6 +9,7 @@ import {
   primaryKey,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
 import { DEFAULT_QUOTA_PER_MIN } from '../quotas.js';
@@ -102,7 +103,108 @@ export const matchParticipants = pgTable(
   ],
 );
 
+/**
+ * One row per crawl run (#87) — the unit of observability and resumability.
+ * Per-(tier, division) page cursors live in Redis while a crawl is running,
+ * because they churn on every page; this row is the durable summary.
+ *
+ * Key-scoped like `players`: a crawl enumerates PUUIDs, and those are only
+ * meaningful to the key that produced them (§7.4).
+ */
+export const ladderCrawls = pgTable(
+  'ladder_crawls',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    keyScope: text('key_scope').notNull(),
+    platform: text('platform').notNull(),
+    queue: text('queue').notNull(),
+    /** The tier the crawl was told to enumerate down to, recorded per run so
+     * a ladder read later can tell "nobody below Master" from "we never
+     * looked below Master". */
+    tierFloor: text('tier_floor').notNull(),
+    status: text('status').notNull().default('running'),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+    pagesFetched: integer('pages_fetched').notNull().default(0),
+    entriesSeen: integer('entries_seen').notNull().default(0),
+    playersDiscovered: integer('players_discovered').notNull().default(0),
+    backfillsEnqueued: integer('backfills_enqueued').notNull().default(0),
+  },
+  (t) => [
+    /**
+     * "One live crawl per (key_scope, platform, queue)" is the rule #88's
+     * trigger route enforces, and a rule enforced by a read-then-insert in a
+     * job processor is a rule two workers can both pass. A partial unique
+     * index makes the database say no instead, so the second trigger loses a
+     * race it cannot see rather than starting a duplicate crawl.
+     */
+    uniqueIndex('ladder_crawls_live_idx')
+      .on(t.keyScope, t.platform, t.queue)
+      .where(sql`status = 'running'`),
+    index('ladder_crawls_recent_idx').on(t.keyScope, t.platform, t.queue, t.startedAt),
+  ],
+);
+
+/**
+ * The ladder itself — latest state, not history. A rank timeseries is
+ * unbounded growth with no retention story, and is a non-goal until it has
+ * one (§10 of the plan).
+ *
+ * `last_seen_crawl_id` is what makes that enough: rows stamped with the newest
+ * completed crawl are the current ladder, and the rows it did not touch are
+ * the players who dropped, decayed or were never re-seen. Both questions are
+ * one indexed predicate rather than a table of deltas.
+ *
+ * No foreign key to `ladder_crawls` on purpose. The crawl rows are a run log
+ * that a retention policy may one day prune, and the ladder has to outlive its
+ * log — a cascade there would delete the data for the sake of the bookkeeping.
+ */
+export const leagueEntries = pgTable(
+  'league_entries',
+  {
+    keyScope: text('key_scope').notNull(),
+    platform: text('platform').notNull(),
+    queue: text('queue').notNull(),
+    puuid: text('puuid').notNull(),
+    tier: text('tier').notNull(),
+    /** Riot's `rank` field. Named `division` here because `rank` reads as the
+     * whole standing, and apex entries report `I` for everyone. */
+    division: text('division').notNull(),
+    leaguePoints: integer('league_points').notNull(),
+    wins: integer('wins').notNull(),
+    losses: integer('losses').notNull(),
+    veteran: boolean('veteran').notNull().default(false),
+    inactive: boolean('inactive').notNull().default(false),
+    freshBlood: boolean('fresh_blood').notNull().default(false),
+    hotStreak: boolean('hot_streak').notNull().default(false),
+    firstSeenCrawlId: uuid('first_seen_crawl_id').notNull(),
+    lastSeenCrawlId: uuid('last_seen_crawl_id').notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.keyScope, t.platform, t.queue, t.puuid] }),
+    /** Leaderboard order: one tier and division, best first. */
+    index('league_entries_ladder_idx').on(
+      t.keyScope,
+      t.platform,
+      t.queue,
+      t.tier,
+      t.division,
+      t.leaguePoints,
+    ),
+    /** "Everything this crawl saw", and its complement. */
+    index('league_entries_last_seen_idx').on(t.lastSeenCrawlId),
+    /** One player's standing across queues — the PK cannot serve this, since
+     * puuid is its last column. */
+    index('league_entries_puuid_idx').on(t.keyScope, t.puuid),
+  ],
+);
+
 export type Consumer = typeof consumers.$inferSelect;
 export type NewConsumer = typeof consumers.$inferInsert;
 export type Player = typeof players.$inferSelect;
 export type NewPlayer = typeof players.$inferInsert;
+export type LadderCrawl = typeof ladderCrawls.$inferSelect;
+export type NewLadderCrawl = typeof ladderCrawls.$inferInsert;
+export type LeagueEntry = typeof leagueEntries.$inferSelect;
+export type NewLeagueEntry = typeof leagueEntries.$inferInsert;
