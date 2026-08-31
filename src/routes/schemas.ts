@@ -10,7 +10,8 @@
 import type {} from '@fastify/swagger';
 import { Type, type Static } from '@sinclair/typebox';
 import { ERROR_CODES } from '../errors.js';
-import { APEX_TIERS, DIVISIONS, PAGED_TIERS, RANKED_QUEUES } from '../riot/ladder.js';
+import { CRAWL_STATUSES } from '../db/ladder.js';
+import { APEX_TIERS, DIVISIONS, PAGED_TIERS, RANKED_QUEUES, TIERS } from '../riot/ladder.js';
 import { PLATFORMS, REGIONS } from '../riot/routing.js';
 import {
   MetricsHistoryPoint,
@@ -398,6 +399,59 @@ export const ConsumerListResponse = Type.Object({ consumers: Type.Array(Consumer
 
 export const PlayerListResponse = Type.Object({ players: Type.Array(PlayerSummary) });
 
+/** One crawl run, as the admin listing and the trigger route report it. */
+export const LadderCrawlSummary = Type.Object(
+  {
+    id: Type.String({ format: 'uuid' }),
+    platform: Type.String(),
+    queue: Type.String(),
+    tierFloor: {
+      ...Type.String(),
+      description: 'How far down the ladder this run was told to enumerate',
+    },
+    status: Type.Unsafe<string>({ type: 'string', enum: [...CRAWL_STATUSES] }),
+    startedAt: Type.String({ format: 'date-time' }),
+    finishedAt: NullableTimestamp,
+    pagesFetched: Type.Integer(),
+    entriesSeen: Type.Integer(),
+    playersDiscovered: Type.Integer(),
+    backfillsEnqueued: Type.Integer(),
+    pendingLegs: {
+      ...Type.Integer(),
+      description:
+        'Apex leagues and (tier, division) walks still outstanding. 0 for a finished run.',
+    },
+  },
+  { $id: 'LadderCrawlSummary' },
+);
+
+export const LadderCrawlListResponse = Type.Object({ crawls: Type.Array(LadderCrawlSummary) });
+
+/**
+ * `tierFloor` bounds what the crawl enumerates. It is the one knob that turns
+ * three requests into twenty thousand, so it is spelled out rather than left
+ * to the reader to infer from the tier list.
+ */
+export const LadderCrawlBody = Type.Object({
+  platform: Type.Optional(PlatformParam),
+  queue: Type.Optional(RankedQueueParam),
+  tierFloor: Type.Optional({
+    ...Type.Unsafe<string>({ type: 'string', enum: [...TIERS] }),
+    description:
+      'Lowest tier to enumerate, inclusive. Defaults to LADDER_TIER_FLOOR. `MASTER` and above ' +
+      'is three requests per queue; `IRON` is the whole ladder, ~15–20 k pages.',
+  }),
+});
+
+export const LadderCrawlStartedResponse = Type.Object({
+  crawlId: Type.String({ format: 'uuid' }),
+  status: Type.Unsafe<string>({ type: 'string', enum: ['started', 'already-running'] }),
+  legs: {
+    ...Type.Integer(),
+    description: 'Jobs fanned out — one per apex league, one per (tier, division) below them',
+  },
+});
+
 export const AdminStatsResponse = Type.Object({
   keyScope: Type.String(),
   archivedMatches: Type.Integer(),
@@ -554,4 +608,5 @@ export const sharedSchemas = [
   BackfillNoticeSchema,
   ProfileResponseSchema,
   MatchPageResponseSchema,
+  LadderCrawlSummary,
 ];

@@ -245,15 +245,18 @@ under a distinct `neg:` prefix — a cached "not in game" is distinguishable fro
 
 ### Background jobs
 
-| Job               | Schedule                           | Action                                              |
-| ----------------- | ---------------------------------- | --------------------------------------------------- |
-| `poll:live`       | every `TRACK_POLL_LIVE_S` (60 s)   | spectator-v5 → `game.started` / `game.ended`        |
-| `poll:rank`       | every `TRACK_POLL_RANK_S` (600 s)  | league-v4 → `rank.changed`                          |
-| `poll:matches`    | every `TRACK_POLL_MATCH_S` (300 s) | new match IDs since the last tick → `archive:match` |
-| `archive:match`   | on demand                          | fetch, upsert, `match.archived`                     |
-| `backfill:player` | admin, or a player never walked    | page 100 IDs at a time, bulk priority               |
-| `ddragon:sync`    | hourly                             | on a new patch, mirror data and emit `patch.new`    |
-| `maintenance`     | daily                              | clear orphaned single-flight locks                  |
+| Job               | Schedule                           | Action                                               |
+| ----------------- | ---------------------------------- | ---------------------------------------------------- |
+| `poll:live`       | every `TRACK_POLL_LIVE_S` (60 s)   | spectator-v5 → `game.started` / `game.ended`         |
+| `poll:rank`       | every `TRACK_POLL_RANK_S` (600 s)  | league-v4 → `rank.changed`                           |
+| `poll:matches`    | every `TRACK_POLL_MATCH_S` (300 s) | new match IDs since the last tick → `archive:match`  |
+| `archive:match`   | on demand                          | fetch, upsert, `match.archived`                      |
+| `backfill:player` | admin, or a player never walked    | page 100 IDs at a time, bulk priority                |
+| `ddragon:sync`    | hourly                             | on a new patch, mirror data and emit `patch.new`     |
+| `ladder:crawl`    | `LADDER_CRAWL_S` (off), or admin   | fan out one leg per apex league and (tier, division) |
+| `ladder:apex`     | per crawl                          | one request per apex league, upserted whole          |
+| `ladder:walk`     | per crawl                          | page a (tier, division) until an empty page          |
+| `maintenance`     | daily                              | clear orphaned single-flight locks                   |
 
 Each poll type is one repeatable tick that fans out to one job per tracked
 player, so adding or removing a tracked player needs no scheduler changes. All
@@ -316,6 +319,10 @@ Every archive job therefore carries an explicit priority.
 | `ARCHIVE_TIMELINES`                          | `false`                                           | Timelines are large; opt in                                 |
 | `LOOKUP_BACKFILL_LIMIT`                      | `10000`                                           | History walked on a first lookup; `0` disables              |
 | `TRACK_CATCHUP_LIMIT`                        | `500`                                             | How far a match poll pages back to resume; `0` disables     |
+| `LADDER_CRAWL_S`                             | `0`                                               | Ladder crawl cadence; `0` means admin-trigger only          |
+| `LADDER_QUEUES`                              | `RANKED_SOLO_5x5`                                 | CSV; `RANKED_FLEX_SR` is the other one                      |
+| `LADDER_PLATFORMS`                           | —                                                 | CSV; empty means `DEFAULT_PLATFORM`                         |
+| `LADDER_TIER_FLOOR`                          | `MASTER`                                          | Lowest tier a crawl enumerates                              |
 | `ADMIN_IP_ALLOWLIST`                         | —                                                 | CSV of IPs/CIDRs; empty means key scope is enough           |
 | `BOOTSTRAP_ADMIN_KEY`                        | —                                                 | Seeds one admin key on `npm run migrate`                    |
 | `AUTH_DISABLED`                              | `false`                                           | Dev only: skip key checks; refused in production            |

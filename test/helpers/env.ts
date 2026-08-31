@@ -64,6 +64,13 @@ export const PINNED: Record<string, string> = {
   // Likewise: the default would let a poll page back 500 matches. The catch-up
   // tests turn it on themselves.
   TRACK_CATCHUP_LIMIT: '0',
+  // Pinned off like the two above: a repeatable crawl in the test suite would
+  // fan out 31 jobs per platform against a stubbed Riot. The crawl tests
+  // trigger one themselves.
+  LADDER_CRAWL_S: '0',
+  LADDER_QUEUES: 'RANKED_SOLO_5x5',
+  LADDER_PLATFORMS: '',
+  LADDER_TIER_FLOOR: 'MASTER',
 
   DDRAGON_DIR: './data/ddragon',
   DDRAGON_LOCALE: 'en_US',

@@ -11,6 +11,7 @@ import {
   jobKey,
   maintenanceQueue,
   pollQueue,
+  scheduleLadderCrawls,
 } from './jobs/queues.js';
 import { logger } from './logger.js';
 import { closeRedis, redis } from './redis.js';
@@ -30,6 +31,11 @@ const CONCURRENCY: Record<string, number> = {
   [QUEUE_NAMES.archive]: 4,
   [QUEUE_NAMES.backfill]: 1,
   [QUEUE_NAMES.ddragon]: 1,
+  // A walk job is mostly spent inside the limiter, so a few in parallel cost
+  // nothing extra — the buckets are the throttle either way. Three keeps the
+  // apex leagues and a couple of divisions moving together without letting the
+  // crawl monopolise the worker.
+  [QUEUE_NAMES.ladder]: 3,
   [QUEUE_NAMES.maintenance]: 1,
 };
 
@@ -82,6 +88,8 @@ async function scheduleRepeatables(): Promise<void> {
     );
     logger.info({ job: name, everySeconds }, 'repeatable scheduled');
   }
+
+  await scheduleLadderCrawls();
 }
 
 async function main(): Promise<void> {

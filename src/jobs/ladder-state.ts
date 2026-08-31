@@ -3,6 +3,9 @@ import { redis } from '../redis.js';
 import type { Division, PagedTier } from '../riot/ladder.js';
 
 /**
+ * A crawl's working state, the parts too churny for Postgres: where each walk
+ * has got to, and which of its legs are still outstanding.
+ *
  * Where a (tier, division) walk has got to (§5 of docs/ladder-crawl-plan.md).
  *
  * These live in Redis rather than on the `ladder_crawls` row because they
@@ -72,4 +75,66 @@ export async function clearCursors(crawlId: string): Promise<number> {
   } while (cursor !== '0');
 
   return deleted;
+}
+
+// ── outstanding legs ─────────────────────────────────────────────────────────
+
+/**
+ * A crawl is finished when its last leg is — an apex league or a
+ * (tier, division) walk. Which is easy to say and awkward to observe: BullMQ
+ * cannot be asked "any jobs left for crawl X", and a counter on the crawl row
+ * would be written by every leg on every attempt.
+ *
+ * So the fan-out records the legs it created, and each one removes itself as
+ * it ends. Whoever removes the last member finishes the crawl. A set rather
+ * than a counter because `SREM` is idempotent: a leg that retries after
+ * already removing itself takes nothing away twice, which a `DECR` would.
+ */
+const legsKey = (crawlId: string): string => `ladder:legs:${KEY_SCOPE}:${crawlId}`;
+
+/** Set when a leg gives up for good, so the crawl ends `failed`, not `completed`. */
+const failedKey = (crawlId: string): string => `ladder:failed:${KEY_SCOPE}:${crawlId}`;
+
+/** Record the legs a fan-out just created. */
+export async function trackLegs(crawlId: string, legIds: string[]): Promise<void> {
+  if (legIds.length === 0) return;
+  await redis
+    .multi()
+    .sadd(legsKey(crawlId), ...legIds)
+    .expire(legsKey(crawlId), CURSOR_TTL_S)
+    .exec();
+}
+
+/**
+ * A leg has ended. Returns whether it was the last one — and therefore whether
+ * this caller is the one that should finish the crawl.
+ *
+ * Two legs ending at once can both read an empty set, so both would try. That
+ * is fine and deliberately not locked against: `finishCrawl` is guarded on
+ * `status = 'running'`, so the second one changes nothing.
+ */
+export async function releaseLeg(
+  crawlId: string,
+  legId: string,
+  outcome: 'done' | 'failed' = 'done',
+): Promise<{ last: boolean; failed: boolean }> {
+  if (outcome === 'failed') {
+    await redis.set(failedKey(crawlId), '1', 'EX', CURSOR_TTL_S);
+  }
+  await redis.srem(legsKey(crawlId), legId);
+  const remaining = await redis.scard(legsKey(crawlId));
+  if (remaining > 0) return { last: false, failed: false };
+
+  const failed = (await redis.exists(failedKey(crawlId))) === 1;
+  return { last: true, failed };
+}
+
+/** How much of a crawl is still outstanding, for the admin listing. */
+export async function pendingLegs(crawlId: string): Promise<number> {
+  return redis.scard(legsKey(crawlId));
+}
+
+/** Everything a finished or cancelled crawl leaves behind. */
+export async function clearCrawlState(crawlId: string): Promise<void> {
+  await Promise.all([clearCursors(crawlId), redis.del(legsKey(crawlId), failedKey(crawlId))]);
 }
