@@ -80,6 +80,28 @@ missing. Phases refer to §15 of [the spec](docs/riot-proxy-spec.md).
       routes, and `REQUIRE_SERVICES=1` in CI so a suite that skipped itself
       fails instead of reading as green (#57)
 
+### Dashboard round
+
+- [x] App-limit configs that equal the bootstrap values are persisted again —
+      `storeConfig` compared headers against a local cache `windowsFor` had
+      just primed with those same bootstrap values, so a development key's
+      limits were never written and its scopes never appeared in
+      `knownScopes()`. Scopes are also derived from method configs now, so a
+      deployment from before the fix still lists what it has talked to.
+- [x] Event channels are key-scoped (`evt:<scope>:<topic>`) like every other
+      Redis key — the test suite and a dev server sharing one Redis were
+      publishing into each other's firehose, which is where the dashboard's
+      `EUW1_1` fixture events came from. The limiter suite also cleans its
+      `test-region` configs up on the way out instead of stranding them.
+- [x] The snapshot's limiter section names its scopes (`Oceania · oc1`), says
+      which host family they are, and carries per-method window usage.
+- [x] A metrics history: one compact point per `METRICS_HISTORY_INTERVAL_S`
+      (default 60 s) into a capped Redis list, recorded whether or not anyone
+      is watching, served at `GET /v1/admin/metrics/history`.
+- [x] The dashboard grew 24 h charts (archive growth, queue backlog, cache hit
+      ratio) and a players panel — who is tracked, who has been backfilled and
+      how deep, resumed cursors, last touch.
+
 ## Next
 
 ### Open

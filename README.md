@@ -96,12 +96,17 @@ on in production for exactly the reason `DEV_UI` defaults off.
 ### The dashboard
 
 `http://localhost:8080/dashboard` is the operator's view: archive and player
-totals, per-queue job counts, rate-limiter meters, cache hit ratio, and a live
-feed of every event the service publishes. It fetches `GET /v1/admin/metrics`
-once and then rides the `metrics` and `firehose` WebSocket topics, so the page
-updates in real time while it is open and costs nothing while it is not — the
-snapshot ticker only runs while someone is subscribed (`METRICS_INTERVAL_S`,
-default 5 s).
+totals, per-queue job counts, rate-limiter meters per platform and region,
+cache hit ratio, the tracked-and-backfilled player table, 24-hour history
+charts, and a live feed of every event the service publishes. It fetches
+`GET /v1/admin/metrics` once and then rides the `metrics` and `firehose`
+WebSocket topics, so the page updates in real time while it is open and costs
+almost nothing while it is not — the snapshot ticker only runs while someone is
+subscribed (`METRICS_INTERVAL_S`, default 5 s). The history charts are the
+exception, by design: `GET /v1/admin/metrics/history` serves compact points a
+recorder writes every `METRICS_HISTORY_INTERVAL_S` (default 60 s) whether or
+not anyone is watching, so a dashboard opened cold still knows what the night
+looked like.
 
 Unlike the dev UI it ships in production (`DASHBOARD_UI`, default on): the page
 is inert HTML, and everything behind it needs an admin-scoped key — pasted once,
@@ -303,6 +308,7 @@ Every archive job therefore carries an explicit priority.
 | `BULK_USAGE_CEILING`                         | `0.80`                                            | Bulk work stops here, keeping 20% for callers               |
 | `STALE_WHILE_REVALIDATE`                     | `true`                                            |                                                             |
 | `METRICS_INTERVAL_S`                         | `5`                                               | `metrics` WS topic cadence; idle while nobody subscribes    |
+| `METRICS_HISTORY_INTERVAL_S`                 | `60`                                              | Metrics history point cadence; always on, capped list       |
 | `TRACK_POLL_LIVE_S` / `_RANK_S` / `_MATCH_S` | `60` / `600` / `300`                              |                                                             |
 | `DDRAGON_SYNC_S`                             | `3600`                                            | Version check cadence                                       |
 | `DDRAGON_DIR` / `DDRAGON_LOCALE`             | `./data/ddragon` / `en_US`                        |                                                             |

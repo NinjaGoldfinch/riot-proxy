@@ -148,7 +148,8 @@
         color: var(--bad);
         font-weight: 600;
       }
-      td.dim {
+      td.dim,
+      span.dim {
         color: var(--dim);
       }
       /* ── meters ─────────────────────────────────────────────────────────── */
@@ -185,6 +186,54 @@
         color: var(--bad);
         font: 12px var(--mono);
         margin-top: 6px;
+      }
+      .methods {
+        margin-top: 8px;
+        border-top: 1px solid var(--line);
+        padding-top: 6px;
+      }
+      .methods .kv {
+        padding: 2px 0;
+      }
+      .methods .hot {
+        color: var(--warn);
+      }
+      /* ── history charts ─────────────────────────────────────────────────── */
+      .chart .kv {
+        padding: 0 0 4px;
+      }
+      .chart .range {
+        display: flex;
+        justify-content: space-between;
+        font: 11px var(--mono);
+        color: var(--dim);
+        margin-top: 2px;
+      }
+      /* ── players ────────────────────────────────────────────────────────── */
+      .pill {
+        font-size: 11px;
+        padding: 1px 7px;
+        border-radius: 9px;
+        border: 1px solid var(--line);
+        white-space: nowrap;
+      }
+      .pill.on {
+        color: var(--good);
+        border-color: var(--good);
+      }
+      .pill.off {
+        color: var(--dim);
+      }
+      td .ok {
+        color: var(--good);
+      }
+      td .run {
+        color: var(--warn);
+      }
+      #playersMeta {
+        font: 12px var(--mono);
+        color: var(--dim);
+        margin: 0 0 8px;
       }
       /* ── two-column band ────────────────────────────────────────────────── */
       .cols {
@@ -332,6 +381,27 @@
       </section>
 
       <section class="cols">
+        <div class="panel chart">
+          <h2>Archive growth</h2>
+          <div class="kv"><span class="k" id="histMatchesLabel">last 24 h</span></div>
+          <svg id="histMatches" viewBox="0 0 300 80" width="100%" height="80" role="img"></svg>
+          <div class="range" id="histMatchesRange"></div>
+        </div>
+        <div class="panel chart">
+          <h2>Queue backlog</h2>
+          <div class="kv"><span class="k" id="histQueueLabel">last 24 h</span></div>
+          <svg id="histQueue" viewBox="0 0 300 80" width="100%" height="80" role="img"></svg>
+          <div class="range" id="histQueueRange"></div>
+        </div>
+        <div class="panel chart">
+          <h2>Cache hit ratio</h2>
+          <div class="kv"><span class="k" id="histCacheLabel">last 24 h</span></div>
+          <svg id="histCache" viewBox="0 0 300 80" width="100%" height="80" role="img"></svg>
+          <div class="range" id="histCacheRange"></div>
+        </div>
+      </section>
+
+      <section class="cols">
         <div class="panel">
           <h2>Queues</h2>
           <div class="scroll"><table id="queues"></table></div>
@@ -367,6 +437,14 @@
           <div class="kv"><span class="k">events / min</span><span id="eventRates">—</span></div>
           <div class="kv"><span class="k">api uptime</span><span id="uptime">—</span></div>
           <div class="kv"><span class="k">api memory (rss)</span><span id="rss">—</span></div>
+        </div>
+      </section>
+
+      <section>
+        <div class="panel">
+          <h2>Players</h2>
+          <p id="playersMeta">loading…</p>
+          <div class="scroll"><table id="players"></table></div>
         </div>
       </section>
 
@@ -423,6 +501,21 @@
         const h = Math.floor((s % 86400) / 3600);
         const m = Math.floor((s % 3600) / 60);
         return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m ${s % 60}s`;
+      };
+      // Riot IDs are player-chosen text; everything interpolated into markup
+      // goes through this.
+      const esc = (s) =>
+        String(s).replace(
+          /[&<>"']/g,
+          (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c],
+        );
+      const relTime = (iso) => {
+        if (!iso) return '—';
+        const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+        if (s < 90) return 'just now';
+        if (s < 5400) return `${Math.round(s / 60)}m ago`;
+        if (s < 129600) return `${Math.round(s / 3600)}h ago`;
+        return `${Math.round(s / 86400)}d ago`;
       };
 
       // ── key gate ──────────────────────────────────────────────────────────
@@ -497,7 +590,7 @@
                 const share = w.limit > 0 ? w.used / w.limit : 0;
                 const cls = share >= 0.95 ? 'bad' : share >= 0.8 ? 'warn' : '';
                 return (
-                  `<div class="meter"><div class="caption"><span>${w.window}</span>` +
+                  `<div class="meter"><div class="caption"><span>${esc(w.window)}</span>` +
                   `<span>${fmt(w.used)} / ${fmt(w.limit)}</span></div>` +
                   `<div class="track"><div class="fill ${cls}" style="width:${Math.min(100, share * 100)}%"></div></div></div>`
                 );
@@ -507,7 +600,29 @@
               s.frozenMs > 0
                 ? `<div class="frozen">frozen — lifts in ${Math.ceil(s.frozenMs / 1000)}s</div>`
                 : '';
-            return `<div><div class="caption" style="font:600 12px var(--mono)">${s.scope}</div>${meters}${frozen}</div>`;
+            const methods = (s.methods || [])
+              .filter((m) => m.windows.length > 0)
+              .map((m) => {
+                const worst = Math.max(
+                  ...m.windows.map((w) => (w.limit > 0 ? w.used / w.limit : 0)),
+                );
+                const shown = m.windows
+                  .map((w) => `${fmt(w.used)}/${fmt(w.limit)}·${esc(w.window.split(':')[1])}s`)
+                  .join(' · ');
+                return (
+                  `<div class="kv"><span class="k">${esc(m.method)}</span>` +
+                  `<span class="${worst >= 0.8 ? 'hot' : ''}">${shown}</span></div>`
+                );
+              })
+              .join('');
+            const title =
+              (s.label && s.label !== s.scope ? `${esc(s.label)} · ` : '') + esc(s.scope);
+            return (
+              `<div><div class="caption" style="font:600 12px var(--mono)">${title}</div>` +
+              `${meters}${frozen}` +
+              (methods ? `<div class="methods">${methods}</div>` : '') +
+              `</div>`
+            );
           })
           .join('<div style="height:12px"></div>');
       }
@@ -574,6 +689,174 @@
             .map(([name, r]) => `${name} ${r < 10 ? r.toFixed(1) : Math.round(r)}`);
           $('eventRates').textContent = rates.length ? rates.join(' · ') : 'quiet';
         }
+      }
+
+      // ── history charts ────────────────────────────────────────────────────
+      const timeShort = (t) =>
+        new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+      /**
+       * One line chart into a 300×80 viewBox. `series` is [{t, v}], oldest
+       * first; a null v breaks the line (idle interval, process restart).
+       */
+      function drawSeries(svgEl, series, opts) {
+        const w = 300,
+          h = 80,
+          padX = 3,
+          padT = 13,
+          padB = 4;
+        const pts = series.filter((p) => p.v != null);
+        if (pts.length === 0) {
+          svgEl.innerHTML = '';
+          return null;
+        }
+        const t0 = series[0].t;
+        const t1 = series[series.length - 1].t;
+        let min = opts && opts.min != null ? opts.min : Math.min(...pts.map((p) => p.v));
+        let max = opts && opts.max != null ? opts.max : Math.max(...pts.map((p) => p.v));
+        if (max === min) max = min + 1;
+        const fmtV = (opts && opts.fmt) || fmt;
+        const x = (t) => (t1 === t0 ? w / 2 : padX + ((t - t0) / (t1 - t0)) * (w - 2 * padX));
+        const y = (v) => h - padB - ((v - min) / (max - min)) * (h - padT - padB);
+        let d = '';
+        let pen = false;
+        for (const p of series) {
+          if (p.v == null) {
+            pen = false;
+            continue;
+          }
+          d += `${pen ? 'L' : 'M'}${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`;
+          pen = true;
+        }
+        const last = pts[pts.length - 1];
+        svgEl.innerHTML =
+          `<line x1="${padX}" y1="${h - padB}" x2="${w - padX}" y2="${h - padB}" stroke="var(--line)" stroke-width="1"/>` +
+          `<text x="${padX}" y="9">${fmtV(max)}</text>` +
+          `<text x="${w - padX}" y="9" text-anchor="end">${fmtV(min)} min</text>` +
+          `<path d="${d}" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-linejoin="round"/>` +
+          `<circle cx="${x(last.t).toFixed(1)}" cy="${y(last.v).toFixed(1)}" r="2.5" fill="var(--accent)"/>`;
+        return last;
+      }
+
+      function renderHistory(data) {
+        const pts = data.points;
+        if (pts.length === 0) {
+          for (const id of ['histMatchesRange', 'histQueueRange', 'histCacheRange'])
+            $(id).textContent = 'no points yet — the first lands within a minute';
+          return;
+        }
+        const range = `${timeShort(pts[0].t)} — ${timeShort(pts[pts.length - 1].t)}`;
+
+        const mSeries = pts.map((p) => ({ t: p.t, v: p.totals.archivedMatches }));
+        const mLast = drawSeries($('histMatches'), mSeries, {});
+        const growth = mLast.v - mSeries[0].v;
+        $('histMatchesLabel').textContent =
+          `${fmt(mLast.v)} archived` + (growth > 0 ? ` · +${fmt(growth)} in range` : '');
+        $('histMatchesRange').innerHTML = `<span>${range}</span><span>archived matches</span>`;
+
+        const qSeries = pts.map((p) => ({ t: p.t, v: p.queues.pending + p.queues.active }));
+        const qLast = drawSeries($('histQueue'), qSeries, { min: 0 });
+        const failedNow = pts[pts.length - 1].queues.failed;
+        $('histQueueLabel').textContent =
+          `${fmt(qLast.v)} queued now` + (failedNow > 0 ? ` · ${fmt(failedNow)} failed` : '');
+        $('histQueueRange').innerHTML = `<span>${range}</span><span>pending + active jobs</span>`;
+
+        // Counters are cumulative per recording process: diff consecutive
+        // points, and a negative step (restart) or an idle interval breaks the
+        // line rather than plotting a lie.
+        const cSeries = pts.map((p, i) => {
+          if (i === 0) return { t: p.t, v: null };
+          const a = pts[i - 1].cache;
+          const b = p.cache;
+          const hits = b.hit + b.neg + b.stale - (a.hit + a.neg + a.stale);
+          const misses = b.miss - a.miss;
+          if (hits < 0 || misses < 0 || hits + misses <= 0) return { t: p.t, v: null };
+          return { t: p.t, v: hits / (hits + misses) };
+        });
+        const cLast = drawSeries($('histCache'), cSeries, {
+          min: 0,
+          max: 1,
+          fmt: (v) => Math.round(v * 100) + '%',
+        });
+        $('histCacheLabel').textContent = cLast
+          ? `${Math.round(cLast.v * 100)} % over the last interval with reads`
+          : 'no cacheable reads in range';
+        $('histCacheRange').innerHTML = `<span>${range}</span><span>per-interval hit ratio</span>`;
+      }
+
+      async function fetchHistory() {
+        const headers = key ? { Authorization: 'Bearer ' + key } : {};
+        const res = await fetch('/v1/admin/metrics/history', { headers });
+        if (res.status === 401 || res.status === 403) {
+          keyRejected('That key was rejected — it needs the admin scope.');
+          return;
+        }
+        if (!res.ok) return;
+        renderHistory(await res.json());
+      }
+
+      // ── players ───────────────────────────────────────────────────────────
+      const PLAYER_ROWS_SHOWN = 30;
+
+      function backfillCell(p) {
+        if (p.historyBackfilledAt) {
+          const depth =
+            p.historyBackfillDepth != null ? `${fmt(p.historyBackfillDepth)} matches` : 'done';
+          return `<span class="ok">✓</span> ${depth} · ${relTime(p.historyBackfilledAt)}`;
+        }
+        if (p.historyBackfillStartedAt)
+          return `<span class="run">⟳ walking</span> · started ${relTime(p.historyBackfillStartedAt)}`;
+        return '<span class="dim">never</span>';
+      }
+
+      function renderPlayers(players) {
+        if (players.length === 0) {
+          $('playersMeta').textContent = 'No players yet — the first lookup creates one.';
+          $('players').innerHTML = '';
+          return;
+        }
+        const tracked = players.filter((p) => p.tracked).length;
+        const backfilled = players.filter((p) => p.historyBackfilledAt).length;
+        const shown = players
+          .slice()
+          .sort((a, b) => b.tracked - a.tracked || new Date(b.updatedAt) - new Date(a.updatedAt))
+          .slice(0, PLAYER_ROWS_SHOWN);
+        $('playersMeta').textContent =
+          `${fmt(tracked)} tracked · ${fmt(backfilled)} backfilled · ${fmt(players.length)} known` +
+          (players.length > shown.length
+            ? ` · showing the ${shown.length} most recently touched`
+            : '');
+
+        const head =
+          '<tr><th>player</th><th>platform</th><th>status</th><th>history backfill</th>' +
+          '<th>last seen match</th><th>updated</th></tr>';
+        const rows = shown
+          .map((p) => {
+            const name = p.gameName
+              ? `${esc(p.gameName)}<span class="dim">#${esc(p.tagLine ?? '')}</span>`
+              : `<span class="dim">${esc(p.puuid.slice(0, 16))}…</span>`;
+            return (
+              `<tr><td>${name}</td>` +
+              `<td>${esc(p.platform)}</td>` +
+              `<td>${p.tracked ? '<span class="pill on">tracked</span>' : '<span class="pill off">seen</span>'}</td>` +
+              `<td>${backfillCell(p)}</td>` +
+              `<td class="dim">${p.lastSeenMatchId ? esc(p.lastSeenMatchId) : '—'}</td>` +
+              `<td class="dim">${relTime(p.updatedAt)}</td></tr>`
+            );
+          })
+          .join('');
+        $('players').innerHTML = head + rows;
+      }
+
+      async function fetchPlayers() {
+        const headers = key ? { Authorization: 'Bearer ' + key } : {};
+        const res = await fetch('/v1/admin/tracked-players', { headers });
+        if (res.status === 401 || res.status === 403) {
+          keyRejected('That key was rejected — it needs the admin scope.');
+          return;
+        }
+        if (!res.ok) return;
+        renderPlayers((await res.json()).players);
       }
 
       function render(snap, atMs) {
@@ -688,12 +971,22 @@
           : '';
       }, 1000);
 
+      // History and players change on the minute, not the tick; poll slowly.
+      let slowPoll = null;
+      function refreshSlow() {
+        if (!key && !authDisabled) return;
+        fetchHistory().catch(console.error);
+        fetchPlayers().catch(console.error);
+      }
+
       async function start() {
         try {
           await fetchSnapshot();
         } catch (err) {
           console.error(err);
         }
+        refreshSlow();
+        if (!slowPoll) slowPoll = setInterval(refreshSlow, 60_000);
         if (key || authDisabled) connect();
       }
 
