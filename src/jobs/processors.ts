@@ -1001,12 +1001,17 @@ export async function ladderCollect(
       newIds += walked.newIds;
       players += 1;
       await job.updateProgress(Math.round((players / Math.max(1, puuids.length)) * 100));
+      logger.debug(
+        { crawlId, puuid, ids: walked.ids, newIds: walked.newIds },
+        'ladder collect walked a player',
+      );
     }
 
     if (newIds > 0) {
       ladderMatchIdsTotal.inc({ platform, queue }, newIds);
       await bumpCrawlCounters(crawlId, { matchIdsSeen: newIds });
     }
+    logger.debug({ crawlId, players, ids, newIds }, 'ladder collect batch done');
     await endLeg(crawlId, legId, 'done');
     return { players, ids, newIds };
   } catch (err) {
@@ -1119,10 +1124,19 @@ export async function ladderArchive(
       seen += batch.length;
       queued += unarchived.length;
       await job.updateProgress({ seen, queued });
+
+      // Bumped per batch, not once at the end: this is the one job in the
+      // whole crawl that runs for as long as the archive phase does, so it is
+      // the one place a counter written only on return would sit stale on the
+      // crawl row — and on the dashboard reading it — for the entire drain.
+      ladderMatchesQueuedTotal.inc({ platform, queue }, unarchived.length);
+      await bumpCrawlCounters(crawlId, { matchesQueued: unarchived.length });
+      logger.debug(
+        { crawlId, batchSize: batch.length, newlyQueued: unarchived.length, seen, queued },
+        'ladder archive batch queued',
+      );
     }
 
-    if (queued > 0) ladderMatchesQueuedTotal.inc({ platform, queue }, queued);
-    await bumpCrawlCounters(crawlId, { matchesQueued: queued });
     logger.info({ crawlId, seen, queued }, 'ladder matches handed to the archive queue');
     await endLeg(crawlId, legId, 'done');
     return { seen, queued };
