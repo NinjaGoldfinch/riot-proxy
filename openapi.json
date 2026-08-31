@@ -1066,6 +1066,79 @@
             }
           }
         }
+      },
+      "LadderCrawlSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "platform",
+          "queue",
+          "tierFloor",
+          "status",
+          "startedAt",
+          "finishedAt",
+          "pagesFetched",
+          "entriesSeen",
+          "playersDiscovered",
+          "backfillsEnqueued",
+          "pendingLegs"
+        ],
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "platform": {
+            "type": "string"
+          },
+          "queue": {
+            "type": "string"
+          },
+          "tierFloor": {
+            "type": "string",
+            "description": "How far down the ladder this run was told to enumerate"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "running",
+              "completed",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "startedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "finishedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pagesFetched": {
+            "type": "integer"
+          },
+          "entriesSeen": {
+            "type": "integer"
+          },
+          "playersDiscovered": {
+            "type": "integer"
+          },
+          "backfillsEnqueued": {
+            "type": "integer"
+          },
+          "pendingLegs": {
+            "type": "integer",
+            "description": "Apex leagues and (tier, division) walks still outstanding. 0 for a finished run."
+          }
+        }
       }
     }
   },
@@ -6011,6 +6084,574 @@
             },
             "in": "path",
             "name": "puuid",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "Unknown platform or region": {
+                    "summary": "Unknown platform or region",
+                    "value": {
+                      "error": {
+                        "code": "BAD_REGION",
+                        "message": "params/platform must be equal to one of the allowed values"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "Missing or unrecognised key": {
+                    "summary": "Missing or unrecognised key",
+                    "value": {
+                      "error": {
+                        "code": "UNAUTHORIZED",
+                        "message": "Missing or invalid consumer key"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "Key lacks the scope (or the admin IP allowlist rejected it)": {
+                    "summary": "Key lacks the scope (or the admin IP allowlist rejected it)",
+                    "value": {
+                      "error": {
+                        "code": "FORBIDDEN",
+                        "message": "This key does not carry the admin scope"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "No such resource": {
+                    "summary": "No such resource",
+                    "value": {
+                      "error": {
+                        "code": "NOT_FOUND",
+                        "message": "No account for that Riot ID"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "Your quota — slow down. Sent with Retry-After": {
+                    "summary": "Your quota — slow down. Sent with Retry-After",
+                    "value": {
+                      "error": {
+                        "code": "QUOTA_EXCEEDED",
+                        "message": "Quota of 600/min exceeded",
+                        "retryAfter": 37
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-badges": [
+          {
+            "name": "Admin scope"
+          }
+        ]
+      }
+    },
+    "/v1/admin/ladder/crawl": {
+      "post": {
+        "summary": "Start a ladder crawl",
+        "tags": [
+          "admin"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "platform": {
+                    "$ref": "#/components/schemas/PlatformParam"
+                  },
+                  "queue": {
+                    "$ref": "#/components/schemas/RankedQueueParam"
+                  },
+                  "tierFloor": {
+                    "type": "string",
+                    "enum": [
+                      "IRON",
+                      "BRONZE",
+                      "SILVER",
+                      "GOLD",
+                      "PLATINUM",
+                      "EMERALD",
+                      "DIAMOND",
+                      "MASTER",
+                      "GRANDMASTER",
+                      "CHALLENGER"
+                    ],
+                    "description": "Lowest tier to enumerate, inclusive. Defaults to LADDER_TIER_FLOOR. `MASTER` and above is three requests per queue; `IRON` is the whole ladder, ~15–20 k pages."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "crawlId",
+                    "status",
+                    "legs"
+                  ],
+                  "properties": {
+                    "crawlId": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "started",
+                        "already-running"
+                      ]
+                    },
+                    "legs": {
+                      "type": "integer",
+                      "description": "Jobs fanned out — one per apex league, one per (tier, division) below them"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "Unknown platform or region": {
+                    "summary": "Unknown platform or region",
+                    "value": {
+                      "error": {
+                        "code": "BAD_REGION",
+                        "message": "params/platform must be equal to one of the allowed values"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "Missing or unrecognised key": {
+                    "summary": "Missing or unrecognised key",
+                    "value": {
+                      "error": {
+                        "code": "UNAUTHORIZED",
+                        "message": "Missing or invalid consumer key"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "Key lacks the scope (or the admin IP allowlist rejected it)": {
+                    "summary": "Key lacks the scope (or the admin IP allowlist rejected it)",
+                    "value": {
+                      "error": {
+                        "code": "FORBIDDEN",
+                        "message": "This key does not carry the admin scope"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "No such resource": {
+                    "summary": "No such resource",
+                    "value": {
+                      "error": {
+                        "code": "NOT_FOUND",
+                        "message": "No account for that Riot ID"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "Your quota — slow down. Sent with Retry-After": {
+                    "summary": "Your quota — slow down. Sent with Retry-After",
+                    "value": {
+                      "error": {
+                        "code": "QUOTA_EXCEEDED",
+                        "message": "Quota of 600/min exceeded",
+                        "retryAfter": 37
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-badges": [
+          {
+            "name": "Admin scope"
+          }
+        ]
+      }
+    },
+    "/v1/admin/ladder/crawls": {
+      "get": {
+        "summary": "Recent ladder crawls",
+        "tags": [
+          "admin"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "$ref": "#/components/schemas/PlatformParam"
+            },
+            "in": "query",
+            "name": "platform",
+            "required": false
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/RankedQueueParam"
+            },
+            "in": "query",
+            "name": "queue",
+            "required": false
+          },
+          {
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "integer"
+            },
+            "in": "query",
+            "name": "limit",
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "crawls"
+                  ],
+                  "properties": {
+                    "crawls": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "platform",
+                          "queue",
+                          "tierFloor",
+                          "status",
+                          "startedAt",
+                          "finishedAt",
+                          "pagesFetched",
+                          "entriesSeen",
+                          "playersDiscovered",
+                          "backfillsEnqueued",
+                          "pendingLegs"
+                        ],
+                        "properties": {
+                          "id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "platform": {
+                            "type": "string"
+                          },
+                          "queue": {
+                            "type": "string"
+                          },
+                          "tierFloor": {
+                            "type": "string",
+                            "description": "How far down the ladder this run was told to enumerate"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "running",
+                              "completed",
+                              "failed",
+                              "cancelled"
+                            ]
+                          },
+                          "startedAt": {
+                            "format": "date-time",
+                            "type": "string"
+                          },
+                          "finishedAt": {
+                            "anyOf": [
+                              {
+                                "format": "date-time",
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "pagesFetched": {
+                            "type": "integer"
+                          },
+                          "entriesSeen": {
+                            "type": "integer"
+                          },
+                          "playersDiscovered": {
+                            "type": "integer"
+                          },
+                          "backfillsEnqueued": {
+                            "type": "integer"
+                          },
+                          "pendingLegs": {
+                            "type": "integer",
+                            "description": "Apex leagues and (tier, division) walks still outstanding. 0 for a finished run."
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "Unknown platform or region": {
+                    "summary": "Unknown platform or region",
+                    "value": {
+                      "error": {
+                        "code": "BAD_REGION",
+                        "message": "params/platform must be equal to one of the allowed values"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "Missing or unrecognised key": {
+                    "summary": "Missing or unrecognised key",
+                    "value": {
+                      "error": {
+                        "code": "UNAUTHORIZED",
+                        "message": "Missing or invalid consumer key"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "Key lacks the scope (or the admin IP allowlist rejected it)": {
+                    "summary": "Key lacks the scope (or the admin IP allowlist rejected it)",
+                    "value": {
+                      "error": {
+                        "code": "FORBIDDEN",
+                        "message": "This key does not carry the admin scope"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "No such resource": {
+                    "summary": "No such resource",
+                    "value": {
+                      "error": {
+                        "code": "NOT_FOUND",
+                        "message": "No account for that Riot ID"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "Your quota — slow down. Sent with Retry-After": {
+                    "summary": "Your quota — slow down. Sent with Retry-After",
+                    "value": {
+                      "error": {
+                        "code": "QUOTA_EXCEEDED",
+                        "message": "Quota of 600/min exceeded",
+                        "retryAfter": 37
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-badges": [
+          {
+            "name": "Admin scope"
+          }
+        ]
+      }
+    },
+    "/v1/admin/ladder/crawls/{id}": {
+      "delete": {
+        "summary": "Cancel a running ladder crawl",
+        "tags": [
+          "admin"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
             "required": true
           }
         ],

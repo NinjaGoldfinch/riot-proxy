@@ -19,7 +19,7 @@ import {
   upsertLeagueEntries,
   type LeagueEntryInput,
 } from '../src/db/ladder.js';
-import { CURSOR_TTL_S, clearCursors, getCursor, setCursor } from '../src/jobs/ladder-cursor.js';
+import { CURSOR_TTL_S, clearCursors, getCursor, setCursor } from '../src/jobs/ladder-state.js';
 import { closeRedis, redis } from '../src/redis.js';
 
 /**
