@@ -102,6 +102,26 @@ missing. Phases refer to §15 of [the spec](docs/riot-proxy-spec.md).
       ratio) and a players panel — who is tracked, who has been backfilled and
       how deep, resumed cursors, last touch.
 
+### Ladder round
+
+- [x] A crawl runs in three stages — enumerate the ladder, collect every
+      discovered player's match ids, then fetch the matches — instead of
+      handing each player to `backfill:player` as it found them. A match has
+      ten participants, so the old order reached one game from ten walks spread
+      across the whole run and every walk that ran before it landed paid for it
+      again. `matchIdsSeen` / `matchesQueued` on the crawl row are what the
+      arrangement bought.
+- [x] A crawl can be started and cancelled from `/dashboard` — platform, queue
+      and tier floor from `GET /v1/admin/ladder/options`, so the form is built
+      from the same enums the trigger route enforces. The crawl card draws
+      which stage it is in, and a history panel lists every run with what it
+      produced and when each ladder was last crawled.
+- [x] `POST /v1/admin/ladder/crawl` names the ladder it answers about. One live
+      crawl is enforced per `(key_scope, platform, queue)`, so `already-running`
+      was always about the ladder asked for — but a response carrying only an
+      id reads, next to a panel showing some other ladder crawling, as a
+      refusal about that one.
+
 ## Next
 
 ### Open
@@ -116,6 +136,18 @@ missing. Phases refer to §15 of [the spec](docs/riot-proxy-spec.md).
 
 ### Follow-ups from this round
 
+- [ ] A crawl is marked `completed` when the archive stage has _queued_ its
+      matches, not when they have been fetched — so `aggregate:champions` runs
+      over an archive that is still filling. It was true before the stages too
+      (the backfills were merely queued), and the aggregate is a recompute, so
+      the fix is to make the crawl wait on the archive queue draining rather
+      than to reorder anything.
+- [ ] Nothing is archived until the whole ladder has been enumerated and every
+      id collected, which is the price of fetching each match once. On a
+      full-ladder dev-key crawl that is hours before the first match lands. A
+      per-tier barrier — collect and archive Challenger while Master is still
+      enumerating — would keep most of the dedup and shorten the wait, at the
+      cost of a boundary per tier rather than one per crawl.
 - [ ] Acceptance coverage for the composites: neither `by-riot-id/…/profile`
       nor `players/{puuid}/matches` is exercised against the real API yet, so
       the fan-out is only proven against stubs.

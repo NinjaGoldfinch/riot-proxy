@@ -2,11 +2,14 @@ import type { Job, Queue } from 'bullmq';
 import { KEY_SCOPE } from '../config.js';
 import { config } from '../config.js';
 import {
+  advanceCrawlPhase,
   bumpCrawlCounters,
   createCrawl,
   finishCrawl,
   getCrawl,
+  listCrawlBackfillCandidates,
   upsertLeagueEntries,
+  type CrawlCandidate,
   type LeagueEntryInput,
 } from '../db/ladder.js';
 import { recomputeChampionStats } from '../db/analytics.js';
@@ -28,6 +31,8 @@ import {
   jobsTotal,
   ladderCrawlDuration,
   ladderEntriesTotal,
+  ladderMatchIdsTotal,
+  ladderMatchesQueuedTotal,
   ladderPagesTotal,
 } from '../metrics.js';
 import { redis } from '../redis.js';
@@ -52,8 +57,19 @@ import {
   platformToRegion,
   regionFromMatchId,
   type Platform,
+  type Region,
 } from '../riot/routing.js';
-import { clearCrawlState, getCursor, releaseLeg, setCursor, trackLegs } from './ladder-state.js';
+import {
+  addMatchIds,
+  clearCrawlState,
+  countMatchIds,
+  dropMatchIds,
+  getCursor,
+  peekMatchIds,
+  releaseLeg,
+  setCursor,
+  trackLegs,
+} from './ladder-state.js';
 import { syncDdragon } from '../static/ddragon.js';
 import {
   ARCHIVE_PRIORITY,
@@ -71,6 +87,8 @@ import {
   type ArchiveMatchJob,
   type BackfillPlayerJob,
   type LadderApexJob,
+  type LadderArchiveJob,
+  type LadderCollectJob,
   type LadderCrawlJob,
   type LadderWalkJob,
   type PollPlayerJob,
@@ -364,6 +382,70 @@ export async function archiveMatchJob(job: Job<ArchiveMatchJob>): Promise<void> 
 
 const BACKFILL_PAGE = 100;
 
+/**
+ * One player's match ids, newest first, a page at a time.
+ *
+ * The paging is the same wherever it is done — the lookup backfill queues each
+ * page's unarchived matches as it goes, and a crawl's collect stage puts them
+ * in a set instead — so the loop lives here and the caller says what a page is
+ * for. `start` comes with the page because both callers rank by position in
+ * the *history*: skipping ten already-archived matches must not promote the
+ * eleventh.
+ *
+ * `ranOut` distinguishes a history that ended from a walk that hit its limit,
+ * which is what decides whether the player can be stamped as backfilled.
+ */
+async function walkMatchIds(
+  region: Region,
+  puuid: string,
+  options: { limit: number; queueId?: number; fetch?: typeof BULK },
+  onPage: (ids: string[], start: number) => Promise<void>,
+): Promise<{ depth: number; ranOut: boolean }> {
+  const { limit, queueId } = options;
+  let start = 0;
+  let depth = 0;
+
+  while (start < limit) {
+    const count = Math.min(BACKFILL_PAGE, limit - start);
+    const { data: ids } = await fetcher.fetch<string[]>(
+      build.matchIdsByPuuid(region, puuid, {
+        start,
+        count,
+        ...(queueId !== undefined ? { queue: queueId } : {}),
+      }),
+      options.fetch ?? BULK,
+    );
+    if (!ids || ids.length === 0) break;
+
+    await onPage(ids, start);
+    depth = start + ids.length;
+
+    // Reached the end of this player's history.
+    if (ids.length < count) return { depth, ranOut: true };
+    start += ids.length;
+  }
+
+  return { depth, ranOut: false };
+}
+
+/**
+ * Whether a walk that got this far has earned the "someone has this player's
+ * history" stamp.
+ *
+ * A *shallow* walk has not. `historyBackfilledAt` means the whole history is
+ * accounted for, and a walk that stopped at its own limit has only the top of
+ * it — so a 100-match ladder walk must not lock a player out of the
+ * 10 000-match walk their first lookup would have done. Two ways to have
+ * earned it: the history ran out before the limit did, or the limit was at
+ * least as deep as the lookup path asks for.
+ *
+ * `ranOut` only counts for an unfiltered walk: running out of *ranked* ids
+ * says nothing about the rest of a player's history.
+ */
+function walkIsComplete(ranOut: boolean, limit: number, queueId?: number): boolean {
+  return (ranOut && queueId === undefined) || limit >= config.LOOKUP_BACKFILL_LIMIT;
+}
+
 export async function backfillPlayer(
   job: Job<BackfillPlayerJob>,
 ): Promise<{ queued: number; depth: number; complete: boolean }> {
@@ -375,68 +457,41 @@ export async function backfillPlayer(
   // the next lookup queue it again.
   await markBackfillStarted(puuid, platform);
 
-  let start = 0;
   let queued = 0;
-  let depth = 0;
-  let ranOut = false;
 
-  while (start < limit) {
-    const count = Math.min(BACKFILL_PAGE, limit - start);
-    const { data: ids } = await fetcher.fetch<string[]>(
-      build.matchIdsByPuuid(region, puuid, {
-        start,
-        count,
-        ...(queueId !== undefined ? { queue: queueId } : {}),
-      }),
-      BULK,
-    );
-    if (!ids || ids.length === 0) break;
+  const { depth, ranOut } = await walkMatchIds(
+    region,
+    puuid,
+    { limit, ...(queueId !== undefined ? { queueId } : {}) },
+    async (ids, start) => {
+      const depthOf = new Map(ids.map((id, index) => [id, start + index]));
+      const unarchived = await filterUnarchived(ids);
 
-    // Rank by position in the *history*, not position in this filtered list:
-    // skipping ten already-archived matches must not promote the eleventh.
-    const depthOf = new Map(ids.map((id, index) => [id, start + index]));
-    const unarchived = await filterUnarchived(ids);
+      if (unarchived.length > 0) {
+        await archiveQueue.addBulk(
+          unarchived.map((matchId) => ({
+            name: JOB.archiveMatch,
+            data: {
+              matchId,
+              puuid,
+              fetchTimeline: fetchTimeline ?? config.ARCHIVE_TIMELINES,
+            } satisfies ArchiveMatchJob,
+            opts: {
+              jobId: jobKey('archive', matchId),
+              priority: backfillPriority(depthOf.get(matchId) ?? start),
+            },
+          })),
+        );
+        queued += unarchived.length;
+      }
 
-    if (unarchived.length > 0) {
-      await archiveQueue.addBulk(
-        unarchived.map((matchId) => ({
-          name: JOB.archiveMatch,
-          data: {
-            matchId,
-            puuid,
-            fetchTimeline: fetchTimeline ?? config.ARCHIVE_TIMELINES,
-          } satisfies ArchiveMatchJob,
-          opts: {
-            jobId: jobKey('archive', matchId),
-            priority: backfillPriority(depthOf.get(matchId) ?? start),
-          },
-        })),
-      );
-      queued += unarchived.length;
-    }
-
-    depth = start + ids.length;
-    await job.updateProgress(Math.min(100, Math.round((depth / limit) * 100)));
-    if (ids.length < count) {
-      ranOut = true; // Reached the end of this player's history.
-      break;
-    }
-    start += ids.length;
-  }
+      await job.updateProgress(Math.min(100, Math.round(((start + ids.length) / limit) * 100)));
+    },
+  );
 
   // Only now, on the way out: this is the record that stops the next lookup
   // queueing the same walk again, so a partial walk must never write it.
-  //
-  // Nor may a *shallow* one. `historyBackfilledAt` means "someone has this
-  // player's history", and a walk that stopped at its own limit has only the
-  // top of it — so a 100-match ladder walk must not lock a player out of the
-  // 10 000-match walk their first lookup would have done. Two ways to have
-  // earned the stamp: the history ran out before the limit did, or the limit
-  // was at least as deep as the lookup path asks for.
-  //
-  // `ranOut` only counts for an unfiltered walk: running out of *ranked* ids
-  // says nothing about the rest of a player's history.
-  const complete = (ranOut && queueId === undefined) || limit >= config.LOOKUP_BACKFILL_LIMIT;
+  const complete = walkIsComplete(ranOut, limit, queueId);
   if (complete) await markBackfillComplete(puuid, depth);
 
   logger.info({ puuid, queued, depth, complete, reason: reason ?? 'admin' }, 'backfill complete');
@@ -520,6 +575,9 @@ export interface StartCrawlInput {
 export interface StartCrawlResult {
   crawlId: string;
   created: boolean;
+  /** The ladder the id names, normalised — what the caller asked for. */
+  platform: Platform;
+  queue: RankedQueue;
   legs: number;
 }
 
@@ -547,7 +605,7 @@ export async function startCrawl(input: StartCrawlInput): Promise<StartCrawlResu
       { crawlId: crawl.id, platform, queue },
       'ladder crawl already running; returning the live one',
     );
-    return { crawlId: crawl.id, created: false, legs: 0 };
+    return { crawlId: crawl.id, created: false, platform, queue, legs: 0 };
   }
 
   const tiers = tiersAtOrAbove(tierFloor);
@@ -594,7 +652,7 @@ export async function startCrawl(input: StartCrawlInput): Promise<StartCrawlResu
     { crawlId: crawl.id, platform, queue, tierFloor, legs: legs.length },
     'ladder crawl started',
   );
-  return { crawlId: crawl.id, created: true, legs: legs.length };
+  return { crawlId: crawl.id, created: true, platform, queue, legs: legs.length };
 }
 
 export async function ladderCrawl(job: Job<LadderCrawlJob>): Promise<StartCrawlResult> {
@@ -614,14 +672,257 @@ function isFinalAttempt(job: Job): boolean {
 }
 
 /**
- * End of a leg. Only the caller that removed the last one finishes the crawl,
- * and it is the same call that cleans the cursors up.
+ * End of a leg, and the crawl's state machine with it. Only the caller that
+ * removed the last leg of a stage moves the crawl on — to the next stage, or,
+ * out of the last one, to finished.
+ *
+ * The stages are what keep a match from being fetched twice, so the boundary
+ * between them has to be exactly this: not one id is collected until every
+ * page of the ladder is in, and not one match is fetched until every id is.
+ * A crawl that let its stages overlap would be back to ten walks racing for
+ * the same game.
+ *
+ * A failed leg ends the run where it stands rather than advancing. A crawl
+ * that has seen part of a ladder should not go on to spend a match budget on
+ * the part it did see as though that were the whole thing — the same
+ * reasoning that stops it aggregating.
  */
 async function endLeg(crawlId: string, legId: string, outcome: 'done' | 'failed'): Promise<void> {
   const { last, failed } = await releaseLeg(crawlId, legId, outcome);
   if (!last) return;
 
-  const finished = await finishCrawl(crawlId, failed ? 'failed' : 'completed');
+  if (failed) {
+    await completeCrawl(crawlId, 'failed');
+    return;
+  }
+
+  // Re-read rather than trust a row from before the leg ran: a cancel while
+  // the leg was in flight has to stop the next stage from being fanned out.
+  const crawl = await runningCrawl(crawlId);
+  if (!crawl) return;
+
+  switch (crawl.phase) {
+    case 'enumerate':
+      await startCollectPhase(crawl);
+      return;
+    case 'collect':
+      await startArchivePhase(crawl);
+      return;
+    default:
+      await completeCrawl(crawlId, 'completed');
+  }
+}
+
+/**
+ * Queue a recompute for one ladder.
+ *
+ * Lifecycle-scoped de-duplication rather than a stable `jobId`: BullMQ matches
+ * a job id against finished jobs it has retained, so a stable one would make
+ * the *second* crawl of the day a silent no-op (#18). What this drops instead
+ * is only a recompute that has not run yet — and one that has not run yet will
+ * read the same tables the dropped one would have.
+ */
+export async function enqueueChampionAggregate(platform: string, queue: string): Promise<void> {
+  await maintenanceQueue.add(
+    JOB.aggregateChampions,
+    { platform, queue } satisfies AggregateChampionsJob,
+    { deduplication: { id: jobKey(JOB.aggregateChampions, platform, queue) } },
+  );
+}
+
+/**
+ * Ladder entry → a row in `players`, and nothing more.
+ *
+ * The hand-off to the match pipeline used to happen here, one player at a time
+ * as the pages came in. It no longer does, and that is the point: a match has
+ * ten participants, so walking a player's history the moment they are
+ * discovered reaches the same game from ten walks spread across the whole
+ * crawl. Each of those walks only skips what `filterUnarchived` can already
+ * see, so the nine that ran before the match landed all paid for it.
+ *
+ * So enumeration only records who is there. The collect stage (§6 of
+ * docs/ladder-crawl-plan.md, staged) reads them back out of `league_entries`
+ * once every leg has finished, and every id it gathers goes into one set.
+ *
+ * Two pieces of restraint survive from the old hand-off:
+ *
+ * 1. **The tier floor.** `LADDER_BACKFILL_TIER_FLOOR` is separate from the one
+ *    that bounds enumeration, because enumerating a ladder is thousands of
+ *    requests and walking the players behind it is millions. Entries below it
+ *    land in `league_entries` and go no further — not even into `players`.
+ * 2. **Never tracked.** `upsertDiscoveredPlayers` cannot set `tracked`, so a
+ *    crawl can never sign thousands of players up for a 60-second poll.
+ */
+async function recordPlayers(
+  crawlId: string,
+  platform: Platform,
+  entries: LeagueEntryInput[],
+): Promise<number> {
+  const floor = config.ladderBackfillTierFloor;
+  const eligible = entries.filter((e) => tierAtOrAbove(e.tier, floor));
+  if (eligible.length === 0) return 0;
+
+  const rows = await upsertDiscoveredPlayers(eligible.map((e) => ({ puuid: e.puuid, platform })));
+  await bumpCrawlCounters(crawlId, { playersDiscovered: rows.length });
+  return rows.length;
+}
+
+/** Players one `ladder:collect` job walks. */
+const COLLECT_BATCH = 25;
+
+/** Collect jobs created per round trip to the candidate query. */
+const COLLECT_FANOUT_BATCH = 40;
+
+/**
+ * Match ids handed to the archive queue at a time. The same 100 the backfill
+ * pages at, and the same reason: `filterUnarchived` binds one parameter per id.
+ */
+const ARCHIVE_BATCH = 100;
+
+/**
+ * The fan-out holds a leg of its own while it runs.
+ *
+ * Without it the first batch of collect jobs could finish — and empty the
+ * outstanding set — before the second batch had been added to it, and whoever
+ * removed the last leg of that first batch would declare the stage over with
+ * most of the ladder still unqueued. The sentinel is released at the end, so
+ * the earliest the stage can finish is after every leg exists.
+ */
+const FANOUT_LEG = 'fanout';
+
+/**
+ * Enumeration is done. Everyone this crawl saw, in batches, on the collect
+ * queue.
+ *
+ * Paged rather than read whole: an Emerald-floor crawl discovers hundreds of
+ * thousands of players, and the list of them is not a thing to hold in one
+ * array on a worker.
+ */
+async function startCollectPhase(crawl: LadderCrawl): Promise<void> {
+  const advanced = await advanceCrawlPhase(crawl.id, 'enumerate', 'collect');
+  // Someone else got there first, or the crawl was cancelled in between.
+  if (!advanced) return;
+
+  const platform = assertPlatform(crawl.platform);
+  const queue = assertRankedQueue(crawl.queue);
+  const limit = config.LADDER_BACKFILL_LIMIT;
+
+  // `LADDER_BACKFILL_LIMIT=0` is the cheapest useful mode: enumerate the
+  // ladder, walk nobody. There is then nothing to collect and nothing to
+  // archive, so the crawl is done.
+  if (limit === 0) {
+    logger.info({ crawlId: crawl.id }, 'ladder backfill disabled; crawl ends at enumeration');
+    await completeCrawl(crawl.id, 'completed');
+    return;
+  }
+
+  await trackLegs(crawl.id, [FANOUT_LEG]);
+
+  const tiers = tiersAtOrAbove(config.ladderBackfillTierFloor);
+  // The cursor is the position in the ladder; `seen` is what names the legs.
+  // A leg id has to be unique within the crawl and reproducible by the job
+  // that runs it, and the position in the candidate list is both.
+  let after: CrawlCandidate | undefined;
+  let seen = 0;
+  let jobs = 0;
+
+  for (;;) {
+    const candidates = await listCrawlBackfillCandidates({
+      crawlId: crawl.id,
+      platform,
+      queue,
+      tiers,
+      notWalkedSince: crawl.startedAt,
+      limit: COLLECT_BATCH * COLLECT_FANOUT_BATCH,
+      ...(after ? { after } : {}),
+    });
+    if (candidates.length === 0) break;
+    after = candidates.at(-1);
+
+    const batches: string[][] = [];
+    for (let i = 0; i < candidates.length; i += COLLECT_BATCH) {
+      batches.push(candidates.slice(i, i + COLLECT_BATCH).map((c) => c.puuid));
+    }
+
+    const legs = batches.map((puuids, index) => {
+      const batchOffset = seen + index * COLLECT_BATCH;
+      return {
+        legId: ladderLegId(JOB.ladderCollect, crawl.id, String(batchOffset)),
+        puuids,
+        batchOffset,
+      };
+    });
+
+    await trackLegs(
+      crawl.id,
+      legs.map((leg) => leg.legId),
+    );
+    await ladderQueue.addBulk(
+      legs.map((leg) => ({
+        name: JOB.ladderCollect,
+        data: {
+          crawlId: crawl.id,
+          platform,
+          queue,
+          puuids: leg.puuids,
+          offset: leg.batchOffset,
+        } satisfies LadderCollectJob,
+        opts: {
+          priority: LADDER_PRIORITY.collect,
+          deduplication: { id: leg.legId },
+          removeOnComplete: { age: 3600, count: 500 },
+        },
+      })),
+    );
+
+    seen += candidates.length;
+    jobs += legs.length;
+  }
+
+  await bumpCrawlCounters(crawl.id, { backfillsEnqueued: seen });
+  logger.info({ crawlId: crawl.id, players: seen, jobs }, 'ladder crawl collecting match ids');
+
+  // Releases the stage if there was nobody to collect — a crawl of a ladder
+  // whose players have all been walked since it started is a real outcome.
+  await endLeg(crawl.id, FANOUT_LEG, 'done');
+}
+
+/**
+ * Every id is in. One job drains the set, because de-duplication only holds if
+ * a single reader owns it — two of them would each find the same id
+ * unarchived and each queue it.
+ */
+async function startArchivePhase(crawl: LadderCrawl): Promise<void> {
+  const advanced = await advanceCrawlPhase(crawl.id, 'collect', 'archive');
+  if (!advanced) return;
+
+  const legId = ladderLegId(JOB.ladderArchive, crawl.id);
+  await trackLegs(crawl.id, [legId]);
+  await ladderQueue.add(
+    JOB.ladderArchive,
+    {
+      crawlId: crawl.id,
+      platform: crawl.platform,
+      queue: crawl.queue,
+    } satisfies LadderArchiveJob,
+    {
+      priority: LADDER_PRIORITY.archive,
+      deduplication: { id: legId },
+      removeOnComplete: { age: 3600, count: 200 },
+    },
+  );
+  logger.info(
+    { crawlId: crawl.id, matchIds: await countMatchIds(crawl.id) },
+    'ladder crawl archiving matches',
+  );
+}
+
+/**
+ * The crawl is over. Marks the row, cleans the Redis state up, and — for a
+ * clean run only — announces it and queues the aggregate.
+ */
+async function completeCrawl(crawlId: string, status: 'completed' | 'failed'): Promise<void> {
+  const finished = await finishCrawl(crawlId, status);
   await clearCrawlState(crawlId);
   if (!finished) return;
 
@@ -631,6 +932,8 @@ async function endLeg(crawlId: string, legId: string, outcome: 'done' | 'failed'
       status: finished.status,
       entries: finished.entriesSeen,
       pages: finished.pagesFetched,
+      matchIds: finished.matchIdsSeen,
+      matchesQueued: finished.matchesQueued,
     },
     'ladder crawl finished',
   );
@@ -661,85 +964,172 @@ async function endLeg(crawlId: string, legId: string, outcome: 'done' | 'failed'
 }
 
 /**
- * Queue a recompute for one ladder.
+ * One batch of discovered players, walked for match ids only.
  *
- * Lifecycle-scoped de-duplication rather than a stable `jobId`: BullMQ matches
- * a job id against finished jobs it has retained, so a stable one would make
- * the *second* crawl of the day a silent no-op (#18). What this drops instead
- * is only a recompute that has not run yet — and one that has not run yet will
- * read the same tables the dropped one would have.
+ * Nothing here fetches a match. The ids go into the crawl's set and the
+ * matches behind them are fetched once, by the archive stage, after every
+ * collect job has finished — which is what makes one match one `match.byId`
+ * however many of its ten participants are on this ladder.
  */
-export async function enqueueChampionAggregate(platform: string, queue: string): Promise<void> {
-  await maintenanceQueue.add(
-    JOB.aggregateChampions,
-    { platform, queue } satisfies AggregateChampionsJob,
-    { deduplication: { id: jobKey(JOB.aggregateChampions, platform, queue) } },
-  );
+export async function ladderCollect(
+  job: Job<LadderCollectJob>,
+): Promise<{ players: number; ids: number; newIds: number }> {
+  const { crawlId } = job.data;
+  const platform = assertPlatform(job.data.platform);
+  const queue = assertRankedQueue(job.data.queue);
+  const puuids = job.data.puuids ?? [];
+  const legId = ladderLegId(JOB.ladderCollect, crawlId, String(job.data.offset));
+
+  const region = platformToRegion(platform);
+  let ids = 0;
+  let newIds = 0;
+  let players = 0;
+
+  try {
+    for (const puuid of puuids) {
+      // Same cancel check as the walk, per player rather than per ten pages:
+      // a player is one or two requests, so this is the same granularity.
+      if (!(await runningCrawl(crawlId))) {
+        logger.info({ crawlId, players }, 'ladder collect stopping; crawl is not running');
+        break;
+      }
+
+      await markBackfillStarted(puuid, platform);
+      const walked = await collectOne(crawlId, region, platform, queue, puuid);
+      if (walked === undefined) continue;
+      ids += walked.ids;
+      newIds += walked.newIds;
+      players += 1;
+      await job.updateProgress(Math.round((players / Math.max(1, puuids.length)) * 100));
+    }
+
+    if (newIds > 0) {
+      ladderMatchIdsTotal.inc({ platform, queue }, newIds);
+      await bumpCrawlCounters(crawlId, { matchIdsSeen: newIds });
+    }
+    await endLeg(crawlId, legId, 'done');
+    return { players, ids, newIds };
+  } catch (err) {
+    if (isFinalAttempt(job)) await endLeg(crawlId, legId, 'failed');
+    throw err;
+  }
 }
 
 /**
- * Ladder entry → match history. The pipeline behind this already exists —
- * `backfill:player` walks the id list, `filterUnarchived` skips what is stored,
- * `archive:match` fetches the rest — so this is the hand-off, and the restraint
- * around it.
+ * One player's ids into the crawl's set, or `undefined` if there is no such
+ * player any more.
  *
- * Three pieces of restraint, in order of how much they save:
- *
- * 1. **The tier floor.** `LADDER_BACKFILL_TIER_FLOOR` is separate from the one
- *    that bounds enumeration, because enumerating a ladder is thousands of
- *    requests and walking the players behind it is millions. Entries below it
- *    land in `league_entries` and go no further.
- * 2. **Never tracked.** `upsertDiscoveredPlayers` cannot set `tracked`, so a
- *    crawl can never sign thousands of players up for a 60-second poll.
- * 3. **Walked once per crawl.** A player whose walk started after this crawl
- *    did is skipped — repeat crawls should converge on what is new, not
- *    re-walk the same ladder. Across crawls they are re-enqueued, which is the
- *    point: `filterUnarchived` makes a second walk one request plus whatever
- *    they have played since.
+ * A 404 is the one upstream error this swallows. A ladder of thousands
+ * contains accounts that have been transferred or deleted since the page that
+ * named them, and a leg that fails takes the whole crawl down with it (§6 of
+ * docs/ladder-crawl-plan.md) — so one dead PUUID must not cost a run. Anything
+ * else propagates: a budget refusal or a 502 is about the service, not the
+ * player, and the right answer to it is the retry BullMQ gives the job.
  */
-async function discoverPlayers(
-  crawl: { id: string; startedAt: Date },
+async function collectOne(
+  crawlId: string,
+  region: Region,
   platform: Platform,
   queue: RankedQueue,
-  entries: LeagueEntryInput[],
-): Promise<{ discovered: number; enqueued: number }> {
-  const floor = config.ladderBackfillTierFloor;
-  const eligible = entries.filter((e) => tierAtOrAbove(e.tier, floor));
-  if (eligible.length === 0) return { discovered: 0, enqueued: 0 };
-
-  const rows = await upsertDiscoveredPlayers(eligible.map((e) => ({ puuid: e.puuid, platform })));
-
-  let enqueued = 0;
+  puuid: string,
+): Promise<{ ids: number; newIds: number } | undefined> {
   const limit = config.LADDER_BACKFILL_LIMIT;
-  if (limit > 0) {
-    for (const row of rows) {
-      const walked = row.historyBackfillStartedAt;
-      if (walked && walked >= crawl.startedAt) continue;
-      try {
-        await enqueueBackfill({
-          puuid: row.puuid,
-          platform,
-          limit,
-          // The crawl is about one ranked ladder, so it pays for that ladder's
-          // games rather than the player's whole back-catalogue. The saving is
-          // in `match.byId`, which is one request per match either way.
-          queueId: QUEUE_IDS[queue],
-          reason: 'ladder',
-        });
-        enqueued += 1;
-      } catch (err) {
-        // Discovery is an optimisation on top of the ladder itself. A queue
-        // that is down must not fail the crawl that is filling `league_entries`.
-        logger.warn({ err, puuid: row.puuid }, 'could not queue ladder backfill');
-      }
-    }
-  }
+  let ids = 0;
+  let newIds = 0;
 
-  await bumpCrawlCounters(crawl.id, {
-    playersDiscovered: rows.length,
-    backfillsEnqueued: enqueued,
-  });
-  return { discovered: rows.length, enqueued };
+  try {
+    const { depth, ranOut } = await walkMatchIds(
+      region,
+      puuid,
+      {
+        limit,
+        // The crawl is about one ranked ladder, so it pays for that ladder's
+        // games rather than the player's whole back-catalogue.
+        queueId: QUEUE_IDS[queue],
+        // The same generous budget the ladder pages get, and for the same
+        // reason: a collect job has nowhere else to be, and a leg that gives
+        // up ends the whole crawl rather than merely losing its own place.
+        fetch: LADDER_FETCH,
+      },
+      async (page) => {
+        ids += page.length;
+        newIds += await addMatchIds(crawlId, page);
+      },
+    );
+    if (walkIsComplete(ranOut, limit, QUEUE_IDS[queue])) {
+      await markBackfillComplete(puuid, depth);
+    }
+    return { ids, newIds };
+  } catch (err) {
+    if (err instanceof ProxyError && err.code === 'NOT_FOUND') {
+      logger.warn({ puuid, platform }, 'ladder collect skipping a player match-v5 does not know');
+      return undefined;
+    }
+    throw err;
+  }
+}
+
+/**
+ * The crawl's de-duplicated match ids, minus what the archive already holds,
+ * onto the archive queue.
+ *
+ * Drained in batches with the ids removed only *after* their jobs exist, so a
+ * crash re-queues a batch rather than dropping it — and re-queueing is free,
+ * because the archive job id is the match id.
+ */
+export async function ladderArchive(
+  job: Job<LadderArchiveJob>,
+): Promise<{ seen: number; queued: number }> {
+  const { crawlId } = job.data;
+  const platform = assertPlatform(job.data.platform);
+  const queue = assertRankedQueue(job.data.queue);
+  const legId = ladderLegId(JOB.ladderArchive, crawlId);
+
+  let seen = 0;
+  let queued = 0;
+
+  try {
+    for (;;) {
+      if (!(await runningCrawl(crawlId))) {
+        logger.info({ crawlId, seen }, 'ladder archive stopping; crawl is not running');
+        break;
+      }
+
+      const batch = await peekMatchIds(crawlId, ARCHIVE_BATCH);
+      if (batch.length === 0) break;
+
+      const unarchived = await filterUnarchived(batch);
+      if (unarchived.length > 0) {
+        await archiveQueue.addBulk(
+          unarchived.map((matchId) => ({
+            name: JOB.archiveMatch,
+            data: {
+              matchId,
+              fetchTimeline: config.ARCHIVE_TIMELINES,
+            } satisfies ArchiveMatchJob,
+            opts: {
+              jobId: jobKey('archive', matchId),
+              priority: ARCHIVE_PRIORITY.ladder,
+            },
+          })),
+        );
+      }
+      await dropMatchIds(crawlId, batch);
+
+      seen += batch.length;
+      queued += unarchived.length;
+      await job.updateProgress({ seen, queued });
+    }
+
+    if (queued > 0) ladderMatchesQueuedTotal.inc({ platform, queue }, queued);
+    await bumpCrawlCounters(crawlId, { matchesQueued: queued });
+    logger.info({ crawlId, seen, queued }, 'ladder matches handed to the archive queue');
+    await endLeg(crawlId, legId, 'done');
+    return { seen, queued };
+  } catch (err) {
+    if (isFinalAttempt(job)) await endLeg(crawlId, legId, 'failed');
+    throw err;
+  }
 }
 
 /** An apex league arrives whole: one request, one upsert, one leg done. */
@@ -769,7 +1159,7 @@ export async function ladderApex(job: Job<LadderApexJob>): Promise<{ entries: nu
     await upsertLeagueEntries(crawlId, platform, queue, entries);
     await countPage(platform, queue, entries.length);
     await bumpCrawlCounters(crawlId, { pagesFetched: 1, entriesSeen: entries.length });
-    await discoverPlayers(crawl, platform, queue, entries);
+    await recordPlayers(crawlId, platform, entries);
     await endLeg(crawlId, legId, 'done');
 
     return { entries: entries.length };
@@ -839,7 +1229,7 @@ export async function ladderWalk(
       await upsertLeagueEntries(crawlId, platform, queue, rows);
       await countPage(platform, queue, rows.length);
       await bumpCrawlCounters(crawlId, { pagesFetched: 1, entriesSeen: rows.length });
-      await discoverPlayers(crawl, platform, queue, rows);
+      await recordPlayers(crawlId, platform, rows);
       await setCursor(crawlId, tier, division, page + 1);
 
       page += 1;
@@ -976,6 +1366,12 @@ export async function dispatch(job: Job): Promise<unknown> {
         break;
       case JOB.ladderWalk:
         result = await ladderWalk(job as Job<LadderWalkJob>);
+        break;
+      case JOB.ladderCollect:
+        result = await ladderCollect(job as Job<LadderCollectJob>);
+        break;
+      case JOB.ladderArchive:
+        result = await ladderArchive(job as Job<LadderArchiveJob>);
         break;
       case JOB.aggregateChampions:
         result = await aggregateChampions(job as Job<AggregateChampionsJob>);

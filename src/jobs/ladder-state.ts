@@ -134,7 +134,72 @@ export async function pendingLegs(crawlId: string): Promise<number> {
   return redis.scard(legsKey(crawlId));
 }
 
+// ── the crawl's match ids ────────────────────────────────────────────────────
+
+/**
+ * Every match id the collect stage has gathered, as one set per crawl.
+ *
+ * A set, because de-duplication is the whole reason the stage exists. A match
+ * has ten participants, and a ladder holds a great many of them: the same
+ * `EUW1_7381937461` comes back from every one of those ten walks. Adding it to
+ * a set collapses the ten into one `match.byId` — but only if no fetch has
+ * started before the last of them has been added, which is what the stage
+ * boundary guarantees.
+ *
+ * Redis rather than a table for the same reason as the cursors: these are
+ * per-run scratch, written once and drained once, and a crawl that loses them
+ * to a flush re-collects rather than corrupts.
+ */
+const matchesKey = (crawlId: string): string => `ladder:matches:${KEY_SCOPE}:${crawlId}`;
+
+/** Ids Redis will hold at once. A page of a match history is 100. */
+const ADD_BATCH = 100;
+
+/** Returns how many were *new* — the ids that had not already been seen. */
+export async function addMatchIds(crawlId: string, matchIds: string[]): Promise<number> {
+  if (matchIds.length === 0) return 0;
+  const key = matchesKey(crawlId);
+  let added = 0;
+
+  for (let i = 0; i < matchIds.length; i += ADD_BATCH) {
+    added += await redis.sadd(key, ...matchIds.slice(i, i + ADD_BATCH));
+  }
+  // Refreshed on every write, so a collect stage that runs for hours does not
+  // watch the front of its own work list expire.
+  await redis.expire(key, CURSOR_TTL_S);
+  return added;
+}
+
+/** How many distinct matches the crawl is still holding. */
+export async function countMatchIds(crawlId: string): Promise<number> {
+  return redis.scard(matchesKey(crawlId));
+}
+
+/**
+ * The next batch to archive. Read without removing, because the caller removes
+ * them only once their archive jobs exist (`dropMatchIds`) — a crash between
+ * the two re-reads a batch it has already queued, which BullMQ de-duplicates
+ * on the job id, while a pop would silently drop the matches instead.
+ *
+ * Scanned from the start each time rather than carrying a cursor: the caller
+ * shrinks the set as it goes, so cursor 0 always lands on work that is left,
+ * and a cursor kept across removals is the one thing SSCAN does not promise.
+ */
+export async function peekMatchIds(crawlId: string, count: number): Promise<string[]> {
+  const [, members] = await redis.sscan(matchesKey(crawlId), '0', 'COUNT', count);
+  return members.slice(0, count);
+}
+
+/** A batch is queued and no longer outstanding. */
+export async function dropMatchIds(crawlId: string, matchIds: string[]): Promise<void> {
+  if (matchIds.length === 0) return;
+  await redis.srem(matchesKey(crawlId), ...matchIds);
+}
+
 /** Everything a finished or cancelled crawl leaves behind. */
 export async function clearCrawlState(crawlId: string): Promise<void> {
-  await Promise.all([clearCursors(crawlId), redis.del(legsKey(crawlId), failedKey(crawlId))]);
+  await Promise.all([
+    clearCursors(crawlId),
+    redis.del(legsKey(crawlId), failedKey(crawlId), matchesKey(crawlId)),
+  ]);
 }

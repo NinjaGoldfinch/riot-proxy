@@ -1,8 +1,14 @@
-import { and, desc, eq, isNotNull, sql as raw } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, lt, or, sql as raw } from 'drizzle-orm';
 import { KEY_SCOPE } from '../config.js';
 import type { Division, RankedQueue, Tier } from '../riot/ladder.js';
 import { db } from './index.js';
-import { ladderCrawls, leagueEntries, type LadderCrawl, type LeagueEntry } from './schema.js';
+import {
+  ladderCrawls,
+  leagueEntries,
+  players,
+  type LadderCrawl,
+  type LeagueEntry,
+} from './schema.js';
 
 /**
  * The ladder's storage (§4 of docs/ladder-crawl-plan.md). Two shapes: a run
@@ -15,6 +21,20 @@ import { ladderCrawls, leagueEntries, type LadderCrawl, type LeagueEntry } from 
 export const CRAWL_STATUSES = ['running', 'completed', 'failed', 'cancelled'] as const;
 export type CrawlStatus = (typeof CRAWL_STATUSES)[number];
 export type TerminalCrawlStatus = Exclude<CrawlStatus, 'running'>;
+
+/**
+ * The three stages a running crawl passes through, in order.
+ *
+ * Stages rather than one pipeline because a match belongs to ten players. A
+ * crawl that walked each player's history as it discovered them would reach
+ * one game from ten different walks at ten different moments, and every walk
+ * that ran before the match landed would pay for it again. Collecting all the
+ * ids first turns that into one set, and `filterUnarchived` over the set means
+ * a match costs one `match.byId` no matter how many of its participants the
+ * ladder holds.
+ */
+export const CRAWL_PHASES = ['enumerate', 'collect', 'archive'] as const;
+export type CrawlPhase = (typeof CRAWL_PHASES)[number];
 
 export interface CreateCrawlInput {
   platform: string;
@@ -181,11 +201,43 @@ export async function finishCrawl(
   return rows[0];
 }
 
+/**
+ * Move a running crawl on to its next stage, and report whether this caller is
+ * the one that moved it.
+ *
+ * Guarded on the stage it is leaving for the same reason `finishCrawl` is
+ * guarded on `running`: the stage change is triggered by whichever leg happens
+ * to finish last, and two legs ending in the same instant can both read an
+ * empty outstanding set. The database picks one. The loser gets `undefined`
+ * and does nothing, rather than fanning the next stage out a second time.
+ */
+export async function advanceCrawlPhase(
+  id: string,
+  from: CrawlPhase,
+  to: CrawlPhase,
+): Promise<LadderCrawl | undefined> {
+  const rows = await db
+    .update(ladderCrawls)
+    .set({ phase: to })
+    .where(
+      and(
+        eq(ladderCrawls.keyScope, KEY_SCOPE),
+        eq(ladderCrawls.id, id),
+        eq(ladderCrawls.status, 'running'),
+        eq(ladderCrawls.phase, from),
+      ),
+    )
+    .returning();
+  return rows[0];
+}
+
 export interface CrawlCounters {
   pagesFetched?: number;
   entriesSeen?: number;
   playersDiscovered?: number;
   backfillsEnqueued?: number;
+  matchIdsSeen?: number;
+  matchesQueued?: number;
 }
 
 /**
@@ -201,6 +253,9 @@ export async function bumpCrawlCounters(id: string, by: CrawlCounters): Promise<
     set['playersDiscovered'] = raw`${ladderCrawls.playersDiscovered} + ${by.playersDiscovered}`;
   if (by.backfillsEnqueued)
     set['backfillsEnqueued'] = raw`${ladderCrawls.backfillsEnqueued} + ${by.backfillsEnqueued}`;
+  if (by.matchIdsSeen) set['matchIdsSeen'] = raw`${ladderCrawls.matchIdsSeen} + ${by.matchIdsSeen}`;
+  if (by.matchesQueued)
+    set['matchesQueued'] = raw`${ladderCrawls.matchesQueued} + ${by.matchesQueued}`;
 
   if (Object.keys(set).length === 0) return;
   await db
@@ -299,6 +354,106 @@ export async function upsertLeagueEntries(
   }
 
   return written;
+}
+
+export interface CrawlCandidateFilter {
+  /** Only entries this run stamped — the ladder as this crawl saw it. */
+  crawlId: string;
+  platform: string;
+  queue: string;
+  /** The backfill floor, expanded: every tier whose players are in scope. */
+  tiers: Tier[];
+  /**
+   * Skip players whose walk started at or after this instant — the crawl's own
+   * start. A repeat crawl should converge on what is new rather than re-walk a
+   * ladder somebody else has just walked.
+   */
+  notWalkedSince: Date;
+  limit: number;
+  /** Where the previous page ended. Omitted for the first page. */
+  after?: CrawlCandidate;
+}
+
+/** One candidate, and the cursor that continues after it. */
+export interface CrawlCandidate {
+  puuid: string;
+  leaguePoints: number;
+}
+
+/**
+ * Whose match history this crawl should collect, a page at a time.
+ *
+ * Read back out of `league_entries` rather than carried in Redis from the
+ * enumeration that found them: the entries are already stamped with the crawl
+ * id, which makes "everyone this run saw" an indexed predicate on a durable
+ * table. A crawl that survives a Redis flush then still knows who is in it —
+ * only the page cursors are cheap enough to lose.
+ *
+ * **Keyset, not OFFSET**, and that is not a micro-optimisation: the jobs this
+ * paging feeds start running while it is still paging, and the first thing
+ * each does is stamp `history_backfill_started_at`, which takes that player
+ * out of the `notWalkedSince` predicate. Under OFFSET every stamped player
+ * shifts the remaining rows left, so `offset += page` would skip exactly as
+ * many players as the workers had got through — silently, and worst on the
+ * fastest deployments. A cursor on the sort key cannot shift.
+ *
+ * Ordered by LP so that, if the crawl is cancelled halfway, what it did
+ * collect is the top of the ladder. The order is only meaningful within the
+ * apex tiers, where LP is one continuous pool; below Master every division
+ * restarts at zero, so a Diamond I on 99 LP sorts above a Master on 50. That
+ * costs nothing — the stage is all-or-nothing by design — and beats an
+ * arbitrary order for the case where somebody stops it early.
+ */
+export async function listCrawlBackfillCandidates(
+  filter: CrawlCandidateFilter,
+): Promise<CrawlCandidate[]> {
+  if (filter.tiers.length === 0) return [];
+
+  const where = [
+    eq(leagueEntries.keyScope, KEY_SCOPE),
+    eq(leagueEntries.platform, filter.platform),
+    eq(leagueEntries.queue, filter.queue),
+    eq(leagueEntries.lastSeenCrawlId, filter.crawlId),
+    inArray(leagueEntries.tier, filter.tiers),
+    or(
+      isNull(players.historyBackfillStartedAt),
+      lt(players.historyBackfillStartedAt, filter.notWalkedSince),
+    ),
+  ];
+
+  // Both columns descend, so "after this row" is one comparison per column
+  // rather than the mixed-direction row constructor a `puuid ASC` tie-break
+  // would need. The direction of `puuid` is arbitrary either way — it is only
+  // there because LP is not unique across a ladder, and a sort key that ties
+  // has no "after".
+  const cursor = filter.after;
+  if (cursor) {
+    where.push(
+      or(
+        lt(leagueEntries.leaguePoints, cursor.leaguePoints),
+        and(
+          eq(leagueEntries.leaguePoints, cursor.leaguePoints),
+          lt(leagueEntries.puuid, cursor.puuid),
+        ),
+      ),
+    );
+  }
+
+  const rows = await db
+    .select({ puuid: leagueEntries.puuid, leaguePoints: leagueEntries.leaguePoints })
+    .from(leagueEntries)
+    // Left join: a player discovered by this very crawl has a `players` row
+    // with no backfill stamp at all, and an inner join would drop exactly the
+    // players the crawl exists to find.
+    .leftJoin(
+      players,
+      and(eq(players.keyScope, leagueEntries.keyScope), eq(players.puuid, leagueEntries.puuid)),
+    )
+    .where(and(...where))
+    .orderBy(desc(leagueEntries.leaguePoints), desc(leagueEntries.puuid))
+    .limit(filter.limit);
+
+  return rows;
 }
 
 export interface LadderFilter {

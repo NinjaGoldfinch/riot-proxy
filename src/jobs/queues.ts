@@ -58,6 +58,8 @@ export const JOB = {
   ladderCrawl: 'ladder:crawl',
   ladderApex: 'ladder:apex',
   ladderWalk: 'ladder:walk',
+  ladderCollect: 'ladder:collect',
+  ladderArchive: 'ladder:archive',
   aggregateChampions: 'aggregate:champions',
   maintenance: 'maintenance',
 } as const;
@@ -108,6 +110,13 @@ export function pollDedupeId(jobName: string, puuid: string): string {
 export const ARCHIVE_PRIORITY = {
   /** A game that has just finished for a tracked player. */
   live: 1,
+  /**
+   * A match a ladder crawl found. Below every depth `backfillPriority()` can
+   * reach — a lookup walk is capped at `LOOKUP_BACKFILL_LIMIT`, whose ceiling
+   * of 10 000 matches ranks at 1 010 — so a crawl's forty thousand matches
+   * never sit in front of the history somebody is watching fill in.
+   */
+  ladder: 10_000,
 } as const;
 
 /** BullMQ rejects a priority above 2^21 - 1. */
@@ -143,6 +152,15 @@ export const LADDER_PRIORITY = {
   crawl: 1,
   apex: 2,
   walk: 3,
+  /**
+   * The later stages rank below the enumeration, which costs nothing while a
+   * crawl runs one stage at a time — but a *second* ladder's crawl can overlap
+   * this one's, and when it does, enumerating that ladder (thousands of pages,
+   * and the only stage with a page cursor to keep warm) should not queue
+   * behind this one's match-id walk.
+   */
+  collect: 4,
+  archive: 5,
 } as const;
 
 export interface LadderCrawlJob {
@@ -167,6 +185,32 @@ export interface LadderWalkJob {
 }
 
 /**
+ * One batch of discovered players whose match ids are wanted. A batch rather
+ * than a job per player because a ladder is thousands of them and the work per
+ * player is one or two requests — the fan-out would otherwise cost more than
+ * the walk.
+ */
+export interface LadderCollectJob {
+  crawlId: string;
+  platform: string;
+  queue: string;
+  puuids: string[];
+  /**
+   * Where this batch started in the crawl's candidate list. It names the leg —
+   * the batches are disjoint slices of one ordered query, so the offset is the
+   * only part of the job that distinguishes them.
+   */
+  offset: number;
+}
+
+/** The crawl's de-duplicated match ids, handed to the archive queue. */
+export interface LadderArchiveJob {
+  crawlId: string;
+  platform: string;
+  queue: string;
+}
+
+/**
  * One leg of a crawl — an apex league, or one (tier, division) walk. The id is
  * both the BullMQ de-duplication id and the member of the outstanding-legs set
  * that decides when the crawl is finished, so the two cannot drift apart.
@@ -186,29 +230,28 @@ export interface ArchiveMatchJob {
 }
 
 /** Why a backfill was queued — the log line, the metric label, and the rank. */
-export const BACKFILL_REASONS = ['admin', 'lookup', 'track', 'catchup', 'ladder'] as const;
+export const BACKFILL_REASONS = ['admin', 'lookup', 'track', 'catchup'] as const;
 export type BackfillReason = (typeof BACKFILL_REASONS)[number];
 
 /**
  * Ordering inside the *backfill* queue. Not to be confused with
  * `backfillPriority()` below, which ranks the archive jobs a walk produces.
  *
- * A crawl discovers thousands of players nobody asked about, so its walks sit
- * in a band of their own beneath everything a person or a tracked player set
- * off — someone looking up one player always beats the ladder.
+ * Every reason ranks the same, and all four are listed anyway, because of the
+ * trap `ARCHIVE_PRIORITY` documents: the worker drains the unprioritized
+ * `wait` list before it touches the prioritized set, so one unranked reason
+ * would be popped ahead of every ranked one.
  *
- * All five are listed because of the trap `ARCHIVE_PRIORITY` documents: the
- * worker drains the unprioritized `wait` list before it touches the prioritized
- * set, so leaving the existing reasons unranked would have put every one of
- * them *ahead* of a band that was supposed to outrank the crawl — and made the
- * crawl's own low rank meaningless.
+ * A ladder crawl is not among them. Its work reaches the archive queue as
+ * `ARCHIVE_PRIORITY.ladder` — the crawl walks match ids on its own queue and
+ * hands over matches, never backfill jobs — and that is where "a crawl yields
+ * to somebody looking up a player" is enforced.
  */
 export const BACKFILL_PRIORITY: Record<BackfillReason, number> = {
   lookup: 1,
   track: 1,
   admin: 1,
   catchup: 1,
-  ladder: 10,
 };
 
 export interface BackfillPlayerJob {

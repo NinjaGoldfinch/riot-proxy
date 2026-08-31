@@ -10,7 +10,7 @@ import {
   listConsumers,
 } from '../db/consumers.js';
 import { getCrawl, finishCrawl, listCrawls } from '../db/ladder.js';
-import { assertRankedQueue } from '../riot/ladder.js';
+import { RANKED_QUEUES, TIERS, assertRankedQueue } from '../riot/ladder.js';
 import { countArchivedMatches } from '../db/matches.js';
 import type { LadderCrawl } from '../db/schema.js';
 import { countTrackedPlayers, listPlayers, setTracked, upsertPlayer } from '../db/players.js';
@@ -18,7 +18,12 @@ import { ProxyError } from '../errors.js';
 import { fetcher } from '../fetcher.js';
 import { logger } from '../logger.js';
 import { build } from '../riot/endpoints.js';
-import { assertPlatform, platformToAccountRegion } from '../riot/routing.js';
+import {
+  PLATFORMS,
+  PLATFORM_LABELS,
+  assertPlatform,
+  platformToAccountRegion,
+} from '../riot/routing.js';
 import { clearCrawlState, pendingLegs } from '../jobs/ladder-state.js';
 import { enqueueChampionAggregate, startCrawl } from '../jobs/processors.js';
 import {
@@ -39,6 +44,7 @@ import {
   LadderCrawlBody,
   LadderCrawlListResponse,
   LadderCrawlStartedResponse,
+  LadderOptionsResponse,
   RankedQueueParam,
   MetricsHistoryResponse,
   MetricsResponse,
@@ -274,7 +280,7 @@ const adminRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const body = request.body as { platform?: string; queue?: string; tierFloor?: string };
-      const { crawlId, created, legs } = await startCrawl({
+      const { crawlId, created, platform, queue, legs } = await startCrawl({
         platform: body.platform ?? config.DEFAULT_PLATFORM,
         queue: body.queue ?? config.ladderQueues[0] ?? 'RANKED_SOLO_5x5',
         ...(body.tierFloor !== undefined ? { tierFloor: body.tierFloor } : {}),
@@ -286,9 +292,43 @@ const adminRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(202).send({
         crawlId,
         status: created ? 'started' : 'already-running',
+        platform,
+        queue,
         legs,
       });
     },
+  );
+
+  /**
+   * What a crawl can be asked for, and what it would be asked for by default.
+   *
+   * Exists for the dashboard's start form, which otherwise has to hardcode
+   * league-v4's tier list and guess at this deployment's floors — two things
+   * with a source of truth right here, and a form that drifts from either
+   * offers a crawl the trigger route will refuse.
+   */
+  fastify.get(
+    '/v1/admin/ladder/options',
+    {
+      ...adminScope,
+      schema: {
+        tags: ['admin'],
+        summary: 'Ladders this deployment can crawl, and its configured defaults',
+        response: { 200: LadderOptionsResponse, ...localErrors },
+      },
+    },
+    async () => ({
+      platforms: PLATFORMS.map((id) => ({ id, label: PLATFORM_LABELS[id] ?? id })),
+      queues: [...RANKED_QUEUES],
+      tiers: [...TIERS],
+      defaults: {
+        platform: config.DEFAULT_PLATFORM,
+        queue: config.ladderQueues[0] ?? 'RANKED_SOLO_5x5',
+        tierFloor: config.ladderTierFloor,
+        backfillTierFloor: config.ladderBackfillTierFloor,
+        backfillLimit: config.LADDER_BACKFILL_LIMIT,
+      },
+    }),
   );
 
   fastify.get(

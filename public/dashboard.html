@@ -414,6 +414,24 @@
         color: var(--dim);
         font-weight: 400;
       }
+      /* The three stages, in order, with the one it is in lit. The order is
+         the guarantee — nothing fetches a match until every id is in — so the
+         crawl says which stage it is at rather than only how far along. */
+      .phases {
+        display: flex;
+        align-items: baseline;
+        gap: 7px;
+        font: 11.5px var(--mono);
+        color: var(--dim);
+        margin: 2px 0 6px;
+      }
+      .phases .step.done {
+        color: var(--good);
+      }
+      .phases .step.now {
+        color: var(--accent);
+        font-weight: 600;
+      }
       /* Label and value read as one token, so they sit together and wrap as a
          pair rather than being stretched apart by a grid track. */
       .facts {
@@ -514,6 +532,64 @@
         border: 1px solid var(--line);
         border-radius: 4px;
         padding: 7px 9px;
+      }
+      /* ── crawl controls ─────────────────────────────────────────────────── */
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-end;
+        gap: 10px 14px;
+      }
+      .field {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .field label {
+        font: 11px var(--mono);
+        color: var(--dim);
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      .field select {
+        font: 12.5px var(--mono);
+        color: var(--text);
+        background: var(--sunk);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 6px 8px;
+      }
+      button.act {
+        cursor: pointer;
+        background: #1f2733;
+        font: 600 12px var(--mono);
+      }
+      button.act:hover:not(:disabled) {
+        border-color: var(--accent);
+      }
+      button.act:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      button.danger:hover:not(:disabled) {
+        border-color: var(--bad);
+        color: var(--bad);
+      }
+      .crawl-head button.act {
+        margin-left: 10px;
+        padding: 2px 8px;
+        font: 11px var(--mono);
+      }
+      .note {
+        font: 12px var(--mono);
+        color: var(--dim);
+        margin: 10px 0 0;
+      }
+      .note.bad {
+        color: var(--bad);
+      }
+      .note.good {
+        color: var(--good);
       }
       input:focus {
         outline: 1px solid var(--accent);
@@ -620,6 +696,28 @@
       <div class="tab" id="tab-ladder">
         <section>
           <div class="panel">
+            <h2>Start a crawl</h2>
+            <div class="controls">
+              <div class="field">
+                <label for="crawlPlatform">platform</label>
+                <select id="crawlPlatform"></select>
+              </div>
+              <div class="field">
+                <label for="crawlQueue">queue</label>
+                <select id="crawlQueue"></select>
+              </div>
+              <div class="field">
+                <label for="crawlTierFloor">enumerate down to</label>
+                <select id="crawlTierFloor"></select>
+              </div>
+              <button type="button" class="act" id="crawlStart" disabled>Start crawl</button>
+            </div>
+            <p class="note" id="crawlHint"></p>
+            <p class="note" id="crawlResult"></p>
+          </div>
+        </section>
+        <section>
+          <div class="panel">
             <h2>Crawls</h2>
             <p class="meta" id="ladderMeta">loading…</p>
             <div id="ladderRunning"></div>
@@ -629,6 +727,13 @@
           <div class="panel">
             <h2>Last completed</h2>
             <div id="ladderLast"></div>
+          </div>
+        </section>
+        <section>
+          <div class="panel">
+            <h2>History</h2>
+            <p class="meta" id="ladderHistoryMeta">loading…</p>
+            <div class="scroll"><table id="ladderHistory"></table></div>
           </div>
         </section>
       </div>
@@ -688,8 +793,15 @@
       const TAB_STORE = 'rp.dashboard.tab';
       const $ = (id) => document.getElementById(id);
 
-      const QUEUE_COLS = ['active', 'waiting', 'prioritized', 'delayed', 'failed', 'completed'];
-      const PENDING_COLS = ['active', 'waiting', 'prioritized', 'delayed'];
+      const QUEUE_COLS = [
+        'active',
+        'waiting',
+        'prioritized',
+        'delayed',
+        'scheduled',
+        'failed',
+        'completed',
+      ];
 
       let key = localStorage.getItem(STORE) || '';
       let authDisabled = false;
@@ -726,7 +838,33 @@
         if (s < 129600) return `${Math.round(s / 3600)}h ago`;
         return `${Math.round(s / 86400)}d ago`;
       };
-      const sumQueues = (snap, col) => Object.values(snap.queues).reduce((n, q) => n + q[col], 0);
+      const sumQueues = (snap, col) =>
+        Object.values(snap.queues).reduce((n, q) => n + (q[col] ?? 0), 0);
+
+      /**
+       * Work actually waiting, which is not the same as the sum of the pending
+       * columns: every repeatable scheduler parks its next firing in `delayed`
+       * and leaves it there, so an idle deployment used to read as a standing
+       * backlog of one per scheduler. Nothing is hidden — the Queues tab keeps
+       * a `scheduled` column beside `delayed`, so the rows still reconcile.
+       *
+       * Netted off `delayed` alone rather than off the row total: a firing
+       * scheduler moves its placeholder into `waiting` before parking the next
+       * one, and that job is about to run. Clamped for that same instant, when
+       * `delayed` is one short of the scheduler count. `?? 0` for an older api
+       * instance that does not send the field — it reverts to the old number
+       * rather than reading as a negative.
+       */
+      const pendingWork = (snap) =>
+        Object.values(snap.queues).reduce(
+          (n, q) =>
+            n +
+            (q.active ?? 0) +
+            (q.waiting ?? 0) +
+            (q.prioritized ?? 0) +
+            Math.max(0, (q.delayed ?? 0) - (q.scheduled ?? 0)),
+          0,
+        );
 
       // ── tabs ──────────────────────────────────────────────────────────────
       const TABS = ['overview', 'queues', 'ladder', 'limiter', 'players', 'events'];
@@ -800,7 +938,7 @@
         const archived = snap.totals.archivedMatches + optimisticMatches;
         const grew = prev ? snap.totals.archivedMatches - prev.totals.archivedMatches : 0;
 
-        const pending = PENDING_COLS.reduce((n, c) => n + sumQueues(snap, c), 0);
+        const pending = pendingWork(snap);
         const failed = sumQueues(snap, 'failed');
 
         const running = snap.ladder ? snap.ladder.running.length : 0;
@@ -900,12 +1038,13 @@
       function renderQueues(snap) {
         const names = Object.keys(snap.queues).sort();
         const failed = sumQueues(snap, 'failed');
-        const pending = PENDING_COLS.reduce((n, c) => n + sumQueues(snap, c), 0);
+        const pending = pendingWork(snap);
         $('tagQueues').textContent = failed > 0 ? fmt(failed) : '';
         $('tagQueues').className = 'tag bad';
         $('queuesMeta').textContent =
-          `${fmt(pending)} pending or running · ${fmt(failed)} failed · ` +
-          `${fmt(sumQueues(snap, 'completed'))} completed recently`;
+          `${fmt(pending)} pending or running · ` +
+          `${fmt(sumQueues(snap, 'scheduled'))} idle in schedulers · ` +
+          `${fmt(failed)} failed · ${fmt(sumQueues(snap, 'completed'))} completed recently`;
 
         const head =
           '<tr><th>queue</th>' + QUEUE_COLS.map((c) => `<th>${c}</th>`).join('') + '</tr>';
@@ -913,8 +1052,12 @@
           .map((name) => {
             const q = snap.queues[name];
             const cells = QUEUE_COLS.map((c) => {
-              const cls = c === 'failed' && q[c] > 0 ? 'alert' : q[c] === 0 ? 'dim' : '';
-              return `<td class="${cls}">${fmt(q[c])}</td>`;
+              const n = q[c] ?? 0;
+              // `scheduled` counts schedulers, not jobs, so it is dim even when
+              // non-zero: it explains a `delayed` figure rather than adding to it.
+              const cls =
+                c === 'failed' && n > 0 ? 'alert' : c === 'scheduled' || n === 0 ? 'dim' : '';
+              return `<td class="${cls}">${fmt(n)}</td>`;
             }).join('');
             return `<tr><td>${esc(name)}</td>${cells}</tr>`;
           })
@@ -943,24 +1086,55 @@
       }
 
       // ── ladder ────────────────────────────────────────────────────────────
+      /**
+       * The three stages, in the order a crawl runs them. The order is the
+       * guarantee worth showing: nothing fetches a match until every id is in,
+       * which is what makes a match shared by ten players cost one fetch.
+       */
+      const PHASES = [
+        ['enumerate', 'walking the ladder'],
+        ['collect', 'gathering match ids'],
+        ['archive', 'fetching the matches'],
+      ];
+
+      function phaseChain(c) {
+        const at = PHASES.findIndex(([name]) => name === c.phase);
+        return (
+          '<div class="phases">' +
+          PHASES.map(
+            ([name, hint], i) =>
+              `<span class="step ${i < at ? 'done' : i === at ? 'now' : ''}" ` +
+              `title="${esc(hint)}">${esc(name)}</span>`,
+          ).join('<span>›</span>') +
+          '</div>'
+        );
+      }
+
       function crawlCard(c) {
         const facts = [
           ['pages', fmt(c.pagesFetched)],
           ['entries', fmt(c.entriesSeen)],
           ['players', fmt(c.playersDiscovered)],
-          ['backfills', fmt(c.backfillsEnqueued)],
+          ['walking', fmt(c.backfillsEnqueued)],
+          ['match ids', fmt(c.matchIdsSeen)],
+          ['matches queued', fmt(c.matchesQueued)],
         ];
         if (c.status === 'running') facts.push(['legs left', fmt(c.pendingLegs)]);
         const when =
           c.status === 'running'
             ? 'started ' + relTime(c.startedAt)
             : relTime(c.finishedAt || c.startedAt);
+        const cancel =
+          c.status === 'running'
+            ? `<button type="button" class="act danger" data-cancel="${esc(c.id)}">cancel</button>`
+            : '';
         return (
           `<div class="crawl"><div class="crawl-head">` +
           `<span>${esc(c.platform)} · ${esc(c.queue)}</span>` +
           `<span class="pill ${esc(c.status)}">${esc(c.status)}</span>` +
           `<span class="dim">from ${esc(c.tierFloor)}</span>` +
-          `<span class="when">${when}</span></div>` +
+          `<span class="when">${when}</span>${cancel}</div>` +
+          (c.status === 'running' && c.phase ? phaseChain(c) : '') +
           `<div class="facts">` +
           facts.map(([k, v]) => `<span><span class="k">${k}</span>${v}</span>`).join('') +
           `</div></div>`
@@ -978,11 +1152,242 @@
           (running.length ? `${running.length} crawl(s) in flight` : 'nothing crawling');
         $('ladderRunning').innerHTML = running.length
           ? running.map(crawlCard).join('')
-          : '<p class="empty">No crawl running. Start one with POST /v1/admin/ladder/crawl.</p>';
+          : '<p class="empty">No crawl running.</p>';
         $('ladderLast').innerHTML = ladder.lastCompleted
           ? crawlCard(ladder.lastCompleted)
           : '<p class="empty">No crawl has finished yet.</p>';
       }
+
+      /**
+       * Every run this key scope has done, newest first — which ladders have
+       * been crawled, what each one produced, and when it last ran.
+       *
+       * The snapshot carries the crawls in flight and the last completed one,
+       * because those are what an operator watches. This is the other
+       * question — "when was oc1 last done, and did it finish?" — and it is a
+       * table of rows rather than a live number, so it polls with the players
+       * panel rather than riding the tick.
+       */
+      const CRAWL_ROWS_SHOWN = 20;
+
+      function renderCrawlHistory(crawls) {
+        if (crawls.length === 0) {
+          $('ladderHistoryMeta').textContent = 'No crawl has run yet.';
+          $('ladderHistory').innerHTML = '';
+          return;
+        }
+
+        // One entry per ladder, newest first, so "when was this last crawled"
+        // is answerable without reading down the table counting. The table
+        // below is one row per *run*; this is one per ladder.
+        //
+        // The queue is dropped when every run shares one, which is the usual
+        // case: `euw1 · RANKED_SOLO_5x5 4m ago · oc1 · …` puts the same
+        // separator between a platform and its queue as between two ladders,
+        // and stops being readable at the second entry.
+        const oneQueue = new Set(crawls.map((c) => c.queue)).size <= 1;
+        const latest = new Map();
+        for (const c of crawls) {
+          const ladder = oneQueue ? c.platform : `${c.platform} ${c.queue}`;
+          if (!latest.has(ladder)) latest.set(ladder, c);
+        }
+        const ladders = [...latest.entries()]
+          .map(([ladder, c]) => `${ladder} ${relTime(c.finishedAt || c.startedAt)}`)
+          .join(' · ');
+        $('ladderHistoryMeta').textContent =
+          `${fmt(crawls.length)} run(s) · last crawled: ${ladders}`;
+
+        const head =
+          '<tr><th>ladder</th><th>floor</th><th>status</th><th>entries</th>' +
+          '<th>match ids</th><th>matches queued</th><th>took</th><th>updated</th></tr>';
+        const rows = crawls
+          .slice(0, CRAWL_ROWS_SHOWN)
+          .map((c) => {
+            const took = c.finishedAt
+              ? fmtDuration((new Date(c.finishedAt) - new Date(c.startedAt)) / 1000)
+              : '<span class="dim">running</span>';
+            const status =
+              c.status === 'running'
+                ? `<span class="pill running">${esc(c.phase || 'running')}</span>`
+                : `<span class="pill ${esc(c.status)}">${esc(c.status)}</span>`;
+            return (
+              `<tr><td>${esc(c.platform)} · ${esc(c.queue)}</td>` +
+              `<td class="dim">${esc(c.tierFloor)}</td>` +
+              `<td>${status}</td>` +
+              `<td>${fmt(c.entriesSeen)}</td>` +
+              `<td>${fmt(c.matchIdsSeen)}</td>` +
+              `<td>${fmt(c.matchesQueued)}</td>` +
+              `<td class="dim">${took}</td>` +
+              `<td class="dim">${relTime(c.finishedAt || c.startedAt)}</td></tr>`
+            );
+          })
+          .join('');
+        $('ladderHistory').innerHTML = head + rows;
+      }
+
+      async function fetchCrawlHistory() {
+        const res = await adminFetch('/v1/admin/ladder/crawls?limit=50');
+        if (!res || !res.ok) return;
+        renderCrawlHistory((await res.json()).crawls);
+      }
+
+      // ── starting and cancelling a crawl ───────────────────────────────────
+      /**
+       * The one place on this page that writes rather than reads, so it is also
+       * the only one that has to say what happened. Everything else re-renders
+       * on the next tick and needs no acknowledgement.
+       */
+      async function adminFetch(path, init) {
+        const headers = Object.assign(
+          key ? { Authorization: 'Bearer ' + key } : {},
+          (init && init.headers) || {},
+        );
+        const res = await fetch(path, Object.assign({}, init, { headers }));
+        if (res.status === 401 || res.status === 403) {
+          keyRejected('That key was rejected — it needs the admin scope.');
+          return null;
+        }
+        return res;
+      }
+
+      const note = (id, text, cls) => {
+        $(id).textContent = text;
+        $(id).className = 'note' + (cls ? ' ' + cls : '');
+      };
+
+      /** The message the API sent, or something honest about why there is none. */
+      async function failure(res, fallback) {
+        const body = await res.json().catch(() => null);
+        return (body && body.error && body.error.message) || `${fallback} (${res.status})`;
+      }
+
+      const fill = (id, options, selected) => {
+        $(id).innerHTML = options
+          .map(
+            (o) =>
+              `<option value="${esc(o.value)}"${o.value === selected ? ' selected' : ''}>` +
+              `${esc(o.label)}</option>`,
+          )
+          .join('');
+      };
+
+      /**
+       * The form's own options come from the API, not from this file: the tier
+       * and queue lists are league-v4's value space and the pre-selection is
+       * this deployment's `LADDER_*` config, and a form that guessed at either
+       * would offer a crawl the trigger route refuses.
+       */
+      async function fetchLadderOptions() {
+        const res = await adminFetch('/v1/admin/ladder/options');
+        if (!res || !res.ok) return;
+        const opts = await res.json();
+
+        fill(
+          'crawlPlatform',
+          opts.platforms.map((p) => ({ value: p.id, label: `${p.label} · ${p.id}` })),
+          opts.defaults.platform,
+        );
+        fill(
+          'crawlQueue',
+          opts.queues.map((q) => ({ value: q, label: q })),
+          opts.defaults.queue,
+        );
+        // Descending, so the cheap floors — the ones anyone should reach for
+        // first — are at the top of the list rather than the bottom.
+        fill(
+          'crawlTierFloor',
+          opts.tiers
+            .slice()
+            .reverse()
+            .map((t) => ({ value: t, label: t })),
+          opts.defaults.tierFloor,
+        );
+
+        const d = opts.defaults;
+        note(
+          'crawlHint',
+          d.backfillLimit > 0
+            ? `Match histories are walked for ${d.backfillTierFloor} and above, ` +
+                `${fmt(d.backfillLimit)} matches per player — every id first, then the ` +
+                `matches, so a game shared by ten players is fetched once.`
+            : 'Match histories are not walked (LADDER_BACKFILL_LIMIT=0): the ladder lands, ' +
+                'and nothing is fetched from match-v5.',
+        );
+        $('crawlStart').disabled = false;
+      }
+
+      // A message about euw1 sitting under a form that now reads oc1 is worse
+      // than no message: it reads as an answer to the crawl about to be
+      // started rather than to the one that was.
+      for (const id of ['crawlPlatform', 'crawlQueue', 'crawlTierFloor']) {
+        $(id).addEventListener('change', () => note('crawlResult', ''));
+      }
+
+      $('crawlStart').addEventListener('click', async () => {
+        const button = $('crawlStart');
+        button.disabled = true;
+        note('crawlResult', 'starting…');
+        try {
+          const res = await adminFetch('/v1/admin/ladder/crawl', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              platform: $('crawlPlatform').value,
+              queue: $('crawlQueue').value,
+              tierFloor: $('crawlTierFloor').value,
+            }),
+          });
+          if (!res) return;
+          if (!res.ok) {
+            note('crawlResult', await failure(res, 'Could not start the crawl'), 'bad');
+            return;
+          }
+          const body = await res.json();
+          // Naming the ladder, not just the id: "already running" is about the
+          // ladder that was asked for, and a message that does not say which
+          // reads as a refusal about whatever crawl happens to be on screen.
+          const ladder = `${body.platform} · ${body.queue}`;
+          note(
+            'crawlResult',
+            body.status === 'already-running'
+              ? `${ladder} is already being crawled — ${body.crawlId}`
+              : `Started ${ladder} — ${body.crawlId} · ${fmt(body.legs)} legs`,
+            'good',
+          );
+          fetchSnapshot().catch(console.error);
+          fetchCrawlHistory().catch(console.error);
+        } catch (err) {
+          note('crawlResult', String(err), 'bad');
+        } finally {
+          button.disabled = false;
+        }
+      });
+
+      $('ladderRunning').addEventListener('click', async (e) => {
+        const button = e.target.closest('button[data-cancel]');
+        if (!button) return;
+        const id = button.dataset.cancel;
+        // A crawl is hours of work and there is no un-cancel, so ask. The legs
+        // already running stop at their next status check, not instantly.
+        if (!confirm(`Cancel crawl ${id}?`)) return;
+
+        button.disabled = true;
+        try {
+          const res = await adminFetch('/v1/admin/ladder/crawls/' + encodeURIComponent(id), {
+            method: 'DELETE',
+          });
+          if (!res) return;
+          note(
+            'crawlResult',
+            res.ok ? `Cancelled ${id}` : await failure(res, 'Could not cancel the crawl'),
+            res.ok ? 'good' : 'bad',
+          );
+          fetchSnapshot().catch(console.error);
+          fetchCrawlHistory().catch(console.error);
+        } catch (err) {
+          note('crawlResult', String(err), 'bad');
+        }
+      });
 
       // ── limiter ───────────────────────────────────────────────────────────
       // Re-rendering the panel each tick would slam every open method list
@@ -1372,6 +1777,10 @@
         if (!key && !authDisabled) return;
         fetchHistory().catch(console.error);
         fetchPlayers().catch(console.error);
+        // Cheap, and it is what enables the start button — so a key accepted
+        // after a rejection re-arms the form rather than leaving it dead.
+        fetchLadderOptions().catch(console.error);
+        fetchCrawlHistory().catch(console.error);
       }
 
       async function start() {

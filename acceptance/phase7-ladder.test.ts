@@ -15,16 +15,24 @@ import {
 /**
  * Ladder crawl — the live checks (#91).
  *
- * Split in two, for a reason worth being explicit about. The **crawl** is
- * cheap: a `MASTER` floor is three requests, one per apex league, whatever the
- * platform. What the crawl *discovers* is not. Every entry at or above the
- * server's `LADDER_BACKFILL_TIER_FLOOR` queues a match-history walk, and on a
- * dev key those walks run for hours — and this suite cannot see or change that
- * setting, because it belongs to the server it is pointed at.
+ * Split in two, for a reason worth being explicit about. The **enumeration**
+ * is cheap: a `MASTER` floor is three requests, one per apex league, whatever
+ * the platform. What the crawl *discovers* is not. Every entry at or above the
+ * server's `LADDER_BACKFILL_TIER_FLOOR` has its match ids walked, and on a dev
+ * key that runs for hours — and this suite cannot see or change that setting,
+ * because it belongs to the server it is pointed at.
  *
  * So everything with a bounded cost runs under the normal acceptance gate, and
  * the crawl itself is a second opt-in: `ACCEPTANCE_LADDER=1`. Same shape as
  * phase 6, where delivery is asserted automatically and the live game is not.
+ *
+ * One consequence of the crawl's three stages is felt right here: a crawl is
+ * `completed` only once it has collected every id and queued every match, not
+ * when the enumeration ends — that ordering is what makes a match shared by
+ * ten players cost one fetch. So `ACCEPTANCE_LADDER=1` against a server with a
+ * backfill floor of `CHALLENGER` waits for a few hundred id walks, and against
+ * one with a lower floor it will time out. Point it at a server with
+ * `LADDER_BACKFILL_LIMIT=0` to assert the enumeration alone.
  */
 const enabled = acceptance.enabled;
 const crawlEnabled = enabled && process.env['ACCEPTANCE_LADDER'] === '1';
@@ -40,6 +48,9 @@ interface CrawlSummary {
   entriesSeen: number;
   playersDiscovered: number;
   backfillsEnqueued: number;
+  matchIdsSeen: number;
+  matchesQueued: number;
+  phase: string;
   pendingLegs: number;
 }
 
@@ -158,7 +169,9 @@ describe.skipIf(!enabled)('Phase 7 — the ladder crawl, live', () => {
           const mine = listed.body.crawls?.find((c) => c.id === crawlId);
           return mine && mine.status !== 'running' ? mine : undefined;
         },
-        { timeoutMs: 180_000, intervalMs: 2000 },
+        // Long, because finishing now means every discovered player's ids have
+        // been walked as well — see the note at the top of this file.
+        { timeoutMs: 1_800_000, intervalMs: 5000 },
       );
 
       expect(done.status).toBe('completed');
@@ -215,21 +228,34 @@ describe.skipIf(!enabled)('Phase 7 — the ladder crawl, live', () => {
       expect(apexJobs).toBe(3);
     });
 
-    it('handed the players it found to the backfill pipeline', async () => {
+    it('collected every id before it fetched a single match', async () => {
+      const { platform } = cfg();
       const after = await metrics();
+      const labels = { platform, queue: QUEUE };
+
+      const collected =
+        counter(after, 'proxy_ladder_match_ids_total', labels) -
+        counter(before, 'proxy_ladder_match_ids_total', labels);
       const queued =
-        counter(after, 'proxy_backfills_queued_total', { reason: 'ladder' }) -
-        counter(before, 'proxy_backfills_queued_total', { reason: 'ladder' });
+        counter(after, 'proxy_ladder_matches_queued_total', labels) -
+        counter(before, 'proxy_ladder_matches_queued_total', labels);
 
       // Zero is a legitimate answer — a deployment with LADDER_BACKFILL_LIMIT=0,
-      // or a backfill floor above every tier this crawl reached, discovers
-      // players without walking them. What must not happen is the counter
-      // being absent, which would mean the reason never reached the metric.
+      // or a backfill floor above every tier this crawl reached, enumerates the
+      // ladder without walking anyone. What must not happen is a counter being
+      // absent, which would mean the stage never reached the metric.
+      expect(collected).toBeGreaterThanOrEqual(0);
       expect(queued).toBeGreaterThanOrEqual(0);
+
       const listed = await get<{ crawls: CrawlSummary[] }>('/v1/admin/ladder/crawls');
       const mine = listed.body.crawls.find((c) => c.id === crawlId)!;
-      expect(mine.playersDiscovered).toBe(queued > 0 ? mine.playersDiscovered : 0);
-      expect(mine.backfillsEnqueued).toBe(queued);
+      expect(mine.matchIdsSeen).toBe(collected);
+      expect(mine.matchesQueued).toBe(queued);
+      // The dedup dividend, and the reason the stages exist: a crawl never
+      // fetches more matches than it found distinct ids, and against a
+      // populated archive it fetches considerably fewer.
+      expect(mine.matchesQueued).toBeLessThanOrEqual(mine.matchIdsSeen);
+      expect(mine.backfillsEnqueued).toBeLessThanOrEqual(mine.playersDiscovered);
     });
 
     it('recomputed the champion aggregates it triggered', async () => {

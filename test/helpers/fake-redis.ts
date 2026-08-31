@@ -77,6 +77,17 @@ export class FakeRedis {
     return [...(this.sets.get(key) ?? [])];
   }
 
+  /**
+   * One pass, everything at once. Real SSCAN hands back a slice and a cursor,
+   * and promises only that a member present for the whole scan is returned at
+   * least once — which is why the caller reads from cursor 0 every time and
+   * shrinks the set as it goes. Returning the lot keeps that caller honest:
+   * it still has to remove what it has taken to make progress.
+   */
+  async sscan(key: string, ..._args: unknown[]): Promise<[string, string[]]> {
+    return ['0', [...(this.sets.get(key) ?? [])]];
+  }
+
   async exists(key: string): Promise<number> {
     return this.live(key) || this.sets.has(key) ? 1 : 0;
   }

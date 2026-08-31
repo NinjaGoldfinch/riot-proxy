@@ -1,6 +1,7 @@
 import './helpers/env.js';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { Value } from '@sinclair/typebox/value';
+import './helpers/formats.js';
 import { eq } from 'drizzle-orm';
 import { probeServices } from './helpers/services.js';
 import { closeDb, db, pingDb } from '../src/db/index.js';

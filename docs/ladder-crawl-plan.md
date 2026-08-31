@@ -151,9 +151,10 @@ real throttle), three job shapes in `src/jobs/processors.ts`:
   (tier, division) rather than one job per page keeps the queue small
   (28 walk jobs, not 20 000 page jobs) while the cursor makes a crash resume
   from page N, not page 1.
-- Completion: last walk/apex job to finish (counter on the crawl row, or a
-  cheap "any siblings left?" check) marks the crawl `completed`, stamps
-  `finished_at`, publishes the event (§7), and cleans up cursors.
+- Completion: the last walk/apex job to finish moves the crawl to its next
+  stage (§6) rather than ending it; the last leg of the *last* stage marks the
+  crawl `completed`, stamps `finished_at`, publishes the event (§7), and cleans
+  up cursors and the crawl's match-id set.
 
 Rules inherited from the codebase, restated because they bite:
 
@@ -172,6 +173,9 @@ Rules inherited from the codebase, restated because they bite:
   the crawl id (or `409`/existing id when one is running).
 - `GET /v1/admin/ladder/crawls?platform=&queue=` — recent runs with counters.
 - `DELETE /v1/admin/ladder/crawls/:id` — cancel: mark row, drain jobs.
+- `GET /v1/admin/ladder/options` — the platforms, queues and tier floors a
+  crawl can name, and this deployment's defaults. Exists so the dashboard's
+  start form is built from the same enums the trigger route enforces.
 
 **Config** (schema + `.env.example` + `test/helpers/env.ts` `PINNED` move
 together; pin the cadence to `0` in tests like the backfill limits):
@@ -185,28 +189,52 @@ together; pin the cadence to `0` in tests like the backfill limits):
 
 ## 6. Player discovery → match fetching (Phase L4)
 
-For each entry at or above `LADDER_BACKFILL_TIER_FLOOR`:
+A crawl runs in three stages, recorded as `phase` on the crawl row and moved on
+by whichever leg of the current stage finishes last:
 
-1. `upsertPlayer` (not tracked — see below), then
-2. `enqueueBackfill({ puuid, platform, limit: LADDER_BACKFILL_LIMIT, reason: 'ladder' })`
-   — extending the `reason` union. The existing pipeline does the rest:
-   `backfill:player` walks `match.idsByPuuid` → `filterUnarchived` →
-   `archive:match` → `matches` / `match_participants`, with per-player
-   resumable state, so a crawl re-run only fetches what is new.
+1. **`enumerate`** — the apex and walk legs of §5. Every entry at or above
+   `LADDER_BACKFILL_TIER_FLOOR` gets a `players` row (`upsertDiscoveredPlayers`,
+   not tracked) and nothing else. No match request is made.
+2. **`collect`** — `ladder:collect` jobs, 25 players each, fanned out from
+   `league_entries` where `last_seen_crawl_id` is this crawl. Each walks
+   `match.idsByPuuid` (queue-filtered to the ladder's queue id, capped at
+   `LADDER_BACKFILL_LIMIT`) and adds every id to one Redis set per crawl.
+   Still no match is fetched.
+3. **`archive`** — one `ladder:archive` job drains that set in batches of 100:
+   `filterUnarchived`, then `archive:match` for what is left, at
+   `ARCHIVE_PRIORITY.ladder`.
+
+**Why the stages, rather than handing each discovered player straight to
+`backfill:player`.** A match has ten participants. Walking a player's history
+the moment they are discovered reaches one game from ten walks spread across
+the whole crawl, and a walk can only skip what `filterUnarchived` can already
+see — so the nine walks that ran before that match landed each paid for it. The
+dedup that §2 counts on only works if the whole ladder's ids are in hand before
+the first fetch, which is exactly what the stage boundary provides: one set,
+one `filterUnarchived`, one `match.byId` per match.
+
+The cost is latency, and it is deliberate: nothing is archived until the last
+page of the ladder and the last id have landed, so a crawl that is stopped
+halfway has enumerated a ladder and archived nothing. `matchIdsSeen` and
+`matchesQueued` on the crawl row are the pair that shows what the arrangement
+bought — 40 000 ids and 4 000 fetches means nine tenths were already stored.
 
 Decisions:
 
 - **Never auto-track.** `tracked = true` means 60 s live polling; applying it
   to thousands of discovered players would drown the limiter. Discovery
   populates `players` and the archive; tracking stays a deliberate act.
-- Backfill jobs get a priority *band below* lookup-triggered backfills, so a
-  user asking about a specific player always beats the crawl's bulk walk.
-- Optional refinement: pass a queue filter (`queue=420`) and/or `startTime` to
-  `match.idsByPuuid` for ladder-reason backfills, so the walk fetches ranked
-  games rather than a player's ARAM back-catalogue. Worth doing only if the
-  existing builder grows the params cleanly.
-- Skip re-enqueueing players whose `history_backfilled_at` is recent — the
-  crawl should converge, not thrash.
+- The matches a crawl queues sit in a band *below* every depth a lookup walk
+  can reach, so a user asking about a specific player always beats the crawl.
+- The id list is queue-filtered (`queue=420`), so the walk fetches the ladder's
+  ranked games rather than a player's ARAM back-catalogue.
+- Players walked since the crawl started are skipped — the crawl should
+  converge, not thrash — and a walk capped at `LADDER_BACKFILL_LIMIT` never
+  stamps `history_backfilled_at`, which would lock a player out of the deeper
+  walk their first lookup does.
+- A failed leg ends the crawl where it stands rather than advancing a stage.
+  Spending a match budget on the part of a ladder that was seen, as though it
+  were the whole thing, is the same mistake as aggregating over it.
 
 ## 7. Processing (Phase L5)
 

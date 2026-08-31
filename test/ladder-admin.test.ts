@@ -1,6 +1,6 @@
 import './helpers/env.js';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { probeServices } from './helpers/services.js';
 import type { App } from '../src/app.js';
 
@@ -65,7 +65,7 @@ const { pendingLegs } = await import('../src/jobs/ladder-state.js');
 const { createTestConsumer, removeTestConsumers, testConsumerName } =
   await import('./helpers/consumers.js');
 const { closeRedis, redis } = await import('../src/redis.js');
-const { KEY_SCOPE } = await import('../src/config.js');
+const { KEY_SCOPE, config } = await import('../src/config.js');
 const { wsHub } = await import('../src/ws/index.js');
 
 /**
@@ -74,6 +74,8 @@ const { wsHub } = await import('../src/ws/index.js');
  * a platform with a developer's own crawl would block it for real.
  */
 const PLATFORM = 'oc1';
+/** A second ladder, for the rule that a crawl of one does not block another. */
+const OTHER_PLATFORM = 'ru';
 const QUEUE = 'RANKED_SOLO_5x5';
 
 let app: App | undefined;
@@ -84,8 +86,8 @@ let available = false;
 const auth = (key: string) => ({ authorization: `Bearer ${key}` });
 
 async function wipe(): Promise<void> {
-  await db.delete(leagueEntries).where(eq(leagueEntries.platform, PLATFORM));
-  await db.delete(ladderCrawls).where(eq(ladderCrawls.platform, PLATFORM));
+  await db.delete(leagueEntries).where(inArray(leagueEntries.platform, [PLATFORM, OTHER_PLATFORM]));
+  await db.delete(ladderCrawls).where(inArray(ladderCrawls.platform, [PLATFORM, OTHER_PLATFORM]));
   jobs.length = 0;
 
   // A crawl this suite starts and never finishes leaves its outstanding-leg
@@ -183,11 +185,54 @@ describe('POST /v1/admin/ladder/crawl', () => {
     // 202, not 409: nothing failed. The caller polls the same id either way,
     // and `status` is what distinguishes the two.
     expect(second.statusCode).toBe(202);
-    const body = second.json() as { crawlId: string; status: string; legs: number };
-    expect(body).toEqual({ crawlId: first.crawlId, status: 'already-running', legs: 0 });
+    const body = second.json() as Record<string, unknown>;
+    // The ladder is named, so "already running" is checkable rather than an
+    // id the caller has to look up to find out which ladder it is about.
+    expect(body).toEqual({
+      crawlId: first.crawlId,
+      status: 'already-running',
+      platform: PLATFORM,
+      queue: QUEUE,
+      legs: 0,
+    });
 
     const rows = await db.select().from(ladderCrawls).where(eq(ladderCrawls.platform, PLATFORM));
     expect(rows).toHaveLength(1);
+  });
+
+  it('starts a crawl on another ladder while this one is running', async ({ skip }) => {
+    if (!available || !app) return skip();
+    // "One live crawl per ladder" is per (key_scope, platform, queue), and a
+    // trigger told the wrong one is running is worse than a refusal: it hands
+    // back an id for a ladder the caller did not ask about.
+    const first = (
+      await trigger({ platform: PLATFORM, queue: QUEUE, tierFloor: 'MASTER' })
+    ).json() as { crawlId: string };
+
+    const otherPlatform = await trigger({
+      platform: OTHER_PLATFORM,
+      queue: QUEUE,
+      tierFloor: 'MASTER',
+    });
+    const otherQueue = await trigger({
+      platform: PLATFORM,
+      queue: 'RANKED_FLEX_SR',
+      tierFloor: 'MASTER',
+    });
+
+    expect(otherPlatform.json()).toMatchObject({
+      status: 'started',
+      platform: OTHER_PLATFORM,
+      queue: QUEUE,
+    });
+    expect(otherQueue.json()).toMatchObject({
+      status: 'started',
+      platform: PLATFORM,
+      queue: 'RANKED_FLEX_SR',
+    });
+    for (const res of [otherPlatform, otherQueue]) {
+      expect((res.json() as { crawlId: string }).crawlId).not.toBe(first.crawlId);
+    }
   });
 
   it('rejects a tier floor and a queue Riot does not serve', async ({ skip }) => {
@@ -232,11 +277,72 @@ describe('GET /v1/admin/ladder/crawls', () => {
       platform: PLATFORM,
       queue: QUEUE,
       status: 'running',
+      // A crawl starts by walking the ladder; nothing it discovers is fetched
+      // until every leg of that stage is in.
+      phase: 'enumerate',
       pagesFetched: 0,
       entriesSeen: 0,
+      matchIdsSeen: 0,
+      matchesQueued: 0,
       pendingLegs: 3,
     });
     expect(crawls[0]?.['finishedAt']).toBeNull();
+  });
+});
+
+describe('GET /v1/admin/ladder/options', () => {
+  const options = (key = adminKey) =>
+    app!.inject({ method: 'GET', url: '/v1/admin/ladder/options', headers: auth(key) });
+
+  it('offers the ladders a crawl can name, and this deployment’s defaults', async ({ skip }) => {
+    if (!available || !app) return skip();
+    const res = await options();
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      platforms: { id: string; label: string }[];
+      queues: string[];
+      tiers: string[];
+      defaults: Record<string, unknown>;
+    };
+
+    // The dashboard's form is built from this, so a value it offers has to be
+    // one the trigger route accepts — same enums, one source.
+    expect(body.platforms.map((p) => p.id)).toContain(PLATFORM);
+    expect(body.platforms.every((p) => p.label.length > 0)).toBe(true);
+    expect(body.queues).toContain(QUEUE);
+    expect(body.tiers).toEqual([
+      'IRON',
+      'BRONZE',
+      'SILVER',
+      'GOLD',
+      'PLATINUM',
+      'EMERALD',
+      'DIAMOND',
+      'MASTER',
+      'GRANDMASTER',
+      'CHALLENGER',
+    ]);
+    expect(body.defaults).toMatchObject({
+      platform: config.DEFAULT_PLATFORM,
+      tierFloor: config.ladderTierFloor,
+      backfillTierFloor: config.ladderBackfillTierFloor,
+      backfillLimit: config.LADDER_BACKFILL_LIMIT,
+    });
+
+    // The form's own defaults, submitted — on this suite's platform rather
+    // than the configured one, which a developer's real crawl may hold.
+    const started = await trigger({
+      platform: PLATFORM,
+      queue: body.defaults['queue'] as string,
+      tierFloor: body.defaults['tierFloor'] as string,
+    });
+    expect(started.statusCode).toBe(202);
+  });
+
+  it('needs the admin scope like everything else here', async ({ skip }) => {
+    if (!available || !app) return skip();
+    expect((await options(readKey)).statusCode).toBe(403);
   });
 });
 
