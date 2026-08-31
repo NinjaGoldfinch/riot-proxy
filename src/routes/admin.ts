@@ -23,10 +23,13 @@ import {
   type BackfillEnqueueResult,
   type BackfillPlayerJob,
 } from '../jobs/queues.js';
+import { buildMetricsSnapshot } from '../stats/snapshot.js';
+import { wsHub } from '../ws/index.js';
 import {
   AdminStatsResponse,
   ConsumerListResponse,
   GameNameParam,
+  MetricsResponse,
   PassthroughResponse,
   PlatformParam,
   PlayerListResponse,
@@ -321,6 +324,30 @@ const adminRoutes: FastifyPluginAsync = async (fastify) => {
       archivedMatches: await countArchivedMatches(),
       trackedPlayers: await countTrackedPlayers(),
     }),
+  );
+
+  fastify.get(
+    '/v1/admin/metrics',
+    {
+      ...adminScope,
+      schema: {
+        tags: ['admin'],
+        summary: 'Operational snapshot',
+        description:
+          'The same document the `metrics` WebSocket topic ticks, built by the same function — ' +
+          'fetch this once on load, then subscribe for updates. The `ws`, `events` and `cache` ' +
+          'sections are counted by the api process answering this request; everything else ' +
+          '(archive counts, queue populations, limiter state) is shared state and identical ' +
+          'from any instance.',
+        response: { 200: MetricsResponse, ...localErrors },
+      },
+    },
+    async () =>
+      buildMetricsSnapshot({
+        wsConnections: wsHub.size,
+        wsSubscriptions: wsHub.subscriptionCount,
+        wsEventCounts: wsHub.eventCounts,
+      }),
   );
 
   /**

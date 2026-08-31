@@ -18,6 +18,7 @@ import playerRoutes from './routes/players.js';
 import riotRoutes from './routes/riot.js';
 import { sharedSchemas } from './routes/schemas.js';
 import staticRoutes from './routes/static.js';
+import { metricsBroadcaster } from './stats/broadcaster.js';
 import wsRoutes from './ws/index.js';
 
 export async function buildApp() {
@@ -123,6 +124,10 @@ export async function buildApp() {
   await app.register(adminRoutes);
   await app.register(debugRoutes);
   await app.register(wsRoutes);
+  // The `metrics` topic's clock. Idle while nothing is subscribed, and stopped
+  // with the app so tests and write-spec runs never leave a timer behind.
+  metricsBroadcaster.start();
+  app.addHook('onClose', async () => metricsBroadcaster.stop());
   // Development-only browser client (§ none — it is a tool, not a contract).
   if (config.devUi) await app.register(devUiRoutes);
   // After the routes: the page can only describe what is already registered.

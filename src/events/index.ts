@@ -1,5 +1,6 @@
 import { logger } from '../logger.js';
 import { publisher } from '../redis.js';
+import type { MetricsSnapshotData } from '../stats/schema.js';
 import { channelFor } from './topics.js';
 
 /** §11 — the realtime event catalogue. */
@@ -20,6 +21,7 @@ export interface EventPayloads {
   };
   'match.archived': { puuid?: string; matchId: string };
   'patch.new': { version: string };
+  'metrics.snapshot': MetricsSnapshotData;
 }
 
 export type EventName = keyof EventPayloads;
@@ -40,6 +42,9 @@ export interface ProxyEvent<E extends EventName = EventName> {
 export {
   playerTopic,
   PATCH_TOPIC,
+  METRICS_TOPIC,
+  FIREHOSE_TOPIC,
+  ADMIN_TOPICS,
   channelFor,
   CHANNEL_PATTERN,
   topicFromChannel,

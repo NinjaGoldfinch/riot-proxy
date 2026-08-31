@@ -490,8 +490,8 @@ src/
 ├─ events/         topics + pub/sub     ├─ static/           Data Dragon mirror
 └─ riot/                                ├─ auth/             consumer auth + scopes
    ├─ routing.ts   platform ↔ region    ├─ docs/             OpenAPI document + /docs
-   ├─ endpoints.ts ids, URLs, TTLs      └─ cli/             key minting, resets, spec
-   ├─ client.ts    undici pools + §5.5 error policy
+   ├─ endpoints.ts ids, URLs, TTLs      ├─ stats/            the metrics snapshot + its clock
+   ├─ client.ts    undici + §5.5 errors └─ cli/              key minting, resets, spec
    └─ limiter.ts   header-driven token buckets
 
 test/              unit + integration, every upstream call stubbed

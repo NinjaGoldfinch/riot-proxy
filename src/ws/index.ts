@@ -3,9 +3,15 @@ import type { FastifyPluginAsync } from 'fastify';
 // and the (socket, request) handler signature.
 import type { WebSocket } from '@fastify/websocket';
 import '@fastify/websocket';
-import { resolveConsumer, bearerFrom, DEV_CONSUMER } from '../auth/plugin.js';
+import { resolveConsumer, bearerFrom, ipAllowed, DEV_CONSUMER } from '../auth/plugin.js';
 import { config } from '../config.js';
-import { CHANNEL_PATTERN, parseEvent, topicFromChannel } from '../events/index.js';
+import {
+  ADMIN_TOPICS,
+  CHANNEL_PATTERN,
+  FIREHOSE_TOPIC,
+  parseEvent,
+  topicFromChannel,
+} from '../events/index.js';
 import { logger } from '../logger.js';
 import { wsConnections } from '../metrics.js';
 import { subscriber } from '../redis.js';
@@ -16,6 +22,12 @@ interface Client {
   topics: Set<string>;
   missedPongs: number;
   consumer: string;
+  /**
+   * Resolved once at the handshake — scope *and* the admin IP allowlist, the
+   * same pair the HTTP admin routes check — so the subscribe handler can gate
+   * `ADMIN_TOPICS` without another round-trip.
+   */
+  admin: boolean;
 }
 
 /**
@@ -28,8 +40,28 @@ export class WsHub {
   private started = false;
   private heartbeat?: NodeJS.Timeout;
 
+  /** Events relayed since this instance started, by event name (cumulative). */
+  private readonly relayed = new Map<string, number>();
+
   get size(): number {
     return this.clients.size;
+  }
+
+  /** Topics held, summed over all local sockets. */
+  get subscriptionCount(): number {
+    let total = 0;
+    for (const client of this.clients) total += client.topics.size;
+    return total;
+  }
+
+  get eventCounts(): Record<string, number> {
+    return Object.fromEntries(this.relayed);
+  }
+
+  countSubscribers(topic: string): number {
+    let total = 0;
+    for (const client of this.clients) if (client.topics.has(topic)) total += 1;
+    return total;
   }
 
   async start(): Promise<void> {
@@ -68,8 +100,11 @@ export class WsHub {
   private relay(topic: string, message: string): void {
     const event = parseEvent(message);
     if (!event) return;
+    this.relayed.set(event.event, (this.relayed.get(event.event) ?? 0) + 1);
     for (const client of this.clients) {
-      if (!client.topics.has(topic)) continue;
+      // The firehose mirrors every topic. No authz check here: only an admin
+      // socket can ever hold it (see the subscribe handler).
+      if (!client.topics.has(topic) && !client.topics.has(FIREHOSE_TOPIC)) continue;
       safeSend(client.socket, message);
     }
   }
@@ -128,9 +163,21 @@ function onMessage(client: Client, raw: string): void {
   switch (msg.op) {
     case 'subscribe': {
       for (const topic of topics) {
+        if (ADMIN_TOPICS.has(topic) && !client.admin) {
+          safeSend(
+            socket,
+            JSON.stringify({
+              op: 'error',
+              error: { code: 'FORBIDDEN', message: `Topic '${topic}' requires the admin scope` },
+            }),
+          );
+          continue;
+        }
         if (client.topics.size >= MAX_TOPICS_PER_SOCKET) break;
         client.topics.add(topic);
       }
+      // The acknowledgement lists what the socket actually holds, so a refused
+      // or dropped topic is visible the same way: absent.
       safeSend(socket, JSON.stringify({ op: 'subscribed', topics: [...client.topics] }));
       break;
     }
@@ -194,6 +241,7 @@ const wsRoutes: FastifyPluginAsync = async (fastify) => {
         topics: new Set<string>(),
         missedPongs: 0,
         consumer: consumer.name,
+        admin: consumer.scopes.includes('admin') && ipAllowed(request.ip, config.adminIpAllowlist),
       };
       wsHub.add(client);
       logger.debug({ consumer: consumer.name }, 'websocket connected');
