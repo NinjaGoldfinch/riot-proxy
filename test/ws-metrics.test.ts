@@ -8,6 +8,7 @@ import { closeDb, pingDb } from '../src/db/index.js';
 import { createTestConsumer, removeTestConsumers, testConsumerName } from './helpers/consumers.js';
 import { EVENT_EXAMPLES } from '../src/events/examples.js';
 import { FIREHOSE_TOPIC, METRICS_TOPIC, playerTopic, publish } from '../src/events/index.js';
+import { KEY_SCOPE } from '../src/config.js';
 import { closeRedis, redis } from '../src/redis.js';
 import { METRICS_LOCK_KEY, metricsBroadcaster } from '../src/stats/broadcaster.js';
 import { wsHub } from '../src/ws/index.js';
@@ -97,6 +98,17 @@ function within(socket: WebSocket, windowMs: number): Promise<Record<string, unk
 
 const SAMPLE = EVENT_EXAMPLES['metrics.snapshot'].data;
 
+/**
+ * Only snapshots this suite produced. The evt:* channels are shared across
+ * everything on one Redis — a dev server with its own dashboard open ticks
+ * snapshots onto the same 'metrics' topic while the suite runs, and an
+ * assertion that counts *any* snapshot is flaky the moment one leaks in. Each
+ * snapshot names its producer via keyScope, and the suite's is pinned.
+ */
+const snapshotFrom = (scope: string) => (m: Record<string, unknown>) =>
+  m['event'] === 'metrics.snapshot' && (m['data'] as { keyScope?: string })?.keyScope === scope;
+const ourSnapshot = snapshotFrom(KEY_SCOPE);
+
 describe('admin-only topics (§11)', () => {
   it('refuses both admin topics to a read-scoped key, and says so per topic', async ({ skip }) => {
     if (!available) return skip();
@@ -135,12 +147,13 @@ describe('admin-only topics (§11)', () => {
       FIREHOSE_TOPIC,
     ]);
 
-    const received = collect(socket, (m) => m.some((x) => x['event'] === 'metrics.snapshot'));
+    const fromSample = snapshotFrom(SAMPLE.keyScope);
+    const received = collect(socket, (m) => m.some(fromSample));
     await new Promise((r) => setTimeout(r, 150));
     await publish('metrics.snapshot', METRICS_TOPIC, SAMPLE);
 
     const msgs = await received;
-    const event = msgs.find((m) => m['event'] === 'metrics.snapshot');
+    const event = msgs.find(fromSample);
     expect(event).toMatchObject({ topic: METRICS_TOPIC, data: { v: 1 } });
     socket.close();
   });
@@ -191,7 +204,7 @@ describe('the metrics broadcaster', () => {
 
     const frames = within(socket, 600);
     await metricsBroadcaster.tick();
-    expect((await frames).some((m) => m['event'] === 'metrics.snapshot')).toBe(false);
+    expect((await frames).some(ourSnapshot)).toBe(false);
     socket.close();
   });
 
@@ -205,7 +218,7 @@ describe('the metrics broadcaster', () => {
     await redis.set(METRICS_LOCK_KEY, '1', 'PX', 5000);
     const frames = within(socket, 600);
     await metricsBroadcaster.tick();
-    expect((await frames).some((m) => m['event'] === 'metrics.snapshot')).toBe(false);
+    expect((await frames).some(ourSnapshot)).toBe(false);
     socket.close();
   });
 
@@ -217,10 +230,10 @@ describe('the metrics broadcaster', () => {
     await acked;
     await new Promise((r) => setTimeout(r, 150));
 
-    const received = collect(socket, (m) => m.some((x) => x['event'] === 'metrics.snapshot'));
+    const received = collect(socket, (m) => m.some(ourSnapshot));
     await metricsBroadcaster.tick();
 
-    const event = (await received).find((m) => m['event'] === 'metrics.snapshot');
+    const event = (await received).find(ourSnapshot);
     const data = event?.['data'] as { v: number; ws: { connections: number } };
     expect(data.v).toBe(1);
     expect(data.ws.connections).toBeGreaterThanOrEqual(1);
