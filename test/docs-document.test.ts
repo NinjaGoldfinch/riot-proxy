@@ -5,8 +5,11 @@ import { buildApp, type App } from '../src/app.js';
 import { closeDb, pingDb } from '../src/db/index.js';
 import { closeRedis, redis } from '../src/redis.js';
 import { DEFAULT_STATUS, ERROR_CODES, type ErrorCode } from '../src/errors.js';
-import { ANON_QUOTA_PER_MIN, DEFAULT_QUOTA_PER_MIN } from '../src/quotas.js';
 import { ERROR_EXAMPLES } from '../src/docs/examples.js';
+import { EVENT_EXAMPLES } from '../src/events/examples.js';
+import { ANON_QUOTA_PER_MIN, DEFAULT_QUOTA_PER_MIN } from '../src/quotas.js';
+import { KEY_PREFIX } from '../src/keys.js';
+import { HEARTBEAT_MS, MAX_MISSED_PONGS, MAX_TOPICS_PER_SOCKET } from '../src/ws/constants.js';
 import { wsHub } from '../src/ws/index.js';
 
 /**
@@ -364,16 +367,27 @@ describe('the document itself (#62)', () => {
     if (!available || !doc) return skip();
     const ws = doc.tags.find((t: { name: string }) => t.name === 'ws');
     expect(ws.description).toContain('?token=');
-    for (const event of [
-      'game.started',
-      'game.ended',
-      'rank.changed',
-      'match.archived',
-      'patch.new',
-    ]) {
+    // Iterated rather than listed: the samples are the source the tag is
+    // rendered from, so a renamed field fails here as well as failing to
+    // compile — and a new event cannot ship undocumented.
+    for (const [event, sample] of Object.entries(EVENT_EXAMPLES)) {
       expect(ws.description, `${event} missing from the ws tag`).toContain(event);
+      for (const field of Object.keys(sample.data)) {
+        expect(ws.description, `${event}.${field} missing from the ws tag`).toContain(`"${field}"`);
+      }
     }
     expect(ws.description).toContain('only ever fires for a _tracked_ player');
+  });
+
+  it('states the socket limits the hub enforces, and the topic ceiling', ({ skip }) => {
+    if (!available || !doc) return skip();
+    const ws = doc.tags.find((t: { name: string }) => t.name === 'ws');
+    expect(ws.description).toContain(`pings every ${HEARTBEAT_MS / 1000} s`);
+    expect(ws.description).toContain(`misses ${MAX_MISSED_PONGS} consecutive pongs`);
+    // The 200-topic cap is silent at runtime — a client that subscribes past it
+    // is acknowledged and simply not subscribed — so the reference is the only
+    // place it can be discovered.
+    expect(ws.description).toContain(`at most ${MAX_TOPICS_PER_SOCKET} topics`);
   });
 
   it('generates its numbers from config rather than stating them', ({ skip }) => {
@@ -397,6 +411,7 @@ describe('the document itself (#62)', () => {
     const prose = (doc.info.description as string).replace(/\s+/g, ' ');
     expect(prose).toContain(`the default is ${DEFAULT_QUOTA_PER_MIN}/min`);
     expect(prose).toContain(`unauthenticated callers get ${ANON_QUOTA_PER_MIN}/min`);
+    expect(prose).toContain(`Authorization: Bearer ${KEY_PREFIX}`);
   });
 
   it('badges each route with what it costs', ({ skip }) => {

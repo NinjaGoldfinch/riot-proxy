@@ -1,5 +1,6 @@
 import { logger } from '../logger.js';
 import { publisher } from '../redis.js';
+import { channelFor } from './topics.js';
 
 /** §11 — the realtime event catalogue. */
 export interface EventPayloads {
@@ -32,20 +33,17 @@ export interface ProxyEvent<E extends EventName = EventName> {
 
 /**
  * Topics are what clients subscribe to (§11): `player:<puuid>` for anything
- * about one player, `patch` for global patch events.
+ * about one player, `patch` for global patch events. Defined in a leaf module
+ * so the reference can read them; re-exported here because this is where the
+ * rest of the service expects to find them.
  */
-export function playerTopic(puuid: string): string {
-  return `player:${puuid}`;
-}
-
-export const PATCH_TOPIC = 'patch';
-
-export const channelFor = (topic: string) => `evt:${topic}`;
-export const CHANNEL_PATTERN = 'evt:*';
-
-export function topicFromChannel(channel: string): string {
-  return channel.startsWith('evt:') ? channel.slice(4) : channel;
-}
+export {
+  playerTopic,
+  PATCH_TOPIC,
+  channelFor,
+  CHANNEL_PATTERN,
+  topicFromChannel,
+} from './topics.js';
 
 /**
  * Worker → Redis → every api instance → local sockets. Publishing is

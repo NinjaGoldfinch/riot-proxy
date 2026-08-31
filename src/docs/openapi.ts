@@ -1,8 +1,12 @@
 import { config } from '../config.js';
 import { DEFAULT_STATUS, type ErrorCode } from '../errors.js';
+import { EVENT_EXAMPLES } from '../events/examples.js';
+import { PATCH_TOPIC } from '../events/topics.js';
+import { KEY_PREFIX } from '../keys.js';
 import { ANON_QUOTA_PER_MIN, DEFAULT_QUOTA_PER_MIN } from '../quotas.js';
 import { ENDPOINTS, type EndpointSpec } from '../riot/endpoints.js';
 import { REFRESH_COOLDOWN_S } from '../routes/players.js';
+import { HEARTBEAT_MS, MAX_MISSED_PONGS, MAX_TOPICS_PER_SOCKET } from '../ws/constants.js';
 
 /**
  * The document's own content (#62) — everything that is not derived from a
@@ -99,7 +103,7 @@ Three things it does that calling Riot directly does not:
 Every route outside \`ops\` needs a consumer key, as a bearer token:
 
 \`\`\`
-Authorization: Bearer rpx_…
+Authorization: Bearer ${KEY_PREFIX}…
 \`\`\`
 
 Keys are issued by an operator (\`POST /v1/admin/consumers\`) and shown exactly
@@ -168,16 +172,29 @@ why \`keyScope\` appears in \`/readyz\` and \`/v1/admin/stats\`. Match IDs are
 `.trim();
 
 /**
+ * One sample per event, as the envelope a client actually receives. Two-space
+ * JSON rather than the hand-packed block this replaced (#74): it is longer, and
+ * it is generated from `EVENT_EXAMPLES`, so it cannot describe a field the
+ * service stopped publishing.
+ */
+const eventSamples = Object.values(EVENT_EXAMPLES)
+  .map((sample) => JSON.stringify(sample, null, 2))
+  .join('\n\n');
+
+/**
  * §11 as prose. OpenAPI 3.1 cannot express a WebSocket — `webhooks` is the
  * wrong shape too, since we are the server and the transport is a persistent
  * socket rather than a callback — so `/v1/ws` is absent as an operation and the
  * protocol is documented here instead. Scalar renders tag descriptions as full
  * markdown, so the samples survive. If this ever needs to be machine-readable
  * the answer is a separate AsyncAPI document, not a contortion of this one.
+ *
+ * Prose, but not hand-typed: the samples, the heartbeat, the topic ceiling and
+ * the key prefix are all read from the code that implements them (#74).
  */
 const wsDescription = `
 \`\`\`
-GET /v1/ws?token=rpx_…
+GET /v1/ws?token=${KEY_PREFIX}…
 \`\`\`
 
 A WebSocket. Auth is the same consumer key, in the query string rather than a
@@ -186,7 +203,7 @@ header, because a browser \`WebSocket\` cannot set one.
 **Client → server**
 
 \`\`\`json
-{ "op": "subscribe",   "topics": ["player:<puuid>", "patch"] }
+{ "op": "subscribe",   "topics": ["player:<puuid>", "${PATCH_TOPIC}"] }
 { "op": "unsubscribe", "topics": ["player:<puuid>"] }
 { "op": "ping" }
 \`\`\`
@@ -195,26 +212,24 @@ header, because a browser \`WebSocket\` cannot set one.
 change, \`pong\`, \`error\`, and the events themselves:
 
 \`\`\`json
-{ "event": "game.started",   "topic": "player:…", "at": 1756000000000,
-  "data": { "puuid": "…", "platform": "euw1", "gameId": 1234567890,
-            "championId": 64, "queueId": 420 } }
-{ "event": "game.ended",     "data": { "puuid": "…", "gameId": 1234567890 } }
-{ "event": "rank.changed",   "data": { "puuid": "…", "queue": "RANKED_SOLO_5x5",
-            "before": { "tier": "GOLD", "rank": "I", "lp": 98 },
-            "after":  { "tier": "PLATINUM", "rank": "IV", "lp": 12 } } }
-{ "event": "match.archived", "data": { "puuid": "…", "matchId": "EUW1_7381937461" } }
-{ "event": "patch.new",      "data": { "version": "15.16.1" } }
+${eventSamples}
 \`\`\`
 
-Two topics exist: \`player:<puuid>\` and \`patch\`.
+Two topics exist: \`player:<puuid>\` and \`${PATCH_TOPIC}\`.
 
 **A player topic only ever fires for a _tracked_ player.** Subscribing to an
 untracked PUUID is accepted and then silent — nothing polls them, so there is
 nothing to report. Tracking is an operator action
 (\`POST /v1/admin/tracked-players\`).
 
-The server pings every 30 s and drops a connection that misses two consecutive
-pongs.
+One socket holds at most ${MAX_TOPICS_PER_SOCKET} topics. Subscribing past that
+is not an error and not honoured: the extra topics are dropped, and the
+\`subscribed\` acknowledgement lists what you actually hold — compare it with
+what you asked for rather than assuming. Above that ceiling, use more than one
+socket.
+
+The server pings every ${HEARTBEAT_MS / 1000} s and drops a connection that
+misses ${MAX_MISSED_PONGS} consecutive pongs.
 `.trim();
 
 const tags = [
@@ -303,8 +318,8 @@ export const openApiDocument = {
         type: 'http',
         scheme: 'bearer',
         description:
-          'A consumer key, `rpx_…`, issued by `POST /v1/admin/consumers` and shown exactly ' +
-          'once. Only its SHA-256 is stored.',
+          `A consumer key, \`${KEY_PREFIX}…\`, issued by \`POST /v1/admin/consumers\` and ` +
+          'shown exactly once. Only its SHA-256 is stored.',
       },
       tokenQuery: {
         type: 'apiKey',
