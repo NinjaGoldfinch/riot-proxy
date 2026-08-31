@@ -5,6 +5,7 @@ import { countPlayers, countTrackedPlayers } from '../db/players.js';
 import { allQueues } from '../jobs/queues.js';
 import { cacheReadsTotal, type CacheOutcome } from '../metrics.js';
 import { limiter } from '../riot/limiter.js';
+import { PLATFORM_LABELS, REGION_LABELS, isPlatform, isRegion } from '../riot/routing.js';
 import type { MetricsSnapshotData } from './schema.js';
 
 /**
@@ -27,7 +28,8 @@ const QUEUE_STATES = [
   'completed',
 ] as const;
 
-async function queueCounts(): Promise<MetricsSnapshotData['queues']> {
+/** Exported for the history recorder, which cuts a compact point from the same reads. */
+export async function queueCounts(): Promise<MetricsSnapshotData['queues']> {
   const counts = await Promise.all(allQueues.map((q) => q.getJobCounts(...QUEUE_STATES)));
   return Object.fromEntries(
     allQueues.map((q, i) => {
@@ -48,19 +50,28 @@ async function queueCounts(): Promise<MetricsSnapshotData['queues']> {
 }
 
 async function limiterState(): Promise<MetricsSnapshotData['limiter']> {
-  const scopes = await limiter.knownScopes();
+  const scopes = await limiter.knownScopeMethods();
   return Promise.all(
-    scopes.map(async (scope) => {
-      const [windows, frozenMs] = await Promise.all([
+    [...scopes].map(async ([scope, methodNames]) => {
+      const [windows, frozenMs, methods] = await Promise.all([
         limiter.usage(scope),
         limiter.isFrozen(scope),
+        limiter.methodUsage(scope, methodNames),
       ]);
-      return { scope, frozenMs, windows };
+      const kind = isPlatform(scope) ? 'platform' : isRegion(scope) ? 'region' : 'other';
+      const label =
+        kind === 'platform'
+          ? PLATFORM_LABELS[scope as keyof typeof PLATFORM_LABELS]
+          : kind === 'region'
+            ? REGION_LABELS[scope as keyof typeof REGION_LABELS]
+            : scope;
+      return { scope, kind, label, frozenMs, windows, methods };
     }),
   );
 }
 
-async function cacheCounts(): Promise<MetricsSnapshotData['cache']> {
+/** Exported for the history recorder, which cuts a compact point from the same reads. */
+export async function cacheCounts(): Promise<MetricsSnapshotData['cache']> {
   const out: MetricsSnapshotData['cache'] = { hit: 0, miss: 0, neg: 0, stale: 0 };
   const metric = await cacheReadsTotal.get();
   for (const { labels, value } of metric.values) {

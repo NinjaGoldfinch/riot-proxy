@@ -90,6 +90,14 @@ const EnvSchema = Type.Object({
   METRICS_INTERVAL_S: Type.Integer({ default: 5, minimum: 1, maximum: 300 }),
 
   /**
+   * Cadence of the metrics *history* — a compact point written to a capped
+   * Redis list so the dashboard can draw the last day. Unlike the live tick
+   * this records whether or not anyone is watching; that is the point of a
+   * history, and one count query per minute is free.
+   */
+  METRICS_HISTORY_INTERVAL_S: Type.Integer({ default: 60, minimum: 10, maximum: 3600 }),
+
+  /**
    * Serve the operational dashboard at `/dashboard` (see
    * `public/dashboard.html`). Like DOCS_UI this defaults **on in production**:
    * the dashboard is an operator tool for the deployed service, and the page

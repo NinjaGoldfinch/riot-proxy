@@ -11,9 +11,9 @@ import { METRICS_TOPIC, PATCH_TOPIC, playerTopic } from './topics.js';
  * the documented shape cannot drift from the published one, and a consumer
  * parsing these is parsing the real thing.
  *
- * The import of `EventPayloads` is type-only and `./topics.js` has no imports
- * at all, so this module stays free of side effects: rendering the document
- * must not open a connection to Redis.
+ * The import of `EventPayloads` is type-only and `./topics.js` reaches no
+ * further than config, so this module stays free of the side effect that
+ * matters: rendering the document must not open a connection to Redis.
  */
 export const EVENT_EXAMPLES: { [E in EventName]: ProxyEvent<E> } = {
   'game.started': {
@@ -84,10 +84,18 @@ export const EVENT_EXAMPLES: { [E in EventName]: ProxyEvent<E> } = {
       limiter: [
         {
           scope: 'euw1',
+          kind: 'platform',
+          label: 'EU West',
           frozenMs: 0,
           windows: [
             { window: '20:1', used: 3, limit: 20 },
             { window: '100:120', used: 41, limit: 100 },
+          ],
+          methods: [
+            {
+              method: 'summoner.byPuuid',
+              windows: [{ window: '1600:60', used: 12, limit: 1600 }],
+            },
           ],
         },
       ],

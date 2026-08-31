@@ -69,6 +69,14 @@ export const PLATFORM_LABELS: Record<Platform, string> = {
   vn2: 'Vietnam',
 };
 
+/** Labels for the regional hosts, same audience as PLATFORM_LABELS. */
+export const REGION_LABELS: Record<Region, string> = {
+  americas: 'Americas',
+  europe: 'Europe',
+  asia: 'Asia',
+  sea: 'Southeast Asia',
+};
+
 const PLATFORM_SET = new Set<string>(PLATFORMS);
 const REGION_SET = new Set<string>(REGIONS);
 

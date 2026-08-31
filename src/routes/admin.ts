@@ -23,12 +23,14 @@ import {
   type BackfillEnqueueResult,
   type BackfillPlayerJob,
 } from '../jobs/queues.js';
+import { METRICS_HISTORY_MAX_POINTS, readMetricsHistory } from '../stats/history.js';
 import { buildMetricsSnapshot } from '../stats/snapshot.js';
 import { wsHub } from '../ws/index.js';
 import {
   AdminStatsResponse,
   ConsumerListResponse,
   GameNameParam,
+  MetricsHistoryResponse,
   MetricsResponse,
   PassthroughResponse,
   PlatformParam,
@@ -348,6 +350,30 @@ const adminRoutes: FastifyPluginAsync = async (fastify) => {
         wsSubscriptions: wsHub.subscriptionCount,
         wsEventCounts: wsHub.eventCounts,
       }),
+  );
+
+  fastify.get(
+    '/v1/admin/metrics/history',
+    {
+      ...adminScope,
+      schema: {
+        tags: ['admin'],
+        summary: 'Metrics history',
+        description:
+          'Compact operational points recorded every `METRICS_HISTORY_INTERVAL_S` seconds ' +
+          '(default 60) into a capped list — 1440 points, a day at the default cadence — ' +
+          'whether or not anything is subscribed to the live topic. This is what lets a ' +
+          'dashboard opened cold draw the last 24 h. The `cache` counters belong to whichever ' +
+          'api process recorded each point: diff consecutive points for a rate, and read a ' +
+          'negative step as that process restarting.',
+        response: { 200: MetricsHistoryResponse, ...localErrors },
+      },
+    },
+    async () => ({
+      intervalS: config.METRICS_HISTORY_INTERVAL_S,
+      maxPoints: METRICS_HISTORY_MAX_POINTS,
+      points: await readMetricsHistory(),
+    }),
   );
 
   /**
