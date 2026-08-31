@@ -85,6 +85,15 @@ const CONFIG_CACHE_MS = 10_000;
 interface CachedConfig {
   windows: LimitWindow[];
   at: number;
+  /**
+   * Whether Redis holds this config, as opposed to a local fallback. The
+   * distinction is load-bearing: `storeConfig` skips its write when nothing
+   * changed, and a fallback that happens to equal the header — a development
+   * key's real app limits are exactly `BOOTSTRAP_APP_LIMITS` — must not count
+   * as "nothing changed", or the config key is never written and the scope
+   * never appears in `knownScopes()`.
+   */
+  stored: boolean;
 }
 
 export interface AcquireResult {
@@ -151,7 +160,7 @@ export class RateLimiter {
     const stored = await this.redis.get(key);
     const windows = stored ? parseLimitHeader(stored) : kind === 'app' ? BOOTSTRAP_APP_LIMITS : []; // Method limits are unknown until Riot tells us; app limits still apply.
 
-    this.localConfig.set(key, { windows, at: Date.now() });
+    this.localConfig.set(key, { windows, at: Date.now(), stored: stored !== null });
     return windows;
   }
 
@@ -298,9 +307,12 @@ export class RateLimiter {
     const cached = this.localConfig.get(key);
     const parsed = parseLimitHeader(header);
     // Skip the write when nothing changed — this runs on every single response.
-    if (cached && serialiseWindows(cached.windows) === serialiseWindows(parsed)) return;
-    this.localConfig.set(key, { windows: parsed, at: Date.now() });
+    // Only a config Redis actually holds counts: the bootstrap fallback equals
+    // a development key's real app limits, and skipping on that match left the
+    // config key unwritten forever (and the scope invisible to knownScopes()).
+    if (cached?.stored && serialiseWindows(cached.windows) === serialiseWindows(parsed)) return;
     await this.redis.set(key, header, 'EX', 86_400);
+    this.localConfig.set(key, { windows: parsed, at: Date.now(), stored: true });
   }
 
   private async evalSync(argv: (string | number)[]): Promise<void> {
@@ -360,22 +372,87 @@ export class RateLimiter {
     }));
   }
 
-  /**
-   * Every scope this deployment has been taught limits for — one config key per
-   * platform/region Riot has answered from, so the set is small and bounded by
-   * the routing table. SCAN rather than KEYS: the admin surface must not stall
-   * Redis under everything else.
-   */
-  async knownScopes(): Promise<string[]> {
-    const prefix = `rl:cfg:app:${KEY_SCOPE}:`;
-    const scopes: string[] = [];
+  /** SCAN rather than KEYS: the admin surface must not stall Redis under everything else. */
+  private async scanKeys(pattern: string): Promise<string[]> {
+    const keys: string[] = [];
     let cursor = '0';
     do {
-      const [next, keys] = await this.redis.scan(cursor, 'MATCH', `${prefix}*`, 'COUNT', 100);
+      const [next, batch] = await this.redis.scan(cursor, 'MATCH', pattern, 'COUNT', 500);
       cursor = next;
-      for (const key of keys) scopes.push(key.slice(prefix.length));
+      keys.push(...batch);
     } while (cursor !== '0');
-    return scopes.sort();
+    return keys;
+  }
+
+  /**
+   * Every scope this deployment has been taught limits for, with the methods
+   * known per scope — the set is small and bounded by the routing table.
+   *
+   * Both config families are read, not just the app one: the app config is
+   * written from the first response like any other, but a deployment that ran
+   * before that fix has method configs with no app sibling, and a scope Riot
+   * has answered from deserves to be listed either way.
+   */
+  async knownScopeMethods(): Promise<Map<string, string[]>> {
+    const appPrefix = `rl:cfg:app:${KEY_SCOPE}:`;
+    const methodPrefix = `rl:cfg:m:${KEY_SCOPE}:`;
+    const [appKeys, methodKeys] = await Promise.all([
+      this.scanKeys(`${appPrefix}*`),
+      this.scanKeys(`${methodPrefix}*`),
+    ]);
+
+    const scopes = new Map<string, string[]>();
+    for (const key of appKeys) {
+      const scope = key.slice(appPrefix.length);
+      if (!scopes.has(scope)) scopes.set(scope, []);
+    }
+    for (const key of methodKeys) {
+      const [scope, method] = key.slice(methodPrefix.length).split(':');
+      if (!scope || !method) continue;
+      const methods = scopes.get(scope);
+      if (methods) methods.push(method);
+      else scopes.set(scope, [method]);
+    }
+    for (const methods of scopes.values()) methods.sort();
+    return new Map([...scopes].sort(([a], [b]) => a.localeCompare(b)));
+  }
+
+  async knownScopes(): Promise<string[]> {
+    return [...(await this.knownScopeMethods()).keys()];
+  }
+
+  /**
+   * Current usage per method window, for the scopes/methods the caller already
+   * discovered via `knownScopeMethods()` — taking the list rather than
+   * re-scanning keeps one snapshot tick to one scan per config family.
+   */
+  async methodUsage(
+    scope: string,
+    methods: string[],
+  ): Promise<{ method: string; windows: { window: string; used: number; limit: number }[] }[]> {
+    if (methods.length === 0) return [];
+    const perMethod = await Promise.all(
+      methods.map((method) => this.windowsFor('method', scope, method)),
+    );
+
+    const now = Date.now();
+    const pipeline = this.redis.pipeline();
+    for (const [i, method] of methods.entries()) {
+      for (const w of perMethod[i] ?? []) {
+        pipeline.zcount(bucketKey.method(scope, method, w), `(${now - w.seconds * 1000}`, '+inf');
+      }
+    }
+    const results = await pipeline.exec();
+
+    let cursor = 0;
+    return methods.map((method, i) => ({
+      method,
+      windows: (perMethod[i] ?? []).map((w) => ({
+        window: `${w.limit}:${w.seconds}`,
+        used: Number(results?.[cursor++]?.[1] ?? 0),
+        limit: w.limit,
+      })),
+    }));
   }
 
   /** Test helper: forget locally cached limit configs. */

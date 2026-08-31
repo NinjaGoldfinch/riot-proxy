@@ -28,6 +28,10 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // The config writes here carry no TTL, and `beforeEach` only cleans on the
+  // way *in* — without this, the last test's `test-region` config outlives the
+  // suite forever and shows up in whatever else shares this Redis.
+  if (available) await clearScope();
   if (available) await redis.quit();
 });
 
@@ -365,6 +369,62 @@ describe.runIf(process.env['SKIP_REDIS_TESTS'] !== '1')('rate limiter against Re
     expect(third).toHaveLength(3);
     // `riot:<token>:<n>` — two syncs padded, so two distinct tokens.
     expect(new Set(third.map((m) => m.split(':')[1])).size).toBe(2);
+  });
+
+  /**
+   * A development key's real app limits are exactly `BOOTSTRAP_APP_LIMITS`, and
+   * `storeConfig` used to skip its write whenever the header matched the local
+   * cache — a cache `windowsFor` had just primed with those same bootstrap
+   * values. So the app config was never persisted, and the scope never appeared
+   * in `knownScopes()`: a dev deployment's dashboard showed no limiter scopes
+   * at all, however much traffic it had sent.
+   */
+  it('persists app limits that equal the bootstrap fallback', async ({ skip }) => {
+    if (!available) return skip();
+    const limiter = new RateLimiter(redis);
+    limiter.clearLocalConfig();
+
+    // No stored config yet: this primes the local cache with the bootstrap
+    // windows, exactly the state a fresh dev deployment is in.
+    await limiter.acquire(SCOPE, 'm', { waitBudgetMs: 0 });
+
+    await limiter.observeHeaders(SCOPE, 'm', {
+      'x-app-rate-limit': '20:1,100:120',
+      'x-app-rate-limit-count': '2:1,2:120',
+    });
+
+    expect(await redis.get(`rl:cfg:app:${KEY_SCOPE}:${SCOPE}`)).toBe('20:1,100:120');
+    expect(await limiter.knownScopes()).toContain(SCOPE);
+  });
+
+  it('derives known scopes from method configs too', async ({ skip }) => {
+    if (!available) return skip();
+    // The state older deployments are left in: method configs stored, no app
+    // sibling. The scope must still be listed, with its methods.
+    await redis.set(`rl:cfg:m:${KEY_SCOPE}:${SCOPE}:match.byId`, '2000:10');
+    await redis.set(`rl:cfg:m:${KEY_SCOPE}:${SCOPE}:account.byPuuid`, '1000:60');
+
+    const limiter = new RateLimiter(redis);
+    expect(await limiter.knownScopes()).toContain(SCOPE);
+    expect((await limiter.knownScopeMethods()).get(SCOPE)).toEqual([
+      'account.byPuuid',
+      'match.byId',
+    ]);
+  });
+
+  it('reports per-method usage for the methods it knows', async ({ skip }) => {
+    if (!available) return skip();
+    const limiter = new RateLimiter(redis);
+    await redis.set(`rl:cfg:app:${KEY_SCOPE}:${SCOPE}`, '100:10');
+    await redis.set(`rl:cfg:m:${KEY_SCOPE}:${SCOPE}:narrow`, '3:10');
+    limiter.clearLocalConfig();
+
+    await limiter.acquire(SCOPE, 'narrow', { waitBudgetMs: 0 });
+    await limiter.acquire(SCOPE, 'narrow', { waitBudgetMs: 0 });
+
+    expect(await limiter.methodUsage(SCOPE, ['narrow'])).toEqual([
+      { method: 'narrow', windows: [{ window: '3:10', used: 2, limit: 3 }] },
+    ]);
   });
 
   it('waits and succeeds once a window rolls over', async ({ skip }) => {
