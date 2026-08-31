@@ -1,0 +1,400 @@
+import './helpers/env.js';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { and, eq, ne } from 'drizzle-orm';
+import { probeServices } from './helpers/services.js';
+import { KEY_SCOPE } from '../src/config.js';
+import { closeDb, db, pingDb } from '../src/db/index.js';
+import { ladderCrawls, leagueEntries } from '../src/db/schema.js';
+import {
+  bumpCrawlCounters,
+  countLeagueEntries,
+  createCrawl,
+  finishCrawl,
+  getCrawl,
+  getLatestCompletedCrawl,
+  getLeagueEntry,
+  getRunningCrawl,
+  listCrawls,
+  listLeagueEntries,
+  upsertLeagueEntries,
+  type LeagueEntryInput,
+} from '../src/db/ladder.js';
+import { CURSOR_TTL_S, clearCursors, getCursor, setCursor } from '../src/jobs/ladder-cursor.js';
+import { closeRedis, redis } from '../src/redis.js';
+
+/**
+ * The ladder's storage (#87), against the real Postgres — the two rules worth
+ * proving are both database behaviour, not TypeScript: one live crawl per
+ * ladder is a partial unique index, and `first_seen`/`last_seen` diverging
+ * across crawls is what an `ON CONFLICT` clause does or does not overwrite.
+ * Neither survives being mocked.
+ *
+ * A platform nobody uses keeps this out of the way of dev data sharing the
+ * database — and out of the way of the live-crawl index, which would otherwise
+ * refuse a real crawl while the suite runs.
+ */
+const PLATFORM = 'ladder-test';
+const QUEUE = 'RANKED_SOLO_5x5' as const;
+
+let available = false;
+
+const entry = (puuid: string, over: Partial<LeagueEntryInput> = {}): LeagueEntryInput => ({
+  puuid,
+  tier: 'DIAMOND',
+  division: 'I',
+  leaguePoints: 50,
+  wins: 100,
+  losses: 90,
+  ...over,
+});
+
+async function wipe(): Promise<void> {
+  await db.delete(leagueEntries).where(eq(leagueEntries.platform, PLATFORM));
+  await db.delete(ladderCrawls).where(eq(ladderCrawls.platform, PLATFORM));
+}
+
+beforeAll(async () => {
+  available = await probeServices('ladder-storage.test.ts', async () => {
+    await redis.ping();
+    return pingDb();
+  });
+  if (available) await wipe();
+});
+
+beforeEach(async () => {
+  if (available) await wipe();
+});
+
+afterAll(async () => {
+  if (available) await wipe();
+  await Promise.allSettled([closeRedis(), closeDb()]);
+});
+
+describe('crawl runs', () => {
+  it('starts a crawl running, with its counters at zero', async ({ skip }) => {
+    if (!available) return skip();
+    const { crawl, created } = await createCrawl({
+      platform: PLATFORM,
+      queue: QUEUE,
+      tierFloor: 'MASTER',
+    });
+
+    expect(created).toBe(true);
+    expect(crawl.status).toBe('running');
+    expect(crawl.keyScope).toBe(KEY_SCOPE);
+    expect(crawl.tierFloor).toBe('MASTER');
+    expect(crawl.finishedAt).toBeNull();
+    expect([
+      crawl.pagesFetched,
+      crawl.entriesSeen,
+      crawl.playersDiscovered,
+      crawl.backfillsEnqueued,
+    ]).toEqual([0, 0, 0, 0]);
+
+    expect((await getCrawl(crawl.id))?.id).toBe(crawl.id);
+    expect((await getRunningCrawl(PLATFORM, QUEUE))?.id).toBe(crawl.id);
+  });
+
+  it('refuses a second live crawl on the same ladder, and names the one running', async ({
+    skip,
+  }) => {
+    if (!available) return skip();
+    const first = await createCrawl({ platform: PLATFORM, queue: QUEUE, tierFloor: 'MASTER' });
+
+    // The floor differs, so this is not deduplication by payload — it is the
+    // index refusing a second running row for the ladder.
+    const second = await createCrawl({ platform: PLATFORM, queue: QUEUE, tierFloor: 'IRON' });
+
+    expect(second.created).toBe(false);
+    expect(second.crawl.id).toBe(first.crawl.id);
+    expect(second.crawl.tierFloor).toBe('MASTER');
+    expect(await countCrawlRows()).toBe(1);
+  });
+
+  it('lets two workers race the same trigger without starting two crawls', async ({ skip }) => {
+    if (!available) return skip();
+    // The check the index replaces is read-then-insert, which both of these
+    // would pass: they are in flight at the same time and neither can see the
+    // other's row yet.
+    const results = await Promise.all([
+      createCrawl({ platform: PLATFORM, queue: QUEUE, tierFloor: 'MASTER' }),
+      createCrawl({ platform: PLATFORM, queue: QUEUE, tierFloor: 'MASTER' }),
+    ]);
+
+    expect(results.filter((r) => r.created)).toHaveLength(1);
+    expect(new Set(results.map((r) => r.crawl.id)).size).toBe(1);
+    expect(await countCrawlRows()).toBe(1);
+  });
+
+  it('allows the next crawl once the last one ends — the index is partial', async ({ skip }) => {
+    if (!available) return skip();
+    const first = await createCrawl({ platform: PLATFORM, queue: QUEUE, tierFloor: 'MASTER' });
+    await finishCrawl(first.crawl.id, 'completed');
+
+    const second = await createCrawl({ platform: PLATFORM, queue: QUEUE, tierFloor: 'MASTER' });
+    expect(second.created).toBe(true);
+    expect(second.crawl.id).not.toBe(first.crawl.id);
+    expect(await countCrawlRows()).toBe(2);
+  });
+
+  it('keeps separate ladders independent', async ({ skip }) => {
+    if (!available) return skip();
+    await createCrawl({ platform: PLATFORM, queue: QUEUE, tierFloor: 'MASTER' });
+    const flex = await createCrawl({
+      platform: PLATFORM,
+      queue: 'RANKED_FLEX_SR',
+      tierFloor: 'MASTER',
+    });
+    expect(flex.created).toBe(true);
+    expect(await countCrawlRows()).toBe(2);
+  });
+
+  it('will not let a finished crawl be finished again', async ({ skip }) => {
+    if (!available) return skip();
+    const { crawl } = await createCrawl({ platform: PLATFORM, queue: QUEUE, tierFloor: 'MASTER' });
+    const cancelled = await finishCrawl(crawl.id, 'cancelled');
+    expect(cancelled?.status).toBe('cancelled');
+    expect(cancelled?.finishedAt).toBeInstanceOf(Date);
+
+    // The last walk job finishing a moment after the cancel must not resurrect
+    // the run as a success.
+    expect(await finishCrawl(crawl.id, 'completed')).toBeUndefined();
+    expect((await getCrawl(crawl.id))?.status).toBe('cancelled');
+  });
+
+  it('adds to counters in SQL, so concurrent walks do not overwrite each other', async ({
+    skip,
+  }) => {
+    if (!available) return skip();
+    const { crawl } = await createCrawl({ platform: PLATFORM, queue: QUEUE, tierFloor: 'MASTER' });
+
+    // Read-modify-write would land on 1: every one of these reads zero.
+    await Promise.all(
+      Array.from({ length: 10 }, () => bumpCrawlCounters(crawl.id, { pagesFetched: 1 })),
+    );
+    await bumpCrawlCounters(crawl.id, { entriesSeen: 205, playersDiscovered: 3 });
+
+    const after = await getCrawl(crawl.id);
+    expect(after?.pagesFetched).toBe(10);
+    expect(after?.entriesSeen).toBe(205);
+    expect(after?.playersDiscovered).toBe(3);
+    expect(after?.backfillsEnqueued).toBe(0);
+  });
+
+  it('lists runs newest first, and finds the newest completed one', async ({ skip }) => {
+    if (!available) return skip();
+    const older = await createCrawl({ platform: PLATFORM, queue: QUEUE, tierFloor: 'MASTER' });
+    await finishCrawl(older.crawl.id, 'completed');
+    const newer = await createCrawl({ platform: PLATFORM, queue: QUEUE, tierFloor: 'MASTER' });
+    await finishCrawl(newer.crawl.id, 'completed');
+    const running = await createCrawl({ platform: PLATFORM, queue: QUEUE, tierFloor: 'MASTER' });
+
+    const listed = await listCrawls({ platform: PLATFORM, queue: QUEUE });
+    expect(listed.map((c) => c.id)).toEqual([running.crawl.id, newer.crawl.id, older.crawl.id]);
+
+    // The running one is newer, and is deliberately not the answer: "the
+    // ladder as it stands" means the last crawl that actually finished.
+    expect((await getLatestCompletedCrawl(PLATFORM, QUEUE))?.id).toBe(newer.crawl.id);
+  });
+});
+
+describe('league entries', () => {
+  it('writes a page of entries and reads them back best first', async ({ skip }) => {
+    if (!available) return skip();
+    const { crawl } = await createCrawl({ platform: PLATFORM, queue: QUEUE, tierFloor: 'DIAMOND' });
+
+    const written = await upsertLeagueEntries(crawl.id, PLATFORM, QUEUE, [
+      entry('puuid-low', { leaguePoints: 10 }),
+      entry('puuid-high', { leaguePoints: 900, hotStreak: true }),
+      entry('puuid-mid', { leaguePoints: 400 }),
+    ]);
+    expect(written).toBe(3);
+
+    const ladder = await listLeagueEntries({ platform: PLATFORM, queue: QUEUE });
+    expect(ladder.map((e) => e.puuid)).toEqual(['puuid-high', 'puuid-mid', 'puuid-low']);
+    expect(ladder[0]?.hotStreak).toBe(true);
+    expect(ladder[0]?.veteran).toBe(false);
+    expect(ladder[0]?.keyScope).toBe(KEY_SCOPE);
+    expect(ladder[0]?.firstSeenCrawlId).toBe(crawl.id);
+    expect(ladder[0]?.lastSeenCrawlId).toBe(crawl.id);
+  });
+
+  it('batches past the 100-row limit rather than building one huge statement', async ({ skip }) => {
+    if (!available) return skip();
+    const { crawl } = await createCrawl({ platform: PLATFORM, queue: QUEUE, tierFloor: 'DIAMOND' });
+
+    // A Riot page is ~205 entries and these rows are 16 columns wide, so a
+    // single insert would be over 3 000 bind parameters.
+    const page = Array.from({ length: 205 }, (_, i) =>
+      entry(`puuid-${String(i).padStart(3, '0')}`, { leaguePoints: i }),
+    );
+    expect(await upsertLeagueEntries(crawl.id, PLATFORM, QUEUE, page)).toBe(205);
+    expect(await countLeagueEntries({ platform: PLATFORM, queue: QUEUE })).toBe(205);
+  });
+
+  it('writes nothing, and asks nothing, for an empty page', async ({ skip }) => {
+    if (!available) return skip();
+    const { crawl } = await createCrawl({ platform: PLATFORM, queue: QUEUE, tierFloor: 'DIAMOND' });
+    expect(await upsertLeagueEntries(crawl.id, PLATFORM, QUEUE, [])).toBe(0);
+  });
+
+  it('keeps first_seen and moves last_seen when a later crawl sees the same player', async ({
+    skip,
+  }) => {
+    if (!available) return skip();
+    const first = await createCrawl({ platform: PLATFORM, queue: QUEUE, tierFloor: 'DIAMOND' });
+    await upsertLeagueEntries(first.crawl.id, PLATFORM, QUEUE, [
+      entry('puuid-climber', { tier: 'DIAMOND', division: 'IV', leaguePoints: 12, wins: 100 }),
+    ]);
+    await finishCrawl(first.crawl.id, 'completed');
+
+    const second = await createCrawl({ platform: PLATFORM, queue: QUEUE, tierFloor: 'DIAMOND' });
+    await upsertLeagueEntries(second.crawl.id, PLATFORM, QUEUE, [
+      entry('puuid-climber', {
+        tier: 'MASTER',
+        division: 'I',
+        leaguePoints: 340,
+        wins: 118,
+        losses: 91,
+        veteran: true,
+      }),
+    ]);
+
+    const row = await getLeagueEntry(PLATFORM, QUEUE, 'puuid-climber');
+    expect(row?.firstSeenCrawlId).toBe(first.crawl.id);
+    expect(row?.lastSeenCrawlId).toBe(second.crawl.id);
+    // Latest state, not history: the row is the player now, not a delta.
+    expect(row?.tier).toBe('MASTER');
+    expect(row?.division).toBe('I');
+    expect(row?.leaguePoints).toBe(340);
+    expect(row?.wins).toBe(118);
+    expect(row?.veteran).toBe(true);
+    expect(await countLeagueEntries({ platform: PLATFORM, queue: QUEUE })).toBe(1);
+  });
+
+  it('separates the current ladder from the players who fell off it', async ({ skip }) => {
+    if (!available) return skip();
+    const first = await createCrawl({ platform: PLATFORM, queue: QUEUE, tierFloor: 'DIAMOND' });
+    await upsertLeagueEntries(first.crawl.id, PLATFORM, QUEUE, [
+      entry('puuid-stayed'),
+      entry('puuid-decayed'),
+    ]);
+    await finishCrawl(first.crawl.id, 'completed');
+
+    const second = await createCrawl({ platform: PLATFORM, queue: QUEUE, tierFloor: 'DIAMOND' });
+    await upsertLeagueEntries(second.crawl.id, PLATFORM, QUEUE, [
+      entry('puuid-stayed'),
+      entry('puuid-promoted'),
+    ]);
+    await finishCrawl(second.crawl.id, 'completed');
+
+    const latest = await getLatestCompletedCrawl(PLATFORM, QUEUE);
+    expect(latest?.id).toBe(second.crawl.id);
+
+    const current = await listLeagueEntries({
+      platform: PLATFORM,
+      queue: QUEUE,
+      crawlId: latest!.id,
+    });
+    expect(current.map((e) => e.puuid).sort()).toEqual(['puuid-promoted', 'puuid-stayed']);
+
+    // The complement — the rows the newest crawl did not restamp — is the
+    // "dropped or decayed" half, off the same index.
+    const dropped = await db
+      .select({ puuid: leagueEntries.puuid })
+      .from(leagueEntries)
+      .where(
+        and(eq(leagueEntries.platform, PLATFORM), ne(leagueEntries.lastSeenCrawlId, latest!.id)),
+      );
+    expect(dropped.map((r) => r.puuid)).toEqual(['puuid-decayed']);
+  });
+
+  it('filters a slice of the ladder by tier and division', async ({ skip }) => {
+    if (!available) return skip();
+    const { crawl } = await createCrawl({ platform: PLATFORM, queue: QUEUE, tierFloor: 'IRON' });
+    await upsertLeagueEntries(crawl.id, PLATFORM, QUEUE, [
+      entry('puuid-d1', { tier: 'DIAMOND', division: 'I' }),
+      entry('puuid-d4', { tier: 'DIAMOND', division: 'IV' }),
+      entry('puuid-iron', { tier: 'IRON', division: 'IV' }),
+    ]);
+
+    expect(await countLeagueEntries({ platform: PLATFORM, queue: QUEUE, tier: 'DIAMOND' })).toBe(2);
+    const d4 = await listLeagueEntries({
+      platform: PLATFORM,
+      queue: QUEUE,
+      tier: 'DIAMOND',
+      division: 'IV',
+    });
+    expect(d4.map((e) => e.puuid)).toEqual(['puuid-d4']);
+  });
+
+  it('keeps the two queues apart for the same player', async ({ skip }) => {
+    if (!available) return skip();
+    const solo = await createCrawl({ platform: PLATFORM, queue: QUEUE, tierFloor: 'DIAMOND' });
+    const flex = await createCrawl({
+      platform: PLATFORM,
+      queue: 'RANKED_FLEX_SR',
+      tierFloor: 'DIAMOND',
+    });
+    await upsertLeagueEntries(solo.crawl.id, PLATFORM, QUEUE, [
+      entry('puuid-both', { tier: 'MASTER', leaguePoints: 300 }),
+    ]);
+    await upsertLeagueEntries(flex.crawl.id, PLATFORM, 'RANKED_FLEX_SR', [
+      entry('puuid-both', { tier: 'GOLD', leaguePoints: 12 }),
+    ]);
+
+    expect((await getLeagueEntry(PLATFORM, QUEUE, 'puuid-both'))?.tier).toBe('MASTER');
+    expect((await getLeagueEntry(PLATFORM, 'RANKED_FLEX_SR', 'puuid-both'))?.tier).toBe('GOLD');
+  });
+});
+
+describe('page cursors', () => {
+  const CRAWL = 'cursor-test-crawl';
+
+  beforeEach(async () => {
+    if (available) await clearCursors(CRAWL);
+  });
+
+  it('starts every walk at page 1', async ({ skip }) => {
+    if (!available) return skip();
+    expect(await getCursor(CRAWL, 'DIAMOND', 'I')).toBe(1);
+  });
+
+  it('remembers where a walk got to, per tier and division', async ({ skip }) => {
+    if (!available) return skip();
+    await setCursor(CRAWL, 'DIAMOND', 'I', 42);
+    await setCursor(CRAWL, 'DIAMOND', 'IV', 7);
+
+    expect(await getCursor(CRAWL, 'DIAMOND', 'I')).toBe(42);
+    expect(await getCursor(CRAWL, 'DIAMOND', 'IV')).toBe(7);
+    // A division nobody has walked is still at the start.
+    expect(await getCursor(CRAWL, 'IRON', 'II')).toBe(1);
+  });
+
+  it('expires on its own, so a crashed crawl strands nothing permanently', async ({ skip }) => {
+    if (!available) return skip();
+    await setCursor(CRAWL, 'GOLD', 'III', 5);
+    const ttl = await redis.ttl(`ladder:cursor:${KEY_SCOPE}:${CRAWL}:GOLD:III`);
+    expect(ttl).toBeGreaterThan(CURSOR_TTL_S - 60);
+    expect(ttl).toBeLessThanOrEqual(CURSOR_TTL_S);
+  });
+
+  it("clears one crawl's cursors and leaves another's alone", async ({ skip }) => {
+    if (!available) return skip();
+    const other = 'cursor-test-other';
+    await setCursor(CRAWL, 'GOLD', 'I', 3);
+    await setCursor(CRAWL, 'GOLD', 'II', 9);
+    await setCursor(other, 'GOLD', 'I', 11);
+
+    expect(await clearCursors(CRAWL)).toBe(2);
+    expect(await getCursor(CRAWL, 'GOLD', 'I')).toBe(1);
+    expect(await getCursor(other, 'GOLD', 'I')).toBe(11);
+
+    await clearCursors(other);
+  });
+});
+
+async function countCrawlRows(): Promise<number> {
+  const rows = await db.select().from(ladderCrawls).where(eq(ladderCrawls.platform, PLATFORM));
+  return rows.length;
+}
