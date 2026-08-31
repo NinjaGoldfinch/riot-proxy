@@ -7,7 +7,7 @@ import { ProxyError } from '../errors.js';
 import { fetcher, type FetchResult } from '../fetcher.js';
 import { enqueueBackfill } from '../jobs/queues.js';
 import { logger } from '../logger.js';
-import { recordCacheOutcome } from '../metrics.js';
+import { recordCacheOutcome, refreshClaimsTotal } from '../metrics.js';
 import { redis } from '../redis.js';
 import { build } from '../riot/endpoints.js';
 import {
@@ -74,8 +74,13 @@ async function refreshWindow(
 ): Promise<RefreshState> {
   const key = `refresh:${config.KEY_SCOPE}:${part}:${identity}`;
   if (claim && (await redis.set(key, '1', 'EX', REFRESH_COOLDOWN_S, 'NX'))) {
+    refreshClaimsTotal.inc({ part, outcome: 'claimed' });
     return { refreshed: true, availableIn: REFRESH_COOLDOWN_S };
   }
+  // Only a caller who asked is counted (#81). Every read passes through here to
+  // learn `availableIn`, and counting those would drown the signal in requests
+  // that never wanted a refresh in the first place.
+  if (claim) refreshClaimsTotal.inc({ part, outcome: 'coalesced' });
   const ttl = await redis.ttl(key);
   return { refreshed: false, availableIn: ttl > 0 ? ttl : 0 };
 }
@@ -517,3 +522,11 @@ async function composeMatches(opts: {
 }
 
 export default playerRoutes;
+
+/**
+ * Exported for unit tests; the routes above are the only callers in the running
+ * service. `refreshWindow` is the one piece worth reaching directly — driving it
+ * through a route means standing up the whole composite fetch to observe a
+ * counter that has nothing to do with it.
+ */
+export const __test = { refreshWindow };
