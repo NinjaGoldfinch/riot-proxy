@@ -9,6 +9,10 @@ import { closeDb, db, pingDb } from '../src/db/index.js';
 import {
   analyticsSlices,
   championBans,
+  championItems,
+  championMatchups,
+  championRunes,
+  championSpells,
   championStats,
   leagueEntries,
   matchBans,
@@ -19,7 +23,13 @@ import {
   latestPatch,
   listAnalyticsSlices,
   listChampionBans,
+  listChampionItems,
+  listChampionMatchups,
+  listChampionRunes,
+  listChampionSpells,
   listChampionStats,
+  recomputeChampionBuilds,
+  recomputeChampionMatchups,
   recomputeChampionStats,
 } from '../src/db/analytics.js';
 import { createTestConsumer, removeTestConsumers, testConsumerName } from './helpers/consumers.js';
@@ -112,6 +122,10 @@ async function wipe(): Promise<void> {
   await db.delete(championStats).where(eq(championStats.platform, PLATFORM));
   await db.delete(analyticsSlices).where(eq(analyticsSlices.platform, PLATFORM));
   await db.delete(championBans).where(eq(championBans.platform, PLATFORM));
+  await db.delete(championMatchups).where(eq(championMatchups.platform, PLATFORM));
+  await db.delete(championItems).where(eq(championItems.platform, PLATFORM));
+  await db.delete(championRunes).where(eq(championRunes.platform, PLATFORM));
+  await db.delete(championSpells).where(eq(championSpells.platform, PLATFORM));
 }
 
 beforeAll(async () => {
@@ -161,6 +175,7 @@ const FACTS_CRAWL_ID = '00000000-0000-4000-8000-0000000000bb';
 interface SeededParticipant {
   championId: number;
   win: boolean;
+  teamId?: number;
   teamPosition?: string;
   kills?: number;
   deaths?: number;
@@ -169,12 +184,22 @@ interface SeededParticipant {
   gold?: number;
   damage?: number;
   vision?: number;
+  item0?: number;
+  item1?: number;
+  item2?: number;
+  item3?: number;
+  item4?: number;
+  item5?: number;
+  keystoneId?: number;
+  subStyleId?: number;
+  spell1?: number;
+  spell2?: number;
 }
 
 /**
  * A match with full control over the C2 fact columns and optional bans —
  * `seed`/`m` above only carry `championId`/`win`, which is not enough to
- * exercise C3's role/sum/denominator columns.
+ * exercise C3's role/sum/denominator columns or C4's matchup/build ones.
  */
 async function seedFacts(
   id: string,
@@ -202,6 +227,7 @@ async function seedFacts(
       puuid,
       championId: p.championId,
       win: p.win,
+      teamId: p.teamId ?? null,
       teamPosition: p.teamPosition ?? null,
       kills: p.kills ?? null,
       deaths: p.deaths ?? null,
@@ -210,6 +236,16 @@ async function seedFacts(
       gold: p.gold ?? null,
       damage: p.damage ?? null,
       vision: p.vision ?? null,
+      item0: p.item0 ?? null,
+      item1: p.item1 ?? null,
+      item2: p.item2 ?? null,
+      item3: p.item3 ?? null,
+      item4: p.item4 ?? null,
+      item5: p.item5 ?? null,
+      keystoneId: p.keystoneId ?? null,
+      subStyleId: p.subStyleId ?? null,
+      spell1: p.spell1 ?? null,
+      spell2: p.spell2 ?? null,
     })),
   );
   if (bans.length > 0) {
@@ -526,6 +562,284 @@ describe('champion_stats v2 — role, sums and denominators', () => {
       'CHALLENGER:64:1',
       'DIAMOND:64:1',
     ]);
+  });
+});
+
+/**
+ * The second-order aggregates (#112): lane matchups and build frequency
+ * tables. Both are pure `match_participants` reads (one self-join for
+ * matchups), against the real Postgres for the same reason as the blocks
+ * above — the deliverable is what the join and the group-by actually produce.
+ */
+describe('champion_matchups and builds', () => {
+  it('stores both directions of a lane matchup', async ({ skip }) => {
+    if (!available) return skip();
+    await seedFacts('matchup-1', {
+      'chall-a': { championId: AHRI, win: true, teamId: 100, teamPosition: 'MIDDLE' },
+      'chall-b': { championId: GAREN, win: false, teamId: 200, teamPosition: 'MIDDLE' },
+    });
+    await ladder({ 'chall-a': 'CHALLENGER', 'chall-b': 'CHALLENGER' });
+    await recomputeChampionMatchups(PLATFORM, QUEUE);
+
+    const ahriSide = await listChampionMatchups({
+      platform: PLATFORM,
+      queue: QUEUE,
+      patch: '16.13',
+      championId: AHRI,
+    });
+    expect(ahriSide).toEqual([
+      { role: 'MIDDLE', opponentId: GAREN, games: 1, wins: 1, computedAt: expect.any(Date) },
+    ]);
+
+    const garenSide = await listChampionMatchups({
+      platform: PLATFORM,
+      queue: QUEUE,
+      patch: '16.13',
+      championId: GAREN,
+    });
+    expect(garenSide).toEqual([
+      { role: 'MIDDLE', opponentId: AHRI, games: 1, wins: 0, computedAt: expect.any(Date) },
+    ]);
+  });
+
+  it('requires a shared, non-empty lane — no matchup across roles or off one', async ({
+    skip,
+  }) => {
+    if (!available) return skip();
+    // Same match, same two teams, but different lanes: never opposing laners.
+    await seedFacts('matchup-cross', {
+      'chall-a': { championId: AHRI, win: true, teamId: 100, teamPosition: 'MIDDLE' },
+      'chall-b': { championId: GAREN, win: false, teamId: 200, teamPosition: 'TOP' },
+    });
+    // ARAM-shaped: both sides share the same (empty) "lane".
+    await seedFacts('matchup-aram', {
+      'chall-c': { championId: AHRI, win: true, teamId: 100, teamPosition: '' },
+      'chall-d': { championId: GAREN, win: false, teamId: 200, teamPosition: '' },
+    });
+    await ladder({
+      'chall-a': 'CHALLENGER',
+      'chall-b': 'CHALLENGER',
+      'chall-c': 'CHALLENGER',
+      'chall-d': 'CHALLENGER',
+    });
+    await recomputeChampionMatchups(PLATFORM, QUEUE);
+
+    expect(
+      await listChampionMatchups({ platform: PLATFORM, queue: QUEUE, patch: '16.13', championId: AHRI }),
+    ).toEqual([]);
+  });
+
+  it('excludes an ambiguous lane rather than fanning out across duplicates', async ({ skip }) => {
+    if (!available) return skip();
+    // A data anomaly the self-join would otherwise multiply: two `MIDDLE`
+    // participants on each side of one match. Riot's own position inference
+    // is supposed to make this impossible, but nothing here enforces it
+    // upstream, and the join must not silently turn one match into four.
+    await seedFacts('matchup-dup-lane', {
+      'chall-e': { championId: AHRI, win: true, teamId: 100, teamPosition: 'MIDDLE' },
+      'chall-f': { championId: 64, win: true, teamId: 100, teamPosition: 'MIDDLE' },
+      'chall-g': { championId: GAREN, win: false, teamId: 200, teamPosition: 'MIDDLE' },
+      'chall-h': { championId: 157, win: false, teamId: 200, teamPosition: 'MIDDLE' },
+    });
+    await ladder({
+      'chall-e': 'CHALLENGER',
+      'chall-f': 'CHALLENGER',
+      'chall-g': 'CHALLENGER',
+      'chall-h': 'CHALLENGER',
+    });
+    await recomputeChampionMatchups(PLATFORM, QUEUE);
+
+    expect(
+      await listChampionMatchups({ platform: PLATFORM, queue: QUEUE, patch: '16.13', championId: AHRI }),
+    ).toEqual([]);
+    expect(
+      await listChampionMatchups({ platform: PLATFORM, queue: QUEUE, patch: '16.13', championId: GAREN }),
+    ).toEqual([]);
+  });
+
+  it('excludes the trinket-less empty item slot, keeping every real item', async ({ skip }) => {
+    if (!available) return skip();
+    await seedFacts('items-1', {
+      'chall-a': { championId: AHRI, win: true, item0: 3020, item1: 0, item2: 4645 },
+    });
+    await ladder({ 'chall-a': 'CHALLENGER' });
+    await recomputeChampionBuilds(PLATFORM, QUEUE);
+
+    const items = await listChampionItems({
+      platform: PLATFORM,
+      queue: QUEUE,
+      patch: '16.13',
+      championId: AHRI,
+    });
+    expect(items.map((i) => i.itemId).sort()).toEqual([3020, 4645]);
+  });
+
+  it('counts a duplicated item slot as one game, not one per slot', async ({ skip }) => {
+    if (!available) return skip();
+    // Two Control Wards is an ordinary final inventory — item0 and item1
+    // holding the same id must still be this participant's one game.
+    await seedFacts('items-dup', {
+      'chall-a': { championId: AHRI, win: true, item0: 2055, item1: 2055, item2: 3020 },
+    });
+    await ladder({ 'chall-a': 'CHALLENGER' });
+    await recomputeChampionBuilds(PLATFORM, QUEUE);
+
+    const items = await listChampionItems({
+      platform: PLATFORM,
+      queue: QUEUE,
+      patch: '16.13',
+      championId: AHRI,
+    });
+    expect(items.find((i) => i.itemId === 2055)).toMatchObject({ games: 1, wins: 1 });
+    expect(items.find((i) => i.itemId === 3020)).toMatchObject({ games: 1, wins: 1 });
+  });
+
+  it('normalises spell order, so {4,14} and {14,4} are the same row', async ({ skip }) => {
+    if (!available) return skip();
+    await seedFacts('spells-1', { 'chall-a': { championId: AHRI, win: true, spell1: 4, spell2: 14 } });
+    await seedFacts('spells-2', { 'chall-b': { championId: AHRI, win: true, spell1: 14, spell2: 4 } });
+    await ladder({ 'chall-a': 'CHALLENGER', 'chall-b': 'CHALLENGER' });
+    await recomputeChampionBuilds(PLATFORM, QUEUE);
+
+    const spells = await listChampionSpells({
+      platform: PLATFORM,
+      queue: QUEUE,
+      patch: '16.13',
+      championId: AHRI,
+    });
+    expect(spells).toEqual([{ spellA: 4, spellB: 14, games: 2, wins: 2 }]);
+  });
+
+  it('buckets runes by role, and sums every role when none is filtered', async ({ skip }) => {
+    if (!available) return skip();
+    await seedFacts('runes-1', {
+      'chall-a': { championId: AHRI, win: true, teamPosition: 'MIDDLE', keystoneId: 8214, subStyleId: 8100 },
+    });
+    await seedFacts('runes-2', {
+      'chall-b': { championId: AHRI, win: false, teamPosition: 'UTILITY', keystoneId: 8214, subStyleId: 8100 },
+    });
+    await ladder({ 'chall-a': 'CHALLENGER', 'chall-b': 'CHALLENGER' });
+    await recomputeChampionBuilds(PLATFORM, QUEUE);
+
+    const rolled = await listChampionRunes({
+      platform: PLATFORM,
+      queue: QUEUE,
+      patch: '16.13',
+      championId: AHRI,
+    });
+    expect(rolled).toEqual([{ keystoneId: 8214, subStyleId: 8100, games: 2, wins: 1 }]);
+
+    const midOnly = await listChampionRunes({
+      platform: PLATFORM,
+      queue: QUEUE,
+      patch: '16.13',
+      championId: AHRI,
+      role: 'MIDDLE',
+    });
+    expect(midOnly).toEqual([{ keystoneId: 8214, subStyleId: 8100, games: 1, wins: 1 }]);
+  });
+});
+
+describe('GET /v1/lol/analytics/champions/{championId}/matchups', () => {
+  const get = (championId: number, query: string) =>
+    app!.inject({
+      method: 'GET',
+      url: `/v1/lol/analytics/champions/${championId}/matchups?platform=${PLATFORM}&${query}`,
+      headers: { authorization: `Bearer ${readKey}` },
+    });
+
+  it('returns a computed winRate for each opponent', async ({ skip }) => {
+    if (!available || !app) return skip();
+    await seedFacts('route-matchup-1', {
+      'chall-a': { championId: AHRI, win: true, teamId: 100, teamPosition: 'MIDDLE' },
+      'chall-b': { championId: GAREN, win: false, teamId: 200, teamPosition: 'MIDDLE' },
+    });
+    await ladder({ 'chall-a': 'CHALLENGER', 'chall-b': 'CHALLENGER' });
+    // The route's default patch comes from `latestPatch`, which reads
+    // `champion_stats` — recomputed here to match how `aggregateChampions`
+    // always orders the two in the real job.
+    await recomputeChampionStats(PLATFORM, QUEUE);
+    await recomputeChampionMatchups(PLATFORM, QUEUE);
+
+    const body = (await get(AHRI, '')).json() as {
+      championId: number;
+      patch: string | null;
+      matchups: { role: string; opponentId: number; games: number; wins: number; winRate: number }[];
+    };
+    expect(body.patch).toBe('16.13');
+    expect(body.matchups).toEqual([
+      { role: 'MIDDLE', opponentId: GAREN, games: 1, wins: 1, winRate: 1 },
+    ]);
+  });
+
+  it('answers honestly before anything has been aggregated', async ({ skip }) => {
+    if (!available || !app) return skip();
+    const res = await get(AHRI, '');
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ patch: null, matchups: [] });
+  });
+});
+
+describe('GET /v1/lol/analytics/champions/{championId}', () => {
+  const get = (championId: number, query = '') =>
+    app!.inject({
+      method: 'GET',
+      url: `/v1/lol/analytics/champions/${championId}?platform=${PLATFORM}&${query}`,
+      headers: { authorization: `Bearer ${readKey}` },
+    });
+
+  it('composes stats, matchups and builds in one call', async ({ skip }) => {
+    if (!available || !app) return skip();
+    await seedFacts('detail-1', {
+      'chall-a': {
+        championId: AHRI,
+        win: true,
+        teamId: 100,
+        teamPosition: 'MIDDLE',
+        item0: 3020,
+        keystoneId: 8214,
+        subStyleId: 8100,
+        spell1: 4,
+        spell2: 14,
+      },
+      'chall-b': { championId: GAREN, win: false, teamId: 200, teamPosition: 'MIDDLE' },
+    });
+    await ladder({ 'chall-a': 'CHALLENGER', 'chall-b': 'CHALLENGER' });
+    await recomputeChampionStats(PLATFORM, QUEUE);
+    await recomputeChampionMatchups(PLATFORM, QUEUE);
+    await recomputeChampionBuilds(PLATFORM, QUEUE);
+
+    const body = (await get(AHRI)).json() as {
+      championId: number;
+      stats: { championId: number; games: number }[];
+      matchups: { opponentId: number; games: number }[];
+      items: { itemId: number; games: number }[];
+      runes: { keystoneId: number; games: number }[];
+      spells: { spellA: number; spellB: number; games: number }[];
+    };
+    expect(body.stats).toEqual([expect.objectContaining({ championId: AHRI, games: 1 })]);
+    expect(body.matchups).toEqual([expect.objectContaining({ opponentId: GAREN, games: 1 })]);
+    expect(body.items).toEqual([expect.objectContaining({ itemId: 3020, games: 1 })]);
+    expect(body.runes).toEqual([expect.objectContaining({ keystoneId: 8214, games: 1 })]);
+    expect(body.spells).toEqual([expect.objectContaining({ spellA: 4, spellB: 14, games: 1 })]);
+  });
+
+  it('answers honestly for a champion nobody has data for, rather than 404', async ({ skip }) => {
+    if (!available || !app) return skip();
+    await seedFacts('detail-2', { 'chall-a': { championId: AHRI, win: true } });
+    await ladder({ 'chall-a': 'CHALLENGER' });
+    await recomputeChampionStats(PLATFORM, QUEUE);
+
+    const res = await get(GAREN);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      championId: GAREN,
+      stats: [],
+      matchups: [],
+      items: [],
+      runes: [],
+      spells: [],
+    });
   });
 });
 

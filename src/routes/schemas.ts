@@ -632,6 +632,133 @@ export const ChampionStatsQuery = Type.Object({
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500, default: 200 })),
 });
 
+/** A numeric champion id in a URL path segment (#112). */
+export const ChampionIdParam = Type.Integer({ minimum: 1 });
+
+/** Reused where the query is "defaults to the newest aggregated patch" (#112). */
+const OptionalPatchParam = Type.Optional(
+  Type.String({
+    minLength: 3,
+    maxLength: 8,
+    pattern: '^[0-9]+\\.[0-9]+$',
+    description: 'Defaults to the newest patch this deployment has aggregated',
+  }),
+);
+
+const OptionalRoleParam = Type.Optional(
+  Type.Unsafe<string>({ type: 'string', enum: [...TEAM_POSITIONS] }),
+);
+
+/**
+ * One champion's record against one lane rival (#112). No `winRate` shortcut
+ * on the stored row — `games`/`wins` are the facts, `winRate` is derived at
+ * read time the same way `ChampionStatEntry`'s is.
+ */
+export const ChampionMatchupEntry = Type.Object(
+  {
+    role: Type.String(),
+    opponentId: Type.Integer(),
+    opponentName: Type.Optional(Type.String()),
+    games: Type.Integer(),
+    wins: Type.Integer(),
+    winRate: Type.Number({ minimum: 0, maximum: 1 }),
+  },
+  { $id: 'ChampionMatchupEntry' },
+);
+
+export const ChampionMatchupsResponse = Type.Object({
+  championId: Type.Integer(),
+  championName: Type.Optional(Type.String()),
+  platform: Type.String(),
+  queue: Type.String(),
+  patch: {
+    ...Type.Union([Type.String(), Type.Null()]),
+    description: 'Null when nothing has been aggregated yet',
+  },
+  role: {
+    ...Type.Union([Type.String(), Type.Null()]),
+    description: 'Echoes the `role` filter; null when every lane this champion has is included',
+  },
+  matchups: Type.Array(
+    Type.Unsafe<Static<typeof ChampionMatchupEntry>>({ $ref: 'ChampionMatchupEntry#' }),
+  ),
+});
+
+export const ChampionMatchupsQuery = Type.Object({
+  platform: Type.Optional(PlatformParam),
+  queue: Type.Optional(RankedQueueParam),
+  patch: OptionalPatchParam,
+  role: OptionalRoleParam,
+  minGames: Type.Optional(Type.Integer({ minimum: 0 })),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200, default: 50 })),
+});
+
+/** `games`/`wins`/`winRate` are common to every build facet below. */
+const BuildFacetCounts = {
+  games: Type.Integer(),
+  wins: Type.Integer(),
+  winRate: Type.Number({ minimum: 0, maximum: 1 }),
+};
+
+export const ChampionItemEntry = Type.Object(
+  { itemId: Type.Integer(), ...BuildFacetCounts },
+  { $id: 'ChampionItemEntry' },
+);
+export const ChampionRuneEntry = Type.Object(
+  { keystoneId: Type.Integer(), subStyleId: Type.Integer(), ...BuildFacetCounts },
+  { $id: 'ChampionRuneEntry' },
+);
+/** `spellA <= spellB` — order-normalised the same way the recompute stores them. */
+export const ChampionSpellEntry = Type.Object(
+  { spellA: Type.Integer(), spellB: Type.Integer(), ...BuildFacetCounts },
+  { $id: 'ChampionSpellEntry' },
+);
+
+/**
+ * One call for a champion page (#112): the stat row(s), top lane matchups,
+ * and top items/runes/spells. Each section is independently truncated by
+ * `limit`/`minGames` — a champion with no matchup data yet still returns
+ * `stats`, empty arrays elsewhere, honest rather than a 404.
+ */
+export const ChampionDetailResponse = Type.Object({
+  championId: Type.Integer(),
+  championName: Type.Optional(Type.String()),
+  platform: Type.String(),
+  queue: Type.String(),
+  patch: {
+    ...Type.Union([Type.String(), Type.Null()]),
+    description: 'Null when nothing has been aggregated yet',
+  },
+  role: {
+    ...Type.Union([Type.String(), Type.Null()]),
+    description: 'Null when every role is summed into one row per section',
+  },
+  stats: Type.Array(
+    Type.Unsafe<Static<typeof ChampionStatEntry>>({ $ref: 'ChampionStatEntry#' }),
+  ),
+  matchups: Type.Array(
+    Type.Unsafe<Static<typeof ChampionMatchupEntry>>({ $ref: 'ChampionMatchupEntry#' }),
+  ),
+  items: Type.Array(Type.Unsafe<Static<typeof ChampionItemEntry>>({ $ref: 'ChampionItemEntry#' })),
+  runes: Type.Array(Type.Unsafe<Static<typeof ChampionRuneEntry>>({ $ref: 'ChampionRuneEntry#' })),
+  spells: Type.Array(
+    Type.Unsafe<Static<typeof ChampionSpellEntry>>({ $ref: 'ChampionSpellEntry#' }),
+  ),
+});
+
+export const ChampionDetailQuery = Type.Object({
+  platform: Type.Optional(PlatformParam),
+  queue: Type.Optional(RankedQueueParam),
+  tier: Type.Optional(Type.Unsafe<string>({ type: 'string', enum: [...TIERS] })),
+  patch: OptionalPatchParam,
+  role: OptionalRoleParam,
+  minGames: Type.Optional(Type.Integer({ minimum: 0 })),
+  limit: {
+    ...Type.Optional(Type.Integer({ minimum: 1, maximum: 50, default: 10 })),
+    description: 'Caps each of matchups/items/runes/spells independently',
+  },
+});
+
 export const AdminStatsResponse = Type.Object({
   keyScope: Type.String(),
   archivedMatches: Type.Integer(),
@@ -786,6 +913,10 @@ export const sharedSchemas = [
   DivisionParamSchema,
   ScopeParamSchema,
   ChampionStatEntry,
+  ChampionMatchupEntry,
+  ChampionItemEntry,
+  ChampionRuneEntry,
+  ChampionSpellEntry,
   BackfillNoticeSchema,
   ProfileResponseSchema,
   MatchPageResponseSchema,
