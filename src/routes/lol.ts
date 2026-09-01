@@ -1,7 +1,17 @@
 import { Type } from '@sinclair/typebox';
 import type { FastifyPluginAsync } from 'fastify';
 import { config } from '../config.js';
-import { latestPatch, listChampionStats } from '../db/analytics.js';
+import {
+  latestPatch,
+  listAnalyticsSlices,
+  listChampionBans,
+  listChampionItems,
+  listChampionMatchups,
+  listChampionRunes,
+  listChampionSpells,
+  listChampionStats,
+  type ChampionStatRow,
+} from '../db/analytics.js';
 import { ProxyError } from '../errors.js';
 import { fetcher } from '../fetcher.js';
 import { build } from '../riot/endpoints.js';
@@ -13,9 +23,15 @@ import {
   assertTier,
 } from '../riot/ladder.js';
 import { assertPlatform, assertRegion, regionFromMatchId } from '../riot/routing.js';
+import { championNames } from '../static/champions.js';
 import { send } from './helpers.js';
 import {
   ApexTierParam,
+  ChampionDetailQuery,
+  ChampionDetailResponse,
+  ChampionIdParam,
+  ChampionMatchupsQuery,
+  ChampionMatchupsResponse,
   ChampionStatsQuery,
   ChampionStatsResponse,
   DivisionParam,
@@ -290,6 +306,8 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
         queue?: string;
         tier?: string;
         patch?: string;
+        role?: string;
+        minGames?: number;
         limit?: number;
       };
       const platform = assertPlatform(query.platform ?? config.DEFAULT_PLATFORM);
@@ -299,17 +317,30 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
       // without a patch means the current one, not every patch ever archived
       // averaged into a single meaningless number.
       const patch = query.patch ?? (await latestPatch(platform, queue));
+      const minGames = query.minGames ?? config.AGGREGATE_MIN_GAMES;
 
-      const rows = patch
-        ? await listChampionStats({
-            platform,
-            queue,
-            patch,
-            ...(tier ? { tier } : {}),
-            ...(query.limit ? { limit: query.limit } : {}),
-          })
-        : [];
+      // Three independent lookups off the same slice rather than a join: none
+      // of them shares a grain with `champion_stats` — a slice is one row per
+      // tier, a ban is one row per (tier, champion), and neither carries a
+      // role — so folding them into one query would fan champion_stats' rows
+      // out and back in for nothing.
+      const [rows, slices, bans] = patch
+        ? await Promise.all([
+            listChampionStats({
+              platform,
+              queue,
+              patch,
+              minGames,
+              ...(tier ? { tier } : {}),
+              ...(query.role !== undefined ? { role: query.role } : {}),
+              ...(query.limit ? { limit: query.limit } : {}),
+            }),
+            listAnalyticsSlices({ platform, queue, patch, ...(tier ? { tier } : {}) }),
+            listChampionBans({ platform, queue, patch, ...(tier ? { tier } : {}) }),
+          ])
+        : [[], [], []];
 
+      const names = await championNames(rows.map((r) => r.championId));
       const totalGames = rows.reduce((total, row) => total + row.games, 0);
       // A recompute writes the whole slice at once, so any row's stamp is the
       // slice's; the newest is taken in case a partial write is ever visible.
@@ -328,16 +359,192 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
         queue,
         tier: tier ?? null,
         patch: patch ?? null,
+        role: query.role ?? null,
         computedAt: computedAt ? computedAt.toISOString() : null,
         totalGames,
-        champions: rows.map((row) => ({
-          championId: row.championId,
-          tier: row.tier,
-          patch: row.patch,
+        champions: enrichChampionStats(rows, slices, bans, names),
+      };
+    },
+  );
+
+  /**
+   * One champion's lane matchups (#112). Its own route rather than a filter
+   * on the aggregate above: `champion_matchups` has a different grain
+   * (patch/role/champion/opponent, no tier) — folding it in would mean every
+   * caller of the plain champion list paying for a self-join it never asked
+   * for.
+   */
+  fastify.get(
+    '/v1/lol/analytics/champions/:championId/matchups',
+    {
+      schema: {
+        tags: ['lol'],
+        summary: "A champion's lane matchups",
+        description:
+          'Both directions of every lane matchup this champion has archived data for. No tier ' +
+          'dimension: sample sizes die fast enough per (champion, opponent, role) alone, and ' +
+          'the two laners can sit in different tiers anyway.',
+        params: Type.Object({ championId: ChampionIdParam }),
+        querystring: ChampionMatchupsQuery,
+        response: { 200: ChampionMatchupsResponse, ...localErrors },
+      },
+    },
+    async (request, reply) => {
+      const { championId } = request.params as { championId: number };
+      const query = request.query as {
+        platform?: string;
+        queue?: string;
+        patch?: string;
+        role?: string;
+        minGames?: number;
+        limit?: number;
+      };
+      const platform = assertPlatform(query.platform ?? config.DEFAULT_PLATFORM);
+      const queue = assertRankedQueue(query.queue ?? config.ladderQueues[0] ?? 'RANKED_SOLO_5x5');
+      const patch = query.patch ?? (await latestPatch(platform, queue));
+
+      const rows = patch
+        ? await listChampionMatchups({
+            platform,
+            queue,
+            patch,
+            championId,
+            ...(query.role !== undefined ? { role: query.role } : {}),
+            ...(query.minGames !== undefined ? { minGames: query.minGames } : {}),
+            ...(query.limit ? { limit: query.limit } : {}),
+          })
+        : [];
+
+      const names = await championNames([championId, ...rows.map((r) => r.opponentId)]);
+
+      reply.header('Cache-Control', 'public, max-age=300');
+
+      return {
+        championId,
+        ...(names.has(championId) ? { championName: names.get(championId) } : {}),
+        platform,
+        queue,
+        patch: patch ?? null,
+        role: query.role ?? null,
+        matchups: rows.map((row) => ({
+          role: row.role,
+          opponentId: row.opponentId,
+          ...(names.has(row.opponentId) ? { opponentName: names.get(row.opponentId) } : {}),
           games: row.games,
           wins: row.wins,
           winRate: round(row.wins / row.games),
-          share: totalGames > 0 ? round(row.games / totalGames) : 0,
+        })),
+      };
+    },
+  );
+
+  /**
+   * One call for a champion page (#112): the stat row(s) at this slice, and
+   * this champion's top matchups/items/runes/spells. Each section is its own
+   * lookup — none shares a grain with any other — run concurrently rather
+   * than joined, the same reasoning as the plain champion list above.
+   */
+  fastify.get(
+    '/v1/lol/analytics/champions/:championId',
+    {
+      schema: {
+        tags: ['lol'],
+        summary: 'Champion detail composite',
+        description:
+          "The stat row(s) at this slice plus this champion's top lane matchups, items, runes " +
+          'and summoner spells — one call for a champion page. Each section is independently ' +
+          'trimmed by `minGames`/`limit`; a champion nobody has data for yet still returns 200 ' +
+          'with empty arrays rather than a 404.',
+        params: Type.Object({ championId: ChampionIdParam }),
+        querystring: ChampionDetailQuery,
+        response: { 200: ChampionDetailResponse, ...localErrors },
+      },
+    },
+    async (request, reply) => {
+      const { championId } = request.params as { championId: number };
+      const query = request.query as {
+        platform?: string;
+        queue?: string;
+        tier?: string;
+        patch?: string;
+        role?: string;
+        minGames?: number;
+        limit?: number;
+      };
+      const platform = assertPlatform(query.platform ?? config.DEFAULT_PLATFORM);
+      const queue = assertRankedQueue(query.queue ?? config.ladderQueues[0] ?? 'RANKED_SOLO_5x5');
+      const tier = query.tier ? assertTier(query.tier) : undefined;
+      const patch = query.patch ?? (await latestPatch(platform, queue));
+      const role = query.role !== undefined ? { role: query.role } : {};
+      const minGames = query.minGames ?? 0;
+      const limit = query.limit ? { limit: query.limit } : {};
+
+      const [stats, slices, bans, matchups, items, runes, spells] = patch
+        ? await Promise.all([
+            listChampionStats({
+              platform,
+              queue,
+              patch,
+              championId,
+              ...(tier ? { tier } : {}),
+              ...role,
+            }),
+            listAnalyticsSlices({ platform, queue, patch, ...(tier ? { tier } : {}) }),
+            listChampionBans({ platform, queue, patch, ...(tier ? { tier } : {}) }),
+            listChampionMatchups({
+              platform,
+              queue,
+              patch,
+              championId,
+              ...role,
+              minGames,
+              ...limit,
+            }),
+            listChampionItems({ platform, queue, patch, championId, ...role, minGames, ...limit }),
+            listChampionRunes({ platform, queue, patch, championId, ...role, minGames, ...limit }),
+            listChampionSpells({ platform, queue, patch, championId, ...role, minGames, ...limit }),
+          ])
+        : [[], [], [], [], [], [], []];
+
+      const names = await championNames([championId, ...matchups.map((m) => m.opponentId)]);
+
+      reply.header('Cache-Control', 'public, max-age=300');
+
+      return {
+        championId,
+        ...(names.has(championId) ? { championName: names.get(championId) } : {}),
+        platform,
+        queue,
+        patch: patch ?? null,
+        role: query.role ?? null,
+        stats: enrichChampionStats(stats, slices, bans, names),
+        matchups: matchups.map((row) => ({
+          role: row.role,
+          opponentId: row.opponentId,
+          ...(names.has(row.opponentId) ? { opponentName: names.get(row.opponentId) } : {}),
+          games: row.games,
+          wins: row.wins,
+          winRate: round(row.wins / row.games),
+        })),
+        items: items.map((row) => ({
+          itemId: row.itemId,
+          games: row.games,
+          wins: row.wins,
+          winRate: round(row.wins / row.games),
+        })),
+        runes: runes.map((row) => ({
+          keystoneId: row.keystoneId,
+          subStyleId: row.subStyleId,
+          games: row.games,
+          wins: row.wins,
+          winRate: round(row.wins / row.games),
+        })),
+        spells: spells.map((row) => ({
+          spellA: row.spellA,
+          spellB: row.spellB,
+          games: row.games,
+          wins: row.wins,
+          winRate: round(row.wins / row.games),
         })),
       };
     },
@@ -362,6 +569,69 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
 /** Four decimal places: enough for a win rate, short of implying precision. */
 function round(value: number): number {
   return Math.round(value * 10_000) / 10_000;
+}
+
+/**
+ * `champion_stats` rows plus their slice/ban/name context, turned into the
+ * response shape `ChampionStatEntry` describes. Shared by the champion list
+ * route and the detail composite's `stats` section rather than duplicated —
+ * `pickRate`/`banRate` already had two real bugs caught in review once, and a
+ * second implementation is a second place either could drift back in.
+ *
+ * `totalGames`/`share` are computed over exactly the rows passed in: the list
+ * route passes a whole slice, so `share` means "of the slice"; the detail
+ * composite passes one champion's rows across tiers, so it means "of this
+ * champion's own games in this slice" — both are the same formula, applied
+ * to a different `rows` set by the caller.
+ */
+function enrichChampionStats(
+  rows: ChampionStatRow[],
+  slices: { tier: string; matches: number }[],
+  bans: { tier: string; championId: number; bans: number }[],
+  names: Map<number, string>,
+) {
+  const sliceMatches = new Map(slices.map((s) => [s.tier, s.matches]));
+  const banCounts = new Map(bans.map((b) => [`${b.tier}:${b.championId}`, b.bans]));
+  const totalGames = rows.reduce((total, row) => total + row.games, 0);
+
+  return rows.map((row) => {
+    const slice = sliceMatches.get(row.tier);
+    // Absent from `champion_bans` means a computed zero, not an unknown —
+    // the recompute writes both tables from the same transaction, so a
+    // champion with no ban row in a slice that exists was simply never
+    // banned in it (§6.3 of the plan).
+    const bansForChampion = banCounts.get(`${row.tier}:${row.championId}`) ?? 0;
+    const minutes = row.durationS / 60;
+    return {
+      championId: row.championId,
+      ...(names.has(row.championId) ? { championName: names.get(row.championId) } : {}),
+      tier: row.tier,
+      patch: row.patch,
+      games: row.games,
+      wins: row.wins,
+      winRate: round(row.wins / row.games),
+      share: totalGames > 0 ? round(row.games / totalGames) : 0,
+      // `matchesPicked` is stored per role and summed across roles when none
+      // is filtered — correct within one role (the primary key guarantees
+      // one row), but a champion picked in two different roles within the
+      // *same* match sums that match twice. Clamped rather than chasing an
+      // exact cross-role distinct count, which would mean re-opening
+      // `match_participants` per request — the JSONB-open cost this whole
+      // feature exists to avoid.
+      ...(slice ? { pickRate: round(Math.min(1, row.matchesPicked / slice)) } : {}),
+      ...(slice ? { banRate: round(bansForChampion / slice) } : {}),
+      ...(row.statedGames > 0
+        ? {
+            avgKda: round((row.kills + row.assists) / Math.max(row.deaths, 1)),
+            avgDamage: round(row.damage / row.statedGames),
+            avgVision: round(row.vision / row.statedGames),
+          }
+        : {}),
+      ...(minutes > 0
+        ? { csPerMin: round(row.cs / minutes), goldPerMin: round(row.gold / minutes) }
+        : {}),
+    };
+  });
 }
 
 /**

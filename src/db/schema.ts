@@ -7,6 +7,7 @@ import {
   jsonb,
   pgTable,
   primaryKey,
+  smallint,
   text,
   timestamp,
   uniqueIndex,
@@ -79,14 +80,54 @@ export const matches = pgTable(
     gameEndTs: bigint('game_end_ts', { mode: 'number' }).generatedAlwaysAs(
       sql`((data->'info'->>'gameEndTimestamp')::bigint)`,
     ),
+    /**
+     * `gameVersion` major.minor (#109) — Data Dragon's own version list is a
+     * different numbering (its third component is a Data Dragon build, not a
+     * game one), so this stays independent of the mirror. Generated + stored
+     * so the recompute (`recomputeChampionStats`) and its future
+     * `AGGREGATE_PATCH_LIMIT` bound never open `data` for it. Null
+     * `gameVersion` yields a null patch, same exclusion the aggregate applied
+     * before this column existed.
+     */
+    patch: text('patch').generatedAlwaysAs(
+      sql`(split_part(data->'info'->>'gameVersion', '.', 1) || '.' || split_part(data->'info'->>'gameVersion', '.', 2))`,
+    ),
+    /**
+     * Seconds (#109) — every `gameVersion` this service can have archived
+     * postdates Riot's 11.20 switch away from milliseconds, so no unit
+     * branch is needed here.
+     */
+    gameDuration: integer('game_duration').generatedAlwaysAs(
+      sql`((data->'info'->>'gameDuration')::int)`,
+    ),
     data: jsonb('data').notNull(),
     timeline: jsonb('timeline'),
     fetchedAt: timestamp('fetched_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('matches_game_end_idx').on(t.gameEndTs)],
+  (t) => [
+    index('matches_game_end_idx').on(t.gameEndTs),
+    index('matches_queue_patch_idx').on(t.queueId, t.patch),
+    /**
+     * Declared to match `0000_init.sql`, which created this index directly —
+     * `schema.ts` didn't declare it, so a `drizzle-kit generate` would have
+     * emitted a DROP for a live index (#109).
+     */
+    index('matches_participants_gin').using('gin', sql`(data->'metadata'->'participants')`),
+  ],
 );
 
-/** Optional denormalisation for "matches where this player appeared" queries. */
+/**
+ * One row per participant. `(champion_id, win)` was the whole table through L5
+ * (#90); the rest are facts C2 (#110) extracts once, at archive time, so every
+ * aggregate that needs them reads a column instead of opening `matches.data`.
+ *
+ * All nullable and best-effort: `extractParticipants` (`src/db/matches.ts`)
+ * writes whatever a participant object actually has, and Riot's own payload
+ * omits fields by patch, queue and game mode (Arena's `placement`/`subteam_id`
+ * exist nowhere else; ARAM has no `team_position`). Absent stays null rather
+ * than a guessed default, the same rule `match-summary.ts` follows for the same
+ * payload.
+ */
 export const matchParticipants = pgTable(
   'match_participants',
   {
@@ -96,11 +137,60 @@ export const matchParticipants = pgTable(
     puuid: text('puuid').notNull(),
     championId: integer('champion_id'),
     win: boolean('win'),
+    teamId: smallint('team_id'),
+    /** `''` in ARAM/Arena, per Riot; absent entirely on very old archives. */
+    teamPosition: text('team_position'),
+    kills: smallint('kills'),
+    deaths: smallint('deaths'),
+    assists: smallint('assists'),
+    /** `totalMinionsKilled + neutralMinionsKilled`. */
+    cs: integer('cs'),
+    gold: integer('gold'),
+    damage: integer('damage'),
+    vision: integer('vision'),
+    item0: integer('item0'),
+    item1: integer('item1'),
+    item2: integer('item2'),
+    item3: integer('item3'),
+    item4: integer('item4'),
+    item5: integer('item5'),
+    /** The trinket slot (`item6`) is never a build choice, so it is skipped. */
+    keystoneId: integer('keystone_id'),
+    /** The secondary rune *tree*, not a specific rune — `perks.styles[1].style`. */
+    subStyleId: integer('sub_style_id'),
+    spell1: integer('spell1'),
+    spell2: integer('spell2'),
+    /** Arena (queue 1700) only. */
+    placement: smallint('placement'),
+    /** Arena's team-of-two id. Riot's field is `playerSubteamId`, not `subteamId`. */
+    subteamId: smallint('subteam_id'),
   },
   (t) => [
     primaryKey({ columns: [t.matchId, t.puuid] }),
     index('match_participants_puuid_idx').on(t.puuid),
   ],
+);
+
+/**
+ * `info.teams[].bans[]`, one row per ban (#110). `championId: -1` — no pick
+ * made in that slot — is skipped at extraction; a row here always names a real
+ * champion.
+ *
+ * No `key_scope`, matching `match_participants`: a ban is a fact about the
+ * match, not about a player, so nothing here is encrypted (§7.4).
+ */
+export const matchBans = pgTable(
+  'match_bans',
+  {
+    matchId: text('match_id')
+      .notNull()
+      .references(() => matches.matchId, { onDelete: 'cascade' }),
+    teamId: smallint('team_id').notNull(),
+    pickTurn: smallint('pick_turn').notNull(),
+    championId: integer('champion_id').notNull(),
+  },
+  // The PK's leading column gives "every ban in this match" its index for free.
+  (t) => [primaryKey({ columns: [t.matchId, t.teamId, t.pickTurn] })],
 );
 
 /**
@@ -246,21 +336,215 @@ export const championStats = pgTable(
     tier: text('tier').notNull(),
     patch: text('patch').notNull(),
     championId: integer('champion_id').notNull(),
+    /**
+     * `team_position` verbatim, `''` for queues without positions (#111).
+     * `NOT NULL DEFAULT ''` keeps the primary key comparable — a null role
+     * could not stand next to `''` in it the way two empty strings can.
+     */
+    role: text('role').notNull().default(''),
+    games: integer('games').notNull(),
+    wins: integer('wins').notNull(),
+    /**
+     * Distinct matches this champion was picked in, in this slice — not the
+     * same as `games` once a mirror matchup exists (§6.3 of the plan): two
+     * players on the same champion in one match is one pick, two games.
+     */
+    matchesPicked: integer('matches_picked').notNull(),
+    /**
+     * Of `games`, how many participant rows actually carried the widened C2
+     * facts — null until §5.3's re-extract sweeps a pre-C2 row. Every average
+     * below divides by this, not by `games`, so a partially-swept archive
+     * under-counts rather than silently averaging in a wall of zeros.
+     */
+    statedGames: integer('stated_games').notNull(),
+    kills: bigint('kills', { mode: 'number' }).notNull(),
+    deaths: bigint('deaths', { mode: 'number' }).notNull(),
+    assists: bigint('assists', { mode: 'number' }).notNull(),
+    cs: bigint('cs', { mode: 'number' }).notNull(),
+    gold: bigint('gold', { mode: 'number' }).notNull(),
+    damage: bigint('damage', { mode: 'number' }).notNull(),
+    vision: bigint('vision', { mode: 'number' }).notNull(),
+    /** Seconds, summed only over `statedGames` — see the recompute for why. */
+    durationS: bigint('duration_s', { mode: 'number' }).notNull(),
+    computedAt: timestamp('computed_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({
+      columns: [t.keyScope, t.platform, t.queue, t.tier, t.patch, t.championId, t.role],
+    }),
+    /**
+     * The read route's shape: a slice is one (platform, queue, patch) and
+     * optionally one tier, ordered by how often a champion was played. The
+     * primary key cannot serve it — `patch` sits behind `tier` there, and the
+     * common question is "this patch, all tiers". Role sits outside it on
+     * purpose: cardinality here is never the problem (§3 of the plan), and a
+     * role-less read already sums every role's rows in one group.
+     */
+    index('champion_stats_slice_idx').on(t.keyScope, t.platform, t.queue, t.patch, t.tier, t.games),
+  ],
+);
+
+/**
+ * One row per (tier, patch) this key scope has archived data for — distinct
+ * matches with at least one participant the ladder placed at that tier
+ * (#111). The honest denominator L5 never had: `champion_stats.matchesPicked`
+ * over this is `pickRate`; `champion_bans.bans` over this is `banRate`.
+ */
+export const analyticsSlices = pgTable(
+  'analytics_slices',
+  {
+    keyScope: text('key_scope').notNull(),
+    platform: text('platform').notNull(),
+    queue: text('queue').notNull(),
+    tier: text('tier').notNull(),
+    patch: text('patch').notNull(),
+    matches: integer('matches').notNull(),
+    computedAt: timestamp('computed_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.keyScope, t.platform, t.queue, t.tier, t.patch] })],
+);
+
+/**
+ * Per-tier ban counts (#111). Bans are per-team and roleless — joined through
+ * `analytics_slices`' match set at recompute time rather than folded into one
+ * arbitrary role row of `champion_stats`, which would misread as that role's
+ * ban rate.
+ */
+export const championBans = pgTable(
+  'champion_bans',
+  {
+    keyScope: text('key_scope').notNull(),
+    platform: text('platform').notNull(),
+    queue: text('queue').notNull(),
+    tier: text('tier').notNull(),
+    patch: text('patch').notNull(),
+    championId: integer('champion_id').notNull(),
+    bans: integer('bans').notNull(),
+    computedAt: timestamp('computed_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.keyScope, t.platform, t.queue, t.tier, t.patch, t.championId] }),
+  ],
+);
+
+/**
+ * One row per lane matchup (#112) — `champion_id`'s record against
+ * `opponent_id` in `role`, both directions stored (the self-join that builds
+ * this naturally produces the mirror row too, from the opponent's side).
+ *
+ * No tier: 170×170×5 roles is sparse enough already, tier would shred every
+ * cell below significance, and cross-tier matches make per-tier attribution
+ * ill-defined anyway — the two laners can sit in different tiers. `role` is
+ * never `''` here (the recompute requires a real, shared lane), unlike the
+ * builds tables below.
+ */
+export const championMatchups = pgTable(
+  'champion_matchups',
+  {
+    keyScope: text('key_scope').notNull(),
+    platform: text('platform').notNull(),
+    queue: text('queue').notNull(),
+    patch: text('patch').notNull(),
+    role: text('role').notNull(),
+    championId: integer('champion_id').notNull(),
+    opponentId: integer('opponent_id').notNull(),
     games: integer('games').notNull(),
     wins: integer('wins').notNull(),
     computedAt: timestamp('computed_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     primaryKey({
-      columns: [t.keyScope, t.platform, t.queue, t.tier, t.patch, t.championId],
+      columns: [t.keyScope, t.platform, t.queue, t.patch, t.role, t.championId, t.opponentId],
     }),
-    /**
-     * The read route's shape: a slice is one (platform, queue, patch) and
-     * optionally one tier, ordered by how often a champion was played. The
-     * primary key cannot serve it — `patch` sits behind `tier` there, and the
-     * common question is "this patch, all tiers".
-     */
-    index('champion_stats_slice_idx').on(t.keyScope, t.platform, t.queue, t.patch, t.tier, t.games),
+  ],
+);
+
+/**
+ * One row per final item held (#112) — `item0`–`item5`, trinket excluded,
+ * item id `0` (empty slot) excluded. *Final* items, not build order: order
+ * needs timelines, which are off by default and stay out of scope (§12 of
+ * the plan). `role` is `''` for queues without one, same as `champion_stats`
+ * — a build question applies to every participant, laned or not.
+ */
+export const championItems = pgTable(
+  'champion_items',
+  {
+    keyScope: text('key_scope').notNull(),
+    platform: text('platform').notNull(),
+    queue: text('queue').notNull(),
+    patch: text('patch').notNull(),
+    championId: integer('champion_id').notNull(),
+    role: text('role').notNull().default(''),
+    itemId: integer('item_id').notNull(),
+    games: integer('games').notNull(),
+    wins: integer('wins').notNull(),
+    computedAt: timestamp('computed_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({
+      columns: [t.keyScope, t.platform, t.queue, t.patch, t.championId, t.role, t.itemId],
+    }),
+  ],
+);
+
+/** One row per (keystone, sub-style tree) pair a participant ran (#112). */
+export const championRunes = pgTable(
+  'champion_runes',
+  {
+    keyScope: text('key_scope').notNull(),
+    platform: text('platform').notNull(),
+    queue: text('queue').notNull(),
+    patch: text('patch').notNull(),
+    championId: integer('champion_id').notNull(),
+    role: text('role').notNull().default(''),
+    keystoneId: integer('keystone_id').notNull(),
+    subStyleId: integer('sub_style_id').notNull(),
+    games: integer('games').notNull(),
+    wins: integer('wins').notNull(),
+    computedAt: timestamp('computed_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({
+      columns: [
+        t.keyScope,
+        t.platform,
+        t.queue,
+        t.patch,
+        t.championId,
+        t.role,
+        t.keystoneId,
+        t.subStyleId,
+      ],
+    }),
+  ],
+);
+
+/**
+ * One row per summoner spell pair (#112). `spellA`/`spellB` are order-
+ * normalised (`least`/`greatest` at recompute time) so `{4, 14}` and `{14, 4}`
+ * — the same two spells, read off the two summoner-spell slots in whichever
+ * order Riot happened to serialise them — land in the same row rather than
+ * splitting one real choice into two.
+ */
+export const championSpells = pgTable(
+  'champion_spells',
+  {
+    keyScope: text('key_scope').notNull(),
+    platform: text('platform').notNull(),
+    queue: text('queue').notNull(),
+    patch: text('patch').notNull(),
+    championId: integer('champion_id').notNull(),
+    role: text('role').notNull().default(''),
+    spellA: integer('spell_a').notNull(),
+    spellB: integer('spell_b').notNull(),
+    games: integer('games').notNull(),
+    wins: integer('wins').notNull(),
+    computedAt: timestamp('computed_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({
+      columns: [t.keyScope, t.platform, t.queue, t.patch, t.championId, t.role, t.spellA, t.spellB],
+    }),
   ],
 );
 
@@ -273,3 +557,9 @@ export type NewLadderCrawl = typeof ladderCrawls.$inferInsert;
 export type LeagueEntry = typeof leagueEntries.$inferSelect;
 export type NewLeagueEntry = typeof leagueEntries.$inferInsert;
 export type ChampionStat = typeof championStats.$inferSelect;
+export type AnalyticsSlice = typeof analyticsSlices.$inferSelect;
+export type ChampionBan = typeof championBans.$inferSelect;
+export type ChampionMatchup = typeof championMatchups.$inferSelect;
+export type ChampionItem = typeof championItems.$inferSelect;
+export type ChampionRune = typeof championRunes.$inferSelect;
+export type ChampionSpell = typeof championSpells.$inferSelect;

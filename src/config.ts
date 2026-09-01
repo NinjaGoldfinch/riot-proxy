@@ -112,6 +112,25 @@ const EnvSchema = Type.Object({
    */
   LADDER_BACKFILL_LIMIT: Type.Integer({ default: 100, minimum: 0, maximum: 10_000 }),
 
+  /**
+   * Matches re-extracted per `facts:reextract` batch (#110). Pure Postgres —
+   * no Riot quota — so the ceiling is bind-parameter and lock-hold time, not
+   * upstream cost. 500 keeps one batch's participant upserts (~10 rows each)
+   * an order of magnitude under Postgres' parameter limit while still making
+   * the admin route's progress log lines mean something between batches.
+   */
+  FACTS_REEXTRACT_BATCH: Type.Integer({ default: 500, minimum: 1, maximum: 10_000 }),
+
+  /**
+   * Default floor for `GET /v1/lol/analytics/champions`' `minGames` filter
+   * (#111). A champion picked once and won is not a "100% win rate" — it is
+   * one data point — and the long tail of those is what makes a freshly
+   * aggregated ladder look broken. 10 trims that tail while still surfacing
+   * anything with a real sample; a caller who wants the raw tail can ask for
+   * `minGames=0`.
+   */
+  AGGREGATE_MIN_GAMES: Type.Integer({ default: 10, minimum: 0, maximum: 10_000 }),
+
   DDRAGON_DIR: Type.String({ default: './data/ddragon' }),
   DDRAGON_LOCALE: Type.String({ default: 'en_US' }),
 

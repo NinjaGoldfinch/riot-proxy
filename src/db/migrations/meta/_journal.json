@@ -36,6 +36,34 @@
       "when": 1798934400000,
       "tag": "0004_ladder_phases",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1799020800000,
+      "tag": "0005_matches_patch_column",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1799107200000,
+      "tag": "0006_match_facts",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1799193600000,
+      "tag": "0007_champion_stats_v2",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1799280000000,
+      "tag": "0008_champion_matchups_and_builds",
+      "breakpoints": true
     }
   ]
 }

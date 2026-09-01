@@ -75,6 +75,13 @@ export const PINNED: Record<string, string> = {
   // discovered player; the discovery tests turn it on themselves.
   LADDER_BACKFILL_LIMIT: '0',
 
+  FACTS_REEXTRACT_BATCH: '500',
+
+  // Off like LOOKUP_BACKFILL_LIMIT: the suite's fixtures are 1-2 games each,
+  // and the production default would silently empty every one of them. The
+  // minGames tests turn it on themselves.
+  AGGREGATE_MIN_GAMES: '0',
+
   DDRAGON_DIR: './data/ddragon',
   DDRAGON_LOCALE: 'en_US',
 

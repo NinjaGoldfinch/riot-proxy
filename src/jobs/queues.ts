@@ -62,6 +62,7 @@ export const JOB = {
   ladderArchive: 'ladder:archive',
   aggregateChampions: 'aggregate:champions',
   namesBackfill: 'names:backfill',
+  factsReextract: 'facts:reextract',
   maintenance: 'maintenance',
 } as const;
 

@@ -338,6 +338,8 @@ Every archive job therefore carries an explicit priority.
 | `LADDER_PLATFORMS`                           | —                                                 | CSV; empty means `DEFAULT_PLATFORM`                          |
 | `LADDER_TIER_FLOOR`                          | `MASTER`                                          | Lowest tier a crawl enumerates — and walks                   |
 | `LADDER_BACKFILL_LIMIT`                      | `100`                                             | Matches per discovered player; `0` discovers without walking |
+| `FACTS_REEXTRACT_BATCH`                      | `500`                                             | Matches per `facts:reextract` batch; pure Postgres           |
+| `AGGREGATE_MIN_GAMES`                        | `10`                                              | Default `minGames` floor on the champion stats route         |
 | `ADMIN_IP_ALLOWLIST`                         | —                                                 | CSV of IPs/CIDRs; empty means key scope is enough            |
 | `BOOTSTRAP_ADMIN_KEY`                        | —                                                 | Seeds one admin key on `npm run migrate`                     |
 | `AUTH_DISABLED`                              | `false`                                           | Dev only: skip key checks; refused in production             |
