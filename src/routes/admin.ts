@@ -443,7 +443,7 @@ const adminRoutes: FastifyPluginAsync = async (fastify) => {
           'Backfills `match_participants`’ widened columns and `match_bans` for rows written ' +
           'before this facts extraction existed. Pure Postgres — no Riot quota — paced so it ' +
           'never competes with interactive traffic. Only one run is ever in flight; a trigger ' +
-          "while one is already running joins it rather than starting a second walk.",
+          'while one is already running joins it rather than starting a second walk.',
         response: { 202: PassthroughResponse, ...localErrors },
       },
     },

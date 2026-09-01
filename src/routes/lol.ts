@@ -1,7 +1,12 @@
 import { Type } from '@sinclair/typebox';
 import type { FastifyPluginAsync } from 'fastify';
 import { config } from '../config.js';
-import { latestPatch, listChampionStats } from '../db/analytics.js';
+import {
+  latestPatch,
+  listAnalyticsSlices,
+  listChampionBans,
+  listChampionStats,
+} from '../db/analytics.js';
 import { ProxyError } from '../errors.js';
 import { fetcher } from '../fetcher.js';
 import { build } from '../riot/endpoints.js';
@@ -13,6 +18,7 @@ import {
   assertTier,
 } from '../riot/ladder.js';
 import { assertPlatform, assertRegion, regionFromMatchId } from '../riot/routing.js';
+import { championNames } from '../static/champions.js';
 import { send } from './helpers.js';
 import {
   ApexTierParam,
@@ -290,6 +296,8 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
         queue?: string;
         tier?: string;
         patch?: string;
+        role?: string;
+        minGames?: number;
         limit?: number;
       };
       const platform = assertPlatform(query.platform ?? config.DEFAULT_PLATFORM);
@@ -299,16 +307,32 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
       // without a patch means the current one, not every patch ever archived
       // averaged into a single meaningless number.
       const patch = query.patch ?? (await latestPatch(platform, queue));
+      const minGames = query.minGames ?? config.AGGREGATE_MIN_GAMES;
 
-      const rows = patch
-        ? await listChampionStats({
-            platform,
-            queue,
-            patch,
-            ...(tier ? { tier } : {}),
-            ...(query.limit ? { limit: query.limit } : {}),
-          })
-        : [];
+      // Three independent lookups off the same slice rather than a join: none
+      // of them shares a grain with `champion_stats` — a slice is one row per
+      // tier, a ban is one row per (tier, champion), and neither carries a
+      // role — so folding them into one query would fan champion_stats' rows
+      // out and back in for nothing.
+      const [rows, slices, bans] = patch
+        ? await Promise.all([
+            listChampionStats({
+              platform,
+              queue,
+              patch,
+              minGames,
+              ...(tier ? { tier } : {}),
+              ...(query.role !== undefined ? { role: query.role } : {}),
+              ...(query.limit ? { limit: query.limit } : {}),
+            }),
+            listAnalyticsSlices({ platform, queue, patch, ...(tier ? { tier } : {}) }),
+            listChampionBans({ platform, queue, patch, ...(tier ? { tier } : {}) }),
+          ])
+        : [[], [], []];
+
+      const sliceMatches = new Map(slices.map((s) => [s.tier, s.matches]));
+      const banCounts = new Map(bans.map((b) => [`${b.tier}:${b.championId}`, b.bans]));
+      const names = await championNames(rows.map((r) => r.championId));
 
       const totalGames = rows.reduce((total, row) => total + row.games, 0);
       // A recompute writes the whole slice at once, so any row's stamp is the
@@ -328,17 +352,47 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
         queue,
         tier: tier ?? null,
         patch: patch ?? null,
+        role: query.role ?? null,
         computedAt: computedAt ? computedAt.toISOString() : null,
         totalGames,
-        champions: rows.map((row) => ({
-          championId: row.championId,
-          tier: row.tier,
-          patch: row.patch,
-          games: row.games,
-          wins: row.wins,
-          winRate: round(row.wins / row.games),
-          share: totalGames > 0 ? round(row.games / totalGames) : 0,
-        })),
+        champions: rows.map((row) => {
+          const slice = sliceMatches.get(row.tier);
+          // Absent from `champion_bans` means a computed zero, not an unknown
+          // — the recompute writes both tables from the same transaction, so
+          // a champion with no ban row in a slice that exists was simply
+          // never banned in it (§6.3 of the plan).
+          const bansForChampion = banCounts.get(`${row.tier}:${row.championId}`) ?? 0;
+          const minutes = row.durationS / 60;
+          return {
+            championId: row.championId,
+            ...(names.has(row.championId) ? { championName: names.get(row.championId) } : {}),
+            tier: row.tier,
+            patch: row.patch,
+            games: row.games,
+            wins: row.wins,
+            winRate: round(row.wins / row.games),
+            share: totalGames > 0 ? round(row.games / totalGames) : 0,
+            // `matchesPicked` is stored per role and summed across roles when
+            // none is filtered — correct within one role (the primary key
+            // guarantees one row), but a champion picked in two different
+            // roles within the *same* match sums that match twice. Clamped
+            // rather than chasing an exact cross-role distinct count, which
+            // would mean re-opening `match_participants` per request — the
+            // JSONB-open cost this whole feature exists to avoid.
+            ...(slice ? { pickRate: round(Math.min(1, row.matchesPicked / slice)) } : {}),
+            ...(slice ? { banRate: round(bansForChampion / slice) } : {}),
+            ...(row.statedGames > 0
+              ? {
+                  avgKda: round((row.kills + row.assists) / Math.max(row.deaths, 1)),
+                  avgDamage: round(row.damage / row.statedGames),
+                  avgVision: round(row.vision / row.statedGames),
+                }
+              : {}),
+            ...(minutes > 0
+              ? { csPerMin: round(row.cs / minutes), goldPerMin: round(row.gold / minutes) }
+              : {}),
+          };
+        }),
       };
     },
   );

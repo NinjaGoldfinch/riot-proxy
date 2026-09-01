@@ -1326,9 +1326,7 @@ const REEXTRACT_PACE_MS = 50;
  * the walk instead of restarting it, and BullMQ's own lock renewal is what
  * lets a job run for as long as an archive this size takes.
  */
-export async function factsReextract(
-  job: Job,
-): Promise<{ matches: number; batches: number }> {
+export async function factsReextract(job: Job): Promise<{ matches: number; batches: number }> {
   let cursor = await getReextractCursor();
   let matches = 0;
   let batches = 0;

@@ -803,6 +803,9 @@
           "championId": {
             "type": "integer"
           },
+          "championName": {
+            "type": "string"
+          },
           "tier": {
             "type": "string"
           },
@@ -825,6 +828,38 @@
             "maximum": 1,
             "type": "number",
             "description": "This champion's games as a fraction of the slice's games"
+          },
+          "pickRate": {
+            "minimum": 0,
+            "maximum": 1,
+            "type": "number",
+            "description": "Distinct matches this champion was picked in, over the slice’s match count"
+          },
+          "banRate": {
+            "minimum": 0,
+            "maximum": 1,
+            "type": "number",
+            "description": "Distinct matches this champion was banned in, over the slice’s match count"
+          },
+          "avgKda": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "csPerMin": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "goldPerMin": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "avgDamage": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "avgVision": {
+            "minimum": 0,
+            "type": "number"
           }
         }
       },
@@ -4283,6 +4318,33 @@
           },
           {
             "schema": {
+              "type": "string",
+              "enum": [
+                "TOP",
+                "JUNGLE",
+                "MIDDLE",
+                "BOTTOM",
+                "UTILITY",
+                ""
+              ]
+            },
+            "in": "query",
+            "name": "role",
+            "required": false,
+            "description": "Omitted sums every role into one row per champion"
+          },
+          {
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "in": "query",
+            "name": "minGames",
+            "required": false,
+            "description": "Drops champions below this many games in the slice; defaults to AGGREGATE_MIN_GAMES"
+          },
+          {
+            "schema": {
               "minimum": 1,
               "maximum": 500,
               "default": 200,
@@ -4305,6 +4367,7 @@
                     "queue",
                     "tier",
                     "patch",
+                    "role",
                     "computedAt",
                     "totalGames",
                     "champions"
@@ -4337,6 +4400,17 @@
                         }
                       ],
                       "description": "`gameVersion` major.minor. Null when nothing has been aggregated yet"
+                    },
+                    "role": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Null when every role is summed into one row per champion"
                     },
                     "computedAt": {
                       "anyOf": [
