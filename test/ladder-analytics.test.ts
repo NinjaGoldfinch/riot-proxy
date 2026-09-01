@@ -602,9 +602,7 @@ describe('champion_matchups and builds', () => {
     ]);
   });
 
-  it('requires a shared, non-empty lane — no matchup across roles or off one', async ({
-    skip,
-  }) => {
+  it('requires a shared, non-empty lane — no matchup across roles or off one', async ({ skip }) => {
     if (!available) return skip();
     // Same match, same two teams, but different lanes: never opposing laners.
     await seedFacts('matchup-cross', {
@@ -625,7 +623,12 @@ describe('champion_matchups and builds', () => {
     await recomputeChampionMatchups(PLATFORM, QUEUE);
 
     expect(
-      await listChampionMatchups({ platform: PLATFORM, queue: QUEUE, patch: '16.13', championId: AHRI }),
+      await listChampionMatchups({
+        platform: PLATFORM,
+        queue: QUEUE,
+        patch: '16.13',
+        championId: AHRI,
+      }),
     ).toEqual([]);
   });
 
@@ -650,10 +653,20 @@ describe('champion_matchups and builds', () => {
     await recomputeChampionMatchups(PLATFORM, QUEUE);
 
     expect(
-      await listChampionMatchups({ platform: PLATFORM, queue: QUEUE, patch: '16.13', championId: AHRI }),
+      await listChampionMatchups({
+        platform: PLATFORM,
+        queue: QUEUE,
+        patch: '16.13',
+        championId: AHRI,
+      }),
     ).toEqual([]);
     expect(
-      await listChampionMatchups({ platform: PLATFORM, queue: QUEUE, patch: '16.13', championId: GAREN }),
+      await listChampionMatchups({
+        platform: PLATFORM,
+        queue: QUEUE,
+        patch: '16.13',
+        championId: GAREN,
+      }),
     ).toEqual([]);
   });
 
@@ -696,8 +709,12 @@ describe('champion_matchups and builds', () => {
 
   it('normalises spell order, so {4,14} and {14,4} are the same row', async ({ skip }) => {
     if (!available) return skip();
-    await seedFacts('spells-1', { 'chall-a': { championId: AHRI, win: true, spell1: 4, spell2: 14 } });
-    await seedFacts('spells-2', { 'chall-b': { championId: AHRI, win: true, spell1: 14, spell2: 4 } });
+    await seedFacts('spells-1', {
+      'chall-a': { championId: AHRI, win: true, spell1: 4, spell2: 14 },
+    });
+    await seedFacts('spells-2', {
+      'chall-b': { championId: AHRI, win: true, spell1: 14, spell2: 4 },
+    });
     await ladder({ 'chall-a': 'CHALLENGER', 'chall-b': 'CHALLENGER' });
     await recomputeChampionBuilds(PLATFORM, QUEUE);
 
@@ -713,10 +730,22 @@ describe('champion_matchups and builds', () => {
   it('buckets runes by role, and sums every role when none is filtered', async ({ skip }) => {
     if (!available) return skip();
     await seedFacts('runes-1', {
-      'chall-a': { championId: AHRI, win: true, teamPosition: 'MIDDLE', keystoneId: 8214, subStyleId: 8100 },
+      'chall-a': {
+        championId: AHRI,
+        win: true,
+        teamPosition: 'MIDDLE',
+        keystoneId: 8214,
+        subStyleId: 8100,
+      },
     });
     await seedFacts('runes-2', {
-      'chall-b': { championId: AHRI, win: false, teamPosition: 'UTILITY', keystoneId: 8214, subStyleId: 8100 },
+      'chall-b': {
+        championId: AHRI,
+        win: false,
+        teamPosition: 'UTILITY',
+        keystoneId: 8214,
+        subStyleId: 8100,
+      },
     });
     await ladder({ 'chall-a': 'CHALLENGER', 'chall-b': 'CHALLENGER' });
     await recomputeChampionBuilds(PLATFORM, QUEUE);
@@ -764,7 +793,13 @@ describe('GET /v1/lol/analytics/champions/{championId}/matchups', () => {
     const body = (await get(AHRI, '')).json() as {
       championId: number;
       patch: string | null;
-      matchups: { role: string; opponentId: number; games: number; wins: number; winRate: number }[];
+      matchups: {
+        role: string;
+        opponentId: number;
+        games: number;
+        wins: number;
+        winRate: number;
+      }[];
     };
     expect(body.patch).toBe('16.13');
     expect(body.matchups).toEqual([

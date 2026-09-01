@@ -733,9 +733,7 @@ export const ChampionDetailResponse = Type.Object({
     ...Type.Union([Type.String(), Type.Null()]),
     description: 'Null when every role is summed into one row per section',
   },
-  stats: Type.Array(
-    Type.Unsafe<Static<typeof ChampionStatEntry>>({ $ref: 'ChampionStatEntry#' }),
-  ),
+  stats: Type.Array(Type.Unsafe<Static<typeof ChampionStatEntry>>({ $ref: 'ChampionStatEntry#' })),
   matchups: Type.Array(
     Type.Unsafe<Static<typeof ChampionMatchupEntry>>({ $ref: 'ChampionMatchupEntry#' }),
   ),

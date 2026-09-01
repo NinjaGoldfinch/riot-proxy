@@ -382,7 +382,7 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
         summary: "A champion's lane matchups",
         description:
           'Both directions of every lane matchup this champion has archived data for. No tier ' +
-          "dimension: sample sizes die fast enough per (champion, opponent, role) alone, and " +
+          'dimension: sample sizes die fast enough per (champion, opponent, role) alone, and ' +
           'the two laners can sit in different tiers anyway.',
         params: Type.Object({ championId: ChampionIdParam }),
         querystring: ChampionMatchupsQuery,
@@ -481,10 +481,25 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
 
       const [stats, slices, bans, matchups, items, runes, spells] = patch
         ? await Promise.all([
-            listChampionStats({ platform, queue, patch, championId, ...(tier ? { tier } : {}), ...role }),
+            listChampionStats({
+              platform,
+              queue,
+              patch,
+              championId,
+              ...(tier ? { tier } : {}),
+              ...role,
+            }),
             listAnalyticsSlices({ platform, queue, patch, ...(tier ? { tier } : {}) }),
             listChampionBans({ platform, queue, patch, ...(tier ? { tier } : {}) }),
-            listChampionMatchups({ platform, queue, patch, championId, ...role, minGames, ...limit }),
+            listChampionMatchups({
+              platform,
+              queue,
+              patch,
+              championId,
+              ...role,
+              minGames,
+              ...limit,
+            }),
             listChampionItems({ platform, queue, patch, championId, ...role, minGames, ...limit }),
             listChampionRunes({ platform, queue, patch, championId, ...role, minGames, ...limit }),
             listChampionSpells({ platform, queue, patch, championId, ...role, minGames, ...limit }),
