@@ -79,11 +79,40 @@ export const matches = pgTable(
     gameEndTs: bigint('game_end_ts', { mode: 'number' }).generatedAlwaysAs(
       sql`((data->'info'->>'gameEndTimestamp')::bigint)`,
     ),
+    /**
+     * `gameVersion` major.minor (#109) — Data Dragon's own version list is a
+     * different numbering (its third component is a Data Dragon build, not a
+     * game one), so this stays independent of the mirror. Generated + stored
+     * so the recompute (`recomputeChampionStats`) and its future
+     * `AGGREGATE_PATCH_LIMIT` bound never open `data` for it. Null
+     * `gameVersion` yields a null patch, same exclusion the aggregate applied
+     * before this column existed.
+     */
+    patch: text('patch').generatedAlwaysAs(
+      sql`(split_part(data->'info'->>'gameVersion', '.', 1) || '.' || split_part(data->'info'->>'gameVersion', '.', 2))`,
+    ),
+    /**
+     * Seconds (#109) — every `gameVersion` this service can have archived
+     * postdates Riot's 11.20 switch away from milliseconds, so no unit
+     * branch is needed here.
+     */
+    gameDuration: integer('game_duration').generatedAlwaysAs(
+      sql`((data->'info'->>'gameDuration')::int)`,
+    ),
     data: jsonb('data').notNull(),
     timeline: jsonb('timeline'),
     fetchedAt: timestamp('fetched_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('matches_game_end_idx').on(t.gameEndTs)],
+  (t) => [
+    index('matches_game_end_idx').on(t.gameEndTs),
+    index('matches_queue_patch_idx').on(t.queueId, t.patch),
+    /**
+     * Declared to match `0000_init.sql`, which created this index directly —
+     * `schema.ts` didn't declare it, so a `drizzle-kit generate` would have
+     * emitted a DROP for a live index (#109).
+     */
+    index('matches_participants_gin').using('gin', sql`(data->'metadata'->'participants')`),
+  ],
 );
 
 /** Optional denormalisation for "matches where this player appeared" queries. */

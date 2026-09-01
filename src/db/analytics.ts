@@ -59,10 +59,9 @@ export async function recomputeChampionStats(
         le.platform,
         le.queue,
         le.tier,
-        -- '16.13.790.6961' -> '16.13'. The build numbers behind it change
-        -- within a patch and would shatter every group.
-        split_part(m.data->'info'->>'gameVersion', '.', 1) || '.' ||
-          split_part(m.data->'info'->>'gameVersion', '.', 2) as patch,
+        -- matches.patch is already major.minor, generated and indexed
+        -- (#109) — nothing left to parse here.
+        m.patch,
         mp.champion_id,
         count(*)::int as games,
         count(*) filter (where mp.win)::int as wins,
@@ -77,7 +76,7 @@ export async function recomputeChampionStats(
       where mp.champion_id is not null
         and mp.win is not null
         and m.queue_id = ${queueId}
-        and m.data->'info'->>'gameVersion' is not null
+        and m.patch is not null
       group by 1, 2, 3, 4, 5, 6
       returning games
     `;
