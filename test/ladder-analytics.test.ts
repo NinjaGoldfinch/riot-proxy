@@ -303,6 +303,78 @@ describe('recomputing champion aggregates', () => {
   });
 });
 
+describe('matches generated columns (#109)', () => {
+  async function insertMatch(id: string, info: Record<string, unknown>): Promise<string> {
+    const matchId = `${MATCH_PREFIX}${id}`;
+    await db.insert(matches).values({
+      matchId,
+      region: 'europe',
+      data: { metadata: { matchId }, info },
+    });
+    return matchId;
+  }
+
+  it('derives patch as major.minor, ignoring the build behind it', async ({ skip }) => {
+    if (!available) return skip();
+    const matchId = await insertMatch('patch-present', {
+      queueId: 420,
+      gameVersion: '16.13.790.6961',
+      gameEndTimestamp: 1_756_000_000_000,
+    });
+
+    const [row] = await db
+      .select({ patch: matches.patch })
+      .from(matches)
+      .where(eq(matches.matchId, matchId));
+    expect(row?.patch).toBe('16.13');
+  });
+
+  it('leaves patch null when gameVersion is absent', async ({ skip }) => {
+    if (!available) return skip();
+    const matchId = await insertMatch('patch-absent', {
+      queueId: 420,
+      gameEndTimestamp: 1_756_000_000_000,
+    });
+
+    const [row] = await db
+      .select({ patch: matches.patch })
+      .from(matches)
+      .where(eq(matches.matchId, matchId));
+    expect(row?.patch).toBeNull();
+  });
+
+  it('derives game_duration in seconds from info.gameDuration', async ({ skip }) => {
+    if (!available) return skip();
+    const matchId = await insertMatch('duration-present', {
+      queueId: 420,
+      gameVersion: '16.13.790.6961',
+      gameDuration: 1823,
+      gameEndTimestamp: 1_756_000_000_000,
+    });
+
+    const [row] = await db
+      .select({ gameDuration: matches.gameDuration })
+      .from(matches)
+      .where(eq(matches.matchId, matchId));
+    expect(row?.gameDuration).toBe(1823);
+  });
+
+  it('leaves game_duration null when info.gameDuration is absent', async ({ skip }) => {
+    if (!available) return skip();
+    const matchId = await insertMatch('duration-absent', {
+      queueId: 420,
+      gameVersion: '16.13.790.6961',
+      gameEndTimestamp: 1_756_000_000_000,
+    });
+
+    const [row] = await db
+      .select({ gameDuration: matches.gameDuration })
+      .from(matches)
+      .where(eq(matches.matchId, matchId));
+    expect(row?.gameDuration).toBeNull();
+  });
+});
+
 describe('GET /v1/lol/analytics/champions', () => {
   const get = (query: string) =>
     app!.inject({
