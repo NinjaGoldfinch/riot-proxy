@@ -70,6 +70,7 @@ const EXPECTED_OPERATIONS = [
   'GET /v1/static/versions',
   'GET /v1/static/{file}',
   'POST /v1/admin/analytics/champions/recompute',
+  'POST /v1/admin/analytics/reextract',
   'POST /v1/admin/backfill',
   'POST /v1/admin/cache/purge',
   'POST /v1/admin/consumers',
