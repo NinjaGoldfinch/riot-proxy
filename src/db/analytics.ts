@@ -312,7 +312,11 @@ export async function listChampionBans(
   if (filter.tier) where.push(eq(championBans.tier, filter.tier));
 
   return db
-    .select({ tier: championBans.tier, championId: championBans.championId, bans: championBans.bans })
+    .select({
+      tier: championBans.tier,
+      championId: championBans.championId,
+      bans: championBans.bans,
+    })
     .from(championBans)
     .where(and(...where));
 }

@@ -410,8 +410,12 @@ describe('champion_stats v2 — role, sums and denominators', () => {
     skip,
   }) => {
     if (!available) return skip();
-    await seedFacts('role-1', { 'chall-a': { championId: AHRI, win: true, teamPosition: 'MIDDLE' } });
-    await seedFacts('role-2', { 'chall-a': { championId: AHRI, win: false, teamPosition: 'UTILITY' } });
+    await seedFacts('role-1', {
+      'chall-a': { championId: AHRI, win: true, teamPosition: 'MIDDLE' },
+    });
+    await seedFacts('role-2', {
+      'chall-a': { championId: AHRI, win: false, teamPosition: 'UTILITY' },
+    });
     await ladder({ 'chall-a': 'CHALLENGER' });
     await recomputeChampionStats(PLATFORM, QUEUE);
 
@@ -425,7 +429,9 @@ describe('champion_stats v2 — role, sums and denominators', () => {
     expect(support.find((r) => r.championId === AHRI)).toMatchObject({ games: 1, wins: 0 });
   });
 
-  it('sums facts only from swept rows, counting them separately in statedGames', async ({ skip }) => {
+  it('sums facts only from swept rows, counting them separately in statedGames', async ({
+    skip,
+  }) => {
     if (!available) return skip();
     await seedFacts('stated-1', {
       'chall-a': {
@@ -506,7 +512,10 @@ describe('champion_stats v2 — role, sums and denominators', () => {
     // `test/matches-facts.test.ts`.
     await seedFacts(
       'ban-1',
-      { 'chall-a': { championId: AHRI, win: true }, 'diamond-a': { championId: GAREN, win: false } },
+      {
+        'chall-a': { championId: AHRI, win: true },
+        'diamond-a': { championId: GAREN, win: false },
+      },
       [{ teamId: 100, pickTurn: 1, championId: 64 }],
     );
     await ladder({ 'chall-a': 'CHALLENGER', 'diamond-a': 'DIAMOND' });
@@ -678,8 +687,12 @@ describe('GET /v1/lol/analytics/champions', () => {
 
   it('rolls up every role by default, and narrows with a role filter', async ({ skip }) => {
     if (!available || !app) return skip();
-    await seedFacts('role-a', { 'chall-a': { championId: AHRI, win: true, teamPosition: 'MIDDLE' } });
-    await seedFacts('role-b', { 'chall-a': { championId: AHRI, win: false, teamPosition: 'UTILITY' } });
+    await seedFacts('role-a', {
+      'chall-a': { championId: AHRI, win: true, teamPosition: 'MIDDLE' },
+    });
+    await seedFacts('role-b', {
+      'chall-a': { championId: AHRI, win: false, teamPosition: 'UTILITY' },
+    });
     await ladder({ 'chall-a': 'CHALLENGER' });
     await recomputeChampionStats(PLATFORM, QUEUE);
 
@@ -735,11 +748,15 @@ describe('GET /v1/lol/analytics/champions', () => {
     await ladder({ 'chall-a': 'CHALLENGER', 'chall-b': 'CHALLENGER' });
     await recomputeChampionStats(PLATFORM, QUEUE);
 
-    const body = (await get('')).json() as { champions: { championId: number; pickRate?: number }[] };
+    const body = (await get('')).json() as {
+      champions: { championId: number; pickRate?: number }[];
+    };
     expect(body.champions.find((c) => c.championId === AHRI)?.pickRate).toBe(1);
   });
 
-  it('computes the performance averages only once a champion has stated games', async ({ skip }) => {
+  it('computes the performance averages only once a champion has stated games', async ({
+    skip,
+  }) => {
     if (!available || !app) return skip();
     await seedFacts(
       'perf-1',

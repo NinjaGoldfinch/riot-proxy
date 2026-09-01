@@ -626,7 +626,8 @@ export const ChampionStatsQuery = Type.Object({
   }),
   minGames: Type.Optional({
     ...Type.Integer({ minimum: 0 }),
-    description: 'Drops champions below this many games in the slice; defaults to AGGREGATE_MIN_GAMES',
+    description:
+      'Drops champions below this many games in the slice; defaults to AGGREGATE_MIN_GAMES',
   }),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500, default: 200 })),
 });

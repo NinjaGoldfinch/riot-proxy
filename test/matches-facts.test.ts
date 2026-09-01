@@ -188,9 +188,7 @@ describe('extracting participant facts', () => {
     await archiveMatch(
       id,
       REGION,
-      match(id, [
-        participant(puuid(3), { placement: 2, playerSubteamId: 4, teamPosition: '' }),
-      ]),
+      match(id, [participant(puuid(3), { placement: 2, playerSubteamId: 4, teamPosition: '' })]),
     );
 
     const row = await participantRow(id, puuid(3));
@@ -279,7 +277,9 @@ describe('facts:reextract batches', () => {
   /** A pre-C2 row: the match and its bare participant row, no facts. */
   async function seedPreC2(id: string, p: string, richData: RiotMatch): Promise<void> {
     await db.insert(matches).values({ matchId: id, region: REGION, data: richData });
-    await db.insert(matchParticipants).values({ matchId: id, puuid: p, championId: 103, win: true });
+    await db
+      .insert(matchParticipants)
+      .values({ matchId: id, puuid: p, championId: 103, win: true });
   }
 
   it('walks matches in id order and backfills their facts', async ({ skip }) => {

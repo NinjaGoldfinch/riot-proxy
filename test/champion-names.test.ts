@@ -21,9 +21,15 @@ const mirror = join(base, 'ddragon');
 const V1 = '16.17.1';
 const V2 = '16.18.1';
 
-async function writeChampionFile(version: string, data: Record<string, { key: string; name: string }>) {
+async function writeChampionFile(
+  version: string,
+  data: Record<string, { key: string; name: string }>,
+) {
   await mkdir(join(mirror, version), { recursive: true });
-  await writeFile(join(mirror, version, 'champion.json'), JSON.stringify({ type: 'champion', data }));
+  await writeFile(
+    join(mirror, version, 'champion.json'),
+    JSON.stringify({ type: 'champion', data }),
+  );
 }
 
 await writeChampionFile(V1, {
