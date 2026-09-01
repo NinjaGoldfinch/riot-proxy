@@ -6,8 +6,22 @@ import type { App } from '../src/app.js';
 import { buildApp } from '../src/app.js';
 import { KEY_SCOPE } from '../src/config.js';
 import { closeDb, db, pingDb } from '../src/db/index.js';
-import { championStats, leagueEntries, matchParticipants, matches } from '../src/db/schema.js';
-import { latestPatch, listChampionStats, recomputeChampionStats } from '../src/db/analytics.js';
+import {
+  analyticsSlices,
+  championBans,
+  championStats,
+  leagueEntries,
+  matchBans,
+  matchParticipants,
+  matches,
+} from '../src/db/schema.js';
+import {
+  latestPatch,
+  listAnalyticsSlices,
+  listChampionBans,
+  listChampionStats,
+  recomputeChampionStats,
+} from '../src/db/analytics.js';
 import { createTestConsumer, removeTestConsumers, testConsumerName } from './helpers/consumers.js';
 import { closeRedis, redis } from '../src/redis.js';
 import { wsHub } from '../src/ws/index.js';
@@ -96,6 +110,8 @@ async function wipe(): Promise<void> {
   if (mine.length > 0) await db.delete(matches).where(inArray(matches.matchId, mine));
   await db.delete(leagueEntries).where(eq(leagueEntries.platform, PLATFORM));
   await db.delete(championStats).where(eq(championStats.platform, PLATFORM));
+  await db.delete(analyticsSlices).where(eq(analyticsSlices.platform, PLATFORM));
+  await db.delete(championBans).where(eq(championBans.platform, PLATFORM));
 }
 
 beforeAll(async () => {
@@ -139,6 +155,85 @@ const m = (
   players,
   ...over,
 });
+
+const FACTS_CRAWL_ID = '00000000-0000-4000-8000-0000000000bb';
+
+interface SeededParticipant {
+  championId: number;
+  win: boolean;
+  teamPosition?: string;
+  kills?: number;
+  deaths?: number;
+  assists?: number;
+  cs?: number;
+  gold?: number;
+  damage?: number;
+  vision?: number;
+}
+
+/**
+ * A match with full control over the C2 fact columns and optional bans —
+ * `seed`/`m` above only carry `championId`/`win`, which is not enough to
+ * exercise C3's role/sum/denominator columns.
+ */
+async function seedFacts(
+  id: string,
+  participants: Record<string, SeededParticipant>,
+  bans: { teamId: number; pickTurn: number; championId: number }[] = [],
+  over: { gameDuration?: number } = {},
+): Promise<void> {
+  const matchId = `${MATCH_PREFIX}${id}`;
+  await db.insert(matches).values({
+    matchId,
+    region: 'europe',
+    data: {
+      metadata: { matchId },
+      info: {
+        queueId: 420,
+        gameVersion: '16.13.790.6961',
+        gameEndTimestamp: 1_756_000_000_000,
+        gameDuration: over.gameDuration ?? 1800,
+      },
+    },
+  });
+  await db.insert(matchParticipants).values(
+    Object.entries(participants).map(([puuid, p]) => ({
+      matchId,
+      puuid,
+      championId: p.championId,
+      win: p.win,
+      teamPosition: p.teamPosition ?? null,
+      kills: p.kills ?? null,
+      deaths: p.deaths ?? null,
+      assists: p.assists ?? null,
+      cs: p.cs ?? null,
+      gold: p.gold ?? null,
+      damage: p.damage ?? null,
+      vision: p.vision ?? null,
+    })),
+  );
+  if (bans.length > 0) {
+    await db.insert(matchBans).values(bans.map((b) => ({ matchId, ...b })));
+  }
+}
+
+async function ladder(entries: Record<string, string>): Promise<void> {
+  for (const [puuid, tier] of Object.entries(entries)) {
+    await db.insert(leagueEntries).values({
+      keyScope: KEY_SCOPE,
+      platform: PLATFORM,
+      queue: QUEUE,
+      puuid,
+      tier,
+      division: 'I',
+      leaguePoints: 0,
+      wins: 0,
+      losses: 0,
+      firstSeenCrawlId: FACTS_CRAWL_ID,
+      lastSeenCrawlId: FACTS_CRAWL_ID,
+    });
+  }
+}
 
 describe('recomputing champion aggregates', () => {
   it('counts a champion once per participant, at that player’s tier', async ({ skip }) => {
@@ -303,6 +398,128 @@ describe('recomputing champion aggregates', () => {
   });
 });
 
+/**
+ * The role dimension, the fact sums, and the honest denominators C3 adds
+ * (#111) — against the real Postgres, for the same reason as the block
+ * above: the deliverable is what the recompute's SQL actually does with a
+ * mix of swept and unswept participant rows, which nothing but a real
+ * database can answer.
+ */
+describe('champion_stats v2 — role, sums and denominators', () => {
+  it('stores one row per role, and sums every role at read time when none is asked for', async ({
+    skip,
+  }) => {
+    if (!available) return skip();
+    await seedFacts('role-1', { 'chall-a': { championId: AHRI, win: true, teamPosition: 'MIDDLE' } });
+    await seedFacts('role-2', { 'chall-a': { championId: AHRI, win: false, teamPosition: 'UTILITY' } });
+    await ladder({ 'chall-a': 'CHALLENGER' });
+    await recomputeChampionStats(PLATFORM, QUEUE);
+
+    const rolled = await listChampionStats({ platform: PLATFORM, queue: QUEUE });
+    expect(rolled.find((r) => r.championId === AHRI)).toMatchObject({ games: 2, wins: 1 });
+
+    const mid = await listChampionStats({ platform: PLATFORM, queue: QUEUE, role: 'MIDDLE' });
+    expect(mid.find((r) => r.championId === AHRI)).toMatchObject({ games: 1, wins: 1 });
+
+    const support = await listChampionStats({ platform: PLATFORM, queue: QUEUE, role: 'UTILITY' });
+    expect(support.find((r) => r.championId === AHRI)).toMatchObject({ games: 1, wins: 0 });
+  });
+
+  it('sums facts only from swept rows, counting them separately in statedGames', async ({ skip }) => {
+    if (!available) return skip();
+    await seedFacts('stated-1', {
+      'chall-a': {
+        championId: AHRI,
+        win: true,
+        kills: 10,
+        deaths: 2,
+        assists: 5,
+        cs: 200,
+        gold: 14_000,
+        damage: 20_000,
+        vision: 30,
+      },
+    });
+    // A pre-C2-shaped row: champion and win only, nothing else — exactly what
+    // an archive `facts:reextract` has not reached yet looks like.
+    await seedFacts('stated-2', { 'chall-a': { championId: AHRI, win: false } });
+    await ladder({ 'chall-a': 'CHALLENGER' });
+    await recomputeChampionStats(PLATFORM, QUEUE);
+
+    const row = (await listChampionStats({ platform: PLATFORM, queue: QUEUE })).find(
+      (r) => r.championId === AHRI,
+    );
+    expect(row).toMatchObject({
+      games: 2,
+      statedGames: 1,
+      kills: 10,
+      deaths: 2,
+      assists: 5,
+      cs: 200,
+      gold: 14_000,
+      damage: 20_000,
+      vision: 30,
+      // Only the stated game's 1800s, not the unswept game's too — otherwise
+      // csPerMin at the route would be understated by a game that contributed
+      // duration but no cs.
+      durationS: 1800,
+    });
+  });
+
+  it('counts matchesPicked as distinct matches, not participant rows', async ({ skip }) => {
+    if (!available) return skip();
+    // A mirror matchup: the same champion on both sides of one game.
+    await seedFacts('mirror-1', {
+      'chall-a': { championId: AHRI, win: true },
+      'chall-b': { championId: AHRI, win: false },
+    });
+    await ladder({ 'chall-a': 'CHALLENGER', 'chall-b': 'CHALLENGER' });
+    await recomputeChampionStats(PLATFORM, QUEUE);
+
+    const row = (await listChampionStats({ platform: PLATFORM, queue: QUEUE })).find(
+      (r) => r.championId === AHRI,
+    );
+    expect(row).toMatchObject({ games: 2, matchesPicked: 1 });
+  });
+
+  it('computes a slice as distinct matches with a participant at that tier', async ({ skip }) => {
+    if (!available) return skip();
+    await seedFacts('slice-1', {
+      'chall-a': { championId: AHRI, win: true },
+      'chall-b': { championId: GAREN, win: false },
+    });
+    await seedFacts('slice-2', { 'diamond-a': { championId: AHRI, win: true } });
+    await ladder({ 'chall-a': 'CHALLENGER', 'chall-b': 'CHALLENGER', 'diamond-a': 'DIAMOND' });
+    await recomputeChampionStats(PLATFORM, QUEUE);
+
+    const slices = await listAnalyticsSlices({ platform: PLATFORM, queue: QUEUE, patch: '16.13' });
+    // One Challenger match (both its picks are the same match), one Diamond.
+    expect(slices.find((s) => s.tier === 'CHALLENGER')?.matches).toBe(1);
+    expect(slices.find((s) => s.tier === 'DIAMOND')?.matches).toBe(1);
+  });
+
+  it('attributes a ban to every tier the match touched', async ({ skip }) => {
+    if (!available) return skip();
+    // `championId: -1` (no pick made in that slot) never reaches `match_bans`
+    // at all — `extractBans` (#110) skips it before a row is ever written, so
+    // there is nothing for the recompute to filter; that skip is covered in
+    // `test/matches-facts.test.ts`.
+    await seedFacts(
+      'ban-1',
+      { 'chall-a': { championId: AHRI, win: true }, 'diamond-a': { championId: GAREN, win: false } },
+      [{ teamId: 100, pickTurn: 1, championId: 64 }],
+    );
+    await ladder({ 'chall-a': 'CHALLENGER', 'diamond-a': 'DIAMOND' });
+    await recomputeChampionStats(PLATFORM, QUEUE);
+
+    const bans = await listChampionBans({ platform: PLATFORM, queue: QUEUE, patch: '16.13' });
+    expect(bans.map((b) => `${b.tier}:${b.championId}:${b.bans}`).sort()).toEqual([
+      'CHALLENGER:64:1',
+      'DIAMOND:64:1',
+    ]);
+  });
+});
+
 describe('matches generated columns (#109)', () => {
   async function insertMatch(id: string, info: Record<string, unknown>): Promise<string> {
     const matchId = `${MATCH_PREFIX}${id}`;
@@ -457,5 +674,131 @@ describe('GET /v1/lol/analytics/champions', () => {
     if (!available || !app) return skip();
     expect((await get('patch=16.13.790.6961')).statusCode).toBe(400);
     expect((await get('tier=WOOD')).statusCode).toBe(400);
+  });
+
+  it('rolls up every role by default, and narrows with a role filter', async ({ skip }) => {
+    if (!available || !app) return skip();
+    await seedFacts('role-a', { 'chall-a': { championId: AHRI, win: true, teamPosition: 'MIDDLE' } });
+    await seedFacts('role-b', { 'chall-a': { championId: AHRI, win: false, teamPosition: 'UTILITY' } });
+    await ladder({ 'chall-a': 'CHALLENGER' });
+    await recomputeChampionStats(PLATFORM, QUEUE);
+
+    const rolled = (await get('')).json() as {
+      role: string | null;
+      champions: { championId: number; games: number }[];
+    };
+    expect(rolled.role).toBeNull();
+    expect(rolled.champions.find((c) => c.championId === AHRI)?.games).toBe(2);
+
+    const narrowed = (await get('role=MIDDLE')).json() as {
+      role: string | null;
+      champions: { championId: number; games: number }[];
+    };
+    expect(narrowed.role).toBe('MIDDLE');
+    expect(narrowed.champions.find((c) => c.championId === AHRI)?.games).toBe(1);
+  });
+
+  it('computes pickRate from the slice, and banRate for a champion that was banned', async ({
+    skip,
+  }) => {
+    if (!available || !app) return skip();
+    await seedFacts(
+      'rate-1',
+      { 'chall-a': { championId: AHRI, win: true }, 'chall-b': { championId: GAREN, win: false } },
+      [{ teamId: 200, pickTurn: 1, championId: 64 }],
+    );
+    await ladder({ 'chall-a': 'CHALLENGER', 'chall-b': 'CHALLENGER' });
+    await recomputeChampionStats(PLATFORM, QUEUE);
+
+    const body = (await get('')).json() as {
+      champions: { championId: number; pickRate?: number; banRate?: number }[];
+    };
+    // One Challenger match total, and Ahri was picked in all of it.
+    expect(body.champions.find((c) => c.championId === AHRI)).toMatchObject({ pickRate: 1 });
+    // Never banned — a computed 0, not an unknown: the slice both rates
+    // divide into is known the moment the champion has a stats row at all,
+    // since both tables come from the same recompute transaction (#111).
+    expect(body.champions.find((c) => c.championId === AHRI)?.banRate).toBe(0);
+  });
+
+  it('clamps pickRate at 1 rather than double-counting a cross-role mirror pick', async ({
+    skip,
+  }) => {
+    if (!available || !app) return skip();
+    // One match, one champion picked twice — once in each of two different
+    // roles. `matchesPicked` is stored (and summed) per role, so the rolled-up
+    // read would otherwise report this one match as two.
+    await seedFacts('cross-role-1', {
+      'chall-a': { championId: AHRI, win: true, teamPosition: 'JUNGLE' },
+      'chall-b': { championId: AHRI, win: false, teamPosition: 'UTILITY' },
+    });
+    await ladder({ 'chall-a': 'CHALLENGER', 'chall-b': 'CHALLENGER' });
+    await recomputeChampionStats(PLATFORM, QUEUE);
+
+    const body = (await get('')).json() as { champions: { championId: number; pickRate?: number }[] };
+    expect(body.champions.find((c) => c.championId === AHRI)?.pickRate).toBe(1);
+  });
+
+  it('computes the performance averages only once a champion has stated games', async ({ skip }) => {
+    if (!available || !app) return skip();
+    await seedFacts(
+      'perf-1',
+      {
+        'chall-a': {
+          championId: AHRI,
+          win: true,
+          kills: 10,
+          deaths: 2,
+          assists: 6,
+          cs: 200,
+          gold: 12_000,
+          damage: 20_000,
+          vision: 30,
+        },
+      },
+      [],
+      { gameDuration: 1200 }, // 20 minutes
+    );
+    // No facts at all — the pre-C2 shape.
+    await seedFacts('perf-2', { 'chall-b': { championId: GAREN, win: true } });
+    await ladder({ 'chall-a': 'CHALLENGER', 'chall-b': 'CHALLENGER' });
+    await recomputeChampionStats(PLATFORM, QUEUE);
+
+    const body = (await get('')).json() as {
+      champions: {
+        championId: number;
+        avgKda?: number;
+        csPerMin?: number;
+        goldPerMin?: number;
+        avgDamage?: number;
+        avgVision?: number;
+      }[];
+    };
+
+    const ahri = body.champions.find((c) => c.championId === AHRI);
+    expect(ahri?.avgKda).toBeCloseTo((10 + 6) / 2, 4);
+    expect(ahri?.csPerMin).toBeCloseTo(200 / 20, 4);
+    expect(ahri?.goldPerMin).toBeCloseTo(12_000 / 20, 4);
+    expect(ahri?.avgDamage).toBe(20_000);
+    expect(ahri?.avgVision).toBe(30);
+
+    const garen = body.champions.find((c) => c.championId === GAREN);
+    expect(garen?.avgKda).toBeUndefined();
+    expect(garen?.csPerMin).toBeUndefined();
+  });
+
+  it('trims champions below minGames', async ({ skip }) => {
+    if (!available || !app) return skip();
+    await seedFacts('min-1', { 'chall-a': { championId: AHRI, win: true } });
+    await seedFacts('min-2', { 'chall-a': { championId: AHRI, win: true } });
+    await seedFacts('min-3', { 'chall-a': { championId: GAREN, win: true } });
+    await ladder({ 'chall-a': 'CHALLENGER' });
+    await recomputeChampionStats(PLATFORM, QUEUE);
+
+    const trimmed = (await get('minGames=2')).json() as { champions: { championId: number }[] };
+    expect(trimmed.champions.map((c) => c.championId)).toEqual([AHRI]);
+
+    const untrimmed = (await get('minGames=0')).json() as { champions: { championId: number }[] };
+    expect(untrimmed.champions.map((c) => c.championId).sort()).toEqual([AHRI, GAREN].sort());
   });
 });

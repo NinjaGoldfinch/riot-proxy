@@ -517,17 +517,41 @@ export const LadderCrawlStartedResponse = Type.Object({
 });
 
 /**
- * A champion's line in one slice of the aggregate.
+ * `match_participants.team_position` verbatim — closed per §12.3 — plus `''`
+ * for queues without positions (ARAM, Arena) and for rows a re-extract has
+ * not swept yet (#111).
+ */
+export const TEAM_POSITIONS = ['TOP', 'JUNGLE', 'MIDDLE', 'BOTTOM', 'UTILITY', ''] as const;
+
+/**
+ * A champion's line in one slice of the aggregate (#111 widens this from L5's
+ * four fields).
  *
- * `share` is this champion's fraction of the picks in the slice, not Riot's
- * pick rate: a match is not played "in" a tier — its ten participants can sit
- * in ten different ones — so the denominator a true pick rate needs (games in
- * this tier) is not a number this table has. The share is well defined, is
- * what a chart of the slice actually plots, and does not pretend otherwise.
+ * `share` is this champion's fraction of the *games* returned in this
+ * response, which is not the same question `pickRate` answers and is kept
+ * only for compatibility — superseded by `pickRate`, which divides into the
+ * slice's actual match count (`analytics_slices`) rather than into whatever
+ * happened to be summed into this response.
+ *
+ * `pickRate` and `banRate` are omitted, not zeroed, only when the *slice*
+ * itself is unknown — `analytics_slices` has no row for this (tier, patch)
+ * yet. Once it does, `banRate` is `0` for a champion nobody banned: absence
+ * in `champion_bans` is a computed zero, not an unknown, since both tables
+ * come from the same recompute transaction. `pickRate` is clamped at `1` —
+ * `matchesPicked` is summed per role when no role is filtered, and a champion
+ * picked in two different roles in one match would otherwise count that
+ * match twice.
+ *
+ * The averages are the other kind of absent: they need at least one
+ * participant row with the C2 facts swept (`statedGames`, itself not exposed
+ * — the denominator, not a result), which is a fact about the archive, not
+ * about the slice, so a champion the archive knows only through pre-C2 rows
+ * omits every average and still shows a `winRate`.
  */
 export const ChampionStatEntry = Type.Object(
   {
     championId: Type.Integer(),
+    championName: Type.Optional(Type.String()),
     tier: Type.String(),
     patch: Type.String(),
     games: Type.Integer(),
@@ -537,6 +561,19 @@ export const ChampionStatEntry = Type.Object(
       ...Type.Number({ minimum: 0, maximum: 1 }),
       description: "This champion's games as a fraction of the slice's games",
     },
+    pickRate: Type.Optional({
+      ...Type.Number({ minimum: 0, maximum: 1 }),
+      description: 'Distinct matches this champion was picked in, over the slice’s match count',
+    }),
+    banRate: Type.Optional({
+      ...Type.Number({ minimum: 0, maximum: 1 }),
+      description: 'Distinct matches this champion was banned in, over the slice’s match count',
+    }),
+    avgKda: Type.Optional(Type.Number({ minimum: 0 })),
+    csPerMin: Type.Optional(Type.Number({ minimum: 0 })),
+    goldPerMin: Type.Optional(Type.Number({ minimum: 0 })),
+    avgDamage: Type.Optional(Type.Number({ minimum: 0 })),
+    avgVision: Type.Optional(Type.Number({ minimum: 0 })),
   },
   { $id: 'ChampionStatEntry' },
 );
@@ -551,6 +588,10 @@ export const ChampionStatsResponse = Type.Object({
   patch: {
     ...Type.Union([Type.String(), Type.Null()]),
     description: '`gameVersion` major.minor. Null when nothing has been aggregated yet',
+  },
+  role: {
+    ...Type.Union([Type.String(), Type.Null()]),
+    description: 'Null when every role is summed into one row per champion',
   },
   computedAt: {
     ...NullableTimestamp,
@@ -579,6 +620,14 @@ export const ChampionStatsQuery = Type.Object({
       description: 'Defaults to the newest patch this deployment has aggregated',
     }),
   ),
+  role: Type.Optional({
+    ...Type.Unsafe<string>({ type: 'string', enum: [...TEAM_POSITIONS] }),
+    description: 'Omitted sums every role into one row per champion',
+  }),
+  minGames: Type.Optional({
+    ...Type.Integer({ minimum: 0 }),
+    description: 'Drops champions below this many games in the slice; defaults to AGGREGATE_MIN_GAMES',
+  }),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500, default: 200 })),
 });
 

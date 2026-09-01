@@ -50,6 +50,13 @@
       "when": 1799107200000,
       "tag": "0006_match_facts",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1799193600000,
+      "tag": "0007_champion_stats_v2",
+      "breakpoints": true
     }
   ]
 }

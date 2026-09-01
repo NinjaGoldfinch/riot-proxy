@@ -336,21 +336,94 @@ export const championStats = pgTable(
     tier: text('tier').notNull(),
     patch: text('patch').notNull(),
     championId: integer('champion_id').notNull(),
+    /**
+     * `team_position` verbatim, `''` for queues without positions (#111).
+     * `NOT NULL DEFAULT ''` keeps the primary key comparable — a null role
+     * could not stand next to `''` in it the way two empty strings can.
+     */
+    role: text('role').notNull().default(''),
     games: integer('games').notNull(),
     wins: integer('wins').notNull(),
+    /**
+     * Distinct matches this champion was picked in, in this slice — not the
+     * same as `games` once a mirror matchup exists (§6.3 of the plan): two
+     * players on the same champion in one match is one pick, two games.
+     */
+    matchesPicked: integer('matches_picked').notNull(),
+    /**
+     * Of `games`, how many participant rows actually carried the widened C2
+     * facts — null until §5.3's re-extract sweeps a pre-C2 row. Every average
+     * below divides by this, not by `games`, so a partially-swept archive
+     * under-counts rather than silently averaging in a wall of zeros.
+     */
+    statedGames: integer('stated_games').notNull(),
+    kills: bigint('kills', { mode: 'number' }).notNull(),
+    deaths: bigint('deaths', { mode: 'number' }).notNull(),
+    assists: bigint('assists', { mode: 'number' }).notNull(),
+    cs: bigint('cs', { mode: 'number' }).notNull(),
+    gold: bigint('gold', { mode: 'number' }).notNull(),
+    damage: bigint('damage', { mode: 'number' }).notNull(),
+    vision: bigint('vision', { mode: 'number' }).notNull(),
+    /** Seconds, summed only over `statedGames` — see the recompute for why. */
+    durationS: bigint('duration_s', { mode: 'number' }).notNull(),
     computedAt: timestamp('computed_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     primaryKey({
-      columns: [t.keyScope, t.platform, t.queue, t.tier, t.patch, t.championId],
+      columns: [t.keyScope, t.platform, t.queue, t.tier, t.patch, t.championId, t.role],
     }),
     /**
      * The read route's shape: a slice is one (platform, queue, patch) and
      * optionally one tier, ordered by how often a champion was played. The
      * primary key cannot serve it — `patch` sits behind `tier` there, and the
-     * common question is "this patch, all tiers".
+     * common question is "this patch, all tiers". Role sits outside it on
+     * purpose: cardinality here is never the problem (§3 of the plan), and a
+     * role-less read already sums every role's rows in one group.
      */
     index('champion_stats_slice_idx').on(t.keyScope, t.platform, t.queue, t.patch, t.tier, t.games),
+  ],
+);
+
+/**
+ * One row per (tier, patch) this key scope has archived data for — distinct
+ * matches with at least one participant the ladder placed at that tier
+ * (#111). The honest denominator L5 never had: `champion_stats.matchesPicked`
+ * over this is `pickRate`; `champion_bans.bans` over this is `banRate`.
+ */
+export const analyticsSlices = pgTable(
+  'analytics_slices',
+  {
+    keyScope: text('key_scope').notNull(),
+    platform: text('platform').notNull(),
+    queue: text('queue').notNull(),
+    tier: text('tier').notNull(),
+    patch: text('patch').notNull(),
+    matches: integer('matches').notNull(),
+    computedAt: timestamp('computed_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.keyScope, t.platform, t.queue, t.tier, t.patch] })],
+);
+
+/**
+ * Per-tier ban counts (#111). Bans are per-team and roleless — joined through
+ * `analytics_slices`' match set at recompute time rather than folded into one
+ * arbitrary role row of `champion_stats`, which would misread as that role's
+ * ban rate.
+ */
+export const championBans = pgTable(
+  'champion_bans',
+  {
+    keyScope: text('key_scope').notNull(),
+    platform: text('platform').notNull(),
+    queue: text('queue').notNull(),
+    tier: text('tier').notNull(),
+    patch: text('patch').notNull(),
+    championId: integer('champion_id').notNull(),
+    bans: integer('bans').notNull(),
+    computedAt: timestamp('computed_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.keyScope, t.platform, t.queue, t.tier, t.patch, t.championId] }),
   ],
 );
 
@@ -363,3 +436,5 @@ export type NewLadderCrawl = typeof ladderCrawls.$inferInsert;
 export type LeagueEntry = typeof leagueEntries.$inferSelect;
 export type NewLeagueEntry = typeof leagueEntries.$inferInsert;
 export type ChampionStat = typeof championStats.$inferSelect;
+export type AnalyticsSlice = typeof analyticsSlices.$inferSelect;
+export type ChampionBan = typeof championBans.$inferSelect;
