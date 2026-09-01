@@ -494,7 +494,6 @@ describe('discovered players', () => {
  */
 describe('the collect stage’s candidates', () => {
   const puuid = (n: number) => `ladder-cand-puuid-${String(n).padStart(4, '0')}`;
-  const APEX = ['MASTER', 'GRANDMASTER', 'CHALLENGER'] as const;
 
   /** A crawl with a ladder under it, ready to be read back. */
   async function stamped(entries: LeagueEntryInput[]) {
@@ -508,7 +507,6 @@ describe('the collect stage’s candidates', () => {
       crawlId,
       platform: PLATFORM,
       queue: QUEUE,
-      tiers: [...APEX],
       notWalkedSince: new Date(),
       limit: 100,
       ...over,
@@ -534,15 +532,16 @@ describe('the collect stage’s candidates', () => {
     expect(await candidates(crawl.id)).toEqual([puuid(1), puuid(2)]);
   });
 
-  it('stops at the backfill tier floor', async ({ skip }) => {
+  it('offers every tier the crawl stored, not just the apex', async ({ skip }) => {
     if (!available) return skip();
+    // There is no backfill floor: whoever enumeration stored is walked. LP
+    // still orders the page, so the Master outranks the Diamond here.
     const crawl = await stamped([
       entry(puuid(1), { tier: 'MASTER', leaguePoints: 300 }),
       entry(puuid(2), { tier: 'DIAMOND', leaguePoints: 99 }),
     ]);
 
-    // Diamond is on the ladder — enumeration stored it — and is not walked.
-    expect(await candidates(crawl.id)).toEqual([puuid(1)]);
+    expect(await candidates(crawl.id)).toEqual([puuid(1), puuid(2)]);
   });
 
   it('skips a player already walked since the crawl started', async ({ skip }) => {
@@ -634,11 +633,5 @@ describe('the collect stage’s candidates', () => {
 
     const second = await page(crawl.id, { limit: 3, after: first.at(-1) });
     expect(second.map((c) => c.puuid)).toEqual([puuid(303), puuid(304), puuid(305)]);
-  });
-
-  it('asks nothing when the floor expands to no tiers', async ({ skip }) => {
-    if (!available) return skip();
-    const crawl = await stamped([entry(puuid(1), { tier: 'CHALLENGER' })]);
-    expect(await candidates(crawl.id, { tiers: [] })).toEqual([]);
   });
 });

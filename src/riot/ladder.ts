@@ -161,8 +161,3 @@ export function assertRankedQueue(value: string): RankedQueue {
 export function tiersAtOrAbove(floor: Tier): Tier[] {
   return TIERS.slice(TIERS.indexOf(floor));
 }
-
-/** The same comparison for one tier, which is how a floor filters entries. */
-export function tierAtOrAbove(tier: Tier, floor: Tier): boolean {
-  return TIERS.indexOf(tier) >= TIERS.indexOf(floor);
-}

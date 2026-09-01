@@ -131,11 +131,30 @@ missing. Phases refer to §15 of [the spec](docs/riot-proxy-spec.md).
       player's matches, aggregate the archive (#85, phases L1–L6 in
       [the plan](docs/ladder-crawl-plan.md); all six landed, `LADDER_CRAWL_S=0`
       until someone opts in)
+- [ ] Champion stats v2 — widen the fact tables, honest pick/ban rates,
+      matchups, builds, per-player champion pools (#108, phases C1–C7 in
+      [the plan](docs/champion-stats-plan.md))
 - [ ] Obtain a Riot API key and run the live acceptance checks (#10)
 - [ ] Re-resolve tracked players after a key rotation (#13)
 
 ### Follow-ups from this round
 
+- [x] A crawl's PUUIDs get Riot IDs from the archive rather than from Riot.
+      `league-v4` carries no summoner name, so every discovered player arrived
+      as bare base64; `account-v1` would have answered at one request per
+      player, which on a full ladder is a second crawl's worth of quota spent
+      on cosmetics. `match-v5` already carries `riotIdGameName` per
+      participant, and the crawl archives those matches anyway — so
+      `names:backfill` reads them back out. Queued when a crawl finishes (a
+      failed one too: half an archive still names the players in it), daily on
+      the `maintenance` queue, or on demand via
+      `POST /v1/admin/players/names/backfill`. Only ever fills a `NULL`; a name
+      from `account-v1` outranks one from a past game.
+- [ ] A name read out of a match is what the player was called _then_. Nothing
+      re-reads it, so a rename is corrected only when someone views the
+      profile. Fine while the ladder is a data set rather than a directory —
+      but if names ever need to be right, they need a source and a timestamp
+      on the row rather than a bare `NULL` check.
 - [ ] A crawl is marked `completed` when the archive stage has _queued_ its
       matches, not when they have been fetched — so `aggregate:champions` runs
       over an archive that is still filling. It was true before the stages too

@@ -336,8 +336,7 @@ Every archive job therefore carries an explicit priority.
 | `LADDER_CRAWL_S`                             | `0`                                               | Ladder crawl cadence; `0` means admin-trigger only           |
 | `LADDER_QUEUES`                              | `RANKED_SOLO_5x5`                                 | CSV; `RANKED_FLEX_SR` is the other one                       |
 | `LADDER_PLATFORMS`                           | —                                                 | CSV; empty means `DEFAULT_PLATFORM`                          |
-| `LADDER_TIER_FLOOR`                          | `MASTER`                                          | Lowest tier a crawl enumerates                               |
-| `LADDER_BACKFILL_TIER_FLOOR`                 | `CHALLENGER`                                      | Lowest tier whose match histories get walked                 |
+| `LADDER_TIER_FLOOR`                          | `MASTER`                                          | Lowest tier a crawl enumerates — and walks                   |
 | `LADDER_BACKFILL_LIMIT`                      | `100`                                             | Matches per discovered player; `0` discovers without walking |
 | `ADMIN_IP_ALLOWLIST`                         | —                                                 | CSV of IPs/CIDRs; empty means key scope is enough            |
 | `BOOTSTRAP_ADMIN_KEY`                        | —                                                 | Seeds one admin key on `npm run migrate`                     |
@@ -523,10 +522,10 @@ that follows it.
 
 Phase 7 is split for a different reason. The crawl itself is three requests at a
 `MASTER` floor — one per apex league — but what it _discovers_ is not: every
-entry above the server's `LADDER_BACKFILL_TIER_FLOOR` queues a match-history
-walk, and the suite cannot see or change that setting because it belongs to the
-server it is pointed at. So the surface is asserted for free and the crawl is a
-second opt-in.
+entry the crawl enumerates queues a match-history walk, and the suite cannot
+see or change the server's floor because it belongs to the server it is
+pointed at. So the surface is asserted for free and the crawl is a second
+opt-in.
 
 ```bash
 ACCEPTANCE_LADDER=1 ACCEPTANCE_RIOT_ID='Name#TAG' npm run test:acceptance

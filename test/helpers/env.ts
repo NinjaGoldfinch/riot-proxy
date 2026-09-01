@@ -71,7 +71,6 @@ export const PINNED: Record<string, string> = {
   LADDER_QUEUES: 'RANKED_SOLO_5x5',
   LADDER_PLATFORMS: '',
   LADDER_TIER_FLOOR: 'MASTER',
-  LADDER_BACKFILL_TIER_FLOOR: 'CHALLENGER',
   // Off like LOOKUP_BACKFILL_LIMIT, so no test accidentally queues a walk per
   // discovered player; the discovery tests turn it on themselves.
   LADDER_BACKFILL_LIMIT: '0',

@@ -58,10 +58,11 @@ Against the two key classes:
 
 Consequences, baked into the design rather than bolted on:
 
-1. **Two independent tier floors.** `LADDER_TIER_FLOOR` bounds what the crawl
-   *enumerates*; `LADDER_BACKFILL_TIER_FLOOR` bounds whose *matches* get
-   walked. Enumerating Emerald+ while only backfilling Master+ is a sane
-   dev-key configuration.
+1. **One tier floor.** `LADDER_TIER_FLOOR` bounds what the crawl
+   *enumerates*, and everyone it enumerates has their matches walked — the
+   floor and `LADDER_BACKFILL_LIMIT` are together what a crawl costs. (A
+   separate backfill floor existed once and was dropped: a floor deep enough
+   to enumerate is a floor worth walking.)
 2. **Disabled by default.** `LADDER_CRAWL_S=0` means no repeatable is
    scheduled; the crawl runs only when triggered via the admin API. A
    repeatable cadence is opt-in for people with the budget for it.
@@ -184,7 +185,6 @@ together; pin the cadence to `0` in tests like the backfill limits):
 - `LADDER_QUEUES` (default `RANKED_SOLO_5x5`)
 - `LADDER_PLATFORMS` (default empty = `DEFAULT_PLATFORM`)
 - `LADDER_TIER_FLOOR` (default `MASTER` — safe on a dev key)
-- `LADDER_BACKFILL_TIER_FLOOR` (default `CHALLENGER`)
 - `LADDER_BACKFILL_LIMIT` (match-depth per discovered player; default modest)
 
 ## 6. Player discovery → match fetching (Phase L4)
@@ -192,9 +192,9 @@ together; pin the cadence to `0` in tests like the backfill limits):
 A crawl runs in three stages, recorded as `phase` on the crawl row and moved on
 by whichever leg of the current stage finishes last:
 
-1. **`enumerate`** — the apex and walk legs of §5. Every entry at or above
-   `LADDER_BACKFILL_TIER_FLOOR` gets a `players` row (`upsertDiscoveredPlayers`,
-   not tracked) and nothing else. No match request is made.
+1. **`enumerate`** — the apex and walk legs of §5. Every entry the crawl
+   sees gets a `players` row (`upsertDiscoveredPlayers`, not tracked) and
+   nothing else. No match request is made.
 2. **`collect`** — `ladder:collect` jobs, 25 players each, fanned out from
    `league_entries` where `last_seen_crawl_id` is this crawl. Each walks
    `match.idsByPuuid` (queue-filtered to the ladder's queue id, capped at

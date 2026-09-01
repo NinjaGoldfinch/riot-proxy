@@ -76,6 +76,7 @@ const EXPECTED_OPERATIONS = [
   'POST /v1/admin/consumers/{id}/revoke-cache',
   'POST /v1/admin/ddragon/sync',
   'POST /v1/admin/ladder/crawl',
+  'POST /v1/admin/players/names/backfill',
   'POST /v1/admin/tracked-players',
 ];
 

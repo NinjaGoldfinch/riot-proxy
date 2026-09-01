@@ -326,7 +326,6 @@ describe('GET /v1/admin/ladder/options', () => {
     expect(body.defaults).toMatchObject({
       platform: config.DEFAULT_PLATFORM,
       tierFloor: config.ladderTierFloor,
-      backfillTierFloor: config.ladderBackfillTierFloor,
       backfillLimit: config.LADDER_BACKFILL_LIMIT,
     });
 

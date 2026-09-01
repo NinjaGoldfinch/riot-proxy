@@ -61,6 +61,7 @@ export const JOB = {
   ladderCollect: 'ladder:collect',
   ladderArchive: 'ladder:archive',
   aggregateChampions: 'aggregate:champions',
+  namesBackfill: 'names:backfill',
   maintenance: 'maintenance',
 } as const;
 

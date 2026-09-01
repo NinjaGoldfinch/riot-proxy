@@ -96,17 +96,12 @@ const EnvSchema = Type.Object({
    * queue — the apex leagues come back whole — and is the only floor that is
    * unambiguously safe on a dev key. `EMERALD` is ~2–3 k pages; `IRON` is the
    * whole ladder, ~15–20 k.
+   *
+   * This is also who gets *walked*: every player a crawl enumerates has their
+   * match ids collected (`LADDER_BACKFILL_LIMIT` per player), so the floor
+   * governs both the enumeration cost and the far larger walk behind it.
    */
   LADDER_TIER_FLOOR: Type.String({ default: 'MASTER' }),
-
-  /**
-   * How far down the ladder to *walk match histories*, which is a separate
-   * question from how far down to enumerate. Enumerating a ladder is thousands
-   * of requests; walking the players behind it is millions, so the two floors
-   * move independently (§2 of docs/ladder-crawl-plan.md). Enumerating Emerald+
-   * while only backfilling Master+ is a sane dev-key configuration.
-   */
-  LADDER_BACKFILL_TIER_FLOOR: Type.String({ default: 'CHALLENGER' }),
 
   /**
    * Matches to walk back per discovered player. One page of ids — deliberately
@@ -272,11 +267,6 @@ function tierSetting(name: string, raw: string): Tier {
 
 export const ladderTierFloor: Tier = tierSetting('LADDER_TIER_FLOOR', env.LADDER_TIER_FLOOR);
 
-export const ladderBackfillTierFloor: Tier = tierSetting(
-  'LADDER_BACKFILL_TIER_FLOOR',
-  env.LADDER_BACKFILL_TIER_FLOOR,
-);
-
 export const adminIpAllowlist = env.ADMIN_IP_ALLOWLIST.split(',')
   .map((s) => s.trim())
   .filter(Boolean);
@@ -288,7 +278,6 @@ export const config = {
   ladderQueues,
   ladderPlatforms,
   ladderTierFloor,
-  ladderBackfillTierFloor,
   adminIpAllowlist,
   authDisabled: env.AUTH_DISABLED,
   devUi: env.DEV_UI ?? env.NODE_ENV !== 'production',

@@ -22,7 +22,6 @@ import type { Player } from '../src/db/schema.js';
  * anything reads the config.
  */
 process.env['LADDER_BACKFILL_LIMIT'] = '100';
-process.env['LADDER_BACKFILL_TIER_FLOOR'] = 'MASTER';
 process.env['LOOKUP_BACKFILL_LIMIT'] = '10000';
 
 const CRAWL_ID = '00000000-0000-4000-8000-000000000001';
@@ -190,6 +189,8 @@ interface AddedJob {
 const ladderJobs: AddedJob[] = [];
 const archiveJobs: AddedJob[] = [];
 const aggregates: Record<string, unknown>[] = [];
+/** Kept apart from `aggregates`: a failed crawl queues one and not the other. */
+const nameBackfills: string[] = [];
 
 vi.mock('../src/jobs/queues.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/jobs/queues.js')>();
@@ -212,8 +213,9 @@ vi.mock('../src/jobs/queues.js', async (importOriginal) => {
       },
     },
     maintenanceQueue: {
-      add: async (_name: string, data: Record<string, unknown>) => {
-        aggregates.push(data);
+      add: async (name: string, data: Record<string, unknown>) => {
+        if (name === actual.JOB.namesBackfill) nameBackfills.push(name);
+        else aggregates.push(data);
         return {};
       },
     },
@@ -294,6 +296,7 @@ beforeEach(() => {
   ladderJobs.length = 0;
   archiveJobs.length = 0;
   aggregates.length = 0;
+  nameBackfills.length = 0;
   candidates = [];
   candidateQueries.length = 0;
   finished.length = 0;
@@ -333,17 +336,16 @@ describe('enumeration', () => {
     expect(Object.keys(discovered[0]!)).toEqual(['puuid', 'platform']);
   });
 
-  it('stops at the backfill tier floor, which is not the enumeration floor', async () => {
-    // The floor here is MASTER. A crawl reaching further down still stores
-    // those entries in `league_entries` — it just does not walk their
-    // histories, which is the whole reason the two floors are separate knobs.
+  it('records every player the crawl reaches, however deep the floor', async () => {
+    // There is no separate backfill floor: whoever the enumeration fetched is
+    // whom the collect stage walks, so a paged tier's players land in
+    // `players` exactly like the apex leagues' do.
     pagedEntries = [entry('diamond-1'), entry('diamond-2')];
     await legsFor(ladderLegId(JOB.ladderWalk, CRAWL_ID, 'DIAMOND', 'I'), 'another-leg');
 
     await ladderWalk(walkJob('DIAMOND'));
 
-    expect(discovered).toHaveLength(0);
-    // The entries themselves still went in, and the pages still counted.
+    expect(discovered.map((d) => d.puuid)).toEqual(['diamond-1', 'diamond-2']);
     expect(counters['entriesSeen']).toBe(2);
   });
 });
@@ -395,7 +397,8 @@ describe('the collect stage', () => {
       // already produced their ids for it.
       notWalkedSince: CRAWL_STARTED,
     });
-    expect(candidateQueries[0]?.['tiers']).toEqual(['MASTER', 'GRANDMASTER', 'CHALLENGER']);
+    // No tier filter: everyone this crawl's entries name is in scope.
+    expect(candidateQueries[0]).not.toHaveProperty('tiers');
   });
 
   it('gathers ids into one set and touches the archive queue not at all', async () => {
@@ -475,7 +478,7 @@ describe('the archive stage', () => {
     expect(counters['matchesQueued']).toBe(1);
   });
 
-  it('finishes the crawl, announces it and queues the aggregate', async () => {
+  it('finishes the crawl, announces it, and queues the aggregate and the names', async () => {
     histories.set('p-1', ['EUW1_1']);
     candidates = ['p-1'];
     await legsFor(apexLeg());
@@ -484,6 +487,37 @@ describe('the archive stage', () => {
 
     expect(finished).toEqual([{ id: CRAWL_ID, status: 'completed' }]);
     expect(aggregates).toEqual([{ platform: 'euw1', queue: 'RANKED_SOLO_5x5' }]);
+    // Every match the crawl archived carries its participants' Riot IDs, so
+    // naming the PUUIDs it discovered costs no upstream request at all.
+    expect(nameBackfills).toHaveLength(1);
+  });
+
+  it('drains a set bigger than one batch to the bottom, empty scans and all', async () => {
+    // The regression that cost a crawl 2,600 of its 3,409 matches. SSCAN
+    // visits a bounded number of buckets per iteration and may hand back *no
+    // members* with a non-zero cursor — which is exactly what a set drained
+    // from the front serves up, every time, once its emptied buckets outgrow
+    // one iteration's budget. A peek that read that empty batch as "set
+    // empty" ended the stage with most of the ladder still in the set, and
+    // the crawl's cleanup then deleted the evidence. The fake's sscan opens
+    // with that empty batch, so this drain only reaches the bottom by
+    // following the cursor.
+    // Three players, disjoint histories: 240 ids, well past one ARCHIVE_BATCH.
+    // (One player cannot get there — the walk stops at LADDER_BACKFILL_LIMIT.)
+    const all: string[] = [];
+    candidates = ['p-1', 'p-2', 'p-3'];
+    for (const [p, puuid] of candidates.entries()) {
+      const history = Array.from({ length: 80 }, (_, i) => `EUW1_${p}_${i}`);
+      histories.set(puuid, history);
+      all.push(...history);
+    }
+    await legsFor(apexLeg());
+    await ladderApex(apexJob());
+    await drainLadder();
+
+    expect(archiveJobs.map((j) => j.data['matchId']).sort()).toEqual([...all].sort());
+    expect(counters['matchesQueued']).toBe(240);
+    expect(finished).toEqual([{ id: CRAWL_ID, status: 'completed' }]);
   });
 
   it('re-queues a batch it has already queued rather than dropping it', async () => {
