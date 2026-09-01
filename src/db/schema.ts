@@ -427,6 +427,127 @@ export const championBans = pgTable(
   ],
 );
 
+/**
+ * One row per lane matchup (#112) — `champion_id`'s record against
+ * `opponent_id` in `role`, both directions stored (the self-join that builds
+ * this naturally produces the mirror row too, from the opponent's side).
+ *
+ * No tier: 170×170×5 roles is sparse enough already, tier would shred every
+ * cell below significance, and cross-tier matches make per-tier attribution
+ * ill-defined anyway — the two laners can sit in different tiers. `role` is
+ * never `''` here (the recompute requires a real, shared lane), unlike the
+ * builds tables below.
+ */
+export const championMatchups = pgTable(
+  'champion_matchups',
+  {
+    keyScope: text('key_scope').notNull(),
+    platform: text('platform').notNull(),
+    queue: text('queue').notNull(),
+    patch: text('patch').notNull(),
+    role: text('role').notNull(),
+    championId: integer('champion_id').notNull(),
+    opponentId: integer('opponent_id').notNull(),
+    games: integer('games').notNull(),
+    wins: integer('wins').notNull(),
+    computedAt: timestamp('computed_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({
+      columns: [t.keyScope, t.platform, t.queue, t.patch, t.role, t.championId, t.opponentId],
+    }),
+  ],
+);
+
+/**
+ * One row per final item held (#112) — `item0`–`item5`, trinket excluded,
+ * item id `0` (empty slot) excluded. *Final* items, not build order: order
+ * needs timelines, which are off by default and stay out of scope (§12 of
+ * the plan). `role` is `''` for queues without one, same as `champion_stats`
+ * — a build question applies to every participant, laned or not.
+ */
+export const championItems = pgTable(
+  'champion_items',
+  {
+    keyScope: text('key_scope').notNull(),
+    platform: text('platform').notNull(),
+    queue: text('queue').notNull(),
+    patch: text('patch').notNull(),
+    championId: integer('champion_id').notNull(),
+    role: text('role').notNull().default(''),
+    itemId: integer('item_id').notNull(),
+    games: integer('games').notNull(),
+    wins: integer('wins').notNull(),
+    computedAt: timestamp('computed_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({
+      columns: [t.keyScope, t.platform, t.queue, t.patch, t.championId, t.role, t.itemId],
+    }),
+  ],
+);
+
+/** One row per (keystone, sub-style tree) pair a participant ran (#112). */
+export const championRunes = pgTable(
+  'champion_runes',
+  {
+    keyScope: text('key_scope').notNull(),
+    platform: text('platform').notNull(),
+    queue: text('queue').notNull(),
+    patch: text('patch').notNull(),
+    championId: integer('champion_id').notNull(),
+    role: text('role').notNull().default(''),
+    keystoneId: integer('keystone_id').notNull(),
+    subStyleId: integer('sub_style_id').notNull(),
+    games: integer('games').notNull(),
+    wins: integer('wins').notNull(),
+    computedAt: timestamp('computed_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({
+      columns: [
+        t.keyScope,
+        t.platform,
+        t.queue,
+        t.patch,
+        t.championId,
+        t.role,
+        t.keystoneId,
+        t.subStyleId,
+      ],
+    }),
+  ],
+);
+
+/**
+ * One row per summoner spell pair (#112). `spellA`/`spellB` are order-
+ * normalised (`least`/`greatest` at recompute time) so `{4, 14}` and `{14, 4}`
+ * — the same two spells, read off the two summoner-spell slots in whichever
+ * order Riot happened to serialise them — land in the same row rather than
+ * splitting one real choice into two.
+ */
+export const championSpells = pgTable(
+  'champion_spells',
+  {
+    keyScope: text('key_scope').notNull(),
+    platform: text('platform').notNull(),
+    queue: text('queue').notNull(),
+    patch: text('patch').notNull(),
+    championId: integer('champion_id').notNull(),
+    role: text('role').notNull().default(''),
+    spellA: integer('spell_a').notNull(),
+    spellB: integer('spell_b').notNull(),
+    games: integer('games').notNull(),
+    wins: integer('wins').notNull(),
+    computedAt: timestamp('computed_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({
+      columns: [t.keyScope, t.platform, t.queue, t.patch, t.championId, t.role, t.spellA, t.spellB],
+    }),
+  ],
+);
+
 export type Consumer = typeof consumers.$inferSelect;
 export type NewConsumer = typeof consumers.$inferInsert;
 export type Player = typeof players.$inferSelect;
@@ -438,3 +559,7 @@ export type NewLeagueEntry = typeof leagueEntries.$inferInsert;
 export type ChampionStat = typeof championStats.$inferSelect;
 export type AnalyticsSlice = typeof analyticsSlices.$inferSelect;
 export type ChampionBan = typeof championBans.$inferSelect;
+export type ChampionMatchup = typeof championMatchups.$inferSelect;
+export type ChampionItem = typeof championItems.$inferSelect;
+export type ChampionRune = typeof championRunes.$inferSelect;
+export type ChampionSpell = typeof championSpells.$inferSelect;

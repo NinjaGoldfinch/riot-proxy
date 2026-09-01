@@ -13,7 +13,11 @@ import {
   type CrawlCandidate,
   type LeagueEntryInput,
 } from '../db/ladder.js';
-import { recomputeChampionStats } from '../db/analytics.js';
+import {
+  recomputeChampionBuilds,
+  recomputeChampionMatchups,
+  recomputeChampionStats,
+} from '../db/analytics.js';
 import {
   archiveMatch,
   archiveTimeline,
@@ -1274,13 +1278,21 @@ export interface AggregateChampionsJob {
 }
 
 /**
- * Read the archive back into `champion_stats` (§7 of the plan).
+ * Read the archive back into `champion_stats` and the second-order tables
+ * (§7 of the plan, #112) — one job, several independently-transactional
+ * recomputes, in this order.
  *
  * On the `maintenance` queue rather than `ladder`, because it is not part of
  * the crawl: it touches Riot not at all, and a crawl should be free to finish
  * — and free the ladder for the next one — without waiting on a table scan.
  * Nothing here is prioritized, matching the daily job beside it; giving one of
  * two jobs on a queue a priority would put the other permanently ahead of it.
+ *
+ * Each recompute commits its own tables in its own transaction (§9.1) rather
+ * than one transaction spanning all of them: a crash mid-run leaves earlier
+ * tables newer than later ones, which `computed_at` makes visible on every
+ * row, and the next run converges — cheaper than one transaction holding
+ * locks across a scan of the whole archive.
  */
 export async function aggregateChampions(
   job: Job<AggregateChampionsJob>,
@@ -1294,6 +1306,16 @@ export async function aggregateChampions(
     { platform, queue, rows: result.rows, games: result.games, ms: Date.now() - started },
     'champion aggregates recomputed',
   );
+
+  const matchups = await recomputeChampionMatchups(platform, queue);
+  logger.info({ platform, queue, rows: matchups.rows }, 'champion matchups recomputed');
+
+  const builds = await recomputeChampionBuilds(platform, queue);
+  logger.info(
+    { platform, queue, items: builds.items, runes: builds.runes, spells: builds.spells },
+    'champion builds recomputed',
+  );
+
   return { rows: result.rows, games: result.games };
 }
 

@@ -863,6 +863,121 @@
           }
         }
       },
+      "ChampionMatchupEntry": {
+        "type": "object",
+        "required": [
+          "role",
+          "opponentId",
+          "games",
+          "wins",
+          "winRate"
+        ],
+        "properties": {
+          "role": {
+            "type": "string"
+          },
+          "opponentId": {
+            "type": "integer"
+          },
+          "opponentName": {
+            "type": "string"
+          },
+          "games": {
+            "type": "integer"
+          },
+          "wins": {
+            "type": "integer"
+          },
+          "winRate": {
+            "minimum": 0,
+            "maximum": 1,
+            "type": "number"
+          }
+        }
+      },
+      "ChampionItemEntry": {
+        "type": "object",
+        "required": [
+          "itemId",
+          "games",
+          "wins",
+          "winRate"
+        ],
+        "properties": {
+          "itemId": {
+            "type": "integer"
+          },
+          "games": {
+            "type": "integer"
+          },
+          "wins": {
+            "type": "integer"
+          },
+          "winRate": {
+            "minimum": 0,
+            "maximum": 1,
+            "type": "number"
+          }
+        }
+      },
+      "ChampionRuneEntry": {
+        "type": "object",
+        "required": [
+          "keystoneId",
+          "subStyleId",
+          "games",
+          "wins",
+          "winRate"
+        ],
+        "properties": {
+          "keystoneId": {
+            "type": "integer"
+          },
+          "subStyleId": {
+            "type": "integer"
+          },
+          "games": {
+            "type": "integer"
+          },
+          "wins": {
+            "type": "integer"
+          },
+          "winRate": {
+            "minimum": 0,
+            "maximum": 1,
+            "type": "number"
+          }
+        }
+      },
+      "ChampionSpellEntry": {
+        "type": "object",
+        "required": [
+          "spellA",
+          "spellB",
+          "games",
+          "wins",
+          "winRate"
+        ],
+        "properties": {
+          "spellA": {
+            "type": "integer"
+          },
+          "spellB": {
+            "type": "integer"
+          },
+          "games": {
+            "type": "integer"
+          },
+          "wins": {
+            "type": "integer"
+          },
+          "winRate": {
+            "minimum": 0,
+            "maximum": 1,
+            "type": "number"
+          }
+        }
+      },
       "BackfillNotice": {
         "description": "Present when this lookup queued the player's history for archiving — the first time anyone asks for a player. The walk runs at bulk priority, out of the way of interactive traffic, and is why the second page view costs no quota.",
         "type": "object",
@@ -4432,6 +4547,559 @@
                       "type": "array",
                       "items": {
                         "$ref": "#/components/schemas/ChampionStatEntry"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "Unknown platform or region": {
+                    "summary": "Unknown platform or region",
+                    "value": {
+                      "error": {
+                        "code": "BAD_REGION",
+                        "message": "params/platform must be equal to one of the allowed values"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "Missing or unrecognised key": {
+                    "summary": "Missing or unrecognised key",
+                    "value": {
+                      "error": {
+                        "code": "UNAUTHORIZED",
+                        "message": "Missing or invalid consumer key"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "Key lacks the scope (or the admin IP allowlist rejected it)": {
+                    "summary": "Key lacks the scope (or the admin IP allowlist rejected it)",
+                    "value": {
+                      "error": {
+                        "code": "FORBIDDEN",
+                        "message": "This key does not carry the admin scope"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "No such resource": {
+                    "summary": "No such resource",
+                    "value": {
+                      "error": {
+                        "code": "NOT_FOUND",
+                        "message": "No account for that Riot ID"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "Your quota — slow down. Sent with Retry-After": {
+                    "summary": "Your quota — slow down. Sent with Retry-After",
+                    "value": {
+                      "error": {
+                        "code": "QUOTA_EXCEEDED",
+                        "message": "Quota of 600/min exceeded",
+                        "retryAfter": 37
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/lol/analytics/champions/{championId}/matchups": {
+      "get": {
+        "summary": "A champion's lane matchups",
+        "tags": [
+          "lol"
+        ],
+        "description": "Both directions of every lane matchup this champion has archived data for. No tier dimension: sample sizes die fast enough per (champion, opponent, role) alone, and the two laners can sit in different tiers anyway.",
+        "parameters": [
+          {
+            "schema": {
+              "$ref": "#/components/schemas/PlatformParam"
+            },
+            "in": "query",
+            "name": "platform",
+            "required": false
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/RankedQueueParam"
+            },
+            "in": "query",
+            "name": "queue",
+            "required": false
+          },
+          {
+            "schema": {
+              "minLength": 3,
+              "maxLength": 8,
+              "pattern": "^[0-9]+\\.[0-9]+$",
+              "type": "string"
+            },
+            "in": "query",
+            "name": "patch",
+            "required": false,
+            "description": "Defaults to the newest patch this deployment has aggregated"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "TOP",
+                "JUNGLE",
+                "MIDDLE",
+                "BOTTOM",
+                "UTILITY",
+                ""
+              ]
+            },
+            "in": "query",
+            "name": "role",
+            "required": false
+          },
+          {
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "in": "query",
+            "name": "minGames",
+            "required": false
+          },
+          {
+            "schema": {
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50,
+              "type": "integer"
+            },
+            "in": "query",
+            "name": "limit",
+            "required": false
+          },
+          {
+            "schema": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "in": "path",
+            "name": "championId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "championId",
+                    "platform",
+                    "queue",
+                    "patch",
+                    "role",
+                    "matchups"
+                  ],
+                  "properties": {
+                    "championId": {
+                      "type": "integer"
+                    },
+                    "championName": {
+                      "type": "string"
+                    },
+                    "platform": {
+                      "type": "string"
+                    },
+                    "queue": {
+                      "type": "string"
+                    },
+                    "patch": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Null when nothing has been aggregated yet"
+                    },
+                    "role": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Echoes the `role` filter; null when every lane this champion has is included"
+                    },
+                    "matchups": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ChampionMatchupEntry"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "Unknown platform or region": {
+                    "summary": "Unknown platform or region",
+                    "value": {
+                      "error": {
+                        "code": "BAD_REGION",
+                        "message": "params/platform must be equal to one of the allowed values"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "Missing or unrecognised key": {
+                    "summary": "Missing or unrecognised key",
+                    "value": {
+                      "error": {
+                        "code": "UNAUTHORIZED",
+                        "message": "Missing or invalid consumer key"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "Key lacks the scope (or the admin IP allowlist rejected it)": {
+                    "summary": "Key lacks the scope (or the admin IP allowlist rejected it)",
+                    "value": {
+                      "error": {
+                        "code": "FORBIDDEN",
+                        "message": "This key does not carry the admin scope"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "No such resource": {
+                    "summary": "No such resource",
+                    "value": {
+                      "error": {
+                        "code": "NOT_FOUND",
+                        "message": "No account for that Riot ID"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "Your quota — slow down. Sent with Retry-After": {
+                    "summary": "Your quota — slow down. Sent with Retry-After",
+                    "value": {
+                      "error": {
+                        "code": "QUOTA_EXCEEDED",
+                        "message": "Quota of 600/min exceeded",
+                        "retryAfter": 37
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/lol/analytics/champions/{championId}": {
+      "get": {
+        "summary": "Champion detail composite",
+        "tags": [
+          "lol"
+        ],
+        "description": "The stat row(s) at this slice plus this champion's top lane matchups, items, runes and summoner spells — one call for a champion page. Each section is independently trimmed by `minGames`/`limit`; a champion nobody has data for yet still returns 200 with empty arrays rather than a 404.",
+        "parameters": [
+          {
+            "schema": {
+              "$ref": "#/components/schemas/PlatformParam"
+            },
+            "in": "query",
+            "name": "platform",
+            "required": false
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/RankedQueueParam"
+            },
+            "in": "query",
+            "name": "queue",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "IRON",
+                "BRONZE",
+                "SILVER",
+                "GOLD",
+                "PLATINUM",
+                "EMERALD",
+                "DIAMOND",
+                "MASTER",
+                "GRANDMASTER",
+                "CHALLENGER"
+              ]
+            },
+            "in": "query",
+            "name": "tier",
+            "required": false
+          },
+          {
+            "schema": {
+              "minLength": 3,
+              "maxLength": 8,
+              "pattern": "^[0-9]+\\.[0-9]+$",
+              "type": "string"
+            },
+            "in": "query",
+            "name": "patch",
+            "required": false,
+            "description": "Defaults to the newest patch this deployment has aggregated"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "TOP",
+                "JUNGLE",
+                "MIDDLE",
+                "BOTTOM",
+                "UTILITY",
+                ""
+              ]
+            },
+            "in": "query",
+            "name": "role",
+            "required": false
+          },
+          {
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "in": "query",
+            "name": "minGames",
+            "required": false
+          },
+          {
+            "schema": {
+              "minimum": 1,
+              "maximum": 50,
+              "default": 10,
+              "type": "integer"
+            },
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "description": "Caps each of matchups/items/runes/spells independently"
+          },
+          {
+            "schema": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "in": "path",
+            "name": "championId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "championId",
+                    "platform",
+                    "queue",
+                    "patch",
+                    "role",
+                    "stats",
+                    "matchups",
+                    "items",
+                    "runes",
+                    "spells"
+                  ],
+                  "properties": {
+                    "championId": {
+                      "type": "integer"
+                    },
+                    "championName": {
+                      "type": "string"
+                    },
+                    "platform": {
+                      "type": "string"
+                    },
+                    "queue": {
+                      "type": "string"
+                    },
+                    "patch": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Null when nothing has been aggregated yet"
+                    },
+                    "role": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Null when every role is summed into one row per section"
+                    },
+                    "stats": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ChampionStatEntry"
+                      }
+                    },
+                    "matchups": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ChampionMatchupEntry"
+                      }
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ChampionItemEntry"
+                      }
+                    },
+                    "runes": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ChampionRuneEntry"
+                      }
+                    },
+                    "spells": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ChampionSpellEntry"
                       }
                     }
                   }
