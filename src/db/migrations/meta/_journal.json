@@ -43,6 +43,13 @@
       "when": 1799020800000,
       "tag": "0005_matches_patch_column",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1799107200000,
+      "tag": "0006_match_facts",
+      "breakpoints": true
     }
   ]
 }

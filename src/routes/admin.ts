@@ -25,7 +25,7 @@ import {
   platformToAccountRegion,
 } from '../riot/routing.js';
 import { clearCrawlState, pendingLegs } from '../jobs/ladder-state.js';
-import { enqueueChampionAggregate, startCrawl } from '../jobs/processors.js';
+import { enqueueChampionAggregate, enqueueFactsReextract, startCrawl } from '../jobs/processors.js';
 import {
   JOB,
   enqueueBackfill,
@@ -423,6 +423,33 @@ const adminRoutes: FastifyPluginAsync = async (fastify) => {
       // 202 for the same reason the crawl trigger is: the answer is "it is
       // queued", and the table scan behind it runs on the worker.
       return reply.code(202).send({ ok: true, platform, queue });
+    },
+  );
+
+  /**
+   * Backfill the widened `match_participants` columns and `match_bans` for
+   * everything the archive holds (#110). No body: unlike the champion
+   * recompute this is not scoped to one ladder — it walks the whole archive,
+   * resuming from wherever the last run's cursor left off.
+   */
+  fastify.post(
+    '/v1/admin/analytics/reextract',
+    {
+      ...adminScope,
+      schema: {
+        tags: ['admin'],
+        summary: 'Re-extract match facts for the whole archive',
+        description:
+          'Backfills `match_participants`’ widened columns and `match_bans` for rows written ' +
+          'before this facts extraction existed. Pure Postgres — no Riot quota — paced so it ' +
+          'never competes with interactive traffic. Only one run is ever in flight; a trigger ' +
+          "while one is already running joins it rather than starting a second walk.",
+        response: { 202: PassthroughResponse, ...localErrors },
+      },
+    },
+    async (_request, reply) => {
+      await enqueueFactsReextract();
+      return reply.code(202).send({ ok: true });
     },
   );
 

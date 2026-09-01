@@ -76,6 +76,8 @@ export const PINNED: Record<string, string> = {
   // discovered player; the discovery tests turn it on themselves.
   LADDER_BACKFILL_LIMIT: '0',
 
+  FACTS_REEXTRACT_BATCH: '500',
+
   DDRAGON_DIR: './data/ddragon',
   DDRAGON_LOCALE: 'en_US',
 

@@ -7,6 +7,7 @@ import {
   jsonb,
   pgTable,
   primaryKey,
+  smallint,
   text,
   timestamp,
   uniqueIndex,
@@ -115,7 +116,18 @@ export const matches = pgTable(
   ],
 );
 
-/** Optional denormalisation for "matches where this player appeared" queries. */
+/**
+ * One row per participant. `(champion_id, win)` was the whole table through L5
+ * (#90); the rest are facts C2 (#110) extracts once, at archive time, so every
+ * aggregate that needs them reads a column instead of opening `matches.data`.
+ *
+ * All nullable and best-effort: `extractParticipants` (`src/db/matches.ts`)
+ * writes whatever a participant object actually has, and Riot's own payload
+ * omits fields by patch, queue and game mode (Arena's `placement`/`subteam_id`
+ * exist nowhere else; ARAM has no `team_position`). Absent stays null rather
+ * than a guessed default, the same rule `match-summary.ts` follows for the same
+ * payload.
+ */
 export const matchParticipants = pgTable(
   'match_participants',
   {
@@ -125,11 +137,60 @@ export const matchParticipants = pgTable(
     puuid: text('puuid').notNull(),
     championId: integer('champion_id'),
     win: boolean('win'),
+    teamId: smallint('team_id'),
+    /** `''` in ARAM/Arena, per Riot; absent entirely on very old archives. */
+    teamPosition: text('team_position'),
+    kills: smallint('kills'),
+    deaths: smallint('deaths'),
+    assists: smallint('assists'),
+    /** `totalMinionsKilled + neutralMinionsKilled`. */
+    cs: integer('cs'),
+    gold: integer('gold'),
+    damage: integer('damage'),
+    vision: integer('vision'),
+    item0: integer('item0'),
+    item1: integer('item1'),
+    item2: integer('item2'),
+    item3: integer('item3'),
+    item4: integer('item4'),
+    item5: integer('item5'),
+    /** The trinket slot (`item6`) is never a build choice, so it is skipped. */
+    keystoneId: integer('keystone_id'),
+    /** The secondary rune *tree*, not a specific rune — `perks.styles[1].style`. */
+    subStyleId: integer('sub_style_id'),
+    spell1: integer('spell1'),
+    spell2: integer('spell2'),
+    /** Arena (queue 1700) only. */
+    placement: smallint('placement'),
+    /** Arena's team-of-two id. Riot's field is `playerSubteamId`, not `subteamId`. */
+    subteamId: smallint('subteam_id'),
   },
   (t) => [
     primaryKey({ columns: [t.matchId, t.puuid] }),
     index('match_participants_puuid_idx').on(t.puuid),
   ],
+);
+
+/**
+ * `info.teams[].bans[]`, one row per ban (#110). `championId: -1` — no pick
+ * made in that slot — is skipped at extraction; a row here always names a real
+ * champion.
+ *
+ * No `key_scope`, matching `match_participants`: a ban is a fact about the
+ * match, not about a player, so nothing here is encrypted (§7.4).
+ */
+export const matchBans = pgTable(
+  'match_bans',
+  {
+    matchId: text('match_id')
+      .notNull()
+      .references(() => matches.matchId, { onDelete: 'cascade' }),
+    teamId: smallint('team_id').notNull(),
+    pickTurn: smallint('pick_turn').notNull(),
+    championId: integer('champion_id').notNull(),
+  },
+  // The PK's leading column gives "every ban in this match" its index for free.
+  (t) => [primaryKey({ columns: [t.matchId, t.teamId, t.pickTurn] })],
 );
 
 /**
