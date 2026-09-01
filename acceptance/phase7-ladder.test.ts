@@ -17,10 +17,10 @@ import {
  *
  * Split in two, for a reason worth being explicit about. The **enumeration**
  * is cheap: a `MASTER` floor is three requests, one per apex league, whatever
- * the platform. What the crawl *discovers* is not. Every entry at or above the
- * server's `LADDER_BACKFILL_TIER_FLOOR` has its match ids walked, and on a dev
- * key that runs for hours — and this suite cannot see or change that setting,
- * because it belongs to the server it is pointed at.
+ * the platform. What the crawl *discovers* is not. Every entry the crawl
+ * enumerates has its match ids walked, and on a dev key that runs for hours —
+ * and this suite cannot see or change the server's floor, because it belongs
+ * to the server it is pointed at.
  *
  * So everything with a bounded cost runs under the normal acceptance gate, and
  * the crawl itself is a second opt-in: `ACCEPTANCE_LADDER=1`. Same shape as

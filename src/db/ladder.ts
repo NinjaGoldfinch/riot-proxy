@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNotNull, isNull, lt, or, sql as raw } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, isNull, lt, or, sql as raw } from 'drizzle-orm';
 import { KEY_SCOPE } from '../config.js';
 import type { Division, RankedQueue, Tier } from '../riot/ladder.js';
 import { db } from './index.js';
@@ -361,8 +361,6 @@ export interface CrawlCandidateFilter {
   crawlId: string;
   platform: string;
   queue: string;
-  /** The backfill floor, expanded: every tier whose players are in scope. */
-  tiers: Tier[];
   /**
    * Skip players whose walk started at or after this instant — the crawl's own
    * start. A repeat crawl should converge on what is new rather than re-walk a
@@ -407,14 +405,11 @@ export interface CrawlCandidate {
 export async function listCrawlBackfillCandidates(
   filter: CrawlCandidateFilter,
 ): Promise<CrawlCandidate[]> {
-  if (filter.tiers.length === 0) return [];
-
   const where = [
     eq(leagueEntries.keyScope, KEY_SCOPE),
     eq(leagueEntries.platform, filter.platform),
     eq(leagueEntries.queue, filter.queue),
     eq(leagueEntries.lastSeenCrawlId, filter.crawlId),
-    inArray(leagueEntries.tier, filter.tiers),
     or(
       isNull(players.historyBackfillStartedAt),
       lt(players.historyBackfillStartedAt, filter.notWalkedSince),

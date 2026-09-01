@@ -78,14 +78,30 @@ export class FakeRedis {
   }
 
   /**
-   * One pass, everything at once. Real SSCAN hands back a slice and a cursor,
-   * and promises only that a member present for the whole scan is returned at
-   * least once — which is why the caller reads from cursor 0 every time and
-   * shrinks the set as it goes. Returning the lot keeps that caller honest:
-   * it still has to remove what it has taken to make progress.
+   * Cursor semantics, with the real-world trap built in: the first iteration
+   * over a non-empty set returns *no members* and a non-zero cursor. Real
+   * SSCAN does exactly this once a drained set's leading buckets outnumber one
+   * iteration's bucket budget — and a caller that reads the empty batch as an
+   * empty set silently drops everything after it (it cost a crawl 2,600 of
+   * its 3,409 matches). Keeping the trap in the fake keeps callers honest:
+   * only a cursor that has wrapped to '0' means the scan is over.
+   *
+   * The cursor here is an offset into the member list, biased by one COUNT
+   * window for the empty first batch.
    */
-  async sscan(key: string, ..._args: unknown[]): Promise<[string, string[]]> {
-    return ['0', [...(this.sets.get(key) ?? [])]];
+  async sscan(key: string, cursor: string, ...args: unknown[]): Promise<[string, string[]]> {
+    const flags = args.map(String);
+    const countAt = flags.findIndex((a) => a.toUpperCase() === 'COUNT');
+    const count = countAt === -1 ? 10 : Number(flags[countAt + 1]);
+    const members = [...(this.sets.get(key) ?? [])];
+
+    const at = Number(cursor);
+    if (at === 0) return members.length === 0 ? ['0', []] : [String(count), []];
+
+    const start = at - count;
+    const window = members.slice(start, start + count);
+    const next = start + count >= members.length ? '0' : String(at + count);
+    return [next, window];
   }
 
   async exists(key: string): Promise<number> {

@@ -28,6 +28,7 @@ import {
 } from '../db/matches.js';
 import type { LadderCrawl } from '../db/schema.js';
 import {
+  backfillNamesFromArchive,
   getPlayer,
   listTrackedPlayers,
   markBackfillComplete,
@@ -58,7 +59,6 @@ import {
   assertRankedQueue,
   assertTier,
   isApexTier,
-  tierAtOrAbove,
   tiersAtOrAbove,
   type ApexTier,
   type PagedTier,
@@ -757,25 +757,23 @@ export async function enqueueChampionAggregate(platform: string, queue: string):
  * docs/ladder-crawl-plan.md, staged) reads them back out of `league_entries`
  * once every leg has finished, and every id it gathers goes into one set.
  *
- * Two pieces of restraint survive from the old hand-off:
+ * One piece of restraint survives from the old hand-off: **never tracked.**
+ * `upsertDiscoveredPlayers` cannot set `tracked`, so a crawl can never sign
+ * thousands of players up for a 60-second poll.
  *
- * 1. **The tier floor.** `LADDER_BACKFILL_TIER_FLOOR` is separate from the one
- *    that bounds enumeration, because enumerating a ladder is thousands of
- *    requests and walking the players behind it is millions. Entries below it
- *    land in `league_entries` and go no further — not even into `players`.
- * 2. **Never tracked.** `upsertDiscoveredPlayers` cannot set `tracked`, so a
- *    crawl can never sign thousands of players up for a 60-second poll.
+ * There is no separate backfill floor any more: everyone the crawl enumerates
+ * becomes a player and is walked by the collect stage. How much a crawl costs
+ * is governed by the one floor it already has — how far down it enumerates —
+ * and by `LADDER_BACKFILL_LIMIT`, the matches walked per player.
  */
 async function recordPlayers(
   crawlId: string,
   platform: Platform,
   entries: LeagueEntryInput[],
 ): Promise<number> {
-  const floor = config.ladderBackfillTierFloor;
-  const eligible = entries.filter((e) => tierAtOrAbove(e.tier, floor));
-  if (eligible.length === 0) return 0;
+  if (entries.length === 0) return 0;
 
-  const rows = await upsertDiscoveredPlayers(eligible.map((e) => ({ puuid: e.puuid, platform })));
+  const rows = await upsertDiscoveredPlayers(entries.map((e) => ({ puuid: e.puuid, platform })));
   await bumpCrawlCounters(crawlId, { playersDiscovered: rows.length });
   return rows.length;
 }
@@ -831,7 +829,6 @@ async function startCollectPhase(crawl: LadderCrawl): Promise<void> {
 
   await trackLegs(crawl.id, [FANOUT_LEG]);
 
-  const tiers = tiersAtOrAbove(config.ladderBackfillTierFloor);
   // The cursor is the position in the ladder; `seen` is what names the legs.
   // A leg id has to be unique within the crawl and reproducible by the job
   // that runs it, and the position in the candidate list is both.
@@ -844,7 +841,6 @@ async function startCollectPhase(crawl: LadderCrawl): Promise<void> {
       crawlId: crawl.id,
       platform,
       queue,
-      tiers,
       notWalkedSince: crawl.startedAt,
       limit: COLLECT_BATCH * COLLECT_FANOUT_BATCH,
       ...(after ? { after } : {}),
@@ -959,6 +955,13 @@ async function completeCrawl(crawlId: string, status: 'completed' | 'failed'): P
     durationS,
   );
 
+  // Above the clean-run guard, unlike the aggregate below it, because the two
+  // fail differently on a partial run. An aggregate over half a ladder is a
+  // wrong number wearing a right one's clothes; a name read out of a match
+  // that did land is simply correct, and the crawl that gave up archived those
+  // matches all the same.
+  await enqueueNameBackfill();
+
   // Only a clean run. A crawl that gave up has seen part of a ladder, and
   // aggregating a part of one as though it were the whole thing is worse than
   // leaving the previous numbers in place.
@@ -1014,12 +1017,17 @@ export async function ladderCollect(
       newIds += walked.newIds;
       players += 1;
       await job.updateProgress(Math.round((players / Math.max(1, puuids.length)) * 100));
+      logger.debug(
+        { crawlId, puuid, ids: walked.ids, newIds: walked.newIds },
+        'ladder collect walked a player',
+      );
     }
 
     if (newIds > 0) {
       ladderMatchIdsTotal.inc({ platform, queue }, newIds);
       await bumpCrawlCounters(crawlId, { matchIdsSeen: newIds });
     }
+    logger.debug({ crawlId, players, ids, newIds }, 'ladder collect batch done');
     await endLeg(crawlId, legId, 'done');
     return { players, ids, newIds };
   } catch (err) {
@@ -1132,10 +1140,19 @@ export async function ladderArchive(
       seen += batch.length;
       queued += unarchived.length;
       await job.updateProgress({ seen, queued });
+
+      // Bumped per batch, not once at the end: this is the one job in the
+      // whole crawl that runs for as long as the archive phase does, so it is
+      // the one place a counter written only on return would sit stale on the
+      // crawl row — and on the dashboard reading it — for the entire drain.
+      ladderMatchesQueuedTotal.inc({ platform, queue }, unarchived.length);
+      await bumpCrawlCounters(crawlId, { matchesQueued: unarchived.length });
+      logger.debug(
+        { crawlId, batchSize: batch.length, newlyQueued: unarchived.length, seen, queued },
+        'ladder archive batch queued',
+      );
     }
 
-    if (queued > 0) ladderMatchesQueuedTotal.inc({ platform, queue }, queued);
-    await bumpCrawlCounters(crawlId, { matchesQueued: queued });
     logger.info({ crawlId, seen, queued }, 'ladder matches handed to the archive queue');
     await endLeg(crawlId, legId, 'done');
     return { seen, queued };
@@ -1394,6 +1411,45 @@ export async function ddragonSync(job: Job<{ force?: boolean }>): Promise<void> 
   await publish('patch.new', PATCH_TOPIC, { version: result.version });
 }
 
+// ── names:backfill ───────────────────────────────────────────────────────────
+
+/**
+ * Put Riot IDs on the PUUIDs a crawl discovered, out of the archive.
+ *
+ * On the `maintenance` queue beside `aggregate:champions` and for the same
+ * reason: it reads tables and touches Riot not at all, so it has no business
+ * holding up the ladder queue — and a crawl should be free to finish, and free
+ * that ladder for the next run, without waiting on a scan.
+ *
+ * Unprioritized, matching the two jobs already there. Giving one job on a
+ * queue a priority puts every unprioritized one permanently ahead of it, which
+ * is the opposite of what a priority looks like it does.
+ */
+export async function backfillNames(): Promise<{ named: number; unnamed: number }> {
+  const started = Date.now();
+  const result = await backfillNamesFromArchive();
+  logger.info(
+    { named: result.named, unnamed: result.unnamed, ms: Date.now() - started },
+    'player names backfilled from archive',
+  );
+  return result;
+}
+
+/**
+ * Queue one pass. Lifecycle-scoped de-duplication for the same reason as
+ * `enqueueChampionAggregate`: a stable `jobId` is matched against retained
+ * finished jobs too, so it would silence every pass after the first for the
+ * length of the retention window (#18). Dropping a pass that has not run yet
+ * costs nothing — the one that replaces it reads the same tables.
+ */
+export async function enqueueNameBackfill(): Promise<void> {
+  await maintenanceQueue.add(
+    JOB.namesBackfill,
+    {},
+    { deduplication: { id: jobKey(JOB.namesBackfill) } },
+  );
+}
+
 // ── maintenance ──────────────────────────────────────────────────────────────
 
 /**
@@ -1477,6 +1533,9 @@ export async function dispatch(job: Job): Promise<unknown> {
         break;
       case JOB.ddragonSync:
         result = await ddragonSync(job as Job<{ force?: boolean }>);
+        break;
+      case JOB.namesBackfill:
+        result = await backfillNames();
         break;
       case JOB.maintenance:
         result = await maintenance();

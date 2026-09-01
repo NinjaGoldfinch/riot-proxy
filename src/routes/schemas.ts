@@ -484,10 +484,10 @@ export const LadderOptionsResponse = Type.Object(
     defaults: Type.Object({
       platform: Type.String(),
       queue: Type.String(),
-      tierFloor: { ...Type.String(), description: 'LADDER_TIER_FLOOR — how far down to enumerate' },
-      backfillTierFloor: {
+      tierFloor: {
         ...Type.String(),
-        description: 'LADDER_BACKFILL_TIER_FLOOR — how far down to walk match histories',
+        description:
+          'LADDER_TIER_FLOOR — how far down to enumerate, and with it whose histories are walked',
       },
       backfillLimit: {
         ...Type.Integer(),
