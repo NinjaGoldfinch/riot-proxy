@@ -827,7 +827,7 @@
             "minimum": 0,
             "maximum": 1,
             "type": "number",
-            "description": "This champion's games as a fraction of the slice's games"
+            "description": "This champion's games over the response's own `totalGames` — the games in the `champions`/`stats` array carrying it, not the slice. On the champion detail composite that array holds one champion, so `share` is a fraction of that champion alone and reaches 1. Use `pickRate` for a slice-relative number."
           },
           "pickRate": {
             "minimum": 0,
@@ -4669,7 +4669,7 @@
         "tags": [
           "lol"
         ],
-        "description": "Both directions of every lane matchup this champion has archived data for. No tier dimension: sample sizes die fast enough per (champion, opponent, role) alone, and the two laners can sit in different tiers anyway.",
+        "description": "Every lane matchup this champion has archived data for. No tier dimension: sample sizes die fast enough per (champion, opponent, role) alone, and the two laners can sit in different tiers anyway. Mirror lanes are excluded — their win rate is 50% by construction. A matchup is recorded from the tracked ladder player’s side, so the opposite champion’s view of the same lane only exists when that player is tracked too, and the two directions can disagree.",
         "parameters": [
           {
             "schema": {
@@ -4707,8 +4707,7 @@
                 "JUNGLE",
                 "MIDDLE",
                 "BOTTOM",
-                "UTILITY",
-                ""
+                "UTILITY"
               ]
             },
             "in": "query",
@@ -4758,6 +4757,7 @@
                     "queue",
                     "patch",
                     "role",
+                    "computedAt",
                     "matchups"
                   ],
                   "properties": {
@@ -4793,7 +4793,19 @@
                           "type": "null"
                         }
                       ],
-                      "description": "Echoes the `role` filter; null when every lane this champion has is included"
+                      "description": "Echoes the `role` filter. Null means every lane is included — and `limit` then truncates across all of them together, most-played first, so a champion played in two lanes can fill the list from the busier one. Filter by role for a guaranteed view of one lane's matchups."
+                    },
+                    "computedAt": {
+                      "anyOf": [
+                        {
+                          "format": "date-time",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "When `champion_matchups` was last recomputed from the archive"
                     },
                     "matchups": {
                       "type": "array",
@@ -5029,8 +5041,12 @@
                     "championId",
                     "platform",
                     "queue",
+                    "tier",
                     "patch",
                     "role",
+                    "computedAt",
+                    "sectionsComputedAt",
+                    "totalGames",
                     "stats",
                     "matchups",
                     "items",
@@ -5049,6 +5065,17 @@
                     },
                     "queue": {
                       "type": "string"
+                    },
+                    "tier": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Echoes the `tier` filter, which applies to `stats` only — `champion_matchups` and the three build tables have no tier dimension, so `matchups`/`items`/`runes`/`spells` are all-tier whatever this says. Null when unfiltered."
                     },
                     "patch": {
                       "anyOf": [
@@ -5070,7 +5097,91 @@
                           "type": "null"
                         }
                       ],
-                      "description": "Null when every role is summed into one row per section"
+                      "description": "Echoes the `role` filter. Null sums every role into one row for `stats` and the three build sections, but `matchups` stays per-lane — see `sectionsComputedAt` and the matchups route for what `limit` then does to a two-lane champion's list."
+                    },
+                    "computedAt": {
+                      "anyOf": [
+                        {
+                          "format": "date-time",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "The oldest stamp across the sections below — the payload as a whole is only this fresh. Null when every section is empty."
+                    },
+                    "sectionsComputedAt": {
+                      "type": "object",
+                      "required": [
+                        "stats",
+                        "matchups",
+                        "items",
+                        "runes",
+                        "spells"
+                      ],
+                      "properties": {
+                        "stats": {
+                          "anyOf": [
+                            {
+                              "format": "date-time",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "matchups": {
+                          "anyOf": [
+                            {
+                              "format": "date-time",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "items": {
+                          "anyOf": [
+                            {
+                              "format": "date-time",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "runes": {
+                          "anyOf": [
+                            {
+                              "format": "date-time",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "spells": {
+                          "anyOf": [
+                            {
+                              "format": "date-time",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "description": "Per section, since each table is recomputed in its own transaction: a run that crashed part-way leaves one section behind the others, and this is what says so."
+                    },
+                    "totalGames": {
+                      "type": "integer",
+                      "description": "Games summed into `stats` — this champion's, and the denominator behind its `share`"
                     },
                     "stats": {
                       "type": "array",
