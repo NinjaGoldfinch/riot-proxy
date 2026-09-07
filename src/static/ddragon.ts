@@ -52,7 +52,7 @@ export async function fetchVersions(): Promise<string[]> {
   return fetchJson<string[]>(VERSIONS_URL);
 }
 
-export async function latestVersion(): Promise<string> {
+async function latestVersion(): Promise<string> {
   const versions = await fetchVersions();
   const latest = versions[0];
   if (!latest) throw new Error('Data Dragon returned an empty version list');

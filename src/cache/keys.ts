@@ -20,7 +20,7 @@ export function canonicalTarget(path: string, query: Record<string, unknown> = {
   return `${path}?${qs}`;
 }
 
-export function hashTarget(target: string): string {
+function hashTarget(target: string): string {
   return createHash('sha1').update(target).digest('hex');
 }
 

@@ -429,14 +429,18 @@ export const championBans = pgTable(
 
 /**
  * One row per lane matchup (#112) — `champion_id`'s record against
- * `opponent_id` in `role`, both directions stored (the self-join that builds
- * this naturally produces the mirror row too, from the opponent's side).
+ * `opponent_id` in `role`. Both directions are stored when both laners are on
+ * the tracked ladder; only the tracked side's row exists when one is not, and
+ * mirror lanes are not stored at all (see `recomputeChampionMatchups`).
  *
  * No tier: 170×170×5 roles is sparse enough already, tier would shred every
  * cell below significance, and cross-tier matches make per-tier attribution
  * ill-defined anyway — the two laners can sit in different tiers. `role` is
  * never `''` here (the recompute requires a real, shared lane), unlike the
  * builds tables below.
+ *
+ * `champion_id` precedes `role` in the key because the only read filters the
+ * first and not always the second (0009).
  */
 export const championMatchups = pgTable(
   'champion_matchups',
@@ -454,7 +458,7 @@ export const championMatchups = pgTable(
   },
   (t) => [
     primaryKey({
-      columns: [t.keyScope, t.platform, t.queue, t.patch, t.role, t.championId, t.opponentId],
+      columns: [t.keyScope, t.platform, t.queue, t.patch, t.championId, t.role, t.opponentId],
     }),
   ],
 );
