@@ -749,7 +749,9 @@ describe('champion_matchups and builds', () => {
       patch: '16.13',
       championId: AHRI,
     });
-    expect(spells).toEqual([{ spellA: 4, spellB: 14, games: 2, wins: 2 }]);
+    expect(spells).toEqual([
+      { spellA: 4, spellB: 14, games: 2, wins: 2, computedAt: expect.any(Date) },
+    ]);
   });
 
   it('buckets runes by role, and sums every role when none is filtered', async ({ skip }) => {
@@ -781,7 +783,9 @@ describe('champion_matchups and builds', () => {
       patch: '16.13',
       championId: AHRI,
     });
-    expect(rolled).toEqual([{ keystoneId: 8214, subStyleId: 8100, games: 2, wins: 1 }]);
+    expect(rolled).toEqual([
+      { keystoneId: 8214, subStyleId: 8100, games: 2, wins: 1, computedAt: expect.any(Date) },
+    ]);
 
     const midOnly = await listChampionRunes({
       platform: PLATFORM,
@@ -790,7 +794,9 @@ describe('champion_matchups and builds', () => {
       championId: AHRI,
       role: 'MIDDLE',
     });
-    expect(midOnly).toEqual([{ keystoneId: 8214, subStyleId: 8100, games: 1, wins: 1 }]);
+    expect(midOnly).toEqual([
+      { keystoneId: 8214, subStyleId: 8100, games: 1, wins: 1, computedAt: expect.any(Date) },
+    ]);
   });
 });
 
