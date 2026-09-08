@@ -64,6 +64,13 @@
       "when": 1799280000000,
       "tag": "0008_champion_matchups_and_builds",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1799366400000,
+      "tag": "0009_champion_matchups_pk_order",
+      "breakpoints": true
     }
   ]
 }

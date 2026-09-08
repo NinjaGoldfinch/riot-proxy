@@ -258,7 +258,7 @@ under a distinct `neg:` prefix — a cached "not in game" is distinguishable fro
 | `ladder:walk`         | per crawl                          | page a (tier, division) until an empty page           |
 | `ladder:collect`      | once the enumeration is done       | 25 discovered players' match ids into the crawl's set |
 | `ladder:archive`      | once every id is collected         | de-duplicate against the archive, queue what is new   |
-| `aggregate:champions` | on a completed crawl, or admin     | recompute `champion_stats` from the archive           |
+| `aggregate:champions` | on a completed crawl, or admin     | recompute the six analytics tables from the archive   |
 | `maintenance`         | daily                              | clear orphaned single-flight locks                    |
 
 Each poll type is one repeatable tick that fans out to one job per tracked
@@ -339,7 +339,7 @@ Every archive job therefore carries an explicit priority.
 | `LADDER_TIER_FLOOR`                          | `MASTER`                                          | Lowest tier a crawl enumerates — and walks                   |
 | `LADDER_BACKFILL_LIMIT`                      | `100`                                             | Matches per discovered player; `0` discovers without walking |
 | `FACTS_REEXTRACT_BATCH`                      | `500`                                             | Matches per `facts:reextract` batch; pure Postgres           |
-| `AGGREGATE_MIN_GAMES`                        | `10`                                              | Default `minGames` floor on the champion stats route         |
+| `AGGREGATE_MIN_GAMES`                        | `10`                                              | Default `minGames` floor on every champion analytics route   |
 | `ADMIN_IP_ALLOWLIST`                         | —                                                 | CSV of IPs/CIDRs; empty means key scope is enough            |
 | `BOOTSTRAP_ADMIN_KEY`                        | —                                                 | Seeds one admin key on `npm run migrate`                     |
 | `AUTH_DISABLED`                              | `false`                                           | Dev only: skip key checks; refused in production             |

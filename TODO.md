@@ -122,6 +122,46 @@ missing. Phases refer to §15 of [the spec](docs/riot-proxy-spec.md).
       id reads, next to a panel showing some other ladder crawling, as a
       refusal about that one.
 
+### Analytics round
+
+Growing L5's minimal `champion_stats` into a real analytics layer (#108,
+phases C1–C7). C1–C4 landed; C5–C7 are still open below.
+
+- [x] `matches.patch` and `matches.game_duration` are indexed generated
+      columns, so a recompute never opens `data` JSONB to find out which patch
+      a game was played on, and the GIN index no longer drifts (#109)
+- [x] `match_participants` carries the facts an aggregate consumes — role,
+      team, the KDA/cs/gold/damage/vision sums, items, runes, spells — extracted
+      once at archive time on both persist paths, with `match_bans` beside it
+      and a `facts:reextract` job to sweep the pre-C2 archive without spending
+      a request (#110)
+- [x] `champion_stats` gained a role dimension, summed facts rather than
+      pre-divided averages, and honest denominators: `analytics_slices` is the
+      match count a pick or ban rate divides into, so `share` is no longer
+      quietly standing in for a pick rate it never measured (#111)
+- [x] Lane matchups and the item/rune/spell frequency tables, plus a champion
+      detail composite that answers a champion page in one call (#112)
+- [x] `GET /v1/players/{puuid}/champions` — a player's champion pool, grouped
+      out of `match_participants` at read time on the puuid index. No table and
+      no recompute: precomputing a pool would mean a table per player,
+      invalidated by every game any of them plays, to save a grouped read of
+      their own rows. Cached 300 s under a key-scoped `derivedKey`, and
+      deliberately outside `proxy_cache_reads_total`, which is about reads that
+      would otherwise have cost Riot quota (#113)
+- [x] Review pass over #112: the detail composite defaulted `minGames` to `0`
+      where the list route uses `AGGREGATE_MIN_GAMES`, so a champion page could
+      publish a one-game 100% win rate the champion list correctly hid; `share`
+      changed meaning between the two routes without either publishing the
+      denominator it divided by; four recomputes returned every inserted row to
+      count them, the widest of them materialising patches × champions × roles ×
+      items in the worker's heap for one integer; the matchup key sorted `role`
+      ahead of `champion_id`, which is the opposite of how it is read; the
+      anti-fan-out CTE grouped the whole archive rather than this ladder's
+      matches; mirror lanes counted one match twice; `computed_at` was selected
+      and discarded, so the staleness the per-table transactions deliberately
+      allow was invisible to callers; and the analytics routes sent
+      `Cache-Control: public` on responses that required a bearer key
+
 ## Next
 
 ### Open
@@ -131,11 +171,16 @@ missing. Phases refer to §15 of [the spec](docs/riot-proxy-spec.md).
       player's matches, aggregate the archive (#85, phases L1–L6 in
       [the plan](docs/ladder-crawl-plan.md); all six landed, `LADDER_CRAWL_S=0`
       until someone opts in)
-- [ ] Champion stats v2 — widen the fact tables, honest pick/ban rates,
-      matchups, builds, per-player champion pools (#108, phases C1–C7 in
-      [the plan](docs/champion-stats-plan.md))
 - [ ] Obtain a Riot API key and run the live acceptance checks (#10)
 - [ ] Re-resolve tracked players after a key rotation (#13)
+- [ ] Analytics C6–C7: the multi-table `aggregate:analytics` job with bounded
+      recomputes and metrics (#114), and the polish pass — queue names, ETags,
+      the `analytics.updated` event (#115)
+- [ ] `docs/champion-stats-plan.md` does not exist. #108 and #113–#115 all cite
+      it as the design of record, down to section numbers (§7.4, §9.4, §13),
+      and the ladder and openapi rounds both have their plan doc committed —
+      this one never was, in the working tree or anywhere in the history. Three
+      open issues currently point at a spec nobody can read.
 
 ### Follow-ups from this round
 
@@ -185,3 +230,29 @@ missing. Phases refer to §15 of [the spec](docs/riot-proxy-spec.md).
 - [ ] `BULK_USAGE_CEILING` now defaults to 0.80 where §9.3 and Appendix A of
       the spec both say 75%. The spec is reproduced verbatim and was not
       edited; the deviation is deliberate and recorded in the README.
+
+### Follow-ups from the analytics review
+
+- [ ] `src/jobs/processors.ts` is ~1500 lines across five unrelated domains —
+      player polling, backfill, the ladder crawl state machine, the analytics
+      recomputes, and Data Dragon plus maintenance. #114 turns one aggregate
+      step into five inside it. Splitting it (`jobs/ladder/` for the crawl
+      machine, `jobs/analytics.ts` for the recomputes, `processors.ts` left as
+      polling and dispatch) is worth doing _before_ C6, but not while #120 has
+      the file open — the conflict would be total.
+- [ ] The analytics routes have no read-side cache; every request runs the
+      joins, and the 300 s `max-age` is the only thing between a polling
+      dashboard and Postgres. #113 specifies a Redis cache for the new
+      player-pool route — doing all four at once is cheaper than doing it
+      twice, and the key shape is already standard.
+- [ ] Route handlers are thinly covered: only eight test files use
+      `app.inject`, and `routes/admin.ts` and `routes/lol.ts` are the two
+      largest route files. Three of the #112 review findings were
+      handler-composition bugs — a wrong default, a denominator that changed
+      meaning, an unechoed filter — that the schema tests cannot see and a
+      couple of inject tests would have caught.
+- [ ] Mirror lane matchups are no longer stored at all (the review fix): they
+      were the one row shape whose `games` counted a match twice, and their win
+      rate is 50% by construction. If a mirror's _frequency_ turns out to be
+      wanted, it belongs in `champion_stats`, which already counts picks
+      honestly — not in a matchup row that has to mean two things at once.

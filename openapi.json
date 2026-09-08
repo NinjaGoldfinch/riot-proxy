@@ -827,7 +827,7 @@
             "minimum": 0,
             "maximum": 1,
             "type": "number",
-            "description": "This champion's games as a fraction of the slice's games"
+            "description": "This champion's games over the response's own `totalGames` — the games in the `champions`/`stats` array carrying it, not the slice. On the champion detail composite that array holds one champion, so `share` is a fraction of that champion alone and reaches 1. Use `pickRate` for a slice-relative number."
           },
           "pickRate": {
             "minimum": 0,
@@ -1446,6 +1446,115 @@
               "playerSubteamId": {
                 "type": "number"
               }
+            }
+          }
+        }
+      },
+      "PlayerChampionEntry": {
+        "type": "object",
+        "required": [
+          "championId",
+          "games",
+          "wins",
+          "winRate",
+          "lastPlayedAt"
+        ],
+        "properties": {
+          "championId": {
+            "type": "integer"
+          },
+          "championName": {
+            "type": "string"
+          },
+          "games": {
+            "type": "integer"
+          },
+          "wins": {
+            "type": "integer"
+          },
+          "winRate": {
+            "minimum": 0,
+            "maximum": 1,
+            "type": "number"
+          },
+          "avgKda": {
+            "minimum": 0,
+            "type": "number",
+            "description": "(kills + assists) / deaths, with deaths floored at 1 so a deathless run is finite"
+          },
+          "csPerMin": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "lastPlayedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "End of the most recent archived game on this champion. Null when none of them carries an end timestamp, which is a fact about the archive rather than about the player."
+          }
+        }
+      },
+      "PlayerChampions": {
+        "type": "object",
+        "required": [
+          "puuid",
+          "platform",
+          "queue",
+          "patch",
+          "archivedGames",
+          "champions"
+        ],
+        "properties": {
+          "puuid": {
+            "type": "string"
+          },
+          "platform": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Echoes the `platform` filter, matched against each match id’s own prefix. Null means every platform in the archive for this player."
+          },
+          "queue": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Echoes the `queue` filter (Riot’s numeric queue id). Null means every queue."
+          },
+          "patch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Echoes the `patch` filter. Null means every patch in the archive."
+          },
+          "archivedGames": {
+            "type": "integer",
+            "description": "Games summed across `champions` — how much archive this pool is built on."
+          },
+          "champions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlayerChampionEntry"
             }
           }
         }
@@ -4669,7 +4778,7 @@
         "tags": [
           "lol"
         ],
-        "description": "Both directions of every lane matchup this champion has archived data for. No tier dimension: sample sizes die fast enough per (champion, opponent, role) alone, and the two laners can sit in different tiers anyway.",
+        "description": "Every lane matchup this champion has archived data for. No tier dimension: sample sizes die fast enough per (champion, opponent, role) alone, and the two laners can sit in different tiers anyway. Mirror lanes are excluded — their win rate is 50% by construction. A matchup is recorded from the tracked ladder player’s side, so the opposite champion’s view of the same lane only exists when that player is tracked too, and the two directions can disagree.",
         "parameters": [
           {
             "schema": {
@@ -4707,8 +4816,7 @@
                 "JUNGLE",
                 "MIDDLE",
                 "BOTTOM",
-                "UTILITY",
-                ""
+                "UTILITY"
               ]
             },
             "in": "query",
@@ -4758,6 +4866,7 @@
                     "queue",
                     "patch",
                     "role",
+                    "computedAt",
                     "matchups"
                   ],
                   "properties": {
@@ -4793,7 +4902,19 @@
                           "type": "null"
                         }
                       ],
-                      "description": "Echoes the `role` filter; null when every lane this champion has is included"
+                      "description": "Echoes the `role` filter. Null means every lane is included — and `limit` then truncates across all of them together, most-played first, so a champion played in two lanes can fill the list from the busier one. Filter by role for a guaranteed view of one lane's matchups."
+                    },
+                    "computedAt": {
+                      "anyOf": [
+                        {
+                          "format": "date-time",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "When `champion_matchups` was last recomputed from the archive"
                     },
                     "matchups": {
                       "type": "array",
@@ -5029,8 +5150,12 @@
                     "championId",
                     "platform",
                     "queue",
+                    "tier",
                     "patch",
                     "role",
+                    "computedAt",
+                    "sectionsComputedAt",
+                    "totalGames",
                     "stats",
                     "matchups",
                     "items",
@@ -5049,6 +5174,17 @@
                     },
                     "queue": {
                       "type": "string"
+                    },
+                    "tier": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Echoes the `tier` filter, which applies to `stats` only — `champion_matchups` and the three build tables have no tier dimension, so `matchups`/`items`/`runes`/`spells` are all-tier whatever this says. Null when unfiltered."
                     },
                     "patch": {
                       "anyOf": [
@@ -5070,7 +5206,91 @@
                           "type": "null"
                         }
                       ],
-                      "description": "Null when every role is summed into one row per section"
+                      "description": "Echoes the `role` filter. Null sums every role into one row for `stats` and the three build sections, but `matchups` stays per-lane — see `sectionsComputedAt` and the matchups route for what `limit` then does to a two-lane champion's list."
+                    },
+                    "computedAt": {
+                      "anyOf": [
+                        {
+                          "format": "date-time",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "The oldest stamp across the sections below — the payload as a whole is only this fresh. Null when every section is empty."
+                    },
+                    "sectionsComputedAt": {
+                      "type": "object",
+                      "required": [
+                        "stats",
+                        "matchups",
+                        "items",
+                        "runes",
+                        "spells"
+                      ],
+                      "properties": {
+                        "stats": {
+                          "anyOf": [
+                            {
+                              "format": "date-time",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "matchups": {
+                          "anyOf": [
+                            {
+                              "format": "date-time",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "items": {
+                          "anyOf": [
+                            {
+                              "format": "date-time",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "runes": {
+                          "anyOf": [
+                            {
+                              "format": "date-time",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "spells": {
+                          "anyOf": [
+                            {
+                              "format": "date-time",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "description": "Per section, since each table is recomputed in its own transaction: a run that crashed part-way leaves one section behind the others, and this is what says so."
+                    },
+                    "totalGames": {
+                      "type": "integer",
+                      "description": "Games summed into `stats` — this champion's, and the denominator behind its `share`"
                     },
                     "stats": {
                       "type": "array",
@@ -6092,6 +6312,189 @@
             "lang": "JavaScript",
             "label": "Page a full history",
             "source": "// hasMore says a full page came back, so page on it rather than\n// guessing where a history ends. Matches are immutable and archived,\n// so every page after the first costs no Riot quota at all.\nconst all = [];\nlet start = 0;\n\nfor (;;) {\n  const res = await fetch(\n    `/v1/players/${puuid}/matches?platform=oc1&start=${start}&count=20`,\n    { headers: { Authorization: 'Bearer ' + KEY } },\n  );\n\n  if (res.status === 429) {\n    // Your own quota, not Riot's. Retry-After is the window.\n    await sleep(Number(res.headers.get('Retry-After') ?? 1) * 1000);\n    continue;\n  }\n\n  const page = await res.json();\n  all.push(...page.matches);\n\n  // The first lookup of a player queues their whole history.\n  if (page.backfill) console.log('archiving in the background:', page.backfill.jobId);\n\n  if (!page.hasMore) break;\n  start += page.count;\n}"
+          }
+        ]
+      }
+    },
+    "/v1/players/{puuid}/champions": {
+      "get": {
+        "summary": "A player's champion pool",
+        "tags": [
+          "players"
+        ],
+        "description": "Per champion: games, wins, win rate, average KDA, CS per minute and when it was last played — grouped at read time from the archive, most-played first. Never contacts Riot, so it costs no quota and cannot fail upstream; it only ever reports the games this deployment has archived for the player.",
+        "parameters": [
+          {
+            "schema": {
+              "$ref": "#/components/schemas/PlatformParam"
+            },
+            "in": "query",
+            "name": "platform",
+            "required": false
+          },
+          {
+            "schema": {
+              "minimum": 0,
+              "maximum": 5000,
+              "type": "integer"
+            },
+            "in": "query",
+            "name": "queue",
+            "required": false
+          },
+          {
+            "schema": {
+              "minLength": 3,
+              "maxLength": 8,
+              "pattern": "^[0-9]+\\.[0-9]+$",
+              "type": "string"
+            },
+            "in": "query",
+            "name": "patch",
+            "required": false,
+            "description": "`gameVersion` major.minor. Omitted spans every patch in the archive."
+          },
+          {
+            "schema": {
+              "minimum": 1,
+              "maximum": 500,
+              "default": 200,
+              "type": "integer"
+            },
+            "in": "query",
+            "name": "limit",
+            "required": false
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/PuuidParam"
+            },
+            "in": "path",
+            "name": "puuid",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlayerChampions"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "Unknown platform or region": {
+                    "summary": "Unknown platform or region",
+                    "value": {
+                      "error": {
+                        "code": "BAD_REGION",
+                        "message": "params/platform must be equal to one of the allowed values"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "Missing or unrecognised key": {
+                    "summary": "Missing or unrecognised key",
+                    "value": {
+                      "error": {
+                        "code": "UNAUTHORIZED",
+                        "message": "Missing or invalid consumer key"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "Key lacks the scope (or the admin IP allowlist rejected it)": {
+                    "summary": "Key lacks the scope (or the admin IP allowlist rejected it)",
+                    "value": {
+                      "error": {
+                        "code": "FORBIDDEN",
+                        "message": "This key does not carry the admin scope"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "No such resource": {
+                    "summary": "No such resource",
+                    "value": {
+                      "error": {
+                        "code": "NOT_FOUND",
+                        "message": "No account for that Riot ID"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "Your quota — slow down. Sent with Retry-After": {
+                    "summary": "Your quota — slow down. Sent with Retry-After",
+                    "value": {
+                      "error": {
+                        "code": "QUOTA_EXCEEDED",
+                        "message": "Quota of 600/min exceeded",
+                        "retryAfter": 37
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-badges": [
+          {
+            "name": "No upstream call"
           }
         ]
       }

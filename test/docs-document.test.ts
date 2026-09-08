@@ -65,6 +65,7 @@ const EXPECTED_OPERATIONS = [
   'GET /v1/lol/status/{platform}',
   'GET /v1/lol/summoners/by-puuid/{platform}/{puuid}',
   'GET /v1/players/by-riot-id/{gameName}/{tagLine}/profile',
+  'GET /v1/players/{puuid}/champions',
   'GET /v1/players/{puuid}/matches',
   'GET /v1/players/{puuid}/profile',
   'GET /v1/riot/accounts/by-puuid/{region}/{puuid}',
@@ -163,6 +164,8 @@ describe('shared components (#61)', () => {
       // document — a named schema is what lets the ws prose point at it.
       'MetricsSnapshot',
       'PlatformParam',
+      'PlayerChampionEntry',
+      'PlayerChampions',
       'ProfileBody',
       'PuuidParam',
       'RankedQueueParam',
@@ -501,6 +504,9 @@ describe('the document itself (#62)', () => {
     expect(badge('/v1/lol/matches/{region}/{matchId}')).toContain('Immutable · archived');
     expect(badge('/v1/static/versions')).toContain('No upstream call');
     expect(badge('/v1/players/{puuid}/matches')).toContain('Composite');
+    // Tagged `players`, but it reaches no further than Postgres — so it takes
+    // the mirror's badge rather than the fan-out's.
+    expect(badge('/v1/players/{puuid}/champions')).toEqual(['No upstream call']);
     expect(badge('/healthz')).toContain('Public · no key');
     expect(badge('/v1/admin/stats')).toContain('Admin scope');
   });

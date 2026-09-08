@@ -85,7 +85,7 @@ export function isPagedTier(value: string): value is PagedTier {
   return isTier(value) && !isApexTier(value);
 }
 
-export function isDivision(value: string): value is Division {
+function isDivision(value: string): value is Division {
   return DIVISION_SET.has(value.toUpperCase());
 }
 

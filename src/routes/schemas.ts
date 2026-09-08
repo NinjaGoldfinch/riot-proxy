@@ -114,6 +114,9 @@ export const MatchIdParamSchema = Type.String({
 });
 export const MatchIdParam = Type.Unsafe<string>({ $ref: 'MatchIdParam#' });
 
+/** An ISO-8601 timestamp column that the row may not have set yet. */
+const NullableTimestamp = Type.Union([Type.String({ format: 'date-time' }), Type.Null()]);
+
 /**
  * league-v4's ladder parameters. The two tier enums are deliberately not one:
  * the paged entries route 400s on an apex tier, so a schema that accepted
@@ -327,6 +330,92 @@ export const MatchPageResponse = Type.Unsafe<Static<typeof MatchPageResponseSche
 });
 
 /**
+ * One champion in a player's pool (#113).
+ *
+ * The averages are optional in the same way `ChampionStatEntry`'s are, and for
+ * the same reason: they need at least one participant row with the C2 facts
+ * swept. A player whose games are all pre-C2 and not yet re-extracted gets
+ * `games`, `wins` and `winRate` — which come from columns that always existed —
+ * and no averages, rather than zeroes that would read as "fed every game".
+ */
+export const PlayerChampionEntry = Type.Object(
+  {
+    championId: Type.Integer(),
+    championName: Type.Optional(Type.String()),
+    games: Type.Integer(),
+    wins: Type.Integer(),
+    winRate: Type.Number({ minimum: 0, maximum: 1 }),
+    avgKda: Type.Optional({
+      ...Type.Number({ minimum: 0 }),
+      description:
+        '(kills + assists) / deaths, with deaths floored at 1 so a deathless run is finite',
+    }),
+    csPerMin: Type.Optional(Type.Number({ minimum: 0 })),
+    lastPlayedAt: {
+      ...NullableTimestamp,
+      description:
+        'End of the most recent archived game on this champion. Null when none of them carries ' +
+        'an end timestamp, which is a fact about the archive rather than about the player.',
+    },
+  },
+  { $id: 'PlayerChampionEntry' },
+);
+
+/**
+ * A player's champion pool, computed from the archive at read time (#113).
+ *
+ * Everything here is the proxy's own document, and everything in it is a fact
+ * about *what has been archived* — not about what the player has played. A pool
+ * only counts games this deployment holds, so a player whose history has never
+ * been walked returns an honest empty list rather than a 404. `archivedGames`
+ * is the denominator that says how much evidence is behind it.
+ */
+export const PlayerChampionsResponseSchema = Type.Object(
+  {
+    puuid: Type.String(),
+    platform: {
+      ...Type.Union([Type.String(), Type.Null()]),
+      description:
+        'Echoes the `platform` filter, matched against each match id’s own prefix. Null means ' +
+        'every platform in the archive for this player.',
+    },
+    queue: {
+      ...Type.Union([Type.Integer(), Type.Null()]),
+      description: 'Echoes the `queue` filter (Riot’s numeric queue id). Null means every queue.',
+    },
+    patch: {
+      ...Type.Union([Type.String(), Type.Null()]),
+      description: 'Echoes the `patch` filter. Null means every patch in the archive.',
+    },
+    archivedGames: {
+      ...Type.Integer(),
+      description: 'Games summed across `champions` — how much archive this pool is built on.',
+    },
+    champions: Type.Array(
+      Type.Unsafe<Static<typeof PlayerChampionEntry>>({ $ref: 'PlayerChampionEntry#' }),
+    ),
+  },
+  { $id: 'PlayerChampions' },
+);
+export const PlayerChampionsResponse = Type.Unsafe<Static<typeof PlayerChampionsResponseSchema>>({
+  $ref: 'PlayerChampions#',
+});
+
+export const PlayerChampionsQuery = Type.Object({
+  platform: Type.Optional(PlatformParam),
+  queue: Type.Optional(Type.Integer({ minimum: 0, maximum: 5000 })),
+  patch: Type.Optional(
+    Type.String({
+      minLength: 3,
+      maxLength: 8,
+      pattern: '^[0-9]+\\.[0-9]+$',
+      description: '`gameVersion` major.minor. Omitted spans every patch in the archive.',
+    }),
+  ),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500, default: 200 })),
+});
+
+/**
  * §9 — `/v1/admin/limits/:scope` reports one bucket, and a bucket is keyed by
  * whichever host serves the endpoint: platform hosts for the game APIs, region
  * hosts for account-v1 and match-v5. So the param is the union of both, not a
@@ -340,9 +429,6 @@ export const ScopeParamSchema = Type.Unsafe<string>({
   description: 'A rate-limit bucket: either a platform host (`euw1`) or a region host (`europe`).',
 });
 export const ScopeParam = Type.Unsafe<string>({ $ref: 'ScopeParam#' });
-
-/** An ISO-8601 timestamp column that the row may not have set yet. */
-const NullableTimestamp = Type.Union([Type.String({ format: 'date-time' }), Type.Null()]);
 
 /**
  * The proxy's own payloads, not Riot's — so unlike the passthrough routes these
@@ -524,6 +610,13 @@ export const LadderCrawlStartedResponse = Type.Object({
 export const TEAM_POSITIONS = ['TOP', 'JUNGLE', 'MIDDLE', 'BOTTOM', 'UTILITY', ''] as const;
 
 /**
+ * The same list without `''` — the five real lanes. `champion_matchups` is
+ * built from a shared lane and never stores `''`, so accepting it there
+ * validates a request that is guaranteed to return nothing.
+ */
+export const LANE_POSITIONS = TEAM_POSITIONS.filter((p) => p !== '');
+
+/**
  * A champion's line in one slice of the aggregate (#111 widens this from L5's
  * four fields).
  *
@@ -531,7 +624,10 @@ export const TEAM_POSITIONS = ['TOP', 'JUNGLE', 'MIDDLE', 'BOTTOM', 'UTILITY', '
  * response, which is not the same question `pickRate` answers and is kept
  * only for compatibility — superseded by `pickRate`, which divides into the
  * slice's actual match count (`analytics_slices`) rather than into whatever
- * happened to be summed into this response.
+ * happened to be summed into this response. Every response carrying this entry
+ * also carries the `totalGames` it divided by, because "whatever was summed
+ * into this response" differs between the champion list (a whole slice) and
+ * the detail composite (one champion).
  *
  * `pickRate` and `banRate` are omitted, not zeroed, only when the *slice*
  * itself is unknown — `analytics_slices` has no row for this (tier, patch)
@@ -559,7 +655,11 @@ export const ChampionStatEntry = Type.Object(
     winRate: Type.Number({ minimum: 0, maximum: 1 }),
     share: {
       ...Type.Number({ minimum: 0, maximum: 1 }),
-      description: "This champion's games as a fraction of the slice's games",
+      description:
+        "This champion's games over the response's own `totalGames` — the games in " +
+        'the `champions`/`stats` array carrying it, not the slice. On the champion ' +
+        'detail composite that array holds one champion, so `share` is a fraction of ' +
+        'that champion alone and reaches 1. Use `pickRate` for a slice-relative number.',
     },
     pickRate: Type.Optional({
       ...Type.Number({ minimum: 0, maximum: 1 }),
@@ -649,6 +749,11 @@ const OptionalRoleParam = Type.Optional(
   Type.Unsafe<string>({ type: 'string', enum: [...TEAM_POSITIONS] }),
 );
 
+/** Lanes only — see `LANE_POSITIONS`. */
+const OptionalLaneParam = Type.Optional(
+  Type.Unsafe<string>({ type: 'string', enum: [...LANE_POSITIONS] }),
+);
+
 /**
  * One champion's record against one lane rival (#112). No `winRate` shortcut
  * on the stored row — `games`/`wins` are the facts, `winRate` is derived at
@@ -677,7 +782,15 @@ export const ChampionMatchupsResponse = Type.Object({
   },
   role: {
     ...Type.Union([Type.String(), Type.Null()]),
-    description: 'Echoes the `role` filter; null when every lane this champion has is included',
+    description:
+      'Echoes the `role` filter. Null means every lane is included — and `limit` then ' +
+      'truncates across all of them together, most-played first, so a champion played ' +
+      'in two lanes can fill the list from the busier one. Filter by role for a ' +
+      "guaranteed view of one lane's matchups.",
+  },
+  computedAt: {
+    ...NullableTimestamp,
+    description: 'When `champion_matchups` was last recomputed from the archive',
   },
   matchups: Type.Array(
     Type.Unsafe<Static<typeof ChampionMatchupEntry>>({ $ref: 'ChampionMatchupEntry#' }),
@@ -688,7 +801,7 @@ export const ChampionMatchupsQuery = Type.Object({
   platform: Type.Optional(PlatformParam),
   queue: Type.Optional(RankedQueueParam),
   patch: OptionalPatchParam,
-  role: OptionalRoleParam,
+  role: OptionalLaneParam,
   minGames: Type.Optional(Type.Integer({ minimum: 0 })),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200, default: 50 })),
 });
@@ -725,13 +838,46 @@ export const ChampionDetailResponse = Type.Object({
   championName: Type.Optional(Type.String()),
   platform: Type.String(),
   queue: Type.String(),
+  tier: {
+    ...Type.Union([Type.String(), Type.Null()]),
+    description:
+      'Echoes the `tier` filter, which applies to `stats` only — `champion_matchups` ' +
+      'and the three build tables have no tier dimension, so `matchups`/`items`/' +
+      '`runes`/`spells` are all-tier whatever this says. Null when unfiltered.',
+  },
   patch: {
     ...Type.Union([Type.String(), Type.Null()]),
     description: 'Null when nothing has been aggregated yet',
   },
   role: {
     ...Type.Union([Type.String(), Type.Null()]),
-    description: 'Null when every role is summed into one row per section',
+    description:
+      'Echoes the `role` filter. Null sums every role into one row for `stats` and the ' +
+      'three build sections, but `matchups` stays per-lane — see `sectionsComputedAt` ' +
+      "and the matchups route for what `limit` then does to a two-lane champion's list.",
+  },
+  computedAt: {
+    ...NullableTimestamp,
+    description:
+      'The oldest stamp across the sections below — the payload as a whole is only ' +
+      'this fresh. Null when every section is empty.',
+  },
+  sectionsComputedAt: {
+    ...Type.Object({
+      stats: NullableTimestamp,
+      matchups: NullableTimestamp,
+      items: NullableTimestamp,
+      runes: NullableTimestamp,
+      spells: NullableTimestamp,
+    }),
+    description:
+      'Per section, since each table is recomputed in its own transaction: a run that ' +
+      'crashed part-way leaves one section behind the others, and this is what says so.',
+  },
+  totalGames: {
+    ...Type.Integer(),
+    description:
+      "Games summed into `stats` — this champion's, and the denominator behind its `share`",
   },
   stats: Type.Array(Type.Unsafe<Static<typeof ChampionStatEntry>>({ $ref: 'ChampionStatEntry#' })),
   matchups: Type.Array(
@@ -918,5 +1064,7 @@ export const sharedSchemas = [
   BackfillNoticeSchema,
   ProfileResponseSchema,
   MatchPageResponseSchema,
+  PlayerChampionEntry,
+  PlayerChampionsResponseSchema,
   LadderCrawlSummary,
 ];

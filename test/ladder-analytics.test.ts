@@ -602,6 +602,31 @@ describe('champion_matchups and builds', () => {
     ]);
   });
 
+  it('stores no row for a mirror lane, which one match would fill from both sides', async ({
+    skip,
+  }) => {
+    if (!available) return skip();
+    await seedFacts('matchup-mirror', {
+      'chall-a': { championId: AHRI, win: true, teamId: 100, teamPosition: 'MIDDLE' },
+      'chall-b': { championId: AHRI, win: false, teamId: 200, teamPosition: 'MIDDLE' },
+    });
+    await ladder({ 'chall-a': 'CHALLENGER', 'chall-b': 'CHALLENGER' });
+    await recomputeChampionMatchups(PLATFORM, QUEUE);
+
+    // Both directions of a mirror land in the same (champion, opponent, role)
+    // group, so a stored row would report this one match as two games while
+    // every other row in the table counts a match once — and the win rate it
+    // doubled is 50% by construction anyway.
+    expect(
+      await listChampionMatchups({
+        platform: PLATFORM,
+        queue: QUEUE,
+        patch: '16.13',
+        championId: AHRI,
+      }),
+    ).toEqual([]);
+  });
+
   it('requires a shared, non-empty lane — no matchup across roles or off one', async ({ skip }) => {
     if (!available) return skip();
     // Same match, same two teams, but different lanes: never opposing laners.
@@ -724,7 +749,9 @@ describe('champion_matchups and builds', () => {
       patch: '16.13',
       championId: AHRI,
     });
-    expect(spells).toEqual([{ spellA: 4, spellB: 14, games: 2, wins: 2 }]);
+    expect(spells).toEqual([
+      { spellA: 4, spellB: 14, games: 2, wins: 2, computedAt: expect.any(Date) },
+    ]);
   });
 
   it('buckets runes by role, and sums every role when none is filtered', async ({ skip }) => {
@@ -756,7 +783,9 @@ describe('champion_matchups and builds', () => {
       patch: '16.13',
       championId: AHRI,
     });
-    expect(rolled).toEqual([{ keystoneId: 8214, subStyleId: 8100, games: 2, wins: 1 }]);
+    expect(rolled).toEqual([
+      { keystoneId: 8214, subStyleId: 8100, games: 2, wins: 1, computedAt: expect.any(Date) },
+    ]);
 
     const midOnly = await listChampionRunes({
       platform: PLATFORM,
@@ -765,7 +794,9 @@ describe('champion_matchups and builds', () => {
       championId: AHRI,
       role: 'MIDDLE',
     });
-    expect(midOnly).toEqual([{ keystoneId: 8214, subStyleId: 8100, games: 1, wins: 1 }]);
+    expect(midOnly).toEqual([
+      { keystoneId: 8214, subStyleId: 8100, games: 1, wins: 1, computedAt: expect.any(Date) },
+    ]);
   });
 });
 
@@ -812,6 +843,32 @@ describe('GET /v1/lol/analytics/champions/{championId}/matchups', () => {
     const res = await get(AHRI, '');
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ patch: null, matchups: [] });
+  });
+
+  it('rejects the empty role, which this table never stores', async ({ skip }) => {
+    if (!available || !app) return skip();
+    // `''` is a real `team_position` for ARAM and for unswept rows, so it is
+    // in the enum the build endpoints use — but a matchup needs a shared lane,
+    // so accepting it here would validate a request guaranteed to be empty.
+    expect((await get(AHRI, 'role=')).statusCode).toBe(400);
+    expect((await get(AHRI, 'role=MIDDLE')).statusCode).toBe(200);
+  });
+
+  it('says when the matchups it served were computed', async ({ skip }) => {
+    if (!available || !app) return skip();
+    await seedFacts('route-matchup-stamp', {
+      'chall-a': { championId: AHRI, win: true, teamId: 100, teamPosition: 'MIDDLE' },
+      'chall-b': { championId: GAREN, win: false, teamId: 200, teamPosition: 'MIDDLE' },
+    });
+    await ladder({ 'chall-a': 'CHALLENGER', 'chall-b': 'CHALLENGER' });
+    await recomputeChampionStats(PLATFORM, QUEUE);
+    await recomputeChampionMatchups(PLATFORM, QUEUE);
+
+    const body = (await get(AHRI, '')).json() as { computedAt: string | null };
+    // `champion_matchups` is recomputed in its own transaction, so a caller
+    // needs its stamp to tell a stale section from a fresh one.
+    expect(body.computedAt).toBeTruthy();
+    expect(Number.isNaN(Date.parse(body.computedAt ?? ''))).toBe(false);
   });
 });
 
@@ -875,6 +932,113 @@ describe('GET /v1/lol/analytics/champions/{championId}', () => {
       runes: [],
       spells: [],
     });
+  });
+
+  it('publishes the denominator its share divided by, and echoes the tier', async ({ skip }) => {
+    if (!available || !app) return skip();
+    await seedFacts('detail-share-1', {
+      'chall-a': { championId: AHRI, win: true, teamId: 100, teamPosition: 'MIDDLE' },
+    });
+    await seedFacts('detail-share-2', {
+      'chall-a': { championId: AHRI, win: false, teamId: 100, teamPosition: 'MIDDLE' },
+    });
+    await ladder({ 'chall-a': 'CHALLENGER' });
+    await recomputeChampionStats(PLATFORM, QUEUE);
+
+    const body = (await get(AHRI, 'tier=CHALLENGER')).json() as {
+      tier: string | null;
+      totalGames: number;
+      stats: { share: number; games: number }[];
+    };
+
+    // `share` here is a fraction of this champion's own games, not the
+    // slice's, because that is the row set the composite sums — which is only
+    // readable next to the `totalGames` it divided by.
+    expect(body.tier).toBe('CHALLENGER');
+    expect(body.totalGames).toBe(2);
+    expect(body.stats[0]?.share).toBe(1);
+  });
+
+  it('stamps each section separately, since each table recomputes on its own', async ({ skip }) => {
+    if (!available || !app) return skip();
+    await seedFacts('detail-stamp', {
+      'chall-a': {
+        championId: AHRI,
+        win: true,
+        teamId: 100,
+        teamPosition: 'MIDDLE',
+        item0: 3020,
+      },
+      'chall-b': { championId: GAREN, win: false, teamId: 200, teamPosition: 'MIDDLE' },
+    });
+    await ladder({ 'chall-a': 'CHALLENGER', 'chall-b': 'CHALLENGER' });
+    // Stats and matchups, but deliberately not builds — the shape a run that
+    // crashed between steps leaves behind, which is the case `computed_at`
+    // exists to make visible rather than serving it silently.
+    await recomputeChampionStats(PLATFORM, QUEUE);
+    await recomputeChampionMatchups(PLATFORM, QUEUE);
+
+    const body = (await get(AHRI)).json() as {
+      computedAt: string | null;
+      sectionsComputedAt: Record<string, string | null>;
+    };
+    expect(body.sectionsComputedAt.stats).toBeTruthy();
+    expect(body.sectionsComputedAt.matchups).toBeTruthy();
+    expect(body.sectionsComputedAt.items).toBeNull();
+    expect(body.sectionsComputedAt.runes).toBeNull();
+    // The payload is only as fresh as its stalest section that has any data.
+    expect(body.computedAt).toBe(
+      [body.sectionsComputedAt.stats, body.sectionsComputedAt.matchups]
+        .filter((s): s is string => s !== null)
+        .sort()[0],
+    );
+  });
+
+  it('applies minGames to every section, not only to stats', async ({ skip }) => {
+    if (!available || !app) return skip();
+    for (const n of [1, 2]) {
+      await seedFacts(`detail-min-${n}`, {
+        'chall-a': {
+          championId: AHRI,
+          win: true,
+          teamId: 100,
+          teamPosition: 'MIDDLE',
+          item0: 3020,
+          keystoneId: 8214,
+          subStyleId: 8100,
+          spell1: 4,
+          spell2: 14,
+        },
+        'chall-b': { championId: GAREN, win: false, teamId: 200, teamPosition: 'MIDDLE' },
+      });
+    }
+    await ladder({ 'chall-a': 'CHALLENGER', 'chall-b': 'CHALLENGER' });
+    await recomputeChampionStats(PLATFORM, QUEUE);
+    await recomputeChampionMatchups(PLATFORM, QUEUE);
+    await recomputeChampionBuilds(PLATFORM, QUEUE);
+
+    type Sections = {
+      stats: unknown[];
+      matchups: unknown[];
+      items: unknown[];
+      runes: unknown[];
+      spells: unknown[];
+    };
+    const kept = (await get(AHRI, 'minGames=2')).json() as Sections;
+    expect(kept.stats).toHaveLength(1);
+    expect(kept.matchups).toHaveLength(1);
+    expect(kept.items).toHaveLength(1);
+    expect(kept.runes).toHaveLength(1);
+    expect(kept.spells).toHaveLength(1);
+
+    // One game short of the floor drops the whole page, rather than the
+    // sections disagreeing about how much evidence is enough.
+    const dropped = (await get(AHRI, 'minGames=3')).json() as Sections;
+    expect(dropped.stats).toEqual([]);
+    expect(dropped.matchups).toEqual([]);
+    expect(dropped.items).toEqual([]);
+    expect(dropped.runes).toEqual([]);
+    expect(dropped.spells).toEqual([]);
   });
 });
 

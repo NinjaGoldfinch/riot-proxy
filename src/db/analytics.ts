@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, sql as raw } from 'drizzle-orm';
+import { and, desc, eq, gte, isNotNull, sql as raw } from 'drizzle-orm';
 import { KEY_SCOPE } from '../config.js';
 import { QUEUE_IDS, type RankedQueue, type Tier } from '../riot/ladder.js';
 import { db, sql } from './index.js';
@@ -10,6 +10,8 @@ import {
   championRunes,
   championSpells,
   championStats,
+  matchParticipants,
+  matches,
 } from './schema.js';
 
 /**
@@ -188,10 +190,22 @@ export interface RecomputeCountResult {
  * `computed_at` makes visible, and the next run converges (§9.1 of the plan).
  *
  * A self-join on `match_participants`, matched by `match_id` and lane
- * (`team_position`), opposite `team_id`. The join is symmetric — for any pair
- * it matches (A, B) it also matches (B, A) — so both directions are stored
- * without a second pass: `champion_id` is always "whose row this is",
- * `opponent_id` the lane rival.
+ * (`team_position`), opposite `team_id`: `champion_id` is always "whose row
+ * this is", `opponent_id` the lane rival.
+ *
+ * The join itself is symmetric, but only `a` is required to be on the tracked
+ * ladder (`le.puuid = a.puuid`), so both directions are stored only when both
+ * laners are. A tracked player against an untracked one produces their row and
+ * not its mirror — the same tracked-ladder scoping every aggregate here uses,
+ * and the reason `GET /champions/X/matchups` can disagree with the Y-side view
+ * of the same lane.
+ *
+ * Mirror lanes (`a.champion_id = b.champion_id`) are excluded rather than
+ * stored. Both directions of one match land in the same
+ * (champion, opponent, role) group, so a mirror row's `games` counted every
+ * match twice where every other row counts it once — and the win rate it
+ * doubled was 50% by construction anyway. `champion_stats` is where a
+ * champion's pick count lives; this table is only about who it was beaten by.
  *
  * `lane_counts` guards the one way a self-join like this silently lies:
  * Riot's own position inference is supposed to assign each `team_position`
@@ -208,17 +222,29 @@ export async function recomputeChampionMatchups(
 ): Promise<RecomputeCountResult> {
   const queueId = QUEUE_IDS[queue];
 
-  const inserted = await sql.begin(async (tx) => {
+  const rows = await sql.begin(async (tx) => {
     await tx`
       delete from champion_matchups
       where key_scope = ${KEY_SCOPE} and platform = ${platform} and queue = ${queue}
     `;
-    return tx<{ championId: number }[]>`
+    // No `returning`: postgres.js reports the affected-row count from the
+    // insert's command tag, and the alternative materialises patches × roles ×
+    // champion × opponent rows in the worker's heap to produce one integer.
+    const result = await tx`
       with lane_counts as (
-        select match_id, team_id, team_position, count(*) as n
-        from match_participants
-        where team_position is not null and team_position <> '' and team_id is not null
-        group by match_id, team_id, team_position
+        select mp.match_id, mp.team_id, mp.team_position, count(*) as n
+        from match_participants mp
+        -- Scoped to the matches the insert below can actually use. Without
+        -- this the guard groups the entire archive — every platform, queue
+        -- and patch — once per recompute, to answer a question only about
+        -- this ladder's matches. Restricting by match (not by participant)
+        -- keeps each lane's occupant count complete, which is the whole point
+        -- of the guard.
+        join matches m on m.match_id = mp.match_id
+        where mp.team_position is not null and mp.team_position <> '' and mp.team_id is not null
+          and m.queue_id = ${queueId}
+          and m.patch is not null
+        group by mp.match_id, mp.team_id, mp.team_position
       )
       insert into champion_matchups
         (key_scope, platform, queue, patch, role, champion_id, opponent_id, games, wins, computed_at)
@@ -250,6 +276,7 @@ export async function recomputeChampionMatchups(
        and le.queue = ${queue}
       where a.champion_id is not null
         and b.champion_id is not null
+        and a.champion_id <> b.champion_id
         and a.win is not null
         and a.team_position is not null
         and a.team_position <> ''
@@ -258,11 +285,11 @@ export async function recomputeChampionMatchups(
         and m.queue_id = ${queueId}
         and m.patch is not null
       group by 1, 2, 3, 4, 5, 6, 7
-      returning champion_id
     `;
+    return result.count;
   });
 
-  return { platform, queue, rows: inserted.length };
+  return { platform, queue, rows };
 }
 
 export interface RecomputeBuildsResult {
@@ -300,7 +327,12 @@ export async function recomputeChampionBuilds(
     // filled", the same convention every other count in this feature uses.
     // The trinket (item6) is never a build choice, so it is not in the array
     // to unnest.
-    return tx<{ championId: number }[]>`
+    //
+    // No `returning` here or in the two below, for the same reason as
+    // `recomputeChampionMatchups`: this is the widest table of the six
+    // (patches × champions × roles × distinct items) and the count is all the
+    // caller wants.
+    const result = await tx`
       insert into champion_items
         (key_scope, platform, queue, patch, champion_id, role, item_id, games, wins, computed_at)
       select
@@ -329,8 +361,8 @@ export async function recomputeChampionBuilds(
         and m.queue_id = ${queueId}
         and m.patch is not null
       group by 1, 2, 3, 4, 5, 6, 7
-      returning champion_id
     `;
+    return result.count;
   });
 
   const runes = await sql.begin(async (tx) => {
@@ -338,7 +370,7 @@ export async function recomputeChampionBuilds(
       delete from champion_runes
       where key_scope = ${KEY_SCOPE} and platform = ${platform} and queue = ${queue}
     `;
-    return tx<{ championId: number }[]>`
+    const result = await tx`
       insert into champion_runes
         (key_scope, platform, queue, patch, champion_id, role, keystone_id, sub_style_id,
          games, wins, computed_at)
@@ -368,8 +400,8 @@ export async function recomputeChampionBuilds(
         and m.queue_id = ${queueId}
         and m.patch is not null
       group by 1, 2, 3, 4, 5, 6, 7, 8
-      returning champion_id
     `;
+    return result.count;
   });
 
   const spells = await sql.begin(async (tx) => {
@@ -379,7 +411,7 @@ export async function recomputeChampionBuilds(
     `;
     // least/greatest normalise the pair's order, so the two summoner-spell
     // slots collapse to one row regardless of which slot each spell landed in.
-    return tx<{ championId: number }[]>`
+    const result = await tx`
       insert into champion_spells
         (key_scope, platform, queue, patch, champion_id, role, spell_a, spell_b,
          games, wins, computed_at)
@@ -409,11 +441,11 @@ export async function recomputeChampionBuilds(
         and m.queue_id = ${queueId}
         and m.patch is not null
       group by 1, 2, 3, 4, 5, 6, 7, 8
-      returning champion_id
     `;
+    return result.count;
   });
 
-  return { platform, queue, items: items.length, runes: runes.length, spells: spells.length };
+  return { platform, queue, items, runes, spells };
 }
 
 export interface ChampionStatsFilter {
@@ -551,9 +583,16 @@ export async function listAnalyticsSlices(
     .where(and(...where));
 }
 
-/** Same shape as `listAnalyticsSlices` — one lookup, every tier's ban counts. */
+/**
+ * Same shape as `listAnalyticsSlices` — one lookup, every tier's ban counts.
+ *
+ * `championId` narrows it to one champion's rows, which is what the detail
+ * composite wants: without it the composite reads every champion's ban row for
+ * the patch (~170 per tier, every tier when none is filtered) to look one
+ * entry up in the map it builds.
+ */
 export async function listChampionBans(
-  filter: AnalyticsSliceFilter,
+  filter: AnalyticsSliceFilter & { championId?: number },
 ): Promise<{ tier: string; championId: number; bans: number }[]> {
   const where = [
     eq(championBans.keyScope, KEY_SCOPE),
@@ -562,6 +601,7 @@ export async function listChampionBans(
     eq(championBans.patch, filter.patch),
   ];
   if (filter.tier) where.push(eq(championBans.tier, filter.tier));
+  if (filter.championId !== undefined) where.push(eq(championBans.championId, filter.championId));
 
   return db
     .select({
@@ -638,6 +678,15 @@ export interface ChampionBuildFilter {
 }
 
 /**
+ * Every build read carries the stamp of the rows it summed, for the same
+ * reason `listChampionStats` does: each of these tables is recomputed in its
+ * own transaction, so a crashed run leaves one section behind the others and
+ * `computed_at` is the only thing that says so. Grouped reads take `max()`,
+ * which is the whole group's stamp — a recompute replaces a table wholesale.
+ */
+type WithComputedAt<T> = T & { computedAt: Date };
+
+/**
  * A champion's most-held final items, most-played first (#112).
  *
  * Grouped and summed like `listChampionStats`, for the same reason: unlike a
@@ -647,7 +696,7 @@ export interface ChampionBuildFilter {
  */
 export async function listChampionItems(
   filter: ChampionBuildFilter,
-): Promise<{ itemId: number; games: number; wins: number }[]> {
+): Promise<WithComputedAt<{ itemId: number; games: number; wins: number }>[]> {
   const where = [
     eq(championItems.keyScope, KEY_SCOPE),
     eq(championItems.platform, filter.platform),
@@ -662,6 +711,7 @@ export async function listChampionItems(
       itemId: championItems.itemId,
       games: raw<number>`sum(${championItems.games})`.mapWith(Number),
       wins: raw<number>`sum(${championItems.wins})`.mapWith(Number),
+      computedAt: raw<string>`max(${championItems.computedAt})`.mapWith((v) => new Date(v)),
     })
     .from(championItems)
     .where(and(...where))
@@ -674,7 +724,9 @@ export async function listChampionItems(
 /** A champion's most-run keystone/sub-style pairs — see `listChampionItems`. */
 export async function listChampionRunes(
   filter: ChampionBuildFilter,
-): Promise<{ keystoneId: number; subStyleId: number; games: number; wins: number }[]> {
+): Promise<
+  WithComputedAt<{ keystoneId: number; subStyleId: number; games: number; wins: number }>[]
+> {
   const where = [
     eq(championRunes.keyScope, KEY_SCOPE),
     eq(championRunes.platform, filter.platform),
@@ -690,6 +742,7 @@ export async function listChampionRunes(
       subStyleId: championRunes.subStyleId,
       games: raw<number>`sum(${championRunes.games})`.mapWith(Number),
       wins: raw<number>`sum(${championRunes.wins})`.mapWith(Number),
+      computedAt: raw<string>`max(${championRunes.computedAt})`.mapWith((v) => new Date(v)),
     })
     .from(championRunes)
     .where(and(...where))
@@ -702,7 +755,7 @@ export async function listChampionRunes(
 /** A champion's most-run summoner spell pairs — see `listChampionItems`. */
 export async function listChampionSpells(
   filter: ChampionBuildFilter,
-): Promise<{ spellA: number; spellB: number; games: number; wins: number }[]> {
+): Promise<WithComputedAt<{ spellA: number; spellB: number; games: number; wins: number }>[]> {
   const where = [
     eq(championSpells.keyScope, KEY_SCOPE),
     eq(championSpells.platform, filter.platform),
@@ -718,6 +771,7 @@ export async function listChampionSpells(
       spellB: championSpells.spellB,
       games: raw<number>`sum(${championSpells.games})`.mapWith(Number),
       wins: raw<number>`sum(${championSpells.wins})`.mapWith(Number),
+      computedAt: raw<string>`max(${championSpells.computedAt})`.mapWith((v) => new Date(v)),
     })
     .from(championSpells)
     .where(and(...where))
@@ -725,4 +779,101 @@ export async function listChampionSpells(
     .having(gte(raw`sum(${championSpells.games})`, filter.minGames ?? 0))
     .orderBy(desc(raw`sum(${championSpells.games})`))
     .limit(filter.limit ?? 10);
+}
+
+export interface PlayerChampionFilter {
+  puuid: string;
+  /** Lowercase platform id; matched against the match id's own prefix. */
+  platform?: string;
+  /** Riot's numeric queue id (420, 440, 450…), as `/players/{puuid}/matches` takes it. */
+  queueId?: number;
+  patch?: string;
+  limit?: number;
+}
+
+export interface PlayerChampionRow {
+  championId: number;
+  games: number;
+  wins: number;
+  /** Rows with the C2 facts swept — the denominator for the averages, not a result. */
+  statedGames: number;
+  kills: number;
+  deaths: number;
+  assists: number;
+  cs: number;
+  /** Seconds, summed over swept rows only — see `recomputeChampionStats`. */
+  durationS: number;
+  /** `info.gameEndTimestamp` of the most recent game on this champion, epoch ms. */
+  lastPlayedAt: number | null;
+}
+
+/**
+ * One player's champion pool, computed at read time (#113).
+ *
+ * No table and no recompute behind this one, unlike everything above. A pool is
+ * a question about a single PUUID, `match_participants` is indexed on exactly
+ * that (`match_participants_puuid_idx`), and the answer is a few dozen rows —
+ * so precomputing it would mean a table per player, invalidated by every game
+ * any of them plays, to save a grouped read of their own rows. The route caches
+ * the document instead (`derivedKey`).
+ *
+ * Key-scoping is inherent rather than a column: `puuid` here is an encrypted id
+ * that only means anything under the key that produced it (§7.4), so a rotation
+ * strands these rows the same way it strands `players`, without
+ * `match_participants` carrying a `key_scope` it would otherwise need on every
+ * row of the largest table in the schema.
+ *
+ * Sums, not averages, for the same reason `champion_stats` stores them that
+ * way: every derived number is computed once at the edge, from denominators the
+ * caller can see. `statedGames` masks the averages so a pre-C2 row — archived
+ * before the facts existed and not yet swept by `facts:reextract` — lowers no
+ * average it never contributed to.
+ */
+export async function listPlayerChampions(
+  filter: PlayerChampionFilter,
+): Promise<PlayerChampionRow[]> {
+  const where = [
+    eq(matchParticipants.puuid, filter.puuid),
+    isNotNull(matchParticipants.championId),
+    isNotNull(matchParticipants.win),
+  ];
+  // Match ids carry the platform that hosted the game (`EUW1_7381937461`), so
+  // the archive can be narrowed to one platform without `match_participants`
+  // storing it — `starts_with` rather than `like`, which would need the
+  // separator escaped out of its own wildcard.
+  if (filter.platform) {
+    where.push(
+      raw`starts_with(${matchParticipants.matchId}, ${`${filter.platform.toUpperCase()}_`})`,
+    );
+  }
+  if (filter.queueId !== undefined) where.push(eq(matches.queueId, filter.queueId));
+  if (filter.patch) where.push(eq(matches.patch, filter.patch));
+
+  return db
+    .select({
+      championId: raw<number>`${matchParticipants.championId}`.mapWith(Number),
+      games: raw<number>`count(*)`.mapWith(Number),
+      wins: raw<number>`count(*) filter (where ${matchParticipants.win})`.mapWith(Number),
+      statedGames:
+        raw<number>`count(*) filter (where ${matchParticipants.kills} is not null)`.mapWith(Number),
+      kills: raw<number>`coalesce(sum(${matchParticipants.kills}), 0)`.mapWith(Number),
+      deaths: raw<number>`coalesce(sum(${matchParticipants.deaths}), 0)`.mapWith(Number),
+      assists: raw<number>`coalesce(sum(${matchParticipants.assists}), 0)`.mapWith(Number),
+      cs: raw<number>`coalesce(sum(${matchParticipants.cs}), 0)`.mapWith(Number),
+      durationS:
+        raw<number>`coalesce(sum(${matches.gameDuration}) filter (where ${matchParticipants.kills} is not null), 0)`.mapWith(
+          Number,
+        ),
+      // Null when every game on this champion predates the archive carrying an
+      // end timestamp, which is a real state and not a zero.
+      lastPlayedAt: raw<number | null>`max(${matches.gameEndTs})`.mapWith((v) =>
+        v === null ? null : Number(v),
+      ),
+    })
+    .from(matchParticipants)
+    .innerJoin(matches, eq(matches.matchId, matchParticipants.matchId))
+    .where(and(...where))
+    .groupBy(matchParticipants.championId)
+    .orderBy(desc(raw`count(*)`))
+    .limit(filter.limit ?? 200);
 }

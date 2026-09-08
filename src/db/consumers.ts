@@ -5,7 +5,7 @@ import { DEFAULT_QUOTA_PER_MIN } from '../quotas.js';
 import { db } from './index.js';
 import { consumers, type Consumer } from './schema.js';
 
-export function generateKey(): string {
+function generateKey(): string {
   // 24 random bytes → 32 base64url characters, no padding.
   return KEY_PREFIX + randomBytes(24).toString('base64url');
 }

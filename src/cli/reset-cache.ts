@@ -63,6 +63,11 @@ async function main(): Promise<void> {
     `c:${KEY_SCOPE}:*`,
     `neg:${KEY_SCOPE}:*`,
     `sf:c:${KEY_SCOPE}:*`,
+    // Derived reads (`derivedKey`) are computed from the archive, so a reset
+    // costs one recompute rather than a request — but they are still cached
+    // answers under this key scope, and leaving them behind would make
+    // `reset:cache` a half-truth.
+    `d:${KEY_SCOPE}:*`,
     // Announced interactive waiters are in-flight state, not learned limiter
     // config: they describe requests this process is serving right now, so a
     // reset should take them the way it takes the single-flight locks beside
