@@ -42,9 +42,14 @@ async function recentPatches(queueId: number): Promise<string[] | undefined> {
   if (limit === 0) return undefined;
 
   const rows = await db
-    .selectDistinct({ patch: matches.patch })
+    .select({ patch: matches.patch })
     .from(matches)
     .where(and(eq(matches.queueId, queueId), isNotNull(matches.patch)))
+    // `group by`, not `select distinct`: Postgres requires a DISTINCT query's
+    // ORDER BY expressions to appear in its select list, and these are
+    // `split_part` casts that have no business in the result. Same shape
+    // `latestPatch` uses, for the same reason.
+    .groupBy(matches.patch)
     .orderBy(
       desc(raw`split_part(${matches.patch}, '.', 1)::int`),
       desc(raw`split_part(${matches.patch}, '.', 2)::int`),
