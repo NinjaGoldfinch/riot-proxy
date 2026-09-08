@@ -163,7 +163,7 @@ vi.mock('../src/jobs/queues.js', async (importOriginal) => {
   };
 });
 
-const { startCrawl, ladderApex, ladderWalk } = await import('../src/jobs/processors.js');
+const { startCrawl, ladderApex, ladderWalk } = await import('../src/jobs/ladder-crawl.js');
 const { JOB, LADDER_PRIORITY, ladderLegId } = await import('../src/jobs/queues.js');
 const { getCursor, setCursor, pendingLegs, trackLegs } =
   await import('../src/jobs/ladder-state.js');

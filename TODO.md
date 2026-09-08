@@ -233,13 +233,12 @@ phases C1–C7). C1–C4 landed; C5–C7 are still open below.
 
 ### Follow-ups from the analytics review
 
-- [ ] `src/jobs/processors.ts` is ~1500 lines across five unrelated domains —
-      player polling, backfill, the ladder crawl state machine, the analytics
-      recomputes, and Data Dragon plus maintenance. #114 turns one aggregate
-      step into five inside it. Splitting it (`jobs/ladder/` for the crawl
-      machine, `jobs/analytics.ts` for the recomputes, `processors.ts` left as
-      polling and dispatch) is worth doing _before_ C6, but not while #120 has
-      the file open — the conflict would be total.
+- [x] `src/jobs/processors.ts` was ~1500 lines across five unrelated domains.
+      Split once #120 landed and before #114 adds to it: `ladder-crawl.ts` for
+      the crawl state machine, `analytics.ts` for the archive recomputes,
+      `player-names.ts` for the name backfill, and `match-walk.ts` for the
+      id-paging helper two of them share. `processors.ts` keeps the per-player
+      jobs and `dispatch`, at 500 lines (#122)
 - [ ] The analytics routes have no read-side cache; every request runs the
       joins, and the 300 s `max-age` is the only thing between a polling
       dashboard and Postgres. #113 specifies a Redis cache for the new
