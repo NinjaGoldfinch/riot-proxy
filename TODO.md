@@ -141,6 +141,13 @@ phases C1–C7). C1–C4 landed; C5–C7 are still open below.
       quietly standing in for a pick rate it never measured (#111)
 - [x] Lane matchups and the item/rune/spell frequency tables, plus a champion
       detail composite that answers a champion page in one call (#112)
+- [x] `GET /v1/players/{puuid}/champions` — a player's champion pool, grouped
+      out of `match_participants` at read time on the puuid index. No table and
+      no recompute: precomputing a pool would mean a table per player,
+      invalidated by every game any of them plays, to save a grouped read of
+      their own rows. Cached 300 s under a key-scoped `derivedKey`, and
+      deliberately outside `proxy_cache_reads_total`, which is about reads that
+      would otherwise have cost Riot quota (#113)
 - [x] Review pass over #112: the detail composite defaulted `minGames` to `0`
       where the list route uses `AGGREGATE_MIN_GAMES`, so a champion page could
       publish a one-game 100% win rate the champion list correctly hid; `share`
@@ -166,9 +173,9 @@ phases C1–C7). C1–C4 landed; C5–C7 are still open below.
       until someone opts in)
 - [ ] Obtain a Riot API key and run the live acceptance checks (#10)
 - [ ] Re-resolve tracked players after a key rotation (#13)
-- [ ] Analytics C5–C7: a player's champion pool (#113), the multi-table
-      `aggregate:analytics` job with bounded recomputes and metrics (#114), and
-      the polish pass — queue names, ETags, the `analytics.updated` event (#115)
+- [ ] Analytics C6–C7: the multi-table `aggregate:analytics` job with bounded
+      recomputes and metrics (#114), and the polish pass — queue names, ETags,
+      the `analytics.updated` event (#115)
 - [ ] `docs/champion-stats-plan.md` does not exist. #108 and #113–#115 all cite
       it as the design of record, down to section numbers (§7.4, §9.4, §13),
       and the ladder and openapi rounds both have their plan doc committed —
