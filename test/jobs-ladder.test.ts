@@ -135,6 +135,12 @@ vi.mock('../src/events/index.js', async (importOriginal) => {
 /** Aggregation jobs a completed crawl queued. */
 const aggregates: Record<string, unknown>[] = [];
 
+/**
+ * Name backfills a finished crawl queued. Kept apart from `aggregates` because
+ * the two are queued on either side of the clean-run guard, deliberately.
+ */
+const nameBackfills: string[] = [];
+
 /** Jobs the fan-out added, in the order it added them. */
 const added: { name: string; data: Record<string, unknown>; opts: Record<string, unknown> }[] = [];
 vi.mock('../src/jobs/queues.js', async (importOriginal) => {
@@ -148,8 +154,9 @@ vi.mock('../src/jobs/queues.js', async (importOriginal) => {
       },
     },
     maintenanceQueue: {
-      add: async (_name: string, data: Record<string, unknown>) => {
-        aggregates.push(data);
+      add: async (name: string, data: Record<string, unknown>) => {
+        if (name === actual.JOB.namesBackfill) nameBackfills.push(name);
+        else aggregates.push(data);
         return {};
       },
     },
@@ -192,6 +199,7 @@ beforeEach(() => {
   crawlRow = { ...baseCrawl };
   published.length = 0;
   aggregates.length = 0;
+  nameBackfills.length = 0;
   createResult = { created: true };
   (redis as unknown as { reset: () => void }).reset();
 });
@@ -493,6 +501,9 @@ describe('completion', () => {
 
     // The archive only becomes readable once something reads it.
     expect(aggregates).toEqual([{ platform: 'euw1', queue: 'RANKED_SOLO_5x5' }]);
+    // And the PUUIDs it discovered get names out of the matches it just
+    // archived, rather than a request each to `account-v1`.
+    expect(nameBackfills).toHaveLength(1);
   });
 
   it('says nothing, and aggregates nothing, for a crawl that gave up', async () => {
@@ -519,6 +530,10 @@ describe('completion', () => {
     expect(finished).toEqual([{ id: CRAWL_ID, status: 'failed' }]);
     expect(published).toHaveLength(0);
     expect(aggregates).toHaveLength(0);
+    // The names, though, still get read. An aggregate over half a ladder is a
+    // wrong number wearing a right one's clothes; a name out of a match that
+    // did land is simply correct, and a crawl that gave up archived those.
+    expect(nameBackfills).toHaveLength(1);
   });
 
   it("clears the crawl's cursors on the way out", async () => {

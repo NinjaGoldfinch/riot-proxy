@@ -74,6 +74,10 @@ async function scheduleRepeatables(): Promise<void> {
     { queue: pollQueue, name: JOB.pollRankTick, everySeconds: config.TRACK_POLL_RANK_S },
     { queue: pollQueue, name: JOB.pollMatchesTick, everySeconds: config.TRACK_POLL_MATCH_S },
     { queue: ddragonQueue, name: JOB.ddragonSync, everySeconds: config.DDRAGON_SYNC_S },
+    // Daily, because the crawl already queues one of these when it finishes.
+    // This is for the matches that arrive by every other route — a lookup
+    // walk, a tracked player's poll — which name players nothing else will.
+    { queue: maintenanceQueue, name: JOB.namesBackfill, everySeconds: 86_400 },
     { queue: maintenanceQueue, name: JOB.maintenance, everySeconds: 86_400 },
   ];
 

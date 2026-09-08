@@ -181,13 +181,31 @@ export async function countMatchIds(crawlId: string): Promise<number> {
  * the two re-reads a batch it has already queued, which BullMQ de-duplicates
  * on the job id, while a pop would silently drop the matches instead.
  *
- * Scanned from the start each time rather than carrying a cursor: the caller
- * shrinks the set as it goes, so cursor 0 always lands on work that is left,
- * and a cursor kept across removals is the one thing SSCAN does not promise.
+ * Scanned from the start each time rather than carrying a cursor across calls:
+ * the caller shrinks the set as it goes, so cursor 0 always lands on work that
+ * is left, and a cursor kept across removals is the one thing SSCAN does not
+ * promise.
+ *
+ * Within one call, though, the cursor must be followed until it wraps. A
+ * single SSCAN iteration visits a bounded number of buckets and may return
+ * *nothing* while the set still holds thousands — draining from the front
+ * empties the buckets the scan visits first, and once the drained prefix
+ * outgrows one iteration's bucket budget, every fresh scan starts with an
+ * empty batch. Reading that batch as "set empty" once cost a crawl 2,600 of
+ * its 3,409 matches; only a cursor that has wrapped to 0 means empty.
  */
 export async function peekMatchIds(crawlId: string, count: number): Promise<string[]> {
-  const [, members] = await redis.sscan(matchesKey(crawlId), '0', 'COUNT', count);
-  return members.slice(0, count);
+  const key = matchesKey(crawlId);
+  const found: string[] = [];
+  let cursor = '0';
+
+  do {
+    const [next, members] = await redis.sscan(key, cursor, 'COUNT', count);
+    cursor = next;
+    found.push(...members);
+  } while (cursor !== '0' && found.length < count);
+
+  return found.slice(0, count);
 }
 
 /** A batch is queued and no longer outstanding. */

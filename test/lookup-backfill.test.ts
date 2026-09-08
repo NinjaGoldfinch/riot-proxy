@@ -132,7 +132,10 @@ beforeEach(async () => {
   replies.set('match.idsByPuuid', ['OC1_1', 'OC1_2']);
   replies.set('match.byId', { metadata: { matchId: 'OC1_1' } });
   if (available) {
-    const keys = await redis.keys(`refresh:${config.KEY_SCOPE}:*`);
+    // Scoped to this file's own PUUID: `refresh:*` is shared with every other
+    // suite running against the same Redis, and a wider wipe here can delete
+    // another file's in-flight claim out from under it.
+    const keys = await redis.keys(`refresh:${config.KEY_SCOPE}:*:${PUUID}`);
     if (keys.length) await redis.del(...keys);
   }
 });

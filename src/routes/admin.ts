@@ -13,7 +13,13 @@ import { getCrawl, finishCrawl, listCrawls } from '../db/ladder.js';
 import { RANKED_QUEUES, TIERS, assertRankedQueue } from '../riot/ladder.js';
 import { countArchivedMatches } from '../db/matches.js';
 import type { LadderCrawl } from '../db/schema.js';
-import { countTrackedPlayers, listPlayers, setTracked, upsertPlayer } from '../db/players.js';
+import {
+  countTrackedPlayers,
+  countUnnamedPlayers,
+  listPlayers,
+  setTracked,
+  upsertPlayer,
+} from '../db/players.js';
 import { ProxyError } from '../errors.js';
 import { fetcher } from '../fetcher.js';
 import { logger } from '../logger.js';
@@ -25,7 +31,12 @@ import {
   platformToAccountRegion,
 } from '../riot/routing.js';
 import { clearCrawlState, pendingLegs } from '../jobs/ladder-state.js';
-import { enqueueChampionAggregate, enqueueFactsReextract, startCrawl } from '../jobs/processors.js';
+import {
+  enqueueChampionAggregate,
+  enqueueFactsReextract,
+  enqueueNameBackfill,
+  startCrawl,
+} from '../jobs/processors.js';
 import {
   JOB,
   enqueueBackfill,
@@ -325,7 +336,6 @@ const adminRoutes: FastifyPluginAsync = async (fastify) => {
         platform: config.DEFAULT_PLATFORM,
         queue: config.ladderQueues[0] ?? 'RANKED_SOLO_5x5',
         tierFloor: config.ladderTierFloor,
-        backfillTierFloor: config.ladderBackfillTierFloor,
         backfillLimit: config.LADDER_BACKFILL_LIMIT,
       },
     }),
@@ -423,6 +433,37 @@ const adminRoutes: FastifyPluginAsync = async (fastify) => {
       // 202 for the same reason the crawl trigger is: the answer is "it is
       // queued", and the table scan behind it runs on the worker.
       return reply.code(202).send({ ok: true, platform, queue });
+    },
+  );
+
+  /**
+   * Put Riot IDs on the PUUIDs already in `players`, read out of the archive.
+   *
+   * Costs no quota — the names come from `matches.data`, which the archive is
+   * storing anyway — so this is safe to fire at any time. A crawl queues one
+   * when it finishes and a repeatable runs one daily; this is for the
+   * impatient, and for filling in an archive that grew before the pass
+   * existed. `unnamed` is the count before the queued pass runs, so it is what
+   * there is to do rather than what is left.
+   */
+  fastify.post(
+    '/v1/admin/players/names/backfill',
+    {
+      ...adminScope,
+      schema: {
+        tags: ['admin'],
+        summary: 'Fill in player Riot IDs from the archive',
+        description:
+          "Reads `riotIdGameName`/`riotIdTagline` out of each nameless player's most recent " +
+          'archived matches. No upstream request is made, and a player who already has a name ' +
+          'is left alone — a Riot ID from `account-v1` outranks one from a past game.',
+        response: { 202: PassthroughResponse, ...localErrors },
+      },
+    },
+    async (_request, reply) => {
+      const unnamed = await countUnnamedPlayers();
+      await enqueueNameBackfill();
+      return reply.code(202).send({ ok: true, unnamed });
     },
   );
 

@@ -1307,7 +1307,7 @@
         note(
           'crawlHint',
           d.backfillLimit > 0
-            ? `Match histories are walked for ${d.backfillTierFloor} and above, ` +
+            ? `Match histories are walked for every player the crawl enumerates, ` +
                 `${fmt(d.backfillLimit)} matches per player — every id first, then the ` +
                 `matches, so a game shared by ten players is fetched once.`
             : 'Match histories are not walked (LADDER_BACKFILL_LIMIT=0): the ladder lands, ' +

@@ -106,8 +106,11 @@ beforeEach(async () => {
   archivedMatches = new Map();
   replies = new Map();
   if (available) {
-    // Each test starts with the refresh window open.
-    const keys = await redis.keys(`refresh:${config.KEY_SCOPE}:*`);
+    // Each test starts with the refresh window open. Scoped to this file's
+    // own PUUID: `refresh:*` is shared with every other suite running
+    // against the same Redis, and a wider wipe can delete another file's
+    // in-flight claim out from under it.
+    const keys = await redis.keys(`refresh:${config.KEY_SCOPE}:*:${PUUID}`);
     if (keys.length) await redis.del(...keys);
   }
 });
