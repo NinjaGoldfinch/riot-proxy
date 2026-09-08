@@ -7,7 +7,7 @@ import { JOB, jobKey, maintenanceQueue } from './queues.js';
  * back out of matches the archive already holds.
  *
  * Its own file since #122. It sits on the `maintenance` queue beside
- * `aggregate:champions` for the same reason that one does — it reads tables
+ * `aggregate:analytics` for the same reason that one does — it reads tables
  * and touches Riot not at all — but "what a player is called" is not an
  * analytics question, and the two share no code.
  */
@@ -15,7 +15,7 @@ import { JOB, jobKey, maintenanceQueue } from './queues.js';
 /**
  * Put Riot IDs on the PUUIDs a crawl discovered, out of the archive.
  *
- * On the `maintenance` queue beside `aggregate:champions` and for the same
+ * On the `maintenance` queue beside `aggregate:analytics` and for the same
  * reason: it reads tables and touches Riot not at all, so it has no business
  * holding up the ladder queue — and a crawl should be free to finish, and free
  * that ladder for the next run, without waiting on a scan.
@@ -36,7 +36,7 @@ export async function backfillNames(): Promise<{ named: number; unnamed: number 
 
 /**
  * Queue one pass. Lifecycle-scoped de-duplication for the same reason as
- * `enqueueChampionAggregate`: a stable `jobId` is matched against retained
+ * `enqueueAnalyticsRecompute`: a stable `jobId` is matched against retained
  * finished jobs too, so it would silence every pass after the first for the
  * length of the retention window (#18). Dropping a pass that has not run yet
  * costs nothing — the one that replaces it reads the same tables.

@@ -35,7 +35,7 @@ import {
   type LadderWalkJob,
   type PollPlayerJob,
 } from './queues.js';
-import { aggregateChampions, factsReextract, type AggregateChampionsJob } from './analytics.js';
+import { aggregateAnalytics, factsReextract, type AggregateAnalyticsJob } from './analytics.js';
 import {
   ladderApex,
   ladderArchive,
@@ -479,8 +479,8 @@ export async function dispatch(job: Job): Promise<unknown> {
       case JOB.ladderArchive:
         result = await ladderArchive(job as Job<LadderArchiveJob>);
         break;
-      case JOB.aggregateChampions:
-        result = await aggregateChampions(job as Job<AggregateChampionsJob>);
+      case JOB.aggregateAnalytics:
+        result = await aggregateAnalytics(job as Job<AggregateAnalyticsJob>);
         break;
       case JOB.factsReextract:
         result = await factsReextract(job);

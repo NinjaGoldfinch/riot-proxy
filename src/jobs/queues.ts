@@ -60,7 +60,9 @@ export const JOB = {
   ladderWalk: 'ladder:walk',
   ladderCollect: 'ladder:collect',
   ladderArchive: 'ladder:archive',
-  aggregateChampions: 'aggregate:champions',
+  /** Renamed from `aggregate:champions` in #114: it has recomputed more than
+   * champions since #112, and C6 made it the one job that rebuilds them all. */
+  aggregateAnalytics: 'aggregate:analytics',
   namesBackfill: 'names:backfill',
   factsReextract: 'facts:reextract',
   maintenance: 'maintenance',
@@ -355,6 +357,58 @@ function record(data: BackfillPlayerJob, result: BackfillEnqueueResult): Backfil
  * them: a scheduler upserted by a previous boot lives in Redis and would keep
  * firing against a config that says it should not.
  */
+/**
+ * The unprompted analytics recompute, one schedule per ladder (#114).
+ *
+ * Mirrors `scheduleLadderCrawls` below, including the part that matters most:
+ * when the interval is `0` the existing schedulers are *removed*, not merely
+ * skipped. A scheduler outlives the process that created it, so a deployment
+ * that turns the knob off and restarts would otherwise keep recomputing on the
+ * old cadence with nothing in its config to explain why.
+ *
+ * Scoped to `LADDER_PLATFORMS` × `LADDER_QUEUES` even though a recompute never
+ * crawls: those are the ladders this deployment has decided it is about, and a
+ * recompute for a (platform, queue) nothing archives is a scan that can only
+ * ever produce zero rows.
+ */
+export async function scheduleAnalyticsRecomputes(): Promise<void> {
+  const wanted = config.ladderPlatforms.flatMap((platform) =>
+    config.ladderQueues.map((queue) => ({
+      schedulerId: jobKey(JOB.aggregateAnalytics, platform, queue),
+      data: { platform, queue },
+    })),
+  );
+
+  if (config.AGGREGATE_INTERVAL_S === 0) {
+    for (const { schedulerId } of wanted) {
+      const removed = await maintenanceQueue.removeJobScheduler(schedulerId);
+      if (removed) {
+        logger.info(
+          { schedulerId },
+          'analytics recompute schedule removed (AGGREGATE_INTERVAL_S=0)',
+        );
+      }
+    }
+    return;
+  }
+
+  for (const { schedulerId, data } of wanted) {
+    await maintenanceQueue.upsertJobScheduler(
+      schedulerId,
+      { every: config.AGGREGATE_INTERVAL_S * 1000 },
+      {
+        name: JOB.aggregateAnalytics,
+        data,
+        opts: { removeOnComplete: { age: 3600, count: 100 } },
+      },
+    );
+    logger.info(
+      { ...data, everySeconds: config.AGGREGATE_INTERVAL_S },
+      'analytics recompute scheduled',
+    );
+  }
+}
+
 export async function scheduleLadderCrawls(): Promise<void> {
   const wanted = config.ladderPlatforms.flatMap((platform) =>
     config.ladderQueues.map((queue) => ({

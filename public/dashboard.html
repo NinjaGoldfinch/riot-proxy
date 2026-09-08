@@ -736,6 +736,14 @@
             <div class="scroll"><table id="ladderHistory"></table></div>
           </div>
         </section>
+        <section>
+          <div class="panel">
+            <h2>Analytics recompute</h2>
+            <p class="meta" id="analyticsMeta">loading…</p>
+            <div class="scroll"><table id="analyticsRuns"></table></div>
+            <div id="analyticsTop"></div>
+          </div>
+        </section>
       </div>
 
       <!-- ── limiter ──────────────────────────────────────────────────────── -->
@@ -1156,6 +1164,70 @@
         $('ladderLast').innerHTML = ladder.lastCompleted
           ? crawlCard(ladder.lastCompleted)
           : '<p class="empty">No crawl has finished yet.</p>';
+      }
+
+      /**
+       * The analytics recompute (#114), on the ladder tab because a crawl is
+       * what triggers one.
+       *
+       * Per-step seconds rather than a single duration: the champion step scans
+       * `match_participants` once and the builds step unnests six item columns
+       * out of it, so "the recompute got slow" is not actionable until it says
+       * which step did. A failed run still lists the steps that finished, which
+       * is how far it got — and, since each step commits its own tables, which
+       * of them are now behind the others.
+       */
+      function renderAnalytics(snap) {
+        const analytics = snap.analytics;
+        if (!analytics) return; // an older api instance
+        const runs = analytics.lastRuns;
+
+        if (runs.length === 0) {
+          $('analyticsMeta').textContent =
+            'No recompute has run yet. One is queued when a crawl finishes, or set AGGREGATE_INTERVAL_S.';
+          $('analyticsRuns').innerHTML = '';
+          $('analyticsTop').innerHTML = '';
+          return;
+        }
+
+        const newest = runs[0];
+        $('analyticsMeta').textContent =
+          `${runs.length} ladder(s) aggregated · last ${relTime(newest.at)}` +
+          (newest.status === 'failed' ? ' · last run FAILED part way' : '');
+
+        const head =
+          '<tr><th>ladder</th><th>when</th><th>steps (s)</th><th>rows</th><th>games</th></tr>';
+        $('analyticsRuns').innerHTML =
+          head +
+          runs
+            .map((run) => {
+              const steps = Object.entries(run.steps)
+                .map(([name, seconds]) => `${name} ${seconds.toFixed(1)}`)
+                .join(' · ');
+              const rows = Object.values(run.rows).reduce((a, b) => a + b, 0);
+              return (
+                `<tr><td>${esc(run.platform)} ${esc(run.queue)}</td>` +
+                `<td>${relTime(run.at)}${run.status === 'failed' ? ' <span class="badge">failed</span>' : ''}</td>` +
+                `<td class="mono">${esc(steps) || '—'}</td>` +
+                `<td>${fmt(rows)}</td><td>${fmt(run.games)}</td></tr>`
+              );
+            })
+            .join('');
+
+        // A sanity read, not an analytics answer: if the newest patch's most
+        // played champions look like League, the recompute produced something.
+        const top = analytics.topChampions;
+        $('analyticsTop').innerHTML = top.length
+          ? '<p class="meta">Most played, newest patch: ' +
+            top
+              .map(
+                (c) =>
+                  `${esc(c.championName ?? String(c.championId))} ${fmt(c.games)}g ` +
+                  `${Math.round(c.winRate * 100)}%`,
+              )
+              .join(' · ') +
+            '</p>'
+          : '';
       }
 
       /**
@@ -1656,6 +1728,7 @@
         renderQueues(snap);
         renderFlows(snap);
         renderLadder(snap);
+        renderAnalytics(snap);
         renderLimiter(snap);
         $('scope').textContent = 'key scope ' + esc(snap.keyScope);
         prev = snap;

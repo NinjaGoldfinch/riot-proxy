@@ -173,6 +173,67 @@ export const ladderCrawlDuration = new Histogram({
   registers: [registry],
 });
 
+/**
+ * The analytics recompute (#114). §13 asks for runs, per-step duration and
+ * rows, and the three answer different questions: whether the job is running
+ * at all, which step is the one that got slow, and whether it produced
+ * anything.
+ *
+ * `proxy_jobs_total{job="aggregate:analytics"}` already counts jobs, so this
+ * pair is not that: `status` here distinguishes a run that completed from one
+ * that failed *part way*, which is the state the per-step transactions
+ * deliberately allow and the one an operator needs to see.
+ */
+export const aggregateRunsTotal = new Counter({
+  name: 'proxy_aggregate_runs_total',
+  help: 'Analytics recomputes, by outcome',
+  labelNames: ['platform', 'queue', 'status'] as const,
+  registers: [registry],
+});
+
+/**
+ * Per step, because the steps have genuinely different costs — the champion
+ * step scans `match_participants` once, the builds step unnests six item
+ * columns out of it — and "the recompute got slow" is not an actionable
+ * statement until it says which part did.
+ *
+ * Buckets run to twenty minutes: §9.4 of the plan sets the revisit trigger at
+ * roughly five minutes for one bounded recompute, so the interesting range is
+ * on both sides of that, and a default histogram would top out at ten seconds
+ * and put every real run in the overflow bucket.
+ */
+export const aggregateStepDuration = new Histogram({
+  name: 'proxy_aggregate_duration_seconds',
+  help: 'Wall-clock time of one step of an analytics recompute',
+  labelNames: ['platform', 'queue', 'step'] as const,
+  buckets: [1, 5, 15, 30, 60, 120, 300, 600, 1200],
+  registers: [registry],
+});
+
+/**
+ * A gauge, not a counter: "how many rows does this table hold for this ladder"
+ * is a level, and a recompute replaces the table wholesale rather than adding
+ * to it. Summing it over time would describe nothing.
+ */
+export const aggregateRows = new Gauge({
+  name: 'proxy_aggregate_rows',
+  help: 'Rows written by the last analytics recompute, by table',
+  labelNames: ['platform', 'queue', 'table'] as const,
+  registers: [registry],
+});
+
+/**
+ * How far the one-off archive sweep has got (#110), as a fraction. It exists
+ * because `facts:reextract` is the slowest job in the service and the only one
+ * whose progress nothing else reveals — the aggregates it feeds look merely
+ * thin while it runs, rather than incomplete.
+ */
+export const factsReextractProgress = new Gauge({
+  name: 'proxy_facts_reextract_progress',
+  help: 'Fraction of the archive the fact re-extraction has swept, 0–1',
+  registers: [registry],
+});
+
 export const archivedMatchesTotal = new Counter({
   name: 'proxy_archived_matches_total',
   help: 'Matches upserted into the Postgres archive',

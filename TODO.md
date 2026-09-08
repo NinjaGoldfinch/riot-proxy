@@ -201,7 +201,7 @@ phases C1–C7). C1–C4 landed; C5–C7 are still open below.
       but if names ever need to be right, they need a source and a timestamp
       on the row rather than a bare `NULL` check.
 - [ ] A crawl is marked `completed` when the archive stage has _queued_ its
-      matches, not when they have been fetched — so `aggregate:champions` runs
+      matches, not when they have been fetched — so `aggregate:analytics` runs
       over an archive that is still filling. It was true before the stages too
       (the backfills were merely queued), and the aggregate is a recompute, so
       the fix is to make the crawl wait on the archive queue draining rather
@@ -230,6 +230,24 @@ phases C1–C7). C1–C4 landed; C5–C7 are still open below.
 - [ ] `BULK_USAGE_CEILING` now defaults to 0.80 where §9.3 and Appendix A of
       the spec both say 75%. The spec is reproduced verbatim and was not
       edited; the deviation is deliberate and recorded in the README.
+
+### Analytics C6
+
+- [x] `aggregate:champions` is `aggregate:analytics`: it has recomputed more
+      than champions since #112. Steps run in order and report per-step timings
+      and per-table row counts; the admin trigger moved to
+      `POST /v1/admin/analytics/recompute` (#114)
+- [x] `AGGREGATE_PATCH_LIMIT` (default 4) bounds the recompute _and its delete_
+      to the latest N patches, so older patches keep their last-computed rows
+      instead of being rebuilt or dropped. `0` restores the full-archive scan
+- [x] `AGGREGATE_INTERVAL_S` (default 0) for deployments that poll tracked
+      players but never crawl. Turning it back to `0` removes the scheduler
+      rather than merely skipping it — a scheduler outlives the process
+- [x] `proxy_aggregate_runs_total{status}`, `proxy_aggregate_duration_seconds{step}`,
+      `proxy_aggregate_rows{table}` and `proxy_facts_reextract_progress`
+- [x] A dashboard block on the ladder tab — every ladder's last run, per-step
+      seconds, rows per table, and the newest patch's most-played champions as
+      a sanity read — plus a compact analytics field on the history point
 
 ### Follow-ups from the analytics review
 
