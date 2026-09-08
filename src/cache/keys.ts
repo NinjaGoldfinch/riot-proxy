@@ -34,6 +34,20 @@ export function negativeKey(req: BuiltRequest): string {
   return `neg:${KEY_SCOPE}:${req.method}:${req.host}:${hashTarget(canonicalTarget(req.path, req.query))}`;
 }
 
+/**
+ * A cache key for one of the proxy's *own* derived reads — a document computed
+ * from the archive rather than fetched from Riot (#113).
+ *
+ * Same scoping rule as `cacheKey` and for the same reason: the archive rows a
+ * derived read groups are reached through PUUIDs, and a PUUID only means
+ * anything under the key that encrypted it (§7.4). A rotation must not let a
+ * new key read a document built for the old one. `part` names the read, so two
+ * of them can never collide on the same arguments.
+ */
+export function derivedKey(part: string, target: string): string {
+  return `d:${KEY_SCOPE}:${part}:${hashTarget(target)}`;
+}
+
 /** §8.4 — single-flight lock derived from the cache key. */
 export function singleFlightKey(key: string): string {
   return `sf:${key}`;

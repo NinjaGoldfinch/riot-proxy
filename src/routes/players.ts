@@ -1,6 +1,9 @@
 import { Type, type Static } from '@sinclair/typebox';
 import type { FastifyPluginAsync, FastifyReply } from 'fastify';
+import { cacheStore } from '../cache/store.js';
+import { canonicalTarget, derivedKey } from '../cache/keys.js';
 import { config } from '../config.js';
+import { listPlayerChampions } from '../db/analytics.js';
 import { getArchivedMatches } from '../db/matches.js';
 import { upsertPlayer } from '../db/players.js';
 import { ProxyError } from '../errors.js';
@@ -10,6 +13,7 @@ import { logger } from '../logger.js';
 import { recordCacheOutcome, refreshClaimsTotal } from '../metrics.js';
 import { redis } from '../redis.js';
 import { build } from '../riot/endpoints.js';
+import { championNames } from '../static/champions.js';
 import {
   assertPlatform,
   platformToAccountRegion,
@@ -27,10 +31,16 @@ import {
   ProfileResponseSchema,
   BackfillNoticeSchema,
   PlatformParam,
+  PlayerChampionsQuery,
+  PlayerChampionsResponse,
+  PlayerChampionsResponseSchema,
   PuuidParam,
   TagLineParam,
+  localErrors,
   upstreamErrors,
 } from './schemas.js';
+
+type PlayerChampions = Static<typeof PlayerChampionsResponseSchema>;
 
 /**
  * §6.3 — the composite endpoints, the proxy's biggest ergonomic win: one client
@@ -219,7 +229,137 @@ const playerRoutes: FastifyPluginAsync = async (fastify) => {
       );
     },
   );
+
+  /**
+   * A player's champion pool, straight out of the archive (#113).
+   *
+   * The odd one out in this file: it never reaches Riot, never touches the
+   * limiter and takes no `refresh`, because there is nothing upstream to
+   * refresh — it groups `match_participants` rows this deployment already
+   * holds. What it can answer is therefore bounded by what has been archived,
+   * which is why the response says `archivedGames` rather than implying it
+   * knows the player's whole history.
+   *
+   * A player nobody has walked returns 200 with an empty list. There is no
+   * fetch to fail and no 404 to report: "we hold no games for this PUUID" is a
+   * true and useful answer, and the caller who wants it filled has
+   * `/v1/players/{puuid}/matches`, which does spend quota.
+   */
+  fastify.get(
+    '/v1/players/:puuid/champions',
+    {
+      schema: {
+        tags: ['players'],
+        summary: "A player's champion pool",
+        description:
+          'Per champion: games, wins, win rate, average KDA, CS per minute and when it was last ' +
+          'played — grouped at read time from the archive, most-played first. Never contacts ' +
+          'Riot, so it costs no quota and cannot fail upstream; it only ever reports the games ' +
+          'this deployment has archived for the player.',
+        params: Type.Object({ puuid: PuuidParam }),
+        querystring: PlayerChampionsQuery,
+        response: { 200: PlayerChampionsResponse, ...localErrors },
+      },
+    },
+    async (request, reply) => {
+      const { puuid } = request.params as { puuid: string };
+      const query = request.query as {
+        platform?: string;
+        queue?: number;
+        patch?: string;
+        limit?: number;
+      };
+      // Unlike every other route here, `platform` is a filter rather than a
+      // routing decision, so it stays optional instead of defaulting: a pool
+      // spanning every platform the archive holds for this player is a
+      // reasonable thing to ask for, and defaulting would silently answer a
+      // narrower question than the caller asked.
+      const platform = query.platform ? assertPlatform(query.platform) : undefined;
+
+      const cached = await cachedPool(puuid, { ...query, ...(platform ? { platform } : {}) });
+      applyCacheHeaders(reply, cached.cache, cached.ageSeconds);
+      return cached.body;
+    },
+  );
 };
+
+/** Soft TTL for the derived pool document. */
+const POOL_TTL_S = 300;
+
+/**
+ * The pool document, cached in Redis for `POOL_TTL_S` (#113).
+ *
+ * Worth caching even though nothing upstream is spent: the read groups every
+ * archived row for a PUUID, and the callers that want it — a profile page, the
+ * dev UI's pool panel — are exactly the ones that ask repeatedly. `derivedKey`
+ * scopes it by API key like every other cached document, so a rotation cannot
+ * serve a pool built from PUUIDs the new key cannot resolve.
+ *
+ * A stale entry is treated as a miss rather than served and revalidated: the
+ * refresh is a single grouped query against an index, so the machinery
+ * stale-while-revalidate exists to avoid — a slow upstream call in the request
+ * path — is not what is behind this one.
+ */
+async function cachedPool(
+  puuid: string,
+  filter: { platform?: string; queue?: number; patch?: string; limit?: number },
+): Promise<Composed<PlayerChampions>> {
+  const key = derivedKey('pool', canonicalTarget(`/players/${puuid}/champions`, filter));
+
+  const hit = await cacheStore.get<PlayerChampions>(key);
+  if (hit && !hit.stale) return { body: hit.value, cache: 'HIT', ageSeconds: hit.ageSeconds };
+
+  const rows = await listPlayerChampions({
+    puuid,
+    ...(filter.platform ? { platform: filter.platform } : {}),
+    ...(filter.queue !== undefined ? { queueId: filter.queue } : {}),
+    ...(filter.patch ? { patch: filter.patch } : {}),
+    ...(filter.limit ? { limit: filter.limit } : {}),
+  });
+  const names = await championNames(rows.map((r) => r.championId));
+
+  const body: PlayerChampions = {
+    puuid,
+    platform: filter.platform ?? null,
+    queue: filter.queue ?? null,
+    patch: filter.patch ?? null,
+    archivedGames: rows.reduce((total, row) => total + row.games, 0),
+    champions: rows.map((row) => {
+      const minutes = row.durationS / 60;
+      return {
+        championId: row.championId,
+        ...(names.has(row.championId) ? { championName: names.get(row.championId) } : {}),
+        games: row.games,
+        wins: row.wins,
+        winRate: round(row.wins / row.games),
+        // Absent, not zero, until at least one game has the C2 facts swept —
+        // the same rule `ChampionStatEntry` follows for the same columns.
+        ...(row.statedGames > 0
+          ? { avgKda: round((row.kills + row.assists) / Math.max(row.deaths, 1)) }
+          : {}),
+        ...(minutes > 0 ? { csPerMin: round(row.cs / minutes) } : {}),
+        lastPlayedAt: row.lastPlayedAt === null ? null : new Date(row.lastPlayedAt).toISOString(),
+      };
+    }),
+  };
+
+  // Deliberately not counted in `proxy_cache_reads_total`. That ratio is about
+  // reads that would otherwise have cost Riot quota — the archive hit above
+  // `composeMatches` counts is exactly that. This one never had an upstream
+  // call to save, so counting it would inflate the number `CacheHitRatioLow`
+  // watches without any more quota having been saved.
+  const firstSeen = await cacheStore.set(key, body, POOL_TTL_S);
+  return {
+    body,
+    cache: 'MISS',
+    ageSeconds: Math.max(0, Math.round((Date.now() - firstSeen) / 1000)),
+  };
+}
+
+/** Four decimal places — the same precision the analytics routes publish. */
+function round(value: number): number {
+  return Math.round(value * 10_000) / 10_000;
+}
 
 interface Composed<T> {
   body: T;
