@@ -31,12 +31,9 @@ import {
   platformToAccountRegion,
 } from '../riot/routing.js';
 import { clearCrawlState, pendingLegs } from '../jobs/ladder-state.js';
-import {
-  enqueueChampionAggregate,
-  enqueueFactsReextract,
-  enqueueNameBackfill,
-  startCrawl,
-} from '../jobs/processors.js';
+import { enqueueChampionAggregate, enqueueFactsReextract } from '../jobs/analytics.js';
+import { startCrawl } from '../jobs/ladder-crawl.js';
+import { enqueueNameBackfill } from '../jobs/player-names.js';
 import {
   JOB,
   enqueueBackfill,
