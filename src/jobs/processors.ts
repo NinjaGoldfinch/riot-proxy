@@ -1294,9 +1294,15 @@ export interface AggregateChampionsJob {
  * row, and the next run converges — cheaper than one transaction holding
  * locks across a scan of the whole archive.
  */
-export async function aggregateChampions(
-  job: Job<AggregateChampionsJob>,
-): Promise<{ rows: number; games: number }> {
+export async function aggregateChampions(job: Job<AggregateChampionsJob>): Promise<{
+  rows: number;
+  games: number;
+  matchups: number;
+  items: number;
+  runes: number;
+  spells: number;
+  ms: number;
+}> {
   const platform = assertPlatform(job.data.platform);
   const queue = assertRankedQueue(job.data.queue);
 
@@ -1316,7 +1322,20 @@ export async function aggregateChampions(
     'champion builds recomputed',
   );
 
-  return { rows: result.rows, games: result.games };
+  // Every table's row count, not just `champion_stats`'. The admin recompute
+  // route answers 202 and the job result is the only structured signal an
+  // operator gets — a matchup or build step that inserted nothing (a pre-C2
+  // archive with no `team_id` extracted, say) would otherwise show up only in
+  // the logs, behind a `rows` count that looked healthy.
+  return {
+    rows: result.rows,
+    games: result.games,
+    matchups: matchups.rows,
+    items: builds.items,
+    runes: builds.runes,
+    spells: builds.spells,
+    ms: Date.now() - started,
+  };
 }
 
 // ── facts:reextract ─────────────────────────────────────────────────────────

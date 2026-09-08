@@ -524,6 +524,13 @@ export const LadderCrawlStartedResponse = Type.Object({
 export const TEAM_POSITIONS = ['TOP', 'JUNGLE', 'MIDDLE', 'BOTTOM', 'UTILITY', ''] as const;
 
 /**
+ * The same list without `''` — the five real lanes. `champion_matchups` is
+ * built from a shared lane and never stores `''`, so accepting it there
+ * validates a request that is guaranteed to return nothing.
+ */
+export const LANE_POSITIONS = TEAM_POSITIONS.filter((p) => p !== '');
+
+/**
  * A champion's line in one slice of the aggregate (#111 widens this from L5's
  * four fields).
  *
@@ -531,7 +538,10 @@ export const TEAM_POSITIONS = ['TOP', 'JUNGLE', 'MIDDLE', 'BOTTOM', 'UTILITY', '
  * response, which is not the same question `pickRate` answers and is kept
  * only for compatibility — superseded by `pickRate`, which divides into the
  * slice's actual match count (`analytics_slices`) rather than into whatever
- * happened to be summed into this response.
+ * happened to be summed into this response. Every response carrying this entry
+ * also carries the `totalGames` it divided by, because "whatever was summed
+ * into this response" differs between the champion list (a whole slice) and
+ * the detail composite (one champion).
  *
  * `pickRate` and `banRate` are omitted, not zeroed, only when the *slice*
  * itself is unknown — `analytics_slices` has no row for this (tier, patch)
@@ -559,7 +569,11 @@ export const ChampionStatEntry = Type.Object(
     winRate: Type.Number({ minimum: 0, maximum: 1 }),
     share: {
       ...Type.Number({ minimum: 0, maximum: 1 }),
-      description: "This champion's games as a fraction of the slice's games",
+      description:
+        "This champion's games over the response's own `totalGames` — the games in " +
+        'the `champions`/`stats` array carrying it, not the slice. On the champion ' +
+        'detail composite that array holds one champion, so `share` is a fraction of ' +
+        'that champion alone and reaches 1. Use `pickRate` for a slice-relative number.',
     },
     pickRate: Type.Optional({
       ...Type.Number({ minimum: 0, maximum: 1 }),
@@ -649,6 +663,11 @@ const OptionalRoleParam = Type.Optional(
   Type.Unsafe<string>({ type: 'string', enum: [...TEAM_POSITIONS] }),
 );
 
+/** Lanes only — see `LANE_POSITIONS`. */
+const OptionalLaneParam = Type.Optional(
+  Type.Unsafe<string>({ type: 'string', enum: [...LANE_POSITIONS] }),
+);
+
 /**
  * One champion's record against one lane rival (#112). No `winRate` shortcut
  * on the stored row — `games`/`wins` are the facts, `winRate` is derived at
@@ -677,7 +696,15 @@ export const ChampionMatchupsResponse = Type.Object({
   },
   role: {
     ...Type.Union([Type.String(), Type.Null()]),
-    description: 'Echoes the `role` filter; null when every lane this champion has is included',
+    description:
+      'Echoes the `role` filter. Null means every lane is included — and `limit` then ' +
+      'truncates across all of them together, most-played first, so a champion played ' +
+      'in two lanes can fill the list from the busier one. Filter by role for a ' +
+      "guaranteed view of one lane's matchups.",
+  },
+  computedAt: {
+    ...NullableTimestamp,
+    description: 'When `champion_matchups` was last recomputed from the archive',
   },
   matchups: Type.Array(
     Type.Unsafe<Static<typeof ChampionMatchupEntry>>({ $ref: 'ChampionMatchupEntry#' }),
@@ -688,7 +715,7 @@ export const ChampionMatchupsQuery = Type.Object({
   platform: Type.Optional(PlatformParam),
   queue: Type.Optional(RankedQueueParam),
   patch: OptionalPatchParam,
-  role: OptionalRoleParam,
+  role: OptionalLaneParam,
   minGames: Type.Optional(Type.Integer({ minimum: 0 })),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200, default: 50 })),
 });
@@ -725,13 +752,46 @@ export const ChampionDetailResponse = Type.Object({
   championName: Type.Optional(Type.String()),
   platform: Type.String(),
   queue: Type.String(),
+  tier: {
+    ...Type.Union([Type.String(), Type.Null()]),
+    description:
+      'Echoes the `tier` filter, which applies to `stats` only — `champion_matchups` ' +
+      'and the three build tables have no tier dimension, so `matchups`/`items`/' +
+      '`runes`/`spells` are all-tier whatever this says. Null when unfiltered.',
+  },
   patch: {
     ...Type.Union([Type.String(), Type.Null()]),
     description: 'Null when nothing has been aggregated yet',
   },
   role: {
     ...Type.Union([Type.String(), Type.Null()]),
-    description: 'Null when every role is summed into one row per section',
+    description:
+      'Echoes the `role` filter. Null sums every role into one row for `stats` and the ' +
+      'three build sections, but `matchups` stays per-lane — see `sectionsComputedAt` ' +
+      "and the matchups route for what `limit` then does to a two-lane champion's list.",
+  },
+  computedAt: {
+    ...NullableTimestamp,
+    description:
+      'The oldest stamp across the sections below — the payload as a whole is only ' +
+      'this fresh. Null when every section is empty.',
+  },
+  sectionsComputedAt: {
+    ...Type.Object({
+      stats: NullableTimestamp,
+      matchups: NullableTimestamp,
+      items: NullableTimestamp,
+      runes: NullableTimestamp,
+      spells: NullableTimestamp,
+    }),
+    description:
+      'Per section, since each table is recomputed in its own transaction: a run that ' +
+      'crashed part-way leaves one section behind the others, and this is what says so.',
+  },
+  totalGames: {
+    ...Type.Integer(),
+    description:
+      "Games summed into `stats` — this champion's, and the denominator behind its `share`",
   },
   stats: Type.Array(Type.Unsafe<Static<typeof ChampionStatEntry>>({ $ref: 'ChampionStatEntry#' })),
   matchups: Type.Array(

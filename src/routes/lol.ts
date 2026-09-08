@@ -341,18 +341,12 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
         : [[], [], []];
 
       const names = await championNames(rows.map((r) => r.championId));
-      const totalGames = rows.reduce((total, row) => total + row.games, 0);
-      // A recompute writes the whole slice at once, so any row's stamp is the
-      // slice's; the newest is taken in case a partial write is ever visible.
-      const computedAt = rows.reduce<Date | null>(
-        (newest, row) => (!newest || row.computedAt > newest ? row.computedAt : newest),
-        null,
-      );
+      const { totalGames, entries } = enrichChampionStats(rows, slices, bans, names);
 
       // Derived from immutable archive rows, and only ever replaced wholesale
       // by a recompute — so it is safe to hold, and holding it is what keeps a
       // dashboard polling this off the database.
-      reply.header('Cache-Control', 'public, max-age=300');
+      reply.header('Cache-Control', ANALYTICS_CACHE_CONTROL);
 
       return {
         platform,
@@ -360,9 +354,9 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
         tier: tier ?? null,
         patch: patch ?? null,
         role: query.role ?? null,
-        computedAt: computedAt ? computedAt.toISOString() : null,
+        computedAt: iso(newestStamp(rows)),
         totalGames,
-        champions: enrichChampionStats(rows, slices, bans, names),
+        champions: entries,
       };
     },
   );
@@ -381,9 +375,12 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
         tags: ['lol'],
         summary: "A champion's lane matchups",
         description:
-          'Both directions of every lane matchup this champion has archived data for. No tier ' +
-          'dimension: sample sizes die fast enough per (champion, opponent, role) alone, and ' +
-          'the two laners can sit in different tiers anyway.',
+          'Every lane matchup this champion has archived data for. No tier dimension: sample ' +
+          'sizes die fast enough per (champion, opponent, role) alone, and the two laners can ' +
+          'sit in different tiers anyway. Mirror lanes are excluded — their win rate is 50% by ' +
+          'construction. A matchup is recorded from the tracked ladder player’s side, so the ' +
+          'opposite champion’s view of the same lane only exists when that player is tracked ' +
+          'too, and the two directions can disagree.',
         params: Type.Object({ championId: ChampionIdParam }),
         querystring: ChampionMatchupsQuery,
         response: { 200: ChampionMatchupsResponse, ...localErrors },
@@ -417,7 +414,7 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
 
       const names = await championNames([championId, ...rows.map((r) => r.opponentId)]);
 
-      reply.header('Cache-Control', 'public, max-age=300');
+      reply.header('Cache-Control', ANALYTICS_CACHE_CONTROL);
 
       return {
         championId,
@@ -426,6 +423,7 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
         queue,
         patch: patch ?? null,
         role: query.role ?? null,
+        computedAt: iso(newestStamp(rows)),
         matchups: rows.map((row) => ({
           role: row.role,
           opponentId: row.opponentId,
@@ -476,7 +474,10 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
       const tier = query.tier ? assertTier(query.tier) : undefined;
       const patch = query.patch ?? (await latestPatch(platform, queue));
       const role = query.role !== undefined ? { role: query.role } : {};
-      const minGames = query.minGames ?? 0;
+      // Same floor as the champion list, and for the same reason: a champion
+      // picked once and won is not a 100% win rate, and a single-game "top
+      // item" or "best matchup" is the version of that a champion page shows.
+      const minGames = query.minGames ?? config.AGGREGATE_MIN_GAMES;
       const limit = query.limit ? { limit: query.limit } : {};
 
       const [stats, slices, bans, matchups, items, runes, spells] = patch
@@ -486,11 +487,12 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
               queue,
               patch,
               championId,
+              minGames,
               ...(tier ? { tier } : {}),
               ...role,
             }),
             listAnalyticsSlices({ platform, queue, patch, ...(tier ? { tier } : {}) }),
-            listChampionBans({ platform, queue, patch, ...(tier ? { tier } : {}) }),
+            listChampionBans({ platform, queue, patch, championId, ...(tier ? { tier } : {}) }),
             listChampionMatchups({
               platform,
               queue,
@@ -507,17 +509,34 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
         : [[], [], [], [], [], [], []];
 
       const names = await championNames([championId, ...matchups.map((m) => m.opponentId)]);
+      const { totalGames, entries } = enrichChampionStats(stats, slices, bans, names);
 
-      reply.header('Cache-Control', 'public, max-age=300');
+      // Each of these tables is recomputed in its own transaction, so their
+      // stamps can genuinely differ — which is the whole reason the design
+      // tolerates a crash between steps. Reporting them per section is what
+      // makes that visible to a caller rather than only to the logs.
+      const sectionsComputedAt = {
+        stats: iso(newestStamp(stats)),
+        matchups: iso(newestStamp(matchups)),
+        items: iso(newestStamp(items)),
+        runes: iso(newestStamp(runes)),
+        spells: iso(newestStamp(spells)),
+      };
+
+      reply.header('Cache-Control', ANALYTICS_CACHE_CONTROL);
 
       return {
         championId,
         ...(names.has(championId) ? { championName: names.get(championId) } : {}),
         platform,
         queue,
+        tier: tier ?? null,
         patch: patch ?? null,
         role: query.role ?? null,
-        stats: enrichChampionStats(stats, slices, bans, names),
+        computedAt: oldest(Object.values(sectionsComputedAt)),
+        sectionsComputedAt,
+        totalGames,
+        stats: entries,
         matchups: matchups.map((row) => ({
           role: row.role,
           opponentId: row.opponentId,
@@ -572,6 +591,40 @@ function round(value: number): number {
 }
 
 /**
+ * `private`, not `public`: every one of these routes sits behind the bearer
+ * check in `auth/plugin.ts`, and nothing here sets `Vary`. The bodies do not
+ * vary by consumer — they are derived from the archive, which is key-scoped
+ * server-side — but `public` on a response that required a key still invites a
+ * shared cache to serve it to a caller that presented none. The 300 s is what
+ * keeps a polling dashboard off the database, and `private` costs none of it.
+ */
+const ANALYTICS_CACHE_CONTROL = 'private, max-age=300';
+
+/**
+ * The newest `computed_at` in a set of aggregate rows. A recompute replaces a
+ * table wholesale, so any row's stamp is the table's; `max` is taken in case a
+ * partial write is ever visible.
+ */
+function newestStamp(rows: { computedAt: Date }[]): Date | null {
+  return rows.reduce<Date | null>(
+    (newest, row) => (!newest || row.computedAt > newest ? row.computedAt : newest),
+    null,
+  );
+}
+
+/** The stalest of several section stamps — how fresh a composite really is. */
+function oldest(stamps: (string | null)[]): string | null {
+  return stamps.reduce<string | null>(
+    (min, stamp) => (stamp && (!min || stamp < min) ? stamp : min),
+    null,
+  );
+}
+
+function iso(stamp: Date | null): string | null {
+  return stamp ? stamp.toISOString() : null;
+}
+
+/**
  * `champion_stats` rows plus their slice/ban/name context, turned into the
  * response shape `ChampionStatEntry` describes. Shared by the champion list
  * route and the detail composite's `stats` section rather than duplicated —
@@ -582,7 +635,9 @@ function round(value: number): number {
  * route passes a whole slice, so `share` means "of the slice"; the detail
  * composite passes one champion's rows across tiers, so it means "of this
  * champion's own games in this slice" — both are the same formula, applied
- * to a different `rows` set by the caller.
+ * to a different `rows` set by the caller. `totalGames` is returned rather
+ * than recomputed by the caller so the denominator a response publishes is
+ * always the one its `share` divided by.
  */
 function enrichChampionStats(
   rows: ChampionStatRow[],
@@ -594,7 +649,7 @@ function enrichChampionStats(
   const banCounts = new Map(bans.map((b) => [`${b.tier}:${b.championId}`, b.bans]));
   const totalGames = rows.reduce((total, row) => total + row.games, 0);
 
-  return rows.map((row) => {
+  const entries = rows.map((row) => {
     const slice = sliceMatches.get(row.tier);
     // Absent from `champion_bans` means a computed zero, not an unknown —
     // the recompute writes both tables from the same transaction, so a
@@ -632,6 +687,8 @@ function enrichChampionStats(
         : {}),
     };
   });
+
+  return { totalGames, entries };
 }
 
 /**
