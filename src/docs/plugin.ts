@@ -82,6 +82,15 @@ function attachExamples(path: string, op: Operation): void {
 }
 
 /**
+ * Routes that answer entirely from this deployment's own storage, despite
+ * sitting under a tag whose other routes do reach Riot. The champion pool is
+ * tagged `players` because that is where a caller looks for it, but badging it
+ * `Composite` would promise a fan-out it never performs — and the badges exist
+ * to say what a call costs.
+ */
+const LOCAL_ROUTES = new Set(['/v1/players/{puuid}/champions']);
+
+/**
  * What a passthrough proxy's reference should say and a generic one cannot:
  * how long an answer is cached, whether it costs Riot budget at all, and what
  * it costs the caller. All of it read from `ENDPOINTS` at build time, so it
@@ -97,7 +106,8 @@ function badgesFor(path: string, op: Operation): string[] {
     if (spec) badges.push(ttlBadge(spec.ttlSeconds));
   }
 
-  if (tags.includes('players')) badges.push('Composite');
+  if (LOCAL_ROUTES.has(path)) badges.push('No upstream call');
+  else if (tags.includes('players')) badges.push('Composite');
   if (tags.includes('static')) badges.push('No upstream call');
   if (tags.includes('ops')) badges.push('Public · no key');
   if (tags.includes('admin')) badges.push('Admin scope');

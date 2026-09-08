@@ -224,6 +224,32 @@
         color: var(--dim);
         margin-top: 4px;
       }
+      /* ── champion pool ────────────────────────────────────────────────── */
+      .pool {
+        display: grid;
+        /* Same `minmax(0, …)` reasoning as `.match`: the champion name is the
+           column that has to give when the panel is narrow. */
+        grid-template-columns: 32px minmax(0, 1fr) auto auto auto;
+        gap: 8px 12px;
+        align-items: center;
+      }
+      .pool img {
+        width: 32px;
+        height: 32px;
+        border-radius: 5px;
+        border: 1px solid var(--line);
+      }
+      .pool .num {
+        font: 12px/1 var(--mono);
+        color: var(--dim);
+        text-align: right;
+        white-space: nowrap;
+      }
+      .pool .name {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
       /* ── matches ──────────────────────────────────────────────────────── */
       .match {
         display: grid;
@@ -404,6 +430,16 @@
         <h2>Top mastery</h2>
         <div class="chips" id="masteryChips"></div>
         <div class="panel"><div class="mastery" id="mastery"></div></div>
+      </section>
+
+      <section id="poolSection" class="hidden">
+        <h2>Champion pool</h2>
+        <div class="chips" id="poolChips"></div>
+        <div class="panel"><div class="pool" id="pool"></div></div>
+        <details class="raw">
+          <summary>raw · /v1/players/{puuid}/champions</summary>
+          <pre id="rawPool"></pre>
+        </details>
       </section>
 
       <section id="matchSection" class="hidden">
@@ -657,6 +693,47 @@
         );
       }
 
+      /* The pool is read out of the proxy's own archive, not from Riot, so it
+         only ever describes games this deployment has actually stored — which
+         is why the header says how many that is rather than implying it knows
+         the player's whole history. Nothing here spends quota, so it is not
+         behind the Update button. */
+      function renderPool(result) {
+        const pool = result.data;
+        json('rawPool', pool);
+        show('poolSection', pool.champions.length > 0);
+        $('poolChips').replaceChildren(
+          chip(`X-Cache: ${result.cache}`),
+          chip(`${pool.archivedGames} archived games`),
+          chip(`${pool.champions.length} champions`),
+        );
+
+        $('pool').replaceChildren(
+          ...pool.champions.flatMap((c) => [
+            el('img', {
+              src: champIcon(c.championId),
+              alt: champName(c.championId, c.championName),
+              loading: 'lazy',
+            }),
+            el('div', {
+              className: 'name',
+              textContent: champName(c.championId, c.championName),
+              title: c.lastPlayedAt
+                ? `last played ${new Date(c.lastPlayedAt).toLocaleString()}`
+                : '',
+            }),
+            el('div', { className: 'num', textContent: `${c.games}g` }),
+            el('div', { className: 'num', textContent: `${Math.round(c.winRate * 100)}%` }),
+            /* Absent rather than zero on a pre-C2 archive, so the dash says
+               "not extracted yet" instead of claiming a real 0.00 KDA. */
+            el('div', {
+              className: 'num',
+              textContent: c.avgKda === undefined ? '—' : `${c.avgKda.toFixed(2)} KDA`,
+            }),
+          ]),
+        );
+      }
+
       function renderMatches(result) {
         const page = result.data;
         json('rawMatches', page);
@@ -802,7 +879,7 @@
           message(refresh ? refreshOutcome(profile.data) : '');
           renderProfile(profile);
           applyRawToggle();
-          await loadMatches({ refresh });
+          await Promise.all([loadMatches({ refresh }), loadPool()]);
 
           if (push) {
             const slug = `${parsed.gameName}-${parsed.tagLine}`;
@@ -810,7 +887,13 @@
           }
         } catch (err) {
           message(String(err.message ?? err), 'err');
-          for (const id of ['profileSection', 'rankSection', 'masterySection', 'matchSection']) {
+          for (const id of [
+            'profileSection',
+            'rankSection',
+            'masterySection',
+            'poolSection',
+            'matchSection',
+          ]) {
             show(id, false);
           }
           // Nothing rendered, so nothing set the cooldown — leave the button
@@ -836,6 +919,18 @@
         } catch (err) {
           message(String(err.message ?? err), 'err');
           show('matchSection', false);
+        }
+      }
+
+      /* Failure here hides the panel and is otherwise swallowed: the pool is
+         a bonus panel on a page whose point is the profile, and a message
+         would displace whatever the profile itself had to say. */
+      async function loadPool() {
+        if (!state.puuid) return;
+        try {
+          renderPool(await api(`/v1/players/${state.puuid}/champions?platform=${state.platform}`));
+        } catch {
+          show('poolSection', false);
         }
       }
 

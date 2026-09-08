@@ -37,6 +37,7 @@ const OWNED = [
   `c:${KEY_SCOPE}:account:x`,
   `neg:${KEY_SCOPE}:summoner:y`,
   `sf:c:${KEY_SCOPE}:z`,
+  `d:${KEY_SCOPE}:pool:abc123`,
   `rl:waiters:${KEY_SCOPE}:europe`,
 ];
 
@@ -44,6 +45,7 @@ const OWNED = [
 const LIMITER = `rl:app:v2:${KEY_SCOPE}:europe`;
 const FOREIGN_KEYS = [
   `c:${FOREIGN}:account:x`,
+  `d:${FOREIGN}:pool:abc123`,
   `rl:app:v2:${FOREIGN}:europe`,
   `rl:waiters:${FOREIGN}:europe`,
 ];
@@ -93,7 +95,7 @@ describe.runIf(process.env['SKIP_REDIS_TESTS'] !== '1')('reset:cache', () => {
     expect(code).toBe(0);
     expect(stdout).toContain(KEY_SCOPE);
 
-    expect(await exists(OWNED)).toEqual([false, false, false, false]);
+    expect(await exists(OWNED)).toEqual([false, false, false, false, false]);
     // The limiter's learned buckets, the queues and the auth cache are not
     // cache: dropping them costs correctness or work, not just a re-fetch.
     expect(await exists([LIMITER, ...INFRASTRUCTURE])).toEqual([true, true, true]);
@@ -106,7 +108,7 @@ describe.runIf(process.env['SKIP_REDIS_TESTS'] !== '1')('reset:cache', () => {
   it('leaves another key scope alone', async ({ skip }) => {
     if (!available) return skip();
     await run();
-    expect(await exists(FOREIGN_KEYS)).toEqual([true, true, true]);
+    expect(await exists(FOREIGN_KEYS)).toEqual([true, true, true, true]);
   });
 
   it('takes the limiter buckets only when asked, and only its own', async ({ skip }) => {
@@ -131,7 +133,7 @@ describe.runIf(process.env['SKIP_REDIS_TESTS'] !== '1')('reset:cache', () => {
     const { code, stderr } = await run([], { NODE_ENV: 'production' });
     expect(code).toBe(1);
     expect(stderr).toContain('Refusing to reset cache');
-    expect(await exists(OWNED)).toEqual([true, true, true, true]);
+    expect(await exists(OWNED)).toEqual([true, true, true, true, true]);
   });
 
   it('--help explains itself without touching anything', async ({ skip }) => {
@@ -139,6 +141,6 @@ describe.runIf(process.env['SKIP_REDIS_TESTS'] !== '1')('reset:cache', () => {
     const { code, stdout } = await run(['--help']);
     expect(code).toBe(0);
     expect(stdout).toContain('Usage: npm run reset:cache');
-    expect(await exists(OWNED)).toEqual([true, true, true, true]);
+    expect(await exists(OWNED)).toEqual([true, true, true, true, true]);
   });
 });

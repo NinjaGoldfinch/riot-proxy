@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, sql as raw } from 'drizzle-orm';
+import { and, desc, eq, gte, isNotNull, sql as raw } from 'drizzle-orm';
 import { KEY_SCOPE } from '../config.js';
 import { QUEUE_IDS, type RankedQueue, type Tier } from '../riot/ladder.js';
 import { db, sql } from './index.js';
@@ -10,6 +10,8 @@ import {
   championRunes,
   championSpells,
   championStats,
+  matchParticipants,
+  matches,
 } from './schema.js';
 
 /**
@@ -777,4 +779,101 @@ export async function listChampionSpells(
     .having(gte(raw`sum(${championSpells.games})`, filter.minGames ?? 0))
     .orderBy(desc(raw`sum(${championSpells.games})`))
     .limit(filter.limit ?? 10);
+}
+
+export interface PlayerChampionFilter {
+  puuid: string;
+  /** Lowercase platform id; matched against the match id's own prefix. */
+  platform?: string;
+  /** Riot's numeric queue id (420, 440, 450…), as `/players/{puuid}/matches` takes it. */
+  queueId?: number;
+  patch?: string;
+  limit?: number;
+}
+
+export interface PlayerChampionRow {
+  championId: number;
+  games: number;
+  wins: number;
+  /** Rows with the C2 facts swept — the denominator for the averages, not a result. */
+  statedGames: number;
+  kills: number;
+  deaths: number;
+  assists: number;
+  cs: number;
+  /** Seconds, summed over swept rows only — see `recomputeChampionStats`. */
+  durationS: number;
+  /** `info.gameEndTimestamp` of the most recent game on this champion, epoch ms. */
+  lastPlayedAt: number | null;
+}
+
+/**
+ * One player's champion pool, computed at read time (#113).
+ *
+ * No table and no recompute behind this one, unlike everything above. A pool is
+ * a question about a single PUUID, `match_participants` is indexed on exactly
+ * that (`match_participants_puuid_idx`), and the answer is a few dozen rows —
+ * so precomputing it would mean a table per player, invalidated by every game
+ * any of them plays, to save a grouped read of their own rows. The route caches
+ * the document instead (`derivedKey`).
+ *
+ * Key-scoping is inherent rather than a column: `puuid` here is an encrypted id
+ * that only means anything under the key that produced it (§7.4), so a rotation
+ * strands these rows the same way it strands `players`, without
+ * `match_participants` carrying a `key_scope` it would otherwise need on every
+ * row of the largest table in the schema.
+ *
+ * Sums, not averages, for the same reason `champion_stats` stores them that
+ * way: every derived number is computed once at the edge, from denominators the
+ * caller can see. `statedGames` masks the averages so a pre-C2 row — archived
+ * before the facts existed and not yet swept by `facts:reextract` — lowers no
+ * average it never contributed to.
+ */
+export async function listPlayerChampions(
+  filter: PlayerChampionFilter,
+): Promise<PlayerChampionRow[]> {
+  const where = [
+    eq(matchParticipants.puuid, filter.puuid),
+    isNotNull(matchParticipants.championId),
+    isNotNull(matchParticipants.win),
+  ];
+  // Match ids carry the platform that hosted the game (`EUW1_7381937461`), so
+  // the archive can be narrowed to one platform without `match_participants`
+  // storing it — `starts_with` rather than `like`, which would need the
+  // separator escaped out of its own wildcard.
+  if (filter.platform) {
+    where.push(
+      raw`starts_with(${matchParticipants.matchId}, ${`${filter.platform.toUpperCase()}_`})`,
+    );
+  }
+  if (filter.queueId !== undefined) where.push(eq(matches.queueId, filter.queueId));
+  if (filter.patch) where.push(eq(matches.patch, filter.patch));
+
+  return db
+    .select({
+      championId: raw<number>`${matchParticipants.championId}`.mapWith(Number),
+      games: raw<number>`count(*)`.mapWith(Number),
+      wins: raw<number>`count(*) filter (where ${matchParticipants.win})`.mapWith(Number),
+      statedGames:
+        raw<number>`count(*) filter (where ${matchParticipants.kills} is not null)`.mapWith(Number),
+      kills: raw<number>`coalesce(sum(${matchParticipants.kills}), 0)`.mapWith(Number),
+      deaths: raw<number>`coalesce(sum(${matchParticipants.deaths}), 0)`.mapWith(Number),
+      assists: raw<number>`coalesce(sum(${matchParticipants.assists}), 0)`.mapWith(Number),
+      cs: raw<number>`coalesce(sum(${matchParticipants.cs}), 0)`.mapWith(Number),
+      durationS:
+        raw<number>`coalesce(sum(${matches.gameDuration}) filter (where ${matchParticipants.kills} is not null), 0)`.mapWith(
+          Number,
+        ),
+      // Null when every game on this champion predates the archive carrying an
+      // end timestamp, which is a real state and not a zero.
+      lastPlayedAt: raw<number | null>`max(${matches.gameEndTs})`.mapWith((v) =>
+        v === null ? null : Number(v),
+      ),
+    })
+    .from(matchParticipants)
+    .innerJoin(matches, eq(matches.matchId, matchParticipants.matchId))
+    .where(and(...where))
+    .groupBy(matchParticipants.championId)
+    .orderBy(desc(raw`count(*)`))
+    .limit(filter.limit ?? 200);
 }
