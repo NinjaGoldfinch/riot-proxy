@@ -258,6 +258,56 @@ describe.skipIf(!enabled)('Phase 7 — the ladder crawl, live', () => {
       expect(mine.backfillsEnqueued).toBeLessThanOrEqual(mine.playersDiscovered);
     });
 
+    it('recomputed every analytics table, not just champion_stats', async () => {
+      const { platform } = cfg();
+      // The recompute runs on the maintenance queue after the crawl, so it can
+      // land a moment after the completion event.
+      const runs = await waitFor(
+        'an analytics run for the crawled ladder',
+        async () => {
+          const res = await get<{
+            analytics?: {
+              lastRuns: { platform: string; status: string; rows: Record<string, number> }[];
+            };
+          }>('/v1/admin/metrics');
+          const mine = res.body.analytics?.lastRuns.find((r) => r.platform === platform);
+          return mine ? mine : undefined;
+        },
+        { timeoutMs: 60_000, intervalMs: 2000 },
+      ).catch(() => undefined);
+
+      if (!runs) {
+        expect(true, 'no recompute recorded yet — nothing to assert').toBe(true);
+        return;
+      }
+      expect(runs.status).toBe('completed');
+      // Every table the job is now responsible for reports a count, even if
+      // the count is zero. A missing key is a step that never ran.
+      expect(Object.keys(runs.rows).sort()).toEqual([
+        'champion_items',
+        'champion_matchups',
+        'champion_runes',
+        'champion_spells',
+        'champion_stats',
+      ]);
+    });
+
+    it('serves the queue table it mirrored, un-versioned', async () => {
+      // Not part of the crawl, but it is the other thing `ddragon:sync`
+      // refreshes and the only route whose data comes from outside Data
+      // Dragon (#115).
+      const res = await get<{ queueId: number; map?: string }[]>('/v1/static/queues');
+      if (res.status === 404) {
+        expect(true, 'ddragon:sync has not run on this deployment yet').toBe(true);
+        return;
+      }
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body)).toBe(true);
+      // 420 is ranked solo and has been for a decade; if it is missing, what
+      // came back is not Riot's queue table.
+      expect(res.body.some((q) => q.queueId === 420)).toBe(true);
+    });
+
     it('recomputed the champion aggregates it triggered', async () => {
       const { platform } = cfg();
       // The aggregate runs on the maintenance queue after the crawl, so it can

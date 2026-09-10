@@ -59,9 +59,12 @@ const {
   DATA_FILES,
   DDRAGON_BASE,
   VERSIONS_URL,
+  META_FILES,
+  QUEUES_URL,
   compareVersions,
   currentVersion,
   ddragonDir,
+  readMeta,
   readStatic,
   syncDdragon,
 } = await import('../src/static/ddragon.js');
@@ -76,8 +79,15 @@ const dataUrl = (version: string, file: string) =>
 /** Everything Riot serves for one patch, so a sync of it succeeds outright. */
 function publishPatch(version: string, files: readonly string[] = DATA_FILES): void {
   cdn.routes.set(VERSIONS_URL, [version, VERSION]);
+  cdn.routes.set(QUEUES_URL, QUEUE_TABLE);
   for (const file of files) cdn.routes.set(dataUrl(version, file), { file, version });
 }
+
+/** A cut of Riot's real queues.json, enough to tell a labelled id from a raw one. */
+const QUEUE_TABLE = [
+  { queueId: 420, map: "Summoner's Rift", description: '5v5 Ranked Solo games' },
+  { queueId: 450, map: 'Howling Abyss', description: 'ARAM games' },
+];
 
 beforeEach(() => {
   cdn.routes.clear();
@@ -115,6 +125,9 @@ describe('data dragon mirror (§5.6)', () => {
    */
   it('does not claim queue.json is a Data Dragon file (#52)', () => {
     expect(DATA_FILES).not.toContain('queue');
+    // It has a home of its own now (#115) — outside the per-patch directories,
+    // because it has no patch.
+    expect([...META_FILES]).toEqual(['queues']);
   });
 });
 
@@ -185,9 +198,11 @@ describe('syncing a patch', () => {
 
     const result = await syncDdragon();
 
-    expect(result).toEqual({ version: '16.18.1', changed: false, files: [] });
-    // The version list, and nothing else: no data file was asked for.
-    expect(cdn.requested).toEqual([VERSIONS_URL]);
+    expect(result).toEqual({ version: '16.18.1', changed: false, files: [], meta: ['queues'] });
+    // The version list and the queue table, and nothing else: no data file was
+    // asked for. The queue table is not versioned, so "the patch has not
+    // changed" says nothing about whether Riot has added a game mode (#115).
+    expect(cdn.requested).toEqual([VERSIONS_URL, QUEUES_URL]);
   });
 
   it('re-downloads the same patch when forced', async () => {
@@ -232,5 +247,42 @@ describe('the route’s file names', () => {
   it('gives every mirrored file a plural alias, so the vocabulary is uniform', () => {
     const aliased = new Set(Object.values(FILE_ALIASES));
     expect([...DATA_FILES].filter((file) => !aliased.has(file))).toEqual([]);
+  });
+});
+
+/**
+ * Riot's queue table (#115): a different host, no version in its path, and no
+ * entry in `versions.json`. The mirror keeps it beside the patch directories
+ * rather than inside one, and refreshes it whether or not the patch moved.
+ *
+ * Last in the file on purpose. These write patch directories into the shared
+ * temp mirror, and `currentVersion`'s disk-recovery path reads whatever is
+ * newest there — so running them earlier moves the answer another test asserts.
+ */
+describe('un-versioned static data', () => {
+  it('mirrors the queue table and reads it back without a version', async () => {
+    publishPatch(VERSION);
+
+    // `force`, not a Redis delete: `currentVersion` falls back to reading the
+    // directory when Redis has no answer, so clearing the key does not make a
+    // mirrored patch look unmirrored.
+    const result = await syncDdragon({ force: true });
+
+    expect(result.meta).toEqual(['queues']);
+    expect(await readMeta('queues')).toEqual(QUEUE_TABLE);
+  });
+
+  it('keeps the copy on disk when Riot does not answer', async () => {
+    publishPatch(VERSION);
+    await syncDdragon({ force: true });
+    // Riot 403s the queue table but the patch is fine: losing a labelling
+    // convenience must not cost the champion and item data a patch needs.
+    cdn.routes.delete(QUEUES_URL);
+
+    const result = await syncDdragon({ force: true });
+
+    expect(result.meta).toEqual([]);
+    expect(result.files).toEqual([...DATA_FILES]);
+    expect(await readMeta('queues')).toEqual(QUEUE_TABLE);
   });
 });

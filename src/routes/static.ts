@@ -1,7 +1,13 @@
 import { Type } from '@sinclair/typebox';
 import type { FastifyPluginAsync } from 'fastify';
 import { ProxyError } from '../errors.js';
-import { DATA_FILES, currentVersion, fetchVersions, readStatic } from '../static/ddragon.js';
+import {
+  DATA_FILES,
+  currentVersion,
+  fetchVersions,
+  readMeta,
+  readStatic,
+} from '../static/ddragon.js';
 import { applyCacheHeaders } from './helpers.js';
 import { PassthroughResponse, localErrors } from './schemas.js';
 
@@ -29,6 +35,43 @@ const staticRoutes: FastifyPluginAsync = async (fastify) => {
       // Fall back to the live list when nothing has been synced yet, so a fresh
       // deployment is usable before the first `ddragon:sync` run.
       return { current: version ?? null, versions: mirrored ?? (await fetchVersions()) };
+    },
+  );
+
+  /**
+   * Riot's queue table (#115). Its own route rather than a `DATA_FILES` entry,
+   * because it is not one: a different host, no version in its path, and no
+   * entry in `versions.json`. Folding it into `/v1/static/{file}` would mean
+   * accepting a `?version=` for a file that has no versions and answering the
+   * same bytes whatever was asked for — a documented lie for the sake of one
+   * fewer route.
+   *
+   * This is the home #52 left owed. `queue` was removed from the mirror's file
+   * list back then for naming a file Data Dragon does not serve; the data was
+   * always real, it just lives somewhere else.
+   */
+  fastify.get(
+    '/v1/static/queues',
+    {
+      schema: {
+        tags: ['static'],
+        summary: "Riot's queue id table",
+        description:
+          'Maps `queueId` to a map and a description — what `420` means where the archive and ' +
+          'the composite routes report one. Refreshed on every `ddragon:sync`, not only on a ' +
+          'new patch: Riot adds queue ids when a game mode ships, which is not a patch event.',
+        response: { 200: PassthroughResponse, ...localErrors },
+      },
+    },
+    async (_request, reply) => {
+      const queues = await readMeta('queues');
+      if (queues === undefined) {
+        throw ProxyError.notFound(
+          'The queue table has not been synced yet. Run the ddragon:sync job.',
+        );
+      }
+      applyCacheHeaders(reply, 'HIT', 0);
+      return queues;
     },
   );
 

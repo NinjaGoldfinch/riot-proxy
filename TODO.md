@@ -249,6 +249,21 @@ phases C1–C7). C1–C4 landed; C5–C7 are still open below.
       seconds, rows per table, and the newest patch's most-played champions as
       a sanity read — plus a compact analytics field on the history point
 
+### Analytics C7
+
+- [x] Non-patch-versioned static data has a home: `DDRAGON_DIR/meta/`, filled by
+      `ddragon:sync` on every run rather than only on a new patch — Riot adds
+      queue ids when a game mode ships, which is not a patch event. Served at
+      `GET /v1/static/queues`, and the dev UI reads its queue names from there
+      instead of from a dozen ids typed in by hand (#52's fallout, #115)
+- [x] `analytics.updated` on the admin ladder topic, carrying the run rather
+      than a pointer to it — a consumer's next move is to re-read the analytics
+      routes, and `tables` says whether that is worth doing. Published only for
+      a completed run (#115)
+- [x] Acceptance additions to the phase 7 suite: every analytics table reports
+      a row count after a real crawl's recompute, and the mirrored queue table
+      is served and contains queue 420
+
 ### Follow-ups from the analytics review
 
 - [x] `src/jobs/processors.ts` was ~1500 lines across five unrelated domains.
