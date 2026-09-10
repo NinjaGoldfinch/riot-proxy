@@ -448,15 +448,35 @@ describe('static mirror routes (§6.2)', () => {
     expect(res.json().error.code).toBe('NOT_FOUND');
   });
 
-  it('no longer advertises queues, which Data Dragon does not serve (#52)', async ({ skip }) => {
+  /**
+   * #52 removed `queue` from the Data Dragon file list, because Data Dragon
+   * does not serve it — asking for it 400d as an unknown file. #115 gave the
+   * data a home of its own instead (`DDRAGON_DIR/meta/`, a different host, no
+   * version), so this is a route now.
+   *
+   * The distinction #52 drew still holds and is what this asserts: it is not a
+   * Data Dragon file. An un-synced mirror answers 404 — "nothing here yet" —
+   * rather than 400, which would say the caller asked for something that does
+   * not exist.
+   */
+  it('serves queues from its own home, not from the Data Dragon list', async ({ skip }) => {
     if (!available || !app) return skip();
     const res = await app.inject({
       method: 'GET',
       url: '/v1/static/queues',
       headers: auth(readKey),
     });
-    expect(res.statusCode).toBe(400);
-    expect(res.json().error.code).toBe('VALIDATION');
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error.code).toBe('NOT_FOUND');
+
+    // And a *version* on it is still meaningless: the un-versioned route
+    // ignores one rather than pretending to honour it.
+    const versioned = await app.inject({
+      method: 'GET',
+      url: '/v1/static/queues?version=16.17.1',
+      headers: auth(readKey),
+    });
+    expect(versioned.statusCode).toBe(404);
   });
 });
 

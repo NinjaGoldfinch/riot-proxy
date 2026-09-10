@@ -245,21 +245,21 @@ under a distinct `neg:` prefix — a cached "not in game" is distinguishable fro
 
 ### Background jobs
 
-| Job                   | Schedule                             | Action                                                |
-| --------------------- | ------------------------------------ | ----------------------------------------------------- |
-| `poll:live`           | every `TRACK_POLL_LIVE_S` (60 s)     | spectator-v5 → `game.started` / `game.ended`          |
-| `poll:rank`           | every `TRACK_POLL_RANK_S` (600 s)    | league-v4 → `rank.changed`                            |
-| `poll:matches`        | every `TRACK_POLL_MATCH_S` (300 s)   | new match IDs since the last tick → `archive:match`   |
-| `archive:match`       | on demand                            | fetch, upsert, `match.archived`                       |
-| `backfill:player`     | admin, or a player never walked      | page 100 IDs at a time, bulk priority                 |
-| `ddragon:sync`        | hourly                               | on a new patch, mirror data and emit `patch.new`      |
-| `ladder:crawl`        | `LADDER_CRAWL_S` (off), or admin     | fan out one leg per apex league and (tier, division)  |
-| `ladder:apex`         | per crawl                            | one request per apex league, upserted whole           |
-| `ladder:walk`         | per crawl                            | page a (tier, division) until an empty page           |
-| `ladder:collect`      | once the enumeration is done         | 25 discovered players' match ids into the crawl's set |
-| `ladder:archive`      | once every id is collected           | de-duplicate against the archive, queue what is new   |
-| `aggregate:analytics` | crawl, `AGGREGATE_INTERVAL_S`, admin | recompute the analytics tables from the archive       |
-| `maintenance`         | daily                                | clear orphaned single-flight locks                    |
+| Job                   | Schedule                             | Action                                                                 |
+| --------------------- | ------------------------------------ | ---------------------------------------------------------------------- |
+| `poll:live`           | every `TRACK_POLL_LIVE_S` (60 s)     | spectator-v5 → `game.started` / `game.ended`                           |
+| `poll:rank`           | every `TRACK_POLL_RANK_S` (600 s)    | league-v4 → `rank.changed`                                             |
+| `poll:matches`        | every `TRACK_POLL_MATCH_S` (300 s)   | new match IDs since the last tick → `archive:match`                    |
+| `archive:match`       | on demand                            | fetch, upsert, `match.archived`                                        |
+| `backfill:player`     | admin, or a player never walked      | page 100 IDs at a time, bulk priority                                  |
+| `ddragon:sync`        | hourly                               | mirror the queue table; on a new patch, the patch data and `patch.new` |
+| `ladder:crawl`        | `LADDER_CRAWL_S` (off), or admin     | fan out one leg per apex league and (tier, division)                   |
+| `ladder:apex`         | per crawl                            | one request per apex league, upserted whole                            |
+| `ladder:walk`         | per crawl                            | page a (tier, division) until an empty page                            |
+| `ladder:collect`      | once the enumeration is done         | 25 discovered players' match ids into the crawl's set                  |
+| `ladder:archive`      | once every id is collected           | de-duplicate against the archive, queue what is new                    |
+| `aggregate:analytics` | crawl, `AGGREGATE_INTERVAL_S`, admin | recompute the analytics tables from the archive                        |
+| `maintenance`         | daily                                | clear orphaned single-flight locks                                     |
 
 Each poll type is one repeatable tick that fans out to one job per tracked
 player, so adding or removing a tracked player needs no scheduler changes. All

@@ -67,6 +67,25 @@ export const EVENT_EXAMPLES: { [E in EventName]: ProxyEvent<E> } = {
       durationS: 42,
     },
   },
+  'analytics.updated': {
+    event: 'analytics.updated',
+    // Admin-only, like the topic it shares with the crawl that triggered it:
+    // these are numbers about what the proxy spent its own time on.
+    topic: LADDER_TOPIC,
+    at: 1_756_000_000_000,
+    data: {
+      platform: 'euw1',
+      queue: 'RANKED_SOLO_5x5',
+      durationS: 214,
+      tables: {
+        champion_stats: 8412,
+        champion_matchups: 121_004,
+        champion_items: 486_220,
+        champion_runes: 31_508,
+        champion_spells: 4106,
+      },
+    },
+  },
   'metrics.snapshot': {
     event: 'metrics.snapshot',
     // Admin-only, like the topic itself. One queue and one limiter scope shown;

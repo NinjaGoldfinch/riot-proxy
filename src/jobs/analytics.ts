@@ -7,6 +7,7 @@ import {
   recomputeChampionStats,
 } from '../db/analytics.js';
 import { countArchivedMatches, reextractBatch } from '../db/matches.js';
+import { LADDER_TOPIC, publish } from '../events/index.js';
 import { logger } from '../logger.js';
 import {
   aggregateRows,
@@ -172,6 +173,16 @@ export async function aggregateAnalytics(
     games,
   });
   logger.info({ ...labels, rows, steps, games, ms }, 'analytics recomputed');
+
+  // Only a completed run. A half-finished rebuild has left some tables newer
+  // than others, and telling a consumer "the analytics updated" is an
+  // invitation to re-read exactly the tables that did not — `computed_at` and
+  // the dashboard are where a partial run is visible, not here.
+  await publish('analytics.updated', LADDER_TOPIC, {
+    ...labels,
+    durationS: Math.round(ms / 1000),
+    tables: rows,
+  });
 
   // Every table's row count, not just `champion_stats`'. The admin recompute
   // route answers 202 and the job result is the only structured signal an

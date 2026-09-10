@@ -34,6 +34,22 @@ export interface EventPayloads {
     players: number;
     durationS: number;
   };
+  /**
+   * The analytics tables were rebuilt for one ladder (#115). Carries the run
+   * rather than a pointer to it, like `ladder.crawl.completed` above: a
+   * consumer's next move is to re-read the analytics routes, and `tables` is
+   * what says whether that is worth doing — a run that wrote zero rows means
+   * the archive had nothing new to say.
+   *
+   * Admin-scoped, because it describes what the proxy spent its own time on.
+   */
+  'analytics.updated': {
+    platform: string;
+    queue: string;
+    durationS: number;
+    /** Rows written, keyed by table name. */
+    tables: Record<string, number>;
+  };
   'metrics.snapshot': MetricsSnapshotData;
 }
 

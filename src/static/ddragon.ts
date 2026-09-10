@@ -12,6 +12,25 @@ import { redis } from '../redis.js';
 export const DDRAGON_BASE = 'https://ddragon.leagueoflegends.com';
 export const VERSIONS_URL = `${DDRAGON_BASE}/api/versions.json`;
 
+/**
+ * Riot's queue table (#52, #115). Not Data Dragon at all: a different host, no
+ * version in the path, and no entry in `versions.json` — so it cannot live
+ * under `DDRAGON_DIR/{version}/` without claiming a patch it does not have.
+ *
+ * It gets `DDRAGON_DIR/meta/` instead, which is the home this repo has owed
+ * non-patch-versioned static data since #52 removed `queue` from the mirror's
+ * file list for naming a file Data Dragon does not serve.
+ */
+export const QUEUES_URL = 'https://static.developer.riotgames.com/docs/lol/queues.json';
+
+/** Where un-versioned static data lives, beside the per-patch directories. */
+export const META_DIR = 'meta';
+
+/** Un-versioned files mirrored into `META_DIR`. */
+export const META_FILES = ['queues'] as const;
+
+export type MetaFile = (typeof META_FILES)[number];
+
 /** Data files mirrored per patch. Images stay on the CDN; §1 non-goals. */
 export const DATA_FILES = [
   'champion',
@@ -25,6 +44,9 @@ export const DATA_FILES = [
 export type DataFile = (typeof DATA_FILES)[number];
 
 const CURRENT_VERSION_KEY = 'ddragon:version';
+
+/** What a mirrored patch directory is named: `16.17.1`, and nothing else. */
+const VERSION_DIR = /^[0-9]+(\.[0-9]+)*$/;
 
 export function ddragonDir(): string {
   return resolve(config.DDRAGON_DIR);
@@ -70,6 +92,11 @@ export async function currentVersion(): Promise<string | undefined> {
     const versions = entries
       .filter((e) => e.isDirectory())
       .map((e) => e.name)
+      // Version directories only. `META_DIR` sits beside them and is not a
+      // patch, and `compareVersions` parses segments with `Number` — so an
+      // unfiltered list sorts a `NaN` into the answer and this returns `meta`
+      // as the current version.
+      .filter((name) => VERSION_DIR.test(name))
       .sort(compareVersions)
       .reverse();
     const found = versions[0];
@@ -94,6 +121,36 @@ export interface SyncResult {
   version: string;
   changed: boolean;
   files: string[];
+  /** Un-versioned files refreshed this run — see `syncMeta`. */
+  meta: string[];
+}
+
+/**
+ * Refresh the un-versioned files, every run rather than only on a new patch.
+ *
+ * The patch check above is a *version* comparison, and these have no version:
+ * Riot adds queue ids when a game mode ships, which is not the same event as a
+ * patch landing in `versions.json`. Gating them on `changed` would mean a
+ * deployment learning about Arena whenever the client next updated, for no
+ * reason but that the two files happen to be fetched by the same job.
+ *
+ * A failure here is logged and swallowed, like a missing Data Dragon file: the
+ * queue table is a labelling convenience, and losing it must not stop the
+ * champion and item data a patch actually needs.
+ */
+async function syncMeta(): Promise<string[]> {
+  const dir = join(ddragonDir(), META_DIR);
+  await mkdir(dir, { recursive: true });
+
+  const written: string[] = [];
+  try {
+    const queues = await fetchJson<unknown>(QUEUES_URL);
+    await writeFile(join(dir, 'queues.json'), JSON.stringify(queues), 'utf8');
+    written.push('queues');
+  } catch (err) {
+    logger.warn({ err, url: QUEUES_URL }, 'queue table unavailable, keeping what is on disk');
+  }
+  return written;
 }
 
 /**
@@ -104,8 +161,12 @@ export async function syncDdragon(opts: { force?: boolean } = {}): Promise<SyncR
   const version = await latestVersion();
   const known = await currentVersion();
 
+  // Before the version check, not after it: these are not versioned, so
+  // "nothing changed" is a statement about the patch and not about them.
+  const meta = await syncMeta();
+
   if (!opts.force && known === version) {
-    return { version, changed: false, files: [] };
+    return { version, changed: false, files: [], meta };
   }
 
   const dir = versionDir(version);
@@ -129,8 +190,8 @@ export async function syncDdragon(opts: { force?: boolean } = {}): Promise<SyncR
   await writeFile(join(dir, 'versions.json'), JSON.stringify(await fetchVersions()), 'utf8');
   await redis.set(CURRENT_VERSION_KEY, version);
 
-  logger.info({ version, files: written.length }, 'Data Dragon sync complete');
-  return { version, changed: true, files: written };
+  logger.info({ version, files: written.length, meta: meta.length }, 'Data Dragon sync complete');
+  return { version, changed: true, files: written, meta };
 }
 
 /**
@@ -147,6 +208,24 @@ function staticPath(version: string, file: string): string | undefined {
   const root = ddragonDir();
   const candidate = resolve(join(root, version, `${file}.json`));
   return candidate.startsWith(root + sep) ? candidate : undefined;
+}
+
+/**
+ * Read an un-versioned mirrored file, or undefined when it has never synced.
+ *
+ * `META_DIR` is a literal rather than a caller's string, so this cannot be the
+ * path-traversal shape `staticPath` guards against — it goes through the same
+ * guard regardless, because a second reader of an exported helper is exactly
+ * how that kind of hole gets reopened.
+ */
+export async function readMeta(file: MetaFile): Promise<unknown | undefined> {
+  const path = staticPath(META_DIR, file);
+  if (!path) return undefined;
+  try {
+    return JSON.parse(await readFile(path, 'utf8')) as unknown;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Read a mirrored file, or undefined when this patch was never synced. */
