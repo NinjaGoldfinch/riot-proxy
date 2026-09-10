@@ -1,9 +1,11 @@
 import { KEY_SCOPE } from '../config.js';
 import { countActiveConsumers } from '../db/consumers.js';
+import { topChampions } from '../db/analytics.js';
 import { countAllLeagueEntries, lastFinishedCrawl, listRunningCrawls } from '../db/ladder.js';
 import { countArchivedMatches } from '../db/matches.js';
 import { countPlayers, countTrackedPlayers } from '../db/players.js';
 import { workerLiveness } from '../jobs/heartbeat.js';
+import { listAnalyticsRuns } from '../jobs/analytics-state.js';
 import { pendingLegs } from '../jobs/ladder-state.js';
 import { allQueues } from '../jobs/queues.js';
 import {
@@ -14,6 +16,7 @@ import {
 } from '../metrics.js';
 import { limiter } from '../riot/limiter.js';
 import { PLATFORM_LABELS, REGION_LABELS, isPlatform, isRegion } from '../riot/routing.js';
+import { championNames } from '../static/champions.js';
 import type { LadderCrawl } from '../db/schema.js';
 import type { MetricsSnapshotData } from './schema.js';
 
@@ -131,6 +134,35 @@ async function labelledCounts(
  * that is where the fan-out records them — and it is the only number that
  * moves while a multi-hour walk is between legs.
  */
+/**
+ * The analytics block (#114): every ladder's last recompute, and the top of
+ * the newest patch as a sanity read on it.
+ *
+ * The top champions come from whichever ladder ran most recently rather than
+ * from a configured default — the dashboard's question is "did the last
+ * recompute work", and the last recompute is the one that can answer it. No
+ * runs recorded means no recompute has happened on this key scope, which is a
+ * true empty rather than a reason to go looking in Postgres anyway.
+ */
+async function analyticsState(): Promise<MetricsSnapshotData['analytics']> {
+  const lastRuns = await listAnalyticsRuns();
+  const newest = lastRuns[0];
+  if (!newest) return { lastRuns: [], topChampions: [] };
+
+  const top = await topChampions(newest.platform, newest.queue);
+  const names = await championNames(top.map((c) => c.championId));
+
+  return {
+    lastRuns,
+    topChampions: top.map((c) => ({
+      championId: c.championId,
+      ...(names.has(c.championId) ? { championName: names.get(c.championId) } : {}),
+      games: c.games,
+      winRate: c.games > 0 ? Math.round((c.wins / c.games) * 10_000) / 10_000 : 0,
+    })),
+  };
+}
+
 async function ladderState(): Promise<MetricsSnapshotData['ladder']> {
   const [running, last, entries] = await Promise.all([
     listRunningCrawls(),
@@ -190,6 +222,7 @@ export async function buildMetricsSnapshot(inputs: SnapshotInputs): Promise<Metr
     backfillsQueued,
     refreshClaims,
     ladder,
+    analytics,
   ] = await Promise.all([
     countArchivedMatches(),
     countTrackedPlayers(),
@@ -202,6 +235,7 @@ export async function buildMetricsSnapshot(inputs: SnapshotInputs): Promise<Metr
     labelledCounts(backfillsQueuedTotal, 'reason', 'status'),
     labelledCounts(refreshClaimsTotal, 'part', 'outcome'),
     ladderState(),
+    analyticsState(),
   ]);
 
   const memory = process.memoryUsage();
@@ -217,6 +251,7 @@ export async function buildMetricsSnapshot(inputs: SnapshotInputs): Promise<Metr
     worker,
     flows: { backfillsQueued, refreshClaims },
     ladder,
+    analytics,
     process: { uptimeSeconds: process.uptime(), rssBytes: memory.rss },
   };
 }

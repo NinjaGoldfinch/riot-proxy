@@ -71,7 +71,7 @@ import {
   type LadderCrawlJob,
   type LadderWalkJob,
 } from './queues.js';
-import { enqueueChampionAggregate } from './analytics.js';
+import { enqueueAnalyticsRecompute } from './analytics.js';
 import { enqueueNameBackfill } from './player-names.js';
 import { walkIsComplete, walkMatchIds } from './match-walk.js';
 
@@ -531,7 +531,7 @@ async function completeCrawl(crawlId: string, status: 'completed' | 'failed'): P
     durationS,
   });
 
-  await enqueueChampionAggregate(finished.platform, finished.queue);
+  await enqueueAnalyticsRecompute(finished.platform, finished.queue);
 }
 
 /**

@@ -74,6 +74,7 @@
           "worker",
           "flows",
           "ladder",
+          "analytics",
           "process"
         ],
         "properties": {
@@ -557,6 +558,101 @@
               }
             }
           },
+          "analytics": {
+            "description": "Deployment-wide: read from Redis and Postgres, not from this process",
+            "type": "object",
+            "required": [
+              "lastRuns",
+              "topChampions"
+            ],
+            "properties": {
+              "lastRuns": {
+                "description": "Each ladder’s most recent recompute, newest first. Empty until one runs.",
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "platform",
+                    "queue",
+                    "at",
+                    "status",
+                    "ms",
+                    "steps",
+                    "rows",
+                    "games"
+                  ],
+                  "properties": {
+                    "platform": {
+                      "type": "string"
+                    },
+                    "queue": {
+                      "type": "string"
+                    },
+                    "at": {
+                      "description": "Epoch milliseconds the run finished, however it ended",
+                      "type": "integer"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "completed",
+                        "failed"
+                      ]
+                    },
+                    "ms": {
+                      "description": "Wall clock for the whole job",
+                      "type": "integer"
+                    },
+                    "steps": {
+                      "description": "Seconds per step, keyed by step name",
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "number"
+                      }
+                    },
+                    "rows": {
+                      "description": "Rows written, keyed by table name",
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "integer"
+                      }
+                    },
+                    "games": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              },
+              "topChampions": {
+                "description": "Most-played champions of the newest aggregated patch, summed across tiers and roles — a sanity read on whether the last recompute produced anything sensible.",
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "championId",
+                    "games",
+                    "winRate"
+                  ],
+                  "properties": {
+                    "championId": {
+                      "type": "integer"
+                    },
+                    "championName": {
+                      "type": "string"
+                    },
+                    "games": {
+                      "type": "integer"
+                    },
+                    "winRate": {
+                      "minimum": 0,
+                      "maximum": 1,
+                      "type": "number"
+                    }
+                  }
+                }
+              }
+            }
+          },
           "process": {
             "type": "object",
             "required": [
@@ -580,6 +676,7 @@
           "t",
           "totals",
           "queues",
+          "analytics",
           "cache"
         ],
         "properties": {
@@ -624,6 +721,31 @@
               },
               "failed": {
                 "type": "integer"
+              }
+            }
+          },
+          "analytics": {
+            "description": "Compact by design: the dashboard reads per-step detail from the snapshot, and a history point only has to answer \"is the aggregate keeping up\" over a day.",
+            "type": "object",
+            "required": [
+              "rows",
+              "ageSeconds"
+            ],
+            "properties": {
+              "rows": {
+                "description": "Rows the last recompute of any ladder wrote, summed",
+                "type": "integer"
+              },
+              "ageSeconds": {
+                "description": "How long ago that run finished; null until one has",
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             }
           },
@@ -8667,12 +8789,13 @@
         ]
       }
     },
-    "/v1/admin/analytics/champions/recompute": {
+    "/v1/admin/analytics/recompute": {
       "post": {
-        "summary": "Recompute champion aggregates from the archive",
+        "summary": "Recompute the analytics tables from the archive",
         "tags": [
           "admin"
         ],
+        "description": "Queues `aggregate:analytics` for one ladder and answers 202 — the scan runs on the worker. Bounded by `AGGREGATE_PATCH_LIMIT`: only the latest N patches are rebuilt, and older ones keep the rows they were last computed with. The job result carries per-table row counts, and `GET /v1/admin/metrics` reports per-step timings.",
         "requestBody": {
           "required": true,
           "content": {
@@ -10566,7 +10689,7 @@
     },
     {
       "name": "ws",
-      "description": "```\nGET /v1/ws?token=rpx_…\n```\n\nA WebSocket. Auth is the same consumer key, in the query string rather than a\nheader, because a browser `WebSocket` cannot set one.\n\n**Client → server**\n\n```json\n{ \"op\": \"subscribe\",   \"topics\": [\"player:<puuid>\", \"patch\"] }\n{ \"op\": \"unsubscribe\", \"topics\": [\"player:<puuid>\"] }\n{ \"op\": \"ping\" }\n```\n\n**Server → client** — `ready` on connect, `subscribed` acknowledging a\nchange, `pong`, `error`, and the events themselves:\n\n```json\n{\n  \"event\": \"game.started\",\n  \"topic\": \"player:…\",\n  \"at\": 1756000000000,\n  \"data\": {\n    \"puuid\": \"…\",\n    \"platform\": \"euw1\",\n    \"gameId\": 1234567890,\n    \"championId\": 64,\n    \"queueId\": 420\n  }\n}\n\n{\n  \"event\": \"game.ended\",\n  \"topic\": \"player:…\",\n  \"at\": 1756000000000,\n  \"data\": {\n    \"puuid\": \"…\",\n    \"gameId\": 1234567890\n  }\n}\n\n{\n  \"event\": \"rank.changed\",\n  \"topic\": \"player:…\",\n  \"at\": 1756000000000,\n  \"data\": {\n    \"puuid\": \"…\",\n    \"queue\": \"RANKED_SOLO_5x5\",\n    \"before\": {\n      \"tier\": \"GOLD\",\n      \"rank\": \"I\",\n      \"lp\": 98\n    },\n    \"after\": {\n      \"tier\": \"PLATINUM\",\n      \"rank\": \"IV\",\n      \"lp\": 12\n    }\n  }\n}\n\n{\n  \"event\": \"match.archived\",\n  \"topic\": \"player:…\",\n  \"at\": 1756000000000,\n  \"data\": {\n    \"puuid\": \"…\",\n    \"matchId\": \"EUW1_7381937461\"\n  }\n}\n\n{\n  \"event\": \"patch.new\",\n  \"topic\": \"patch\",\n  \"at\": 1756000000000,\n  \"data\": {\n    \"version\": \"15.16.1\"\n  }\n}\n\n{\n  \"event\": \"ladder.crawl.completed\",\n  \"topic\": \"ladder\",\n  \"at\": 1756000000000,\n  \"data\": {\n    \"crawlId\": \"0f2a…\",\n    \"platform\": \"euw1\",\n    \"queue\": \"RANKED_SOLO_5x5\",\n    \"entries\": 1870,\n    \"players\": 50,\n    \"durationS\": 42\n  }\n}\n\n{\n  \"event\": \"metrics.snapshot\",\n  \"topic\": \"metrics\",\n  \"at\": 1756000000000,\n  \"data\": {\n    \"v\": 1,\n    \"keyScope\": \"a1b2c3d4\",\n    \"totals\": {\n      \"archivedMatches\": 48213,\n      \"trackedPlayers\": 12,\n      \"knownPlayers\": 3417,\n      \"activeConsumers\": 4\n    },\n    \"queues\": {\n      \"backfill\": {\n        \"active\": 2,\n        \"waiting\": 0,\n        \"prioritized\": 137,\n        \"delayed\": 0,\n        \"scheduled\": 0,\n        \"failed\": 1,\n        \"completed\": 812\n      }\n    },\n    \"ws\": {\n      \"connections\": 3,\n      \"subscriptions\": 7\n    },\n    \"events\": {\n      \"match.archived\": 812,\n      \"game.started\": 41\n    },\n    \"cache\": {\n      \"hit\": 10412,\n      \"miss\": 1733,\n      \"neg\": 88,\n      \"stale\": 402\n    },\n    \"limiter\": [\n      {\n        \"scope\": \"euw1\",\n        \"kind\": \"platform\",\n        \"label\": \"EU West\",\n        \"frozenMs\": 0,\n        \"windows\": [\n          {\n            \"window\": \"20:1\",\n            \"used\": 3,\n            \"limit\": 20\n          },\n          {\n            \"window\": \"100:120\",\n            \"used\": 41,\n            \"limit\": 100\n          }\n        ],\n        \"methods\": [\n          {\n            \"method\": \"summoner.byPuuid\",\n            \"windows\": [\n              {\n                \"window\": \"1600:60\",\n                \"used\": 12,\n                \"limit\": 1600\n              }\n            ]\n          }\n        ]\n      }\n    ],\n    \"worker\": {\n      \"alive\": true,\n      \"lastSeenMs\": 4000\n    },\n    \"flows\": {\n      \"backfillsQueued\": {\n        \"lookup:queued\": 214,\n        \"lookup:already-queued\": 37,\n        \"admin:queued\": 3\n      },\n      \"refreshClaims\": {\n        \"profile:claimed\": 96,\n        \"profile:coalesced\": 311\n      }\n    },\n    \"ladder\": {\n      \"running\": [\n        {\n          \"id\": \"0f2a…\",\n          \"platform\": \"euw1\",\n          \"queue\": \"RANKED_SOLO_5x5\",\n          \"tierFloor\": \"EMERALD\",\n          \"status\": \"running\",\n          \"phase\": \"enumerate\",\n          \"startedAt\": \"2026-09-01T02:00:00.000Z\",\n          \"finishedAt\": null,\n          \"pagesFetched\": 412,\n          \"entriesSeen\": 84306,\n          \"playersDiscovered\": 5102,\n          \"backfillsEnqueued\": 0,\n          \"matchIdsSeen\": 0,\n          \"matchesQueued\": 0,\n          \"pendingLegs\": 6\n        }\n      ],\n      \"lastCompleted\": null,\n      \"entries\": 84306\n    },\n    \"process\": {\n      \"uptimeSeconds\": 86400,\n      \"rssBytes\": 182000000\n    }\n  }\n}\n```\n\nFour topics exist: `player:<puuid>`, `patch`, `metrics`\nand `firehose`.\n\n**A player topic only ever fires for a _tracked_ player.** Subscribing to an\nuntracked PUUID is accepted and then silent — nothing polls them, so there is\nnothing to report. Tracking is an operator action\n(`POST /v1/admin/tracked-players`).\n\n**`metrics` and `firehose` require an admin-scoped key** —\nand, when `ADMIN_IP_ALLOWLIST` is set, a source address on that list, the same\npair the `admin` routes check. Subscribing without it earns an `error` frame\n(`FORBIDDEN`) and the topic is not subscribed; the acknowledgement lists what\nthe socket actually holds. `metrics` publishes a `metrics.snapshot`\nevery 5 s while at least one socket is subscribed —\nthe same document `GET /v1/admin/metrics` returns. `firehose`\nmirrors every event the service publishes, whatever its topic — including every\ntracked player's, which is what makes it an admin surface.\n\nOne socket holds at most 200 topics. Subscribing past that\nis not an error and not honoured: the extra topics are dropped, and the\n`subscribed` acknowledgement lists what you actually hold — compare it with\nwhat you asked for rather than assuming. Above that ceiling, use more than one\nsocket.\n\nThe server pings every 30 s and drops a connection that\nmisses 2 consecutive pongs."
+      "description": "```\nGET /v1/ws?token=rpx_…\n```\n\nA WebSocket. Auth is the same consumer key, in the query string rather than a\nheader, because a browser `WebSocket` cannot set one.\n\n**Client → server**\n\n```json\n{ \"op\": \"subscribe\",   \"topics\": [\"player:<puuid>\", \"patch\"] }\n{ \"op\": \"unsubscribe\", \"topics\": [\"player:<puuid>\"] }\n{ \"op\": \"ping\" }\n```\n\n**Server → client** — `ready` on connect, `subscribed` acknowledging a\nchange, `pong`, `error`, and the events themselves:\n\n```json\n{\n  \"event\": \"game.started\",\n  \"topic\": \"player:…\",\n  \"at\": 1756000000000,\n  \"data\": {\n    \"puuid\": \"…\",\n    \"platform\": \"euw1\",\n    \"gameId\": 1234567890,\n    \"championId\": 64,\n    \"queueId\": 420\n  }\n}\n\n{\n  \"event\": \"game.ended\",\n  \"topic\": \"player:…\",\n  \"at\": 1756000000000,\n  \"data\": {\n    \"puuid\": \"…\",\n    \"gameId\": 1234567890\n  }\n}\n\n{\n  \"event\": \"rank.changed\",\n  \"topic\": \"player:…\",\n  \"at\": 1756000000000,\n  \"data\": {\n    \"puuid\": \"…\",\n    \"queue\": \"RANKED_SOLO_5x5\",\n    \"before\": {\n      \"tier\": \"GOLD\",\n      \"rank\": \"I\",\n      \"lp\": 98\n    },\n    \"after\": {\n      \"tier\": \"PLATINUM\",\n      \"rank\": \"IV\",\n      \"lp\": 12\n    }\n  }\n}\n\n{\n  \"event\": \"match.archived\",\n  \"topic\": \"player:…\",\n  \"at\": 1756000000000,\n  \"data\": {\n    \"puuid\": \"…\",\n    \"matchId\": \"EUW1_7381937461\"\n  }\n}\n\n{\n  \"event\": \"patch.new\",\n  \"topic\": \"patch\",\n  \"at\": 1756000000000,\n  \"data\": {\n    \"version\": \"15.16.1\"\n  }\n}\n\n{\n  \"event\": \"ladder.crawl.completed\",\n  \"topic\": \"ladder\",\n  \"at\": 1756000000000,\n  \"data\": {\n    \"crawlId\": \"0f2a…\",\n    \"platform\": \"euw1\",\n    \"queue\": \"RANKED_SOLO_5x5\",\n    \"entries\": 1870,\n    \"players\": 50,\n    \"durationS\": 42\n  }\n}\n\n{\n  \"event\": \"metrics.snapshot\",\n  \"topic\": \"metrics\",\n  \"at\": 1756000000000,\n  \"data\": {\n    \"v\": 1,\n    \"keyScope\": \"a1b2c3d4\",\n    \"totals\": {\n      \"archivedMatches\": 48213,\n      \"trackedPlayers\": 12,\n      \"knownPlayers\": 3417,\n      \"activeConsumers\": 4\n    },\n    \"queues\": {\n      \"backfill\": {\n        \"active\": 2,\n        \"waiting\": 0,\n        \"prioritized\": 137,\n        \"delayed\": 0,\n        \"scheduled\": 0,\n        \"failed\": 1,\n        \"completed\": 812\n      }\n    },\n    \"ws\": {\n      \"connections\": 3,\n      \"subscriptions\": 7\n    },\n    \"events\": {\n      \"match.archived\": 812,\n      \"game.started\": 41\n    },\n    \"cache\": {\n      \"hit\": 10412,\n      \"miss\": 1733,\n      \"neg\": 88,\n      \"stale\": 402\n    },\n    \"limiter\": [\n      {\n        \"scope\": \"euw1\",\n        \"kind\": \"platform\",\n        \"label\": \"EU West\",\n        \"frozenMs\": 0,\n        \"windows\": [\n          {\n            \"window\": \"20:1\",\n            \"used\": 3,\n            \"limit\": 20\n          },\n          {\n            \"window\": \"100:120\",\n            \"used\": 41,\n            \"limit\": 100\n          }\n        ],\n        \"methods\": [\n          {\n            \"method\": \"summoner.byPuuid\",\n            \"windows\": [\n              {\n                \"window\": \"1600:60\",\n                \"used\": 12,\n                \"limit\": 1600\n              }\n            ]\n          }\n        ]\n      }\n    ],\n    \"worker\": {\n      \"alive\": true,\n      \"lastSeenMs\": 4000\n    },\n    \"flows\": {\n      \"backfillsQueued\": {\n        \"lookup:queued\": 214,\n        \"lookup:already-queued\": 37,\n        \"admin:queued\": 3\n      },\n      \"refreshClaims\": {\n        \"profile:claimed\": 96,\n        \"profile:coalesced\": 311\n      }\n    },\n    \"ladder\": {\n      \"running\": [\n        {\n          \"id\": \"0f2a…\",\n          \"platform\": \"euw1\",\n          \"queue\": \"RANKED_SOLO_5x5\",\n          \"tierFloor\": \"EMERALD\",\n          \"status\": \"running\",\n          \"phase\": \"enumerate\",\n          \"startedAt\": \"2026-09-01T02:00:00.000Z\",\n          \"finishedAt\": null,\n          \"pagesFetched\": 412,\n          \"entriesSeen\": 84306,\n          \"playersDiscovered\": 5102,\n          \"backfillsEnqueued\": 0,\n          \"matchIdsSeen\": 0,\n          \"matchesQueued\": 0,\n          \"pendingLegs\": 6\n        }\n      ],\n      \"lastCompleted\": null,\n      \"entries\": 84306\n    },\n    \"analytics\": {\n      \"lastRuns\": [\n        {\n          \"platform\": \"euw1\",\n          \"queue\": \"RANKED_SOLO_5x5\",\n          \"at\": 1755900000000,\n          \"status\": \"completed\",\n          \"ms\": 214000,\n          \"steps\": {\n            \"champions\": 96.4,\n            \"matchups\": 71.2,\n            \"builds\": 46.1\n          },\n          \"rows\": {\n            \"champion_stats\": 8412,\n            \"champion_matchups\": 121004,\n            \"champion_items\": 486220,\n            \"champion_runes\": 31508,\n            \"champion_spells\": 4106\n          },\n          \"games\": 402118\n        }\n      ],\n      \"topChampions\": [\n        {\n          \"championId\": 157,\n          \"championName\": \"Yasuo\",\n          \"games\": 9204,\n          \"winRate\": 0.4881\n        },\n        {\n          \"championId\": 103,\n          \"championName\": \"Ahri\",\n          \"games\": 8817,\n          \"winRate\": 0.5142\n        }\n      ]\n    },\n    \"process\": {\n      \"uptimeSeconds\": 86400,\n      \"rssBytes\": 182000000\n    }\n  }\n}\n```\n\nFour topics exist: `player:<puuid>`, `patch`, `metrics`\nand `firehose`.\n\n**A player topic only ever fires for a _tracked_ player.** Subscribing to an\nuntracked PUUID is accepted and then silent — nothing polls them, so there is\nnothing to report. Tracking is an operator action\n(`POST /v1/admin/tracked-players`).\n\n**`metrics` and `firehose` require an admin-scoped key** —\nand, when `ADMIN_IP_ALLOWLIST` is set, a source address on that list, the same\npair the `admin` routes check. Subscribing without it earns an `error` frame\n(`FORBIDDEN`) and the topic is not subscribed; the acknowledgement lists what\nthe socket actually holds. `metrics` publishes a `metrics.snapshot`\nevery 5 s while at least one socket is subscribed —\nthe same document `GET /v1/admin/metrics` returns. `firehose`\nmirrors every event the service publishes, whatever its topic — including every\ntracked player's, which is what makes it an admin surface.\n\nOne socket holds at most 200 topics. Subscribing past that\nis not an error and not honoured: the extra topics are dropped, and the\n`subscribed` acknowledgement lists what you actually hold — compare it with\nwhat you asked for rather than assuming. Above that ceiling, use more than one\nsocket.\n\nThe server pings every 30 s and drops a connection that\nmisses 2 consecutive pongs."
     },
     {
       "name": "ops",

@@ -72,7 +72,7 @@ const EXPECTED_OPERATIONS = [
   'GET /v1/riot/accounts/by-riot-id/{region}/{gameName}/{tagLine}',
   'GET /v1/static/versions',
   'GET /v1/static/{file}',
-  'POST /v1/admin/analytics/champions/recompute',
+  'POST /v1/admin/analytics/recompute',
   'POST /v1/admin/analytics/reextract',
   'POST /v1/admin/backfill',
   'POST /v1/admin/cache/purge',

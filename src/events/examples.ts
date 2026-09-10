@@ -146,6 +146,33 @@ export const EVENT_EXAMPLES: { [E in EventName]: ProxyEvent<E> } = {
         lastCompleted: null,
         entries: 84_306,
       },
+      // The recompute that ran after the *previous* crawl finished — the one
+      // above is still enumerating, so nothing it discovers has been
+      // aggregated yet. Steps in the order they run.
+      analytics: {
+        lastRuns: [
+          {
+            platform: 'euw1',
+            queue: 'RANKED_SOLO_5x5',
+            at: 1_755_900_000_000,
+            status: 'completed',
+            ms: 214_000,
+            steps: { champions: 96.4, matchups: 71.2, builds: 46.1 },
+            rows: {
+              champion_stats: 8412,
+              champion_matchups: 121_004,
+              champion_items: 486_220,
+              champion_runes: 31_508,
+              champion_spells: 4106,
+            },
+            games: 402_118,
+          },
+        ],
+        topChampions: [
+          { championId: 157, championName: 'Yasuo', games: 9204, winRate: 0.4881 },
+          { championId: 103, championName: 'Ahri', games: 8817, winRate: 0.5142 },
+        ],
+      },
       process: { uptimeSeconds: 86_400, rssBytes: 182_000_000 },
     },
   },

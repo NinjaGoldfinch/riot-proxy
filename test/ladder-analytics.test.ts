@@ -34,6 +34,7 @@ import {
 } from '../src/db/analytics.js';
 import { createTestConsumer, removeTestConsumers, testConsumerName } from './helpers/consumers.js';
 import { closeRedis, redis } from '../src/redis.js';
+import { config } from '../src/config.js';
 import { wsHub } from '../src/ws/index.js';
 
 /**
@@ -571,6 +572,77 @@ describe('champion_stats v2 — role, sums and denominators', () => {
  * matchups), against the real Postgres for the same reason as the blocks
  * above — the deliverable is what the join and the group-by actually produce.
  */
+describe('AGGREGATE_PATCH_LIMIT (#114)', () => {
+  /** `config` is read at call time, so a test can move one field and put it back. */
+  async function withPatchLimit(limit: number, run: () => Promise<void>): Promise<void> {
+    const target = config as unknown as Record<string, unknown>;
+    const before = target['AGGREGATE_PATCH_LIMIT'];
+    target['AGGREGATE_PATCH_LIMIT'] = limit;
+    try {
+      await run();
+    } finally {
+      target['AGGREGATE_PATCH_LIMIT'] = before;
+    }
+  }
+
+  it('rebuilds only the latest N patches', async ({ skip }) => {
+    if (!available) return skip();
+    await seed(
+      [
+        m('p1', { 'chall-a': [AHRI, true] }, { gameVersion: '16.13.1.1' }),
+        m('p2', { 'chall-a': [AHRI, true] }, { gameVersion: '16.12.1.1' }),
+        m('p3', { 'chall-a': [AHRI, true] }, { gameVersion: '16.11.1.1' }),
+      ],
+      { 'chall-a': 'CHALLENGER' },
+    );
+
+    await withPatchLimit(2, () => recomputeChampionStats(PLATFORM, QUEUE).then(() => undefined));
+
+    const patches = (
+      await listChampionStats({ platform: PLATFORM, queue: QUEUE, minGames: 0 })
+    ).map((r) => r.patch);
+    // 16.11 is the third patch back and was never built. Ordered on the
+    // numbers, not the strings — 16.9 would sort above 16.10.
+    expect([...new Set(patches)].sort()).toEqual(['16.12', '16.13']);
+  });
+
+  it('leaves an older patch’s existing rows alone rather than dropping them', async ({ skip }) => {
+    if (!available) return skip();
+    await seed(
+      [
+        m('q1', { 'chall-a': [AHRI, true] }, { gameVersion: '16.13.1.1' }),
+        m('q2', { 'chall-a': [GAREN, true] }, { gameVersion: '16.11.1.1' }),
+      ],
+      { 'chall-a': 'CHALLENGER' },
+    );
+
+    // Unbounded first, so 16.11 has rows to preserve.
+    await recomputeChampionStats(PLATFORM, QUEUE);
+    // Then bounded to one patch: the delete is bounded with the insert, so the
+    // 16.11 row survives instead of being dropped by a rebuild that no longer
+    // covers it. This is the whole point of bounding the delete.
+    await withPatchLimit(1, () => recomputeChampionStats(PLATFORM, QUEUE).then(() => undefined));
+
+    const rows = await listChampionStats({ platform: PLATFORM, queue: QUEUE, minGames: 0 });
+    expect(rows.map((r) => r.patch).sort()).toEqual(['16.11', '16.13']);
+  });
+
+  it('rebuilds everything when the limit is 0', async ({ skip }) => {
+    if (!available) return skip();
+    await seed(
+      [
+        m('r1', { 'chall-a': [AHRI, true] }, { gameVersion: '16.13.1.1' }),
+        m('r2', { 'chall-a': [AHRI, true] }, { gameVersion: '16.10.1.1' }),
+      ],
+      { 'chall-a': 'CHALLENGER' },
+    );
+    await withPatchLimit(0, () => recomputeChampionStats(PLATFORM, QUEUE).then(() => undefined));
+
+    const rows = await listChampionStats({ platform: PLATFORM, queue: QUEUE, minGames: 0 });
+    expect(rows.map((r) => r.patch).sort()).toEqual(['16.10', '16.13']);
+  });
+});
+
 describe('champion_matchups and builds', () => {
   it('stores both directions of a lane matchup', async ({ skip }) => {
     if (!available) return skip();
@@ -816,7 +888,7 @@ describe('GET /v1/lol/analytics/champions/{championId}/matchups', () => {
     });
     await ladder({ 'chall-a': 'CHALLENGER', 'chall-b': 'CHALLENGER' });
     // The route's default patch comes from `latestPatch`, which reads
-    // `champion_stats` — recomputed here to match how `aggregateChampions`
+    // `champion_stats` — recomputed here to match how `aggregateAnalytics`
     // always orders the two in the real job.
     await recomputeChampionStats(PLATFORM, QUEUE);
     await recomputeChampionMatchups(PLATFORM, QUEUE);

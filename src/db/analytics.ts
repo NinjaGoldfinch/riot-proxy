@@ -1,5 +1,5 @@
 import { and, desc, eq, gte, isNotNull, sql as raw } from 'drizzle-orm';
-import { KEY_SCOPE } from '../config.js';
+import { KEY_SCOPE, config } from '../config.js';
 import { QUEUE_IDS, type RankedQueue, type Tier } from '../riot/ladder.js';
 import { db, sql } from './index.js';
 import {
@@ -21,6 +21,43 @@ import {
  * `league_entries`, which is what makes recomputing them the whole strategy
  * rather than a fallback.
  */
+
+/**
+ * The patches a bounded recompute covers, newest first — or `undefined` when
+ * `AGGREGATE_PATCH_LIMIT` is `0` and it covers everything (#114).
+ *
+ * Read from `matches` rather than from `champion_stats`: the bound is about
+ * which patches are worth *rebuilding*, and a patch that has archived games but
+ * no aggregate row yet is exactly the one that needs building most. Sorted on
+ * the numbers, not the strings, for the reason `latestPatch` documents.
+ *
+ * Not scoped by platform, because `matches` has none — a match id carries its
+ * platform and nothing else does. That is harmless here: patches ship to every
+ * platform within days of each other, so the newest four by queue are the
+ * newest four anywhere, and naming one platform's patch on another simply
+ * matches no rows.
+ */
+async function recentPatches(queueId: number): Promise<string[] | undefined> {
+  const limit = config.AGGREGATE_PATCH_LIMIT;
+  if (limit === 0) return undefined;
+
+  const rows = await db
+    .select({ patch: matches.patch })
+    .from(matches)
+    .where(and(eq(matches.queueId, queueId), isNotNull(matches.patch)))
+    // `group by`, not `select distinct`: Postgres requires a DISTINCT query's
+    // ORDER BY expressions to appear in its select list, and these are
+    // `split_part` casts that have no business in the result. Same shape
+    // `latestPatch` uses, for the same reason.
+    .groupBy(matches.patch)
+    .orderBy(
+      desc(raw`split_part(${matches.patch}, '.', 1)::int`),
+      desc(raw`split_part(${matches.patch}, '.', 2)::int`),
+    )
+    .limit(limit);
+
+  return rows.map((r) => r.patch).filter((patch): patch is string => patch !== null);
+}
 
 export interface RecomputeResult {
   platform: string;
@@ -61,11 +98,13 @@ export async function recomputeChampionStats(
   queue: RankedQueue,
 ): Promise<RecomputeResult> {
   const queueId = QUEUE_IDS[queue];
+  const patches = await recentPatches(queueId);
 
   const inserted = await sql.begin(async (tx) => {
     await tx`
       delete from analytics_slices
       where key_scope = ${KEY_SCOPE} and platform = ${platform} and queue = ${queue}
+        ${patches ? tx`and patch = any(${patches})` : tx``}
     `;
     await tx`
       insert into analytics_slices (key_scope, platform, queue, tier, patch, matches, computed_at)
@@ -86,12 +125,14 @@ export async function recomputeChampionStats(
        and le.queue = ${queue}
       where m.queue_id = ${queueId}
         and m.patch is not null
+        ${patches ? tx`and m.patch = any(${patches})` : tx``}
       group by 1, 2, 3, 4, 5
     `;
 
     await tx`
       delete from champion_stats
       where key_scope = ${KEY_SCOPE} and platform = ${platform} and queue = ${queue}
+        ${patches ? tx`and patch = any(${patches})` : tx``}
     `;
     const statsRows = await tx<{ games: number }[]>`
       insert into champion_stats
@@ -134,6 +175,7 @@ export async function recomputeChampionStats(
         and mp.win is not null
         and m.queue_id = ${queueId}
         and m.patch is not null
+        ${patches ? tx`and m.patch = any(${patches})` : tx``}
       group by 1, 2, 3, 4, 5, 6, 7
       returning games
     `;
@@ -141,6 +183,7 @@ export async function recomputeChampionStats(
     await tx`
       delete from champion_bans
       where key_scope = ${KEY_SCOPE} and platform = ${platform} and queue = ${queue}
+        ${patches ? tx`and patch = any(${patches})` : tx``}
     `;
     await tx`
       insert into champion_bans (key_scope, platform, queue, tier, patch, champion_id, bans, computed_at)
@@ -163,6 +206,7 @@ export async function recomputeChampionStats(
        and le.queue = ${queue}
       where m.queue_id = ${queueId}
         and m.patch is not null
+        ${patches ? tx`and m.patch = any(${patches})` : tx``}
       group by 1, 2, 3, 4, 5, 6
     `;
 
@@ -221,11 +265,13 @@ export async function recomputeChampionMatchups(
   queue: RankedQueue,
 ): Promise<RecomputeCountResult> {
   const queueId = QUEUE_IDS[queue];
+  const patches = await recentPatches(queueId);
 
   const rows = await sql.begin(async (tx) => {
     await tx`
       delete from champion_matchups
       where key_scope = ${KEY_SCOPE} and platform = ${platform} and queue = ${queue}
+        ${patches ? tx`and patch = any(${patches})` : tx``}
     `;
     // No `returning`: postgres.js reports the affected-row count from the
     // insert's command tag, and the alternative materialises patches × roles ×
@@ -244,6 +290,8 @@ export async function recomputeChampionMatchups(
         where mp.team_position is not null and mp.team_position <> '' and mp.team_id is not null
           and m.queue_id = ${queueId}
           and m.patch is not null
+          ${patches ? tx`and m.patch = any(${patches})` : tx``}
+        ${patches ? tx`and m.patch = any(${patches})` : tx``}
         group by mp.match_id, mp.team_id, mp.team_position
       )
       insert into champion_matchups
@@ -284,6 +332,7 @@ export async function recomputeChampionMatchups(
         and lb.n = 1
         and m.queue_id = ${queueId}
         and m.patch is not null
+        ${patches ? tx`and m.patch = any(${patches})` : tx``}
       group by 1, 2, 3, 4, 5, 6, 7
     `;
     return result.count;
@@ -313,11 +362,13 @@ export async function recomputeChampionBuilds(
   queue: RankedQueue,
 ): Promise<RecomputeBuildsResult> {
   const queueId = QUEUE_IDS[queue];
+  const patches = await recentPatches(queueId);
 
   const items = await sql.begin(async (tx) => {
     await tx`
       delete from champion_items
       where key_scope = ${KEY_SCOPE} and platform = ${platform} and queue = ${queue}
+        ${patches ? tx`and patch = any(${patches})` : tx``}
     `;
     // Final items only: one row per non-empty item0..5 slot, but a
     // participant who holds the same item in two slots (a second Control
@@ -360,6 +411,7 @@ export async function recomputeChampionBuilds(
         and item.id <> 0
         and m.queue_id = ${queueId}
         and m.patch is not null
+        ${patches ? tx`and m.patch = any(${patches})` : tx``}
       group by 1, 2, 3, 4, 5, 6, 7
     `;
     return result.count;
@@ -369,6 +421,7 @@ export async function recomputeChampionBuilds(
     await tx`
       delete from champion_runes
       where key_scope = ${KEY_SCOPE} and platform = ${platform} and queue = ${queue}
+        ${patches ? tx`and patch = any(${patches})` : tx``}
     `;
     const result = await tx`
       insert into champion_runes
@@ -399,6 +452,7 @@ export async function recomputeChampionBuilds(
         and mp.sub_style_id is not null
         and m.queue_id = ${queueId}
         and m.patch is not null
+        ${patches ? tx`and m.patch = any(${patches})` : tx``}
       group by 1, 2, 3, 4, 5, 6, 7, 8
     `;
     return result.count;
@@ -408,6 +462,7 @@ export async function recomputeChampionBuilds(
     await tx`
       delete from champion_spells
       where key_scope = ${KEY_SCOPE} and platform = ${platform} and queue = ${queue}
+        ${patches ? tx`and patch = any(${patches})` : tx``}
     `;
     // least/greatest normalise the pair's order, so the two summoner-spell
     // slots collapse to one row regardless of which slot each spell landed in.
@@ -440,6 +495,7 @@ export async function recomputeChampionBuilds(
         and mp.spell2 is not null
         and m.queue_id = ${queueId}
         and m.patch is not null
+        ${patches ? tx`and m.patch = any(${patches})` : tx``}
       group by 1, 2, 3, 4, 5, 6, 7, 8
     `;
     return result.count;
@@ -876,4 +932,41 @@ export async function listPlayerChampions(
     .groupBy(matchParticipants.championId)
     .orderBy(desc(raw`count(*)`))
     .limit(filter.limit ?? 200);
+}
+
+/**
+ * The most-played champions of the newest aggregated patch, for the dashboard
+ * (#114).
+ *
+ * Summed across tiers *and* roles, unlike `listChampionStats`, because this is
+ * not an analytics answer — it is a sanity read. "Did the last recompute
+ * produce something that looks like League" is a question a per-tier breakdown
+ * makes harder to answer, not easier.
+ */
+export async function topChampions(
+  platform: string,
+  queue: string,
+  limit = 5,
+): Promise<{ championId: number; games: number; wins: number }[]> {
+  const patch = await latestPatch(platform, queue);
+  if (!patch) return [];
+
+  return db
+    .select({
+      championId: championStats.championId,
+      games: raw<number>`sum(${championStats.games})`.mapWith(Number),
+      wins: raw<number>`sum(${championStats.wins})`.mapWith(Number),
+    })
+    .from(championStats)
+    .where(
+      and(
+        eq(championStats.keyScope, KEY_SCOPE),
+        eq(championStats.platform, platform),
+        eq(championStats.queue, queue),
+        eq(championStats.patch, patch),
+      ),
+    )
+    .groupBy(championStats.championId)
+    .orderBy(desc(raw`sum(${championStats.games})`))
+    .limit(limit);
 }

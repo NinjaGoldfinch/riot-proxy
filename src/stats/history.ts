@@ -3,6 +3,7 @@ import { countArchivedMatches } from '../db/matches.js';
 import { countPlayers, countTrackedPlayers } from '../db/players.js';
 import { logger } from '../logger.js';
 import { redis } from '../redis.js';
+import { listAnalyticsRuns } from '../jobs/analytics-state.js';
 import type { MetricsHistoryPointData } from './schema.js';
 import { cacheCounts, queueCounts } from './snapshot.js';
 
@@ -35,12 +36,13 @@ export const METRICS_HISTORY_MAX_POINTS = 1440;
 const LOCK_MARGIN_MS = 250;
 
 export async function buildHistoryPoint(): Promise<MetricsHistoryPointData> {
-  const [archivedMatches, trackedPlayers, knownPlayers, queues, cache] = await Promise.all([
+  const [archivedMatches, trackedPlayers, knownPlayers, queues, cache, runs] = await Promise.all([
     countArchivedMatches(),
     countTrackedPlayers(),
     countPlayers(),
     queueCounts(),
     cacheCounts(),
+    listAnalyticsRuns(),
   ]);
 
   const summed = { active: 0, pending: 0, failed: 0 };
@@ -58,10 +60,20 @@ export async function buildHistoryPoint(): Promise<MetricsHistoryPointData> {
     summed.failed += q.failed;
   }
 
+  // Summed across ladders, and aged off the most recent of them: a point is a
+  // day-scale answer to "is the aggregate keeping up", and per-ladder detail at
+  // that resolution is what the snapshot is for.
+  const newestRun = runs[0];
+  const analytics = {
+    rows: runs.reduce((n, run) => n + Object.values(run.rows).reduce((a, b) => a + b, 0), 0),
+    ageSeconds: newestRun ? Math.max(0, Math.round((Date.now() - newestRun.at) / 1000)) : null,
+  };
+
   return {
     t: Date.now(),
     totals: { archivedMatches, trackedPlayers, knownPlayers },
     queues: summed,
+    analytics,
     cache,
   };
 }

@@ -11,6 +11,7 @@ import {
   jobKey,
   maintenanceQueue,
   pollQueue,
+  scheduleAnalyticsRecomputes,
   scheduleLadderCrawls,
 } from './jobs/queues.js';
 import { logger } from './logger.js';
@@ -69,6 +70,8 @@ async function scheduleRepeatables(): Promise<void> {
     name: string;
     everySeconds: number;
     data?: unknown;
+    /** Distinguishes several schedules of the same job — one per ladder. */
+    idSuffix?: string[];
   }[] = [
     { queue: pollQueue, name: JOB.pollLiveTick, everySeconds: config.TRACK_POLL_LIVE_S },
     { queue: pollQueue, name: JOB.pollRankTick, everySeconds: config.TRACK_POLL_RANK_S },
@@ -81,19 +84,20 @@ async function scheduleRepeatables(): Promise<void> {
     { queue: maintenanceQueue, name: JOB.maintenance, everySeconds: 86_400 },
   ];
 
-  for (const { queue, name, everySeconds, data } of repeatables) {
+  for (const { queue, name, everySeconds, data, idSuffix } of repeatables) {
     // Each job the scheduler emits is named `repeat:<schedulerId>:<millis>`, so
     // a colon in the id would push that past the three parts BullMQ allows.
     // `jobKey` strips the colons our job names carry.
     await queue.upsertJobScheduler(
-      jobKey(name),
+      jobKey(name, ...(idSuffix ?? [])),
       { every: everySeconds * 1000 },
       { name, data: data ?? {}, opts: { removeOnComplete: { age: 3600, count: 100 } } },
     );
-    logger.info({ job: name, everySeconds }, 'repeatable scheduled');
+    logger.info({ job: name, everySeconds, ...(data ? { data } : {}) }, 'repeatable scheduled');
   }
 
   await scheduleLadderCrawls();
+  await scheduleAnalyticsRecomputes();
 }
 
 async function main(): Promise<void> {

@@ -81,6 +81,8 @@ export const PINNED: Record<string, string> = {
   // and the production default would silently empty every one of them. The
   // minGames tests turn it on themselves.
   AGGREGATE_MIN_GAMES: '0',
+  AGGREGATE_PATCH_LIMIT: '0',
+  AGGREGATE_INTERVAL_S: '0',
 
   DDRAGON_DIR: './data/ddragon',
   DDRAGON_LOCALE: 'en_US',

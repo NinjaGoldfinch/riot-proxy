@@ -69,6 +69,38 @@ const LadderCrawlProgress = Type.Object({
   }),
 });
 
+/**
+ * One analytics recompute, as the dashboard reports it (#114). `steps` is what
+ * makes a slow run actionable — the champion step scans `match_participants`
+ * once and the builds step unnests six item columns out of it, so "the
+ * recompute got slow" means nothing until it says which half.
+ *
+ * A `failed` run still carries the steps that finished, which is how far it got
+ * before it died — and, with `computed_at` on the rows themselves, which tables
+ * are now behind the others.
+ */
+export const AnalyticsRunSummary = Type.Object({
+  platform: Type.String(),
+  queue: Type.String(),
+  at: Type.Integer({ description: 'Epoch milliseconds the run finished, however it ended' }),
+  status: Type.Unsafe<string>({ type: 'string', enum: ['completed', 'failed'] }),
+  ms: Type.Integer({ description: 'Wall clock for the whole job' }),
+  steps: Type.Record(Type.String(), Type.Number(), {
+    description: 'Seconds per step, keyed by step name',
+  }),
+  rows: Type.Record(Type.String(), Type.Integer(), {
+    description: 'Rows written, keyed by table name',
+  }),
+  games: Type.Integer(),
+});
+
+export const AnalyticsTopChampion = Type.Object({
+  championId: Type.Integer(),
+  championName: Type.Optional(Type.String()),
+  games: Type.Integer(),
+  winRate: Type.Number({ minimum: 0, maximum: 1 }),
+});
+
 export const MetricsSnapshot = Type.Object(
   {
     /** Bumped only when a field changes meaning; additions do not bump it. */
@@ -183,6 +215,25 @@ export const MetricsSnapshot = Type.Object(
       },
       { description: 'Deployment-wide: read from Postgres, not from this process' },
     ),
+    /**
+     * The analytics recompute (#114). Deployment-wide like `ladder` above, and
+     * for a sharper version of the same reason: the job runs in the *worker*
+     * and this snapshot is built in the *api*, so a per-process metric could
+     * never see it. Read from Redis, where the worker leaves it.
+     */
+    analytics: Type.Object(
+      {
+        lastRuns: Type.Array(AnalyticsRunSummary, {
+          description: 'Each ladder’s most recent recompute, newest first. Empty until one runs.',
+        }),
+        topChampions: Type.Array(AnalyticsTopChampion, {
+          description:
+            'Most-played champions of the newest aggregated patch, summed across tiers and ' +
+            'roles — a sanity read on whether the last recompute produced anything sensible.',
+        }),
+      },
+      { description: 'Deployment-wide: read from Redis and Postgres, not from this process' },
+    ),
     process: Type.Object({
       uptimeSeconds: Type.Number(),
       rssBytes: Type.Integer(),
@@ -218,6 +269,19 @@ export const MetricsHistoryPoint = Type.Object(
       }),
       failed: Type.Integer(),
     }),
+    analytics: Type.Object(
+      {
+        rows: Type.Integer({ description: 'Rows the last recompute of any ladder wrote, summed' }),
+        ageSeconds: Type.Union([Type.Integer(), Type.Null()], {
+          description: 'How long ago that run finished; null until one has',
+        }),
+      },
+      {
+        description:
+          'Compact by design: the dashboard reads per-step detail from the snapshot, and a ' +
+          'history point only has to answer "is the aggregate keeping up" over a day.',
+      },
+    ),
     cache: Type.Object(
       {
         hit: Type.Integer(),

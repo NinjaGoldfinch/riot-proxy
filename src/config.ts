@@ -131,6 +131,40 @@ const EnvSchema = Type.Object({
    */
   AGGREGATE_MIN_GAMES: Type.Integer({ default: 10, minimum: 0, maximum: 10_000 }),
 
+  /**
+   * How many patches back a recompute rebuilds (#114). `0` means every patch
+   * the archive holds.
+   *
+   * The recompute is a full scan by construction — that is the whole strategy
+   * (§9 of the plan): the ladder *moves*, so a promoted player has to be
+   * counted in their new tier, which no incremental update can do. What it does
+   * not have to be is a scan of *everything*. Nobody asks what the win rates
+   * were four patches ago, and the rows for those patches are already computed
+   * and still correct, so the delete is bounded with the insert: older patches
+   * keep their last-computed rows rather than being rebuilt or dropped.
+   *
+   * 4 covers the current patch and the three behind it, which is more history
+   * than any of the analytics routes will serve by default and enough that a
+   * patch boundary never leaves the newest one alone in the table.
+   */
+  AGGREGATE_PATCH_LIMIT: Type.Integer({ default: 4, minimum: 0, maximum: 100 }),
+
+  /**
+   * Seconds between unprompted recomputes; `0` disables the tick (#114).
+   *
+   * A crawl queues a recompute when it finishes, which is the only trigger a
+   * deployment that crawls ever needs. A deployment that only *polls tracked
+   * players* never crawls, so nothing would ever aggregate its archive — and
+   * its `league_entries` is empty, so the per-tier slices are empty by
+   * construction, but the tierless aggregates are exactly as computable as
+   * anyone else's. This is the knob that lets those deployments say so.
+   *
+   * Off by default: a recompute on a deployment that does crawl would be
+   * duplicating a job the crawl already queues, on a schedule unrelated to when
+   * the data actually changed.
+   */
+  AGGREGATE_INTERVAL_S: Type.Integer({ default: 0, minimum: 0, maximum: 604_800 }),
+
   DDRAGON_DIR: Type.String({ default: './data/ddragon' }),
   DDRAGON_LOCALE: Type.String({ default: 'en_US' }),
 

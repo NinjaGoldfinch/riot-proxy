@@ -31,7 +31,7 @@ import {
   platformToAccountRegion,
 } from '../riot/routing.js';
 import { clearCrawlState, pendingLegs } from '../jobs/ladder-state.js';
-import { enqueueChampionAggregate, enqueueFactsReextract } from '../jobs/analytics.js';
+import { enqueueAnalyticsRecompute, enqueueFactsReextract } from '../jobs/analytics.js';
 import { startCrawl } from '../jobs/ladder-crawl.js';
 import { enqueueNameBackfill } from '../jobs/player-names.js';
 import {
@@ -403,17 +403,26 @@ const adminRoutes: FastifyPluginAsync = async (fastify) => {
   );
 
   /**
-   * Recompute the champion aggregates for one ladder, without waiting for a
+   * Recompute every analytics table for one ladder, without waiting for a
    * crawl to finish — for a deployment whose archive filled up by other means,
    * or after a schema change to the aggregation itself.
+   *
+   * Named for what it rebuilds rather than for `champion_stats` alone (#114):
+   * one job now recomputes slices, champion stats, bans, matchups and the three
+   * build tables, and the path said otherwise.
    */
   fastify.post(
-    '/v1/admin/analytics/champions/recompute',
+    '/v1/admin/analytics/recompute',
     {
       ...adminScope,
       schema: {
         tags: ['admin'],
-        summary: 'Recompute champion aggregates from the archive',
+        summary: 'Recompute the analytics tables from the archive',
+        description:
+          'Queues `aggregate:analytics` for one ladder and answers 202 — the scan runs on the ' +
+          'worker. Bounded by `AGGREGATE_PATCH_LIMIT`: only the latest N patches are rebuilt, ' +
+          'and older ones keep the rows they were last computed with. The job result carries ' +
+          'per-table row counts, and `GET /v1/admin/metrics` reports per-step timings.',
         body: Type.Object({
           platform: Type.Optional(PlatformParam),
           queue: Type.Optional(RankedQueueParam),
@@ -426,7 +435,7 @@ const adminRoutes: FastifyPluginAsync = async (fastify) => {
       const platform = assertPlatform(body.platform ?? config.DEFAULT_PLATFORM);
       const queue = assertRankedQueue(body.queue ?? config.ladderQueues[0] ?? 'RANKED_SOLO_5x5');
 
-      await enqueueChampionAggregate(platform, queue);
+      await enqueueAnalyticsRecompute(platform, queue);
       // 202 for the same reason the crawl trigger is: the answer is "it is
       // queued", and the table scan behind it runs on the worker.
       return reply.code(202).send({ ok: true, platform, queue });
