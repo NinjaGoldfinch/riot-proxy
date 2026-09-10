@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto';
 import { Type } from '@sinclair/typebox';
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { config } from '../config.js';
 import {
   latestPatch,
@@ -24,6 +25,7 @@ import {
 } from '../riot/ladder.js';
 import { assertPlatform, assertRegion, regionFromMatchId } from '../riot/routing.js';
 import { championNames } from '../static/champions.js';
+import { currentVersion } from '../static/ddragon.js';
 import { send } from './helpers.js';
 import {
   ApexTierParam,
@@ -295,7 +297,7 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
         description:
           'Aggregated from the match archive, with each participant placed at the tier the ' +
           'latest ladder crawl found them at. Recomputed per (platform, queue) when a crawl ' +
-          'completes.',
+          'completes. Sends an `ETag`; a matching `If-None-Match` gets 304.',
         querystring: ChampionStatsQuery,
         response: { 200: ChampionStatsResponse, ...localErrors },
       },
@@ -342,11 +344,26 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
 
       const names = await championNames(rows.map((r) => r.championId));
       const { totalGames, entries } = enrichChampionStats(rows, slices, bans, names);
+      const computedAt = iso(newestStamp(rows));
 
       // Derived from immutable archive rows, and only ever replaced wholesale
       // by a recompute — so it is safe to hold, and holding it is what keeps a
       // dashboard polling this off the database.
       reply.header('Cache-Control', ANALYTICS_CACHE_CONTROL);
+
+      const etag = analyticsEtag([
+        'champions',
+        computedAt,
+        await currentVersion(),
+        platform,
+        queue,
+        tier,
+        patch,
+        query.role,
+        minGames,
+        query.limit,
+      ]);
+      if (notModified(request, reply, etag)) return reply.code(304).send();
 
       return {
         platform,
@@ -354,7 +371,7 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
         tier: tier ?? null,
         patch: patch ?? null,
         role: query.role ?? null,
-        computedAt: iso(newestStamp(rows)),
+        computedAt,
         totalGames,
         champions: entries,
       };
@@ -375,6 +392,7 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
         tags: ['lol'],
         summary: "A champion's lane matchups",
         description:
+          'Sends an `ETag`; a matching `If-None-Match` gets 304. ' +
           'Every lane matchup this champion has archived data for. No tier dimension: sample ' +
           'sizes die fast enough per (champion, opponent, role) alone, and the two laners can ' +
           'sit in different tiers anyway. Mirror lanes are excluded — their win rate is 50% by ' +
@@ -413,8 +431,23 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
         : [];
 
       const names = await championNames([championId, ...rows.map((r) => r.opponentId)]);
+      const computedAt = iso(newestStamp(rows));
 
       reply.header('Cache-Control', ANALYTICS_CACHE_CONTROL);
+
+      const etag = analyticsEtag([
+        'matchups',
+        computedAt,
+        await currentVersion(),
+        platform,
+        queue,
+        patch,
+        championId,
+        query.role,
+        query.minGames,
+        query.limit,
+      ]);
+      if (notModified(request, reply, etag)) return reply.code(304).send();
 
       return {
         championId,
@@ -423,7 +456,7 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
         queue,
         patch: patch ?? null,
         role: query.role ?? null,
-        computedAt: iso(newestStamp(rows)),
+        computedAt,
         matchups: rows.map((row) => ({
           role: row.role,
           opponentId: row.opponentId,
@@ -449,6 +482,7 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
         tags: ['lol'],
         summary: 'Champion detail composite',
         description:
+          'Sends an `ETag`; a matching `If-None-Match` gets 304. ' +
           "The stat row(s) at this slice plus this champion's top lane matchups, items, runes " +
           'and summoner spells — one call for a champion page. Each section is independently ' +
           'trimmed by `minGames`/`limit`; a champion nobody has data for yet still returns 200 ' +
@@ -525,6 +559,25 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
 
       reply.header('Cache-Control', ANALYTICS_CACHE_CONTROL);
 
+      // Every section's stamp, not just the oldest one the body reports. The
+      // oldest is what says how fresh the payload is as a whole; the validator
+      // has to change when *any* section does, or a recompute that rebuilt only
+      // the builds table would go on serving 304 for a document that moved.
+      const etag = analyticsEtag([
+        'detail',
+        ...Object.values(sectionsComputedAt),
+        await currentVersion(),
+        platform,
+        queue,
+        tier,
+        patch,
+        championId,
+        query.role,
+        minGames,
+        query.limit,
+      ]);
+      if (notModified(request, reply, etag)) return reply.code(304).send();
+
       return {
         championId,
         ...(names.has(championId) ? { championName: names.get(championId) } : {}),
@@ -588,6 +641,49 @@ const lolRoutes: FastifyPluginAsync = async (fastify) => {
 /** Four decimal places: enough for a win rate, short of implying precision. */
 function round(value: number): number {
   return Math.round(value * 10_000) / 10_000;
+}
+
+/**
+ * A validator for one analytics document (#115).
+ *
+ * Built from the `computed_at` stamps the response already carries, plus every
+ * input that changes the bytes: the canonical query, and the mirrored Data
+ * Dragon version. That last one is not decoration — champion *names* come from
+ * the mirror, so a `ddragon:sync` changes the body without touching a single
+ * `computed_at`, and a validator that ignored it would hold a stale name in a
+ * caller's cache until the next recompute.
+ *
+ * **Weak**, and honestly so. A strong validator promises byte-equality, and
+ * this is derived from metadata rather than from the bytes — the two agree
+ * today because the same stamps, query and mirror version produce the same
+ * document, but that is an argument, not a guarantee the code enforces.
+ *
+ * What this saves is the response body, not the queries behind it: the work is
+ * already done by the time there is a stamp to hash. #123 is the one that would
+ * save the queries, and its cache would sit in front of this rather than
+ * replace it.
+ */
+function analyticsEtag(parts: (string | number | null | undefined)[]): string {
+  const material = parts.map((part) => (part === null || part === undefined ? '~' : String(part)));
+  return `W/"${createHash('sha1').update(material.join('|')).digest('base64url')}"`;
+}
+
+/**
+ * Sets the validator and reports whether the caller already holds this exact
+ * document.
+ *
+ * `If-None-Match` is a comma-separated list and may be `*`, which means "any
+ * representation" — a caller that has *something* and wants to know only
+ * whether it still stands.
+ */
+function notModified(request: FastifyRequest, reply: FastifyReply, etag: string): boolean {
+  reply.header('ETag', etag);
+  const header = request.headers['if-none-match'];
+  if (!header) return false;
+  return header
+    .split(',')
+    .map((value) => value.trim())
+    .some((value) => value === etag || value === '*');
 }
 
 /**

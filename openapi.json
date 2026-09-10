@@ -4612,7 +4612,7 @@
         "tags": [
           "lol"
         ],
-        "description": "Aggregated from the match archive, with each participant placed at the tier the latest ladder crawl found them at. Recomputed per (platform, queue) when a crawl completes.",
+        "description": "Aggregated from the match archive, with each participant placed at the tier the latest ladder crawl found them at. Recomputed per (platform, queue) when a crawl completes. Sends an `ETag`; a matching `If-None-Match` gets 304.",
         "parameters": [
           {
             "schema": {
@@ -4900,7 +4900,7 @@
         "tags": [
           "lol"
         ],
-        "description": "Every lane matchup this champion has archived data for. No tier dimension: sample sizes die fast enough per (champion, opponent, role) alone, and the two laners can sit in different tiers anyway. Mirror lanes are excluded — their win rate is 50% by construction. A matchup is recorded from the tracked ladder player’s side, so the opposite champion’s view of the same lane only exists when that player is tracked too, and the two directions can disagree.",
+        "description": "Sends an `ETag`; a matching `If-None-Match` gets 304. Every lane matchup this champion has archived data for. No tier dimension: sample sizes die fast enough per (champion, opponent, role) alone, and the two laners can sit in different tiers anyway. Mirror lanes are excluded — their win rate is 50% by construction. A matchup is recorded from the tracked ladder player’s side, so the opposite champion’s view of the same lane only exists when that player is tracked too, and the two directions can disagree.",
         "parameters": [
           {
             "schema": {
@@ -5164,7 +5164,7 @@
         "tags": [
           "lol"
         ],
-        "description": "The stat row(s) at this slice plus this champion's top lane matchups, items, runes and summoner spells — one call for a champion page. Each section is independently trimmed by `minGames`/`limit`; a champion nobody has data for yet still returns 200 with empty arrays rather than a 404.",
+        "description": "Sends an `ETag`; a matching `If-None-Match` gets 304. The stat row(s) at this slice plus this champion's top lane matchups, items, runes and summoner spells — one call for a champion page. Each section is independently trimmed by `minGames`/`limit`; a champion nobody has data for yet still returns 200 with empty arrays rather than a 404.",
         "parameters": [
           {
             "schema": {
