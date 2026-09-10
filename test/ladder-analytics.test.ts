@@ -988,6 +988,28 @@ describe('GET /v1/lol/analytics/champions/{championId}', () => {
     expect(body.spells).toEqual([expect.objectContaining({ spellA: 4, spellB: 14, games: 1 })]);
   });
 
+  it('gives the composite a validator that moves when any section does', async ({ skip }) => {
+    if (!available || !app) return skip();
+    await seedFacts('etag-detail', {
+      'chall-a': { championId: AHRI, win: true, teamId: 100, teamPosition: 'MIDDLE', item0: 3020 },
+      'chall-b': { championId: GAREN, win: false, teamId: 200, teamPosition: 'MIDDLE' },
+    });
+    await ladder({ 'chall-a': 'CHALLENGER', 'chall-b': 'CHALLENGER' });
+    await recomputeChampionStats(PLATFORM, QUEUE);
+    await recomputeChampionMatchups(PLATFORM, QUEUE);
+
+    const before = (await get(AHRI)).headers['etag'];
+    expect(before).toBeTruthy();
+
+    // Only the builds table is rebuilt. The composite's reported `computedAt`
+    // is the *oldest* section and does not move, so a validator built from
+    // that alone would keep serving 304 for a document that just gained an
+    // items section.
+    await recomputeChampionBuilds(PLATFORM, QUEUE);
+    const after = (await get(AHRI)).headers['etag'];
+    expect(after).not.toBe(before);
+  });
+
   it('answers honestly for a champion nobody has data for, rather than 404', async ({ skip }) => {
     if (!available || !app) return skip();
     await seedFacts('detail-2', { 'chall-a': { championId: AHRI, win: true } });
@@ -1256,6 +1278,56 @@ describe('GET /v1/lol/analytics/champions', () => {
       champions: [],
       computedAt: null,
     });
+  });
+
+  it('answers 304 when the caller already holds this exact document', async ({ skip }) => {
+    if (!available || !app) return skip();
+    await seedFacts('etag-1', { 'chall-a': { championId: AHRI, win: true } });
+    await ladder({ 'chall-a': 'CHALLENGER' });
+    await recomputeChampionStats(PLATFORM, QUEUE);
+
+    const first = await get('');
+    const etag = first.headers['etag'];
+    expect(etag).toMatch(/^W\/"/);
+
+    const again = await app.inject({
+      method: 'GET',
+      url: `/v1/lol/analytics/champions?platform=${PLATFORM}&`,
+      headers: { authorization: `Bearer ${readKey}`, 'if-none-match': etag as string },
+    });
+    expect(again.statusCode).toBe(304);
+    expect(again.body).toBe('');
+    // A 304 still has to carry the validator it matched, or the next
+    // conditional request has nothing to send.
+    expect(again.headers['etag']).toBe(etag);
+  });
+
+  it('changes the validator when the question changes, not just the data', async ({ skip }) => {
+    if (!available || !app) return skip();
+    await seedFacts('etag-2', { 'chall-a': { championId: AHRI, win: true } });
+    await ladder({ 'chall-a': 'CHALLENGER' });
+    await recomputeChampionStats(PLATFORM, QUEUE);
+
+    // Same slice, same stamp, different question: a validator built from
+    // `computed_at` alone would hand the tier-filtered caller the unfiltered
+    // body out of their own cache.
+    const all = (await get('')).headers['etag'];
+    const challenger = (await get('tier=CHALLENGER')).headers['etag'];
+    expect(all).not.toBe(challenger);
+  });
+
+  it('accepts If-None-Match: *, which asks whether anything changed', async ({ skip }) => {
+    if (!available || !app) return skip();
+    await seedFacts('etag-3', { 'chall-a': { championId: AHRI, win: true } });
+    await ladder({ 'chall-a': 'CHALLENGER' });
+    await recomputeChampionStats(PLATFORM, QUEUE);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/v1/lol/analytics/champions?platform=${PLATFORM}&`,
+      headers: { authorization: `Bearer ${readKey}`, 'if-none-match': '*' },
+    });
+    expect(res.statusCode).toBe(304);
   });
 
   it('is cacheable, because a recompute replaces a slice wholesale', async ({ skip }) => {

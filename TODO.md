@@ -263,6 +263,12 @@ phases C1–C7). C1–C4 landed; C5–C7 are still open below.
 - [x] Acceptance additions to the phase 7 suite: every analytics table reports
       a row count after a real crawl's recompute, and the mirrored queue table
       is served and contains queue 420
+- [x] `ETag` on the three analytics routes, `If-None-Match` → 304. Built from
+      the sections' `computed_at` stamps _and_ the mirrored Data Dragon
+      version, because champion names come from the mirror — a sync changes the
+      body without touching a stamp. Weak, honestly: it is derived from
+      metadata rather than from the bytes. It saves the body, not the queries;
+      #123 is the one that would save those (#115)
 
 ### Follow-ups from the analytics review
 
