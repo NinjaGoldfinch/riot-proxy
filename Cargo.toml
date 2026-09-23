@@ -39,6 +39,8 @@ insta = { version = "1.48", features = ["json"] }
 proptest = "1.11"
 tempfile = "3.27"
 tokio-test = "0.4"
+tower = { version = "0.5.3", features = ["util"] }
+ulid = "3.0"
 wiremock = "0.6"
 
 [lints.clippy]
