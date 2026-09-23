@@ -101,12 +101,8 @@ Exit check: _pending_
 - [ ] P8-06 cut-over runbook
 Exit check: _pending_
 
-## Owner review at the P0 gate
-- CORS is **not** enabled (v1 has none, the plan listed it; ADR-011). Keep it off, or choose a policy?
-- No LICENSE file (v1 has none). The repo is public, so it is all-rights-reserved by default. Pick one?
-- The bootstrap admin key is printed to stderr, not into the JSON log stream (ADR-012).
-- `NODE_ENV` is honoured as a fallback for `ENV` (ADR-008).
-- v2 metric names for design/07's additions (`jobs_pending`, `limiter_bulk_waiters`, `sqlite_wal_bytes`): with or without the `proxy_` prefix? This must be settled by P2-05.
+## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)
+- CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
 
 ## Notes for the next task
 - v1 reference is `NinjaGoldfinch/riot-proxy-deprecated` (cloned at `../riot-proxy-v1`, commit `c86e631`), not `ninja-recorder-deprecated` as §1 of the plan says.
@@ -126,5 +122,4 @@ Exit check: _pending_
 - The musl build needs `musl-gcc`, which isn't on the dev box (no sudo), so it's verified in CI only.
 - CI (owner decision): required status checks are the job names `fmt`, `clippy`, `test`, `build-musl` (not the workflow name `ci`, which GitHub never reports as a check). Since P0-07, `build-musl` also builds and smoke-tests the Docker image and `docker compose up` (ADR-013).
 - No docker on the dev box; image behaviour is verified in CI only. `just` is installed at `~/.local/bin/just`.
-- v1 has no LICENSE file, so none was copied. Waiting on the owner to pick one.
 - `acceptance/` is v1's suite verbatim (plus its `vitest.acceptance.config.ts`); it hits the real Riot API and is ported in P8-01.

@@ -38,6 +38,15 @@ Label-less metrics are registered at 0 on boot, as prom-client did. Labelled met
 | `proxy_node_*` | prom-client's Node.js runtime metrics (`collectDefaultMetrics({prefix: 'proxy_node_'})`). There is no Node runtime in v2. Neither the Grafana board nor the alerts use them. |
 | `proxy_cache_hit_ratio` | Only in the v1 *spec* (§13). v1 code replaced it with the `proxy_cache_reads_total` counter pair. |
 
-## v2 additions (pending)
+## v2 additions
 
-design/07 §Observability asks for `jobs_pending{kind}`, `limiter_bulk_waiters` and `sqlite_wal_bytes`, and P2-05 names `limiter_interactive_waiters`. The design writes these without v1's `proxy_` prefix. The prefix is decided when the first one is implemented (P2-05) and recorded here.
+Owner decision (2026-09-24, ADR-014): these use the names **exactly as design/07 writes them, without v1's `proxy_` prefix**. Each gets a catalogue entry and a row here when its task implements it.
+
+| Name | Type | Labels | Emitted by (v2 task) |
+|---|---|---|---|
+| `limiter_bulk_waiters` | gauge | — | Limiter priorities (P2-05) |
+| `limiter_interactive_waiters` | gauge | — | Limiter priorities (P2-05) |
+| `jobs_pending` | gauge | kind | Scheduler (P6-03) |
+| `sqlite_wal_bytes` | gauge | — | Maintenance / sampler (P7-05) |
+
+Labels are provisional until the implementing task confirms them. `limiter_interactive_waiters` comes from P2-05; the other three from design/07 §Observability.

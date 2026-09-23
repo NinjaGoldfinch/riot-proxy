@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.98"
 description = "Lightweight single-binary proxy for the Riot Games API"
+license = "MIT"
 publish = false
 
 # Versions are pinned to the current minor; Cargo.lock pins the exact patch.
