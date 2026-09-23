@@ -201,7 +201,7 @@ pub async fn create(db: &Db, new: NewConsumer) -> Result<Created, ConsumerError>
 pub async fn list(db: &Db) -> Result<Vec<Consumer>, ConsumerError> {
     db.read(|c| {
         let mut stmt = c.prepare(
-            "SELECT id, name, scopes, quota_per_min, created_at, revoked_at FROM consumers ORDER BY created_at, id",
+            "SELECT id, name, scopes, quota_per_min, created_at, revoked_at FROM consumers ORDER BY created_at, rowid",
         )?;
         let rows = stmt.query_map([], from_row)?.collect::<Result<Vec<_>, _>>()?;
         rows.into_iter().map(with_scopes).collect()
