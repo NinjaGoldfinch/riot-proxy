@@ -1,0 +1,11 @@
+---
+source: tests/http.rs
+expression: body
+---
+{
+  "error": {
+    "code": "NOT_FOUND",
+    "message": "No route for GET /nope?x=1",
+    "requestId": "[request-id]"
+  }
+}

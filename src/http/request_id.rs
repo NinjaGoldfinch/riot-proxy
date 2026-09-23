@@ -1,6 +1,6 @@
 //! Request ids: a ULID per request, or the caller's own `X-Request-Id` when it is
-//! well-formed. The id is put in the request extensions, attached to a tracing span
-//! wrapping the rest of the stack, and returned on the response (ADR-009).
+//! well-formed. The id is put in the request extensions and a task-local, attached to a
+//! tracing span wrapping the rest of the stack, and returned on the response (ADR-009).
 
 use axum::extract::Request;
 use axum::http::{HeaderName, HeaderValue};
@@ -15,6 +15,17 @@ pub const MAX_INBOUND_LEN: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestId(pub String);
+
+tokio::task_local! {
+    /// The id of the request being served, for code (like `ApiError`) that has
+    /// no access to the request itself.
+    pub static CURRENT: RequestId;
+}
+
+/// The current request's id, if called while serving one.
+pub fn current() -> Option<RequestId> {
+    CURRENT.try_with(Clone::clone).ok()
+}
 
 impl RequestId {
     fn from_inbound(value: &HeaderValue) -> Option<Self> {
@@ -46,7 +57,7 @@ pub async fn request_id(mut req: Request, next: Next) -> Response {
     req.extensions_mut().insert(id.clone());
 
     let span = tracing::info_span!("request", request_id = %id.as_str());
-    let mut res = next.run(req).instrument(span).await;
+    let mut res = CURRENT.scope(id.clone(), next.run(req).instrument(span)).await;
 
     // Only [A-Za-z0-9-_.:] reaches here, so the header value is always valid.
     if let Ok(value) = HeaderValue::from_str(id.as_str()) {
