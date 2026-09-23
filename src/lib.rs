@@ -2,6 +2,7 @@
 //! Module layout follows docs/design/03-architecture.md#module-layout.
 
 pub mod config;
+pub mod db;
 pub mod http;
 pub mod metrics;
 pub mod telemetry;
