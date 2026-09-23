@@ -739,4 +739,50 @@ mod tests {
         assert_eq!(ids.len(), ENDPOINTS.len());
         assert!(ENDPOINTS.iter().all(|e| e.method_scope_key == e.id));
     }
+
+    /// P1 exit check: every endpoint, in all nine groups, resolves to the right host
+    /// from one platform per region. Platform-hosted groups stay on the platform;
+    /// match-v5 goes to the platform's region; account-v1 does too, except SEA → asia.
+    #[test]
+    fn every_endpoint_group_resolves_to_the_right_host() {
+        let groups = [
+            ("account", "account-v1"),
+            ("summoner", "summoner-v4"),
+            ("league", "league-v4"),
+            ("match", "match-v5"),
+            ("spectator", "spectator-v5"),
+            ("mastery", "champion-mastery-v4"),
+            ("platform", "champion rotations"),
+            ("status", "lol-status-v4"),
+        ];
+        // Ladder reads are the ninth group, prefixed "league." like per-player entries.
+        assert_eq!(ENDPOINTS.iter().filter(|e| e.override_key == "ladder").count(), 4);
+        for e in ENDPOINTS {
+            let group = e.id.split('.').next().unwrap();
+            assert!(groups.iter().any(|(g, _)| *g == group), "{} has no group", e.id);
+        }
+
+        let cases = [
+            (Platform::Na1, "na1", "americas", "americas"),
+            (Platform::Euw1, "euw1", "europe", "europe"),
+            (Platform::Kr, "kr", "asia", "asia"),
+            (Platform::Oc1, "oc1", "sea", "asia"),
+            (Platform::Vn2, "vn2", "sea", "asia"),
+        ];
+        for e in ENDPOINTS {
+            for (platform, plat, match_region, account_region) in cases {
+                let expected = match e.id.split('.').next().unwrap() {
+                    "account" => account_region,
+                    "match" => match_region,
+                    _ => plat,
+                };
+                assert_eq!(
+                    e.target_for_platform(platform).host(),
+                    format!("{expected}.api.riotgames.com"),
+                    "{} from {plat}",
+                    e.id
+                );
+            }
+        }
+    }
 }
