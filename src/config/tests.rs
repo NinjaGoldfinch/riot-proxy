@@ -44,7 +44,7 @@ fn defaults_match_v1_and_design_07() {
     assert_eq!(c.job_concurrency, 8);
     assert!(!c.tls);
     assert_eq!(c.riot_user_agent, DEFAULT_USER_AGENT);
-    assert_eq!(c.default_platform, "euw1");
+    assert_eq!(c.default_platform, Platform::Euw1);
     assert_eq!(c.neg_ttl_seconds, 30);
     assert_eq!(c.neg_ttl_account_seconds, 300);
     assert_eq!(c.client_wait_budget_ms, 2000);
@@ -61,7 +61,7 @@ fn defaults_match_v1_and_design_07() {
     assert_eq!(c.track_catchup_limit, 500);
     assert_eq!(c.ladder_crawl_s, 0);
     assert_eq!(c.ladder_queues, vec!["RANKED_SOLO_5x5"]);
-    assert_eq!(c.ladder_platforms, vec!["euw1"]);
+    assert_eq!(c.ladder_platforms, vec![Platform::Euw1]);
     assert_eq!(c.ladder_tier_floor, "MASTER");
     assert_eq!(c.ladder_backfill_limit, 100);
     assert_eq!(c.facts_reextract_batch, 500);
@@ -325,14 +325,14 @@ fn lists_are_split_and_trimmed() {
         ("LADDER_TIER_FLOOR", "diamond"),
     ]));
     assert_eq!(c.admin_ip_allowlist, vec!["127.0.0.1", "::1", "10.0.0.0/8"]);
-    assert_eq!(c.ladder_platforms, vec!["euw1", "na1"]);
+    assert_eq!(c.ladder_platforms, vec![Platform::Euw1, Platform::Na1]);
     assert_eq!(c.ladder_queues, vec!["RANKED_SOLO_5x5", "RANKED_FLEX_SR"]);
     assert_eq!(c.ladder_tier_floor, "DIAMOND");
 
     let c = load(env(&[("DEFAULT_PLATFORM", "kr")]));
     assert_eq!(
         c.ladder_platforms,
-        vec!["kr"],
+        vec![Platform::Kr],
         "empty LADDER_PLATFORMS means DEFAULT_PLATFORM"
     );
 }
@@ -410,4 +410,25 @@ fn env_example_documents_every_variable() {
     for var in &documented {
         assert!(VARS.contains(var), "{var} in .env.example but not read by config");
     }
+}
+
+#[test]
+fn unknown_platforms_are_refused_at_boot() {
+    let errs = errors(env(&[
+        ("DEFAULT_PLATFORM", "euw"),
+        ("LADDER_PLATFORMS", "na1,xx"),
+    ]));
+    assert_eq!(errs.len(), 2, "{errs:?}");
+    assert!(
+        errs[0].starts_with("DEFAULT_PLATFORM: Unknown platform 'euw'"),
+        "{errs:?}"
+    );
+    assert!(
+        errs[1].starts_with("LADDER_PLATFORMS: Unknown platform 'xx'"),
+        "{errs:?}"
+    );
+    assert_eq!(
+        load(env(&[("DEFAULT_PLATFORM", "KR")])).default_platform,
+        Platform::Kr
+    );
 }

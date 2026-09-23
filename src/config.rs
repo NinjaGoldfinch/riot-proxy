@@ -15,6 +15,8 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use figment::Figment;
+
+use crate::riot::routing::Platform;
 use figment::providers::Serialized;
 
 /// Every variable the config reads. `.env.example` documents each one.
@@ -192,9 +194,9 @@ pub struct Config {
     pub tls_domain: Option<String>,
     pub acme_email: Option<String>,
 
-    // Values below are validated against Riot enums by the modules that own them
-    // (routing in P1-01, endpoints in P1-02, ladder in P7-02).
-    pub default_platform: String,
+    pub default_platform: Platform,
+    // Validated against Riot enums by the modules that own them (endpoints in
+    // P1-02, ladder queues and tiers in P7-02).
     pub cache_ttl_overrides: String,
     pub neg_ttl_seconds: u32,
     pub neg_ttl_account_seconds: u32,
@@ -213,7 +215,7 @@ pub struct Config {
     pub ladder_crawl_s: u32,
     pub ladder_queues: Vec<String>,
     /// Empty `LADDER_PLATFORMS` resolves to `[DEFAULT_PLATFORM]`, as in v1.
-    pub ladder_platforms: Vec<String>,
+    pub ladder_platforms: Vec<Platform>,
     pub ladder_tier_floor: String,
     pub ladder_backfill_limit: u32,
     pub facts_reextract_batch: u32,
@@ -402,10 +404,10 @@ impl Config {
                 .push("AUTH_DISABLED cannot be enabled when ENV=production".into());
         }
 
-        let default_platform = v.string("DEFAULT_PLATFORM", "euw1");
+        let default_platform = v.platform("DEFAULT_PLATFORM", &v.string("DEFAULT_PLATFORM", "euw1"));
         let ladder_platforms = match csv(&v.string("LADDER_PLATFORMS", "")) {
-            empty if empty.is_empty() => vec![default_platform.clone()],
-            list => list.into_iter().map(|p| p.to_ascii_lowercase()).collect(),
+            empty if empty.is_empty() => vec![default_platform],
+            list => list.iter().map(|p| v.platform("LADDER_PLATFORMS", p)).collect(),
         };
 
         let config = Config {
@@ -582,6 +584,14 @@ impl Vars {
     fn range_error<T: fmt::Display>(&mut self, name: &str, raw: &str, min: T, max: T, default: T) -> T {
         self.push(name, &format!("'{raw}' is outside {min}..={max}"));
         default
+    }
+
+    /// A platform, or an error naming the variable. v1 refused unknown platforms at boot.
+    fn platform(&mut self, name: &str, raw: &str) -> Platform {
+        raw.parse().unwrap_or_else(|e: crate::http::ApiError| {
+            self.push(name, &e.message);
+            Platform::Euw1
+        })
     }
 
     fn opt_bool(&mut self, name: &str) -> Option<bool> {

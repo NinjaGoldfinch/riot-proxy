@@ -29,7 +29,7 @@ CI run 35857621010 on main: fmt ✓ clippy ✓ test ✓ build-musl ✓
 The musl binary was checked in CI, not on the dev box (no `musl-gcc` there; ADR-006/013).
 
 ## P1 — Riot client
-- [ ] P1-01 routing
+- [x] P1-01 routing (#10)
 - [ ] P1-02 endpoint registry
 - [ ] P1-03 HTTP client
 - [ ] P1-04 rate-limit header parsing
@@ -105,6 +105,7 @@ Exit check: _pending_
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
 
 ## Notes for the next task
+- Routing: `riot::routing::{Platform, Region}` with `region()`, `account_region()` (sea→asia), `host()`, `parse()` → `BAD_REGION`, and `Platform::from_match_id`. Config's `default_platform` and `ladder_platforms` are typed.
 - v1 reference is `NinjaGoldfinch/riot-proxy-deprecated` (cloned at `../riot-proxy-v1`, commit `c86e631`), not `ninja-recorder-deprecated` as §1 of the plan says.
 - Repo is **public** (owner decision), not private.
 - Toolchain pinned to 1.98.1 (`rust-toolchain.toml`); CI installs it with `rustup toolchain install`.
