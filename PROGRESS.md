@@ -5,7 +5,7 @@ Legend: [ ] todo · [~] in progress (branch name) · [x] merged (#PR)
 ## P0 — Foundations
 - [x] P0-00 bootstrap (direct to `main`, no PR — see notes)
 - [x] P0-01 workspace, toolchain, CI (#1)
-- [ ] P0-02 config
+- [~] P0-02 config (feat/P0-02-config)
 - [ ] P0-03 logging + metrics + request ids
 - [ ] P0-04 SQLite layer
 - [ ] P0-05 HTTP skeleton + health
