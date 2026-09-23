@@ -4,7 +4,7 @@ Legend: [ ] todo · [~] in progress (branch name) · [x] merged (#PR)
 
 ## P0 — Foundations
 - [x] P0-00 bootstrap (direct to `main`, no PR — see notes)
-- [ ] P0-01 workspace, toolchain, CI
+- [x] P0-01 workspace, toolchain, CI (#1)
 - [ ] P0-02 config
 - [ ] P0-03 logging + metrics + request ids
 - [ ] P0-04 SQLite layer
@@ -89,7 +89,11 @@ Exit check: _pending_
 ## Notes for the next task
 - v1 reference is `NinjaGoldfinch/riot-proxy-deprecated` (cloned at `../riot-proxy-v1`, commit `c86e631`), not `ninja-recorder-deprecated` as §1 of the plan says.
 - Repo is **public** (owner decision), not private.
-- Bootstrap deliberately left `.github/workflows/ci.yml`, `rust-toolchain.toml` and `Cargo.toml` deps to P0-01, which owns them.
+- Toolchain pinned to 1.98.1 (`rust-toolchain.toml`); CI installs it with `rustup toolchain install`.
+- rusqlite is held at **0.39** for refinery 0.9 compatibility (ADR-005). Don't bump it without checking refinery's range.
+- reqwest 0.13: the feature is `rustls`, not `rustls-tls`. P1-03 must build the client with `tls_certs_only(<webpki roots>)` so `FROM scratch` needs no CA bundle (ADR-007).
+- `metrics-exporter-prometheus` has default features off (no built-in HTTP listener); P0-03 renders `/metrics` from our own axum route.
+- The musl build needs `musl-gcc`, which isn't on the dev box (no sudo), so it's verified in CI only.
 - CI (owner decision): required status checks are the job names `fmt`, `clippy`, `test`, `build-musl` (not the workflow name `ci`, which GitHub never reports as a check). Docker steps in `build-musl` are added in P0-07, not before.
 - v1 has no LICENSE file, so none was copied. Waiting on the owner to pick one.
 - `acceptance/` is v1's suite verbatim (plus its `vitest.acceptance.config.ts`); it hits the real Riot API and is ported in P8-01.
