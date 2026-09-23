@@ -5,7 +5,7 @@ Legend: [ ] todo · [~] in progress (branch name) · [x] merged (#PR)
 ## P0 — Foundations
 - [x] P0-00 bootstrap (direct to `main`, no PR — see notes)
 - [x] P0-01 workspace, toolchain, CI (#1)
-- [ ] P0-02 config
+- [x] P0-02 config (#2)
 - [ ] P0-03 logging + metrics + request ids
 - [ ] P0-04 SQLite layer
 - [ ] P0-05 HTTP skeleton + health
@@ -93,6 +93,8 @@ Exit check: _pending_
 - rusqlite is held at **0.39** for refinery 0.9 compatibility (ADR-005). Don't bump it without checking refinery's range.
 - reqwest 0.13: the feature is `rustls`, not `rustls-tls`. P1-03 must build the client with `tls_certs_only(<webpki roots>)` so `FROM scratch` needs no CA bundle (ADR-007).
 - `metrics-exporter-prometheus` has default features off (no built-in HTTP listener); P0-03 renders `/metrics` from our own axum route.
+- Config: `riot_proxy::config::Config::load(ConfigArgs)`; `ConfigArgs` is a `clap::Args` to `#[command(flatten)]` into `serve` in P0-06. `LOG_LEVEL` is a tracing filter string and `log_format` is already resolved (tty → pretty) for P0-03. Riot enum values (`DEFAULT_PLATFORM`, `LADDER_*`, `CACHE_TTL_OVERRIDES`) are still raw strings; P1-01, P1-02 and P7-02 must validate them at boot (ADR-008).
+- The crate is lib + bin (`src/lib.rs`), so `tests/*.rs` can import modules.
 - The musl build needs `musl-gcc`, which isn't on the dev box (no sudo), so it's verified in CI only.
 - CI (owner decision): required status checks are the job names `fmt`, `clippy`, `test`, `build-musl` (not the workflow name `ci`, which GitHub never reports as a check). Docker steps in `build-musl` are added in P0-07, not before.
 - v1 has no LICENSE file, so none was copied. Waiting on the owner to pick one.
