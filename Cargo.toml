@@ -2,5 +2,51 @@
 name = "riot-proxy"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.98"
+description = "Lightweight single-binary proxy for the Riot Games API"
+publish = false
 
+# Versions are pinned to the current minor; Cargo.lock pins the exact patch.
+# rusqlite is held at 0.39 because refinery 0.9 accepts rusqlite <= 0.39 (ADR-005).
 [dependencies]
+anyhow = "1.0"
+axum = { version = "0.8", features = ["ws"] }
+clap = { version = "4.6", features = ["derive", "env"] }
+dashmap = "6.2"
+dotenvy = "0.15"
+figment = { version = "0.10", features = ["env"] }
+hex = "0.4"
+jiff = "0.2"
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.18", default-features = false }
+moka = { version = "0.12", features = ["future"] }
+refinery = { version = "0.9", features = ["rusqlite"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "gzip", "rustls", "http2"] }
+rusqlite = { version = "0.39", features = ["bundled"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.11"
+thiserror = "2.0"
+tokio = { version = "1.53", features = ["full"] }
+tower-http = { version = "0.7", features = ["compression-full", "cors", "fs", "trace", "request-id"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+ulid = "3.0"
+zstd = "0.14"
+
+[dev-dependencies]
+insta = { version = "1.48", features = ["json"] }
+proptest = "1.11"
+tempfile = "3.27"
+tokio-test = "0.4"
+wiremock = "0.6"
+
+[lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

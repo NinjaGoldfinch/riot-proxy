@@ -1,0 +1,56 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request: {}
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+# Job ids are the required status checks on `main` (fmt, clippy, test, build-musl) —
+# renaming a job means updating branch protection too. See ADR-006.
+# The toolchain, components and musl target all come from rust-toolchain.toml.
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install
+      - run: cargo fmt --all --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install && rustup component add llvm-tools
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - run: cargo llvm-cov --all-features --workspace --summary-only
+      - name: no leaked Riot keys
+        run: '! grep -rE "RGAPI-[0-9a-f-]{20,}" tests/ src/ docs/'
+
+  build-musl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: cargo build --release --target x86_64-unknown-linux-musl
+      - name: static and under 20 MB
+        run: |
+          bin=target/x86_64-unknown-linux-musl/release/riot-proxy
+          ls -la "$bin"
+          file "$bin" | tee /dev/stderr | grep -qE "static(ally|-pie) linked"
+          test "$(stat -c %s "$bin")" -lt $((20 * 1024 * 1024))
+      # Docker image build + `healthcheck` run are added in P0-07 (owner decision, ADR-006).
