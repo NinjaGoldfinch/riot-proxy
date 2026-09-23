@@ -1,0 +1,62 @@
+---
+source: tests/riot_client.rs
+expression: bodies
+---
+{
+  "401": {
+    "body": {
+      "error": {
+        "code": "UPSTREAM_ERROR",
+        "message": "Upstream authentication failed"
+      }
+    },
+    "status": 502
+  },
+  "404": {
+    "body": {
+      "error": {
+        "code": "NOT_FOUND",
+        "message": "Resource not found upstream"
+      }
+    },
+    "status": 404
+  },
+  "418": {
+    "body": {
+      "error": {
+        "code": "UPSTREAM_ERROR",
+        "message": "Upstream request failed"
+      }
+    },
+    "status": 502
+  },
+  "429_service": {
+    "body": {
+      "error": {
+        "code": "RATE_LIMITED",
+        "message": "Upstream rate limited",
+        "retryAfter": 1
+      }
+    },
+    "status": 503
+  },
+  "429_typed": {
+    "body": {
+      "error": {
+        "code": "RATE_LIMITED",
+        "message": "Upstream rate limited",
+        "retryAfter": 3
+      }
+    },
+    "status": 503
+  },
+  "503": {
+    "body": {
+      "error": {
+        "code": "UPSTREAM_ERROR",
+        "message": "Upstream request failed"
+      }
+    },
+    "status": 502
+  }
+}

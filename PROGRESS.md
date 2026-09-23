@@ -31,7 +31,7 @@ The musl binary was checked in CI, not on the dev box (no `musl-gcc` there; ADR-
 ## P1 — Riot client
 - [x] P1-01 routing (#10)
 - [x] P1-02 endpoint registry (#11)
-- [ ] P1-03 HTTP client
+- [x] P1-03 HTTP client (#12)
 - [ ] P1-04 rate-limit header parsing
 - [ ] P1-05 dev subcommand
 Exit check: _pending_
@@ -105,6 +105,7 @@ Exit check: _pending_
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
 
 ## Notes for the next task
+- Client: `RiotClient::new(&cfg)` / `with_base_url(&cfg, mock_uri)`; `RiotRequest::new(ep, target, &params)?.query(k, Some(v))?`; `client.send(&req) -> Result<RiotResponse, RiotError>` (errors carry `headers`). **P3-05 must port v1's retry policy** (ADR-017 lists the exact numbers).
 - Endpoints: `riot::endpoints::{ENDPOINTS, Endpoint::by_id, Endpoint::path(&[..]), target_for_platform/region, TtlPolicy::from_config(&cfg).ttls(ep)}`. When the fetcher is wired (P3-05), `serve` should log `ineffective_overrides()` at warn.
 - **Flag for P3-05:** v1's negative-cache state is `X-Cache: HIT-NEG` (`src/cache/store.ts` `CacheState`), while design/03 and the plan say `NEG`. Headers must be byte-identical to v1, so ask the owner before choosing.
 - Routing: `riot::routing::{Platform, Region}` with `region()`, `account_region()` (sea→asia), `host()`, `parse()` → `BAD_REGION`, and `Platform::from_match_id`. Config's `default_platform` and `ladder_platforms` are typed.
@@ -120,7 +121,6 @@ Exit check: _pending_
 - Error envelope (owner decision): `{error:{code,message,requestId,retryAfter?}}`. Return `http::ApiError` from handlers; `requestId` is filled in automatically (ADR-011).
 - App: `app::router(AppState{config,db}, metrics_handle)` and `app::serve(listener, router, app::shutdown_signal()?)`. The CLI lives in `src/cli/` (`serve`, `migrate`, `key create|list|revoke`, `healthcheck`, `spec`); `main.rs` just calls `cli::run()`. Consumer storage is `src/consumers.rs` (`create`, `list`, `revoke`, `bootstrap_admin`, `hash_key`), which P4-01 auth should reuse. Integration-test fixtures are in `tests/common/mod.rs`; `tests/cli.rs` drives the real binary.
 - Logs go to **stdout** (JSON). The bootstrap key banner goes to **stderr**.
-- v1's `scrubKey` log redaction (the `test/config.test.ts` "log redaction" cases) is not ported yet. `Secret` covers `Debug`. P1-03 (Riot client) must make sure `X-Riot-Token` is never logged, and should port those tests.
 - The crate is lib + bin (`src/lib.rs`), so `tests/*.rs` can import modules.
 - The musl build needs `musl-gcc`, which isn't on the dev box (no sudo), so it's verified in CI only.
 - CI (owner decision): required status checks are the job names `fmt`, `clippy`, `test`, `build-musl` (not the workflow name `ci`, which GitHub never reports as a check). Since P0-07, `build-musl` also builds and smoke-tests the Docker image and `docker compose up` (ADR-013).
