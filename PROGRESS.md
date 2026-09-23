@@ -36,6 +36,8 @@ The musl binary was checked in CI, not on the dev box (no `musl-gcc` there; ADR-
 - [x] P1-05 dev subcommand (#14)
 Exit check: _pending_
 
+- [x] P1-06 exhaustive host-resolution test for the exit check (#15)
+
 ## P2 — Rate limiter
 - [ ] P2-01 port v1 limiter tests first
 - [ ] P2-02 windows and scopes
@@ -116,9 +118,9 @@ Exit check: _pending_
 - Repo is **public** (owner decision), not private.
 - Toolchain pinned to 1.98.1 (`rust-toolchain.toml`); CI installs it with `rustup toolchain install`.
 - rusqlite is held at **0.39** for refinery 0.9 compatibility (ADR-005). Don't bump it without checking refinery's range.
-- reqwest 0.13: the feature is `rustls`, not `rustls-tls`. P1-03 must build the client with `tls_certs_only(<webpki roots>)` so `FROM scratch` needs no CA bundle (ADR-007).
+- reqwest 0.13: the feature is `rustls`, not `rustls-tls`. Every reqwest client must use `tls_certs_only(...)` (webpki roots, or empty for plain HTTP), or it fails to build in `FROM scratch` (ADR-007/013).
 - `metrics-exporter-prometheus` has default features off (no built-in HTTP listener); P0-03 renders `/metrics` from our own axum route.
-- Config: `riot_proxy::config::Config::load(ConfigArgs)`; `ConfigArgs` is a `clap::Args` to `#[command(flatten)]` into `serve` in P0-06. `LOG_LEVEL` is a tracing filter string and `log_format` is already resolved (tty → pretty) for P0-03. Riot enum values (`DEFAULT_PLATFORM`, `LADDER_*`, `CACHE_TTL_OVERRIDES`) are still raw strings; P1-01, P1-02 and P7-02 must validate them at boot (ADR-008).
+- Config: `riot_proxy::config::Config::load(ConfigArgs)`; `ConfigArgs` is a `clap::Args` to `#[command(flatten)]` into `serve` in P0-06. `LOG_LEVEL` is a tracing filter string and `log_format` is already resolved (tty → pretty) for P0-03. Platforms are typed and validated at boot (P1-01). `LADDER_QUEUES`/`LADDER_TIER_FLOOR` are still raw strings; P7-02 must validate them at boot (ADR-008).
 - Telemetry: `telemetry::init_tracing(&config)`, `telemetry::metrics_handle()` (idempotent), `telemetry::spawn_upkeep(handle)` and `telemetry::metrics_router(handle)` for P0-05 to merge. `http::request_id::request_id` goes on as the **outermost** `axum::middleware::from_fn` layer. Metric names are constants in `src/metrics.rs`; use those, not string literals.
 - DB: `db::Db::open(path, readers)` (blocking) or `Db::open_async`; `db.write(|c: &mut Connection| …)` and `db.read(|c: &Connection| …)`, generic over the error type (`E: From<DbError>`). Migrations are `src/db/migrations/V000N__name.sql` (refinery naming, ADR-010); P5-01 adds `V0002__archive.sql`. `Config.database` gives the path (`Database::Sqlite(path)`).
 - Error envelope (owner decision): `{error:{code,message,requestId,retryAfter?}}`. Return `http::ApiError` from handlers; `requestId` is filled in automatically (ADR-011).
