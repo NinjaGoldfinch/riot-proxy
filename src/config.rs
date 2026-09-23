@@ -230,41 +230,41 @@ pub struct Config {
     pub dashboard_ui: bool,
 }
 
-/// Flags that override any variable. Flattened into the `serve` subcommand (P0-06).
+/// Flags that override any variable. Global: accepted before or after any subcommand.
 #[derive(Debug, Clone, Default, clap::Args)]
 pub struct ConfigArgs {
     /// Address to bind [env: HOST]
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub host: Option<String>,
     /// Port to bind [env: PORT]
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub port: Option<u16>,
     /// Directory for the database, ddragon mirror and backups [env: DATA_DIR]
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub data_dir: Option<PathBuf>,
     /// sqlite://path (default) or postgres://… with the postgres feature [env: DATABASE_URL]
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub database_url: Option<String>,
     /// development | test | production [env: ENV]
-    #[arg(long = "env")]
+    #[arg(long = "env", global = true)]
     pub environment: Option<String>,
     /// all | api | worker [env: ROLE]
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub role: Option<String>,
     /// tracing filter, e.g. info or riot_proxy=debug [env: LOG_LEVEL]
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub log_level: Option<String>,
     /// json | pretty [env: LOG_FORMAT]
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub log_format: Option<String>,
     /// Terminate TLS in-process via ACME [env: TLS]
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub tls: bool,
     /// Domain to request a certificate for [env: TLS_DOMAIN]
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub domain: Option<String>,
     /// ACME account contact [env: ACME_EMAIL]
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub acme_email: Option<String>,
 }
 

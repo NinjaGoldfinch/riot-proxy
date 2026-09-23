@@ -9,7 +9,7 @@ Legend: [ ] todo · [~] in progress (branch name) · [x] merged (#PR)
 - [x] P0-03 logging + metrics + request ids (#3)
 - [x] P0-04 SQLite layer (#4)
 - [x] P0-05 HTTP skeleton + health (#5)
-- [ ] P0-06 CLI
+- [x] P0-06 CLI (#6)
 - [ ] P0-07 dev tooling
 Exit check: _pending_
 
@@ -97,7 +97,8 @@ Exit check: _pending_
 - Telemetry: `telemetry::init_tracing(&config)`, `telemetry::metrics_handle()` (idempotent), `telemetry::spawn_upkeep(handle)` and `telemetry::metrics_router(handle)` for P0-05 to merge. `http::request_id::request_id` goes on as the **outermost** `axum::middleware::from_fn` layer. Metric names are constants in `src/metrics.rs`; use those, not string literals.
 - DB: `db::Db::open(path, readers)` (blocking) or `Db::open_async`; `db.write(|c: &mut Connection| …)` and `db.read(|c: &Connection| …)`, generic over the error type (`E: From<DbError>`). Migrations are `src/db/migrations/V000N__name.sql` (refinery naming, ADR-010); P5-01 adds `V0002__archive.sql`. `Config.database` gives the path (`Database::Sqlite(path)`).
 - Error envelope (owner decision): `{error:{code,message,requestId,retryAfter?}}`. Return `http::ApiError` from handlers; `requestId` is filled in automatically (ADR-011).
-- App: `app::router(AppState{config,db}, metrics_handle)` and `app::serve(listener, router, app::shutdown_signal()?)`. `src/main.rs` is a minimal serve-only entry; P0-06 replaces it with clap subcommands (`serve` flattens `ConfigArgs`). Integration-test fixtures are in `tests/common/mod.rs`.
+- App: `app::router(AppState{config,db}, metrics_handle)` and `app::serve(listener, router, app::shutdown_signal()?)`. The CLI lives in `src/cli/` (`serve`, `migrate`, `key create|list|revoke`, `healthcheck`, `spec`); `main.rs` just calls `cli::run()`. Consumer storage is `src/consumers.rs` (`create`, `list`, `revoke`, `bootstrap_admin`, `hash_key`), which P4-01 auth should reuse. Integration-test fixtures are in `tests/common/mod.rs`; `tests/cli.rs` drives the real binary.
+- Logs go to **stdout** (JSON). The bootstrap key banner goes to **stderr**.
 - **For owner review at the P0 gate:** CORS was deliberately *not* added (v1 has none; ADR-011).
 - v1's `scrubKey` log redaction (the `test/config.test.ts` "log redaction" cases) is not ported yet. `Secret` covers `Debug`. P1-03 (Riot client) must make sure `X-Riot-Token` is never logged, and should port those tests.
 - The crate is lib + bin (`src/lib.rs`), so `tests/*.rs` can import modules.

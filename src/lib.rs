@@ -2,7 +2,9 @@
 //! Module layout follows docs/design/03-architecture.md#module-layout.
 
 pub mod app;
+pub mod cli;
 pub mod config;
+pub mod consumers;
 pub mod db;
 pub mod http;
 pub mod metrics;
