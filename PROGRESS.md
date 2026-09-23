@@ -6,7 +6,7 @@ Legend: [ ] todo · [~] in progress (branch name) · [x] merged (#PR)
 - [x] P0-00 bootstrap (direct to `main`, no PR — see notes)
 - [x] P0-01 workspace, toolchain, CI (#1)
 - [x] P0-02 config (#2)
-- [ ] P0-03 logging + metrics + request ids
+- [x] P0-03 logging + metrics + request ids (#3)
 - [ ] P0-04 SQLite layer
 - [ ] P0-05 HTTP skeleton + health
 - [ ] P0-06 CLI
@@ -94,6 +94,9 @@ Exit check: _pending_
 - reqwest 0.13: the feature is `rustls`, not `rustls-tls`. P1-03 must build the client with `tls_certs_only(<webpki roots>)` so `FROM scratch` needs no CA bundle (ADR-007).
 - `metrics-exporter-prometheus` has default features off (no built-in HTTP listener); P0-03 renders `/metrics` from our own axum route.
 - Config: `riot_proxy::config::Config::load(ConfigArgs)`; `ConfigArgs` is a `clap::Args` to `#[command(flatten)]` into `serve` in P0-06. `LOG_LEVEL` is a tracing filter string and `log_format` is already resolved (tty → pretty) for P0-03. Riot enum values (`DEFAULT_PLATFORM`, `LADDER_*`, `CACHE_TTL_OVERRIDES`) are still raw strings; P1-01, P1-02 and P7-02 must validate them at boot (ADR-008).
+- Telemetry: `telemetry::init_tracing(&config)`, `telemetry::metrics_handle()` (idempotent), `telemetry::spawn_upkeep(handle)` and `telemetry::metrics_router(handle)` for P0-05 to merge. `http::request_id::request_id` goes on as the **outermost** `axum::middleware::from_fn` layer. Metric names are constants in `src/metrics.rs`; use those, not string literals.
+- **Open question for the owner (blocks P0-05):** v1 has no `X-Request-Id` and no `requestId` in its error envelope (ADR-009). P0-05 says the body is `{error:{code,message,requestId}}`, while v1's is `{error:{code,message,retryAfter?}}`.
+- v1's `scrubKey` log redaction (the `test/config.test.ts` "log redaction" cases) is not ported yet. `Secret` covers `Debug`. P1-03 (Riot client) must make sure `X-Riot-Token` is never logged, and should port those tests.
 - The crate is lib + bin (`src/lib.rs`), so `tests/*.rs` can import modules.
 - The musl build needs `musl-gcc`, which isn't on the dev box (no sudo), so it's verified in CI only.
 - CI (owner decision): required status checks are the job names `fmt`, `clippy`, `test`, `build-musl` (not the workflow name `ci`, which GitHub never reports as a check). Docker steps in `build-musl` are added in P0-07, not before.
