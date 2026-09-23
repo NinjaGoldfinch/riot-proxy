@@ -1,0 +1,17 @@
+# v1 method ids (src/riot/endpoints.ts METHOD_IDS @ c86e631). One per line.
+account.byRiotId
+account.byPuuid
+summoner.byPuuid
+league.entriesByPuuid
+league.challenger
+league.grandmaster
+league.master
+league.entriesByTier
+match.idsByPuuid
+match.byId
+match.timeline
+spectator.activeGame
+mastery.byPuuid
+mastery.topByPuuid
+platform.championRotations
+status.platformData

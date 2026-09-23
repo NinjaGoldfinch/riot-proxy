@@ -30,7 +30,7 @@ The musl binary was checked in CI, not on the dev box (no `musl-gcc` there; ADR-
 
 ## P1 — Riot client
 - [x] P1-01 routing (#10)
-- [ ] P1-02 endpoint registry
+- [x] P1-02 endpoint registry (#11)
 - [ ] P1-03 HTTP client
 - [ ] P1-04 rate-limit header parsing
 - [ ] P1-05 dev subcommand
@@ -105,6 +105,8 @@ Exit check: _pending_
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
 
 ## Notes for the next task
+- Endpoints: `riot::endpoints::{ENDPOINTS, Endpoint::by_id, Endpoint::path(&[..]), target_for_platform/region, TtlPolicy::from_config(&cfg).ttls(ep)}`. When the fetcher is wired (P3-05), `serve` should log `ineffective_overrides()` at warn.
+- **Flag for P3-05:** v1's negative-cache state is `X-Cache: HIT-NEG` (`src/cache/store.ts` `CacheState`), while design/03 and the plan say `NEG`. Headers must be byte-identical to v1, so ask the owner before choosing.
 - Routing: `riot::routing::{Platform, Region}` with `region()`, `account_region()` (sea→asia), `host()`, `parse()` → `BAD_REGION`, and `Platform::from_match_id`. Config's `default_platform` and `ladder_platforms` are typed.
 - v1 reference is `NinjaGoldfinch/riot-proxy-deprecated` (cloned at `../riot-proxy-v1`, commit `c86e631`), not `ninja-recorder-deprecated` as §1 of the plan says.
 - Repo is **public** (owner decision), not private.
