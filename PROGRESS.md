@@ -11,7 +11,22 @@ Legend: [ ] todo · [~] in progress (branch name) · [x] merged (#PR)
 - [x] P0-05 HTTP skeleton + health (#5)
 - [x] P0-06 CLI (#6)
 - [x] P0-07 dev tooling (#7)
-Exit check: _pending_
+Exit check: **passed** (2026-09-23, `main` @ `6d7f2f8`)
+```
+$ rm -rf data && RIOT_API_KEY=<placeholder> cargo run -- serve
+  migrated V1__init → "database ready" path=./data/riot-proxy.db
+  "bootstrap admin consumer created"
+  bootstrap admin key (shown once): rpx_<redacted>          ← stderr, once
+  "listening" addr=0.0.0.0:8080
+$ curl localhost:8080/healthz        → {"ok":true} [200]
+$ curl localhost:8080/metrics        → [200] # TYPE proxy_archived_matches_total counter …
+$ kill -TERM <pid>                   → "SIGTERM" → "draining" → "stopped", exit 0
+$ cargo run -- key create --name test → Consumer created … API KEY rpx_<redacted> (36 chars)
+CI run 35857621010 on main: fmt ✓ clippy ✓ test ✓ build-musl ✓
+  target/x86_64-unknown-linux-musl/release/riot-proxy: 14,517,536 bytes, "static-pie linked", stripped  (< 20 MB)
+  docker image riot-proxy:ci: 14.6 MB; container healthcheck ✓, /healthz ✓, /readyz ✓, SIGTERM exit 0; docker compose up → /healthz ✓
+```
+The musl binary was checked in CI, not on the dev box (no `musl-gcc` there; ADR-006/013).
 
 ## P1 — Riot client
 - [ ] P1-01 routing
@@ -86,6 +101,13 @@ Exit check: _pending_
 - [ ] P8-06 cut-over runbook
 Exit check: _pending_
 
+## Owner review at the P0 gate
+- CORS is **not** enabled (v1 has none, the plan listed it; ADR-011). Keep it off, or choose a policy?
+- No LICENSE file (v1 has none). The repo is public, so it is all-rights-reserved by default. Pick one?
+- The bootstrap admin key is printed to stderr, not into the JSON log stream (ADR-012).
+- `NODE_ENV` is honoured as a fallback for `ENV` (ADR-008).
+- v2 metric names for design/07's additions (`jobs_pending`, `limiter_bulk_waiters`, `sqlite_wal_bytes`): with or without the `proxy_` prefix? This must be settled by P2-05.
+
 ## Notes for the next task
 - v1 reference is `NinjaGoldfinch/riot-proxy-deprecated` (cloned at `../riot-proxy-v1`, commit `c86e631`), not `ninja-recorder-deprecated` as §1 of the plan says.
 - Repo is **public** (owner decision), not private.
@@ -99,7 +121,6 @@ Exit check: _pending_
 - Error envelope (owner decision): `{error:{code,message,requestId,retryAfter?}}`. Return `http::ApiError` from handlers; `requestId` is filled in automatically (ADR-011).
 - App: `app::router(AppState{config,db}, metrics_handle)` and `app::serve(listener, router, app::shutdown_signal()?)`. The CLI lives in `src/cli/` (`serve`, `migrate`, `key create|list|revoke`, `healthcheck`, `spec`); `main.rs` just calls `cli::run()`. Consumer storage is `src/consumers.rs` (`create`, `list`, `revoke`, `bootstrap_admin`, `hash_key`), which P4-01 auth should reuse. Integration-test fixtures are in `tests/common/mod.rs`; `tests/cli.rs` drives the real binary.
 - Logs go to **stdout** (JSON). The bootstrap key banner goes to **stderr**.
-- **For owner review at the P0 gate:** CORS was deliberately *not* added (v1 has none; ADR-011).
 - v1's `scrubKey` log redaction (the `test/config.test.ts` "log redaction" cases) is not ported yet. `Secret` covers `Debug`. P1-03 (Riot client) must make sure `X-Riot-Token` is never logged, and should port those tests.
 - The crate is lib + bin (`src/lib.rs`), so `tests/*.rs` can import modules.
 - The musl build needs `musl-gcc`, which isn't on the dev box (no sudo), so it's verified in CI only.
