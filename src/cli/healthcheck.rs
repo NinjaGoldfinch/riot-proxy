@@ -6,9 +6,7 @@ use crate::config::Config;
 
 pub async fn run(config: &Config, timeout_s: u64) -> anyhow::Result<()> {
     let url = healthz_url(config);
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(timeout_s))
-        .build()?;
+    let client = client(Duration::from_secs(timeout_s))?;
     let res = client.get(&url).send().await?;
     anyhow::ensure!(res.status().is_success(), "{url} answered {}", res.status());
     Ok(())
