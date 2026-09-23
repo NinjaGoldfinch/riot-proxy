@@ -53,4 +53,29 @@ jobs:
           ls -la "$bin"
           file "$bin" | tee /dev/stderr | grep -qE "static(ally|-pie) linked"
           test "$(stat -c %s "$bin")" -lt $((20 * 1024 * 1024))
-      # Docker image build + `healthcheck` run are added in P0-07 (owner decision, ADR-006).
+      - name: docker image builds
+        run: docker build -t riot-proxy:ci .
+      - name: image runs, serves, and passes its own healthcheck
+        run: |
+          docker run --rm riot-proxy:ci --version
+          docker run -d --name rp -e RIOT_API_KEY=ci-dummy-key-not-a-riot-key -p 8080:8080 riot-proxy:ci
+          for i in $(seq 1 30); do
+            if docker exec rp /riot-proxy healthcheck; then break; fi
+            sleep 1
+          done
+          docker exec rp /riot-proxy healthcheck
+          curl -fsS localhost:8080/healthz
+          curl -fsS localhost:8080/readyz
+          docker logs rp 2>&1 | grep -q "bootstrap admin key (shown once)"
+          docker stop -t 15 rp
+          test "$(docker inspect -f '{{.State.ExitCode}}' rp)" = 0
+          docker images riot-proxy:ci --format 'image size: {{.Size}}'
+      - name: docker compose up serves /healthz
+        run: |
+          echo "RIOT_API_KEY=ci-dummy-key-not-a-riot-key" > .env
+          docker compose up -d --build --wait --wait-timeout 60 || true
+          for i in $(seq 1 30); do curl -fsS localhost:8080/healthz && break; sleep 1; done
+          curl -fsS localhost:8080/healthz
+          docker compose down
+      - if: failure()
+        run: docker logs rp || true; docker compose logs || true

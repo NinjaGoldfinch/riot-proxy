@@ -1,0 +1,7 @@
+/target
+/data
+/backups
+.env
+.git
+node_modules
+rust-toolchain.toml
