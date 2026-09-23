@@ -12,7 +12,7 @@ The catalogue lives in `src/metrics.rs` (`CATALOGUE`). A unit test fails if a ca
 | `proxy_upstream_requests_total` | counter | region, method, status | — | Riot client (P1-03) |
 | `proxy_upstream_latency_seconds` | histogram | region, method | 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10 | Riot client (P1-03) |
 | `proxy_rl_wait_seconds` | histogram | region, priority | 0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10 | Limiter (P2-03) |
-| `proxy_rl_429_total` | counter | region, type | — | Limiter observe (P2-04) |
+| `proxy_rl_429_total` | counter | region, type | — | Riot client, one per 429 received; `type` = `X-Rate-Limit-Type` or `service` (P1-03) |
 | `proxy_cache_reads_total` | counter | state | — | Fetcher (P3-05); `state` ∈ hit, miss, neg, stale |
 | `proxy_ws_connections` | gauge | — | — | WS hub (P6-01) |
 | `proxy_jobs_total` | counter | job, status | — | Scheduler (P6-03) |
