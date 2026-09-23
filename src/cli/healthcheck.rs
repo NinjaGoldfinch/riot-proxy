@@ -6,12 +6,20 @@ use crate::config::Config;
 
 pub async fn run(config: &Config, timeout_s: u64) -> anyhow::Result<()> {
     let url = healthz_url(config);
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(timeout_s))
-        .build()?;
+    let client = client(Duration::from_secs(timeout_s))?;
     let res = client.get(&url).send().await?;
     anyhow::ensure!(res.status().is_success(), "{url} answered {}", res.status());
     Ok(())
+}
+
+/// Plain HTTP to loopback only. An explicitly empty root store stops reqwest from
+/// building its platform verifier, which fails in a `FROM scratch` image because
+/// there is no system CA store to load (ADR-007).
+fn client(timeout: Duration) -> reqwest::Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .tls_certs_only(std::iter::empty())
+        .build()
 }
 
 /// The server binds `HOST`, which is usually a wildcard; connect via loopback then.
@@ -41,6 +49,11 @@ mod tests {
             ..Sources::default()
         })
         .unwrap()
+    }
+
+    #[test]
+    fn client_builds_without_a_system_ca_store() {
+        client(Duration::from_secs(1)).expect("no platform verifier involved");
     }
 
     #[test]

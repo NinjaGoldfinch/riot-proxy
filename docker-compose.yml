@@ -1,0 +1,8 @@
+services:
+  riot-proxy:
+    image: ghcr.io/ninjagoldfinch/riot-proxy:2
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    ports: ["8080:8080"]
+    volumes: ["./data:/data"]

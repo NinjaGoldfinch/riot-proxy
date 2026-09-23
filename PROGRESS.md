@@ -10,7 +10,7 @@ Legend: [ ] todo · [~] in progress (branch name) · [x] merged (#PR)
 - [x] P0-04 SQLite layer (#4)
 - [x] P0-05 HTTP skeleton + health (#5)
 - [x] P0-06 CLI (#6)
-- [ ] P0-07 dev tooling
+- [x] P0-07 dev tooling (#7)
 Exit check: _pending_
 
 ## P1 — Riot client
@@ -103,6 +103,7 @@ Exit check: _pending_
 - v1's `scrubKey` log redaction (the `test/config.test.ts` "log redaction" cases) is not ported yet. `Secret` covers `Debug`. P1-03 (Riot client) must make sure `X-Riot-Token` is never logged, and should port those tests.
 - The crate is lib + bin (`src/lib.rs`), so `tests/*.rs` can import modules.
 - The musl build needs `musl-gcc`, which isn't on the dev box (no sudo), so it's verified in CI only.
-- CI (owner decision): required status checks are the job names `fmt`, `clippy`, `test`, `build-musl` (not the workflow name `ci`, which GitHub never reports as a check). Docker steps in `build-musl` are added in P0-07, not before.
+- CI (owner decision): required status checks are the job names `fmt`, `clippy`, `test`, `build-musl` (not the workflow name `ci`, which GitHub never reports as a check). Since P0-07, `build-musl` also builds and smoke-tests the Docker image and `docker compose up` (ADR-013).
+- No docker on the dev box; image behaviour is verified in CI only. `just` is installed at `~/.local/bin/just`.
 - v1 has no LICENSE file, so none was copied. Waiting on the owner to pick one.
 - `acceptance/` is v1's suite verbatim (plus its `vitest.acceptance.config.ts`); it hits the real Riot API and is ported in P8-01.
