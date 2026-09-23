@@ -33,7 +33,7 @@ The musl binary was checked in CI, not on the dev box (no `musl-gcc` there; ADR-
 - [x] P1-02 endpoint registry (#11)
 - [x] P1-03 HTTP client (#12)
 - [x] P1-04 rate-limit header parsing (#13)
-- [ ] P1-05 dev subcommand
+- [x] P1-05 dev subcommand (#14)
 Exit check: _pending_
 
 ## P2 — Rate limiter
@@ -105,6 +105,7 @@ Exit check: _pending_
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
 
 ## Notes for the next task
+- Dev CLI: `just riot account/by-riot-id europe Faker KR1` (needs a real dev key in `./.env`; none is on the dev box yet).
 - Headers: `riot::limiter::headers::{RateLimitHeaders::from_headers, parse_limits, parse_counts, RateLimitType, BOOTSTRAP_APP_LIMITS}`. The client still reports the 429 type as a raw string; P2-04 can convert with `RateLimitType::parse`.
 - **Ask the owner before P2-04/P3-05:** service-429 backoff numbers, design/05 vs v1 (ADR-018).
 - Client: `RiotClient::new(&cfg)` / `with_base_url(&cfg, mock_uri)`; `RiotRequest::new(ep, target, &params)?.query(k, Some(v))?`; `client.send(&req) -> Result<RiotResponse, RiotError>` (errors carry `headers`). **P3-05 must port v1's retry policy** (ADR-017 lists the exact numbers).

@@ -320,3 +320,97 @@ fn healthcheck_fails_when_nothing_listens() {
         .unwrap();
     assert!(!out.status.success());
 }
+
+#[cfg(feature = "dev-cli")]
+#[tokio::test(flavor = "multi_thread")]
+async fn riot_get_prints_the_raw_body() {
+    use wiremock::matchers::{header, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(path("/riot/account/v1/accounts/by-riot-id/Hide%20on%20bush/KR1"))
+        .and(header("x-riot-token", KEY))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(r#"{"puuid":"P","gameName":"Hide on bush"}"#),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(path("/lol/champion-mastery/v4/champion-masteries/by-puuid/P/top"))
+        .and(query_param("count", "3"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("[]"))
+        .mount(&server)
+        .await;
+    Mock::given(path("/lol/summoner/v4/summoners/by-puuid/missing"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("data");
+    let uri = server.uri();
+    let data2 = data.clone();
+    let out = tokio::task::spawn_blocking(move || {
+        run(
+            &data2,
+            &[
+                "riot",
+                "get",
+                "account/by-riot-id",
+                "europe",
+                "Hide on bush",
+                "KR1",
+                "--base-url",
+                &uri,
+            ],
+        )
+    })
+    .await
+    .unwrap();
+    assert_eq!(stdout(&out).trim(), r#"{"puuid":"P","gameName":"Hide on bush"}"#);
+    assert!(
+        String::from_utf8_lossy(&out.stderr)
+            .starts_with("200 /riot/account/v1/accounts/by-riot-id/Hide%20on%20bush/KR1")
+    );
+
+    let uri = server.uri();
+    let data2 = data.clone();
+    let out = tokio::task::spawn_blocking(move || {
+        run(
+            &data2,
+            &[
+                "riot",
+                "get",
+                "mastery.topByPuuid",
+                "kr",
+                "P",
+                "-q",
+                "count=3",
+                "--base-url",
+                &uri,
+            ],
+        )
+    })
+    .await
+    .unwrap();
+    assert_eq!(stdout(&out).trim(), "[]");
+
+    let uri = server.uri();
+    let out = tokio::task::spawn_blocking(move || {
+        cmd(&data)
+            .args([
+                "riot",
+                "get",
+                "summoner/by-puuid",
+                "euw1",
+                "missing",
+                "--base-url",
+                &uri,
+            ])
+            .output()
+            .unwrap()
+    })
+    .await
+    .unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("NotFound"));
+}

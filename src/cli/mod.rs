@@ -2,6 +2,8 @@
 
 pub mod healthcheck;
 pub mod key;
+#[cfg(feature = "dev-cli")]
+pub mod riot;
 pub mod serve;
 
 use std::process::ExitCode;
@@ -42,6 +44,10 @@ pub enum Command {
     },
     /// Print the OpenAPI document to stdout (placeholder until P4-03).
     Spec,
+    /// Raw Riot API calls for development (built with --features dev-cli).
+    #[cfg(feature = "dev-cli")]
+    #[command(subcommand)]
+    Riot(riot::RiotCommand),
 }
 
 /// Parse `std::env::args` and run. Errors are printed here; the exit code says
@@ -77,6 +83,8 @@ pub fn run() -> ExitCode {
             Command::Key(cmd) => key::run(&config, cmd).await,
             Command::Healthcheck { timeout } => healthcheck::run(&config, timeout).await,
             Command::Spec => Ok(()),
+            #[cfg(feature = "dev-cli")]
+            Command::Riot(cmd) => riot::run(&config, cmd).await,
         }
     });
     match result {
