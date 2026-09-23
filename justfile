@@ -33,3 +33,7 @@ musl:
 # Build the FROM-scratch image
 docker:
     docker build -t {{image}} .
+
+# One raw Riot call with the key from ./.env, e.g. `just riot account/by-riot-id europe Faker KR1`
+riot *ARGS:
+    cargo run --features dev-cli -- riot get {{ARGS}}

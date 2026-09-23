@@ -39,6 +39,10 @@ ulid = "3.0"
 webpki-root-certs = "1.0"
 zstd = "0.14"
 
+[features]
+# `riot-proxy riot get …`: raw upstream calls for development. Never in release builds.
+dev-cli = []
+
 [dev-dependencies]
 insta = { version = "1.48", features = ["json"] }
 proptest = "1.11"
