@@ -36,6 +36,9 @@ tower-http = { version = "0.7", features = ["catch-panic", "compression-full", "
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 ulid = "3.0"
+utoipa = { version = "6", features = ["yaml", "axum_extras", "preserve_order"] }
+utoipa-axum = "0.3"
+utoipa-scalar = { version = "0.4", features = ["axum"] }
 webpki-root-certs = "1.0"
 zstd = "0.14"
 

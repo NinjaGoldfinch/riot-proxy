@@ -44,7 +44,7 @@ pub enum Command {
         #[arg(long, default_value_t = 3)]
         timeout: u64,
     },
-    /// Print the OpenAPI document to stdout (placeholder until P4-03).
+    /// Print the OpenAPI document (JSON) to stdout.
     Spec,
     /// Raw Riot API calls for development (built with --features dev-cli).
     #[cfg(feature = "dev-cli")]
@@ -57,7 +57,13 @@ pub enum Command {
 pub fn run() -> ExitCode {
     let cli = Cli::parse();
     if let Command::Spec = cli.command {
-        println!("{}", spec_placeholder());
+        match crate::routes::docs::spec().to_pretty_json() {
+            Ok(json) => println!("{json}"),
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
         return ExitCode::SUCCESS;
     }
     let config = match Config::load(cli.config) {
@@ -143,14 +149,4 @@ async fn migrate(config: &Config) -> anyhow::Result<()> {
         println!("{}: applied {}", path.display(), applied.join(", "));
     }
     Ok(())
-}
-
-/// A valid, empty OpenAPI 3.1 document. P4-03 replaces this with the utoipa spec.
-pub fn spec_placeholder() -> String {
-    serde_json::json!({
-        "openapi": "3.1.0",
-        "info": {"title": "riot-proxy", "version": env!("CARGO_PKG_VERSION")},
-        "paths": {}
-    })
-    .to_string()
 }

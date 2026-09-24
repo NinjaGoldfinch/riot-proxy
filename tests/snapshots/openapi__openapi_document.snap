@@ -1,0 +1,246 @@
+---
+source: tests/openapi.rs
+expression: doc
+---
+{
+  "components": {
+    "schemas": {
+      "Health": {
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "type": "object"
+      },
+      "Ready": {
+        "description": "v1 returned `{ok, redis, postgres, keyScope}`. v2 has one store, so `sqlite` replaces\nthe two backend booleans, and `limiter` says the checkpoint was restored\n(design/07). `keyScope` is v1's (ADR-011).",
+        "properties": {
+          "keyScope": {
+            "type": "string"
+          },
+          "limiter": {
+            "type": "boolean"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "sqlite": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "sqlite",
+          "limiter",
+          "keyScope"
+        ],
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "description": "A consumer key, `rpx_…`, issued by `riot-proxy key create` or `POST /v1/admin/consumers` and shown exactly once. Only its SHA-256 is stored.",
+        "scheme": "bearer",
+        "type": "http"
+      },
+      "tokenQuery": {
+        "description": "**WebSocket handshake only.** A browser `WebSocket` cannot set an `Authorization` header, so `/v1/ws` takes the same key as `?token=`. Avoid it on HTTP routes: a key in a query string ends up in access logs.",
+        "in": "query",
+        "name": "token",
+        "type": "apiKey"
+      }
+    }
+  },
+  "info": {
+    "description": "A self-hosted proxy between [Riot's public API](https://developer.riotgames.com/) and everything downstream of it. It holds one Riot key, spends it carefully, and gives its consumers their own keys and quotas.\n\n- **Rate limits:** read from Riot's own response headers. Requests a user is waiting on go ahead of background work.\n- **Caching and archive:** repeated reads are served from cache; matches are immutable and archived.\n- **One error envelope:** `{\"error\":{\"code\",\"message\",\"requestId\",\"retryAfter?\"}}`.\n\n### Response headers\n\n| Header | Meaning |\n|---|---|\n| `X-Cache` | `HIT`, `MISS`, `STALE`, `HIT-NEG` (a cached 404), `ARCHIVE` (from the match archive), `BYPASS` (`?refresh=true`) |\n| `X-Cache-Age` | Age of the **content** in seconds, not of the last fetch |\n| `X-RateLimit-Limit` / `-Remaining` / `-Reset` | Your consumer quota |\n| `X-Request-Id` | Quote this when reporting a problem |\n",
+    "license": {
+      "identifier": "MIT",
+      "name": "MIT"
+    },
+    "title": "riot-proxy",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/healthz": {
+      "get": {
+        "description": "Answers as long as the process is up. It touches nothing, so a 200 says only that the process is serving; use `/readyz` to decide whether to send traffic.",
+        "operationId": "healthz",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            },
+            "description": "Up"
+          }
+        },
+        "security": [
+          {}
+        ],
+        "summary": "Liveness",
+        "tags": [
+          "ops"
+        ]
+      }
+    },
+    "/metrics": {
+      "get": {
+        "description": "Prometheus text exposition format, not JSON. Behind a reverse proxy, restrict this path to private ranges.",
+        "operationId": "render_metrics",
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Prometheus text exposition format"
+          }
+        },
+        "security": [
+          {}
+        ],
+        "summary": "Prometheus metrics",
+        "tags": [
+          "ops"
+        ]
+      }
+    },
+    "/readyz": {
+      "get": {
+        "description": "SQLite can take a write and the limiter checkpoint is restored. **The 503 carries the same body as the 200**, so the booleans name what is not ready.",
+        "operationId": "readyz",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ready"
+                }
+              }
+            },
+            "description": "Ready"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ready"
+                }
+              }
+            },
+            "description": "Not ready"
+          }
+        },
+        "security": [
+          {}
+        ],
+        "summary": "Readiness",
+        "tags": [
+          "ops"
+        ]
+      }
+    }
+  },
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "servers": [
+    {
+      "description": "Local development",
+      "url": "http://localhost:8080"
+    },
+    {
+      "description": "Your deployment",
+      "url": "{scheme}://{host}",
+      "variables": {
+        "host": {
+          "default": "riot-proxy.example.com"
+        },
+        "scheme": {
+          "default": "https",
+          "enum": [
+            "https",
+            "http"
+          ]
+        }
+      }
+    }
+  ],
+  "tags": [
+    {
+      "description": "Composite player reads",
+      "name": "players"
+    },
+    {
+      "description": "Riot account-v1, passed through",
+      "name": "riot"
+    },
+    {
+      "description": "League of Legends endpoints",
+      "name": "lol"
+    },
+    {
+      "description": "Data Dragon",
+      "name": "static"
+    },
+    {
+      "description": "Realtime events",
+      "name": "ws"
+    },
+    {
+      "description": "Health and metrics; no key needed",
+      "name": "ops"
+    },
+    {
+      "description": "Administration; admin scope and IP allowlist",
+      "name": "admin"
+    }
+  ],
+  "x-tagGroups": [
+    {
+      "name": "Player data",
+      "tags": [
+        "players",
+        "riot",
+        "lol"
+      ]
+    },
+    {
+      "name": "Static data",
+      "tags": [
+        "static"
+      ]
+    },
+    {
+      "name": "Realtime",
+      "tags": [
+        "ws"
+      ]
+    },
+    {
+      "name": "Operations",
+      "tags": [
+        "ops"
+      ]
+    },
+    {
+      "name": "Administration",
+      "tags": [
+        "admin"
+      ]
+    }
+  ]
+}
