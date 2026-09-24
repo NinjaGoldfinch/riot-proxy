@@ -214,7 +214,6 @@ async fn unknown_scopes_use_the_bootstrap_app_limits() {
 
 /// v1: "learns limits from response headers and absorbs external usage (§9.1)".
 #[tokio::test(start_paused = true)]
-#[ignore = "P2-04"]
 async fn learns_limits_from_headers_and_absorbs_external_usage() {
     let l = Limiter::new(CEILING);
     l.observe(
@@ -246,7 +245,6 @@ async fn learns_limits_from_headers_and_absorbs_external_usage() {
 /// v1: "absorbs Riot counts without disturbing what we already admitted (§9.1)".
 /// Our own admission keeps its timestamp; padding is stamped at sync time.
 #[tokio::test(start_paused = true)]
-#[ignore = "P2-04"]
 async fn absorbs_riot_counts_without_disturbing_what_we_admitted() {
     let l = limiter_with_app("100:120");
     take(&l, "m").await.unwrap();
@@ -269,7 +267,6 @@ async fn absorbs_riot_counts_without_disturbing_what_we_admitted() {
 /// Design/05 §Observe: sync never lowers our count (it may include in-flight
 /// requests Riot has not seen yet).
 #[tokio::test(start_paused = true)]
-#[ignore = "P2-04"]
 async fn sync_never_lowers_the_count() {
     let l = limiter_with_app("100:120");
     for _ in 0..10 {
@@ -290,7 +287,6 @@ async fn sync_never_lowers_the_count() {
 /// no member names to collide; the property is that a repeated sync of the same
 /// count is idempotent, and that the count climbs back after it drops.
 #[tokio::test(start_paused = true)]
-#[ignore = "P2-04"]
 async fn repeated_syncs_are_idempotent() {
     let l = Limiter::new(CEILING);
     let h = headers(&[
@@ -308,7 +304,6 @@ async fn repeated_syncs_are_idempotent() {
 
 /// Design/05 §Observe 1: reconfigure keeps counts for windows matching by `seconds`.
 #[tokio::test(start_paused = true)]
-#[ignore = "P2-04"]
 async fn reconfigure_keeps_counts_for_matching_windows() {
     let l = limiter_with_app("20:1,100:120");
     for _ in 0..5 {
@@ -346,7 +341,6 @@ async fn reconfigure_keeps_counts_for_matching_windows() {
 /// v1: "skips the rewrite once that config is actually stored". In-process: seeing
 /// the same limits again is a no-op and never resets counts.
 #[tokio::test(start_paused = true)]
-#[ignore = "P2-04"]
 async fn identical_limits_do_not_reset_anything() {
     let l = limiter_with_app("20:1,100:120");
     take(&l, "m").await.unwrap();
@@ -360,7 +354,6 @@ async fn identical_limits_do_not_reset_anything() {
 /// v1: "persists app limits that equal the bootstrap fallback". A dev key's real
 /// limits equal the bootstrap ones; the scope must still become known.
 #[tokio::test(start_paused = true)]
-#[ignore = "P2-04"]
 async fn app_limits_equal_to_bootstrap_still_make_the_scope_known() {
     let l = Limiter::new(CEILING);
     take(&l, "m").await.unwrap();
@@ -390,7 +383,6 @@ async fn known_scopes_include_method_only_scopes() {
 
 /// v1: "reports per-method usage for the methods it knows".
 #[tokio::test(start_paused = true)]
-#[ignore = "P2-04"]
 async fn reports_per_method_usage() {
     let l = limiter_with_app("100:10");
     l.configure_method(SCOPE, "narrow", &w("3:10"));
@@ -411,7 +403,6 @@ async fn reports_per_method_usage() {
 
 /// v1: "freezes the whole scope after a 429 with Retry-After (§9.4)".
 #[tokio::test(start_paused = true)]
-#[ignore = "P2-04"]
 async fn freezes_the_whole_scope_after_a_typed_429() {
     let metrics = crate::telemetry::metrics_handle().unwrap();
     let count_429 = || {
@@ -439,7 +430,6 @@ async fn freezes_the_whole_scope_after_a_typed_429() {
 
 /// A frozen scope inside the budget waits out the freeze instead of failing.
 #[tokio::test(start_paused = true)]
-#[ignore = "P2-04"]
 async fn a_short_freeze_is_waited_out_within_budget() {
     let l = limiter_with_app("100:10");
     l.freeze(SCOPE, Duration::from_secs(1), RateLimitType::Method);
@@ -452,7 +442,6 @@ async fn a_short_freeze_is_waited_out_within_budget() {
 
 /// Other scopes are unaffected by a freeze.
 #[tokio::test(start_paused = true)]
-#[ignore = "P2-04"]
 async fn a_freeze_is_per_scope() {
     let l = limiter_with_app("100:10");
     l.freeze(
@@ -653,4 +642,79 @@ async fn records_the_wait_histogram() {
         text.contains(r#"proxy_rl_wait_seconds_count{region="wait-hist-region",priority="bulk"} 1"#),
         "{text}"
     );
+}
+
+// ── observe details (P2-04) ─────────────────────────────────────────────────────
+
+#[tokio::test(start_paused = true)]
+async fn a_typed_429_observed_freezes_the_scope() {
+    let l = limiter_with_app("100:10");
+    l.observe(
+        SCOPE,
+        "m",
+        &headers(&[
+            ("x-rate-limit-type", "method"),
+            ("retry-after", "3"),
+            ("x-app-rate-limit-count", "5:10"),
+        ]),
+    );
+    assert_eq!(l.frozen_for(SCOPE), Some(Duration::from_secs(3)));
+    assert_eq!(used(&l, "100:10"), 5, "counts on a 429 are still absorbed");
+}
+
+/// v1 froze on any typed 429 carrying Retry-After, `service` included (ADR-024).
+#[tokio::test(start_paused = true)]
+async fn a_typed_service_429_with_retry_after_also_freezes() {
+    let l = limiter_with_app("100:10");
+    l.observe(
+        SCOPE,
+        "m",
+        &headers(&[("x-rate-limit-type", "service"), ("retry-after", "2")]),
+    );
+    assert_eq!(l.frozen_for(SCOPE), Some(Duration::from_secs(2)));
+}
+
+/// Design/05 §Observe 3: an untyped 429 leaves the buckets alone.
+#[tokio::test(start_paused = true)]
+async fn an_untyped_429_touches_nothing() {
+    let l = limiter_with_app("100:10");
+    l.observe(SCOPE, "m", &headers(&[("retry-after", "5")]));
+    l.observe(SCOPE, "m", &headers(&[("x-rate-limit-type", "application")]));
+    assert_eq!(l.frozen_for(SCOPE), None, "needs both a type and a Retry-After");
+    assert_eq!(used(&l, "100:10"), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_shorter_freeze_never_shortens_a_longer_one() {
+    let l = limiter_with_app("100:10");
+    l.freeze(SCOPE, Duration::from_secs(10), RateLimitType::Application);
+    l.freeze(SCOPE, Duration::from_secs(2), RateLimitType::Method);
+    assert_eq!(l.frozen_for(SCOPE), Some(Duration::from_secs(10)));
+}
+
+#[tokio::test(start_paused = true)]
+async fn method_counts_without_known_method_limits_are_ignored() {
+    let l = limiter_with_app("100:10");
+    l.observe(SCOPE, "m", &headers(&[("x-method-rate-limit-count", "7:10")]));
+    assert_eq!(l.method_usage(SCOPE, &["m"])[0].windows, vec![]);
+    // Limits and counts in the same response: limits first, then counts.
+    l.observe(
+        SCOPE,
+        "m",
+        &headers(&[
+            ("x-method-rate-limit", "50:10"),
+            ("x-method-rate-limit-count", "7:10"),
+        ]),
+    );
+    assert_eq!(l.method_usage(SCOPE, &["m"])[0].windows[0].used, 7);
+}
+
+/// Riot counts above our limit (another process sharing the key): acquire waits.
+#[tokio::test(start_paused = true)]
+async fn counts_at_the_limit_block_acquire_until_they_age_out() {
+    let l = limiter_with_app("20:1,100:120");
+    l.observe(SCOPE, "m", &headers(&[("x-app-rate-limit-count", "20:1,20:120")]));
+    let t0 = Instant::now();
+    let err = take(&l, "m").await.unwrap_err();
+    assert_eq!(err.retry_at, t0 + Duration::from_secs(1));
 }
