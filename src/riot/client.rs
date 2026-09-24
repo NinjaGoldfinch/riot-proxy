@@ -14,7 +14,7 @@ use bytes::Bytes;
 use crate::config::{Config, Secret};
 use crate::http::{ApiError, ErrorCode};
 use crate::metrics::{RL_429_TOTAL, UPSTREAM_LATENCY_SECONDS, UPSTREAM_REQUESTS_TOTAL};
-use crate::riot::endpoints::{Endpoint, PathError, Target};
+use crate::riot::endpoints::{Endpoint, PathError, Target, encode_component};
 
 /// v1 undici pool: 32 connections per host, 60 s keep-alive.
 const POOL_MAX_IDLE_PER_HOST: usize = 32;
@@ -32,6 +32,8 @@ pub struct RiotRequest {
     pub endpoint: &'static Endpoint,
     pub target: Target,
     pub path: String,
+    /// Path parameter values, percent-encoded as they appear in `path` (cache keys).
+    pub params: Vec<String>,
     pub query: Vec<(&'static str, String)>,
 }
 
@@ -49,6 +51,7 @@ impl RiotRequest {
             endpoint,
             target,
             path: endpoint.path(params)?,
+            params: params.iter().map(|p| encode_component(p)).collect(),
             query: Vec::new(),
         })
     }
