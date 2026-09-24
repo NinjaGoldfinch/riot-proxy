@@ -37,6 +37,7 @@ pub const VARS: &[&str] = &[
     "ACME_EMAIL",
     "DEFAULT_PLATFORM",
     "CACHE_TTL_OVERRIDES",
+    "CACHE_L1_MAX_MB",
     "NEG_TTL_SECONDS",
     "NEG_TTL_ACCOUNT_SECONDS",
     "CLIENT_WAIT_BUDGET_MS",
@@ -204,6 +205,8 @@ pub struct Config {
     // Validated against Riot enums by the modules that own them (endpoints in
     // P1-02, ladder queues and tiers in P7-02).
     pub cache_ttl_overrides: String,
+    /// L1 weight budget in MiB (design/07 §Sizing, default 128).
+    pub cache_l1_max_mb: u32,
     pub neg_ttl_seconds: u32,
     pub neg_ttl_account_seconds: u32,
     pub client_wait_budget_ms: u64,
@@ -436,6 +439,7 @@ impl Config {
             acme_email: v.opt_string("ACME_EMAIL"),
             default_platform,
             cache_ttl_overrides: v.string("CACHE_TTL_OVERRIDES", ""),
+            cache_l1_max_mb: v.int("CACHE_L1_MAX_MB", 128, 1, 1_048_576),
             neg_ttl_seconds: v.int("NEG_TTL_SECONDS", 30, 1, u32::MAX),
             neg_ttl_account_seconds: v.int("NEG_TTL_ACCOUNT_SECONDS", 300, 1, u32::MAX),
             client_wait_budget_ms: v.int("CLIENT_WAIT_BUDGET_MS", 2000, 0, u64::MAX),
