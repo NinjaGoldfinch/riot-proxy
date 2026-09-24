@@ -10,6 +10,7 @@ use axum::{Json, Router};
 use serde::Serialize;
 
 use crate::app::AppState;
+use crate::cache::keys::KeyScope;
 use crate::db::DbError;
 
 /// A readiness probe that cannot get a write slot this quickly counts as not ready.
@@ -33,12 +34,14 @@ async fn healthz() -> Json<Health> {
 
 /// v1 returned `{ok, redis, postgres, keyScope}`. v2 has one store, so `sqlite` replaces
 /// the two backend booleans, and `limiter` says the checkpoint was restored
-/// (design/07). `keyScope` returns with P3-01 (ADR-011).
+/// (design/07). `keyScope` is v1's (ADR-011).
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Ready {
     pub ok: bool,
     pub sqlite: bool,
     pub limiter: bool,
+    pub key_scope: String,
 }
 
 /// Readiness: the writer thread is alive and can take SQLite's write lock, and the
@@ -57,5 +60,13 @@ async fn readyz(State(state): State<AppState>) -> (StatusCode, Json<Ready>) {
     } else {
         StatusCode::SERVICE_UNAVAILABLE
     };
-    (status, Json(Ready { ok, sqlite, limiter }))
+    (
+        status,
+        Json(Ready {
+            ok,
+            sqlite,
+            limiter,
+            key_scope: KeyScope::from_key(&state.config.riot_api_key).to_string(),
+        }),
+    )
 }

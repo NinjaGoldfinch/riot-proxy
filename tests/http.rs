@@ -7,6 +7,11 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use common::{app, get, send};
 
+fn key_scope() -> String {
+    riot_proxy::cache::keys::KeyScope::from_key(&riot_proxy::config::Secret::new(common::TEST_KEY))
+        .to_string()
+}
+
 #[tokio::test]
 async fn healthz_is_200_ok_true() {
     let (_dir, _state, router) = app();
@@ -23,7 +28,7 @@ async fn readyz_is_200_when_sqlite_is_writable() {
     assert_eq!(res.status, StatusCode::OK);
     assert_eq!(
         res.json(),
-        serde_json::json!({"ok": true, "sqlite": true, "limiter": true})
+        serde_json::json!({"ok": true, "sqlite": true, "limiter": true, "keyScope": key_scope()})
     );
 }
 
@@ -39,7 +44,7 @@ async fn readyz_is_503_with_the_same_body_when_sqlite_is_not_writable() {
     assert_eq!(res.status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(
         res.json(),
-        serde_json::json!({"ok": false, "sqlite": false, "limiter": true})
+        serde_json::json!({"ok": false, "sqlite": false, "limiter": true, "keyScope": key_scope()})
     );
     blocker.execute_batch("ROLLBACK;").unwrap();
 }
@@ -107,6 +112,6 @@ async fn readyz_is_503_until_the_limiter_is_restored() {
     assert_eq!(res.status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(
         res.json(),
-        serde_json::json!({"ok": false, "sqlite": true, "limiter": false})
+        serde_json::json!({"ok": false, "sqlite": true, "limiter": false, "keyScope": key_scope()})
     );
 }
