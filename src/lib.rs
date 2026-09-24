@@ -12,4 +12,5 @@ pub mod http;
 pub mod metrics;
 pub mod riot;
 pub mod routes;
+pub mod singleflight;
 pub mod telemetry;

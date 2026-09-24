@@ -2150,6 +2150,7 @@ dependencies = [
  "clap",
  "dashmap",
  "figment",
+ "futures-util",
  "getrandom 0.4.3",
  "hex",
  "insta",
