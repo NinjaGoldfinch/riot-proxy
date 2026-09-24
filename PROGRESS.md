@@ -52,7 +52,7 @@ $ cargo test every_endpoint_group_resolves_to_the_right_host
 Found and fixed on the way: `.env` parsing rejected v1-style unquoted values (#16, ADR-020).
 
 ## P2 — Rate limiter
-- [ ] P2-01 port v1 limiter tests first
+- [x] P2-01 port v1 limiter tests first (#19)
 - [ ] P2-02 windows and scopes
 - [ ] P2-03 acquire (single priority)
 - [ ] P2-04 observe + freeze
@@ -120,6 +120,7 @@ Exit check: _pending_
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
 
 ## Notes for the next task
+- Limiter: **sliding-log windows** (owner, ADR-023), not design/05's fixed counters. The API is in `src/riot/limiter/mod.rs` (todo!() bodies). `tests.rs` holds 24 ported cases, `#[ignore = "P2-0x"]` by task; un-ignore them as each task lands. Use `tokio::time::Instant` everywhere so `start_paused` tests work.
 - Dev CLI: `just riot account/by-riot-id europe 'Hide on bush' KR1`. A real dev key is in `./.env` (gitignored; dev keys expire every 24 h).
 - Headers: `riot::limiter::headers::{RateLimitHeaders::from_headers, parse_limits, parse_counts, RateLimitType, BOOTSTRAP_APP_LIMITS}`. The client still reports the 429 type as a raw string; P2-04 can convert with `RateLimitType::parse`.
 - Service-429 backoff (owner, ADR-021): use **v1's numbers**, 500 ms × 2ⁿ capped at 8 s, ±20 %, 3 tries, implemented in the fetcher (P3-05), not the client.
