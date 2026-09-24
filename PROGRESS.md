@@ -56,7 +56,7 @@ Found and fixed on the way: `.env` parsing rejected v1-style unquoted values (#1
 - [x] P2-02 windows and scopes (#20)
 - [x] P2-03 acquire (single priority) (#21)
 - [x] P2-04 observe + freeze (#22)
-- [ ] P2-05 priorities
+- [x] P2-05 priorities (#23)
 - [ ] P2-06 checkpoint/restore
 - [ ] P2-07 property test + soak
 Exit check: _pending_

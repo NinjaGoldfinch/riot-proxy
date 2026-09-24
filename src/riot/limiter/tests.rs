@@ -456,7 +456,6 @@ async fn a_freeze_is_per_scope() {
 
 /// v1: "holds bulk work back at the usage ceiling while interactive still passes (§9.3)".
 #[tokio::test(start_paused = true)]
-#[ignore = "P2-05"]
 async fn bulk_is_held_back_at_the_usage_ceiling() {
     let l = limiter_with_app("10:10");
     for _ in 0..8 {
@@ -471,10 +470,11 @@ async fn bulk_is_held_back_at_the_usage_ceiling() {
 }
 
 /// v1: "holds bulk back while an interactive request is actually queueing".
+/// v2 fails an interactive acquire fast when its wait cannot fit the budget
+/// (design/05), so the queued caller here has a wait that fits: 1 s of 1.5 s.
 #[tokio::test(start_paused = true)]
-#[ignore = "P2-05"]
 async fn bulk_yields_while_an_interactive_request_queues() {
-    let l = Arc::new(limiter_with_app("1:10"));
+    let l = Arc::new(limiter_with_app("1:1"));
     take(&l, "m").await.unwrap();
     let queued = {
         let l = Arc::clone(&l);
@@ -487,7 +487,10 @@ async fn bulk_yields_while_an_interactive_request_queues() {
     assert_eq!(l.interactive_waiters(SCOPE), 1);
     assert!(take_bulk(&l).await.is_err());
 
-    let _ = queued.await;
+    assert!(
+        queued.await.unwrap().is_ok(),
+        "the interactive caller gets the token"
+    );
     // And it withdraws itself on the way out, however it left.
     assert_eq!(l.interactive_waiters(SCOPE), 0);
 }
@@ -496,9 +499,8 @@ async fn bulk_yields_while_an_interactive_request_queues() {
 /// In-process the equivalent leak is a cancelled future: dropping a queued
 /// interactive acquire must withdraw its waiter, or bulk would stall forever.
 #[tokio::test(start_paused = true)]
-#[ignore = "P2-05"]
 async fn a_cancelled_interactive_waiter_withdraws_itself() {
-    let l = Arc::new(limiter_with_app("1:10"));
+    let l = Arc::new(limiter_with_app("1:1"));
     take(&l, "m").await.unwrap();
     let queued = {
         let l = Arc::clone(&l);
@@ -512,11 +514,12 @@ async fn a_cancelled_interactive_waiter_withdraws_itself() {
     queued.abort();
     let _ = queued.await;
     assert_eq!(l.interactive_waiters(SCOPE), 0);
+    advance(Duration::from_secs(1)).await;
+    assert!(take_bulk(&l).await.is_ok(), "bulk is not stuck behind a phantom");
 }
 
 /// v1: "does not count bulk callers as waiters, so they cannot block each other".
 #[tokio::test(start_paused = true)]
-#[ignore = "P2-05"]
 async fn bulk_callers_are_not_counted_as_waiters() {
     let l = limiter_with_app("100:10");
     take_bulk(&l).await.unwrap();
@@ -717,4 +720,111 @@ async fn counts_at_the_limit_block_acquire_until_they_age_out() {
     let t0 = Instant::now();
     let err = take(&l, "m").await.unwrap_err();
     assert_eq!(err.retry_at, t0 + Duration::from_secs(1));
+}
+
+// ── priority details (P2-05) ─────────────────────────────────────────────────────
+
+/// Plan P2-05: "bulk starves while interactive present". A steady stream of
+/// interactive callers queueing on a full window keeps bulk out entirely.
+#[tokio::test(start_paused = true)]
+async fn bulk_starves_while_interactive_callers_keep_queueing() {
+    let l = Arc::new(limiter_with_app("1:1"));
+    take(&l, "m").await.unwrap();
+    let bulk = {
+        let l = Arc::clone(&l);
+        tokio::spawn(async move {
+            let got = l
+                .acquire(SCOPE, "m", Priority::Bulk, Duration::from_secs(3600))
+                .await
+                .unwrap();
+            (Instant::now(), got)
+        })
+    };
+    let t0 = Instant::now();
+    // Each second, an interactive caller arrives before the token frees.
+    for _ in 0..5 {
+        let l2 = Arc::clone(&l);
+        let interactive = tokio::spawn(async move {
+            l2.acquire(SCOPE, "m", Priority::Interactive, Duration::from_secs(2))
+                .await
+        });
+        tokio::task::yield_now().await;
+        assert!(
+            interactive.await.unwrap().is_ok(),
+            "interactive always wins the freed token"
+        );
+    }
+    let (got_at, _) = bulk.await.unwrap();
+    assert!(
+        got_at >= t0 + Duration::from_secs(6),
+        "bulk only got in after the interactive burst: {:?}",
+        got_at - t0
+    );
+}
+
+/// Plan P2-05: "bulk resumes when ceiling clears".
+#[tokio::test(start_paused = true)]
+async fn bulk_resumes_when_usage_drops_below_the_ceiling() {
+    let l = limiter_with_app("10:10");
+    let t0 = Instant::now();
+    for i in 0..8 {
+        take(&l, "m").await.unwrap();
+        if i == 0 {
+            advance(Duration::from_secs(2)).await;
+        }
+    }
+    // 8/10 used: at the ceiling. The first admission (t0) leaves at t0+10.
+    let permit = l
+        .acquire(SCOPE, "m", Priority::Bulk, Duration::from_secs(60))
+        .await
+        .unwrap();
+    assert_eq!(Instant::now(), t0 + Duration::from_secs(10));
+    assert_eq!(permit.waited, Duration::from_secs(8));
+}
+
+/// The ceiling applies to method windows too.
+#[tokio::test(start_paused = true)]
+async fn the_ceiling_covers_method_windows() {
+    let l = limiter_with_app("100:10");
+    l.configure_method(SCOPE, "m", &w("5:10"));
+    for _ in 0..4 {
+        take(&l, "m").await.unwrap();
+    }
+    assert!(take_bulk(&l).await.is_err(), "4/5 = 0.80 on the method window");
+    assert!(
+        l.acquire(SCOPE, "other", Priority::Bulk, NOW).await.is_ok(),
+        "other methods are free"
+    );
+}
+
+#[test]
+fn ceiling_threshold_is_strictly_below() {
+    assert_eq!(super::max_under_ceiling(10, 0.80), 7, "8 of 10 is at the ceiling");
+    assert_eq!(super::max_under_ceiling(20, 0.80), 15);
+    assert_eq!(super::max_under_ceiling(100, 0.75), 74);
+    assert_eq!(super::max_under_ceiling(3, 0.80), 2, "2.4 → up to 2");
+    assert_eq!(super::max_under_ceiling(1, 0.80), 0);
+    assert_eq!(super::max_under_ceiling(10, 1.0), 9);
+    assert_eq!(super::max_under_ceiling(10, 0.0), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn waiter_gauges_are_published() {
+    let metrics = crate::telemetry::metrics_handle().unwrap();
+    let l = Arc::new(limiter_with_app("1:1"));
+    take(&l, "m").await.unwrap();
+    let queued = {
+        let l = Arc::clone(&l);
+        tokio::spawn(async move {
+            l.acquire(SCOPE, "m", Priority::Interactive, Duration::from_secs(2))
+                .await
+        })
+    };
+    tokio::task::yield_now().await;
+    assert!(
+        metrics.render().contains("limiter_interactive_waiters"),
+        "gauge registered"
+    );
+    queued.await.unwrap().unwrap();
+    assert_eq!(l.interactive_waiters(SCOPE), 0);
 }
