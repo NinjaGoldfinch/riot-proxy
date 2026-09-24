@@ -5,17 +5,20 @@
 //! P2-01: the public API with `todo!()` bodies, so the ported v1 suite in
 //! `tests.rs` compiles. P2-02..P2-06 fill it in and un-ignore the tests.
 
+pub mod bucket;
 pub mod headers;
 
 #[cfg(test)]
 mod tests;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use tokio::time::Instant;
 
-use self::headers::{LimitWindow, RateLimitHeaders, RateLimitType};
+use self::bucket::{ScopeEntry, ScopeState, Window};
+use self::headers::{BOOTSTRAP_APP_LIMITS, LimitWindow, RateLimitHeaders, RateLimitType};
 
 /// Who is asking. Interactive requests are a user waiting; bulk is background work
 /// that yields at `BULK_USAGE_CEILING` and whenever interactive requests queue.
@@ -70,6 +73,24 @@ pub struct MethodUsage {
 #[derive(Debug)]
 pub struct Limiter {
     _bulk_ceiling: f64,
+    scopes: Mutex<HashMap<String, ScopeEntry>>,
+}
+
+impl ScopeEntry {
+    fn bootstrap() -> Self {
+        Self {
+            app: ScopeState::new(&BOOTSTRAP_APP_LIMITS),
+            ..Self::default()
+        }
+    }
+}
+
+fn usage_of(window: &mut Window, now: Instant) -> WindowUsage {
+    WindowUsage {
+        window: format!("{}:{}", window.limit, window.seconds),
+        used: window.used(now),
+        limit: window.limit,
+    }
 }
 
 impl Limiter {
@@ -77,7 +98,15 @@ impl Limiter {
     pub fn new(bulk_ceiling: f64) -> Self {
         Self {
             _bulk_ceiling: bulk_ceiling,
+            scopes: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// The state lock. Held only for check-and-take or bookkeeping, never across
+    /// an await. A panic while holding it leaves counts as they were, which is
+    /// safe, so poisoning is ignored.
+    fn lock(&self) -> MutexGuard<'_, HashMap<String, ScopeEntry>> {
+        self.scopes.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Take one token from every app and method window for `scope`/`method`, all or
@@ -108,33 +137,83 @@ impl Limiter {
     }
 
     /// Set a scope's app windows directly (what v1 tests did with `redis.set(cfg)`).
-    pub fn configure_app(&self, _scope: &str, _windows: &[LimitWindow]) {
-        todo!("P2-02")
+    /// Admissions in windows of matching length are kept.
+    pub fn configure_app(&self, scope: &str, windows: &[LimitWindow]) {
+        let mut scopes = self.lock();
+        let entry = scopes
+            .entry(scope.to_string())
+            .or_insert_with(ScopeEntry::bootstrap);
+        entry.app.reconfigure(windows);
+        entry.app_known = true;
     }
 
     /// Set a method's windows directly.
-    pub fn configure_method(&self, _scope: &str, _method: &str, _windows: &[LimitWindow]) {
-        todo!("P2-02")
+    pub fn configure_method(&self, scope: &str, method: &str, windows: &[LimitWindow]) {
+        let mut scopes = self.lock();
+        let entry = scopes
+            .entry(scope.to_string())
+            .or_insert_with(ScopeEntry::bootstrap);
+        entry
+            .methods
+            .entry(method.to_string())
+            .or_default()
+            .reconfigure(windows);
     }
 
-    /// Current app-window use for a scope.
-    pub fn usage(&self, _scope: &str) -> Vec<WindowUsage> {
-        todo!("P2-02")
+    /// Current app-window use for a scope, shortest window first. An untouched
+    /// scope reports the bootstrap windows, empty.
+    pub fn usage(&self, scope: &str) -> Vec<WindowUsage> {
+        let now = Instant::now();
+        let mut scopes = self.lock();
+        match scopes.get_mut(scope) {
+            Some(entry) => entry.app.windows.iter_mut().map(|w| usage_of(w, now)).collect(),
+            None => ScopeState::new(&BOOTSTRAP_APP_LIMITS)
+                .windows
+                .iter_mut()
+                .map(|w| usage_of(w, now))
+                .collect(),
+        }
     }
 
-    /// Current use of each named method's windows.
-    pub fn method_usage(&self, _scope: &str, _methods: &[&str]) -> Vec<MethodUsage> {
-        todo!("P2-02")
+    /// Current use of each named method's windows. Methods with no known limits
+    /// report no windows.
+    pub fn method_usage(&self, scope: &str, methods: &[&str]) -> Vec<MethodUsage> {
+        let now = Instant::now();
+        let mut scopes = self.lock();
+        let mut entry = scopes.get_mut(scope);
+        methods
+            .iter()
+            .map(|&method| MethodUsage {
+                method: method.to_string(),
+                windows: entry
+                    .as_deref_mut()
+                    .and_then(|e| e.methods.get_mut(method))
+                    .map(|s| s.windows.iter_mut().map(|w| usage_of(w, now)).collect())
+                    .unwrap_or_default(),
+            })
+            .collect()
     }
 
-    /// Scopes with any configured app or method windows.
+    /// Scopes whose app or method limits are known (from Riot or configuration),
+    /// sorted. A scope only ever seen with the bootstrap limits is not listed.
     pub fn known_scopes(&self) -> Vec<String> {
-        todo!("P2-02")
+        let mut out: Vec<String> = self
+            .lock()
+            .iter()
+            .filter(|(_, e)| e.app_known || !e.methods.is_empty())
+            .map(|(k, _)| k.clone())
+            .collect();
+        out.sort();
+        out
     }
 
-    /// Methods with configured windows, per scope, sorted.
+    /// Methods with known windows, per scope, sorted.
     pub fn known_scope_methods(&self) -> BTreeMap<String, Vec<String>> {
-        todo!("P2-02")
+        self.lock()
+            .iter()
+            .filter(|(_, e)| !e.methods.is_empty())
+            .map(|(k, e)| (k.clone(), e.methods.keys().cloned().collect()))
+            .collect()
     }
 
     /// Interactive callers currently queued on `scope` (bulk yields while > 0).
