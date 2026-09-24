@@ -58,7 +58,7 @@ Found and fixed on the way: `.env` parsing rejected v1-style unquoted values (#1
 - [x] P2-04 observe + freeze (#22)
 - [x] P2-05 priorities (#23)
 - [x] P2-06 checkpoint/restore (#24)
-- [ ] P2-07 property test + soak
+- [x] P2-07 property test + soak (#25)
 Exit check: _pending_
 
 ## P3 — Cache, single-flight, fetcher

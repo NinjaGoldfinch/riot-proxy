@@ -134,6 +134,24 @@ impl Limiter {
 
 ~150 lines with `observe`, `freeze`, `checkpoint`, `restore`. Unit-testable with `tokio::time::pause()` — no Redis in CI.
 
+## As built (P2) — deviations from the above
+
+The sections above are the original design. Where they differ, the implementation in `src/riot/limiter/` and these decisions win:
+
+| Topic | Design above | As built | ADR |
+|---|---|---|---|
+| Window algorithm | Fixed window: `count`, `reset_at`, reset on expiry | **Sliding log**: admission instants per window, as v1 (#17). No rolling interval ever holds more than `limit`, boundaries included | ADR-023 |
+| Riot count sync | `count = max(count, riot_count)` | Pad with entries stamped at sync time up to Riot's count. Never lowers, never moves our own stamps | ADR-023, ADR-024 |
+| Freeze trigger | `application\|method` + `Retry-After` | Any typed 429 with a numeric `Retry-After`, `service` included (v1). Error log only for application/method | ADR-024 |
+| Service-429 backoff | client.rs, 250 ms × 2ⁿ ± 25 %, 3 tries | Fetcher (P3-05), **v1's** 500 ms × 2ⁿ capped at 8 s, ± 20 %, 3 tries. The client never retries | ADR-017, ADR-021 |
+| Interactive over budget | Implied wait | Fail at once with `RATE_LIMITED` and the exact `retry_at` when the wait cannot fit the budget (v1 waited the whole budget) | ADR-025 |
+| Bulk ceiling | Any window ≥ ceiling · limit | Same, strictly: bulk needs `used < ceiling × limit` in every app and method window (8/10 at 0.80 blocks) | ADR-025 |
+| Waiter tracking | `interactive_waiting` counter | Per-scope count via a drop guard, so a cancelled acquire never leaves a phantom waiter. Gauges `limiter_interactive_waiters`, `limiter_bulk_waiters` | ADR-025 |
+| Checkpoint format | `[{limit, seconds, count, reset_at}]` | `{known?, windows:[{limit, seconds, stamps:[[unix_ms, n]…]}]}`. Stamps bucketed to `max(100 ms, seconds ms)` and rounded **up**, so restore is never less conservative | ADR-026 |
+| Stale checkpoint | "full until its reset" | Rows older than 120 s restore every window full, stamped at boot (closed for one window length) | ADR-026 |
+
+Verified by: the ported v1 suite (`src/riot/limiter/tests.rs`), a 1 000-case property test (`proptest.rs`, which fails on a planted off-by-one), a kill-and-restart test on a real SQLite file (`tests/limiter_restart.rs`), and a 60 s, 50-task soak (`tests/limiter_soak.rs`, ignored by default).
+
 ## Go equivalent
 
 Same structure: `sync.Mutex` around `map[Scope]*ScopeState`, two `sync.Cond` (or channel-based) queues, `time.AfterFunc` for wakeups. Nothing here depends on Rust.
