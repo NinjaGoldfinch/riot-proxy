@@ -19,6 +19,7 @@ use tracing::Level;
 
 use crate::config::Config;
 use crate::db::Db;
+use crate::fetcher::Fetcher;
 use crate::http::ApiError;
 use crate::http::request_id::{RequestId, request_id};
 use crate::riot::limiter::Limiter;
@@ -36,6 +37,8 @@ pub struct AppState {
     pub config: Arc<Config>,
     pub db: Db,
     pub limiter: Arc<Limiter>,
+    /// The read funnel every Riot-backed route uses.
+    pub fetcher: Fetcher,
     /// Set once the limiter checkpoint has been restored (`/readyz`).
     pub limiter_restored: Arc<std::sync::atomic::AtomicBool>,
 }

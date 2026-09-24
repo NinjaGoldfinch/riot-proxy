@@ -44,6 +44,7 @@ zstd = "0.14"
 dev-cli = []
 
 [dev-dependencies]
+futures-util = "0.3"
 insta = { version = "1.48", features = ["json"] }
 proptest = "1.11"
 tempfile = "3.27"
