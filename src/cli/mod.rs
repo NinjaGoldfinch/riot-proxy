@@ -3,6 +3,8 @@
 pub mod healthcheck;
 pub mod key;
 #[cfg(feature = "dev-cli")]
+pub mod record;
+#[cfg(feature = "dev-cli")]
 pub mod riot;
 pub mod serve;
 

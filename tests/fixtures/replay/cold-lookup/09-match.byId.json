@@ -1,0 +1,21 @@
+{
+  "body_file": "09-match.byId.body",
+  "endpoint": "match.byId",
+  "headers": {
+    "content-type": "application/json",
+    "x-app-rate-limit": "100:120,20:1",
+    "x-app-rate-limit-count": "6:120,2:1",
+    "x-method-rate-limit": "2000:10",
+    "x-method-rate-limit-count": "4:10"
+  },
+  "params": [
+    "KR_8393234454"
+  ],
+  "path_and_query": "/lol/match/v5/matches/KR_8393234454",
+  "query": [],
+  "recorded_at": "2026-09-24T17:26:27.905597757Z",
+  "routing": "asia",
+  "seq": 9,
+  "status": 200,
+  "synthetic": false
+}

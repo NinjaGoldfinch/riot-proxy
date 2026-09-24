@@ -1,0 +1,330 @@
+---
+source: tests/replay.rs
+expression: log
+---
+[
+  {
+    "endpoint": "account.byRiotId",
+    "limiter": {
+      "app": [
+        "100:120 used 1"
+      ],
+      "method": [
+        "1000:60 used 1"
+      ]
+    },
+    "pass": 1,
+    "scope": "asia",
+    "step": 1,
+    "upstream_calls": 1,
+    "x_cache": "MISS"
+  },
+  {
+    "endpoint": "summoner.byPuuid",
+    "limiter": {
+      "app": [
+        "100:120 used 1"
+      ],
+      "method": [
+        "2000:60 used 1"
+      ]
+    },
+    "pass": 1,
+    "scope": "kr",
+    "step": 2,
+    "upstream_calls": 2,
+    "x_cache": "MISS"
+  },
+  {
+    "endpoint": "league.entriesByPuuid",
+    "limiter": {
+      "app": [
+        "100:120 used 2"
+      ],
+      "method": [
+        "20000:10 used 1",
+        "1200000:600 used 1"
+      ]
+    },
+    "pass": 1,
+    "scope": "kr",
+    "step": 3,
+    "upstream_calls": 3,
+    "x_cache": "MISS"
+  },
+  {
+    "endpoint": "mastery.topByPuuid",
+    "limiter": {
+      "app": [
+        "100:120 used 3"
+      ],
+      "method": [
+        "20000:10 used 1",
+        "1200000:600 used 1"
+      ]
+    },
+    "pass": 1,
+    "scope": "kr",
+    "step": 4,
+    "upstream_calls": 4,
+    "x_cache": "MISS"
+  },
+  {
+    "endpoint": "match.idsByPuuid",
+    "limiter": {
+      "app": [
+        "100:120 used 2"
+      ],
+      "method": [
+        "2000:10 used 1"
+      ]
+    },
+    "pass": 1,
+    "scope": "asia",
+    "step": 5,
+    "upstream_calls": 5,
+    "x_cache": "MISS"
+  },
+  {
+    "endpoint": "match.byId",
+    "limiter": {
+      "app": [
+        "100:120 used 3"
+      ],
+      "method": [
+        "2000:10 used 1"
+      ]
+    },
+    "pass": 1,
+    "scope": "asia",
+    "step": 6,
+    "upstream_calls": 6,
+    "x_cache": "MISS"
+  },
+  {
+    "endpoint": "match.byId",
+    "limiter": {
+      "app": [
+        "100:120 used 4"
+      ],
+      "method": [
+        "2000:10 used 2"
+      ]
+    },
+    "pass": 1,
+    "scope": "asia",
+    "step": 7,
+    "upstream_calls": 7,
+    "x_cache": "MISS"
+  },
+  {
+    "endpoint": "match.byId",
+    "limiter": {
+      "app": [
+        "100:120 used 5"
+      ],
+      "method": [
+        "2000:10 used 3"
+      ]
+    },
+    "pass": 1,
+    "scope": "asia",
+    "step": 8,
+    "upstream_calls": 8,
+    "x_cache": "MISS"
+  },
+  {
+    "endpoint": "match.byId",
+    "limiter": {
+      "app": [
+        "100:120 used 6"
+      ],
+      "method": [
+        "2000:10 used 4"
+      ]
+    },
+    "pass": 1,
+    "scope": "asia",
+    "step": 9,
+    "upstream_calls": 9,
+    "x_cache": "MISS"
+  },
+  {
+    "endpoint": "match.byId",
+    "limiter": {
+      "app": [
+        "100:120 used 7"
+      ],
+      "method": [
+        "2000:10 used 5"
+      ]
+    },
+    "pass": 1,
+    "scope": "asia",
+    "step": 10,
+    "upstream_calls": 10,
+    "x_cache": "MISS"
+  },
+  {
+    "endpoint": "account.byRiotId",
+    "limiter": {
+      "app": [
+        "100:120 used 7"
+      ],
+      "method": [
+        "1000:60 used 1"
+      ]
+    },
+    "pass": 2,
+    "scope": "asia",
+    "step": 1,
+    "upstream_calls": 10,
+    "x_cache": "HIT"
+  },
+  {
+    "endpoint": "summoner.byPuuid",
+    "limiter": {
+      "app": [
+        "100:120 used 3"
+      ],
+      "method": [
+        "2000:60 used 1"
+      ]
+    },
+    "pass": 2,
+    "scope": "kr",
+    "step": 2,
+    "upstream_calls": 10,
+    "x_cache": "HIT"
+  },
+  {
+    "endpoint": "league.entriesByPuuid",
+    "limiter": {
+      "app": [
+        "100:120 used 3"
+      ],
+      "method": [
+        "20000:10 used 1",
+        "1200000:600 used 1"
+      ]
+    },
+    "pass": 2,
+    "scope": "kr",
+    "step": 3,
+    "upstream_calls": 10,
+    "x_cache": "HIT"
+  },
+  {
+    "endpoint": "mastery.topByPuuid",
+    "limiter": {
+      "app": [
+        "100:120 used 3"
+      ],
+      "method": [
+        "20000:10 used 1",
+        "1200000:600 used 1"
+      ]
+    },
+    "pass": 2,
+    "scope": "kr",
+    "step": 4,
+    "upstream_calls": 10,
+    "x_cache": "HIT"
+  },
+  {
+    "endpoint": "match.idsByPuuid",
+    "limiter": {
+      "app": [
+        "100:120 used 7"
+      ],
+      "method": [
+        "2000:10 used 1"
+      ]
+    },
+    "pass": 2,
+    "scope": "asia",
+    "step": 5,
+    "upstream_calls": 10,
+    "x_cache": "HIT"
+  },
+  {
+    "endpoint": "match.byId",
+    "limiter": {
+      "app": [
+        "100:120 used 8"
+      ],
+      "method": [
+        "2000:10 used 6"
+      ]
+    },
+    "pass": 2,
+    "scope": "asia",
+    "step": 6,
+    "upstream_calls": 11,
+    "x_cache": "MISS"
+  },
+  {
+    "endpoint": "match.byId",
+    "limiter": {
+      "app": [
+        "100:120 used 9"
+      ],
+      "method": [
+        "2000:10 used 7"
+      ]
+    },
+    "pass": 2,
+    "scope": "asia",
+    "step": 7,
+    "upstream_calls": 12,
+    "x_cache": "MISS"
+  },
+  {
+    "endpoint": "match.byId",
+    "limiter": {
+      "app": [
+        "100:120 used 10"
+      ],
+      "method": [
+        "2000:10 used 8"
+      ]
+    },
+    "pass": 2,
+    "scope": "asia",
+    "step": 8,
+    "upstream_calls": 13,
+    "x_cache": "MISS"
+  },
+  {
+    "endpoint": "match.byId",
+    "limiter": {
+      "app": [
+        "100:120 used 11"
+      ],
+      "method": [
+        "2000:10 used 9"
+      ]
+    },
+    "pass": 2,
+    "scope": "asia",
+    "step": 9,
+    "upstream_calls": 14,
+    "x_cache": "MISS"
+  },
+  {
+    "endpoint": "match.byId",
+    "limiter": {
+      "app": [
+        "100:120 used 12"
+      ],
+      "method": [
+        "2000:10 used 10"
+      ]
+    },
+    "pass": 2,
+    "scope": "asia",
+    "step": 10,
+    "upstream_calls": 15,
+    "x_cache": "MISS"
+  }
+]

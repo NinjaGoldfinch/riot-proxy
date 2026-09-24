@@ -1,0 +1,26 @@
+{
+  "body_file": "04-mastery.topByPuuid.body",
+  "endpoint": "mastery.topByPuuid",
+  "headers": {
+    "content-type": "application/json",
+    "x-app-rate-limit": "100:120,20:1",
+    "x-app-rate-limit-count": "3:120,3:1",
+    "x-method-rate-limit": "20000:10,1200000:600",
+    "x-method-rate-limit-count": "1:10,1:600"
+  },
+  "params": [
+    "NkQRxdiN3U3pEek5MWbWgaxzG_hpH5imJ9Ttch8ql5KM7D6p6Bh-Hbbvn6UoFVdGUBBIvcnEJv72qw"
+  ],
+  "path_and_query": "/lol/champion-mastery/v4/champion-masteries/by-puuid/NkQRxdiN3U3pEek5MWbWgaxzG_hpH5imJ9Ttch8ql5KM7D6p6Bh-Hbbvn6UoFVdGUBBIvcnEJv72qw/top?count=3",
+  "query": [
+    [
+      "count",
+      "3"
+    ]
+  ],
+  "recorded_at": "2026-09-24T17:26:26.057662598Z",
+  "routing": "kr",
+  "seq": 4,
+  "status": 200,
+  "synthetic": false
+}

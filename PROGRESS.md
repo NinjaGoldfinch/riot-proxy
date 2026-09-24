@@ -76,7 +76,7 @@ docs/design/05-rate-limiter.md: "As built (P2)" section lists every deviation wi
 - [x] P3-03 L2 (SQLite write-behind + warm) (#29)
 - [x] P3-04 single-flight (#30)
 - [x] P3-05 fetcher (#31)
-- [ ] P3-06 replay harness
+- [x] P3-06 replay harness (#32)
 Exit check: _pending_
 
 ## P4 — Public surface
@@ -129,6 +129,7 @@ Exit check: _pending_
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
 
 ## Notes for the next task
+- Replay: `tests/replay.rs` + `tests/fixtures/replay/` (README documents re-recording). **P5-02 will change `replay__replay_cold_summoner_lookup.snap`**: pass-2 matches should become `ARCHIVE`.
 - Fetcher: `state.fetcher.fetch(RiotRequest, FetchOptions{priority, bypass}) -> Result<FetchResult{body, x_cache, cache_age}, FetchError{api, x_cache}>`. Routes (P4-04) must set `X-Cache`/`X-Cache-Age`, including on HIT-NEG errors. `?refresh=true` → `bypass`, admin only (P4). The `Archive` trait gets its SQLite implementation in P5-02.
 - Single-flight: `singleflight::SingleFlight<K,T,E>::run(key, || async {..}) -> Flight{value, did_work}`; `E: From<WorkFailed> + Clone`. The work is spawned, so put the cache write *inside* the work closure.
 - Cache: `cache::ResponseCache::new(L1, Some(L2Writer::spawn(db)))` with `get`, `put(key, ep, body, &ttls)`, `put_negative(key, ep, ttl)`, `shutdown()`. **P3-05 must wire into `serve`:** `l2::warm` + `l2::sweep` at boot, `cache.shutdown()` after the drain. `crate::clock::Clock` converts Instant↔unix ms.

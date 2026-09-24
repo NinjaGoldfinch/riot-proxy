@@ -1,0 +1,21 @@
+{
+  "body_file": "03-league.entriesByPuuid.body",
+  "endpoint": "league.entriesByPuuid",
+  "headers": {
+    "content-type": "application/json",
+    "x-app-rate-limit": "100:120,20:1",
+    "x-app-rate-limit-count": "2:120,2:1",
+    "x-method-rate-limit": "20000:10,1200000:600",
+    "x-method-rate-limit-count": "1:10,1:600"
+  },
+  "params": [
+    "NkQRxdiN3U3pEek5MWbWgaxzG_hpH5imJ9Ttch8ql5KM7D6p6Bh-Hbbvn6UoFVdGUBBIvcnEJv72qw"
+  ],
+  "path_and_query": "/lol/league/v4/entries/by-puuid/NkQRxdiN3U3pEek5MWbWgaxzG_hpH5imJ9Ttch8ql5KM7D6p6Bh-Hbbvn6UoFVdGUBBIvcnEJv72qw",
+  "query": [],
+  "recorded_at": "2026-09-24T17:26:25.535213086Z",
+  "routing": "kr",
+  "seq": 3,
+  "status": 200,
+  "synthetic": false
+}
