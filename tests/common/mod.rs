@@ -26,10 +26,19 @@ pub fn config(extra: &[(&str, &str)]) -> Config {
 pub fn app() -> (tempfile::TempDir, AppState, Router) {
     let dir = tempfile::tempdir().expect("tempdir");
     let db = Db::open(&dir.path().join("riot-proxy.db"), 2).expect("db");
+    let config = config(&[]);
+    let limiter = std::sync::Arc::new(riot_proxy::riot::limiter::Limiter::new(0.8));
+    let fetcher = fetcher(
+        &config,
+        "http://127.0.0.1:9",
+        std::sync::Arc::clone(&limiter),
+        None,
+    );
     let state = AppState {
-        config: config(&[]).into(),
+        config: config.into(),
         db,
-        limiter: std::sync::Arc::new(riot_proxy::riot::limiter::Limiter::new(0.8)),
+        limiter,
+        fetcher,
         limiter_restored: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
     };
     let router = app::router(state.clone(), telemetry::metrics_handle().expect("metrics"));
@@ -65,4 +74,27 @@ pub async fn send(router: Router, req: Request<Body>) -> Reply {
 
 pub async fn get(router: Router, path: &str) -> Reply {
     send(router, Request::get(path).body(Body::empty()).unwrap()).await
+}
+
+/// A fetcher pointed at `upstream` (a wiremock URI), with an optional test archive.
+pub fn fetcher(
+    config: &Config,
+    upstream: &str,
+    limiter: std::sync::Arc<riot_proxy::riot::limiter::Limiter>,
+    archive: Option<std::sync::Arc<dyn riot_proxy::fetcher::Archive>>,
+) -> riot_proxy::fetcher::Fetcher {
+    use riot_proxy::fetcher::{Fetcher, FetcherParts, NoArchive};
+    Fetcher::new(FetcherParts {
+        client: riot_proxy::riot::client::RiotClient::with_base_url(config, upstream).expect("client"),
+        limiter,
+        cache: std::sync::Arc::new(riot_proxy::cache::ResponseCache::new(
+            riot_proxy::cache::l1::L1::new(16 * 1024 * 1024),
+            None,
+        )),
+        archive: archive.unwrap_or_else(|| std::sync::Arc::new(NoArchive)),
+        scope: riot_proxy::cache::keys::KeyScope::from_key(&config.riot_api_key),
+        policy: riot_proxy::riot::endpoints::TtlPolicy::from_config(config),
+        interactive_budget: std::time::Duration::from_millis(config.client_wait_budget_ms),
+        swr: config.stale_while_revalidate,
+    })
 }

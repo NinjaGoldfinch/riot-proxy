@@ -75,7 +75,7 @@ docs/design/05-rate-limiter.md: "As built (P2)" section lists every deviation wi
 - [x] P3-02 L1 (moka) (#28)
 - [x] P3-03 L2 (SQLite write-behind + warm) (#29)
 - [x] P3-04 single-flight (#30)
-- [ ] P3-05 fetcher
+- [x] P3-05 fetcher (#31)
 - [ ] P3-06 replay harness
 Exit check: _pending_
 
@@ -129,6 +129,7 @@ Exit check: _pending_
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
 
 ## Notes for the next task
+- Fetcher: `state.fetcher.fetch(RiotRequest, FetchOptions{priority, bypass}) -> Result<FetchResult{body, x_cache, cache_age}, FetchError{api, x_cache}>`. Routes (P4-04) must set `X-Cache`/`X-Cache-Age`, including on HIT-NEG errors. `?refresh=true` → `bypass`, admin only (P4). The `Archive` trait gets its SQLite implementation in P5-02.
 - Single-flight: `singleflight::SingleFlight<K,T,E>::run(key, || async {..}) -> Flight{value, did_work}`; `E: From<WorkFailed> + Clone`. The work is spawned, so put the cache write *inside* the work closure.
 - Cache: `cache::ResponseCache::new(L1, Some(L2Writer::spawn(db)))` with `get`, `put(key, ep, body, &ttls)`, `put_negative(key, ep, ttl)`, `shutdown()`. **P3-05 must wire into `serve`:** `l2::warm` + `l2::sweep` at boot, `cache.shutdown()` after the drain. `crate::clock::Clock` converts Instant↔unix ms.
 - L1: `cache::l1::{L1::from_config, get → Lookup::{Fresh,Stale,Miss}, put(key, body, &ttls), put_negative, insert_entry (for L2 warm), invalidate_where}`. Entries hold tokio `Instant`s; P3-03 must convert to and from unix ms, e.g. with `riot::limiter::persist::Clock`.
@@ -138,7 +139,7 @@ Exit check: _pending_
 - Dev CLI: `just riot account/by-riot-id europe 'Hide on bush' KR1`. A real dev key is in `./.env` (gitignored; dev keys expire every 24 h).
 - Headers: `riot::limiter::headers::{RateLimitHeaders::from_headers, parse_limits, parse_counts, RateLimitType, BOOTSTRAP_APP_LIMITS}`. The client still reports the 429 type as a raw string; P2-04 can convert with `RateLimitType::parse`.
 - Service-429 backoff (owner, ADR-021): use **v1's numbers**, 500 ms × 2ⁿ capped at 8 s, ±20 %, 3 tries, implemented in the fetcher (P3-05), not the client.
-- Client: `RiotClient::new(&cfg)` / `with_base_url(&cfg, mock_uri)`; `RiotRequest::new(ep, target, &params)?.query(k, Some(v))?`; `client.send(&req) -> Result<RiotResponse, RiotError>` (errors carry `headers`). **P3-05 must port v1's retry policy** (ADR-017 lists the exact numbers).
+- Client: `RiotClient::new(&cfg)` / `with_base_url(&cfg, mock_uri)`; `RiotRequest::new(ep, target, &params)?.query(k, Some(v))?`; `client.send(&req) -> Result<RiotResponse, RiotError>` (errors carry `headers`). v1's retry policy lives in the fetcher (ADR-031).
 - Endpoints: `riot::endpoints::{ENDPOINTS, Endpoint::by_id, Endpoint::path(&[..]), target_for_platform/region, TtlPolicy::from_config(&cfg).ttls(ep)}`. When the fetcher is wired (P3-05), `serve` should log `ineffective_overrides()` at warn.
 - `X-Cache` for negative hits is **`HIT-NEG`** (owner, ADR-022), not design/03's `NEG`. That includes the P3 exit check list.
 - Routing: `riot::routing::{Platform, Region}` with `region()`, `account_region()` (sea→asia), `host()`, `parse()` → `BAD_REGION`, and `Platform::from_match_id`. Config's `default_platform` and `ladder_platforms` are typed.
