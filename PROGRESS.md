@@ -125,7 +125,7 @@ Exit check: _pending_
 - Service-429 backoff (owner, ADR-021): use **v1's numbers**, 500 ms × 2ⁿ capped at 8 s, ±20 %, 3 tries, implemented in the fetcher (P3-05), not the client.
 - Client: `RiotClient::new(&cfg)` / `with_base_url(&cfg, mock_uri)`; `RiotRequest::new(ep, target, &params)?.query(k, Some(v))?`; `client.send(&req) -> Result<RiotResponse, RiotError>` (errors carry `headers`). **P3-05 must port v1's retry policy** (ADR-017 lists the exact numbers).
 - Endpoints: `riot::endpoints::{ENDPOINTS, Endpoint::by_id, Endpoint::path(&[..]), target_for_platform/region, TtlPolicy::from_config(&cfg).ttls(ep)}`. When the fetcher is wired (P3-05), `serve` should log `ineffective_overrides()` at warn.
-- **Flag for P3-05:** v1's negative-cache state is `X-Cache: HIT-NEG` (`src/cache/store.ts` `CacheState`), while design/03 and the plan say `NEG`. Headers must be byte-identical to v1, so ask the owner before choosing.
+- `X-Cache` for negative hits is **`HIT-NEG`** (owner, ADR-022), not design/03's `NEG`. That includes the P3 exit check list.
 - Routing: `riot::routing::{Platform, Region}` with `region()`, `account_region()` (sea→asia), `host()`, `parse()` → `BAD_REGION`, and `Platform::from_match_id`. Config's `default_platform` and `ladder_platforms` are typed.
 - v1 reference is `NinjaGoldfinch/riot-proxy-deprecated` (cloned at `../riot-proxy-v1`, commit `c86e631`), not `ninja-recorder-deprecated` as §1 of the plan says.
 - Repo is **public** (owner decision), not private.
