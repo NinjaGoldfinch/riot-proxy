@@ -5,6 +5,64 @@ expression: doc
 {
   "components": {
     "schemas": {
+      "ErrorBody": {
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/ErrorCode"
+          },
+          "message": {
+            "type": "string"
+          },
+          "requestId": {
+            "description": "The request's `X-Request-Id`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "retryAfter": {
+            "description": "Seconds to wait before retrying; also sent as `Retry-After`.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "type": "object"
+      },
+      "ErrorCode": {
+        "description": "v1's closed set of error codes, serialised verbatim.",
+        "enum": [
+          "UNAUTHORIZED",
+          "FORBIDDEN",
+          "QUOTA_EXCEEDED",
+          "NOT_FOUND",
+          "UPSTREAM_ERROR",
+          "RATE_LIMITED",
+          "BAD_REGION",
+          "VALIDATION",
+          "INTERNAL"
+        ],
+        "type": "string"
+      },
+      "ErrorResponse": {
+        "description": "The error envelope as documented in OpenAPI (v1 `ErrorResponse`, plus `requestId`).",
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorBody"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
       "Health": {
         "properties": {
           "ok": {
@@ -148,6 +206,217 @@ expression: doc
         "summary": "Readiness",
         "tags": [
           "ops"
+        ]
+      }
+    },
+    "/v1/riot/accounts/by-puuid/{region}/{puuid}": {
+      "get": {
+        "description": "account-v1 by PUUID. The body is Riot's, unmodified. PUUIDs are encrypted per API key.",
+        "operationId": "account_by_puuid",
+        "parameters": [
+          {
+            "description": "Regional routing value: americas, europe, asia or sea",
+            "in": "path",
+            "name": "region",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Encrypted player UUID (60–128 characters, [A-Za-z0-9_-])",
+            "in": "path",
+            "name": "puuid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {}
+            },
+            "description": "Riot's account-v1 payload, passed through"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Account by PUUID",
+        "tags": [
+          "riot"
+        ]
+      }
+    },
+    "/v1/riot/accounts/by-riot-id/{region}/{gameName}/{tagLine}": {
+      "get": {
+        "description": "account-v1 by Riot ID. The body is Riot's, unmodified. `sea` is accepted and routed to `asia`, since account-v1 has no `sea` host.",
+        "operationId": "account_by_riot_id",
+        "parameters": [
+          {
+            "description": "Regional routing value: americas, europe, asia or sea",
+            "in": "path",
+            "name": "region",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The part of a Riot ID before the `#` (1–16 characters)",
+            "in": "path",
+            "name": "gameName",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The part of a Riot ID after the `#` (1–5 characters)",
+            "in": "path",
+            "name": "tagLine",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {}
+            },
+            "description": "Riot's account-v1 payload, passed through"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Account by Riot ID",
+        "tags": [
+          "riot"
         ]
       }
     }

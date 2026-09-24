@@ -24,16 +24,16 @@ pub fn config(extra: &[(&str, &str)]) -> Config {
 
 /// A full app over a fresh SQLite file. Keep the TempDir alive for the test.
 pub fn app() -> (tempfile::TempDir, AppState, Router) {
+    app_with(&[], "http://127.0.0.1:9")
+}
+
+/// A full app whose Riot client talks to `upstream` (a wiremock URI).
+pub fn app_with(env: &[(&str, &str)], upstream: &str) -> (tempfile::TempDir, AppState, Router) {
     let dir = tempfile::tempdir().expect("tempdir");
     let db = Db::open(&dir.path().join("riot-proxy.db"), 2).expect("db");
-    let config = config(&[]);
+    let config = config(env);
     let limiter = std::sync::Arc::new(riot_proxy::riot::limiter::Limiter::new(0.8));
-    let fetcher = fetcher(
-        &config,
-        "http://127.0.0.1:9",
-        std::sync::Arc::clone(&limiter),
-        None,
-    );
+    let fetcher = fetcher(&config, upstream, std::sync::Arc::clone(&limiter), None);
     let auth = std::sync::Arc::new(riot_proxy::http::auth::Auth::new(&config, db.clone()));
     let state = AppState {
         config: config.into(),

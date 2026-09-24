@@ -10,7 +10,7 @@ use serde::Serialize;
 use crate::http::request_id;
 
 /// v1's closed set of error codes, serialised verbatim.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ErrorCode {
     Unauthorized,
@@ -120,6 +120,24 @@ impl ApiError {
             },
         }
     }
+}
+
+/// The error envelope as documented in OpenAPI (v1 `ErrorResponse`, plus `requestId`).
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[schema(as = ErrorResponse)]
+pub struct ErrorResponse {
+    pub error: ErrorBody,
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ErrorBody {
+    pub code: ErrorCode,
+    pub message: String,
+    /// The request's `X-Request-Id`.
+    pub request_id: Option<String>,
+    /// Seconds to wait before retrying; also sent as `Retry-After`.
+    pub retry_after: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]

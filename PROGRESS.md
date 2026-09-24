@@ -93,7 +93,7 @@ The plan's exit check says `NEG`; per ADR-022 the value is `HIT-NEG`.
 - [x] P4-01 auth (#34)
 - [x] P4-02 consumer quota (#35)
 - [x] P4-03 OpenAPI scaffolding (#36)
-- [ ] P4-04 `/v1/riot/*` passthrough
+- [x] P4-04 `/v1/riot/*` passthrough (#37)
 - [ ] P4-05 `/v1/lol/*` typed routes
 - [ ] P4-06 dev UI + dashboard shells `[parallel-ok]`
 Exit check: _pending_
@@ -139,6 +139,7 @@ Exit check: _pending_
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
 
 ## Notes for the next task
+- Routes: follow `src/routes/riot.rs`, which uses `http::validate::*` for v1 rules and `routes::passthrough::{respond, options}`. Add read routers to `routes::docs::api_router`'s `read` group so they get auth+quota. `tests/common::app_with(env, wiremock_uri)` gives a full app. v1's `/v1/lol` bodies are raw passthrough too (`PassthroughResponse`), so P4-05's "typed" part is request validation.
 - OpenAPI: add routes to `routes::docs::api_router()` as `OpenApiRouter`s with `#[utoipa::path]` handlers. `just`/CI check: `cargo run -- spec > /tmp/spec.json && scripts/compare-openapi.py docs/contract/v1-openapi.json /tmp/spec.json --prefix /v1/riot/ --prefix /v1/lol/` (16 missing at P4-03). The `tests/snapshots/openapi__openapi_document.snap` changes with every documented route; review it.
 - Disk: `target/` reached ~26 GB with debug, release and feature builds and hit the session's disk allowance. `rm -rf target/release target/debug/incremental` frees ~10 GB.
 - Auth: protect routers with `.route_layer(axum::middleware::from_fn_with_state(state.clone(), http::auth::require_read))` (or `require_admin`); handlers take `Extension<Arc<http::auth::Consumer>>` (has `quota_per_min` for P4-02). `AppState.auth: Arc<Auth>`; call `auth.invalidate(hash)` on admin revoke (P5-05).
