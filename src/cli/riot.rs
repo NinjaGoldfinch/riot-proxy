@@ -31,6 +31,27 @@ pub enum RiotCommand {
         #[arg(long, hide = true)]
         base_url: Option<String>,
     },
+    /// Call one endpoint and save the exchange as a replay fixture in --out
+    /// (NN-<method>.json + .body). The key is redacted.
+    ///
+    /// Example: riot-proxy riot record --out tests/fixtures/replay/cold-lookup account/by-riot-id europe 'Hide on bush' KR1
+    Record {
+        /// Fixture directory (created if missing)
+        #[arg(long)]
+        out: std::path::PathBuf,
+        /// Method id or slug
+        endpoint: String,
+        /// Platform or region
+        routing: String,
+        /// Path parameters, in template order
+        params: Vec<String>,
+        /// Query parameter as key=value; repeatable
+        #[arg(long = "query", short = 'q', value_parser = parse_kv)]
+        query: Vec<(String, String)>,
+        /// Send to this base URL instead of Riot (tests)
+        #[arg(long, hide = true)]
+        base_url: Option<String>,
+    },
 }
 
 fn parse_kv(raw: &str) -> Result<(String, String), String> {
@@ -55,11 +76,11 @@ pub fn slug(id: &str) -> String {
     out
 }
 
-pub fn find_endpoint(name: &str) -> Option<&'static Endpoint> {
+pub(crate) fn find_endpoint(name: &str) -> Option<&'static Endpoint> {
     Endpoint::by_id(name).or_else(|| ENDPOINTS.iter().find(|e| slug(e.id) == name.to_ascii_lowercase()))
 }
 
-fn target(endpoint: &Endpoint, routing: &str) -> anyhow::Result<Target> {
+pub(crate) fn target(endpoint: &Endpoint, routing: &str) -> anyhow::Result<Target> {
     if let Ok(platform) = Platform::parse(routing) {
         return Ok(endpoint.target_for_platform(platform));
     }
@@ -73,13 +94,36 @@ fn target(endpoint: &Endpoint, routing: &str) -> anyhow::Result<Target> {
 }
 
 pub async fn run(config: &Config, cmd: RiotCommand) -> anyhow::Result<()> {
-    let RiotCommand::Get {
-        endpoint,
-        routing,
-        params,
-        query,
-        base_url,
-    } = cmd;
+    let (endpoint, routing, params, query, base_url) = match cmd {
+        RiotCommand::Get {
+            endpoint,
+            routing,
+            params,
+            query,
+            base_url,
+        } => (endpoint, routing, params, query, base_url),
+        RiotCommand::Record {
+            out,
+            endpoint,
+            routing,
+            params,
+            query,
+            base_url,
+        } => {
+            return super::record::run(
+                config,
+                super::record::RecordArgs {
+                    out,
+                    endpoint,
+                    routing,
+                    params,
+                    query,
+                    base_url,
+                },
+            )
+            .await;
+        }
+    };
     let Some(ep) = find_endpoint(&endpoint) else {
         let known: Vec<String> = ENDPOINTS
             .iter()

@@ -1,0 +1,21 @@
+{
+  "body_file": "02-summoner.byPuuid.body",
+  "endpoint": "summoner.byPuuid",
+  "headers": {
+    "content-type": "application/json",
+    "x-app-rate-limit": "100:120,20:1",
+    "x-app-rate-limit-count": "1:120,1:1",
+    "x-method-rate-limit": "2000:60",
+    "x-method-rate-limit-count": "1:60"
+  },
+  "params": [
+    "NkQRxdiN3U3pEek5MWbWgaxzG_hpH5imJ9Ttch8ql5KM7D6p6Bh-Hbbvn6UoFVdGUBBIvcnEJv72qw"
+  ],
+  "path_and_query": "/lol/summoner/v4/summoners/by-puuid/NkQRxdiN3U3pEek5MWbWgaxzG_hpH5imJ9Ttch8ql5KM7D6p6Bh-Hbbvn6UoFVdGUBBIvcnEJv72qw",
+  "query": [],
+  "recorded_at": "2026-09-24T17:26:25.274231305Z",
+  "routing": "kr",
+  "seq": 2,
+  "status": 200,
+  "synthetic": false
+}

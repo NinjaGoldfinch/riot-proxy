@@ -1,0 +1,23 @@
+---
+source: tests/replay.rs
+expression: "json!({\n    \"event\": event, \"note\":\n    \"one 429 (application, Retry-After 1) then the recorded 200\",\n})"
+---
+{
+  "event": {
+    "endpoint": "summoner.byPuuid",
+    "limiter": {
+      "app": [
+        "100:120 used 42"
+      ],
+      "method": [
+        "2000:60 used 2"
+      ]
+    },
+    "pass": 1,
+    "scope": "kr",
+    "step": 1,
+    "upstream_calls": 2,
+    "x_cache": "MISS"
+  },
+  "note": "one 429 (application, Retry-After 1) then the recorded 200"
+}

@@ -1,0 +1,23 @@
+{
+  "body_file": "01-summoner.byPuuid.body",
+  "endpoint": "summoner.byPuuid",
+  "headers": {
+    "retry-after": "1",
+    "x-app-rate-limit": "100:120,20:1",
+    "x-app-rate-limit-count": "21:1,41:120",
+    "x-method-rate-limit": "2000:60",
+    "x-method-rate-limit-count": "1:60",
+    "x-rate-limit-type": "application"
+  },
+  "params": [
+    "NkQRxdiN3U3pEek5MWbWgaxzG_hpH5imJ9Ttch8ql5KM7D6p6Bh-Hbbvn6UoFVdGUBBIvcnEJv72qw"
+  ],
+  "path_and_query": "/lol/summoner/v4/summoners/by-puuid/NkQRxdiN3U3pEek5MWbWgaxzG_hpH5imJ9Ttch8ql5KM7D6p6Bh-Hbbvn6UoFVdGUBBIvcnEJv72qw",
+  "query": [],
+  "recorded_at": "2026-09-24T17:26:25.274231305Z",
+  "routing": "kr",
+  "seq": 1,
+  "status": 429,
+  "synthetic": true,
+  "synthetic_note": "Derived from cold-lookup/02 by editing status and headers; a real application 429 was not provoked (owner decision, P3-06)."
+}
