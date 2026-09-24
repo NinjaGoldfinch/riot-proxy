@@ -54,7 +54,7 @@ Found and fixed on the way: `.env` parsing rejected v1-style unquoted values (#1
 ## P2 — Rate limiter
 - [x] P2-01 port v1 limiter tests first (#19)
 - [x] P2-02 windows and scopes (#20)
-- [ ] P2-03 acquire (single priority)
+- [x] P2-03 acquire (single priority) (#21)
 - [ ] P2-04 observe + freeze
 - [ ] P2-05 priorities
 - [ ] P2-06 checkpoint/restore

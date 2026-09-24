@@ -65,7 +65,6 @@ fn worst_burst(stamps: &[Instant], span: Duration) -> usize {
 
 /// v1: "admits exactly `limit` requests inside one window".
 #[tokio::test(start_paused = true)]
-#[ignore = "P2-03"]
 async fn admits_exactly_limit_inside_one_window() {
     let l = limiter_with_app("5:10");
     let mut admitted = 0;
@@ -81,7 +80,6 @@ async fn admits_exactly_limit_inside_one_window() {
 
 /// v1: "never over-commits a bucket under concurrency".
 #[tokio::test(start_paused = true)]
-#[ignore = "P2-03"]
 async fn never_over_commits_under_concurrency() {
     let l = Arc::new(limiter_with_app("10:10"));
     let mut set = tokio::task::JoinSet::new();
@@ -96,7 +94,6 @@ async fn never_over_commits_under_concurrency() {
 
 /// v1: "requires a token from every window before dispatch (§9.2)".
 #[tokio::test(start_paused = true)]
-#[ignore = "P2-03"]
 async fn requires_a_token_from_every_window() {
     // A tight short window inside a generous long one: the short one binds.
     let l = limiter_with_app("2:10,100:120");
@@ -109,7 +106,6 @@ async fn requires_a_token_from_every_window() {
 
 /// v1: "also enforces method buckets on top of app buckets".
 #[tokio::test(start_paused = true)]
-#[ignore = "P2-03"]
 async fn enforces_method_buckets_on_top_of_app_buckets() {
     let l = limiter_with_app("100:10");
     l.configure_method(SCOPE, "narrow", &w("3:10"));
@@ -129,7 +125,6 @@ async fn enforces_method_buckets_on_top_of_app_buckets() {
 /// v1: "never admits more than `limit` in any rolling window, boundary included
 /// (§9.2)" — the sliding-log property (#17, ADR-023).
 #[tokio::test(start_paused = true)]
-#[ignore = "P2-03"]
 async fn never_admits_more_than_limit_in_any_rolling_window() {
     let l = limiter_with_app("5:1");
     let opened = Instant::now();
@@ -160,7 +155,6 @@ async fn never_admits_more_than_limit_in_any_rolling_window() {
 
 /// v1: "waits and succeeds once a window rolls over".
 #[tokio::test(start_paused = true)]
-#[ignore = "P2-03"]
 async fn waits_and_succeeds_once_a_window_rolls_over() {
     let l = limiter_with_app("1:1");
     take(&l, "m").await.unwrap();
@@ -175,7 +169,6 @@ async fn waits_and_succeeds_once_a_window_rolls_over() {
 
 /// Plan P2-03: beyond the budget, fail fast with the earliest retry time.
 #[tokio::test(start_paused = true)]
-#[ignore = "P2-03"]
 async fn budget_exceeded_reports_the_next_token() {
     let l = limiter_with_app("1:10");
     let started = Instant::now();
@@ -194,7 +187,6 @@ async fn budget_exceeded_reports_the_next_token() {
 
 /// Unknown scopes start from the development-key app limits (v1 `BOOTSTRAP_APP_LIMITS`).
 #[tokio::test(start_paused = true)]
-#[ignore = "P2-03"]
 async fn unknown_scopes_use_the_bootstrap_app_limits() {
     let l = Limiter::new(CEILING);
     for _ in 0..20 {
@@ -610,4 +602,55 @@ async fn unknown_methods_report_no_windows() {
         ]
     );
     assert_eq!(l.method_usage("other-scope", &["narrow"])[0].windows, vec![]);
+}
+
+// ── acquire details (P2-03) ─────────────────────────────────────────────────────
+
+/// A method window that is full makes the whole acquire wait for it, and the wait
+/// is for the *latest* window to free, since every window must have room.
+#[tokio::test(start_paused = true)]
+async fn waits_for_the_last_window_to_have_room() {
+    let l = limiter_with_app("1:1");
+    l.configure_method(SCOPE, "m", &w("1:5"));
+    let t0 = Instant::now();
+    take(&l, "m").await.unwrap();
+    let err = take(&l, "m").await.unwrap_err();
+    assert_eq!(
+        err.retry_at,
+        t0 + Duration::from_secs(5),
+        "the method window binds, not the app one"
+    );
+    let permit = l
+        .acquire(SCOPE, "m", Priority::Interactive, Duration::from_secs(5))
+        .await
+        .unwrap();
+    assert_eq!(permit.waited, Duration::from_secs(5));
+}
+
+#[tokio::test(start_paused = true)]
+async fn rate_limited_becomes_a_v1_envelope() {
+    let l = limiter_with_app("1:10");
+    take(&l, "m").await.unwrap();
+    advance(Duration::from_millis(500)).await;
+    let err = take(&l, "m").await.unwrap_err();
+    assert_eq!(err.retry_after_secs(), 10, "9.5 s rounds up");
+    let api: crate::http::ApiError = err.into();
+    assert_eq!(api.code, crate::http::ErrorCode::RateLimited);
+    assert_eq!(api.status.as_u16(), 503);
+    assert_eq!(api.retry_after, Some(10));
+}
+
+#[tokio::test(start_paused = true)]
+async fn records_the_wait_histogram() {
+    let metrics = crate::telemetry::metrics_handle().unwrap();
+    let l = limiter_with_app("1:1");
+    l.acquire("wait-hist-region", "m", Priority::Bulk, NOW)
+        .await
+        .unwrap();
+    metrics.run_upkeep();
+    let text = metrics.render();
+    assert!(
+        text.contains(r#"proxy_rl_wait_seconds_count{region="wait-hist-region",priority="bulk"} 1"#),
+        "{text}"
+    );
 }

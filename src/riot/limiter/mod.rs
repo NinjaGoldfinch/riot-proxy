@@ -2,8 +2,8 @@
 //! v1 — ADR-023). Runs in process memory: one mutex around every scope's windows,
 //! held only for check-and-take.
 //!
-//! P2-01: the public API with `todo!()` bodies, so the ported v1 suite in
-//! `tests.rs` compiles. P2-02..P2-06 fill it in and un-ignore the tests.
+//! Implemented so far: windows and scopes (P2-02) and acquire (P2-03). Observe and
+//! freeze (P2-04), priorities (P2-05) and checkpoints (P2-06) are still `todo!()`.
 
 pub mod bucket;
 pub mod headers;
@@ -16,6 +16,9 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use tokio::time::Instant;
+
+use crate::http::{ApiError, ErrorCode};
+use crate::metrics::RL_WAIT_SECONDS;
 
 use self::bucket::{ScopeEntry, ScopeState, Window};
 use self::headers::{BOOTSTRAP_APP_LIMITS, LimitWindow, RateLimitHeaders, RateLimitType};
@@ -51,6 +54,22 @@ pub struct Permit {
 pub struct RateLimited {
     /// Earliest instant a token could be available.
     pub retry_at: Instant,
+}
+
+impl RateLimited {
+    /// Seconds until `retry_at`, rounded up, at least 1.
+    pub fn retry_after_secs(&self) -> u64 {
+        let remaining = self.retry_at.saturating_duration_since(Instant::now());
+        remaining.as_secs() + u64::from(remaining.subsec_nanos() > 0)
+    }
+}
+
+/// v1 `ProxyError.rateLimited`: `RATE_LIMITED` (503) with `Retry-After`.
+impl From<RateLimited> for ApiError {
+    fn from(e: RateLimited) -> Self {
+        ApiError::new(ErrorCode::RateLimited, "Upstream rate limit budget exceeded")
+            .with_retry_after(e.retry_after_secs().max(1))
+    }
 }
 
 /// One window's current use, as the admin surface and dashboard report it (v1 `usage`).
@@ -110,15 +129,65 @@ impl Limiter {
     }
 
     /// Take one token from every app and method window for `scope`/`method`, all or
-    /// nothing, waiting up to `budget` for windows to roll over.
+    /// nothing, waiting up to `budget` for windows to roll over (design/05 §Acquire).
+    /// The lock is held only for each check-and-take, never across the sleep.
     pub async fn acquire(
         &self,
-        _scope: &str,
-        _method: &str,
-        _priority: Priority,
-        _budget: Duration,
+        scope: &str,
+        method: &str,
+        priority: Priority,
+        budget: Duration,
     ) -> Result<Permit, RateLimited> {
-        todo!("P2-03")
+        let started = Instant::now();
+        let deadline = started + budget;
+        loop {
+            let now = Instant::now();
+            match self.try_take_all(scope, method, now) {
+                Ok(()) => {
+                    let waited = now - started;
+                    metrics::histogram!(RL_WAIT_SECONDS, "region" => scope.to_string(), "priority" => priority.as_str())
+                        .record(waited.as_secs_f64());
+                    return Ok(Permit { waited });
+                }
+                Err(until) if until > deadline => return Err(RateLimited { retry_at: until }),
+                Err(until) => tokio::time::sleep_until(until).await,
+            }
+        }
+    }
+
+    /// One critical section: take from every window or from none. On failure,
+    /// returns when every window will have room (or when a freeze ends).
+    fn try_take_all(&self, scope: &str, method: &str, now: Instant) -> Result<(), Instant> {
+        let mut scopes = self.lock();
+        let entry = scopes
+            .entry(scope.to_string())
+            .or_insert_with(ScopeEntry::bootstrap);
+        if let Some(until) = entry.frozen_until {
+            if until > now {
+                return Err(until);
+            }
+            entry.frozen_until = None;
+        }
+        let ScopeEntry { app, methods, .. } = entry;
+        let mut windows: Vec<&mut Window> = app.windows.iter_mut().collect();
+        if let Some(m) = methods.get_mut(method) {
+            windows.extend(m.windows.iter_mut());
+        }
+
+        let mut taken = 0;
+        for w in windows.iter_mut() {
+            if !w.try_take(now) {
+                break;
+            }
+            taken += 1;
+        }
+        if taken == windows.len() {
+            return Ok(());
+        }
+        for w in windows.iter_mut().take(taken) {
+            w.rollback();
+        }
+        Err(windows.iter_mut().map(|w| w.next_free(now)).max().unwrap_or(now))
     }
 
     /// Learn limits and absorb Riot's counts from one response's headers.
