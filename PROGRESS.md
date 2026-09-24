@@ -57,7 +57,7 @@ Found and fixed on the way: `.env` parsing rejected v1-style unquoted values (#1
 - [x] P2-03 acquire (single priority) (#21)
 - [x] P2-04 observe + freeze (#22)
 - [x] P2-05 priorities (#23)
-- [ ] P2-06 checkpoint/restore
+- [x] P2-06 checkpoint/restore (#24)
 - [ ] P2-07 property test + soak
 Exit check: _pending_
 
@@ -120,6 +120,7 @@ Exit check: _pending_
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
 
 ## Notes for the next task
+- `AppState` now has `limiter: Arc<Limiter>` and `limiter_restored`; `serve` restores, checkpoints every 10 s and on shutdown (`riot::limiter::persist`). `/readyz` body is `{ok, sqlite, limiter}`.
 - Limiter: **sliding-log windows** (owner, ADR-023), not design/05's fixed counters. The API is in `src/riot/limiter/mod.rs` (todo!() bodies). `tests.rs` holds 24 ported cases, `#[ignore = "P2-0x"]` by task; un-ignore them as each task lands. Use `tokio::time::Instant` everywhere so `start_paused` tests work. `bucket::Window` (sliding log: `try_take`, `rollback`, `next_free`, `sync`, `prune`), `ScopeState::reconfigure`, `ScopeEntry {app, app_known, methods, frozen_until}`; `Limiter::lock()` is a std `Mutex` and must never be held across an await.
 - Dev CLI: `just riot account/by-riot-id europe 'Hide on bush' KR1`. A real dev key is in `./.env` (gitignored; dev keys expire every 24 h).
 - Headers: `riot::limiter::headers::{RateLimitHeaders::from_headers, parse_limits, parse_counts, RateLimitType, BOOTSTRAP_APP_LIMITS}`. The client still reports the 429 type as a raw string; P2-04 can convert with `RateLimitType::parse`.

@@ -1,11 +1,16 @@
 //! `riot-proxy serve` (docs/design/03 §Process model, 07 §First run).
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use anyhow::Context;
 
 use crate::app::{self, AppState};
 use crate::config::Config;
 use crate::consumers;
 use crate::db::Db;
+use crate::riot::limiter::Limiter;
+use crate::riot::limiter::persist;
 use crate::telemetry;
 
 pub async fn serve(config: Config) -> anyhow::Result<()> {
@@ -32,6 +37,17 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         }
     }
 
+    // Restore the limiter before accepting traffic (design/03 §Process model).
+    let limiter = Arc::new(Limiter::new(config.bulk_usage_ceiling));
+    let restored = Arc::new(AtomicBool::new(false));
+    match persist::restore_from(&limiter, &db).await {
+        Ok(rows) => tracing::info!(rows, "limiter checkpoint restored"),
+        // Nothing usable: start from bootstrap limits; Riot's headers correct it.
+        Err(e) => tracing::warn!(error = %e, "limiter checkpoint could not be read; starting fresh"),
+    }
+    restored.store(true, Ordering::Release);
+    let checkpoints = persist::spawn_checkpoints(Arc::clone(&limiter), db.clone());
+
     let listener = tokio::net::TcpListener::bind((config.host.as_str(), config.port))
         .await
         .with_context(|| format!("binding {}:{}", config.host, config.port))?;
@@ -41,10 +57,17 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     let shutdown = app::shutdown_signal()?;
     let state = AppState {
         config: config.into(),
-        db,
+        db: db.clone(),
+        limiter: Arc::clone(&limiter),
+        limiter_restored: restored,
     };
-    app::serve(listener, app::router(state, metrics), shutdown).await?;
-    tracing::info!("stopped");
+    let served = app::serve(listener, app::router(state, metrics), shutdown).await;
+
+    // Final checkpoint after draining (design/05), whether or not serve failed.
+    checkpoints.abort();
+    persist::checkpoint_now(&limiter, &db).await;
+    tracing::info!("limiter checkpoint written; stopped");
+    served?;
     Ok(())
 }
 

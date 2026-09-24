@@ -29,6 +29,8 @@ pub fn app() -> (tempfile::TempDir, AppState, Router) {
     let state = AppState {
         config: config(&[]).into(),
         db,
+        limiter: std::sync::Arc::new(riot_proxy::riot::limiter::Limiter::new(0.8)),
+        limiter_restored: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
     };
     let router = app::router(state.clone(), telemetry::metrics_handle().expect("metrics"));
     (dir, state, router)

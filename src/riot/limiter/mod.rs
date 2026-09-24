@@ -2,11 +2,12 @@
 //! v1 — ADR-023). Runs in process memory: one mutex around every scope's windows,
 //! held only for check-and-take.
 //!
-//! Implemented: windows and scopes (P2-02), acquire (P2-03), observe and freeze
-//! (P2-04), priorities (P2-05). Checkpoint/restore is P2-06.
+//! Windows and scopes (P2-02), acquire (P2-03), observe and freeze (P2-04),
+//! priorities (P2-05), checkpoint and restore in `persist` (P2-06).
 
 pub mod bucket;
 pub mod headers;
+pub mod persist;
 
 #[cfg(test)]
 mod tests;

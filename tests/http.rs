@@ -21,7 +21,10 @@ async fn readyz_is_200_when_sqlite_is_writable() {
     let (_dir, _state, router) = app();
     let res = get(router, "/readyz").await;
     assert_eq!(res.status, StatusCode::OK);
-    assert_eq!(res.json(), serde_json::json!({"ok": true, "sqlite": true}));
+    assert_eq!(
+        res.json(),
+        serde_json::json!({"ok": true, "sqlite": true, "limiter": true})
+    );
 }
 
 #[tokio::test]
@@ -34,7 +37,10 @@ async fn readyz_is_503_with_the_same_body_when_sqlite_is_not_writable() {
 
     let res = get(router, "/readyz").await;
     assert_eq!(res.status, StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(res.json(), serde_json::json!({"ok": false, "sqlite": false}));
+    assert_eq!(
+        res.json(),
+        serde_json::json!({"ok": false, "sqlite": false, "limiter": true})
+    );
     blocker.execute_batch("ROLLBACK;").unwrap();
 }
 
@@ -88,5 +94,19 @@ async fn metrics_is_mounted() {
         String::from_utf8(res.body)
             .unwrap()
             .contains("proxy_archived_matches_total")
+    );
+}
+
+#[tokio::test]
+async fn readyz_is_503_until_the_limiter_is_restored() {
+    let (_dir, state, router) = app();
+    state
+        .limiter_restored
+        .store(false, std::sync::atomic::Ordering::Release);
+    let res = get(router, "/readyz").await;
+    assert_eq!(res.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        res.json(),
+        serde_json::json!({"ok": false, "sqlite": true, "limiter": false})
     );
 }
