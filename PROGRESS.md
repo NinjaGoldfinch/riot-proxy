@@ -77,7 +77,17 @@ docs/design/05-rate-limiter.md: "As built (P2)" section lists every deviation wi
 - [x] P3-04 single-flight (#30)
 - [x] P3-05 fetcher (#31)
 - [x] P3-06 replay harness (#32)
-Exit check: _pending_
+Exit check: **passed** (2026-09-25, `main` @ `9af51a0`)
+```
+$ cargo test --test fetcher_states        → 17 passed
+  every X-Cache value asserted against wiremock:
+  HIT ×4, MISS ×4, STALE ×3, HIT-NEG ×1, ARCHIVE ×2, BYPASS ×1   (six values: ADR-022, ADR-031)
+  incl. stale-on-5xx, SWR refresh at bulk priority, typed/service 429 retries, RATE_LIMITED hint
+$ CI=true cargo test --test replay        → 2 passed (snapshots unchanged)
+  cold_summoner_lookup   (10 real exchanges, 2 passes)
+  typed_application_429  (synthetic, freeze ≈1 s then MISS)
+```
+The plan's exit check says `NEG`; per ADR-022 the value is `HIT-NEG`.
 
 ## P4 — Public surface
 - [ ] P4-01 auth
