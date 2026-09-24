@@ -385,7 +385,6 @@ async fn app_limits_equal_to_bootstrap_still_make_the_scope_known() {
 
 /// v1: "derives known scopes from method configs too".
 #[tokio::test(start_paused = true)]
-#[ignore = "P2-04"]
 async fn known_scopes_include_method_only_scopes() {
     let l = Limiter::new(CEILING);
     l.configure_method(SCOPE, "match.byId", &w("2000:10"));
@@ -541,4 +540,74 @@ async fn bulk_callers_are_not_counted_as_waiters() {
     let l = limiter_with_app("100:10");
     take_bulk(&l).await.unwrap();
     assert_eq!(l.interactive_waiters(SCOPE), 0);
+}
+
+// ── configuration and reporting (P2-02) ─────────────────────────────────────────
+
+#[tokio::test(start_paused = true)]
+async fn configured_windows_report_empty_usage_in_length_order() {
+    let l = Limiter::new(CEILING);
+    assert_eq!(
+        l.usage(SCOPE),
+        vec![
+            WindowUsage {
+                window: "20:1".into(),
+                used: 0,
+                limit: 20
+            },
+            WindowUsage {
+                window: "100:120".into(),
+                used: 0,
+                limit: 100
+            },
+        ],
+        "an untouched scope reports the bootstrap windows"
+    );
+    assert!(
+        l.known_scopes().is_empty(),
+        "bootstrap limits do not make a scope known"
+    );
+
+    l.configure_app(SCOPE, &w("30000:600,500:10"));
+    assert_eq!(
+        l.usage(SCOPE),
+        vec![
+            WindowUsage {
+                window: "500:10".into(),
+                used: 0,
+                limit: 500
+            },
+            WindowUsage {
+                window: "30000:600".into(),
+                used: 0,
+                limit: 30000
+            },
+        ]
+    );
+    assert_eq!(l.known_scopes(), vec![SCOPE.to_string()]);
+    assert!(l.known_scope_methods().is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn unknown_methods_report_no_windows() {
+    let l = Limiter::new(CEILING);
+    l.configure_method(SCOPE, "narrow", &w("3:10"));
+    assert_eq!(
+        l.method_usage(SCOPE, &["narrow", "never-seen"]),
+        vec![
+            MethodUsage {
+                method: "narrow".into(),
+                windows: vec![WindowUsage {
+                    window: "3:10".into(),
+                    used: 0,
+                    limit: 3
+                }]
+            },
+            MethodUsage {
+                method: "never-seen".into(),
+                windows: vec![]
+            },
+        ]
+    );
+    assert_eq!(l.method_usage("other-scope", &["narrow"])[0].windows, vec![]);
 }
