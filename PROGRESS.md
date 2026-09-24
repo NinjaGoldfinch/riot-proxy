@@ -59,7 +59,16 @@ Found and fixed on the way: `.env` parsing rejected v1-style unquoted values (#1
 - [x] P2-05 priorities (#23)
 - [x] P2-06 checkpoint/restore (#24)
 - [x] P2-07 property test + soak (#25)
-Exit check: _pending_
+Exit check: **passed** (2026-09-25, `main` @ `98f4599`)
+```
+$ cargo test limiter
+  ok. 70 passed; 0 failed; 0 ignored   (lib: ported v1 suite, bucket, headers, persist, proptest)
+  ok. 1 passed                          (tests/limiter_restart.rs … restart never over-commits, etc.)
+  riot::limiter::proptest::never_over_commits_a_window ... ok   (1 000 cases; fails on a planted off-by-one)
+$ cargo test --release --test limiter_soak -- --ignored --nocapture
+  admitted 100 in 60s; worst 1 s = 20/20, worst 120 s = 100/100, worst tight 2 s = 6/7   (50 tasks)
+docs/design/05-rate-limiter.md: "As built (P2)" section lists every deviation with its ADR.
+```
 
 ## P3 — Cache, single-flight, fetcher
 - [ ] P3-01 cache keys + key_scope

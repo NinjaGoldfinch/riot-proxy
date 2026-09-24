@@ -4,8 +4,7 @@
 //! names, config-key TTLs) are ported as the in-process property they protected.
 //!
 //! All run under `tokio::time::pause()`: time only moves when the test says so.
-//! Ignored until the task that implements them (P2-03 acquire, P2-04 observe/freeze,
-//! P2-05 priorities) removes the `#[ignore]`.
+//! Ported in P2-01 against stubs; all live since P2-05.
 
 use std::sync::Arc;
 use std::time::Duration;
