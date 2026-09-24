@@ -21,6 +21,7 @@ use crate::config::Config;
 use crate::db::Db;
 use crate::http::ApiError;
 use crate::http::request_id::{RequestId, request_id};
+use crate::riot::limiter::Limiter;
 use crate::{routes, telemetry};
 
 /// v1's Fastify `bodyLimit`.
@@ -34,6 +35,9 @@ pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
 pub struct AppState {
     pub config: Arc<Config>,
     pub db: Db,
+    pub limiter: Arc<Limiter>,
+    /// Set once the limiter checkpoint has been restored (`/readyz`).
+    pub limiter_restored: Arc<std::sync::atomic::AtomicBool>,
 }
 
 pub fn router(state: AppState, metrics: PrometheusHandle) -> Router {
