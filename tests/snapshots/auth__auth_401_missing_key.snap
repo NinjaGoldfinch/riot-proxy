@@ -1,0 +1,11 @@
+---
+source: tests/auth.rs
+expression: redacted(&r)
+---
+{
+  "error": {
+    "code": "UNAUTHORIZED",
+    "message": "Missing or invalid API key",
+    "requestId": "[request-id]"
+  }
+}

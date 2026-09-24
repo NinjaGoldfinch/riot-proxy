@@ -1,0 +1,11 @@
+---
+source: tests/auth.rs
+expression: redacted(&r)
+---
+{
+  "error": {
+    "code": "FORBIDDEN",
+    "message": "This key lacks the 'admin' scope",
+    "requestId": "[request-id]"
+  }
+}

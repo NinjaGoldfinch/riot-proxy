@@ -34,9 +34,11 @@ pub fn app() -> (tempfile::TempDir, AppState, Router) {
         std::sync::Arc::clone(&limiter),
         None,
     );
+    let auth = std::sync::Arc::new(riot_proxy::http::auth::Auth::new(&config, db.clone()));
     let state = AppState {
         config: config.into(),
         db,
+        auth,
         limiter,
         fetcher,
         limiter_restored: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),

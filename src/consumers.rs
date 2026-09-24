@@ -209,6 +209,22 @@ pub async fn list(db: &Db) -> Result<Vec<Consumer>, ConsumerError> {
     .await
 }
 
+/// The active (not revoked) consumer whose key hashes to `hash` (v1 `findConsumerByHash`).
+pub async fn find_active_by_hash(db: &Db, hash: [u8; 32]) -> Result<Option<Consumer>, ConsumerError> {
+    db.read(move |c| {
+        let found = c
+            .query_row(
+                "SELECT id, name, scopes, quota_per_min, created_at, revoked_at FROM consumers
+                 WHERE key_sha256 = ?1 AND revoked_at IS NULL",
+                [hash.as_slice()],
+                from_row,
+            )
+            .optional()?;
+        found.map(with_scopes).transpose()
+    })
+    .await
+}
+
 /// Soft delete by id or name. The hash stays, so the key can never be reissued
 /// (v1 `disableConsumer`). Returns the revoked consumer; revoking twice is an error.
 pub async fn revoke(db: &Db, id_or_name: String) -> Result<Consumer, ConsumerError> {
