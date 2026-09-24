@@ -2,3 +2,4 @@
 //! docs/design/04 §Cache tiers.
 
 pub mod keys;
+pub mod l1;

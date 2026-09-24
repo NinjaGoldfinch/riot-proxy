@@ -45,6 +45,7 @@ fn defaults_match_v1_and_design_07() {
     assert!(!c.tls);
     assert_eq!(c.riot_user_agent, DEFAULT_USER_AGENT);
     assert_eq!(c.default_platform, Platform::Euw1);
+    assert_eq!(c.cache_l1_max_mb, 128);
     assert_eq!(c.neg_ttl_seconds, 30);
     assert_eq!(c.neg_ttl_account_seconds, 300);
     assert_eq!(c.client_wait_budget_ms, 2000);
@@ -402,7 +403,11 @@ fn env_example_documents_every_variable() {
         .lines()
         .map(|l| l.trim_start_matches('#').trim_start())
         .filter_map(|l| l.split_once('=').map(|(k, _)| k))
-        .filter(|k| !k.is_empty() && k.chars().all(|c| c.is_ascii_uppercase() || c == '_'))
+        .filter(|k| {
+            !k.is_empty()
+                && k.chars()
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+        })
         .collect();
     for var in VARS {
         assert!(documented.contains(var), "{var} missing from .env.example");
