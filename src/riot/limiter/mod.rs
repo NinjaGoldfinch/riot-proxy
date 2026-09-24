@@ -2,8 +2,8 @@
 //! v1 — ADR-023). Runs in process memory: one mutex around every scope's windows,
 //! held only for check-and-take.
 //!
-//! Implemented so far: windows and scopes (P2-02), acquire (P2-03), observe and
-//! freeze (P2-04). Priorities (P2-05) and checkpoints (P2-06) are still to come.
+//! Implemented: windows and scopes (P2-02), acquire (P2-03), observe and freeze
+//! (P2-04), priorities (P2-05). Checkpoint/restore is P2-06.
 
 pub mod bucket;
 pub mod headers;
@@ -12,13 +12,15 @@ pub mod headers;
 mod tests;
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
+use tokio::sync::Notify;
 use tokio::time::Instant;
 
 use crate::http::{ApiError, ErrorCode};
-use crate::metrics::RL_WAIT_SECONDS;
+use crate::metrics::{LIMITER_BULK_WAITERS, LIMITER_INTERACTIVE_WAITERS, RL_WAIT_SECONDS};
 
 use self::bucket::{ScopeEntry, ScopeState, Window};
 use self::headers::{BOOTSTRAP_APP_LIMITS, CountWindow, LimitWindow, RateLimitHeaders, RateLimitType};
@@ -91,8 +93,78 @@ pub struct MethodUsage {
 /// `europe`); `method` is the endpoint's method id.
 #[derive(Debug)]
 pub struct Limiter {
-    _bulk_ceiling: f64,
+    bulk_ceiling: f64,
     scopes: Mutex<HashMap<String, ScopeEntry>>,
+    /// Wakes waiters when state changes in a way a sleep would not notice: an
+    /// interactive waiter leaving, a freeze lifting early, new limits.
+    changed: Notify,
+    bulk_waiting: AtomicUsize,
+    interactive_waiting: AtomicUsize,
+}
+
+enum Attempt {
+    Taken,
+    WaitUntil(Instant),
+}
+
+/// The largest count a window can hold while bulk may still take from it: bulk
+/// needs `used < ceiling × limit` (v1 test: 8 of 10 at 0.80 holds bulk back).
+fn max_under_ceiling(limit: u32, ceiling: f64) -> u32 {
+    let threshold = f64::from(limit) * ceiling;
+    // Largest integer strictly below the threshold, and never negative.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let below = (threshold.ceil() as u32).saturating_sub(1);
+    below
+}
+
+/// Registered while an acquire waits; unregisters on drop, so a cancelled acquire
+/// can never leave a phantom waiter behind (the in-process form of v1's leaked
+/// Redis waiter).
+struct WaiterGuard<'a> {
+    limiter: &'a Limiter,
+    scope: String,
+    priority: Priority,
+}
+
+impl<'a> WaiterGuard<'a> {
+    fn new(limiter: &'a Limiter, scope: &str, priority: Priority) -> Self {
+        match priority {
+            Priority::Interactive => {
+                if let Some(e) = limiter.lock().get_mut(scope) {
+                    e.interactive_waiters += 1;
+                }
+                limiter.interactive_waiting.fetch_add(1, Ordering::Relaxed);
+            }
+            Priority::Bulk => {
+                limiter.bulk_waiting.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        limiter.publish_waiters();
+        Self {
+            limiter,
+            scope: scope.to_string(),
+            priority,
+        }
+    }
+}
+
+impl Drop for WaiterGuard<'_> {
+    fn drop(&mut self) {
+        match self.priority {
+            Priority::Interactive => {
+                if let Some(e) = self.limiter.lock().get_mut(&self.scope) {
+                    e.interactive_waiters = e.interactive_waiters.saturating_sub(1);
+                }
+                self.limiter.interactive_waiting.fetch_sub(1, Ordering::Relaxed);
+                // Bulk may be standing aside for this caller.
+                self.limiter.changed.notify_waiters();
+            }
+            Priority::Bulk => {
+                self.limiter.bulk_waiting.fetch_sub(1, Ordering::Relaxed);
+            }
+        }
+        self.limiter.publish_waiters();
+    }
 }
 
 impl ScopeEntry {
@@ -125,8 +197,20 @@ impl Limiter {
     /// `bulk_ceiling` is `BULK_USAGE_CEILING` (0.80 by default).
     pub fn new(bulk_ceiling: f64) -> Self {
         Self {
-            _bulk_ceiling: bulk_ceiling,
+            bulk_ceiling,
             scopes: Mutex::new(HashMap::new()),
+            changed: Notify::new(),
+            bulk_waiting: AtomicUsize::new(0),
+            interactive_waiting: AtomicUsize::new(0),
+        }
+    }
+
+    fn publish_waiters(&self) {
+        #[allow(clippy::cast_precision_loss)]
+        {
+            metrics::gauge!(LIMITER_INTERACTIVE_WAITERS)
+                .set(self.interactive_waiting.load(Ordering::Relaxed) as f64);
+            metrics::gauge!(LIMITER_BULK_WAITERS).set(self.bulk_waiting.load(Ordering::Relaxed) as f64);
         }
     }
 
@@ -139,7 +223,13 @@ impl Limiter {
 
     /// Take one token from every app and method window for `scope`/`method`, all or
     /// nothing, waiting up to `budget` for windows to roll over (design/05 §Acquire).
-    /// The lock is held only for each check-and-take, never across the sleep.
+    /// The lock is held only for each check-and-take, never across a wait.
+    ///
+    /// Priorities (design/05 §Priorities, v1 §9.3): an interactive caller that has
+    /// to wait registers as a waiter, and while any are registered on the scope,
+    /// bulk callers stand aside. Bulk also stands aside while any window is at or
+    /// above `BULK_USAGE_CEILING`, keeping the rest for interactive traffic.
+    /// A wait that cannot finish inside `budget` fails at once with `RateLimited`.
     pub async fn acquire(
         &self,
         scope: &str,
@@ -149,38 +239,73 @@ impl Limiter {
     ) -> Result<Permit, RateLimited> {
         let started = Instant::now();
         let deadline = started + budget;
+        let mut waiter: Option<WaiterGuard<'_>> = None;
         loop {
+            // Enable the wakeup before checking, so a change between the check and
+            // the wait is not missed.
+            let changed = self.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+
             let now = Instant::now();
-            match self.try_take_all(scope, method, now) {
-                Ok(()) => {
+            let until = match self.try_take_all(scope, method, priority, now) {
+                Attempt::Taken => {
                     let waited = now - started;
                     metrics::histogram!(RL_WAIT_SECONDS, "region" => scope.to_string(), "priority" => priority.as_str())
                         .record(waited.as_secs_f64());
                     return Ok(Permit { waited });
                 }
-                Err(until) if until > deadline => return Err(RateLimited { retry_at: until }),
-                Err(until) => tokio::time::sleep_until(until).await,
+                Attempt::WaitUntil(until) => until,
+            };
+            if until > deadline {
+                return Err(RateLimited { retry_at: until });
+            }
+            if waiter.is_none() {
+                waiter = Some(WaiterGuard::new(self, scope, priority));
+            }
+            tokio::select! {
+                () = tokio::time::sleep_until(until) => {}
+                () = &mut changed => {}
             }
         }
     }
 
-    /// One critical section: take from every window or from none. On failure,
-    /// returns when every window will have room (or when a freeze ends).
-    fn try_take_all(&self, scope: &str, method: &str, now: Instant) -> Result<(), Instant> {
+    /// One critical section: take from every window or from none. Otherwise, when
+    /// to try again: when every window has room, a freeze ends, or (bulk) usage
+    /// drops below the ceiling. Bulk blocked only by queued interactive callers
+    /// retries when every window has room *and* is woken early when they leave.
+    fn try_take_all(&self, scope: &str, method: &str, priority: Priority, now: Instant) -> Attempt {
         let mut scopes = self.lock();
         let entry = scopes
             .entry(scope.to_string())
             .or_insert_with(ScopeEntry::bootstrap);
         if let Some(until) = entry.frozen_until {
             if until > now {
-                return Err(until);
+                return Attempt::WaitUntil(until);
             }
             entry.frozen_until = None;
         }
+        let interactive_waiting = entry.interactive_waiters > 0;
         let ScopeEntry { app, methods, .. } = entry;
         let mut windows: Vec<&mut Window> = app.windows.iter_mut().collect();
         if let Some(m) = methods.get_mut(method) {
             windows.extend(m.windows.iter_mut());
+        }
+
+        if priority == Priority::Bulk {
+            let ceiling_clear = windows
+                .iter_mut()
+                .map(|w| w.until_at_most(max_under_ceiling(w.limit, self.bulk_ceiling), now))
+                .max()
+                .unwrap_or(now);
+            if ceiling_clear > now {
+                return Attempt::WaitUntil(ceiling_clear);
+            }
+            if interactive_waiting {
+                let room = windows.iter_mut().map(|w| w.next_free(now)).max().unwrap_or(now);
+                // Never "now": that would spin. The waiter leaving wakes us anyway.
+                return Attempt::WaitUntil(room.max(now + Duration::from_millis(1)));
+            }
         }
 
         let mut taken = 0;
@@ -191,12 +316,12 @@ impl Limiter {
             taken += 1;
         }
         if taken == windows.len() {
-            return Ok(());
+            return Attempt::Taken;
         }
         for w in windows.iter_mut().take(taken) {
             w.rollback();
         }
-        Err(windows.iter_mut().map(|w| w.next_free(now)).max().unwrap_or(now))
+        Attempt::WaitUntil(windows.iter_mut().map(|w| w.next_free(now)).max().unwrap_or(now))
     }
 
     /// Learn limits and absorb Riot's counts from one response's headers, errors
@@ -236,6 +361,8 @@ impl Limiter {
         if let (Some(kind), Some(seconds)) = (headers.limit_type, headers.retry_after) {
             self.freeze(scope, Duration::from_secs(seconds), kind);
         }
+        // New limits can open room sooner than a waiter's computed wake time.
+        self.changed.notify_waiters();
     }
 
     /// Block every acquire on `scope`, every method, for `retry_after`. A longer
@@ -356,7 +483,7 @@ impl Limiter {
     }
 
     /// Interactive callers currently queued on `scope` (bulk yields while > 0).
-    pub fn interactive_waiters(&self, _scope: &str) -> usize {
-        todo!("P2-05")
+    pub fn interactive_waiters(&self, scope: &str) -> usize {
+        self.lock().get(scope).map_or(0, |e| e.interactive_waiters)
     }
 }

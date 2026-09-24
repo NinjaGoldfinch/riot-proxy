@@ -82,6 +82,19 @@ impl Window {
         self.admitted.get(index).map_or(now, |&t| t + self.span())
     }
 
+    /// When at most `max_used` admissions will remain in the window: now if
+    /// already so, else when enough of the oldest have aged out.
+    pub fn until_at_most(&mut self, max_used: u32, now: Instant) -> Instant {
+        let used = self.used(now);
+        if used <= max_used {
+            return now;
+        }
+        let must_leave = (used - max_used) as usize;
+        self.admitted
+            .get(must_leave - 1)
+            .map_or(now, |&t| t + self.span())
+    }
+
     /// Absorb Riot's count: pad with entries stamped `now` until we hold at least
     /// `count`. Never lowers, and never moves our own admissions (v1 §9.1).
     pub fn sync(&mut self, count: u32, now: Instant) {
@@ -160,6 +173,8 @@ pub struct ScopeEntry {
     pub methods: std::collections::BTreeMap<String, ScopeState>,
     /// A typed 429 blocks the whole scope until then.
     pub frozen_until: Option<Instant>,
+    /// Interactive acquires currently waiting on this scope. Bulk yields while > 0.
+    pub interactive_waiters: usize,
 }
 
 #[cfg(test)]
@@ -315,6 +330,26 @@ mod tests {
         s.reconfigure(&[lw(5, 10)]);
         assert_eq!(s.windows[0].used(t0), 8);
         assert!(!s.windows[0].try_take(t0));
+    }
+
+    #[test]
+    fn until_at_most_counts_down_the_oldest_stamps() {
+        let t0 = Instant::now();
+        let mut w = Window::new(lw(10, 10));
+        for i in 0..8 {
+            w.try_take(t0 + secs(i));
+        }
+        assert_eq!(w.until_at_most(8, t0 + secs(8)), t0 + secs(8), "already there");
+        assert_eq!(
+            w.until_at_most(7, t0 + secs(8)),
+            t0 + secs(10),
+            "the first leaves at t0+10"
+        );
+        assert_eq!(
+            w.until_at_most(5, t0 + secs(8)),
+            t0 + secs(12),
+            "three must leave"
+        );
     }
 
     #[test]

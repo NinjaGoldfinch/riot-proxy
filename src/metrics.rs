@@ -43,6 +43,10 @@ pub const AGGREGATE_ROWS: &str = "proxy_aggregate_rows";
 pub const FACTS_REEXTRACT_PROGRESS: &str = "proxy_facts_reextract_progress";
 pub const ARCHIVED_MATCHES_TOTAL: &str = "proxy_archived_matches_total";
 
+// v2 additions: design/07 names, no `proxy_` prefix (ADR-014).
+pub const LIMITER_INTERACTIVE_WAITERS: &str = "limiter_interactive_waiters";
+pub const LIMITER_BULK_WAITERS: &str = "limiter_bulk_waiters";
+
 const UPSTREAM_LATENCY_BUCKETS: &[f64] = &[0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0];
 const RL_WAIT_BUCKETS: &[f64] = &[0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0];
 const LADDER_CRAWL_BUCKETS: &[f64] = &[
@@ -208,6 +212,21 @@ pub const CATALOGUE: &[MetricDef] = &[
         Kind::Counter,
         &[],
         "Matches upserted into the archive",
+        &[],
+    ),
+    // v2 additions (design/07 §Observability; ADR-014 naming).
+    def(
+        LIMITER_INTERACTIVE_WAITERS,
+        Kind::Gauge,
+        &[],
+        "Interactive acquires currently waiting for a rate-limit token",
+        &[],
+    ),
+    def(
+        LIMITER_BULK_WAITERS,
+        Kind::Gauge,
+        &[],
+        "Bulk acquires currently waiting (held back by the ceiling or by interactive traffic)",
         &[],
     ),
 ];

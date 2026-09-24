@@ -44,8 +44,8 @@ Owner decision (2026-09-24, ADR-014): these use the names **exactly as design/07
 
 | Name | Type | Labels | Emitted by (v2 task) |
 |---|---|---|---|
-| `limiter_bulk_waiters` | gauge | — | Limiter priorities (P2-05) |
-| `limiter_interactive_waiters` | gauge | — | Limiter priorities (P2-05) |
+| `limiter_bulk_waiters` | gauge | — | Limiter priorities (P2-05), implemented; process-wide total |
+| `limiter_interactive_waiters` | gauge | — | Limiter priorities (P2-05), implemented; process-wide total |
 | `jobs_pending` | gauge | kind | Scheduler (P6-03) |
 | `sqlite_wal_bytes` | gauge | — | Maintenance / sampler (P7-05) |
 
