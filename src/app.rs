@@ -50,10 +50,13 @@ pub struct AppState {
 }
 
 pub fn router(state: AppState, metrics: PrometheusHandle) -> Router {
-    Router::new()
-        .merge(routes::health::router())
-        .with_state(state)
-        .merge(telemetry::metrics_router(metrics))
+    let (api, doc) = routes::docs::api_router().split_for_parts();
+    let docs_ui = state.config.docs_ui;
+    let mut router = api.with_state(state).merge(telemetry::metrics_router(metrics));
+    if docs_ui {
+        router = router.merge(routes::docs::docs_router(routes::docs::finish(doc)));
+    }
+    router
         .fallback(not_found)
         // Fastify 404s a known path with the wrong method; so does v2.
         .method_not_allowed_fallback(not_found)

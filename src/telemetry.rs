@@ -105,7 +105,18 @@ pub fn metrics_router(handle: PrometheusHandle) -> Router {
         .with_state(handle)
 }
 
-async fn render_metrics(State(handle): State<PrometheusHandle>) -> impl IntoResponse {
+/// Prometheus text exposition, documented in the OpenAPI document (v1 `/metrics`).
+#[utoipa::path(
+    get,
+    path = "/metrics",
+    tag = "ops",
+    summary = "Prometheus metrics",
+    description = "Prometheus text exposition format, not JSON. Behind a reverse proxy, restrict this path to \
+                   private ranges.",
+    security(()),
+    responses((status = 200, description = "Prometheus text exposition format", content_type = "text/plain", body = String)),
+)]
+pub async fn render_metrics(State(handle): State<PrometheusHandle>) -> impl IntoResponse {
     ([(header::CONTENT_TYPE, METRICS_CONTENT_TYPE)], handle.render())
 }
 
