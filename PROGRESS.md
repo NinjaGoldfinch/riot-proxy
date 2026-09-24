@@ -36,7 +36,20 @@ The musl binary was checked in CI, not on the dev box (no `musl-gcc` there; ADR-
 - [x] P1-05 dev subcommand (#14)
 - [x] P1-06 exhaustive host-resolution test for the exit check (#15)
 - [x] P1-07 fix: `.env` parsing compatible with v1/node dotenv (#16)
-Exit check: _pending_
+Exit check: **passed** (2026-09-24, `main` @ `ddf9853`, real development key from `.env`)
+```
+$ just riot account/by-riot-id europe Faker KR1
+  → /riot/account/v1/accounts/by-riot-id/Faker/KR1 → NotFound (404)
+    The key is accepted (no 401/403), but the Riot ID in the plan's example does not exist.
+$ just riot account/by-riot-id europe 'Hide on bush' KR1
+  200 /riot/account/v1/accounts/by-riot-id/Hide%20on%20bush/KR1 (461 ms)
+  {"puuid":"NkQRxdiN…","gameName":"Hide on bush","tagLine":"KR1"}        ← Riot's raw JSON
+$ just riot account/by-riot-id sea 'Hide on bush' KR1
+  200 … (sea → asia account host, live)
+$ cargo test every_endpoint_group_resolves_to_the_right_host
+  ok: 16 endpoints / nine groups × na1, euw1, kr, oc1, vn2 → correct host
+```
+Found and fixed on the way: `.env` parsing rejected v1-style unquoted values (#16, ADR-020).
 
 ## P2 — Rate limiter
 - [ ] P2-01 port v1 limiter tests first
@@ -107,9 +120,9 @@ Exit check: _pending_
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
 
 ## Notes for the next task
-- Dev CLI: `just riot account/by-riot-id europe Faker KR1` (needs a real dev key in `./.env`; none is on the dev box yet).
+- Dev CLI: `just riot account/by-riot-id europe 'Hide on bush' KR1`. A real dev key is in `./.env` (gitignored; dev keys expire every 24 h).
 - Headers: `riot::limiter::headers::{RateLimitHeaders::from_headers, parse_limits, parse_counts, RateLimitType, BOOTSTRAP_APP_LIMITS}`. The client still reports the 429 type as a raw string; P2-04 can convert with `RateLimitType::parse`.
-- **Ask the owner before P2-04/P3-05:** service-429 backoff numbers, design/05 vs v1 (ADR-018).
+- Service-429 backoff (owner, ADR-021): use **v1's numbers**, 500 ms × 2ⁿ capped at 8 s, ±20 %, 3 tries, implemented in the fetcher (P3-05), not the client.
 - Client: `RiotClient::new(&cfg)` / `with_base_url(&cfg, mock_uri)`; `RiotRequest::new(ep, target, &params)?.query(k, Some(v))?`; `client.send(&req) -> Result<RiotResponse, RiotError>` (errors carry `headers`). **P3-05 must port v1's retry policy** (ADR-017 lists the exact numbers).
 - Endpoints: `riot::endpoints::{ENDPOINTS, Endpoint::by_id, Endpoint::path(&[..]), target_for_platform/region, TtlPolicy::from_config(&cfg).ttls(ep)}`. When the fetcher is wired (P3-05), `serve` should log `ineffective_overrides()` at warn.
 - **Flag for P3-05:** v1's negative-cache state is `X-Cache: HIT-NEG` (`src/cache/store.ts` `CacheState`), while design/03 and the plan say `NEG`. Headers must be byte-identical to v1, so ask the owner before choosing.
