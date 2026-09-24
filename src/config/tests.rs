@@ -392,7 +392,7 @@ fn malformed_dotenv_is_an_error() {
     let dotenv = tmp.path().join(".env");
     std::fs::write(&dotenv, "NOT A VALID LINE\n").expect("write .env");
     let err = Config::load_with(Some(&dotenv), pairs(&[]), ConfigArgs::default()).expect_err("must fail");
-    assert!(matches!(err, ConfigError::DotEnv { .. }), "{err:?}");
+    assert!(matches!(err, ConfigError::DotEnv { line: 1, .. }), "{err:?}");
 }
 
 #[test]
@@ -431,4 +431,67 @@ fn unknown_platforms_are_refused_at_boot() {
         load(env(&[("DEFAULT_PLATFORM", "KR")])).default_platform,
         Platform::Kr
     );
+}
+
+/// v1's own `.env.example` must load unchanged (design/07: ".env files can be
+/// ported mechanically"). It has unquoted values with spaces and parentheses.
+#[test]
+fn dotenv_parses_v1_style_values() {
+    let text = "\
+# comment
+RIOT_API_KEY=RGAPI-redacted-placeholder
+RIOT_USER_AGENT=riot-proxy/1.0 (+https://api.yourdomain.dev)
+export PORT=8080
+QUOTED=\"a # not a comment\"
+SINGLE='x\\ny'
+DOUBLE=\"x\\ny\"
+INLINE=value # trailing comment
+EMPTY=
+  SPACED  =  padded value  
+";
+    let got: std::collections::BTreeMap<String, String> = parse_dotenv(text).unwrap().into_iter().collect();
+    assert_eq!(
+        got["RIOT_USER_AGENT"],
+        "riot-proxy/1.0 (+https://api.yourdomain.dev)"
+    );
+    assert_eq!(got["PORT"], "8080");
+    assert_eq!(got["QUOTED"], "a # not a comment");
+    assert_eq!(got["SINGLE"], "x\\ny");
+    assert_eq!(got["DOUBLE"], "x\ny");
+    assert_eq!(got["INLINE"], "value");
+    assert_eq!(got["EMPTY"], "");
+    assert_eq!(got["SPACED"], "padded value");
+}
+
+#[test]
+fn v1_env_example_loads_verbatim() {
+    let text = include_str!("../../tests/fixtures/v1.env.example");
+    let pairs = parse_dotenv(text).expect("v1 .env.example parses");
+
+    // The one deliberate incompatibility: v1 points DATABASE_URL at Postgres,
+    // which v2 refuses without the postgres feature (design/07). Loudly.
+    let errs = errors(Sources {
+        dotenv: pairs.clone(),
+        ..Sources::default()
+    });
+    assert_eq!(errs.len(), 1, "{errs:?}");
+    assert!(errs[0].starts_with("DATABASE_URL: postgres://"), "{errs:?}");
+
+    // Everything else in it is accepted as-is.
+    let without_db: Vec<_> = pairs.into_iter().filter(|(k, _)| k != "DATABASE_URL").collect();
+    let c = Config::from_sources(Sources {
+        dotenv: without_db,
+        ..Sources::default()
+    })
+    .expect("validates");
+    assert_eq!(c.riot_user_agent, "riot-proxy/1.0 (+https://api.yourdomain.dev)");
+    assert_eq!(c.bulk_usage_ceiling, 0.8);
+    assert_eq!(c.admin_ip_allowlist, vec!["127.0.0.1", "::1"]);
+}
+
+#[test]
+fn dotenv_errors_name_the_line() {
+    assert_eq!(parse_dotenv("A=1\nB=\"open\n").unwrap_err().0, 2);
+    assert_eq!(parse_dotenv("A=1\n\nbad name=1\n").unwrap_err().0, 3);
+    assert_eq!(parse_dotenv("A='x' y\n").unwrap_err().0, 1);
 }
