@@ -62,6 +62,7 @@ and archived.
     security(("bearerAuth" = [])),
     modifiers(&SecuritySchemes),
     paths(crate::telemetry::render_metrics),
+    components(schemas(crate::http::error::ErrorResponse)),
 )]
 struct ApiDoc;
 
@@ -95,9 +96,19 @@ impl Modify for SecuritySchemes {
     }
 }
 
-/// Every documented route, before state is attached.
-pub fn api_router() -> OpenApiRouter<AppState> {
-    OpenApiRouter::with_openapi(ApiDoc::openapi()).merge(routes::health::router())
+/// Every documented route. With `Some(state)`, protected routes get the auth guard
+/// (`serve`); with `None` they don't, which is all `spec` needs.
+pub fn api_router(auth: Option<AppState>) -> OpenApiRouter<AppState> {
+    let mut read = OpenApiRouter::new().merge(routes::riot::router());
+    if let Some(state) = auth {
+        read = read.route_layer(axum::middleware::from_fn_with_state(
+            state,
+            crate::http::auth::require_read,
+        ));
+    }
+    OpenApiRouter::with_openapi(ApiDoc::openapi())
+        .merge(routes::health::router())
+        .merge(read)
 }
 
 /// Final touches: the crate version and v1's tag groups.
@@ -118,7 +129,7 @@ pub fn finish(mut doc: Document) -> Document {
 
 /// The document `serve` publishes and `riot-proxy spec` prints.
 pub fn spec() -> Document {
-    let (_, doc) = api_router().split_for_parts();
+    let (_, doc) = api_router(None).split_for_parts();
     finish(doc)
 }
 

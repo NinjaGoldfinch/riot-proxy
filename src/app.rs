@@ -50,7 +50,7 @@ pub struct AppState {
 }
 
 pub fn router(state: AppState, metrics: PrometheusHandle) -> Router {
-    let (api, doc) = routes::docs::api_router().split_for_parts();
+    let (api, doc) = routes::docs::api_router(Some(state.clone())).split_for_parts();
     let docs_ui = state.config.docs_ui;
     let mut router = api.with_state(state).merge(telemetry::metrics_router(metrics));
     if docs_ui {
@@ -60,7 +60,8 @@ pub fn router(state: AppState, metrics: PrometheusHandle) -> Router {
         .fallback(not_found)
         // Fastify 404s a known path with the wrong method; so does v2.
         .method_not_allowed_fallback(not_found)
-        // Innermost first: body limit → compression → trace → panic → request id.
+        // Innermost first: metrics → body limit → compression → trace → panic → request id.
+        .layer(axum::middleware::from_fn(record_request))
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
         .layer(CompressionLayer::new())
         .layer(
@@ -75,6 +76,43 @@ pub fn router(state: AppState, metrics: PrometheusHandle) -> Router {
         )
         .layer(CatchPanicLayer::custom(|_: Box<dyn std::any::Any + Send>| panic_response()))
         .layer(axum::middleware::from_fn(request_id))
+}
+
+/// `proxy_requests_total{route,status,cache}` (v1's onResponse hook). `route` is the
+/// matched template in v1's `:param` form; unmatched requests are `unmatched`
+/// rather than v1's raw URL, which made the label unbounded (ADR-036).
+async fn record_request(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    let route = req
+        .extensions()
+        .get::<axum::extract::MatchedPath>()
+        .map_or_else(|| "unmatched".to_string(), |m| fastify_style(m.as_str()));
+    let res = next.run(req).await;
+    let cache = match res.headers().get("x-cache").and_then(|v| v.to_str().ok()) {
+        Some("HIT-NEG") => "neg",
+        Some("HIT") => "hit",
+        Some("MISS") => "miss",
+        Some("STALE") => "stale",
+        Some("ARCHIVE") => "archive",
+        Some("BYPASS") => "bypass",
+        _ => "none",
+    };
+    metrics::counter!(crate::metrics::REQUESTS_TOTAL, "route" => route, "status" => res.status().as_str().to_string(), "cache" => cache)
+        .increment(1);
+    res
+}
+
+/// `/a/{b}/c` → `/a/:b/c`.
+fn fastify_style(template: &str) -> String {
+    template
+        .split('/')
+        .map(
+            |seg| match seg.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
+                Some(name) => format!(":{name}"),
+                None => seg.to_string(),
+            },
+        )
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// v1 `setNotFoundHandler`: `No route for <METHOD> <url>`.
