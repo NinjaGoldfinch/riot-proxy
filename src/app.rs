@@ -21,6 +21,7 @@ use crate::config::Config;
 use crate::db::Db;
 use crate::fetcher::Fetcher;
 use crate::http::ApiError;
+use crate::http::auth::Auth;
 use crate::http::request_id::{RequestId, request_id};
 use crate::riot::limiter::Limiter;
 use crate::{routes, telemetry};
@@ -37,6 +38,8 @@ pub struct AppState {
     pub config: Arc<Config>,
     pub db: Db,
     pub limiter: Arc<Limiter>,
+    /// Consumer key resolution and scope/allowlist policy.
+    pub auth: Arc<Auth>,
     /// The read funnel every Riot-backed route uses.
     pub fetcher: Fetcher,
     /// Set once the limiter checkpoint has been restored (`/readyz`).
@@ -59,7 +62,7 @@ pub fn router(state: AppState, metrics: PrometheusHandle) -> Router {
                 .make_span_with(|req: &axum::http::Request<_>| {
                     // The request_id layer runs first, so the extension is always set.
                     let id = req.extensions().get::<RequestId>().map(RequestId::as_str).unwrap_or_default();
-                    tracing::info_span!("http", request_id = %id, method = %req.method(), path = %req.uri().path())
+                    tracing::info_span!("http", request_id = %id, method = %req.method(), path = %req.uri().path(), consumer = tracing::field::Empty)
                 })
                 .on_request(())
                 .on_response(DefaultOnResponse::new().level(Level::INFO)),

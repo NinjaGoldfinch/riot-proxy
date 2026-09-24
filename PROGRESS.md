@@ -90,7 +90,7 @@ $ CI=true cargo test --test replay        → 2 passed (snapshots unchanged)
 The plan's exit check says `NEG`; per ADR-022 the value is `HIT-NEG`.
 
 ## P4 — Public surface
-- [ ] P4-01 auth
+- [x] P4-01 auth (#34)
 - [ ] P4-02 consumer quota
 - [ ] P4-03 OpenAPI scaffolding
 - [ ] P4-04 `/v1/riot/*` passthrough
@@ -139,6 +139,7 @@ Exit check: _pending_
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
 
 ## Notes for the next task
+- Auth: protect routers with `.route_layer(axum::middleware::from_fn_with_state(state.clone(), http::auth::require_read))` (or `require_admin`); handlers take `Extension<Arc<http::auth::Consumer>>` (has `quota_per_min` for P4-02). `AppState.auth: Arc<Auth>`; call `auth.invalidate(hash)` on admin revoke (P5-05).
 - Replay: `tests/replay.rs` + `tests/fixtures/replay/` (README documents re-recording). **P5-02 will change `replay__replay_cold_summoner_lookup.snap`**: pass-2 matches should become `ARCHIVE`.
 - Fetcher: `state.fetcher.fetch(RiotRequest, FetchOptions{priority, bypass}) -> Result<FetchResult{body, x_cache, cache_age}, FetchError{api, x_cache}>`. Routes (P4-04) must set `X-Cache`/`X-Cache-Age`, including on HIT-NEG errors. `?refresh=true` → `bypass`, admin only (P4). The `Archive` trait gets its SQLite implementation in P5-02.
 - Single-flight: `singleflight::SingleFlight<K,T,E>::run(key, || async {..}) -> Flight{value, did_work}`; `E: From<WorkFailed> + Clone`. The work is spawned, so put the cache write *inside* the work closure.

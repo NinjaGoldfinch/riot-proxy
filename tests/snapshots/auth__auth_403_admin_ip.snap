@@ -1,0 +1,11 @@
+---
+source: tests/auth.rs
+expression: redacted(&denied)
+---
+{
+  "error": {
+    "code": "FORBIDDEN",
+    "message": "Admin access is not permitted from this address",
+    "requestId": "[request-id]"
+  }
+}
