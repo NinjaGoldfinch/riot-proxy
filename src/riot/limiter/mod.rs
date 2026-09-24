@@ -10,6 +10,8 @@ pub mod headers;
 pub mod persist;
 
 #[cfg(test)]
+mod proptest;
+#[cfg(test)]
 mod tests;
 
 use std::collections::{BTreeMap, HashMap};

@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 5e7d3326a7c1069ff4bafe9e837b87c8f80e51c48d02da86f12d95ec487396fe # shrinks to ops = [Acquire { method: 0, bulk: false }, Acquire { method: 0, bulk: false }, Acquire { method: 0, bulk: false }, Acquire { method: 0, bulk: false }]
