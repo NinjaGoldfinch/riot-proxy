@@ -39,6 +39,7 @@ pub fn app() -> (tempfile::TempDir, AppState, Router) {
         config: config.into(),
         db,
         auth,
+        quotas: std::sync::Arc::new(riot_proxy::http::quota::Quotas::new()),
         limiter,
         fetcher,
         limiter_restored: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),

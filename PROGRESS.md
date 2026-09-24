@@ -91,7 +91,7 @@ The plan's exit check says `NEG`; per ADR-022 the value is `HIT-NEG`.
 
 ## P4 — Public surface
 - [x] P4-01 auth (#34)
-- [ ] P4-02 consumer quota
+- [x] P4-02 consumer quota (#35)
 - [ ] P4-03 OpenAPI scaffolding
 - [ ] P4-04 `/v1/riot/*` passthrough
 - [ ] P4-05 `/v1/lol/*` typed routes
