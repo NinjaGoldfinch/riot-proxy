@@ -82,7 +82,13 @@ pub enum ConfigError {
     #[error("Invalid environment configuration:\n{}", .0.iter().map(|e| format!("  {e}")).collect::<Vec<_>>().join("\n"))]
     Invalid(Vec<String>),
     #[error("could not read {path}: {source}")]
-    DotEnv { path: PathBuf, source: dotenvy::Error },
+    DotEnvIo { path: PathBuf, source: std::io::Error },
+    #[error("{path} line {line}: {message}")]
+    DotEnv {
+        path: PathBuf,
+        line: usize,
+        message: String,
+    },
     #[error("could not merge configuration layers: {0}")]
     Merge(#[from] Box<figment::Error>),
     #[error("could not create DATA_DIR {path}: {source}")]
@@ -483,14 +489,69 @@ impl Config {
 }
 
 fn read_dotenv(path: &Path) -> Result<Vec<(String, String)>, ConfigError> {
-    let err = |source| ConfigError::DotEnv {
+    let text = std::fs::read_to_string(path).map_err(|source| ConfigError::DotEnvIo {
         path: path.to_path_buf(),
         source,
-    };
-    dotenvy::from_path_iter(path)
-        .map_err(err)?
-        .map(|item| item.map_err(err))
-        .collect()
+    })?;
+    parse_dotenv(&text).map_err(|(line, message)| ConfigError::DotEnv {
+        path: path.to_path_buf(),
+        line,
+        message,
+    })
+}
+
+/// `.env` parsing with node `dotenv`'s rules, so v1 files port unchanged (ADR-020).
+/// v1's own `.env.example` has `RIOT_USER_AGENT=riot-proxy/1.0 (+https://…)`
+/// unquoted, which stricter parsers such as `dotenvy` reject.
+///
+/// - Blank lines and lines starting with `#` are skipped; `export KEY=…` is allowed.
+/// - Unquoted values run to the end of the line, stop at ` #` (inline comment), and are trimmed.
+/// - Values in `'…'`, `"…"` or `` `…` `` are taken literally, except that `"…"`
+///   expands `\n`. Multi-line quoted values are not supported.
+/// - Any other line, e.g. one without `=`, is an error naming its line number.
+pub fn parse_dotenv(text: &str) -> Result<Vec<(String, String)>, (usize, String)> {
+    let mut out = Vec::new();
+    for (i, raw) in text.lines().enumerate() {
+        let line_no = i + 1;
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let line = line.strip_prefix("export ").map_or(line, str::trim_start);
+        let Some((key, value)) = line.split_once('=') else {
+            return Err((line_no, "expected KEY=VALUE".into()));
+        };
+        let key = key.trim();
+        if key.is_empty()
+            || !key
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.' || b == b'-')
+        {
+            return Err((line_no, format!("invalid variable name '{key}'")));
+        }
+        let value = value.trim();
+        let parsed = match value.chars().next() {
+            Some(q @ ('"' | '\'' | '`')) => {
+                let inner = &value[1..];
+                let Some(end) = inner.find(q) else {
+                    return Err((line_no, format!("unterminated {q}-quoted value")));
+                };
+                let rest = inner[end + 1..].trim();
+                if !(rest.is_empty() || rest.starts_with('#')) {
+                    return Err((line_no, "unexpected text after the closing quote".into()));
+                }
+                let body = &inner[..end];
+                if q == '"' {
+                    body.replace("\\n", "\n")
+                } else {
+                    body.to_string()
+                }
+            }
+            _ => value.split(" #").next().unwrap_or_default().trim().to_string(),
+        };
+        out.push((key.to_string(), parsed));
+    }
+    Ok(out)
 }
 
 /// Keep only variables the config reads, and drop empty values so `FOO=` in a

@@ -35,6 +35,7 @@ The musl binary was checked in CI, not on the dev box (no `musl-gcc` there; ADR-
 - [x] P1-04 rate-limit header parsing (#13)
 - [x] P1-05 dev subcommand (#14)
 - [x] P1-06 exhaustive host-resolution test for the exit check (#15)
+- [x] P1-07 fix: `.env` parsing compatible with v1/node dotenv (#16)
 Exit check: _pending_
 
 ## P2 — Rate limiter
