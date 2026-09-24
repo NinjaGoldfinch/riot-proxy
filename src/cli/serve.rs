@@ -16,6 +16,7 @@ use crate::consumers;
 use crate::db::Db;
 use crate::fetcher::{Fetcher, FetcherParts, NoArchive};
 use crate::http::auth::Auth;
+use crate::http::quota::Quotas;
 use crate::riot::client::RiotClient;
 use crate::riot::endpoints::TtlPolicy;
 use crate::riot::limiter::Limiter;
@@ -96,6 +97,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         limiter: Arc::clone(&limiter),
         fetcher,
         auth,
+        quotas: Arc::new(Quotas::new()),
         limiter_restored: restored,
     };
     let served = app::serve(listener, app::router(state, metrics), shutdown).await;

@@ -22,6 +22,7 @@ use crate::db::Db;
 use crate::fetcher::Fetcher;
 use crate::http::ApiError;
 use crate::http::auth::Auth;
+use crate::http::quota::Quotas;
 use crate::http::request_id::{RequestId, request_id};
 use crate::riot::limiter::Limiter;
 use crate::{routes, telemetry};
@@ -40,6 +41,8 @@ pub struct AppState {
     pub limiter: Arc<Limiter>,
     /// Consumer key resolution and scope/allowlist policy.
     pub auth: Arc<Auth>,
+    /// Per-consumer request quotas.
+    pub quotas: Arc<Quotas>,
     /// The read funnel every Riot-backed route uses.
     pub fetcher: Fetcher,
     /// Set once the limiter checkpoint has been restored (`/readyz`).

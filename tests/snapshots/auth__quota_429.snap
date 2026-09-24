@@ -1,0 +1,12 @@
+---
+source: tests/auth.rs
+expression: redacted(&denied)
+---
+{
+  "error": {
+    "code": "QUOTA_EXCEEDED",
+    "message": "Quota of 2/min exceeded",
+    "requestId": "[request-id]",
+    "retryAfter": 60
+  }
+}

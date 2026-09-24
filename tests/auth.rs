@@ -243,3 +243,85 @@ async fn auth_disabled_runs_everything_as_dev_local() {
         );
     }
 }
+
+/// v1: "answers 429 QUOTA_EXCEEDED once a consumer spends its quota (§12.1)".
+#[tokio::test]
+async fn quota_exceeded_after_n_requests() {
+    let e = env(&[]).await;
+    let key = consumers::create(
+        &e.state.db,
+        NewConsumer {
+            name: "tiny".into(),
+            scopes: vec![Scope::Read],
+            quota_per_min: 2,
+            key: None,
+        },
+    )
+    .await
+    .unwrap()
+    .key
+    .expose()
+    .to_string();
+    let app = router(e.state, "127.0.0.1:1");
+    for remaining in ["1", "0"] {
+        let r = call(app.clone(), "/read", Some(&key), &[]).await;
+        assert_eq!(r.status, StatusCode::OK);
+        assert_eq!(r.headers["x-ratelimit-limit"], "2");
+        assert_eq!(r.headers["x-ratelimit-remaining"], remaining);
+        assert!(r.headers.contains_key("x-ratelimit-reset"));
+    }
+    let denied = call(app, "/read", Some(&key), &[]).await;
+    assert_eq!(denied.status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(
+        denied.headers["retry-after"]
+            .to_str()
+            .unwrap()
+            .parse::<u64>()
+            .unwrap()
+            > 0
+    );
+    assert_eq!(denied.headers["x-ratelimit-remaining"], "0");
+    insta::assert_json_snapshot!("quota_429", redacted(&denied));
+}
+
+/// v1: "meters each consumer separately rather than by address (§12.1)".
+#[tokio::test]
+async fn quotas_are_per_consumer_not_per_address() {
+    let e = env(&[]).await;
+    let make = |name: &str, q: u32| NewConsumer {
+        name: name.into(),
+        scopes: vec![Scope::Read],
+        quota_per_min: q,
+        key: None,
+    };
+    let small = consumers::create(&e.state.db, make("small", 2))
+        .await
+        .unwrap()
+        .key
+        .expose()
+        .to_string();
+    let large = consumers::create(&e.state.db, make("large", 5))
+        .await
+        .unwrap()
+        .key
+        .expose()
+        .to_string();
+    let app = router(e.state, "127.0.0.1:1");
+    call(app.clone(), "/read", Some(&small), &[]).await;
+    call(app.clone(), "/read", Some(&small), &[]).await;
+    assert_eq!(
+        call(app.clone(), "/read", Some(&small), &[]).await.status,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    let other = call(app, "/read", Some(&large), &[]).await;
+    assert_eq!(other.status, StatusCode::OK);
+    assert_eq!(other.headers["x-ratelimit-limit"], "5");
+    assert_eq!(other.headers["x-ratelimit-remaining"], "4");
+}
+
+#[tokio::test]
+async fn public_routes_are_not_metered() {
+    let e = env(&[]).await;
+    let r = call(router(e.state, "127.0.0.1:1"), "/public", None, &[]).await;
+    assert!(!r.headers.contains_key("x-ratelimit-limit"));
+}

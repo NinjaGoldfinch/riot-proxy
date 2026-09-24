@@ -292,15 +292,27 @@ impl Ask {
     }
 }
 
+/// Authenticate, authorise and meter one request.
 async fn guard(state: AppState, required: Scope, mut req: Request, next: Next) -> Response {
     let ask = Ask::from(&req);
-    match state.auth.authorise(ask, required).await {
-        Ok(consumer) => {
-            tracing::Span::current().record("consumer", consumer.name.as_str());
+    let consumer = match state.auth.authorise(ask, required).await {
+        Ok(consumer) => consumer,
+        Err(e) => return e.into_response(),
+    };
+    tracing::Span::current().record("consumer", consumer.name.as_str());
+    // The consumer quota runs after authentication, keyed by consumer (P4-02).
+    match state.quotas.check(&consumer) {
+        Ok(quota) => {
             req.extensions_mut().insert(consumer);
-            next.run(req).await
+            let mut res = next.run(req).await;
+            quota.apply(res.headers_mut());
+            res
         }
-        Err(e) => e.into_response(),
+        Err((err, quota)) => {
+            let mut res = err.into_response();
+            quota.apply(res.headers_mut());
+            res
+        }
     }
 }
 
