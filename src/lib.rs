@@ -4,6 +4,7 @@
 pub mod app;
 pub mod cache;
 pub mod cli;
+pub mod clock;
 pub mod config;
 pub mod consumers;
 pub mod db;

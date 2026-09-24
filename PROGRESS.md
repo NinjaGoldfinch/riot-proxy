@@ -73,7 +73,7 @@ docs/design/05-rate-limiter.md: "As built (P2)" section lists every deviation wi
 ## P3 — Cache, single-flight, fetcher
 - [x] P3-01 cache keys + key_scope (#27)
 - [x] P3-02 L1 (moka) (#28)
-- [ ] P3-03 L2 (SQLite write-behind + warm)
+- [x] P3-03 L2 (SQLite write-behind + warm) (#29)
 - [ ] P3-04 single-flight
 - [ ] P3-05 fetcher
 - [ ] P3-06 replay harness
@@ -129,6 +129,7 @@ Exit check: _pending_
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
 
 ## Notes for the next task
+- Cache: `cache::ResponseCache::new(L1, Some(L2Writer::spawn(db)))` with `get`, `put(key, ep, body, &ttls)`, `put_negative(key, ep, ttl)`, `shutdown()`. **P3-05 must wire into `serve`:** `l2::warm` + `l2::sweep` at boot, `cache.shutdown()` after the drain. `crate::clock::Clock` converts Instant↔unix ms.
 - L1: `cache::l1::{L1::from_config, get → Lookup::{Fresh,Stale,Miss}, put(key, body, &ttls), put_negative, insert_entry (for L2 warm), invalidate_where}`. Entries hold tokio `Instant`s; P3-03 must convert to and from unix ms, e.g. with `riot::limiter::persist::Clock`.
 - Cache keys: `cache::keys::{KeyScope::from_key(&cfg.riot_api_key), cache_key(&scope, &req), derived_key, scoped_purge_pattern}`, in design 04's readable shape (owner, ADR-027). `RiotRequest.params` holds the encoded path params. No `neg:` prefix: L1 entries carry their status.
 - `AppState` now has `limiter: Arc<Limiter>` and `limiter_restored`; `serve` restores, checkpoints every 10 s and on shutdown (`riot::limiter::persist`). `/readyz` body is `{ok, sqlite, limiter}`.
