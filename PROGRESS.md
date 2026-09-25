@@ -99,7 +99,7 @@ The plan's exit check says `NEG`; per ADR-022 the value is `HIT-NEG`.
 Exit check: _pending_
 
 ## P5 — Archive and composites
-- [ ] P5-01 archive schema
+- [x] P5-01 archive schema (#40)
 - [ ] P5-02 match archive
 - [ ] P5-03 facts extraction
 - [ ] P5-04 players + composites
@@ -139,6 +139,8 @@ Exit check: _pending_
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
 
 ## Notes for the next task
+- **P4 exit check is still open:** the owner needs to confirm `/docs` renders in a browser (headless Chromium crashed on Scalar here). Tag `phase-P4` after that.
+- **Ask the owner at P7-04:** v1's analytics routes read tables design/04 doesn't have (bans, runes, spells, analytics slices; ADR-039).
 - Routes: follow `src/routes/riot.rs`, which uses `http::validate::*` for v1 rules and `routes::passthrough::{respond, options}`. Add read routers to `routes::docs::api_router`'s `read` group so they get auth+quota. `tests/common::app_with(env, wiremock_uri)` gives a full app. v1's `/v1/lol` bodies are raw passthrough too (`PassthroughResponse`), so P4-05's "typed" part is request validation.
 - OpenAPI: add routes to `routes::docs::api_router()` as `OpenApiRouter`s with `#[utoipa::path]` handlers. `just`/CI check: `cargo run -- spec > /tmp/spec.json && scripts/compare-openapi.py docs/contract/v1-openapi.json /tmp/spec.json --prefix /v1/riot/ --prefix /v1/lol/` (16 missing at P4-03). The `tests/snapshots/openapi__openapi_document.snap` changes with every documented route; review it.
 - Disk: `target/` reached ~26 GB with debug, release and feature builds and hit the session's disk allowance. `rm -rf target/release target/debug/incremental` frees ~10 GB.

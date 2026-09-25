@@ -87,7 +87,7 @@ async fn readers_have_connection_pragmas_and_see_wal() {
 }
 
 #[tokio::test]
-async fn init_creates_exactly_the_p0_tables() {
+async fn migrations_create_exactly_the_design_04_tables() {
     let (_dir, db) = open_temp(1);
     let tables: Vec<String> = db
         .read(|c| {
@@ -103,13 +103,146 @@ async fn init_creates_exactly_the_p0_tables() {
         tables,
         [
             "cache",
+            "champion_builds",
+            "champion_matchups",
+            "champion_stats",
             "consumers",
+            "crawl_match_ids",
             "jobs",
+            "ladder_crawls",
+            "ladder_entries",
             "limiter_state",
+            "match_facts",
+            "matches",
             "metrics_history",
-            "refinery_schema_history"
+            "players",
+            "refinery_schema_history",
+            "timelines",
         ]
     );
+}
+
+async fn names(db: &Db, kind: &'static str) -> Vec<String> {
+    db.read(move |c| {
+        let mut stmt = c.prepare(
+            "SELECT name FROM sqlite_master WHERE type = ?1 AND name NOT LIKE 'sqlite_%' ORDER BY name",
+        )?;
+        let rows = stmt
+            .query_map([kind], |r| r.get(0))?
+            .collect::<Result<Vec<String>, _>>()?;
+        Ok::<_, DbError>(rows)
+    })
+    .await
+    .expect("names")
+}
+
+/// P5-01: design 04's indexes, including the partial ones.
+#[tokio::test]
+async fn archive_indexes_exist() {
+    let (_dir, db) = open_temp(1);
+    let indexes = names(&db, "index").await;
+    for ix in [
+        "players_tracked",
+        "matches_patch_queue",
+        "matches_end",
+        "facts_player",
+        "facts_champ",
+        "cache_hard",
+        "jobs_dedupe",
+        "jobs_claim",
+    ] {
+        assert!(indexes.contains(&ix.to_string()), "{ix} missing from {indexes:?}");
+    }
+}
+
+/// A database created at V0001 (P0–P4) upgrades in place and keeps its rows.
+#[tokio::test]
+async fn a_v1_database_upgrades_to_v2_and_keeps_its_data() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("riot-proxy.db");
+    {
+        let mut conn = Connection::open(&path).expect("open");
+        embedded::migrations::runner()
+            .set_grouped(true)
+            .set_target(refinery::Target::Version(1))
+            .run(&mut conn)
+            .expect("V0001 only");
+        conn.execute(
+            "INSERT INTO consumers (id, name, key_sha256, scopes, created_at) VALUES ('c1', 'old', x'01', '[\"read\"]', 0)",
+            [],
+        )
+        .expect("row");
+        let tables: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'matches'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count");
+        assert_eq!(tables, 0, "V0001 has no archive yet");
+    }
+    let db = Db::open(&path, 1).expect("upgrade");
+    assert!(names(&db, "table").await.contains(&"matches".to_string()));
+    let (name, versions): (String, i64) = db
+        .read(|c| {
+            Ok::<_, DbError>((
+                c.query_row("SELECT name FROM consumers WHERE id = 'c1'", [], |r| r.get(0))?,
+                c.query_row("SELECT COUNT(*) FROM refinery_schema_history", [], |r| r.get(0))?,
+            ))
+        })
+        .await
+        .expect("read");
+    assert_eq!((name.as_str(), versions), ("old", 2));
+}
+
+/// match_facts is a pure derivation of matches: deleting a match cascades (design 04).
+/// A timeline references its match without cascade, so it must go first.
+#[tokio::test]
+async fn archive_foreign_keys_behave_as_designed() {
+    let (_dir, db) = open_temp(1);
+    let deleted = db
+        .write(|c| {
+            c.execute_batch(
+                "INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size, archived_at)
+                   VALUES ('EUW1_1', 'europe', '14.18', 420, 1, x'00', 1, 1);
+                 INSERT INTO match_facts (match_id, key_scope, puuid, team_id, champion_id, win, facts_version)
+                   VALUES ('EUW1_1', 'abcd1234', 'P1', 100, 1, 1, 1), ('EUW1_1', 'abcd1234', 'P2', 200, 2, 0, 1);
+                 INSERT INTO timelines (match_id, body_zstd) VALUES ('EUW1_1', x'00');",
+            )?;
+            let blocked = c.execute("DELETE FROM matches WHERE match_id = 'EUW1_1'", []).is_err();
+            c.execute("DELETE FROM timelines WHERE match_id = 'EUW1_1'", [])?;
+            c.execute("DELETE FROM matches WHERE match_id = 'EUW1_1'", [])?;
+            let facts: i64 = c.query_row("SELECT COUNT(*) FROM match_facts", [], |r| r.get(0))?;
+            Ok::<_, DbError>((blocked, facts))
+        })
+        .await
+        .expect("write");
+    assert_eq!(deleted, (true, 0));
+}
+
+#[tokio::test]
+async fn facts_are_unique_per_match_and_player() {
+    let (_dir, db) = open_temp(1);
+    let dup = db
+        .write(|c| {
+            c.execute_batch(
+                "INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size, archived_at)
+                   VALUES ('KR_1', 'asia', '14.18', 420, 1, x'00', 1, 1);
+                 INSERT INTO match_facts (match_id, key_scope, puuid, team_id, champion_id, win, facts_version)
+                   VALUES ('KR_1', 's', 'P', 100, 1, 1, 1);",
+            )?;
+            Ok::<_, DbError>(
+                c.execute(
+                    "INSERT INTO match_facts (match_id, key_scope, puuid, team_id, champion_id, win, facts_version)
+                       VALUES ('KR_1', 's', 'P', 100, 1, 1, 1)",
+                    [],
+                )
+                .is_err(),
+            )
+        })
+        .await
+        .expect("write");
+    assert!(dup);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -189,11 +322,11 @@ async fn migrations_apply_once_across_reopens() {
         })
         .await
         .expect("insert");
-    assert_eq!(history(first.clone()).await.expect("history"), 1);
+    assert_eq!(history(first.clone()).await.expect("history"), 2);
     drop(first);
 
     let second = Db::open(&path, 1).expect("second open");
-    assert_eq!(history(second.clone()).await.expect("history"), 1, "no re-run");
+    assert_eq!(history(second.clone()).await.expect("history"), 2, "no re-run");
     let name: Option<String> = second
         .read(|c| {
             Ok::<_, DbError>(
