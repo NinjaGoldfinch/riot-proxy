@@ -1,11 +1,13 @@
-//! The permanent store for immutable Riot data (docs/design/04): matches now;
-//! facts and analytics follow in P5-03 and P7.
+//! The permanent store for immutable Riot data (docs/design/04): matches and
+//! their facts; analytics follow in P7.
 
+pub mod facts;
 pub mod matches;
 
 use bytes::Bytes;
 use futures_util::future::BoxFuture;
 
+use crate::cache::keys::KeyScope;
 use crate::clock::Clock;
 use crate::db::Db;
 use crate::fetcher::Archive;
@@ -16,13 +18,15 @@ use crate::riot::client::RiotRequest;
 #[derive(Debug, Clone)]
 pub struct SqliteArchive {
     db: Db,
+    /// Whose PUUIDs the fetched bodies carry, for `match_facts`.
+    scope: KeyScope,
     /// `ARCHIVE_TIMELINES`: also store timelines. Stored ones are served either way.
     timelines: bool,
 }
 
 impl SqliteArchive {
-    pub fn new(db: Db, timelines: bool) -> Self {
-        Self { db, timelines }
+    pub fn new(db: Db, scope: KeyScope, timelines: bool) -> Self {
+        Self { db, scope, timelines }
     }
 }
 
@@ -66,9 +70,16 @@ impl Archive for SqliteArchive {
         let (id, region) = (id.to_string(), req.target.scope());
         Box::pin(async move {
             let result = match kind {
-                Kind::Match => matches::put(&self.db, &id, region, body, Clock::now().unix_ms)
-                    .await
-                    .map(|_| ()),
+                Kind::Match => matches::put(
+                    &self.db,
+                    &id,
+                    region,
+                    self.scope.as_str(),
+                    body,
+                    Clock::now().unix_ms,
+                )
+                .await
+                .map(|_| ()),
                 Kind::Timeline if self.timelines => match matches::put_timeline(&self.db, &id, body).await {
                     Ok(false) => {
                         tracing::debug!(match_id = %id, "timeline not archived: its match is not archived yet");

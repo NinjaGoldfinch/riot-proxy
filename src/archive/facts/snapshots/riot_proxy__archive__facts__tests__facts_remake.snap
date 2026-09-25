@@ -1,0 +1,386 @@
+---
+source: src/archive/facts/tests.rs
+expression: facts
+---
+[
+  {
+    "puuid": "ay_eRDcdLU9vOeezaiq1OkZo0QBj7na1KF2ZiIT9SffG_fjhCjwD9BEs3qBZXrBX2EBBg4bZdFAcww",
+    "team_id": 100,
+    "position": null,
+    "champion_id": 126,
+    "win": false,
+    "kills": 0,
+    "deaths": 0,
+    "assists": 0,
+    "items": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "runes": {
+      "primaryStyle": 8400,
+      "keystone": 8437,
+      "subStyle": 8300,
+      "perks": [
+        8437,
+        8446,
+        8473,
+        8242,
+        8313,
+        8347
+      ],
+      "statPerks": [
+        5008,
+        5008,
+        5011
+      ]
+    },
+    "summoners": [
+      12,
+      4
+    ]
+  },
+  {
+    "puuid": "rhu84s8BjCdkJJi_LUhSlBOu4pTutFXsgEBYtJN4NAuVwiszfsz_ml_fUeXJ7xMfWLegjY6GNCD8vQ",
+    "team_id": 100,
+    "position": null,
+    "champion_id": 24,
+    "win": false,
+    "kills": 0,
+    "deaths": 0,
+    "assists": 0,
+    "items": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "runes": {
+      "primaryStyle": 8000,
+      "keystone": 8010,
+      "subStyle": 8300,
+      "perks": [
+        8010,
+        9111,
+        9104,
+        8017,
+        8304,
+        8347
+      ],
+      "statPerks": [
+        5005,
+        5008,
+        5001
+      ]
+    },
+    "summoners": [
+      11,
+      4
+    ]
+  },
+  {
+    "puuid": "NkQRxdiN3U3pEek5MWbWgaxzG_hpH5imJ9Ttch8ql5KM7D6p6Bh-Hbbvn6UoFVdGUBBIvcnEJv72qw",
+    "team_id": 100,
+    "position": "MIDDLE",
+    "champion_id": 134,
+    "win": false,
+    "kills": 0,
+    "deaths": 0,
+    "assists": 0,
+    "items": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "runes": null,
+    "summoners": [
+      12,
+      4
+    ]
+  },
+  {
+    "puuid": "Umzpa7-ptzazGxB-ttUUeMBDV3tkuSFuYCI7H9n4wTJcZ6XXR7G1BYlITP_4jKqB8Df4_vZQhVt_Ig",
+    "team_id": 100,
+    "position": "BOTTOM",
+    "champion_id": 81,
+    "win": false,
+    "kills": 0,
+    "deaths": 0,
+    "assists": 0,
+    "items": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "runes": {
+      "primaryStyle": 8000,
+      "keystone": 8008,
+      "subStyle": 8300,
+      "perks": [
+        8008,
+        8009,
+        9105,
+        8017,
+        8316,
+        8321
+      ],
+      "statPerks": [
+        5005,
+        5008,
+        5011
+      ]
+    },
+    "summoners": null
+  },
+  {
+    "puuid": "BRIFHvCyx76xukAVguwXrGDFNf7R9fP70bztZfFNm6oRi3VniLGHJL6QCoZjJ4vqEukOZsV_FBIT7Q",
+    "team_id": 100,
+    "position": "UTILITY",
+    "champion_id": 432,
+    "win": false,
+    "kills": 0,
+    "deaths": 0,
+    "assists": 0,
+    "items": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "runes": {
+      "primaryStyle": 8100,
+      "keystone": 8112,
+      "subStyle": 8300,
+      "perks": [
+        8112,
+        8126,
+        8141,
+        8105,
+        8304,
+        8347
+      ],
+      "statPerks": [
+        5005,
+        5010,
+        5011
+      ]
+    },
+    "summoners": [
+      4,
+      7
+    ]
+  },
+  {
+    "puuid": "7UHvc4rBMEM5twXdUQ7iX9h55cNDhDiA0wI_VtLSdpO2k6-bcL1QryBPZEqH78yvn9k01bOcCtQvyQ",
+    "team_id": 200,
+    "position": null,
+    "champion_id": 79,
+    "win": true,
+    "kills": 0,
+    "deaths": 0,
+    "assists": 0,
+    "items": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "runes": {
+      "primaryStyle": 8200,
+      "keystone": 8229,
+      "subStyle": 8300,
+      "perks": [
+        8229,
+        8226,
+        8210,
+        8237,
+        8313,
+        8347
+      ],
+      "statPerks": [
+        5008,
+        5008,
+        5011
+      ]
+    },
+    "summoners": [
+      12,
+      4
+    ]
+  },
+  {
+    "puuid": "8LdcJQgoiH1BiQ0CTGRHTKK646qwkwNMnY6TuogbcxXQi5PxV01XGtVnot6E7MOHffsZ4T-5bvgI9g",
+    "team_id": 200,
+    "position": "JUNGLE",
+    "champion_id": 64,
+    "win": true,
+    "kills": 0,
+    "deaths": 0,
+    "assists": 0,
+    "items": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "runes": {
+      "primaryStyle": 8000,
+      "keystone": 8010,
+      "subStyle": 8300,
+      "perks": [
+        8010,
+        9111,
+        9104,
+        8014,
+        8304,
+        8347
+      ],
+      "statPerks": [
+        5005,
+        5008,
+        5011
+      ]
+    },
+    "summoners": [
+      4,
+      11
+    ]
+  },
+  {
+    "puuid": "AD5Tw4GncfA2viC16Fekxqhz_DSKUB-8A4r6obQWvGOC3mmzNsBXSykWQUOhfdaYEUsVj0EBSHK7EA",
+    "team_id": 200,
+    "position": "MIDDLE",
+    "champion_id": 13,
+    "win": true,
+    "kills": 0,
+    "deaths": 0,
+    "assists": 0,
+    "items": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "runes": {
+      "primaryStyle": 8200,
+      "keystone": 8992,
+      "subStyle": 8400,
+      "perks": [
+        8992,
+        8226,
+        8234,
+        8237,
+        8242,
+        8473
+      ],
+      "statPerks": [
+        5005,
+        5010,
+        5011
+      ]
+    },
+    "summoners": [
+      4,
+      12
+    ]
+  },
+  {
+    "puuid": "8P50edBWZD5qJkNbIg8s31ee_LRpeVOSpWHSKEHuMssiCZC3uSz3Wrvjgi9lQyZuB7BbsUh4MYo5zQ",
+    "team_id": 200,
+    "position": "BOTTOM",
+    "champion_id": 22,
+    "win": true,
+    "kills": 0,
+    "deaths": 0,
+    "assists": 0,
+    "items": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "runes": {
+      "primaryStyle": 8200,
+      "keystone": 8229,
+      "subStyle": 8300,
+      "perks": [
+        8229,
+        8226,
+        8233,
+        8237,
+        8410,
+        8313
+      ],
+      "statPerks": [
+        5005,
+        5008,
+        5011
+      ]
+    },
+    "summoners": [
+      6,
+      4
+    ]
+  },
+  {
+    "puuid": "Fo9_0koQTL7T86gbV7kosjAHIUUGxTWK5GVh0uuJ_T1SMaTIbOwC83inRxk2mnXbVgOMdxuNFrCr6w",
+    "team_id": 200,
+    "position": "UTILITY",
+    "champion_id": 147,
+    "win": true,
+    "kills": 0,
+    "deaths": 0,
+    "assists": 0,
+    "items": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "runes": {
+      "primaryStyle": 8200,
+      "keystone": 8214,
+      "subStyle": 8300,
+      "perks": [
+        8214,
+        8226,
+        8210,
+        8237,
+        8347,
+        8304
+      ],
+      "statPerks": [
+        5008,
+        5008,
+        5011
+      ]
+    },
+    "summoners": [
+      7,
+      4
+    ]
+  }
+]

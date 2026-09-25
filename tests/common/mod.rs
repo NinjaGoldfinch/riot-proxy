@@ -33,7 +33,11 @@ pub fn app_with(env: &[(&str, &str)], upstream: &str) -> (tempfile::TempDir, App
     let db = Db::open(&dir.path().join("riot-proxy.db"), 2).expect("db");
     let config = config(env);
     let limiter = std::sync::Arc::new(riot_proxy::riot::limiter::Limiter::new(0.8));
-    let archive = riot_proxy::archive::SqliteArchive::new(db.clone(), config.archive_timelines);
+    let archive = riot_proxy::archive::SqliteArchive::new(
+        db.clone(),
+        riot_proxy::cache::keys::KeyScope::from_key(&config.riot_api_key),
+        config.archive_timelines,
+    );
     let fetcher = fetcher(
         &config,
         upstream,

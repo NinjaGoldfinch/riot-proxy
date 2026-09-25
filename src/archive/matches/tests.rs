@@ -5,6 +5,7 @@ use super::*;
 /// A real ranked solo match (tests/fixtures/replay, recorded in P3-06).
 const MATCH: &[u8] = include_bytes!("../../../tests/fixtures/replay/cold-lookup/06-match.byId.body");
 const MATCH_ID: &str = "KR_8393343196";
+const SCOPE: &str = "abcd1234";
 
 fn db() -> (tempfile::TempDir, Db) {
     let dir = tempfile::tempdir().unwrap();
@@ -46,7 +47,7 @@ fn refuses_bodies_missing_an_indexed_column() {
 async fn round_trip_is_byte_identical_and_compressed() {
     let (_dir, db) = db();
     assert_eq!(get(&db, MATCH_ID).await.unwrap(), None);
-    put(&db, MATCH_ID, "asia", Bytes::from_static(MATCH), 1_000)
+    put(&db, MATCH_ID, "asia", SCOPE, Bytes::from_static(MATCH), 1_000)
         .await
         .unwrap();
     assert_eq!(get(&db, MATCH_ID).await.unwrap().unwrap().as_ref(), MATCH);
@@ -77,10 +78,10 @@ async fn round_trip_is_byte_identical_and_compressed() {
 #[tokio::test]
 async fn archiving_twice_is_idempotent() {
     let (_dir, db) = db();
-    put(&db, MATCH_ID, "asia", Bytes::from_static(MATCH), 1_000)
+    put(&db, MATCH_ID, "asia", SCOPE, Bytes::from_static(MATCH), 1_000)
         .await
         .unwrap();
-    put(&db, MATCH_ID, "asia", Bytes::from_static(MATCH), 2_000)
+    put(&db, MATCH_ID, "asia", SCOPE, Bytes::from_static(MATCH), 2_000)
         .await
         .unwrap();
     let (n, at): (i64, i64) = db
@@ -100,7 +101,7 @@ async fn archiving_twice_is_idempotent() {
 async fn a_body_that_is_not_a_match_is_not_archived() {
     let (_dir, db) = db();
     assert!(
-        put(&db, "EUW1_1", "europe", Bytes::from_static(b"{}"), 1)
+        put(&db, "EUW1_1", "europe", SCOPE, Bytes::from_static(b"{}"), 1)
             .await
             .is_err()
     );
@@ -111,7 +112,7 @@ async fn a_body_that_is_not_a_match_is_not_archived() {
 async fn filter_unarchived_keeps_order_and_spans_chunks() {
     let (_dir, db) = db();
     assert!(filter_unarchived(&db, &[]).await.unwrap().is_empty());
-    put(&db, MATCH_ID, "asia", Bytes::from_static(MATCH), 1)
+    put(&db, MATCH_ID, "asia", SCOPE, Bytes::from_static(MATCH), 1)
         .await
         .unwrap();
 
@@ -133,7 +134,7 @@ async fn timelines_need_their_match_first() {
     );
     assert_eq!(get_timeline(&db, MATCH_ID).await.unwrap(), None);
 
-    put(&db, MATCH_ID, "asia", Bytes::from_static(MATCH), 1)
+    put(&db, MATCH_ID, "asia", SCOPE, Bytes::from_static(MATCH), 1)
         .await
         .unwrap();
     assert!(put_timeline(&db, MATCH_ID, timeline.clone()).await.unwrap());
@@ -142,4 +143,43 @@ async fn timelines_need_their_match_first() {
         "idempotent"
     );
     assert_eq!(get_timeline(&db, MATCH_ID).await.unwrap(), Some(timeline));
+}
+
+async fn facts_rows(db: &Db) -> Vec<(String, String, i64)> {
+    db.read(|c| {
+        let mut s = c.prepare("SELECT key_scope, puuid, facts_version FROM match_facts ORDER BY rowid")?;
+        let rows = s.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
+    })
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn archiving_writes_the_facts_once_per_participant() {
+    let (_dir, db) = db();
+    put(&db, MATCH_ID, "asia", SCOPE, Bytes::from_static(MATCH), 1)
+        .await
+        .unwrap();
+    put(&db, MATCH_ID, "asia", SCOPE, Bytes::from_static(MATCH), 2)
+        .await
+        .unwrap();
+    let rows = facts_rows(&db).await;
+    let expected: Vec<_> = facts::extract(MATCH)
+        .unwrap()
+        .into_iter()
+        .map(|f| (SCOPE.to_string(), f.puuid, facts::FACTS_VERSION))
+        .collect();
+    assert_eq!(rows, expected);
+}
+
+#[tokio::test]
+async fn a_match_whose_facts_cannot_be_read_is_still_archived() {
+    let (_dir, db) = db();
+    let body = br#"{"info":{"gameVersion":"14.1.1","queueId":420,"gameEndTimestamp":1,"participants":"x"}}"#;
+    put(&db, "EUW1_1", "europe", SCOPE, Bytes::from_static(body), 1)
+        .await
+        .unwrap();
+    assert_eq!(get(&db, "EUW1_1").await.unwrap().unwrap().as_ref(), body);
+    assert!(facts_rows(&db).await.is_empty());
 }

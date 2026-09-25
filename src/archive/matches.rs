@@ -6,11 +6,15 @@
 //! analytics and stats never open the blob. Timelines go in their own table,
 //! only with `ARCHIVE_TIMELINES=true`, and only once their match is archived
 //! (the foreign key; v1 skipped a timeline that arrived first the same way).
+//!
+//! Archiving a match also writes its `match_facts` in the same transaction
+//! (v1 `archiveMatch`), for the key scope whose PUUIDs the body carries.
 
 use bytes::Bytes;
 use rusqlite::{OptionalExtension, params_from_iter};
 use serde::Deserialize;
 
+use crate::archive::facts::{self, Fact};
 use crate::db::{Db, DbError};
 
 /// design/04: zstd, level 3.
@@ -84,6 +88,21 @@ async fn compress(body: Bytes) -> Result<Vec<u8>, ArchiveError> {
     Ok(tokio::task::spawn_blocking(move || zstd::encode_all(body.as_ref(), ZSTD_LEVEL)).await??)
 }
 
+/// Parse and compress off the async runtime: a match body is ~100 KB.
+async fn prepare(body: Bytes) -> Result<(MatchMeta, Vec<Fact>, Vec<u8>), ArchiveError> {
+    tokio::task::spawn_blocking(move || {
+        let meta = extract(&body)?;
+        // Facts are a derivation: a body they cannot read is still archived.
+        let rows = facts::extract(&body).unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "match facts not extracted");
+            Vec::new()
+        });
+        let blob = zstd::encode_all(body.as_ref(), ZSTD_LEVEL)?;
+        Ok((meta, rows, blob))
+    })
+    .await?
+}
+
 fn decompress(blob: &[u8]) -> Result<Bytes, ArchiveError> {
     Ok(Bytes::from(zstd::decode_all(blob)?))
 }
@@ -102,18 +121,19 @@ pub async fn get(db: &Db, match_id: &str) -> Result<Option<Bytes>, ArchiveError>
     .await
 }
 
-/// Archive a match body. Idempotent: archiving it again rewrites the same row
-/// (v1 upserted too). `region` is the routing value the match came from.
+/// Archive a match body and its facts. Idempotent: archiving it again rewrites
+/// the same rows (v1 upserted too). `region` is the routing value the match came
+/// from; `key_scope` is the key whose PUUIDs are in the body.
 pub async fn put(
     db: &Db,
     match_id: &str,
     region: &str,
+    key_scope: &str,
     body: Bytes,
     now_ms: i64,
 ) -> Result<MatchMeta, ArchiveError> {
-    let meta = extract(&body)?;
     let size = body.len();
-    let blob = compress(body).await?;
+    let (meta, rows, blob) = prepare(body).await?;
     tracing::debug!(
         match_id,
         raw_bytes = size,
@@ -121,9 +141,15 @@ pub async fn put(
         ratio = format!("{:.1}", size as f64 / blob.len().max(1) as f64),
         "match archived"
     );
-    let (id, region, row) = (match_id.to_string(), region.to_string(), meta.clone());
+    let (id, region, scope, row) = (
+        match_id.to_string(),
+        region.to_string(),
+        key_scope.to_string(),
+        meta.clone(),
+    );
     db.write(move |conn| {
-        conn.execute(
+        let tx = conn.transaction()?;
+        tx.execute(
             "INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size, archived_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
              ON CONFLICT (match_id) DO UPDATE SET
@@ -132,6 +158,8 @@ pub async fn put(
                body_size = excluded.body_size, archived_at = excluded.archived_at",
             rusqlite::params![id, region, row.patch, row.queue_id, row.game_end_ms, blob, size as i64, now_ms],
         )?;
+        facts::write(&tx, &id, &scope, &rows)?;
+        tx.commit()?;
         Ok::<_, ArchiveError>(())
     })
     .await?;

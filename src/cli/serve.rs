@@ -77,7 +77,11 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         client: RiotClient::new(&config)?,
         limiter: Arc::clone(&limiter),
         cache: Arc::clone(&cache),
-        archive: Arc::new(SqliteArchive::new(db.clone(), config.archive_timelines)),
+        archive: Arc::new(SqliteArchive::new(
+            db.clone(),
+            KeyScope::from_key(&config.riot_api_key),
+            config.archive_timelines,
+        )),
         scope: KeyScope::from_key(&config.riot_api_key),
         policy,
         interactive_budget: Duration::from_millis(config.client_wait_budget_ms),
