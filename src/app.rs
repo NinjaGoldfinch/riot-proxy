@@ -52,7 +52,11 @@ pub struct AppState {
 pub fn router(state: AppState, metrics: PrometheusHandle) -> Router {
     let (api, doc) = routes::docs::api_router(Some(state.clone())).split_for_parts();
     let docs_ui = state.config.docs_ui;
-    let mut router = api.with_state(state).merge(telemetry::metrics_router(metrics));
+    let ui = routes::ui::router(&state.config);
+    let mut router = api
+        .with_state(state)
+        .merge(telemetry::metrics_router(metrics))
+        .merge(ui);
     if docs_ui {
         router = router.merge(routes::docs::docs_router(routes::docs::finish(doc)));
     }

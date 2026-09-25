@@ -1,0 +1,1882 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>riot-proxy dashboard</title>
+    <style>
+      :root {
+        --bg: #0e1116;
+        --panel: #161b22;
+        --sunk: #0b0e13;
+        --line: #262d38;
+        --text: #d7dee8;
+        --dim: #7d8794;
+        --accent: #58a6ff;
+        --good: #2ea043;
+        --bad: #d1444a;
+        --warn: #d29922;
+        --mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font:
+          14px/1.5 system-ui,
+          -apple-system,
+          'Segoe UI',
+          sans-serif;
+      }
+      .wrap {
+        max-width: 1120px;
+        margin: 0 auto;
+        padding: 20px 16px 64px;
+      }
+      /* ── header ─────────────────────────────────────────────────────────── */
+      header {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        flex-wrap: wrap;
+      }
+      h1 {
+        font: 600 15px/1 var(--mono);
+        letter-spacing: 0.04em;
+        margin: 0;
+        color: var(--dim);
+      }
+      .status {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--dim);
+        font: 12px var(--mono);
+      }
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--dim);
+        flex: none;
+      }
+      .dot.live {
+        background: var(--good);
+      }
+      .dot.down {
+        background: var(--bad);
+      }
+      #scope {
+        font: 12px var(--mono);
+        color: var(--dim);
+        margin-left: auto;
+      }
+      /* ── tab bar ────────────────────────────────────────────────────────── */
+      nav {
+        display: flex;
+        gap: 2px;
+        margin-top: 16px;
+        border-bottom: 1px solid var(--line);
+        overflow-x: auto;
+      }
+      nav button {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        background: none;
+        border: 0;
+        border-bottom: 2px solid transparent;
+        color: var(--dim);
+        font: 600 12px/1 var(--mono);
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+        padding: 10px 13px;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      nav button:hover {
+        color: var(--text);
+      }
+      nav button[aria-selected='true'] {
+        color: var(--text);
+        border-bottom-color: var(--accent);
+      }
+      .tag {
+        font: 600 10px/1 var(--mono);
+        letter-spacing: 0;
+        padding: 2px 6px;
+        border-radius: 9px;
+        border: 1px solid var(--line);
+        color: var(--dim);
+      }
+      .tag.bad {
+        color: var(--bad);
+        border-color: var(--bad);
+      }
+      .tag.live {
+        color: var(--good);
+        border-color: var(--good);
+      }
+      .tag:empty {
+        display: none;
+      }
+      /* ── panels ─────────────────────────────────────────────────────────── */
+      .tab {
+        display: none;
+      }
+      .tab.on {
+        display: block;
+      }
+      section {
+        margin-top: 14px;
+      }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 14px;
+      }
+      h2 {
+        font: 600 12px/1 var(--mono);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--dim);
+        margin: 0 0 10px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      h2 .status {
+        margin-left: auto;
+        text-transform: none;
+        letter-spacing: 0;
+      }
+      .cols {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+        gap: 10px;
+      }
+      .empty {
+        color: var(--dim);
+        font: 12.5px var(--mono);
+        margin: 0;
+      }
+      /* ── stat tiles ─────────────────────────────────────────────────────── */
+      .tiles {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 10px;
+      }
+      .tile {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 11px 13px;
+      }
+      .tile .label {
+        font: 600 10.5px/1 var(--mono);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--dim);
+      }
+      .tile .value {
+        font: 600 24px/1.25 var(--mono);
+        margin-top: 5px;
+      }
+      .tile .sub {
+        font: 11.5px var(--mono);
+        color: var(--dim);
+        min-height: 17px;
+      }
+      .tile .sub.good {
+        color: var(--good);
+      }
+      .tile .sub.bad {
+        color: var(--bad);
+      }
+      /* ── key/value rows ─────────────────────────────────────────────────── */
+      .kv {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        font: 12.5px var(--mono);
+        padding: 4px 0;
+      }
+      .kv .k {
+        color: var(--dim);
+        white-space: nowrap;
+      }
+      .kv span:last-child {
+        text-align: right;
+      }
+      /* Two columns of kv rows where the panel is wide enough for them. */
+      .kvgrid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        column-gap: 22px;
+      }
+      /* ── tables ─────────────────────────────────────────────────────────── */
+      .scroll {
+        overflow-x: auto;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font: 12.5px var(--mono);
+      }
+      th,
+      td {
+        text-align: right;
+        padding: 6px 10px;
+        border-bottom: 1px solid var(--line);
+      }
+      th {
+        color: var(--dim);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        font-size: 11px;
+      }
+      th:first-child,
+      td:first-child {
+        text-align: left;
+      }
+      tr:last-child td {
+        border-bottom: 0;
+      }
+      td.alert {
+        color: var(--bad);
+        font-weight: 600;
+      }
+      td.dim,
+      span.dim {
+        color: var(--dim);
+      }
+      /* ── charts ─────────────────────────────────────────────────────────── */
+      .chart .headline {
+        font: 12.5px var(--mono);
+        padding-bottom: 4px;
+      }
+      .chart .range {
+        display: flex;
+        justify-content: space-between;
+        font: 11px var(--mono);
+        color: var(--dim);
+        margin-top: 2px;
+      }
+      svg text {
+        font: 11px var(--mono);
+        fill: var(--dim);
+      }
+      /* ── limiter ────────────────────────────────────────────────────────── */
+      .scope + .scope {
+        margin-top: 14px;
+        border-top: 1px solid var(--line);
+        padding-top: 12px;
+      }
+      .scope-head {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        font: 600 12.5px var(--mono);
+      }
+      .scope-head .pct {
+        margin-left: auto;
+        color: var(--dim);
+      }
+      .scope-head .pct.warn {
+        color: var(--warn);
+      }
+      .scope-head .pct.bad {
+        color: var(--bad);
+      }
+      .meter {
+        margin-top: 7px;
+      }
+      .meter .caption {
+        display: flex;
+        justify-content: space-between;
+        font: 11.5px var(--mono);
+        color: var(--dim);
+      }
+      .meter .track {
+        height: 5px;
+        border-radius: 4px;
+        background: var(--sunk);
+        border: 1px solid var(--line);
+        overflow: hidden;
+        margin-top: 3px;
+      }
+      .meter .fill {
+        height: 100%;
+        border-radius: 4px;
+        background: var(--accent);
+        transition: width 0.4s;
+      }
+      .meter .fill.warn {
+        background: var(--warn);
+      }
+      .meter .fill.bad {
+        background: var(--bad);
+      }
+      .frozen {
+        color: var(--bad);
+        font: 12px var(--mono);
+        margin-top: 6px;
+      }
+      details.methods {
+        margin-top: 8px;
+      }
+      details.methods summary {
+        cursor: pointer;
+        color: var(--dim);
+        font: 11.5px var(--mono);
+        list-style: none;
+      }
+      details.methods summary::marker,
+      details.methods summary::-webkit-details-marker {
+        display: none;
+      }
+      details.methods summary::before {
+        content: '▸ ';
+      }
+      details.methods[open] summary::before {
+        content: '▾ ';
+      }
+      details.methods summary:hover {
+        color: var(--text);
+      }
+      details.methods .body {
+        margin-top: 4px;
+        padding-left: 12px;
+        border-left: 1px solid var(--line);
+      }
+      .methods .kv {
+        padding: 2px 0;
+      }
+      .methods .hot {
+        color: var(--warn);
+      }
+      /* ── pills, players, ladder ─────────────────────────────────────────── */
+      .pill {
+        font-size: 11px;
+        padding: 1px 7px;
+        border-radius: 9px;
+        border: 1px solid var(--line);
+        white-space: nowrap;
+      }
+      .pill.on,
+      .pill.completed {
+        color: var(--good);
+        border-color: var(--good);
+      }
+      .pill.off {
+        color: var(--dim);
+      }
+      .pill.running {
+        color: var(--accent);
+        border-color: var(--accent);
+      }
+      .pill.failed,
+      .pill.cancelled {
+        color: var(--bad);
+        border-color: var(--bad);
+      }
+      td .ok {
+        color: var(--good);
+      }
+      td .run {
+        color: var(--warn);
+      }
+      .meta {
+        font: 12px var(--mono);
+        color: var(--dim);
+        margin: 0 0 8px;
+      }
+      .crawl + .crawl {
+        margin-top: 12px;
+        border-top: 1px solid var(--line);
+        padding-top: 10px;
+      }
+      .crawl-head {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        font: 600 12.5px var(--mono);
+        margin-bottom: 4px;
+      }
+      .crawl-head .when {
+        margin-left: auto;
+        color: var(--dim);
+        font-weight: 400;
+      }
+      /* The three stages, in order, with the one it is in lit. The order is
+         the guarantee — nothing fetches a match until every id is in — so the
+         crawl says which stage it is at rather than only how far along. */
+      .phases {
+        display: flex;
+        align-items: baseline;
+        gap: 7px;
+        font: 11.5px var(--mono);
+        color: var(--dim);
+        margin: 2px 0 6px;
+      }
+      .phases .step.done {
+        color: var(--good);
+      }
+      .phases .step.now {
+        color: var(--accent);
+        font-weight: 600;
+      }
+      /* Label and value read as one token, so they sit together and wrap as a
+         pair rather than being stretched apart by a grid track. */
+      .facts {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 2px 20px;
+        font: 12.5px var(--mono);
+      }
+      .facts span .k {
+        color: var(--dim);
+        margin-right: 6px;
+      }
+      /* ── event feed ─────────────────────────────────────────────────────── */
+      #feed {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        font: 12.5px var(--mono);
+        max-height: 60vh;
+        overflow-y: auto;
+      }
+      #feed li {
+        display: flex;
+        gap: 10px;
+        align-items: baseline;
+        padding: 4px 0;
+        border-bottom: 1px solid var(--line);
+      }
+      #feed li:last-child {
+        border-bottom: 0;
+      }
+      .badge {
+        font-size: 11px;
+        padding: 1px 7px;
+        border-radius: 9px;
+        border: 1px solid var(--line);
+        color: var(--accent);
+        white-space: nowrap;
+      }
+      .badge.archived {
+        color: var(--good);
+      }
+      .badge.game {
+        color: var(--warn);
+      }
+      .badge.ladder {
+        color: var(--text);
+      }
+      #feed .detail {
+        color: var(--dim);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        flex: 1;
+      }
+      #feed .when {
+        color: var(--dim);
+        white-space: nowrap;
+      }
+      /* ── key prompt ─────────────────────────────────────────────────────── */
+      #gate {
+        position: fixed;
+        inset: 0;
+        background: rgba(10, 12, 16, 0.85);
+        display: none;
+        align-items: center;
+        justify-content: center;
+      }
+      #gate.open {
+        display: flex;
+      }
+      #gate form {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        width: min(420px, 90vw);
+      }
+      #gate p {
+        margin: 0;
+        color: var(--dim);
+        font-size: 13px;
+      }
+      #gate .gate-err {
+        color: var(--bad);
+        font: 12px var(--mono);
+        min-height: 16px;
+        margin: 0;
+      }
+      input,
+      button {
+        font: inherit;
+        color: var(--text);
+        background: var(--sunk);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 7px 9px;
+      }
+      /* ── crawl controls ─────────────────────────────────────────────────── */
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-end;
+        gap: 10px 14px;
+      }
+      .field {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .field label {
+        font: 11px var(--mono);
+        color: var(--dim);
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      .field select {
+        font: 12.5px var(--mono);
+        color: var(--text);
+        background: var(--sunk);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 6px 8px;
+      }
+      button.act {
+        cursor: pointer;
+        background: #1f2733;
+        font: 600 12px var(--mono);
+      }
+      button.act:hover:not(:disabled) {
+        border-color: var(--accent);
+      }
+      button.act:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      button.danger:hover:not(:disabled) {
+        border-color: var(--bad);
+        color: var(--bad);
+      }
+      .crawl-head button.act {
+        margin-left: 10px;
+        padding: 2px 8px;
+        font: 11px var(--mono);
+      }
+      .note {
+        font: 12px var(--mono);
+        color: var(--dim);
+        margin: 10px 0 0;
+      }
+      .note.bad {
+        color: var(--bad);
+      }
+      .note.good {
+        color: var(--good);
+      }
+      input:focus {
+        outline: 1px solid var(--accent);
+        border-color: var(--accent);
+      }
+      #keyInput {
+        font-family: var(--mono);
+      }
+      #gate button {
+        cursor: pointer;
+        background: #1f2733;
+      }
+      #gate button:hover {
+        border-color: var(--accent);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <h1>riot-proxy</h1>
+        <span class="status"
+          ><span id="wsDot" class="dot"></span><span id="wsState">connecting…</span></span
+        >
+        <span class="status" id="tickAge"></span>
+        <span class="status"
+          ><span id="workerDot" class="dot"></span><span id="workerState">worker —</span></span
+        >
+        <span id="scope"></span>
+      </header>
+
+      <!-- One page per question an operator actually arrives with; everything
+           else stays folded away until asked for. -->
+      <nav id="tabs" role="tablist">
+        <button role="tab" id="nav-overview" data-tab="overview">Overview</button>
+        <button role="tab" id="nav-queues" data-tab="queues">
+          Queues<span class="tag" id="tagQueues"></span>
+        </button>
+        <button role="tab" id="nav-ladder" data-tab="ladder">
+          Ladder<span class="tag" id="tagLadder"></span>
+        </button>
+        <button role="tab" id="nav-limiter" data-tab="limiter">
+          Limiter<span class="tag" id="tagLimiter"></span>
+        </button>
+        <button role="tab" id="nav-players" data-tab="players">Players</button>
+        <button role="tab" id="nav-events" data-tab="events">
+          Events<span class="tag" id="tagEvents"></span>
+        </button>
+      </nav>
+
+      <!-- ── overview ─────────────────────────────────────────────────────── -->
+      <div class="tab" id="tab-overview">
+        <section>
+          <div class="tiles" id="tiles"></div>
+        </section>
+
+        <section class="cols">
+          <div class="panel chart">
+            <h2>Archive growth</h2>
+            <div class="headline" id="histMatchesLabel">last 24 h</div>
+            <svg id="histMatches" viewBox="0 0 300 72" width="100%" height="72" role="img"></svg>
+            <div class="range" id="histMatchesRange"></div>
+          </div>
+          <div class="panel chart">
+            <h2>Queue backlog</h2>
+            <div class="headline" id="histQueueLabel">last 24 h</div>
+            <svg id="histQueue" viewBox="0 0 300 72" width="100%" height="72" role="img"></svg>
+            <div class="range" id="histQueueRange"></div>
+          </div>
+          <div class="panel chart">
+            <h2>Cache hit ratio</h2>
+            <div class="headline" id="histCacheLabel">last 24 h</div>
+            <svg id="histCache" viewBox="0 0 300 72" width="100%" height="72" role="img"></svg>
+            <div class="range" id="histCacheRange"></div>
+          </div>
+        </section>
+
+        <section>
+          <div class="panel">
+            <h2>System</h2>
+            <div class="kvgrid" id="system"></div>
+          </div>
+        </section>
+      </div>
+
+      <!-- ── queues ───────────────────────────────────────────────────────── -->
+      <div class="tab" id="tab-queues">
+        <section>
+          <div class="panel">
+            <h2>Queues</h2>
+            <p class="meta" id="queuesMeta">loading…</p>
+            <div class="scroll"><table id="queues"></table></div>
+          </div>
+        </section>
+        <section>
+          <div class="panel">
+            <h2>Work requested</h2>
+            <div class="kvgrid" id="flows"></div>
+          </div>
+        </section>
+      </div>
+
+      <!-- ── ladder ───────────────────────────────────────────────────────── -->
+      <div class="tab" id="tab-ladder">
+        <section>
+          <div class="panel">
+            <h2>Start a crawl</h2>
+            <div class="controls">
+              <div class="field">
+                <label for="crawlPlatform">platform</label>
+                <select id="crawlPlatform"></select>
+              </div>
+              <div class="field">
+                <label for="crawlQueue">queue</label>
+                <select id="crawlQueue"></select>
+              </div>
+              <div class="field">
+                <label for="crawlTierFloor">enumerate down to</label>
+                <select id="crawlTierFloor"></select>
+              </div>
+              <button type="button" class="act" id="crawlStart" disabled>Start crawl</button>
+            </div>
+            <p class="note" id="crawlHint"></p>
+            <p class="note" id="crawlResult"></p>
+          </div>
+        </section>
+        <section>
+          <div class="panel">
+            <h2>Crawls</h2>
+            <p class="meta" id="ladderMeta">loading…</p>
+            <div id="ladderRunning"></div>
+          </div>
+        </section>
+        <section>
+          <div class="panel">
+            <h2>Last completed</h2>
+            <div id="ladderLast"></div>
+          </div>
+        </section>
+        <section>
+          <div class="panel">
+            <h2>History</h2>
+            <p class="meta" id="ladderHistoryMeta">loading…</p>
+            <div class="scroll"><table id="ladderHistory"></table></div>
+          </div>
+        </section>
+        <section>
+          <div class="panel">
+            <h2>Analytics recompute</h2>
+            <p class="meta" id="analyticsMeta">loading…</p>
+            <div class="scroll"><table id="analyticsRuns"></table></div>
+            <div id="analyticsTop"></div>
+          </div>
+        </section>
+      </div>
+
+      <!-- ── limiter ──────────────────────────────────────────────────────── -->
+      <div class="tab" id="tab-limiter">
+        <section>
+          <div class="panel">
+            <h2>Rate limiter</h2>
+            <p class="meta" id="limiterMeta"></p>
+            <div id="limiter">
+              <p class="empty">No scopes yet — nothing has called Riot.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- ── players ──────────────────────────────────────────────────────── -->
+      <div class="tab" id="tab-players">
+        <section>
+          <div class="panel">
+            <h2>Players</h2>
+            <p class="meta" id="playersMeta">loading…</p>
+            <div class="scroll"><table id="players"></table></div>
+          </div>
+        </section>
+      </div>
+
+      <!-- ── events ───────────────────────────────────────────────────────── -->
+      <div class="tab" id="tab-events">
+        <section>
+          <div class="panel">
+            <h2>Live events</h2>
+            <ul id="feed"></ul>
+            <p class="empty" id="feedEmpty">Waiting for the firehose…</p>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <div id="gate">
+      <form id="gateForm">
+        <h2>Admin key</h2>
+        <p>
+          The dashboard reads <code>/v1/admin/metrics</code> and the admin-only WebSocket topics, so
+          it needs an admin-scoped consumer key. Stored in this browser only.
+        </p>
+        <input id="keyInput" type="password" placeholder="rpx_…" autocomplete="off" />
+        <p class="gate-err" id="gateErr"></p>
+        <button type="submit">Connect</button>
+      </form>
+    </div>
+
+    <script>
+      'use strict';
+      const STORE = 'rp.dashboard.key';
+      const TAB_STORE = 'rp.dashboard.tab';
+      const $ = (id) => document.getElementById(id);
+
+      const QUEUE_COLS = [
+        'active',
+        'waiting',
+        'prioritized',
+        'delayed',
+        'scheduled',
+        'failed',
+        'completed',
+      ];
+
+      let key = localStorage.getItem(STORE) || '';
+      let authDisabled = false;
+      let ws = null;
+      let backoffMs = 1000;
+      let prev = null; // previous snapshot, for deltas
+      let prevAt = 0;
+      let lastTickAt = 0;
+      let optimisticMatches = 0; // match.archived frames since the last tick
+      let lastRatio = null; // cache hit ratio over the last tick, 0..1 or null
+      const feed = [];
+      let unseenEvents = 0;
+
+      const fmt = (n) => Number(n).toLocaleString('en-US');
+      const fmtDuration = (s) => {
+        s = Math.floor(s);
+        const d = Math.floor(s / 86400);
+        const h = Math.floor((s % 86400) / 3600);
+        const m = Math.floor((s % 3600) / 60);
+        return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m ${s % 60}s`;
+      };
+      // Riot IDs are player-chosen text; everything interpolated into markup
+      // goes through this.
+      const esc = (s) =>
+        String(s).replace(
+          /[&<>"']/g,
+          (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c],
+        );
+      const relTime = (iso) => {
+        if (!iso) return '—';
+        const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+        if (s < 90) return 'just now';
+        if (s < 5400) return `${Math.round(s / 60)}m ago`;
+        if (s < 129600) return `${Math.round(s / 3600)}h ago`;
+        return `${Math.round(s / 86400)}d ago`;
+      };
+      const sumQueues = (snap, col) =>
+        Object.values(snap.queues).reduce((n, q) => n + (q[col] ?? 0), 0);
+
+      /**
+       * Work actually waiting, which is not the same as the sum of the pending
+       * columns: every repeatable scheduler parks its next firing in `delayed`
+       * and leaves it there, so an idle deployment used to read as a standing
+       * backlog of one per scheduler. Nothing is hidden — the Queues tab keeps
+       * a `scheduled` column beside `delayed`, so the rows still reconcile.
+       *
+       * Netted off `delayed` alone rather than off the row total: a firing
+       * scheduler moves its placeholder into `waiting` before parking the next
+       * one, and that job is about to run. Clamped for that same instant, when
+       * `delayed` is one short of the scheduler count. `?? 0` for an older api
+       * instance that does not send the field — it reverts to the old number
+       * rather than reading as a negative.
+       */
+      const pendingWork = (snap) =>
+        Object.values(snap.queues).reduce(
+          (n, q) =>
+            n +
+            (q.active ?? 0) +
+            (q.waiting ?? 0) +
+            (q.prioritized ?? 0) +
+            Math.max(0, (q.delayed ?? 0) - (q.scheduled ?? 0)),
+          0,
+        );
+
+      // ── tabs ──────────────────────────────────────────────────────────────
+      const TABS = ['overview', 'queues', 'ladder', 'limiter', 'players', 'events'];
+      let activeTab = 'overview';
+
+      function showTab(name) {
+        if (!TABS.includes(name)) name = 'overview';
+        activeTab = name;
+        for (const t of TABS) {
+          $('tab-' + t).classList.toggle('on', t === name);
+          $('nav-' + t).setAttribute('aria-selected', String(t === name));
+        }
+        localStorage.setItem(TAB_STORE, name);
+        if (location.hash.slice(1) !== name) history.replaceState(null, '', '#' + name);
+        if (name === 'events') {
+          unseenEvents = 0;
+          $('tagEvents').textContent = '';
+        }
+      }
+      $('tabs').addEventListener('click', (e) => {
+        const button = e.target.closest('button[data-tab]');
+        if (button) showTab(button.dataset.tab);
+      });
+      window.addEventListener('hashchange', () => showTab(location.hash.slice(1)));
+      showTab(location.hash.slice(1) || localStorage.getItem(TAB_STORE) || 'overview');
+
+      // ── key gate ──────────────────────────────────────────────────────────
+      function askForKey(message) {
+        $('gateErr').textContent = message || '';
+        $('gate').classList.add('open');
+        $('keyInput').focus();
+      }
+      $('gateForm').addEventListener('submit', (e) => {
+        e.preventDefault();
+        key = $('keyInput').value.trim();
+        if (!key) return;
+        localStorage.setItem(STORE, key);
+        $('gate').classList.remove('open');
+        start();
+      });
+      function keyRejected(message) {
+        localStorage.removeItem(STORE);
+        key = '';
+        if (ws) {
+          ws.onclose = null;
+          ws.close();
+          ws = null;
+        }
+        setWsState('down', 'not authorised');
+        askForKey(message);
+      }
+
+      // ── overview ──────────────────────────────────────────────────────────
+      function setWsState(cls, label) {
+        $('wsDot').className = 'dot' + (cls ? ' ' + cls : '');
+        $('wsState').textContent = label;
+      }
+
+      const tile = (label, value, sub, cls) =>
+        `<div class="tile"><div class="label">${label}</div>` +
+        `<div class="value">${value}</div>` +
+        `<div class="sub ${cls || ''}">${sub || ''}</div></div>`;
+
+      /**
+       * Five numbers, each answering a question on its own: is the archive
+       * growing, is work piling up, is the cache earning its keep, who do we
+       * know, and is the crawl doing anything. Everything else moved behind a
+       * tab.
+       */
+      function renderTiles(snap) {
+        const archived = snap.totals.archivedMatches + optimisticMatches;
+        const grew = prev ? snap.totals.archivedMatches - prev.totals.archivedMatches : 0;
+
+        const pending = pendingWork(snap);
+        const failed = sumQueues(snap, 'failed');
+
+        const running = snap.ladder ? snap.ladder.running.length : 0;
+
+        $('tiles').innerHTML =
+          tile(
+            'Archived matches',
+            fmt(archived),
+            grew > 0 ? '+' + fmt(grew) + ' this tick' : '',
+            'good',
+          ) +
+          tile(
+            'Queue backlog',
+            fmt(pending),
+            failed > 0 ? fmt(failed) + ' failed' : 'nothing failed',
+            failed > 0 ? 'bad' : '',
+          ) +
+          tile(
+            'Cache hit ratio',
+            lastRatio == null ? '—' : Math.round(lastRatio * 100) + ' %',
+            lastRatio == null ? 'no reads last tick' : 'over the last tick',
+          ) +
+          tile(
+            'Players',
+            fmt(snap.totals.knownPlayers),
+            fmt(snap.totals.trackedPlayers) + ' tracked',
+          ) +
+          tile(
+            'Ladder entries',
+            fmt(snap.ladder ? snap.ladder.entries : 0),
+            running > 0 ? running + ' crawl' + (running > 1 ? 's' : '') + ' running' : '',
+          );
+      }
+
+      /**
+       * Queue counts come from Redis and say nothing about whether anything is
+       * draining them — a crashed worker and an idle one are both all-zero
+       * `active`. So the heartbeat gets a dot of its own, in the header where
+       * it qualifies every number below it (#80).
+       */
+      function renderWorker(snap) {
+        const worker = snap.worker;
+        if (!worker) return; // an older api instance; say nothing rather than lie
+        const ago = worker.lastSeenMs;
+        $('workerDot').className = 'dot ' + (worker.alive ? 'live' : 'down');
+        $('workerState').textContent = worker.alive
+          ? 'worker up' + (ago >= 1000 ? ' · ' + Math.round(ago / 1000) + 's ago' : '')
+          : 'worker down';
+      }
+
+      function renderSystem(snap, atMs) {
+        const rows = [
+          ['api uptime', fmtDuration(snap.process.uptimeSeconds)],
+          ['api memory (rss)', Math.round(snap.process.rssBytes / 1_048_576) + ' MB'],
+          ['ws connections', fmt(snap.ws.connections)],
+          ['topic subscriptions', fmt(snap.ws.subscriptions)],
+          ['active consumers', fmt(snap.totals.activeConsumers)],
+          ['events / min', eventRates(snap, atMs)],
+          [
+            'cache hit / miss / neg / stale',
+            `${fmt(snap.cache.hit)} / ${fmt(snap.cache.miss)} / ` +
+              `${fmt(snap.cache.neg)} / ${fmt(snap.cache.stale)}`,
+          ],
+        ];
+        $('system').innerHTML = rows
+          .map(([k, v]) => `<div class="kv"><span class="k">${k}</span><span>${v}</span></div>`)
+          .join('');
+      }
+
+      let eventRatesText = '—';
+      function eventRates(snap, atMs) {
+        if (prev && atMs > prevAt) {
+          const minutes = (atMs - prevAt) / 60_000;
+          const rates = Object.entries(snap.events)
+            .map(([name, n]) => [name, (n - (prev.events[name] || 0)) / minutes])
+            .filter(([, r]) => r > 0)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 3)
+            .map(([name, r]) => `${esc(name)} ${r < 10 ? r.toFixed(1) : Math.round(r)}`);
+          eventRatesText = rates.length ? rates.join(' · ') : 'quiet';
+        }
+        return eventRatesText;
+      }
+
+      /** The per-tick ratio the tile shows; the 24 h shape is on the chart. */
+      function trackCacheRatio(snap) {
+        lastRatio = null;
+        if (!prev) return;
+        const c = snap.cache;
+        const p = prev.cache;
+        const hits = c.hit + c.neg + c.stale - (p.hit + p.neg + p.stale);
+        const total = hits + (c.miss - p.miss);
+        if (total > 0) lastRatio = hits / total;
+      }
+
+      // ── queues ────────────────────────────────────────────────────────────
+      function renderQueues(snap) {
+        const names = Object.keys(snap.queues).sort();
+        const failed = sumQueues(snap, 'failed');
+        const pending = pendingWork(snap);
+        $('tagQueues').textContent = failed > 0 ? fmt(failed) : '';
+        $('tagQueues').className = 'tag bad';
+        $('queuesMeta').textContent =
+          `${fmt(pending)} pending or running · ` +
+          `${fmt(sumQueues(snap, 'scheduled'))} idle in schedulers · ` +
+          `${fmt(failed)} failed · ${fmt(sumQueues(snap, 'completed'))} completed recently`;
+
+        const head =
+          '<tr><th>queue</th>' + QUEUE_COLS.map((c) => `<th>${c}</th>`).join('') + '</tr>';
+        const rows = names
+          .map((name) => {
+            const q = snap.queues[name];
+            const cells = QUEUE_COLS.map((c) => {
+              const n = q[c] ?? 0;
+              // `scheduled` counts schedulers, not jobs, so it is dim even when
+              // non-zero: it explains a `delayed` figure rather than adding to it.
+              const cls =
+                c === 'failed' && n > 0 ? 'alert' : c === 'scheduled' || n === 0 ? 'dim' : '';
+              return `<td class="${cls}">${fmt(n)}</td>`;
+            }).join('');
+            return `<tr><td>${esc(name)}</td>${cells}</tr>`;
+          })
+          .join('');
+        $('queues').innerHTML = head + rows;
+      }
+
+      /**
+       * Work asked for, as against work done: a lookup that coalesced onto a
+       * walk already pending is demand, and it never becomes a queue row (#81).
+       */
+      function renderFlows(snap) {
+        if (!snap.flows) return;
+        const rows = [
+          ...Object.entries(snap.flows.backfillsQueued).map(([k, n]) => ['backfill ' + k, n]),
+          ...Object.entries(snap.flows.refreshClaims).map(([k, n]) => ['refresh ' + k, n]),
+        ].sort((a, b) => b[1] - a[1]);
+        $('flows').innerHTML = rows.length
+          ? rows
+              .map(
+                ([k, n]) =>
+                  `<div class="kv"><span class="k">${esc(k)}</span><span>${fmt(n)}</span></div>`,
+              )
+              .join('')
+          : '<p class="empty">Nothing has been asked for since this api process started.</p>';
+      }
+
+      // ── ladder ────────────────────────────────────────────────────────────
+      /**
+       * The three stages, in the order a crawl runs them. The order is the
+       * guarantee worth showing: nothing fetches a match until every id is in,
+       * which is what makes a match shared by ten players cost one fetch.
+       */
+      const PHASES = [
+        ['enumerate', 'walking the ladder'],
+        ['collect', 'gathering match ids'],
+        ['archive', 'fetching the matches'],
+      ];
+
+      function phaseChain(c) {
+        const at = PHASES.findIndex(([name]) => name === c.phase);
+        return (
+          '<div class="phases">' +
+          PHASES.map(
+            ([name, hint], i) =>
+              `<span class="step ${i < at ? 'done' : i === at ? 'now' : ''}" ` +
+              `title="${esc(hint)}">${esc(name)}</span>`,
+          ).join('<span>›</span>') +
+          '</div>'
+        );
+      }
+
+      function crawlCard(c) {
+        const facts = [
+          ['pages', fmt(c.pagesFetched)],
+          ['entries', fmt(c.entriesSeen)],
+          ['players', fmt(c.playersDiscovered)],
+          ['walking', fmt(c.backfillsEnqueued)],
+          ['match ids', fmt(c.matchIdsSeen)],
+          ['matches queued', fmt(c.matchesQueued)],
+        ];
+        if (c.status === 'running') facts.push(['legs left', fmt(c.pendingLegs)]);
+        const when =
+          c.status === 'running'
+            ? 'started ' + relTime(c.startedAt)
+            : relTime(c.finishedAt || c.startedAt);
+        const cancel =
+          c.status === 'running'
+            ? `<button type="button" class="act danger" data-cancel="${esc(c.id)}">cancel</button>`
+            : '';
+        return (
+          `<div class="crawl"><div class="crawl-head">` +
+          `<span>${esc(c.platform)} · ${esc(c.queue)}</span>` +
+          `<span class="pill ${esc(c.status)}">${esc(c.status)}</span>` +
+          `<span class="dim">from ${esc(c.tierFloor)}</span>` +
+          `<span class="when">${when}</span>${cancel}</div>` +
+          (c.status === 'running' && c.phase ? phaseChain(c) : '') +
+          `<div class="facts">` +
+          facts.map(([k, v]) => `<span><span class="k">${k}</span>${v}</span>`).join('') +
+          `</div></div>`
+        );
+      }
+
+      function renderLadder(snap) {
+        const ladder = snap.ladder;
+        if (!ladder) return; // an older api instance
+        const running = ladder.running;
+        $('tagLadder').textContent = running.length ? String(running.length) : '';
+        $('tagLadder').className = 'tag live';
+        $('ladderMeta').textContent =
+          `${fmt(ladder.entries)} league entries stored · ` +
+          (running.length ? `${running.length} crawl(s) in flight` : 'nothing crawling');
+        $('ladderRunning').innerHTML = running.length
+          ? running.map(crawlCard).join('')
+          : '<p class="empty">No crawl running.</p>';
+        $('ladderLast').innerHTML = ladder.lastCompleted
+          ? crawlCard(ladder.lastCompleted)
+          : '<p class="empty">No crawl has finished yet.</p>';
+      }
+
+      /**
+       * The analytics recompute (#114), on the ladder tab because a crawl is
+       * what triggers one.
+       *
+       * Per-step seconds rather than a single duration: the champion step scans
+       * `match_participants` once and the builds step unnests six item columns
+       * out of it, so "the recompute got slow" is not actionable until it says
+       * which step did. A failed run still lists the steps that finished, which
+       * is how far it got — and, since each step commits its own tables, which
+       * of them are now behind the others.
+       */
+      function renderAnalytics(snap) {
+        const analytics = snap.analytics;
+        if (!analytics) return; // an older api instance
+        const runs = analytics.lastRuns;
+
+        if (runs.length === 0) {
+          $('analyticsMeta').textContent =
+            'No recompute has run yet. One is queued when a crawl finishes, or set AGGREGATE_INTERVAL_S.';
+          $('analyticsRuns').innerHTML = '';
+          $('analyticsTop').innerHTML = '';
+          return;
+        }
+
+        const newest = runs[0];
+        $('analyticsMeta').textContent =
+          `${runs.length} ladder(s) aggregated · last ${relTime(newest.at)}` +
+          (newest.status === 'failed' ? ' · last run FAILED part way' : '');
+
+        const head =
+          '<tr><th>ladder</th><th>when</th><th>steps (s)</th><th>rows</th><th>games</th></tr>';
+        $('analyticsRuns').innerHTML =
+          head +
+          runs
+            .map((run) => {
+              const steps = Object.entries(run.steps)
+                .map(([name, seconds]) => `${name} ${seconds.toFixed(1)}`)
+                .join(' · ');
+              const rows = Object.values(run.rows).reduce((a, b) => a + b, 0);
+              return (
+                `<tr><td>${esc(run.platform)} ${esc(run.queue)}</td>` +
+                `<td>${relTime(run.at)}${run.status === 'failed' ? ' <span class="badge">failed</span>' : ''}</td>` +
+                `<td class="mono">${esc(steps) || '—'}</td>` +
+                `<td>${fmt(rows)}</td><td>${fmt(run.games)}</td></tr>`
+              );
+            })
+            .join('');
+
+        // A sanity read, not an analytics answer: if the newest patch's most
+        // played champions look like League, the recompute produced something.
+        const top = analytics.topChampions;
+        $('analyticsTop').innerHTML = top.length
+          ? '<p class="meta">Most played, newest patch: ' +
+            top
+              .map(
+                (c) =>
+                  `${esc(c.championName ?? String(c.championId))} ${fmt(c.games)}g ` +
+                  `${Math.round(c.winRate * 100)}%`,
+              )
+              .join(' · ') +
+            '</p>'
+          : '';
+      }
+
+      /**
+       * Every run this key scope has done, newest first — which ladders have
+       * been crawled, what each one produced, and when it last ran.
+       *
+       * The snapshot carries the crawls in flight and the last completed one,
+       * because those are what an operator watches. This is the other
+       * question — "when was oc1 last done, and did it finish?" — and it is a
+       * table of rows rather than a live number, so it polls with the players
+       * panel rather than riding the tick.
+       */
+      const CRAWL_ROWS_SHOWN = 20;
+
+      function renderCrawlHistory(crawls) {
+        if (crawls.length === 0) {
+          $('ladderHistoryMeta').textContent = 'No crawl has run yet.';
+          $('ladderHistory').innerHTML = '';
+          return;
+        }
+
+        // One entry per ladder, newest first, so "when was this last crawled"
+        // is answerable without reading down the table counting. The table
+        // below is one row per *run*; this is one per ladder.
+        //
+        // The queue is dropped when every run shares one, which is the usual
+        // case: `euw1 · RANKED_SOLO_5x5 4m ago · oc1 · …` puts the same
+        // separator between a platform and its queue as between two ladders,
+        // and stops being readable at the second entry.
+        const oneQueue = new Set(crawls.map((c) => c.queue)).size <= 1;
+        const latest = new Map();
+        for (const c of crawls) {
+          const ladder = oneQueue ? c.platform : `${c.platform} ${c.queue}`;
+          if (!latest.has(ladder)) latest.set(ladder, c);
+        }
+        const ladders = [...latest.entries()]
+          .map(([ladder, c]) => `${ladder} ${relTime(c.finishedAt || c.startedAt)}`)
+          .join(' · ');
+        $('ladderHistoryMeta').textContent =
+          `${fmt(crawls.length)} run(s) · last crawled: ${ladders}`;
+
+        const head =
+          '<tr><th>ladder</th><th>floor</th><th>status</th><th>entries</th>' +
+          '<th>match ids</th><th>matches queued</th><th>took</th><th>updated</th></tr>';
+        const rows = crawls
+          .slice(0, CRAWL_ROWS_SHOWN)
+          .map((c) => {
+            const took = c.finishedAt
+              ? fmtDuration((new Date(c.finishedAt) - new Date(c.startedAt)) / 1000)
+              : '<span class="dim">running</span>';
+            const status =
+              c.status === 'running'
+                ? `<span class="pill running">${esc(c.phase || 'running')}</span>`
+                : `<span class="pill ${esc(c.status)}">${esc(c.status)}</span>`;
+            return (
+              `<tr><td>${esc(c.platform)} · ${esc(c.queue)}</td>` +
+              `<td class="dim">${esc(c.tierFloor)}</td>` +
+              `<td>${status}</td>` +
+              `<td>${fmt(c.entriesSeen)}</td>` +
+              `<td>${fmt(c.matchIdsSeen)}</td>` +
+              `<td>${fmt(c.matchesQueued)}</td>` +
+              `<td class="dim">${took}</td>` +
+              `<td class="dim">${relTime(c.finishedAt || c.startedAt)}</td></tr>`
+            );
+          })
+          .join('');
+        $('ladderHistory').innerHTML = head + rows;
+      }
+
+      async function fetchCrawlHistory() {
+        const res = await adminFetch('/v1/admin/ladder/crawls?limit=50');
+        if (!res || !res.ok) return;
+        renderCrawlHistory((await res.json()).crawls);
+      }
+
+      // ── starting and cancelling a crawl ───────────────────────────────────
+      /**
+       * The one place on this page that writes rather than reads, so it is also
+       * the only one that has to say what happened. Everything else re-renders
+       * on the next tick and needs no acknowledgement.
+       */
+      async function adminFetch(path, init) {
+        const headers = Object.assign(
+          key ? { Authorization: 'Bearer ' + key } : {},
+          (init && init.headers) || {},
+        );
+        const res = await fetch(path, Object.assign({}, init, { headers }));
+        if (res.status === 401 || res.status === 403) {
+          keyRejected('That key was rejected — it needs the admin scope.');
+          return null;
+        }
+        return res;
+      }
+
+      const note = (id, text, cls) => {
+        $(id).textContent = text;
+        $(id).className = 'note' + (cls ? ' ' + cls : '');
+      };
+
+      /** The message the API sent, or something honest about why there is none. */
+      async function failure(res, fallback) {
+        const body = await res.json().catch(() => null);
+        return (body && body.error && body.error.message) || `${fallback} (${res.status})`;
+      }
+
+      const fill = (id, options, selected) => {
+        $(id).innerHTML = options
+          .map(
+            (o) =>
+              `<option value="${esc(o.value)}"${o.value === selected ? ' selected' : ''}>` +
+              `${esc(o.label)}</option>`,
+          )
+          .join('');
+      };
+
+      /**
+       * The form's own options come from the API, not from this file: the tier
+       * and queue lists are league-v4's value space and the pre-selection is
+       * this deployment's `LADDER_*` config, and a form that guessed at either
+       * would offer a crawl the trigger route refuses.
+       */
+      async function fetchLadderOptions() {
+        const res = await adminFetch('/v1/admin/ladder/options');
+        if (!res || !res.ok) return;
+        const opts = await res.json();
+
+        fill(
+          'crawlPlatform',
+          opts.platforms.map((p) => ({ value: p.id, label: `${p.label} · ${p.id}` })),
+          opts.defaults.platform,
+        );
+        fill(
+          'crawlQueue',
+          opts.queues.map((q) => ({ value: q, label: q })),
+          opts.defaults.queue,
+        );
+        // Descending, so the cheap floors — the ones anyone should reach for
+        // first — are at the top of the list rather than the bottom.
+        fill(
+          'crawlTierFloor',
+          opts.tiers
+            .slice()
+            .reverse()
+            .map((t) => ({ value: t, label: t })),
+          opts.defaults.tierFloor,
+        );
+
+        const d = opts.defaults;
+        note(
+          'crawlHint',
+          d.backfillLimit > 0
+            ? `Match histories are walked for every player the crawl enumerates, ` +
+                `${fmt(d.backfillLimit)} matches per player — every id first, then the ` +
+                `matches, so a game shared by ten players is fetched once.`
+            : 'Match histories are not walked (LADDER_BACKFILL_LIMIT=0): the ladder lands, ' +
+                'and nothing is fetched from match-v5.',
+        );
+        $('crawlStart').disabled = false;
+      }
+
+      // A message about euw1 sitting under a form that now reads oc1 is worse
+      // than no message: it reads as an answer to the crawl about to be
+      // started rather than to the one that was.
+      for (const id of ['crawlPlatform', 'crawlQueue', 'crawlTierFloor']) {
+        $(id).addEventListener('change', () => note('crawlResult', ''));
+      }
+
+      $('crawlStart').addEventListener('click', async () => {
+        const button = $('crawlStart');
+        button.disabled = true;
+        note('crawlResult', 'starting…');
+        try {
+          const res = await adminFetch('/v1/admin/ladder/crawl', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              platform: $('crawlPlatform').value,
+              queue: $('crawlQueue').value,
+              tierFloor: $('crawlTierFloor').value,
+            }),
+          });
+          if (!res) return;
+          if (!res.ok) {
+            note('crawlResult', await failure(res, 'Could not start the crawl'), 'bad');
+            return;
+          }
+          const body = await res.json();
+          // Naming the ladder, not just the id: "already running" is about the
+          // ladder that was asked for, and a message that does not say which
+          // reads as a refusal about whatever crawl happens to be on screen.
+          const ladder = `${body.platform} · ${body.queue}`;
+          note(
+            'crawlResult',
+            body.status === 'already-running'
+              ? `${ladder} is already being crawled — ${body.crawlId}`
+              : `Started ${ladder} — ${body.crawlId} · ${fmt(body.legs)} legs`,
+            'good',
+          );
+          fetchSnapshot().catch(console.error);
+          fetchCrawlHistory().catch(console.error);
+        } catch (err) {
+          note('crawlResult', String(err), 'bad');
+        } finally {
+          button.disabled = false;
+        }
+      });
+
+      $('ladderRunning').addEventListener('click', async (e) => {
+        const button = e.target.closest('button[data-cancel]');
+        if (!button) return;
+        const id = button.dataset.cancel;
+        // A crawl is hours of work and there is no un-cancel, so ask. The legs
+        // already running stop at their next status check, not instantly.
+        if (!confirm(`Cancel crawl ${id}?`)) return;
+
+        button.disabled = true;
+        try {
+          const res = await adminFetch('/v1/admin/ladder/crawls/' + encodeURIComponent(id), {
+            method: 'DELETE',
+          });
+          if (!res) return;
+          note(
+            'crawlResult',
+            res.ok ? `Cancelled ${id}` : await failure(res, 'Could not cancel the crawl'),
+            res.ok ? 'good' : 'bad',
+          );
+          fetchSnapshot().catch(console.error);
+          fetchCrawlHistory().catch(console.error);
+        } catch (err) {
+          note('crawlResult', String(err), 'bad');
+        }
+      });
+
+      // ── limiter ───────────────────────────────────────────────────────────
+      // Re-rendering the panel each tick would slam every open method list
+      // shut, so which ones are open lives out here.
+      const limiterOpen = new Set();
+      $('limiter').addEventListener(
+        'toggle',
+        (e) => {
+          const el = e.target;
+          if (!el.dataset || !el.dataset.scope) return;
+          if (el.open) limiterOpen.add(el.dataset.scope);
+          else limiterOpen.delete(el.dataset.scope);
+        },
+        true, // `toggle` does not bubble
+      );
+
+      const share = (w) => (w.limit > 0 ? w.used / w.limit : 0);
+      const worstShare = (windows) => (windows.length ? Math.max(...windows.map(share)) : 0);
+      const heat = (s) => (s >= 0.95 ? 'bad' : s >= 0.8 ? 'warn' : '');
+
+      function renderLimiter(snap) {
+        const scopes = snap.limiter
+          .slice()
+          .sort((a, b) => worstShare(b.windows) - worstShare(a.windows));
+        const hot = scopes.filter((s) => worstShare(s.windows) >= 0.8).length;
+        const frozen = scopes.filter((s) => s.frozenMs > 0).length;
+        $('tagLimiter').textContent = frozen > 0 ? 'frozen' : hot > 0 ? String(hot) : '';
+        $('tagLimiter').className = 'tag ' + (frozen > 0 ? 'bad' : '');
+        $('limiterMeta').textContent = scopes.length
+          ? `${scopes.length} scope(s) talked to · busiest window ` +
+            `${Math.round(worstShare(scopes[0] ? scopes[0].windows : []) * 100)} %`
+          : '';
+        if (scopes.length === 0) return; // keep the empty-state text
+
+        $('limiter').innerHTML = scopes
+          .map((s) => {
+            const top = worstShare(s.windows);
+            const meters = s.windows
+              .map((w) => {
+                const used = share(w);
+                return (
+                  `<div class="meter"><div class="caption"><span>${esc(w.window)}</span>` +
+                  `<span>${fmt(w.used)} / ${fmt(w.limit)}</span></div>` +
+                  `<div class="track"><div class="fill ${heat(used)}" ` +
+                  `style="width:${Math.min(100, used * 100)}%"></div></div></div>`
+                );
+              })
+              .join('');
+            const frozenNote =
+              s.frozenMs > 0
+                ? `<div class="frozen">frozen — lifts in ${Math.ceil(s.frozenMs / 1000)}s</div>`
+                : '';
+
+            // Per-method windows are the long tail: dozens of rows that are
+            // almost always all-zero. They fold away, and the summary carries
+            // the one number worth reading without opening them.
+            const methods = (s.methods || [])
+              .filter((m) => m.windows.length > 0)
+              .sort((a, b) => worstShare(b.windows) - worstShare(a.windows));
+            let fold = '';
+            if (methods.length > 0) {
+              const busiest = worstShare(methods[0].windows);
+              const rows = methods
+                .map((m) => {
+                  const used = m.windows
+                    .map((w) => `${fmt(w.used)}/${fmt(w.limit)}·${esc(w.window.split(':')[1])}s`)
+                    .join(' · ');
+                  const cls = worstShare(m.windows) >= 0.8 ? 'hot' : '';
+                  return (
+                    `<div class="kv"><span class="k">${esc(m.method)}</span>` +
+                    `<span class="${cls}">${used}</span></div>`
+                  );
+                })
+                .join('');
+              fold =
+                `<details class="methods" data-scope="${esc(s.scope)}"` +
+                `${limiterOpen.has(s.scope) ? ' open' : ''}>` +
+                `<summary>${methods.length} method${methods.length > 1 ? 's' : ''}` +
+                `${busiest > 0 ? ` · busiest ${esc(methods[0].method)} ${Math.round(busiest * 100)} %` : ' · all idle'}` +
+                `</summary><div class="body">${rows}</div></details>`;
+            }
+
+            const label = s.label && s.label !== s.scope ? `${esc(s.label)} ` : '';
+            return (
+              `<div class="scope"><div class="scope-head">` +
+              `<span>${label}<span class="dim">${esc(s.scope)}</span></span>` +
+              `<span class="pct ${heat(top)}">${Math.round(top * 100)} %</span></div>` +
+              `${meters}${frozenNote}${fold}</div>`
+            );
+          })
+          .join('');
+      }
+
+      // ── history charts ────────────────────────────────────────────────────
+      const timeShort = (t) =>
+        new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+      /**
+       * One line chart into a 300×72 viewBox. `series` is [{t, v}], oldest
+       * first; a null v breaks the line (idle interval, process restart).
+       */
+      function drawSeries(svgEl, series, opts) {
+        const w = 300,
+          h = 72,
+          padX = 3,
+          padT = 13,
+          padB = 4;
+        const pts = series.filter((p) => p.v != null);
+        if (pts.length === 0) {
+          svgEl.innerHTML = '';
+          return null;
+        }
+        const t0 = series[0].t;
+        const t1 = series[series.length - 1].t;
+        let min = opts && opts.min != null ? opts.min : Math.min(...pts.map((p) => p.v));
+        let max = opts && opts.max != null ? opts.max : Math.max(...pts.map((p) => p.v));
+        if (max === min) max = min + 1;
+        const fmtV = (opts && opts.fmt) || fmt;
+        const x = (t) => (t1 === t0 ? w / 2 : padX + ((t - t0) / (t1 - t0)) * (w - 2 * padX));
+        const y = (v) => h - padB - ((v - min) / (max - min)) * (h - padT - padB);
+        let d = '';
+        let pen = false;
+        for (const p of series) {
+          if (p.v == null) {
+            pen = false;
+            continue;
+          }
+          d += `${pen ? 'L' : 'M'}${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`;
+          pen = true;
+        }
+        const last = pts[pts.length - 1];
+        svgEl.innerHTML =
+          `<line x1="${padX}" y1="${h - padB}" x2="${w - padX}" y2="${h - padB}" stroke="var(--line)" stroke-width="1"/>` +
+          `<text x="${padX}" y="9">${fmtV(max)}</text>` +
+          `<text x="${w - padX}" y="9" text-anchor="end">${fmtV(min)} min</text>` +
+          `<path d="${d}" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-linejoin="round"/>` +
+          `<circle cx="${x(last.t).toFixed(1)}" cy="${y(last.v).toFixed(1)}" r="2.5" fill="var(--accent)"/>`;
+        return last;
+      }
+
+      function renderHistory(data) {
+        const pts = data.points;
+        if (pts.length === 0) {
+          for (const id of ['histMatchesRange', 'histQueueRange', 'histCacheRange'])
+            $(id).textContent = 'no points yet — the first lands within a minute';
+          return;
+        }
+        const range = `${timeShort(pts[0].t)} — ${timeShort(pts[pts.length - 1].t)}`;
+
+        const mSeries = pts.map((p) => ({ t: p.t, v: p.totals.archivedMatches }));
+        const mLast = drawSeries($('histMatches'), mSeries, {});
+        const growth = mLast.v - mSeries[0].v;
+        $('histMatchesLabel').textContent =
+          growth > 0 ? `+${fmt(growth)} in range` : 'flat over the range';
+        $('histMatchesRange').innerHTML = `<span>${range}</span><span>archived matches</span>`;
+
+        const qSeries = pts.map((p) => ({ t: p.t, v: p.queues.pending + p.queues.active }));
+        const qLast = drawSeries($('histQueue'), qSeries, { min: 0 });
+        const failedNow = pts[pts.length - 1].queues.failed;
+        $('histQueueLabel').textContent =
+          `${fmt(qLast.v)} queued now` + (failedNow > 0 ? ` · ${fmt(failedNow)} failed` : '');
+        $('histQueueRange').innerHTML = `<span>${range}</span><span>pending + active jobs</span>`;
+
+        // Counters are cumulative per recording process: diff consecutive
+        // points, and a negative step (restart) or an idle interval breaks the
+        // line rather than plotting a lie.
+        const cSeries = pts.map((p, i) => {
+          if (i === 0) return { t: p.t, v: null };
+          const a = pts[i - 1].cache;
+          const b = p.cache;
+          const hits = b.hit + b.neg + b.stale - (a.hit + a.neg + a.stale);
+          const misses = b.miss - a.miss;
+          if (hits < 0 || misses < 0 || hits + misses <= 0) return { t: p.t, v: null };
+          return { t: p.t, v: hits / (hits + misses) };
+        });
+        const cLast = drawSeries($('histCache'), cSeries, {
+          min: 0,
+          max: 1,
+          fmt: (v) => Math.round(v * 100) + '%',
+        });
+        $('histCacheLabel').textContent = cLast
+          ? `${Math.round(cLast.v * 100)} % over the last interval with reads`
+          : 'no cacheable reads in range';
+        $('histCacheRange').innerHTML = `<span>${range}</span><span>per-interval hit ratio</span>`;
+      }
+
+      async function fetchHistory() {
+        const headers = key ? { Authorization: 'Bearer ' + key } : {};
+        const res = await fetch('/v1/admin/metrics/history', { headers });
+        if (res.status === 401 || res.status === 403) {
+          keyRejected('That key was rejected — it needs the admin scope.');
+          return;
+        }
+        if (!res.ok) return;
+        renderHistory(await res.json());
+      }
+
+      // ── players ───────────────────────────────────────────────────────────
+      const PLAYER_ROWS_SHOWN = 30;
+
+      function backfillCell(p) {
+        if (p.historyBackfilledAt) {
+          const depth =
+            p.historyBackfillDepth != null ? `${fmt(p.historyBackfillDepth)} matches` : 'done';
+          return `<span class="ok">✓</span> ${depth} · ${relTime(p.historyBackfilledAt)}`;
+        }
+        if (p.historyBackfillStartedAt)
+          return `<span class="run">⟳ walking</span> · started ${relTime(p.historyBackfillStartedAt)}`;
+        return '<span class="dim">never</span>';
+      }
+
+      function renderPlayers(players) {
+        if (players.length === 0) {
+          $('playersMeta').textContent = 'No players yet — the first lookup creates one.';
+          $('players').innerHTML = '';
+          return;
+        }
+        const tracked = players.filter((p) => p.tracked).length;
+        const backfilled = players.filter((p) => p.historyBackfilledAt).length;
+        const shown = players
+          .slice()
+          .sort((a, b) => b.tracked - a.tracked || new Date(b.updatedAt) - new Date(a.updatedAt))
+          .slice(0, PLAYER_ROWS_SHOWN);
+        $('playersMeta').textContent =
+          `${fmt(tracked)} tracked · ${fmt(backfilled)} backfilled · ${fmt(players.length)} known` +
+          (players.length > shown.length
+            ? ` · showing the ${shown.length} most recently touched`
+            : '');
+
+        const head =
+          '<tr><th>player</th><th>platform</th><th>status</th>' +
+          '<th>history backfill</th><th>updated</th></tr>';
+        const rows = shown
+          .map((p) => {
+            const name = p.gameName
+              ? `${esc(p.gameName)}<span class="dim">#${esc(p.tagLine ?? '')}</span>`
+              : `<span class="dim">${esc(p.puuid.slice(0, 16))}…</span>`;
+            return (
+              `<tr><td>${name}</td>` +
+              `<td>${esc(p.platform)}</td>` +
+              `<td>${p.tracked ? '<span class="pill on">tracked</span>' : '<span class="pill off">seen</span>'}</td>` +
+              `<td>${backfillCell(p)}</td>` +
+              `<td class="dim">${relTime(p.updatedAt)}</td></tr>`
+            );
+          })
+          .join('');
+        $('players').innerHTML = head + rows;
+      }
+
+      async function fetchPlayers() {
+        const headers = key ? { Authorization: 'Bearer ' + key } : {};
+        const res = await fetch('/v1/admin/tracked-players', { headers });
+        if (res.status === 401 || res.status === 403) {
+          keyRejected('That key was rejected — it needs the admin scope.');
+          return;
+        }
+        if (!res.ok) return;
+        renderPlayers((await res.json()).players);
+      }
+
+      function render(snap, atMs) {
+        trackCacheRatio(snap);
+        renderTiles(snap);
+        renderWorker(snap);
+        renderSystem(snap, atMs);
+        renderQueues(snap);
+        renderFlows(snap);
+        renderLadder(snap);
+        renderAnalytics(snap);
+        renderLimiter(snap);
+        $('scope').textContent = 'key scope ' + esc(snap.keyScope);
+        prev = snap;
+        prevAt = atMs;
+        lastTickAt = Date.now();
+        optimisticMatches = 0;
+      }
+
+      // ── event feed ────────────────────────────────────────────────────────
+      function badgeClass(event) {
+        if (event === 'match.archived') return 'badge archived';
+        if (event.startsWith('game.')) return 'badge game';
+        if (event.startsWith('ladder.')) return 'badge ladder';
+        return 'badge';
+      }
+      function describe(frame) {
+        const d = frame.data || {};
+        switch (frame.event) {
+          case 'match.archived':
+            return d.matchId || '';
+          case 'game.started':
+            return `${d.puuid ? d.puuid.slice(0, 12) + '…' : ''} queue ${d.queueId ?? '?'}`;
+          case 'game.ended':
+            return d.puuid ? d.puuid.slice(0, 12) + '…' : '';
+          case 'rank.changed': {
+            const t = (x) => (x ? `${x.tier ?? '?'} ${x.rank ?? ''} ${x.lp ?? '?'}lp` : 'unranked');
+            return `${t(d.before)} → ${t(d.after)}`;
+          }
+          case 'ladder.crawl.completed':
+            return `${d.platform ?? '?'} · ${d.queue ?? '?'} · ${fmt(d.entries ?? 0)} entries`;
+          case 'patch.new':
+            return d.version || '';
+          default:
+            return frame.topic;
+        }
+      }
+      function onEvent(frame) {
+        if (frame.event === 'metrics.snapshot') {
+          render(frame.data, frame.at);
+          return;
+        }
+        if (frame.event === 'match.archived' && prev) {
+          optimisticMatches += 1;
+          renderTiles(prev);
+        }
+        feed.unshift(frame);
+        if (feed.length > 50) feed.pop();
+        $('feedEmpty').style.display = 'none';
+        $('feed').innerHTML = feed
+          .map(
+            (f) =>
+              `<li><span class="${badgeClass(f.event)}">${esc(f.event)}</span>` +
+              `<span class="detail">${esc(describe(f))}</span>` +
+              `<span class="when">${new Date(f.at).toLocaleTimeString()}</span></li>`,
+          )
+          .join('');
+        if (activeTab !== 'events') {
+          unseenEvents = Math.min(99, unseenEvents + 1);
+          $('tagEvents').textContent = String(unseenEvents);
+          $('tagEvents').className = 'tag';
+        }
+      }
+
+      // ── transport ─────────────────────────────────────────────────────────
+      async function fetchSnapshot() {
+        const headers = key ? { Authorization: 'Bearer ' + key } : {};
+        const res = await fetch('/v1/admin/metrics', { headers });
+        if (res.status === 401 || res.status === 403) {
+          keyRejected('That key was rejected — it needs the admin scope.');
+          return;
+        }
+        if (!res.ok) throw new Error('metrics fetch failed: ' + res.status);
+        render(await res.json(), Date.now());
+      }
+
+      function connect() {
+        const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const token = key ? '?token=' + encodeURIComponent(key) : '';
+        ws = new WebSocket(`${proto}//${location.host}/v1/ws${token}`);
+        setWsState('', 'connecting…');
+
+        ws.onopen = () => {
+          backoffMs = 1000;
+          setWsState('live', 'live');
+          ws.send(JSON.stringify({ op: 'subscribe', topics: ['metrics', 'firehose'] }));
+        };
+        ws.onmessage = (e) => {
+          let frame;
+          try {
+            frame = JSON.parse(e.data);
+          } catch {
+            return;
+          }
+          if (frame.op === 'error') {
+            const code = frame.error && frame.error.code;
+            if (code === 'UNAUTHORIZED' || code === 'FORBIDDEN') {
+              keyRejected(frame.error.message || 'The key was rejected.');
+            }
+            return;
+          }
+          if (frame.event) onEvent(frame);
+        };
+        ws.onclose = () => {
+          setWsState('down', 'reconnecting…');
+          setTimeout(connect, backoffMs);
+          backoffMs = Math.min(backoffMs * 2, 30_000);
+        };
+      }
+
+      setInterval(() => {
+        $('tickAge').textContent = lastTickAt
+          ? `last tick ${Math.round((Date.now() - lastTickAt) / 1000)}s ago`
+          : '';
+      }, 1000);
+
+      // History and players change on the minute, not the tick; poll slowly.
+      let slowPoll = null;
+      function refreshSlow() {
+        if (!key && !authDisabled) return;
+        fetchHistory().catch(console.error);
+        fetchPlayers().catch(console.error);
+        // Cheap, and it is what enables the start button — so a key accepted
+        // after a rejection re-arms the form rather than leaving it dead.
+        fetchLadderOptions().catch(console.error);
+        fetchCrawlHistory().catch(console.error);
+      }
+
+      async function start() {
+        try {
+          await fetchSnapshot();
+        } catch (err) {
+          console.error(err);
+        }
+        refreshSlow();
+        if (!slowPoll) slowPoll = setInterval(refreshSlow, 60_000);
+        if (key || authDisabled) connect();
+      }
+
+      (async () => {
+        try {
+          const cfg = await (await fetch('/dashboard/config.json')).json();
+          authDisabled = Boolean(cfg.authDisabled);
+        } catch {
+          /* config route missing: assume auth is on */
+        }
+        if (!authDisabled && !key) askForKey('');
+        else start();
+      })();
+    </script>
+  </body>
+</html>
