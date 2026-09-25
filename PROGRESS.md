@@ -100,7 +100,7 @@ Exit check: _pending_
 
 ## P5 — Archive and composites
 - [x] P5-01 archive schema (#40)
-- [x] P5-02 match archive (#PR)
+- [x] P5-02 match archive (#41)
 - [ ] P5-03 facts extraction
 - [ ] P5-04 players + composites
 - [ ] P5-05 admin routes (data)
