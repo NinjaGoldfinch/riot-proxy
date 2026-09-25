@@ -96,6 +96,7 @@ async fn a_match_is_fetched_once_then_served_from_the_archive() {
     assert_eq!((first.status, x_cache(&first)), (StatusCode::OK, "MISS"));
     assert_eq!(first.body, MATCH);
     assert_eq!(e.archived("matches").await, 1);
+    assert_eq!(e.archived("match_facts").await, 10, "one fact row per player");
 
     let second = e.get(&uri).await;
     assert_eq!((second.status, x_cache(&second)), (StatusCode::OK, "ARCHIVE"));

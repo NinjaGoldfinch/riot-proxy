@@ -269,3 +269,12 @@ Accepted. `archive::matches` stores match-v5 bodies zstd-compressed (level 3) an
 - **Failures never fail a request:** read errors fall through to Riot, write errors are logged (v1 behaviour).
 - `region` is the routing value the match was fetched through (`asia`, `europe`, …). `filter_unarchived` keeps input order and queries in chunks of 500 ids.
 - The compression ratio is logged at debug per match.
+
+## ADR-041 — Match facts (2026-09-26)
+Accepted. `archive::facts::extract` is a pure function from a match-v5 body to one `match_facts` row per participant; `FACTS_VERSION = 1`. `matches::put` writes the match and its facts in one transaction (v1 `archiveMatch` did both), so `SqliteArchive` now carries the key scope.
+- **Column shapes** (design/04 names the columns, not their JSON): `position` is `teamPosition`, with `""` or absent stored as `NULL` (Arena, ARAM, remakes). `items` is `[item0..item5]` in slot order with `0` for an empty slot; the trinket `item6` is excluded, as v1's item stats excluded it. `summoners` is `[summoner1Id, summoner2Id]` in slot order; v1 normalised the order when aggregating, not when storing. `runes` is `{primaryStyle, keystone, subStyle, perks[], statPerks[offense, flex, defense]}`, which is v1's keystone and sub-style pair plus the rest of the page, so build views need no re-extraction.
+- **No invented values:** a participant without a puuid, team, champion or `win` (all `NOT NULL`) is skipped. v1 stored nulls there, and its metadata-only fallback rows are impossible under this schema. A puuid repeated within one match keeps its first row, because the key is `(match_id, puuid)`.
+- **Remakes are recorded as Riot reports them**, as v1 did; v1's aggregates did not filter them either. `match_facts` has no remake flag and `matches` has no duration, so if P7's analytics should exclude remakes, that needs a schema addition. That is an owner question at P7.
+- A body whose facts cannot be read is still archived, with no facts rows.
+- Re-archiving replaces the key scope's facts for that match (`DELETE` then upsert), so a `facts_version` bump re-derives cleanly.
+- **Fixtures:** `tests/fixtures/matches/` holds two real matches (ranked solo, Arena) and a remake derived by script from a real match, to avoid spending Riot calls hunting for a recorded one. The README lists every edit.

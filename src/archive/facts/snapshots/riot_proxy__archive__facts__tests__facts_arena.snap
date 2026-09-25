@@ -1,0 +1,726 @@
+---
+source: src/archive/facts/tests.rs
+expression: facts
+---
+[
+  {
+    "puuid": "ISlxyThDXHoDbyzUT5VwaFjE9ZnXQ_LOJCjUWjscgEiB-bka897N-YCi3rd65wAmGq8RmcFfG7ia4A",
+    "team_id": 200,
+    "position": null,
+    "champion_id": 30,
+    "win": false,
+    "kills": 5,
+    "deaths": 8,
+    "assists": 7,
+    "items": [
+      223020,
+      443060,
+      447107,
+      226653,
+      223135,
+      0
+    ],
+    "runes": {
+      "primaryStyle": 0,
+      "keystone": 0,
+      "subStyle": 0,
+      "perks": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "statPerks": [
+        0,
+        0,
+        0
+      ]
+    },
+    "summoners": [
+      2201,
+      2202
+    ]
+  },
+  {
+    "puuid": "HP8AeeQTNF5FQy_0L6Eq3mv5t32yik__fZoOPUTIQuE23GprTT-uxaS2Q3sOaPRAKUV5wQTp27pu7w",
+    "team_id": 100,
+    "position": null,
+    "champion_id": 76,
+    "win": true,
+    "kills": 3,
+    "deaths": 6,
+    "assists": 15,
+    "items": [
+      223020,
+      223100,
+      223146,
+      226655,
+      447121,
+      443056
+    ],
+    "runes": {
+      "primaryStyle": 0,
+      "keystone": 0,
+      "subStyle": 0,
+      "perks": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "statPerks": [
+        0,
+        0,
+        0
+      ]
+    },
+    "summoners": [
+      2201,
+      2202
+    ]
+  },
+  {
+    "puuid": "GIcK0C43iy6awQ5XYhIZEusCBVN4a5ZncopNv4oVsDI0_G3HyVp1eTWsm-e5OKJPzbLwatkaDjg8ig",
+    "team_id": 200,
+    "position": null,
+    "champion_id": 51,
+    "win": false,
+    "kills": 3,
+    "deaths": 9,
+    "assists": 8,
+    "items": [
+      446671,
+      223006,
+      447101,
+      443081,
+      443069,
+      0
+    ],
+    "runes": {
+      "primaryStyle": 0,
+      "keystone": 0,
+      "subStyle": 0,
+      "perks": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "statPerks": [
+        0,
+        0,
+        0
+      ]
+    },
+    "summoners": [
+      2202,
+      2201
+    ]
+  },
+  {
+    "puuid": "d6iU4SvfIPlXg6DMpNDMpueAWp8Kkf8shKVzVrU_3a8aVoF5TOxE1-euJUAHofVPuI18eUz_Yh2ZFw",
+    "team_id": 100,
+    "position": null,
+    "champion_id": 13,
+    "win": true,
+    "kills": 21,
+    "deaths": 4,
+    "assists": 12,
+    "items": [
+      228002,
+      222522,
+      223040,
+      443056,
+      447113,
+      4015
+    ],
+    "runes": {
+      "primaryStyle": 0,
+      "keystone": 0,
+      "subStyle": 0,
+      "perks": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "statPerks": [
+        0,
+        0,
+        0
+      ]
+    },
+    "summoners": [
+      2201,
+      2202
+    ]
+  },
+  {
+    "puuid": "NkQRxdiN3U3pEek5MWbWgaxzG_hpH5imJ9Ttch8ql5KM7D6p6Bh-Hbbvn6UoFVdGUBBIvcnEJv72qw",
+    "team_id": 200,
+    "position": null,
+    "champion_id": 516,
+    "win": false,
+    "kills": 2,
+    "deaths": 7,
+    "assists": 12,
+    "items": [
+      223047,
+      443061,
+      447101,
+      223039,
+      223068,
+      447114
+    ],
+    "runes": {
+      "primaryStyle": 0,
+      "keystone": 0,
+      "subStyle": 0,
+      "perks": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "statPerks": [
+        0,
+        0,
+        0
+      ]
+    },
+    "summoners": [
+      2201,
+      2202
+    ]
+  },
+  {
+    "puuid": "jd7b1BuwdDCxPM7_rfZC3FKlGkA7g8EszTn6TEF2NZyIJl50XljoRZdEmSmC0tKHofHyqZFBa8n9Tg",
+    "team_id": 200,
+    "position": null,
+    "champion_id": 360,
+    "win": false,
+    "kills": 10,
+    "deaths": 10,
+    "assists": 2,
+    "items": [
+      223036,
+      443056,
+      223031,
+      443069,
+      226676,
+      223047
+    ],
+    "runes": {
+      "primaryStyle": 0,
+      "keystone": 0,
+      "subStyle": 0,
+      "perks": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "statPerks": [
+        0,
+        0,
+        0
+      ]
+    },
+    "summoners": [
+      2201,
+      2202
+    ]
+  },
+  {
+    "puuid": "lLfOI3nl72WO6A6trTLjtvsHCurRSk2mDvTJpFb5jVHR_IMkJu5lTYtxRnoEOPsadHojituPj1wdCg",
+    "team_id": 100,
+    "position": null,
+    "champion_id": 92,
+    "win": true,
+    "kills": 10,
+    "deaths": 9,
+    "assists": 15,
+    "items": [
+      443060,
+      447115,
+      223074,
+      223036,
+      447103,
+      223031
+    ],
+    "runes": {
+      "primaryStyle": 0,
+      "keystone": 0,
+      "subStyle": 0,
+      "perks": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "statPerks": [
+        0,
+        0,
+        0
+      ]
+    },
+    "summoners": [
+      2201,
+      2202
+    ]
+  },
+  {
+    "puuid": "Xx1jlXshy2fV34WxiLKntM2cfws-iw-vHHc7GjIiSUujXaPLJp5-9z_6QheAXcTEuCwmOikscw-3Cg",
+    "team_id": 100,
+    "position": null,
+    "champion_id": 104,
+    "win": true,
+    "kills": 6,
+    "deaths": 10,
+    "assists": 17,
+    "items": [
+      446671,
+      223157,
+      223031,
+      223036,
+      226676,
+      223072
+    ],
+    "runes": {
+      "primaryStyle": 0,
+      "keystone": 0,
+      "subStyle": 0,
+      "perks": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "statPerks": [
+        0,
+        0,
+        0
+      ]
+    },
+    "summoners": [
+      2201,
+      2202
+    ]
+  },
+  {
+    "puuid": "rs8DupXkLML4bssPF8QL9ujud2aFuzi4YochhpIH02YRo5gG4hkYBbB3NltnRZW-RnSAF_-cckZuKQ",
+    "team_id": 200,
+    "position": null,
+    "champion_id": 23,
+    "win": false,
+    "kills": 9,
+    "deaths": 6,
+    "assists": 7,
+    "items": [
+      447106,
+      443069,
+      223031,
+      223033,
+      223153,
+      223111
+    ],
+    "runes": {
+      "primaryStyle": 0,
+      "keystone": 0,
+      "subStyle": 0,
+      "perks": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "statPerks": [
+        0,
+        0,
+        0
+      ]
+    },
+    "summoners": [
+      2201,
+      2202
+    ]
+  },
+  {
+    "puuid": "q8upnx_YgitDK5nzx1GMh5k33cPTE__dyWNn1NGW1Aa6fBiU09E5nUYurJSBfdf7ALj7qvew6r0V0g",
+    "team_id": 200,
+    "position": null,
+    "champion_id": 875,
+    "win": false,
+    "kills": 5,
+    "deaths": 8,
+    "assists": 9,
+    "items": [
+      447101,
+      220012,
+      0,
+      0,
+      0,
+      0
+    ],
+    "runes": {
+      "primaryStyle": 0,
+      "keystone": 0,
+      "subStyle": 0,
+      "perks": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "statPerks": [
+        0,
+        0,
+        0
+      ]
+    },
+    "summoners": [
+      2201,
+      2202
+    ]
+  },
+  {
+    "puuid": "ZG0dup7nhm6g4RLiqdqWAAqenNWsUD43_uNj11EFqVxHrcM0Xi319OECY8DsItAcS--jqW149E0T5A",
+    "team_id": 200,
+    "position": null,
+    "champion_id": 50,
+    "win": false,
+    "kills": 5,
+    "deaths": 8,
+    "assists": 10,
+    "items": [
+      223158,
+      447105,
+      446656,
+      224633,
+      443062,
+      0
+    ],
+    "runes": {
+      "primaryStyle": 0,
+      "keystone": 0,
+      "subStyle": 0,
+      "perks": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "statPerks": [
+        0,
+        0,
+        0
+      ]
+    },
+    "summoners": [
+      2201,
+      2202
+    ]
+  },
+  {
+    "puuid": "5Fcr-puQj5NLzWqTLRx8AWL9jLKFtH3zEdt-uCHfxtSTLikvz3ocV7-PrEx2pZXcMCJrW33zKo6_Mg",
+    "team_id": 200,
+    "position": null,
+    "champion_id": 12,
+    "win": false,
+    "kills": 2,
+    "deaths": 7,
+    "assists": 10,
+    "items": [
+      223047,
+      447110,
+      223084,
+      223068,
+      447114,
+      0
+    ],
+    "runes": {
+      "primaryStyle": 0,
+      "keystone": 0,
+      "subStyle": 0,
+      "perks": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "statPerks": [
+        0,
+        0,
+        0
+      ]
+    },
+    "summoners": [
+      2201,
+      2202
+    ]
+  },
+  {
+    "puuid": "9Bv-bjl6KIwt7zuQXVg_MWbWZjz6X-QlZwLF7jRv1cCkvtqPk2E3GrbB9XSCpuannDee8Qvi1T_5lQ",
+    "team_id": 100,
+    "position": null,
+    "champion_id": 4,
+    "win": true,
+    "kills": 11,
+    "deaths": 7,
+    "assists": 6,
+    "items": [
+      447108,
+      0,
+      447113,
+      443081,
+      223158,
+      447101
+    ],
+    "runes": {
+      "primaryStyle": 0,
+      "keystone": 0,
+      "subStyle": 0,
+      "perks": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "statPerks": [
+        0,
+        0,
+        0
+      ]
+    },
+    "summoners": [
+      2202,
+      2201
+    ]
+  },
+  {
+    "puuid": "D3Ll5kIciBHFfQru0K4M8K5CC-GU93_dW0l8mvKHnLDEYg26pynO-6eDcj76HsAhu_71EC1LASgutQ",
+    "team_id": 100,
+    "position": null,
+    "champion_id": 4,
+    "win": true,
+    "kills": 7,
+    "deaths": 12,
+    "assists": 18,
+    "items": [
+      223158,
+      446656,
+      447101,
+      444636,
+      223094,
+      223100
+    ],
+    "runes": {
+      "primaryStyle": 0,
+      "keystone": 0,
+      "subStyle": 0,
+      "perks": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "statPerks": [
+        0,
+        0,
+        0
+      ]
+    },
+    "summoners": [
+      2201,
+      2202
+    ]
+  },
+  {
+    "puuid": "0NWt7txNrCIvOAkBon57Tc6p6JjoMYFxbYXsCVE0sroe5bnToXJ20EbNDqgQr5_tC_87tWu-9vWaIw",
+    "team_id": 100,
+    "position": null,
+    "champion_id": 266,
+    "win": true,
+    "kills": 21,
+    "deaths": 8,
+    "assists": 9,
+    "items": [
+      226693,
+      223142,
+      446632,
+      4017,
+      226695,
+      226694
+    ],
+    "runes": {
+      "primaryStyle": 0,
+      "keystone": 0,
+      "subStyle": 0,
+      "perks": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "statPerks": [
+        0,
+        0,
+        0
+      ]
+    },
+    "summoners": [
+      2201,
+      2202
+    ]
+  },
+  {
+    "puuid": "-uWg5cekh2tAOLzG9gMvBNmxwwJfyXId0amZ0oaIOgVJPdSNXdSd7AIFZqkbG9qaFWvK-zV4MTFKoA",
+    "team_id": 100,
+    "position": null,
+    "champion_id": 12,
+    "win": true,
+    "kills": 9,
+    "deaths": 9,
+    "assists": 20,
+    "items": [
+      447109,
+      447122,
+      223084,
+      443059,
+      222502,
+      223065
+    ],
+    "runes": {
+      "primaryStyle": 0,
+      "keystone": 0,
+      "subStyle": 0,
+      "perks": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "statPerks": [
+        0,
+        0,
+        0
+      ]
+    },
+    "summoners": [
+      2201,
+      2202
+    ]
+  },
+  {
+    "puuid": "3Diu8SCIgGQfICw88L5LddKz9TGjEEBD3XYRMJdl20Tmjnvl8Jz9BSspUhRQOP_kFBKvggWuiPxz9g",
+    "team_id": 100,
+    "position": null,
+    "champion_id": 80,
+    "win": true,
+    "kills": 7,
+    "deaths": 9,
+    "assists": 10,
+    "items": [
+      447112,
+      223047,
+      223071,
+      226692,
+      226610,
+      226333
+    ],
+    "runes": {
+      "primaryStyle": 0,
+      "keystone": 0,
+      "subStyle": 0,
+      "perks": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "statPerks": [
+        0,
+        0,
+        0
+      ]
+    },
+    "summoners": [
+      2201,
+      2202
+    ]
+  },
+  {
+    "puuid": "b2j2CIx10Rg9w7fjKZqXJ9Hd4rPMJxmCRE4WMugkibRuwGp6YskPnkoVb_gZwy85xlCiV9Xt4ijiHg",
+    "team_id": 200,
+    "position": null,
+    "champion_id": 517,
+    "win": false,
+    "kills": 6,
+    "deaths": 6,
+    "assists": 7,
+    "items": [
+      223003,
+      444644,
+      223042,
+      447106,
+      223158,
+      0
+    ],
+    "runes": {
+      "primaryStyle": 0,
+      "keystone": 0,
+      "subStyle": 0,
+      "perks": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "statPerks": [
+        0,
+        0,
+        0
+      ]
+    },
+    "summoners": [
+      2201,
+      2202
+    ]
+  }
+]

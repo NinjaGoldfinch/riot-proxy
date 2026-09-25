@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use riot_proxy::archive::SqliteArchive;
+use riot_proxy::cache::keys::KeyScope;
 use riot_proxy::db::Db;
 use riot_proxy::fetcher::{FetchOptions, Fetcher};
 use riot_proxy::riot::client::RiotRequest;
@@ -117,7 +118,11 @@ async fn harness(scenario: &str) -> (Harness, Vec<Exchange>) {
     let limiter = Arc::new(Limiter::new(0.8));
     let dir = tempfile::tempdir().unwrap();
     let db = Db::open(&dir.path().join("riot-proxy.db"), 2).unwrap();
-    let archive = Arc::new(SqliteArchive::new(db, false));
+    let archive = Arc::new(SqliteArchive::new(
+        db,
+        KeyScope::from_key(&config.riot_api_key),
+        false,
+    ));
     let fetcher = common::fetcher(&config, &server.uri(), Arc::clone(&limiter), Some(archive));
     (
         Harness {
