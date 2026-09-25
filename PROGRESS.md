@@ -95,7 +95,7 @@ The plan's exit check says `NEG`; per ADR-022 the value is `HIT-NEG`.
 - [x] P4-03 OpenAPI scaffolding (#36)
 - [x] P4-04 `/v1/riot/*` passthrough (#37)
 - [x] P4-05 `/v1/lol/*` typed routes (#38)
-- [ ] P4-06 dev UI + dashboard shells `[parallel-ok]`
+- [x] P4-06 dev UI + dashboard shells `[parallel-ok]` (#39)
 Exit check: _pending_
 
 ## P5 — Archive and composites
