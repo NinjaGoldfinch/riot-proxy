@@ -209,6 +209,1282 @@ expression: doc
         ]
       }
     },
+    "/v1/lol/league/apex/{platform}/{tier}/{queue}": {
+      "get": {
+        "description": "MASTER, GRANDMASTER or CHALLENGER for one queue. One request returns every entry; not paged.",
+        "operationId": "league_apex",
+        "parameters": [
+          {
+            "description": "Platform routing value",
+            "in": "path",
+            "name": "platform",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "MASTER, GRANDMASTER or CHALLENGER",
+            "in": "path",
+            "name": "tier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "RANKED_SOLO_5x5 or RANKED_FLEX_SR",
+            "in": "path",
+            "name": "queue",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {}
+            },
+            "description": "Riot's payload, unmodified. `X-Cache` and `X-Cache-Age` describe where it came from."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found upstream; a cached 404 carries `X-Cache: HIT-NEG`."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot failed or rejected the proxy's key (`UPSTREAM_ERROR`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot's rate limit budget is exhausted (`RATE_LIMITED`, with `Retry-After`)."
+          }
+        },
+        "summary": "Read a whole apex league",
+        "tags": [
+          "lol"
+        ]
+      }
+    },
+    "/v1/lol/league/entries/by-puuid/{platform}/{puuid}": {
+      "get": {
+        "description": "league-v4 entries for one player, passed through.",
+        "operationId": "league_entries_by_puuid",
+        "parameters": [
+          {
+            "description": "Platform routing value",
+            "in": "path",
+            "name": "platform",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Encrypted player UUID",
+            "in": "path",
+            "name": "puuid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {}
+            },
+            "description": "Riot's payload, unmodified. `X-Cache` and `X-Cache-Age` describe where it came from."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found upstream; a cached 404 carries `X-Cache: HIT-NEG`."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot failed or rejected the proxy's key (`UPSTREAM_ERROR`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot's rate limit budget is exhausted (`RATE_LIMITED`, with `Retry-After`)."
+          }
+        },
+        "summary": "Ranked entries by PUUID",
+        "tags": [
+          "lol"
+        ]
+      }
+    },
+    "/v1/lol/league/entries/{platform}/{queue}/{tier}/{division}": {
+      "get": {
+        "description": "One ~205-entry page of the ladder. Pages are 1-based; a page past the end of the division returns an empty array rather than a 404.",
+        "operationId": "league_entries_page",
+        "parameters": [
+          {
+            "description": "Platform routing value",
+            "in": "path",
+            "name": "platform",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "RANKED_SOLO_5x5 or RANKED_FLEX_SR",
+            "in": "path",
+            "name": "queue",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "IRON … DIAMOND (apex tiers have their own route)",
+            "in": "path",
+            "name": "tier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "I … IV",
+            "in": "path",
+            "name": "division",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "1-based page, default 1 (max 100000)",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {}
+            },
+            "description": "Riot's payload, unmodified. `X-Cache` and `X-Cache-Age` describe where it came from."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found upstream; a cached 404 carries `X-Cache: HIT-NEG`."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot failed or rejected the proxy's key (`UPSTREAM_ERROR`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot's rate limit budget is exhausted (`RATE_LIMITED`, with `Retry-After`)."
+          }
+        },
+        "summary": "Walk one page of a tier and division",
+        "tags": [
+          "lol"
+        ]
+      }
+    },
+    "/v1/lol/mastery/by-puuid/{platform}/{puuid}": {
+      "get": {
+        "description": "champion-mastery-v4, passed through. `top=N` returns the top N.",
+        "operationId": "mastery_by_puuid",
+        "parameters": [
+          {
+            "description": "Platform routing value",
+            "in": "path",
+            "name": "platform",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Encrypted player UUID",
+            "in": "path",
+            "name": "puuid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "1–200: only the top N champions",
+            "in": "query",
+            "name": "top",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {}
+            },
+            "description": "Riot's payload, unmodified. `X-Cache` and `X-Cache-Age` describe where it came from."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found upstream; a cached 404 carries `X-Cache: HIT-NEG`."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot failed or rejected the proxy's key (`UPSTREAM_ERROR`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot's rate limit budget is exhausted (`RATE_LIMITED`, with `Retry-After`)."
+          }
+        },
+        "summary": "Champion mastery",
+        "tags": [
+          "lol"
+        ]
+      }
+    },
+    "/v1/lol/matches/ids/{region}/{puuid}": {
+      "get": {
+        "description": "match-v5 id list, passed through. `start` defaults to 0 and `count` to 20 (1–100).",
+        "operationId": "match_ids",
+        "parameters": [
+          {
+            "description": "Regional routing value",
+            "in": "path",
+            "name": "region",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Encrypted player UUID",
+            "in": "path",
+            "name": "puuid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "0–10000, default 0",
+            "in": "query",
+            "name": "start",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "1–100, default 20",
+            "in": "query",
+            "name": "count",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Queue id, 0–5000",
+            "in": "query",
+            "name": "queue",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "ranked, normal, tourney or tutorial",
+            "in": "query",
+            "name": "type",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Epoch seconds, ≥ 0",
+            "in": "query",
+            "name": "startTime",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Epoch seconds, ≥ 0",
+            "in": "query",
+            "name": "endTime",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {}
+            },
+            "description": "Riot's payload, unmodified. `X-Cache` and `X-Cache-Age` describe where it came from."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found upstream; a cached 404 carries `X-Cache: HIT-NEG`."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot failed or rejected the proxy's key (`UPSTREAM_ERROR`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot's rate limit budget is exhausted (`RATE_LIMITED`, with `Retry-After`)."
+          }
+        },
+        "summary": "Match ids by PUUID",
+        "tags": [
+          "lol"
+        ]
+      }
+    },
+    "/v1/lol/matches/{region}/{matchId}": {
+      "get": {
+        "description": "match-v5, passed through. Matches are immutable and served from the archive once seen (`X-Cache: ARCHIVE`). The match id's platform must belong to `region`.",
+        "operationId": "match_by_id",
+        "parameters": [
+          {
+            "description": "Regional routing value",
+            "in": "path",
+            "name": "region",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Platform-prefixed id, e.g. EUW1_7381937461",
+            "in": "path",
+            "name": "matchId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {}
+            },
+            "description": "Riot's payload, unmodified. `X-Cache` and `X-Cache-Age` describe where it came from."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found upstream; a cached 404 carries `X-Cache: HIT-NEG`."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot failed or rejected the proxy's key (`UPSTREAM_ERROR`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot's rate limit budget is exhausted (`RATE_LIMITED`, with `Retry-After`)."
+          }
+        },
+        "summary": "Match by id",
+        "tags": [
+          "lol"
+        ]
+      }
+    },
+    "/v1/lol/matches/{region}/{matchId}/timeline": {
+      "get": {
+        "description": "match-v5 timeline, passed through. Immutable, like the match.",
+        "operationId": "match_timeline",
+        "parameters": [
+          {
+            "description": "Regional routing value",
+            "in": "path",
+            "name": "region",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Platform-prefixed id",
+            "in": "path",
+            "name": "matchId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {}
+            },
+            "description": "Riot's payload, unmodified. `X-Cache` and `X-Cache-Age` describe where it came from."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found upstream; a cached 404 carries `X-Cache: HIT-NEG`."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot failed or rejected the proxy's key (`UPSTREAM_ERROR`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot's rate limit budget is exhausted (`RATE_LIMITED`, with `Retry-After`)."
+          }
+        },
+        "summary": "Match timeline",
+        "tags": [
+          "lol"
+        ]
+      }
+    },
+    "/v1/lol/rotations/{platform}": {
+      "get": {
+        "description": "champion-v3 rotations, passed through.",
+        "operationId": "rotations",
+        "parameters": [
+          {
+            "description": "Platform routing value",
+            "in": "path",
+            "name": "platform",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {}
+            },
+            "description": "Riot's payload, unmodified. `X-Cache` and `X-Cache-Age` describe where it came from."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found upstream; a cached 404 carries `X-Cache: HIT-NEG`."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot failed or rejected the proxy's key (`UPSTREAM_ERROR`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot's rate limit budget is exhausted (`RATE_LIMITED`, with `Retry-After`)."
+          }
+        },
+        "summary": "Free champion rotation",
+        "tags": [
+          "lol"
+        ]
+      }
+    },
+    "/v1/lol/spectator/active/{platform}/{puuid}": {
+      "get": {
+        "description": "spectator-v5, passed through. Not in a game is a 404, negatively cached briefly.",
+        "operationId": "spectator_active",
+        "parameters": [
+          {
+            "description": "Platform routing value",
+            "in": "path",
+            "name": "platform",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Encrypted player UUID",
+            "in": "path",
+            "name": "puuid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {}
+            },
+            "description": "Riot's payload, unmodified. `X-Cache` and `X-Cache-Age` describe where it came from."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found upstream; a cached 404 carries `X-Cache: HIT-NEG`."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot failed or rejected the proxy's key (`UPSTREAM_ERROR`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot's rate limit budget is exhausted (`RATE_LIMITED`, with `Retry-After`)."
+          }
+        },
+        "summary": "Active game",
+        "tags": [
+          "lol"
+        ]
+      }
+    },
+    "/v1/lol/status/{platform}": {
+      "get": {
+        "description": "lol-status-v4 platform data, passed through.",
+        "operationId": "platform_status",
+        "parameters": [
+          {
+            "description": "Platform routing value",
+            "in": "path",
+            "name": "platform",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {}
+            },
+            "description": "Riot's payload, unmodified. `X-Cache` and `X-Cache-Age` describe where it came from."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found upstream; a cached 404 carries `X-Cache: HIT-NEG`."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot failed or rejected the proxy's key (`UPSTREAM_ERROR`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot's rate limit budget is exhausted (`RATE_LIMITED`, with `Retry-After`)."
+          }
+        },
+        "summary": "Platform status",
+        "tags": [
+          "lol"
+        ]
+      }
+    },
+    "/v1/lol/summoners/by-puuid/{platform}/{puuid}": {
+      "get": {
+        "description": "summoner-v4, passed through.",
+        "operationId": "summoner_by_puuid",
+        "parameters": [
+          {
+            "description": "Platform routing value, e.g. euw1",
+            "in": "path",
+            "name": "platform",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Encrypted player UUID",
+            "in": "path",
+            "name": "puuid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {}
+            },
+            "description": "Riot's payload, unmodified. `X-Cache` and `X-Cache-Age` describe where it came from."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found upstream; a cached 404 carries `X-Cache: HIT-NEG`."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot failed or rejected the proxy's key (`UPSTREAM_ERROR`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot's rate limit budget is exhausted (`RATE_LIMITED`, with `Retry-After`)."
+          }
+        },
+        "summary": "Summoner by PUUID",
+        "tags": [
+          "lol"
+        ]
+      }
+    },
     "/v1/riot/accounts/by-puuid/{region}/{puuid}": {
       "get": {
         "description": "account-v1 by PUUID. The body is Riot's, unmodified. PUUIDs are encrypted per API key.",
@@ -238,7 +1514,7 @@ expression: doc
             "content": {
               "application/json": {}
             },
-            "description": "Riot's account-v1 payload, passed through"
+            "description": "Riot's payload, unmodified. `X-Cache` and `X-Cache-Age` describe where it came from."
           },
           "400": {
             "content": {
@@ -247,7 +1523,8 @@ expression: doc
                   "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
-            }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
           },
           "401": {
             "content": {
@@ -256,7 +1533,8 @@ expression: doc
                   "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
-            }
+            },
+            "description": "Missing or invalid key."
           },
           "403": {
             "content": {
@@ -265,7 +1543,8 @@ expression: doc
                   "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
-            }
+            },
+            "description": "The key lacks a scope."
           },
           "404": {
             "content": {
@@ -274,7 +1553,8 @@ expression: doc
                   "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
-            }
+            },
+            "description": "Not found upstream; a cached 404 carries `X-Cache: HIT-NEG`."
           },
           "429": {
             "content": {
@@ -283,7 +1563,8 @@ expression: doc
                   "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
-            }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
           },
           "502": {
             "content": {
@@ -292,7 +1573,8 @@ expression: doc
                   "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
-            }
+            },
+            "description": "Riot failed or rejected the proxy's key (`UPSTREAM_ERROR`)."
           },
           "503": {
             "content": {
@@ -301,7 +1583,8 @@ expression: doc
                   "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
-            }
+            },
+            "description": "Riot's rate limit budget is exhausted (`RATE_LIMITED`, with `Retry-After`)."
           }
         },
         "summary": "Account by PUUID",
@@ -348,7 +1631,7 @@ expression: doc
             "content": {
               "application/json": {}
             },
-            "description": "Riot's account-v1 payload, passed through"
+            "description": "Riot's payload, unmodified. `X-Cache` and `X-Cache-Age` describe where it came from."
           },
           "400": {
             "content": {
@@ -357,7 +1640,8 @@ expression: doc
                   "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
-            }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
           },
           "401": {
             "content": {
@@ -366,7 +1650,8 @@ expression: doc
                   "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
-            }
+            },
+            "description": "Missing or invalid key."
           },
           "403": {
             "content": {
@@ -375,7 +1660,8 @@ expression: doc
                   "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
-            }
+            },
+            "description": "The key lacks a scope."
           },
           "404": {
             "content": {
@@ -384,7 +1670,8 @@ expression: doc
                   "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
-            }
+            },
+            "description": "Not found upstream; a cached 404 carries `X-Cache: HIT-NEG`."
           },
           "429": {
             "content": {
@@ -393,7 +1680,8 @@ expression: doc
                   "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
-            }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
           },
           "502": {
             "content": {
@@ -402,7 +1690,8 @@ expression: doc
                   "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
-            }
+            },
+            "description": "Riot failed or rejected the proxy's key (`UPSTREAM_ERROR`)."
           },
           "503": {
             "content": {
@@ -411,7 +1700,8 @@ expression: doc
                   "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
-            }
+            },
+            "description": "Riot's rate limit budget is exhausted (`RATE_LIMITED`, with `Retry-After`)."
           }
         },
         "summary": "Account by Riot ID",

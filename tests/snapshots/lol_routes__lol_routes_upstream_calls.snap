@@ -1,0 +1,96 @@
+---
+source: tests/lol_routes.rs
+expression: table
+---
+[
+  {
+    "route": "/v1/lol/summoners/by-puuid/euw1/{puuid}",
+    "status": 200,
+    "upstream": "/lol/summoner/v4/summoners/by-puuid/{puuid}",
+    "x_cache": "MISS"
+  },
+  {
+    "route": "/v1/lol/league/entries/by-puuid/kr/{puuid}",
+    "status": 200,
+    "upstream": "/lol/league/v4/entries/by-puuid/{puuid}",
+    "x_cache": "MISS"
+  },
+  {
+    "route": "/v1/lol/league/apex/euw1/CHALLENGER/RANKED_SOLO_5x5",
+    "status": 200,
+    "upstream": "/lol/league/v4/challengerleagues/by-queue/RANKED_SOLO_5x5",
+    "x_cache": "MISS"
+  },
+  {
+    "route": "/v1/lol/league/apex/na1/GRANDMASTER/RANKED_FLEX_SR",
+    "status": 200,
+    "upstream": "/lol/league/v4/grandmasterleagues/by-queue/RANKED_FLEX_SR",
+    "x_cache": "MISS"
+  },
+  {
+    "route": "/v1/lol/league/entries/euw1/RANKED_SOLO_5x5/DIAMOND/I",
+    "status": 200,
+    "upstream": "/lol/league/v4/entries/RANKED_SOLO_5x5/DIAMOND/I?page=1",
+    "x_cache": "MISS"
+  },
+  {
+    "route": "/v1/lol/league/entries/euw1/RANKED_SOLO_5x5/IRON/IV?page=42",
+    "status": 200,
+    "upstream": "/lol/league/v4/entries/RANKED_SOLO_5x5/IRON/IV?page=42",
+    "x_cache": "MISS"
+  },
+  {
+    "route": "/v1/lol/matches/ids/europe/{puuid}",
+    "status": 200,
+    "upstream": "/lol/match/v5/matches/by-puuid/{puuid}/ids?start=0&count=20",
+    "x_cache": "MISS"
+  },
+  {
+    "route": "/v1/lol/matches/ids/europe/{puuid}?count=100&start=5&queue=420&type=ranked&startTime=1&endTime=2&junk=x",
+    "status": 200,
+    "upstream": "/lol/match/v5/matches/by-puuid/{puuid}/ids?start=5&count=100&queue=420&type=ranked&startTime=1&endTime=2",
+    "x_cache": "MISS"
+  },
+  {
+    "route": "/v1/lol/matches/europe/EUW1_7381937461",
+    "status": 200,
+    "upstream": "/lol/match/v5/matches/EUW1_7381937461",
+    "x_cache": "MISS"
+  },
+  {
+    "route": "/v1/lol/matches/sea/OC1_123456789/timeline",
+    "status": 200,
+    "upstream": "/lol/match/v5/matches/OC1_123456789/timeline",
+    "x_cache": "MISS"
+  },
+  {
+    "route": "/v1/lol/spectator/active/oc1/{puuid}",
+    "status": 200,
+    "upstream": "/lol/spectator/v5/active-games/by-summoner/{puuid}",
+    "x_cache": "MISS"
+  },
+  {
+    "route": "/v1/lol/mastery/by-puuid/euw1/{puuid}",
+    "status": 200,
+    "upstream": "/lol/champion-mastery/v4/champion-masteries/by-puuid/{puuid}",
+    "x_cache": "MISS"
+  },
+  {
+    "route": "/v1/lol/mastery/by-puuid/euw1/{puuid}?top=3",
+    "status": 200,
+    "upstream": "/lol/champion-mastery/v4/champion-masteries/by-puuid/{puuid}/top?count=3",
+    "x_cache": "MISS"
+  },
+  {
+    "route": "/v1/lol/rotations/br1",
+    "status": 200,
+    "upstream": "/lol/platform/v3/champion-rotations",
+    "x_cache": "MISS"
+  },
+  {
+    "route": "/v1/lol/status/jp1",
+    "status": 200,
+    "upstream": "/lol/status/v4/platform-data",
+    "x_cache": "MISS"
+  }
+]

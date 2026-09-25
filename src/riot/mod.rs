@@ -2,5 +2,6 @@
 
 pub mod client;
 pub mod endpoints;
+pub mod ladder;
 pub mod limiter;
 pub mod routing;

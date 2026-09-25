@@ -94,7 +94,7 @@ The plan's exit check says `NEG`; per ADR-022 the value is `HIT-NEG`.
 - [x] P4-02 consumer quota (#35)
 - [x] P4-03 OpenAPI scaffolding (#36)
 - [x] P4-04 `/v1/riot/*` passthrough (#37)
-- [ ] P4-05 `/v1/lol/*` typed routes
+- [x] P4-05 `/v1/lol/*` typed routes (#38)
 - [ ] P4-06 dev UI + dashboard shells `[parallel-ok]`
 Exit check: _pending_
 
@@ -121,7 +121,7 @@ Exit check: _pending_
 - [ ] P7-01 Data Dragon sync + static serving
 - [ ] P7-02 ladder enumerate
 - [ ] P7-03 ladder collect + archive
-- [ ] P7-04 analytics
+- [ ] P7-04 analytics (**+ v1's three `/v1/lol/analytics/*` routes, deferred from P4-05 by the owner, ADR-037**)
 - [ ] P7-05 maintenance
 - [ ] P7-06 dashboard wiring
 Exit check: _pending_
