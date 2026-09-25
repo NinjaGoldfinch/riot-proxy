@@ -100,7 +100,7 @@ Exit check: _pending_
 
 ## P5 — Archive and composites
 - [x] P5-01 archive schema (#40)
-- [ ] P5-02 match archive
+- [x] P5-02 match archive (#41)
 - [ ] P5-03 facts extraction
 - [ ] P5-04 players + composites
 - [ ] P5-05 admin routes (data)
@@ -145,8 +145,8 @@ Exit check: _pending_
 - OpenAPI: add routes to `routes::docs::api_router()` as `OpenApiRouter`s with `#[utoipa::path]` handlers. `just`/CI check: `cargo run -- spec > /tmp/spec.json && scripts/compare-openapi.py docs/contract/v1-openapi.json /tmp/spec.json --prefix /v1/riot/ --prefix /v1/lol/` (16 missing at P4-03). The `tests/snapshots/openapi__openapi_document.snap` changes with every documented route; review it.
 - Disk: `target/` reached ~26 GB with debug, release and feature builds and hit the session's disk allowance. `rm -rf target/release target/debug/incremental` frees ~10 GB.
 - Auth: protect routers with `.route_layer(axum::middleware::from_fn_with_state(state.clone(), http::auth::require_read))` (or `require_admin`); handlers take `Extension<Arc<http::auth::Consumer>>` (has `quota_per_min` for P4-02). `AppState.auth: Arc<Auth>`; call `auth.invalidate(hash)` on admin revoke (P5-05).
-- Replay: `tests/replay.rs` + `tests/fixtures/replay/` (README documents re-recording). **P5-02 will change `replay__replay_cold_summoner_lookup.snap`**: pass-2 matches should become `ARCHIVE`.
-- Fetcher: `state.fetcher.fetch(RiotRequest, FetchOptions{priority, bypass}) -> Result<FetchResult{body, x_cache, cache_age}, FetchError{api, x_cache}>`. Routes (P4-04) must set `X-Cache`/`X-Cache-Age`, including on HIT-NEG errors. `?refresh=true` → `bypass`, admin only (P4). The `Archive` trait gets its SQLite implementation in P5-02.
+- Replay: `tests/replay.rs` + `tests/fixtures/replay/` (README documents re-recording). Since P5-02, pass-2 matches in `replay__replay_cold_summoner_lookup.snap` are `ARCHIVE`.
+- Fetcher: `state.fetcher.fetch(RiotRequest, FetchOptions{priority, bypass}) -> Result<FetchResult{body, x_cache, cache_age}, FetchError{api, x_cache}>`. Routes (P4-04) must set `X-Cache`/`X-Cache-Age`, including on HIT-NEG errors. `?refresh=true` → `bypass`, admin only (P4). The `Archive` trait's SQLite implementation is `archive::SqliteArchive` (P5-02); `archive::matches::{get, put, filter_unarchived, get_timeline, put_timeline}` for jobs.
 - Single-flight: `singleflight::SingleFlight<K,T,E>::run(key, || async {..}) -> Flight{value, did_work}`; `E: From<WorkFailed> + Clone`. The work is spawned, so put the cache write *inside* the work closure.
 - Cache: `cache::ResponseCache::new(L1, Some(L2Writer::spawn(db)))` with `get`, `put(key, ep, body, &ttls)`, `put_negative(key, ep, ttl)`, `shutdown()`. **P3-05 must wire into `serve`:** `l2::warm` + `l2::sweep` at boot, `cache.shutdown()` after the drain. `crate::clock::Clock` converts Instant↔unix ms.
 - L1: `cache::l1::{L1::from_config, get → Lookup::{Fresh,Stale,Miss}, put(key, body, &ttls), put_negative, insert_entry (for L2 warm), invalidate_where}`. Entries hold tokio `Instant`s; P3-03 must convert to and from unix ms, e.g. with `riot::limiter::persist::Clock`.

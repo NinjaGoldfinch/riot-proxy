@@ -2,6 +2,7 @@
 //! Module layout follows docs/design/03-architecture.md#module-layout.
 
 pub mod app;
+pub mod archive;
 pub mod cache;
 pub mod cli;
 pub mod clock;

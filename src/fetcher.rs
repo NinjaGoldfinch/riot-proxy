@@ -111,8 +111,8 @@ impl Default for FetchOptions {
     }
 }
 
-/// Immutable payloads (match, timeline) served from the archive. The real one
-/// arrives in P5-02; until then [`NoArchive`].
+/// Immutable payloads (match, timeline) served from the archive: in production
+/// [`crate::archive::SqliteArchive`]; [`NoArchive`] where there is none.
 pub trait Archive: Send + Sync + 'static {
     /// The stored body for an immutable endpoint, if archived.
     fn get(&self, req: &RiotRequest) -> futures_util::future::BoxFuture<'_, Option<Bytes>>;
