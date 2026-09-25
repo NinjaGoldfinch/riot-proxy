@@ -7,6 +7,7 @@ use std::time::Duration;
 use anyhow::Context;
 
 use crate::app::{self, AppState};
+use crate::archive::SqliteArchive;
 use crate::cache::ResponseCache;
 use crate::cache::keys::KeyScope;
 use crate::cache::l1::L1;
@@ -14,7 +15,7 @@ use crate::cache::l2::{self, L2Writer};
 use crate::config::Config;
 use crate::consumers;
 use crate::db::Db;
-use crate::fetcher::{Fetcher, FetcherParts, NoArchive};
+use crate::fetcher::{Fetcher, FetcherParts};
 use crate::http::auth::Auth;
 use crate::http::quota::Quotas;
 use crate::riot::client::RiotClient;
@@ -76,7 +77,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         client: RiotClient::new(&config)?,
         limiter: Arc::clone(&limiter),
         cache: Arc::clone(&cache),
-        archive: Arc::new(NoArchive),
+        archive: Arc::new(SqliteArchive::new(db.clone(), config.archive_timelines)),
         scope: KeyScope::from_key(&config.riot_api_key),
         policy,
         interactive_budget: Duration::from_millis(config.client_wait_budget_ms),

@@ -251,80 +251,80 @@ expression: log
     "endpoint": "match.byId",
     "limiter": {
       "app": [
-        "100:120 used 8"
+        "100:120 used 7"
       ],
       "method": [
-        "2000:10 used 6"
+        "2000:10 used 5"
       ]
     },
     "pass": 2,
     "scope": "asia",
     "step": 6,
-    "upstream_calls": 11,
-    "x_cache": "MISS"
+    "upstream_calls": 10,
+    "x_cache": "ARCHIVE"
   },
   {
     "endpoint": "match.byId",
     "limiter": {
       "app": [
-        "100:120 used 9"
+        "100:120 used 7"
       ],
       "method": [
-        "2000:10 used 7"
+        "2000:10 used 5"
       ]
     },
     "pass": 2,
     "scope": "asia",
     "step": 7,
-    "upstream_calls": 12,
-    "x_cache": "MISS"
+    "upstream_calls": 10,
+    "x_cache": "ARCHIVE"
   },
   {
     "endpoint": "match.byId",
     "limiter": {
       "app": [
-        "100:120 used 10"
+        "100:120 used 7"
       ],
       "method": [
-        "2000:10 used 8"
+        "2000:10 used 5"
       ]
     },
     "pass": 2,
     "scope": "asia",
     "step": 8,
-    "upstream_calls": 13,
-    "x_cache": "MISS"
+    "upstream_calls": 10,
+    "x_cache": "ARCHIVE"
   },
   {
     "endpoint": "match.byId",
     "limiter": {
       "app": [
-        "100:120 used 11"
+        "100:120 used 7"
       ],
       "method": [
-        "2000:10 used 9"
+        "2000:10 used 5"
       ]
     },
     "pass": 2,
     "scope": "asia",
     "step": 9,
-    "upstream_calls": 14,
-    "x_cache": "MISS"
+    "upstream_calls": 10,
+    "x_cache": "ARCHIVE"
   },
   {
     "endpoint": "match.byId",
     "limiter": {
       "app": [
-        "100:120 used 12"
+        "100:120 used 7"
       ],
       "method": [
-        "2000:10 used 10"
+        "2000:10 used 5"
       ]
     },
     "pass": 2,
     "scope": "asia",
     "step": 10,
-    "upstream_calls": 15,
-    "x_cache": "MISS"
+    "upstream_calls": 10,
+    "x_cache": "ARCHIVE"
   }
 ]

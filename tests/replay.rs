@@ -10,6 +10,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use riot_proxy::archive::SqliteArchive;
+use riot_proxy::db::Db;
 use riot_proxy::fetcher::{FetchOptions, Fetcher};
 use riot_proxy::riot::client::RiotRequest;
 use riot_proxy::riot::endpoints::{Endpoint, Target};
@@ -101,6 +103,7 @@ fn request(ex: &Exchange) -> RiotRequest {
 }
 
 struct Harness {
+    _dir: tempfile::TempDir,
     server: MockServer,
     fetcher: Fetcher,
     limiter: Arc<Limiter>,
@@ -112,9 +115,13 @@ async fn harness(scenario: &str) -> (Harness, Vec<Exchange>) {
     mount(&server, &exchanges).await;
     let config = common::config(&[]);
     let limiter = Arc::new(Limiter::new(0.8));
-    let fetcher = common::fetcher(&config, &server.uri(), Arc::clone(&limiter), None);
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open(&dir.path().join("riot-proxy.db"), 2).unwrap();
+    let archive = Arc::new(SqliteArchive::new(db, false));
+    let fetcher = common::fetcher(&config, &server.uri(), Arc::clone(&limiter), Some(archive));
     (
         Harness {
+            _dir: dir,
             server,
             fetcher,
             limiter,
@@ -164,8 +171,8 @@ async fn step(h: &Harness, pass: usize, n: usize, ex: &Exchange) -> Value {
     })
 }
 
-/// A first lookup, then the same lookup again. Pass 2 is served from cache except
-/// the matches, which are immutable and archive-only (the archive is P5-02).
+/// A first lookup, then the same lookup again. Pass 2 is served from cache, and
+/// the matches, which are immutable, from the archive.
 #[tokio::test]
 async fn cold_summoner_lookup() {
     let (h, exchanges) = harness("cold-lookup").await;
