@@ -99,7 +99,9 @@ impl Modify for SecuritySchemes {
 /// Every documented route. With `Some(state)`, protected routes get the auth guard
 /// (`serve`); with `None` they don't, which is all `spec` needs.
 pub fn api_router(auth: Option<AppState>) -> OpenApiRouter<AppState> {
-    let mut read = OpenApiRouter::new().merge(routes::riot::router());
+    let mut read = OpenApiRouter::new()
+        .merge(routes::riot::router())
+        .merge(routes::lol::router());
     if let Some(state) = auth {
         read = read.route_layer(axum::middleware::from_fn_with_state(
             state,

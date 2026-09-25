@@ -243,3 +243,12 @@ Accepted.
 - **`?refresh=true`** is honoured (`X-Cache: BYPASS`) for admin keys only and ignored for others; v1 dropped unknown query params on these routes. This is design/03's admin-only bypass.
 - **`proxy_requests_total{route,status,cache}`** is recorded for every request. `route` is the matched template in v1's Fastify form (`/v1/riot/accounts/by-puuid/:region/:puuid`), so existing dashboards group the same way. Unmatched requests are labelled `unmatched`; v1 used the raw URL, which made the label unbounded. `cache` uses v1's labels (`hit`, `miss`, `stale`, `neg`, `none`) plus `archive` and `bypass`.
 - OpenAPI: a shared `ErrorResponse` component (v1's envelope plus `requestId`) is referenced by every error status, as v1 did after its #61.
+
+## ADR-037 — `/v1/lol/*` routes (2026-09-26)
+Accepted.
+- **Eleven Riot-backed routes** exactly as v1's `routes/lol.ts`: summoner, league entries by PUUID, apex league, paged league entries, match ids, match, timeline, spectator, mastery (with `?top=N` → the top-N endpoint), rotations, status.
+- **"Typed" means the request, not the response.** v1 passed Riot's bodies through unmodified (`PassthroughResponse`, deliberately unconstrained so that Riot adding a field never breaks the proxy), and so does v2. The plan's "typed serde structs derived from v1 TypeBox schemas" applies to v1's param and query schemas, which are enforced before any upstream call: ladder enums (`RANKED_QUEUES`, paged vs apex tiers, divisions, taken verbatim from v1 `riot/ladder.ts`), `MatchIdsQuery` (start 0–10 000, count 1–100, queue 0–5000, type enum, start/end time ≥ 0), `page` 1–100 000, `top` 1–200. Unknown query params are dropped (v1 ajv `removeAdditional`).
+- **v1's defaults are applied**, so the upstream request and cache key match v1: match ids always send `start=0&count=20` and paged entries `page=1`. `?count=20&start=0` and no query share one cache entry.
+- **Match routes** check that the match id's platform prefix agrees with the path region: `BAD_REGION`, "Match X belongs to region 'a', not 'b'" (v1 `resolveMatchRegion`).
+- **Analytics deferred (owner decision):** v1's three `/v1/lol/analytics/*` routes read the aggregate tables and are implemented with them in P7-04. The P4 exit check is therefore "zero missing `/v1/riot/*` and `/v1/lol/*` operations except those three"; P7's exit check covers them.
+- The OpenAPI document shares one `PassthroughResponses` set (200 plus v1's `upstreamErrors` statuses, each referencing `ErrorResponse`).

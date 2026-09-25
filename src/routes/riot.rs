@@ -13,11 +13,10 @@ use utoipa_axum::routes;
 
 use crate::app::AppState;
 use crate::http::auth::Consumer;
-use crate::http::error::ErrorResponse;
 use crate::http::{ApiError, ErrorCode, validate};
 use crate::riot::client::RiotRequest;
 use crate::riot::endpoints::Endpoint;
-use crate::routes::passthrough::{options, respond};
+use crate::routes::passthrough::{PassthroughResponses, options, respond};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -50,12 +49,7 @@ fn account(id: &str, region: &str, params: &[&str]) -> Result<RiotRequest, ApiEr
         ("gameName" = String, Path, description = "The part of a Riot ID before the `#` (1–16 characters)"),
         ("tagLine" = String, Path, description = "The part of a Riot ID after the `#` (1–5 characters)"),
     ),
-    responses(
-        (status = 200, description = "Riot's account-v1 payload, passed through", content_type = "application/json"),
-        (status = 400, body = ErrorResponse), (status = 401, body = ErrorResponse), (status = 403, body = ErrorResponse),
-        (status = 404, body = ErrorResponse), (status = 429, body = ErrorResponse),
-        (status = 502, body = ErrorResponse), (status = 503, body = ErrorResponse),
-    ),
+    responses(PassthroughResponses),
 )]
 async fn account_by_riot_id(
     State(state): State<AppState>,
@@ -87,12 +81,7 @@ async fn account_by_riot_id(
         ("region" = String, Path, description = "Regional routing value: americas, europe, asia or sea"),
         ("puuid" = String, Path, description = "Encrypted player UUID (60–128 characters, [A-Za-z0-9_-])"),
     ),
-    responses(
-        (status = 200, description = "Riot's account-v1 payload, passed through", content_type = "application/json"),
-        (status = 400, body = ErrorResponse), (status = 401, body = ErrorResponse), (status = 403, body = ErrorResponse),
-        (status = 404, body = ErrorResponse), (status = 429, body = ErrorResponse),
-        (status = 502, body = ErrorResponse), (status = 503, body = ErrorResponse),
-    ),
+    responses(PassthroughResponses),
 )]
 async fn account_by_puuid(
     State(state): State<AppState>,

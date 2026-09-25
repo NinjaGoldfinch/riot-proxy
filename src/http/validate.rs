@@ -72,6 +72,29 @@ pub fn platform(value: &str) -> Result<Platform, ApiError> {
     one_of("params", "platform", value, &Platform::ALL, Platform::as_str)
 }
 
+/// A `params/<name>` value from a closed set of strings (ladder enums).
+pub fn one_of_str(name: &str, value: &str, all: &[&'static str]) -> Result<&'static str, ApiError> {
+    all.iter()
+        .copied()
+        .find(|v| *v == value)
+        .ok_or_else(|| invalid("params", name, "must be equal to one of the allowed values"))
+}
+
+/// A `querystring/<name>` value from a closed set of strings.
+pub fn query_one_of(
+    name: &str,
+    raw: Option<&str>,
+    all: &[&'static str],
+) -> Result<Option<&'static str>, ApiError> {
+    raw.map(|v| {
+        all.iter()
+            .copied()
+            .find(|a| *a == v)
+            .ok_or_else(|| invalid("querystring", name, "must be equal to one of the allowed values"))
+    })
+    .transpose()
+}
+
 pub fn game_name(value: &str) -> Result<(), ApiError> {
     length("params", "gameName", value, 1, GAME_NAME_MAX)
 }
