@@ -119,7 +119,7 @@ The response shape of `/v1/players/by-riot-id/{gameName}/{tagLine}/profile` matc
 - [x] P6-01 WebSocket hub spike (may run any time after P0) (#46)
 - [x] P6-02 events (#47)
 - [x] P6-03 durable jobs core (#48)
-- [x] P6-04 ticks (#PR)
+- [x] P6-04 ticks (#49)
 - [ ] P6-05 poll handlers
 - [ ] P6-06 archive + backfill handlers
 - [ ] P6-07 WS auth + wiring
