@@ -102,7 +102,7 @@ Exit check: _pending_
 - [x] P5-01 archive schema (#40)
 - [x] P5-02 match archive (#41)
 - [x] P5-03 facts extraction (#42)
-- [ ] P5-04 players + composites
+- [ ] P5-04 players + composites (#PR open; awaiting owner snapshot review)
 - [ ] P5-05 admin routes (data)
 Exit check: _pending_
 

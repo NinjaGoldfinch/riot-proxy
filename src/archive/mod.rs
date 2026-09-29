@@ -3,6 +3,7 @@
 
 pub mod facts;
 pub mod matches;
+pub mod pool;
 
 use bytes::Bytes;
 use futures_util::future::BoxFuture;

@@ -104,6 +104,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         auth,
         quotas: Arc::new(Quotas::new()),
         limiter_restored: restored,
+        refresh: Arc::new(crate::routes::players::RefreshWindows::new()),
     };
     let served = app::serve(listener, app::router(state, metrics), shutdown).await;
 

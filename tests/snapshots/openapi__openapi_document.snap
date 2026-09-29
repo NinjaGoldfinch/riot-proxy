@@ -5,6 +5,30 @@ expression: doc
 {
   "components": {
     "schemas": {
+      "BackfillNotice": {
+        "description": "Present when this lookup queued the player's history for archiving.",
+        "properties": {
+          "jobId": {
+            "type": "string"
+          },
+          "limit": {
+            "description": "How far back the walk will go, in matches.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "description": "`queued`, or `already-queued` when another request got there first.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "jobId",
+          "status",
+          "limit"
+        ],
+        "type": "object"
+      },
       "ErrorBody": {
         "properties": {
           "code": {
@@ -71,6 +95,599 @@ expression: doc
         },
         "required": [
           "ok"
+        ],
+        "type": "object"
+      },
+      "MatchPage": {
+        "properties": {
+          "backfill": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BackfillNotice"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "hasMore": {
+            "description": "A full page came back, so there is probably another behind it.",
+            "type": "boolean"
+          },
+          "matchIds": {
+            "description": "The id page as Riot returned it, including ids no summary could be built for.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "matchIdsAgeSeconds": {
+            "description": "How long the id list has been unchanged.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "matches": {
+            "description": "One summary per id that resolved: the requesting player's line in each game.",
+            "items": {
+              "$ref": "#/components/schemas/MatchSummary"
+            },
+            "type": "array"
+          },
+          "platform": {
+            "type": "string"
+          },
+          "puuid": {
+            "type": "string"
+          },
+          "refreshAvailableIn": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "refreshed": {
+            "type": "boolean"
+          },
+          "region": {
+            "type": "string"
+          },
+          "start": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "puuid",
+          "platform",
+          "region",
+          "start",
+          "count",
+          "matchIds",
+          "matches",
+          "hasMore",
+          "matchIdsAgeSeconds",
+          "backfill",
+          "refreshed",
+          "refreshAvailableIn",
+          "warnings"
+        ],
+        "type": "object"
+      },
+      "MatchSummary": {
+        "properties": {
+          "endOfGameResult": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "gameCreation": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "gameDuration": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "gameEndTimestamp": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "gameMode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "gameVersion": {
+            "description": "Which patch this was played on: the Data Dragon version to render it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "matchId": {
+            "type": "string"
+          },
+          "player": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PlayerSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "queueId": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "matchId"
+        ],
+        "type": "object"
+      },
+      "PartAges": {
+        "description": "Per part, how long its content has been unchanged; `null` for a failed part.",
+        "properties": {
+          "account": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "league": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "mastery": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "summoner": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "account",
+          "summoner",
+          "league",
+          "mastery"
+        ],
+        "type": "object"
+      },
+      "PerksSummary": {
+        "description": "Riot's `perks` blob is ~40 lines to convey three icon ids.",
+        "properties": {
+          "keystone": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "primaryStyle": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "subStyle": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "PlayerChampionEntry": {
+        "description": "One champion in a player's pool.",
+        "properties": {
+          "avgKda": {
+            "description": "(kills + assists) / deaths, deaths floored at 1. Absent until a game\ncarries a K/D/A.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "championId": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "championName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "csPerMin": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "games": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "lastPlayedAt": {
+            "description": "End of the most recent archived game on this champion (ISO 8601).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "winRate": {
+            "format": "double",
+            "type": "number"
+          },
+          "wins": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "championId",
+          "games",
+          "wins",
+          "winRate",
+          "lastPlayedAt"
+        ],
+        "type": "object"
+      },
+      "PlayerChampions": {
+        "description": "A player's champion pool, computed from the archive at read time: a fact\nabout what this deployment has archived, not the player's whole history.",
+        "properties": {
+          "archivedGames": {
+            "description": "Games summed across `champions`.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "champions": {
+            "items": {
+              "$ref": "#/components/schemas/PlayerChampionEntry"
+            },
+            "type": "array"
+          },
+          "patch": {
+            "description": "Echoes the `patch` filter; null means every patch.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "platform": {
+            "description": "Echoes the `platform` filter; null means every platform.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "puuid": {
+            "type": "string"
+          },
+          "queue": {
+            "description": "Echoes the `queue` filter; null means every queue.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "puuid",
+          "platform",
+          "queue",
+          "patch",
+          "archivedGames",
+          "champions"
+        ],
+        "type": "object"
+      },
+      "PlayerSummary": {
+        "properties": {
+          "assists": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "champLevel": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "championId": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "championName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deaths": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "gameEndedInEarlySurrender": {
+            "description": "A remake: rendered as neither a win nor a loss.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "goldEarned": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "item0": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "item1": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "item2": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "item3": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "item4": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "item5": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "item6": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "kills": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "neutralMinionsKilled": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "perks": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PerksSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "placement": {
+            "description": "Arena: there is no win/loss to render, only a placement.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "playerSubteamId": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "puuid": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "summoner1Id": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "summoner2Id": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "teamId": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "teamPosition": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "totalDamageDealtToChampions": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "totalMinionsKilled": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "visionScore": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "win": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "ProfileBody": {
+        "description": "The composite profile. `account`, `summoner`, `league` and `mastery` are\nRiot's payloads verbatim, or `null` if that part failed (see `warnings`).",
+        "properties": {
+          "account": {
+            "description": "Riot's payload, verbatim, or `null` if that part failed; see `warnings`."
+          },
+          "ageSeconds": {
+            "$ref": "#/components/schemas/PartAges",
+            "description": "`X-Cache-Age` is the stalest of these."
+          },
+          "league": {
+            "description": "Riot's payload, verbatim, or `null` if that part failed; see `warnings`."
+          },
+          "mastery": {
+            "description": "Riot's payload, verbatim, or `null` if that part failed; see `warnings`."
+          },
+          "platform": {
+            "type": "string"
+          },
+          "puuid": {
+            "type": "string"
+          },
+          "refreshAvailableIn": {
+            "description": "Seconds until another `?refresh=true` is allowed for this player; 0 when now.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "refreshed": {
+            "description": "Whether this request won the refresh window and went upstream.",
+            "type": "boolean"
+          },
+          "region": {
+            "type": "string"
+          },
+          "summoner": {
+            "description": "Riot's payload, verbatim, or `null` if that part failed; see `warnings`."
+          },
+          "warnings": {
+            "description": "Names each part that could not be fetched.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "puuid",
+          "platform",
+          "region",
+          "account",
+          "summoner",
+          "league",
+          "mastery",
+          "ageSeconds",
+          "refreshed",
+          "refreshAvailableIn",
+          "warnings"
         ],
         "type": "object"
       },
@@ -1482,6 +2099,548 @@ expression: doc
         "summary": "Summoner by PUUID",
         "tags": [
           "lol"
+        ]
+      }
+    },
+    "/v1/players/by-riot-id/{gameName}/{tagLine}/profile": {
+      "get": {
+        "description": "The same document, entered by Riot ID. The account lookup is reused as the `account` part rather than fetched twice.",
+        "operationId": "profile_by_riot_id",
+        "parameters": [
+          {
+            "description": "The part of a Riot ID before the `#` (1–16 characters)",
+            "in": "path",
+            "name": "gameName",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The part of a Riot ID after the `#` (1–5 characters)",
+            "in": "path",
+            "name": "tagLine",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Platform routing value; default `DEFAULT_PLATFORM`",
+            "in": "query",
+            "name": "platform",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "1–20, default 5",
+            "in": "query",
+            "name": "topMastery",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Spend quota to re-read; once a minute per player",
+            "in": "query",
+            "name": "refresh",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileBody"
+                }
+              }
+            },
+            "description": "The profile"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Nothing resolved for this player."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot failed or rejected the proxy's key (`UPSTREAM_ERROR`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot's rate limit budget is exhausted (`RATE_LIMITED`, with `Retry-After`)."
+          }
+        },
+        "summary": "A player's profile by Riot ID",
+        "tags": [
+          "players"
+        ]
+      }
+    },
+    "/v1/players/{puuid}/champions": {
+      "get": {
+        "description": "Per champion: games, wins, win rate, average KDA and when it was last played, grouped at read time from the archive, most played first. Never contacts Riot, so it costs no quota; it only reports the games this deployment has archived for the player.",
+        "operationId": "champions",
+        "parameters": [
+          {
+            "description": "Encrypted player UUID",
+            "in": "path",
+            "name": "puuid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only games on this platform (by match id prefix)",
+            "in": "query",
+            "name": "platform",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Queue id, 0–5000",
+            "in": "query",
+            "name": "queue",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "`major.minor`, e.g. 14.18",
+            "in": "query",
+            "name": "patch",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "1–500, default 200",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlayerChampions"
+                }
+              }
+            },
+            "description": "The pool"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          }
+        },
+        "summary": "A player's champion pool",
+        "tags": [
+          "players"
+        ]
+      }
+    },
+    "/v1/players/{puuid}/matches": {
+      "get": {
+        "description": "The id page, then every match on it, fanned out concurrently. Archived matches come from one archive read at no quota cost. Each entry is the player's own line in the game; the full match stays one call away at `/v1/lol/matches/{region}/{matchId}`. A match that cannot be fetched is left out and named in `warnings`; a failed id lookup fails the page.",
+        "operationId": "match_page",
+        "parameters": [
+          {
+            "description": "Encrypted player UUID",
+            "in": "path",
+            "name": "puuid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Platform routing value; default `DEFAULT_PLATFORM`",
+            "in": "query",
+            "name": "platform",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "0–10000, default 0",
+            "in": "query",
+            "name": "start",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "1–20, default 10: every id is its own upstream call",
+            "in": "query",
+            "name": "count",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Queue id, 0–5000",
+            "in": "query",
+            "name": "queue",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "ranked, normal, tourney or tutorial",
+            "in": "query",
+            "name": "type",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Re-read the id list; once a minute per player",
+            "in": "query",
+            "name": "refresh",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatchPage"
+                }
+              }
+            },
+            "description": "The page"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Nothing resolved for this player."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot failed or rejected the proxy's key (`UPSTREAM_ERROR`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot's rate limit budget is exhausted (`RATE_LIMITED`, with `Retry-After`)."
+          }
+        },
+        "summary": "A page of match history, summarised",
+        "tags": [
+          "players"
+        ]
+      }
+    },
+    "/v1/players/{puuid}/profile": {
+      "get": {
+        "description": "Account, summoner, ranked entries and top mastery, fetched concurrently and each cached on its own. A part that fails is `null` and named in `warnings`; only every part failing is a 404. `refresh=true` re-reads every part upstream, at most once a minute per player.",
+        "operationId": "profile",
+        "parameters": [
+          {
+            "description": "Encrypted player UUID",
+            "in": "path",
+            "name": "puuid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Platform routing value; default `DEFAULT_PLATFORM`",
+            "in": "query",
+            "name": "platform",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "1–20, default 5",
+            "in": "query",
+            "name": "topMastery",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Spend quota to re-read; once a minute per player",
+            "in": "query",
+            "name": "refresh",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileBody"
+                }
+              }
+            },
+            "description": "The profile"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Nothing resolved for this player."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot failed or rejected the proxy's key (`UPSTREAM_ERROR`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot's rate limit budget is exhausted (`RATE_LIMITED`, with `Retry-After`)."
+          }
+        },
+        "summary": "A player's profile in one call",
+        "tags": [
+          "players"
         ]
       }
     },

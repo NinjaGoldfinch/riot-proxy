@@ -100,6 +100,7 @@ impl Modify for SecuritySchemes {
 /// (`serve`); with `None` they don't, which is all `spec` needs.
 pub fn api_router(auth: Option<AppState>) -> OpenApiRouter<AppState> {
     let mut read = OpenApiRouter::new()
+        .merge(routes::players::router())
         .merge(routes::riot::router())
         .merge(routes::lol::router());
     if let Some(state) = auth {

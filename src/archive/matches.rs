@@ -121,6 +121,37 @@ pub async fn get(db: &Db, match_id: &str) -> Result<Option<Bytes>, ArchiveError>
     .await
 }
 
+/// The archived bodies among `match_ids`, by id; ids not archived are absent.
+/// One query for a whole page (v1 `getArchivedMatches`, #54) rather than one
+/// archive read per match.
+pub async fn get_many(
+    db: &Db,
+    match_ids: &[String],
+) -> Result<std::collections::HashMap<String, Bytes>, ArchiveError> {
+    if match_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let ids = match_ids.to_vec();
+    db.read(move |conn| {
+        let mut found = std::collections::HashMap::new();
+        for chunk in ids.chunks(FILTER_CHUNK) {
+            let marks = vec!["?"; chunk.len()].join(",");
+            let mut stmt = conn.prepare(&format!(
+                "SELECT match_id, body_zstd FROM matches WHERE match_id IN ({marks})"
+            ))?;
+            let rows = stmt.query_map(params_from_iter(chunk), |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))
+            })?;
+            for row in rows {
+                let (id, blob) = row?;
+                found.insert(id, decompress(&blob)?);
+            }
+        }
+        Ok::<_, ArchiveError>(found)
+    })
+    .await
+}
+
 /// Archive a match body and its facts. Idempotent: archiving it again rewrites
 /// the same rows (v1 upserted too). `region` is the routing value the match came
 /// from; `key_scope` is the key whose PUUIDs are in the body.

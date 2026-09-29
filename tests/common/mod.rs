@@ -53,6 +53,7 @@ pub fn app_with(env: &[(&str, &str)], upstream: &str) -> (tempfile::TempDir, App
         limiter,
         fetcher,
         limiter_restored: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        refresh: std::sync::Arc::new(riot_proxy::routes::players::RefreshWindows::new()),
     };
     let router = app::router(state.clone(), telemetry::metrics_handle().expect("metrics"));
     (dir, state, router)

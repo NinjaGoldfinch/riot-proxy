@@ -183,3 +183,17 @@ async fn a_match_whose_facts_cannot_be_read_is_still_archived() {
     assert_eq!(get(&db, "EUW1_1").await.unwrap().unwrap().as_ref(), body);
     assert!(facts_rows(&db).await.is_empty());
 }
+
+#[tokio::test]
+async fn get_many_returns_only_the_archived_ones() {
+    let (_dir, db) = db();
+    assert!(get_many(&db, &[]).await.unwrap().is_empty());
+    put(&db, MATCH_ID, "asia", SCOPE, Bytes::from_static(MATCH), 1)
+        .await
+        .unwrap();
+    let found = get_many(&db, &[MATCH_ID.to_string(), "KR_1".to_string()])
+        .await
+        .unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[MATCH_ID].as_ref(), MATCH);
+}

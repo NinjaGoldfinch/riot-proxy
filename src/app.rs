@@ -47,6 +47,8 @@ pub struct AppState {
     pub fetcher: Fetcher,
     /// Set once the limiter checkpoint has been restored (`/readyz`).
     pub limiter_restored: Arc<std::sync::atomic::AtomicBool>,
+    /// The per-player `?refresh=true` cooldowns of `/v1/players/*`.
+    pub refresh: Arc<crate::routes::players::RefreshWindows>,
 }
 
 pub fn router(state: AppState, metrics: PrometheusHandle) -> Router {

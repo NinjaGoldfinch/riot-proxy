@@ -1,0 +1,117 @@
+---
+source: tests/players_routes.rs
+expression: body
+---
+{
+  "account": {
+    "gameName": "Hide on bush",
+    "puuid": "NkQRxdiN3U3pEek5MWbWgaxzG_hpH5imJ9Ttch8ql5KM7D6p6Bh-Hbbvn6UoFVdGUBBIvcnEJv72qw",
+    "tagLine": "KR1"
+  },
+  "ageSeconds": {
+    "account": 0,
+    "league": 0,
+    "mastery": 0,
+    "summoner": 0
+  },
+  "league": [
+    {
+      "freshBlood": false,
+      "hotStreak": true,
+      "inactive": false,
+      "leaguePoints": 2178,
+      "losses": 335,
+      "puuid": "NkQRxdiN3U3pEek5MWbWgaxzG_hpH5imJ9Ttch8ql5KM7D6p6Bh-Hbbvn6UoFVdGUBBIvcnEJv72qw",
+      "queueType": "RANKED_SOLO_5x5",
+      "rank": "I",
+      "tier": "CHALLENGER",
+      "veteran": false,
+      "wins": 410
+    }
+  ],
+  "mastery": [
+    {
+      "championId": 7,
+      "championLevel": 59,
+      "championPoints": 623792,
+      "championPointsSinceLastLevel": 9192,
+      "championPointsUntilNextLevel": 1808,
+      "championSeasonMilestone": 2,
+      "lastPlayTime": 1790234538000,
+      "markRequiredForNextLevel": 2,
+      "milestoneGrades": [
+        "B+",
+        "A",
+        "A+",
+        "A",
+        "B+",
+        "A"
+      ],
+      "nextSeasonMilestone": {
+        "bonus": false,
+        "requireGradeCounts": {
+          "S-": 1
+        },
+        "rewardMarks": 2,
+        "totalGamesRequires": 1
+      },
+      "puuid": "NkQRxdiN3U3pEek5MWbWgaxzG_hpH5imJ9Ttch8ql5KM7D6p6Bh-Hbbvn6UoFVdGUBBIvcnEJv72qw",
+      "tokensEarned": 8
+    },
+    {
+      "championId": 268,
+      "championLevel": 38,
+      "championPoints": 394054,
+      "championPointsSinceLastLevel": 10454,
+      "championPointsUntilNextLevel": 546,
+      "championSeasonMilestone": 0,
+      "lastPlayTime": 1780848080000,
+      "markRequiredForNextLevel": 2,
+      "nextSeasonMilestone": {
+        "bonus": false,
+        "requireGradeCounts": {
+          "A-": 1
+        },
+        "rewardMarks": 1,
+        "totalGamesRequires": 1
+      },
+      "puuid": "NkQRxdiN3U3pEek5MWbWgaxzG_hpH5imJ9Ttch8ql5KM7D6p6Bh-Hbbvn6UoFVdGUBBIvcnEJv72qw",
+      "tokensEarned": 33
+    },
+    {
+      "championId": 517,
+      "championLevel": 34,
+      "championPoints": 344722,
+      "championPointsSinceLastLevel": 5122,
+      "championPointsUntilNextLevel": 5878,
+      "championSeasonMilestone": 1,
+      "lastPlayTime": 1789736552000,
+      "markRequiredForNextLevel": 2,
+      "milestoneGrades": [
+        "B+"
+      ],
+      "nextSeasonMilestone": {
+        "bonus": false,
+        "requireGradeCounts": {
+          "A-": 1
+        },
+        "rewardMarks": 1,
+        "totalGamesRequires": 1
+      },
+      "puuid": "NkQRxdiN3U3pEek5MWbWgaxzG_hpH5imJ9Ttch8ql5KM7D6p6Bh-Hbbvn6UoFVdGUBBIvcnEJv72qw",
+      "tokensEarned": 23
+    }
+  ],
+  "platform": "kr",
+  "puuid": "NkQRxdiN3U3pEek5MWbWgaxzG_hpH5imJ9Ttch8ql5KM7D6p6Bh-Hbbvn6UoFVdGUBBIvcnEJv72qw",
+  "refreshAvailableIn": 0,
+  "refreshed": false,
+  "region": "asia",
+  "summoner": {
+    "profileIconId": 6,
+    "puuid": "NkQRxdiN3U3pEek5MWbWgaxzG_hpH5imJ9Ttch8ql5KM7D6p6Bh-Hbbvn6UoFVdGUBBIvcnEJv72qw",
+    "revisionDate": 1790247628000,
+    "summonerLevel": 939
+  },
+  "warnings": []
+}
