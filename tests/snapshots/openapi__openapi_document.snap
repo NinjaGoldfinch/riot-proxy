@@ -4360,6 +4360,50 @@ expression: doc
           "riot"
         ]
       }
+    },
+    "/v1/ws": {
+      "get": {
+        "description": "Upgrade with `Authorization: Bearer rpx_…`, or `?token=rpx_…` from a browser. The server sends `{\"op\":\"ready\",\"consumer\":…}`, then:\n\n- `{\"op\":\"subscribe\",\"topics\":[…]}` / `{\"op\":\"unsubscribe\",\"topics\":[…]}` → `{\"op\":\"subscribed\",\"topics\":[…]}`, listing everything the socket holds. A topic that was refused is absent.\n- `{\"op\":\"ping\"}` → `{\"op\":\"pong\",\"at\":…}`.\n- Events arrive as `{\"op\":\"event\",\"event\":…,\"topic\":…,\"at\":…,\"data\":{…}}`.\n- `{\"op\":\"resync\",\"topic\":…,\"dropped\":n}` means this socket fell behind and missed `n` events on that topic; re-read what it covers.\n- Problems arrive as `{\"op\":\"error\",\"error\":{\"code\",\"message\"}}` without closing the socket.\n\n**Topics:** `player:<puuid>` (game, rank and archive events for one player), `patch`, and admin only: `metrics` (a snapshot every `METRICS_INTERVAL_S` while subscribed), `ladder`, `firehose` (every event). At most 200 per socket. The server pings every 30 s and drops a socket after two unanswered pings.\n\n**Events:** `game.started`, `game.ended`, `rank.changed`, `match.archived` (player topics); `patch.new`; `crawl.phase`, `ladder.crawl.completed`, `analytics.updated` (`ladder`); `metrics.snapshot` (`metrics`).\n\n**Closes:** 4401 for an invalid or revoked key, 1001 on server shutdown.",
+        "operationId": "socket",
+        "parameters": [
+          {
+            "description": "The consumer key, for browsers that cannot set headers",
+            "in": "query",
+            "name": "token",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "Switching protocols"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "tokenQuery": []
+          }
+        ],
+        "summary": "Realtime events over a WebSocket",
+        "tags": [
+          "ws"
+        ]
+      }
     }
   },
   "security": [

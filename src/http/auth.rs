@@ -236,6 +236,25 @@ impl Auth {
         Ok(cached)
     }
 
+    /// The WebSocket handshake (v1 `/v1/ws`): any active key, from the bearer
+    /// header or `?token=`. Returns the consumer and whether it may hold admin
+    /// topics: admin scope *and* the admin IP allowlist, decided once here (v1).
+    pub async fn socket(
+        &self,
+        headers: &HeaderMap,
+        uri: &Uri,
+        peer: Option<SocketAddr>,
+    ) -> Result<(Arc<Consumer>, bool), ApiError> {
+        let ip = client_ip(headers, peer);
+        if self.disabled {
+            return Ok((Arc::new(Consumer::dev_local()), true));
+        }
+        let token = bearer(headers, uri).ok_or_else(ApiError::unauthorized)?;
+        let consumer = self.resolve(&token).await?.ok_or_else(ApiError::unauthorized)?;
+        let admin = consumer.has(Scope::Admin) && ip_allowed(ip, &self.allowlist);
+        Ok((consumer, admin))
+    }
+
     /// Drop a cached lookup so a revocation takes effect at once (admin API, P5-05).
     pub async fn invalidate(&self, key_hash: [u8; 32]) {
         self.cache.invalidate(&key_hash).await;

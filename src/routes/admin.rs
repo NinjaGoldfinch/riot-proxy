@@ -234,7 +234,9 @@ async fn revoke_consumer(
             // v1 left a revoked key working until its auth-cache entry expired
             // and offered `revoke-cache` for the impatient; v2 drops it here.
             state.auth.invalidate(hash).await;
-            tracing::info!(id = %consumer.id, "consumer disabled");
+            // And its open sockets (ADR-045).
+            let closed = state.hub.close_consumer(&consumer.id);
+            tracing::info!(id = %consumer.id, sockets = closed, "consumer disabled");
             ok(&serde_json::json!({"ok": true, "id": consumer.id}))
         }
         Ok(None) => ApiError::not_found("No active consumer with that id").into_response(),

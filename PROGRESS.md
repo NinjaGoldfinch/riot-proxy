@@ -122,7 +122,7 @@ The response shape of `/v1/players/by-riot-id/{gameName}/{tagLine}/profile` matc
 - [x] P6-04 ticks (#49)
 - [x] P6-05 poll handlers (#50)
 - [x] P6-06 archive + backfill handlers (#51)
-- [ ] P6-07 WS auth + wiring
+- [x] P6-07 WS auth + wiring (#52)
 - [ ] P6-08 admin routes (jobs)
 Exit check: _pending_
 

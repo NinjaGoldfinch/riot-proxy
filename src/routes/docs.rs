@@ -116,6 +116,7 @@ pub fn api_router(auth: Option<AppState>) -> OpenApiRouter<AppState> {
     }
     OpenApiRouter::with_openapi(ApiDoc::openapi())
         .merge(routes::health::router())
+        .merge(routes::ws::router())
         .merge(read)
         .merge(admin)
 }

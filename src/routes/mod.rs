@@ -8,3 +8,4 @@ pub mod passthrough;
 pub mod players;
 pub mod riot;
 pub mod ui;
+pub mod ws;

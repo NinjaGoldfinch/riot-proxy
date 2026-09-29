@@ -127,6 +127,13 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     let workers = scheduler.start(usize::try_from(config.job_concurrency).unwrap_or(8));
     let ticks =
         crate::jobs::ticks::Ticks::start(&scheduler, &scope, crate::jobs::ticks::poll_schedule(&config));
+    // The `metrics` topic ticks only while someone holds it (v1).
+    let metrics_topic = crate::ws::metrics::spawn(
+        hub.clone(),
+        db.clone(),
+        scope.clone(),
+        Duration::from_secs(u64::from(config.metrics_interval_s)),
+    );
 
     let shutdown = app::shutdown_signal()?;
     let auth = Arc::new(Auth::new(&config, db.clone()));
@@ -148,6 +155,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     // jobs finish (the rest resume on the next boot), close sockets, then the
     // final limiter checkpoint (design/05) and pending L2 writes (design/04).
     ticks.shutdown().await;
+    metrics_topic.abort();
     workers.shutdown(JOB_GRACE).await;
     hub.shutdown();
     checkpoints.abort();
