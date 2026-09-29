@@ -103,7 +103,7 @@ Exit check: _pending_
 - [x] P5-02 match archive (#41)
 - [x] P5-03 facts extraction (#42)
 - [x] P5-04 players + composites (#43; snapshots reviewed by owner)
-- [x] P5-05 admin routes (data) (#PR)
+- [x] P5-05 admin routes (data) (#44)
 Exit check: _pending_
 
 ## P6 — Scheduler, jobs, realtime
