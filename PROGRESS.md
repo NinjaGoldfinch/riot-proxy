@@ -104,7 +104,16 @@ Exit check: _pending_
 - [x] P5-03 facts extraction (#42)
 - [x] P5-04 players + composites (#43; snapshots reviewed by owner)
 - [x] P5-05 admin routes (data) (#44)
-Exit check: _pending_
+
+Exit check (2026-09-30): **passed.**
+The real binary ran against Riot with a fresh `DATA_DIR`, making one live call.
+```
+GET /v1/lol/matches/asia/KR_8393343196   → 200, X-Cache: MISS     (78939 bytes)
+SIGTERM, restart serve (same DATA_DIR)
+GET /v1/lol/matches/asia/KR_8393343196   → 200, X-Cache: ARCHIVE  (78939 bytes)
+cmp: byte-identical (sha256 71b146e59a3b2818…); no RGAPI- in the server log
+```
+The response shape of `/v1/players/by-riot-id/{gameName}/{tagLine}/profile` matches v1's `ProfileBody` (snapshot `players_routes__players_profile.snap`), reviewed and approved by the owner on #43. The plan's path `/v1/lol/match/{id}` is served as v1's `/v1/lol/matches/{region}/{matchId}`.
 
 ## P6 — Scheduler, jobs, realtime
 - [ ] P6-01 WebSocket hub spike (may run any time after P0)
