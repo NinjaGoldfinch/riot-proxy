@@ -122,12 +122,11 @@ stateDiagram-v2
 flowchart LR
     pub["publish(topic, event)"] --> hub
     subgraph hub["Hub: HashMap<Topic, broadcast::Sender<Arc<Event>>>"]
-        t1[game]
-        t2[rank]
-        t3[match]
+        t1["player:&lt;puuid&gt;"]
         t4[patch]
         t5[metrics]
         t6[firehose]
+        t7[ladder]
     end
     t1 --> s1[socket A]
     t1 --> s2[socket B]
@@ -135,37 +134,45 @@ flowchart LR
     t5 --> s3[dashboard]
 ```
 
-- One `broadcast::Sender` per topic, capacity 256. `firehose` receives every event.
+- One `broadcast::Sender` per topic, capacity 256, created on first subscribe and dropped when its last subscriber leaves. `firehose` receives every event.
 - A socket task holds one `Receiver` per subscribed topic and `select!`s over them plus the inbound frame stream.
-- `RecvError::Lagged(n)` → send `{"type":"resync","dropped":n}` and continue, matching v1's slow-consumer behaviour.
+- `RecvError::Lagged(n)` → send `{"op":"resync","topic":…,"dropped":n}` and continue. v1 had no signal for this: a slow socket either buffered without bound or lost events without being told.
 - `metrics` ticks only while `sender.receiver_count() > 0` — v1's "costs nothing while nobody watches" rule, now free to check.
 
 ### Protocol
 
-Unchanged from v1 §11 so existing consumers keep working:
+v1's wire protocol (§11), which the embedded dashboard and existing clients speak, plus four additions the owner approved (ADR-045): a `resync` frame, topic validation, closing sockets whose key is revoked, and `op:"event"` on event frames.
 
 ```jsonc
 // client → server
-{ "type": "subscribe",   "topics": ["game", "rank"] }
-{ "type": "unsubscribe", "topics": ["rank"] }
-{ "type": "ping" }
+{ "op": "subscribe",   "topics": ["player:<puuid>", "patch"] }
+{ "op": "unsubscribe", "topics": ["patch"] }
+{ "op": "ping" }
 // server → client
-{ "type": "event", "topic": "game", "name": "game.started", "at": 1726400000000, "data": { … } }
-{ "type": "resync", "dropped": 12 }
-{ "type": "pong" }
+{ "op": "ready", "consumer": "web" }
+{ "op": "subscribed", "topics": ["player:<puuid>"] }     // everything the socket now holds
+{ "op": "event", "event": "game.started", "topic": "player:<puuid>", "at": 1726400000000, "data": { … } }
+{ "op": "resync", "topic": "player:<puuid>", "dropped": 12 }
+{ "op": "pong", "at": 1726400000000 }
+{ "op": "error", "error": { "code": "FORBIDDEN", "message": "Topic 'metrics' requires the admin scope" } }
 ```
 
-Auth is the same Bearer key on the upgrade request (or `?key=` for browsers, admin topics require admin scope), rate-limited by the consumer quota like any route.
+Topics are v1's: `player:<puuid>` (anything about one player), `patch`, and the admin-only `metrics`, `firehose` and `ladder`. Any other topic is refused with an error frame. A socket holds at most 200 topics. The server pings every 30 s and drops a socket after two unanswered pings. Order is kept within a topic, and so on the firehose, but not across topics.
+
+Auth is the same Bearer key on the upgrade request, or `?token=` for browsers (v1); admin topics require the admin scope and the admin IP allowlist. A revoked key's sockets are closed with 4401, and shutdown closes them with 1001.
 
 ### Events
 
-`events.rs` is an enum with `#[serde(tag = "name")]`, so the set of event names is exhaustively known to the compiler and `utoipa` can document them under the `ws` tag as prose, as v1 does.
+`events.rs` is an enum tagged `event` (the key v1's frames use), so the set of event names is exhaustively known to the compiler and `utoipa` can document them under the `ws` tag as prose, as v1 does. Names and payload fields are v1's, plus `crawl.phase` (ADR-045).
 
-| Name | Payload |
-|---|---|
-| `game.started` / `game.ended` | puuid, platform, gameId, queue, champion |
-| `rank.changed` | puuid, queue, before, after |
-| `match.archived` | matchId, patch, participants (puuids) |
-| `patch.new` | version |
-| `crawl.phase` | crawlId, phase, stats |
-| `metrics` | the snapshot the dashboard draws |
+| Name | Topic | Payload |
+|---|---|---|
+| `game.started` | `player:<puuid>` | puuid, platform, gameId, queueId, championId |
+| `game.ended` | `player:<puuid>` | puuid, platform, gameId, queueId, championId |
+| `rank.changed` | `player:<puuid>` | puuid, queue, before, after (`{tier, rank, lp}` or null) |
+| `match.archived` | `player:<puuid>` | puuid, matchId, patch, participants (puuids) |
+| `patch.new` | `patch` | version |
+| `crawl.phase` | `ladder` | crawlId, platform, queue, phase, stats |
+| `ladder.crawl.completed` | `ladder` | crawlId, platform, queue, entries, players, durationS |
+| `analytics.updated` | `ladder` | platform, queue, durationS, tables |
+| `metrics.snapshot` | `metrics` | the snapshot the dashboard draws |

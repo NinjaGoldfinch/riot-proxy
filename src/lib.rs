@@ -17,3 +17,4 @@ pub mod riot;
 pub mod routes;
 pub mod singleflight;
 pub mod telemetry;
+pub mod ws;

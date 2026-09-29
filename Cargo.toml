@@ -17,7 +17,7 @@ bytes = "1.12"
 clap = { version = "4.6", features = ["derive", "env"] }
 dashmap = "6.2"
 figment = { version = "0.10", features = ["env"] }
-futures-util = { version = "0.3", default-features = false, features = ["std"] }
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 getrandom = "0.4"
 hex = "0.4"
 jiff = "0.2"
@@ -32,6 +32,7 @@ serde_json = { version = "1.0", features = ["raw_value"] }
 sha2 = "0.11"
 thiserror = "2.0"
 tokio = { version = "1.53", features = ["full"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
 tower-http = { version = "0.7", features = ["catch-panic", "compression-full", "cors", "fs", "limit", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
@@ -52,6 +53,7 @@ insta = { version = "1.48", features = ["json"] }
 proptest = "1.11"
 tempfile = "3.27"
 tokio-test = "0.4"
+tokio-tungstenite = "0.29"
 tower = { version = "0.5.3", features = ["util"] }
 ulid = "3.0"
 wiremock = "0.6"
