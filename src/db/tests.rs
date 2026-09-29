@@ -192,7 +192,7 @@ async fn a_v1_database_upgrades_to_v2_and_keeps_its_data() {
         })
         .await
         .expect("read");
-    assert_eq!((name.as_str(), versions), ("old", 2));
+    assert_eq!((name.as_str(), versions), ("old", 3));
 }
 
 /// match_facts is a pure derivation of matches: deleting a match cascades (design 04).
@@ -322,11 +322,11 @@ async fn migrations_apply_once_across_reopens() {
         })
         .await
         .expect("insert");
-    assert_eq!(history(first.clone()).await.expect("history"), 2);
+    assert_eq!(history(first.clone()).await.expect("history"), 3);
     drop(first);
 
     let second = Db::open(&path, 1).expect("second open");
-    assert_eq!(history(second.clone()).await.expect("history"), 2, "no re-run");
+    assert_eq!(history(second.clone()).await.expect("history"), 3, "no re-run");
     let name: Option<String> = second
         .read(|c| {
             Ok::<_, DbError>(
@@ -444,4 +444,27 @@ async fn open_async_and_custom_error_types() {
     assert!(matches!(res, Err(AppError::NotFound)));
     assert!(Db::default_readers() >= 1);
     assert_eq!(db.path(), dir.path().join("a.db"));
+}
+
+/// V0003 (ADR-043): CS and game length, nullable for rows archived before it.
+#[tokio::test]
+async fn cs_and_game_duration_columns_exist_and_are_nullable() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db = Db::open(&dir.path().join("riot-proxy.db"), 1).expect("open");
+    let cols = |table: &'static str| {
+        let db = db.clone();
+        async move {
+            db.read(move |c| {
+                let mut s = c.prepare(&format!(
+                    "SELECT name, \"notnull\" FROM pragma_table_info('{table}')"
+                ))?;
+                let rows = s.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+                Ok::<_, DbError>(rows.collect::<Result<Vec<_>, _>>()?)
+            })
+            .await
+            .expect("columns")
+        }
+    };
+    assert!(cols("matches").await.contains(&("game_duration".to_string(), 0)));
+    assert!(cols("match_facts").await.contains(&("cs".to_string(), 0)));
 }

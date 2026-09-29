@@ -2244,7 +2244,7 @@ expression: doc
     },
     "/v1/players/{puuid}/champions": {
       "get": {
-        "description": "Per champion: games, wins, win rate, average KDA and when it was last played, grouped at read time from the archive, most played first. Never contacts Riot, so it costs no quota; it only reports the games this deployment has archived for the player.",
+        "description": "Per champion: games, wins, win rate, average KDA, CS per minute and when it was last played, grouped at read time from the archive, most played first. Never contacts Riot, so it costs no quota; it only reports the games this deployment has archived for the player.",
         "operationId": "champions",
         "parameters": [
           {

@@ -12,6 +12,7 @@ expression: facts
     "kills": 5,
     "deaths": 8,
     "assists": 7,
+    "cs": 0,
     "items": [
       223020,
       443060,
@@ -52,6 +53,7 @@ expression: facts
     "kills": 3,
     "deaths": 6,
     "assists": 15,
+    "cs": 0,
     "items": [
       223020,
       223100,
@@ -92,6 +94,7 @@ expression: facts
     "kills": 3,
     "deaths": 9,
     "assists": 8,
+    "cs": 0,
     "items": [
       446671,
       223006,
@@ -132,6 +135,7 @@ expression: facts
     "kills": 21,
     "deaths": 4,
     "assists": 12,
+    "cs": 1,
     "items": [
       228002,
       222522,
@@ -172,6 +176,7 @@ expression: facts
     "kills": 2,
     "deaths": 7,
     "assists": 12,
+    "cs": 0,
     "items": [
       223047,
       443061,
@@ -212,6 +217,7 @@ expression: facts
     "kills": 10,
     "deaths": 10,
     "assists": 2,
+    "cs": 0,
     "items": [
       223036,
       443056,
@@ -252,6 +258,7 @@ expression: facts
     "kills": 10,
     "deaths": 9,
     "assists": 15,
+    "cs": 0,
     "items": [
       443060,
       447115,
@@ -292,6 +299,7 @@ expression: facts
     "kills": 6,
     "deaths": 10,
     "assists": 17,
+    "cs": 0,
     "items": [
       446671,
       223157,
@@ -332,6 +340,7 @@ expression: facts
     "kills": 9,
     "deaths": 6,
     "assists": 7,
+    "cs": 0,
     "items": [
       447106,
       443069,
@@ -372,6 +381,7 @@ expression: facts
     "kills": 5,
     "deaths": 8,
     "assists": 9,
+    "cs": 0,
     "items": [
       447101,
       220012,
@@ -412,6 +422,7 @@ expression: facts
     "kills": 5,
     "deaths": 8,
     "assists": 10,
+    "cs": 0,
     "items": [
       223158,
       447105,
@@ -452,6 +463,7 @@ expression: facts
     "kills": 2,
     "deaths": 7,
     "assists": 10,
+    "cs": 0,
     "items": [
       223047,
       447110,
@@ -492,6 +504,7 @@ expression: facts
     "kills": 11,
     "deaths": 7,
     "assists": 6,
+    "cs": 0,
     "items": [
       447108,
       0,
@@ -532,6 +545,7 @@ expression: facts
     "kills": 7,
     "deaths": 12,
     "assists": 18,
+    "cs": 0,
     "items": [
       223158,
       446656,
@@ -572,6 +586,7 @@ expression: facts
     "kills": 21,
     "deaths": 8,
     "assists": 9,
+    "cs": 0,
     "items": [
       226693,
       223142,
@@ -612,6 +627,7 @@ expression: facts
     "kills": 9,
     "deaths": 9,
     "assists": 20,
+    "cs": 0,
     "items": [
       447109,
       447122,
@@ -652,6 +668,7 @@ expression: facts
     "kills": 7,
     "deaths": 9,
     "assists": 10,
+    "cs": 0,
     "items": [
       447112,
       223047,
@@ -692,6 +709,7 @@ expression: facts
     "kills": 6,
     "deaths": 6,
     "assists": 7,
+    "cs": 0,
     "items": [
       223003,
       444644,

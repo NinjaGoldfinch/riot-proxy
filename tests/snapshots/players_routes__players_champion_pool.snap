@@ -8,6 +8,7 @@ expression: body
     {
       "avgKda": 5.3333,
       "championId": 134,
+      "csPerMin": 8.0676,
       "games": 2,
       "lastPlayedAt": "2026-09-24T11:00:23.902Z",
       "winRate": 1,
@@ -16,6 +17,7 @@ expression: body
     {
       "avgKda": 3,
       "championId": 105,
+      "csPerMin": 0,
       "games": 1,
       "lastPlayedAt": "2026-09-24T08:53:56.455Z",
       "winRate": 1,
@@ -24,6 +26,7 @@ expression: body
     {
       "avgKda": 7,
       "championId": 143,
+      "csPerMin": 8.091,
       "games": 1,
       "lastPlayedAt": "2026-09-24T09:54:16.131Z",
       "winRate": 1,
@@ -32,6 +35,7 @@ expression: body
     {
       "avgKda": 2,
       "championId": 516,
+      "csPerMin": 0,
       "games": 1,
       "lastPlayedAt": "2026-09-24T09:25:38.859Z",
       "winRate": 0,

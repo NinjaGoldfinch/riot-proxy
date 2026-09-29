@@ -99,7 +99,8 @@ CREATE TABLE matches (
   game_end_ms  INTEGER NOT NULL,
   body_zstd    BLOB NOT NULL,                     -- match-v5 payload, zstd
   body_size    INTEGER NOT NULL,                  -- uncompressed, for stats
-  archived_at  INTEGER NOT NULL
+  archived_at  INTEGER NOT NULL,
+  game_duration INTEGER                           -- seconds; added by V0003 (ADR-043)
 );
 CREATE INDEX matches_patch_queue ON matches(patch, queue_id);
 CREATE INDEX matches_end        ON matches(game_end_ms);
@@ -122,6 +123,7 @@ CREATE TABLE match_facts (                        -- one row per participant; pu
   runes        TEXT,                              -- JSON
   summoners    TEXT,                              -- JSON [int,int]
   facts_version INTEGER NOT NULL,                 -- bump to trigger facts:reextract
+  cs           INTEGER,                           -- lane + jungle minions; V0003 (ADR-043)
   PRIMARY KEY (match_id, puuid)
 );
 CREATE INDEX facts_player ON match_facts(key_scope, puuid, match_id);

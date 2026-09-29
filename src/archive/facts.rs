@@ -11,7 +11,9 @@
 use serde::{Deserialize, Serialize};
 
 /// The version of [`extract`] that wrote a row (`match_facts.facts_version`).
-pub const FACTS_VERSION: i64 = 1;
+///
+/// 2: `cs` (P5-04, ADR-043).
+pub const FACTS_VERSION: i64 = 2;
 
 /// One `match_facts` row, minus the `match_id` and `key_scope` the caller owns.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -25,6 +27,9 @@ pub struct Fact {
     pub kills: Option<i64>,
     pub deaths: Option<i64>,
     pub assists: Option<i64>,
+    /// `totalMinionsKilled + neutralMinionsKilled`; `None` only when both are
+    /// absent (v1 `extractCs`).
+    pub cs: Option<i64>,
     /// `item0`–`item5` in slot order, `0` for an empty slot. The trinket
     /// (`item6`) is left out, as v1's item stats left it out.
     pub items: Vec<i64>,
@@ -91,6 +96,8 @@ struct Participant {
     kills: Option<i64>,
     deaths: Option<i64>,
     assists: Option<i64>,
+    total_minions_killed: Option<i64>,
+    neutral_minions_killed: Option<i64>,
     item0: Option<i64>,
     item1: Option<i64>,
     item2: Option<i64>,
@@ -159,6 +166,10 @@ pub fn extract(body: &[u8]) -> Result<Vec<Fact>, FactsError> {
             kills: p.kills,
             deaths: p.deaths,
             assists: p.assists,
+            cs: match (p.total_minions_killed, p.neutral_minions_killed) {
+                (None, None) => None,
+                (lane, jungle) => Some(lane.unwrap_or(0) + jungle.unwrap_or(0)),
+            },
             items,
             runes: p.perks.map(runes),
             summoners: p.summoner1_id.zip(p.summoner2_id).map(|(a, b)| [a, b]),
@@ -202,13 +213,14 @@ pub fn write(
     )?;
     let mut stmt = conn.prepare_cached(
         "INSERT INTO match_facts (match_id, key_scope, puuid, team_id, position, champion_id, win,
-           kills, deaths, assists, items, runes, summoners, facts_version)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+           kills, deaths, assists, items, runes, summoners, facts_version, cs)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
          ON CONFLICT (match_id, puuid) DO UPDATE SET
            key_scope = excluded.key_scope, team_id = excluded.team_id, position = excluded.position,
            champion_id = excluded.champion_id, win = excluded.win, kills = excluded.kills,
            deaths = excluded.deaths, assists = excluded.assists, items = excluded.items,
-           runes = excluded.runes, summoners = excluded.summoners, facts_version = excluded.facts_version",
+           runes = excluded.runes, summoners = excluded.summoners, facts_version = excluded.facts_version,
+           cs = excluded.cs",
     )?;
     for f in facts {
         stmt.execute(rusqlite::params![
@@ -226,6 +238,7 @@ pub fn write(
             f.runes_json(),
             f.summoners_json(),
             FACTS_VERSION,
+            f.cs,
         ])?;
     }
     Ok(())

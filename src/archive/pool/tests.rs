@@ -21,6 +21,21 @@ async fn game(
     end: i64,
     rows: &[(&str, i64, bool, Option<(i64, i64, i64)>)],
 ) {
+    game_with(db, id, queue, patch, end, Some(1800), rows, None).await;
+}
+
+/// As [`game`], with a length (seconds) and the first row's CS.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+async fn game_with(
+    db: &Db,
+    id: &str,
+    queue: i64,
+    patch: &str,
+    end: i64,
+    duration: Option<i64>,
+    rows: &[(&str, i64, bool, Option<(i64, i64, i64)>)],
+    cs: Option<i64>,
+) {
     let (id, patch) = (id.to_string(), patch.to_string());
     let rows: Vec<_> = rows
         .iter()
@@ -28,14 +43,15 @@ async fn game(
         .collect();
     db.write(move |c| {
         c.execute(
-            "INSERT INTO matches VALUES (?1, 'europe', ?2, ?3, ?4, x'00', 1, 0)",
-            rusqlite::params![id, patch, queue, end],
+            "INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size, archived_at, game_duration)
+             VALUES (?1, 'europe', ?2, ?3, ?4, x'00', 1, 0, ?5)",
+            rusqlite::params![id, patch, queue, end, duration],
         )?;
-        for (puuid, champ, win, kda) in rows {
+        for (i, (puuid, champ, win, kda)) in rows.into_iter().enumerate() {
             c.execute(
-                "INSERT INTO match_facts (match_id, key_scope, puuid, team_id, champion_id, win, kills, deaths, assists, facts_version)
-                 VALUES (?1, 's1', ?2, 100, ?3, ?4, ?5, ?6, ?7, 1)",
-                rusqlite::params![id, puuid, champ, win, kda.map(|k| k.0), kda.map(|k| k.1), kda.map(|k| k.2)],
+                "INSERT INTO match_facts (match_id, key_scope, puuid, team_id, champion_id, win, kills, deaths, assists, facts_version, cs)
+                 VALUES (?1, 's1', ?2, 100, ?3, ?4, ?5, ?6, ?7, 2, ?8)",
+                rusqlite::params![id, puuid, champ, win, kda.map(|k| k.0), kda.map(|k| k.1), kda.map(|k| k.2), if i == 0 { cs } else { None }],
             )?;
         }
         Ok::<_, DbError>(())
@@ -147,7 +163,62 @@ async fn sums_the_facts_and_counts_the_stated_rows_separately() {
             kills: 6,
             deaths: 6,
             assists: 10,
+            cs: 0,
+            cs_seconds: 0,
             last_played_ms: Some(30),
         }
     );
+}
+
+#[tokio::test]
+async fn cs_and_length_are_summed_over_the_same_games() {
+    let (_d, db) = db();
+    game_with(
+        &db,
+        "EUW1_1",
+        420,
+        "14.18",
+        1,
+        Some(1800),
+        &[(ME, 64, true, None)],
+        Some(240),
+    )
+    .await;
+    game_with(
+        &db,
+        "EUW1_2",
+        420,
+        "14.18",
+        2,
+        Some(1200),
+        &[(ME, 64, true, None)],
+        Some(150),
+    )
+    .await;
+    // No CS (pre-v2 facts): its length must not dilute the rate.
+    game_with(
+        &db,
+        "EUW1_3",
+        420,
+        "14.18",
+        3,
+        Some(2400),
+        &[(ME, 64, true, None)],
+        None,
+    )
+    .await;
+    // No length (archived before V0003): its CS must not inflate it.
+    game_with(
+        &db,
+        "EUW1_4",
+        420,
+        "14.18",
+        4,
+        None,
+        &[(ME, 64, true, None)],
+        Some(300),
+    )
+    .await;
+    let row = &champions(&db, "s1", ME, all()).await.unwrap()[0];
+    assert_eq!((row.games, row.cs, row.cs_seconds), (4, 390, 3000));
 }

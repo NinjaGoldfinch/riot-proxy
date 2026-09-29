@@ -772,8 +772,9 @@ fn pool_body(puuid: &str, f: &pool::Filter, rows: Vec<pool::ChampionRow>) -> Pla
                     wins: r.wins,
                     win_rate: round4(wins / games),
                     avg_kda: kda,
-                    // match_facts holds no CS or game duration (design/04; ADR-042).
-                    cs_per_min: None,
+                    // Absent until a game carries both CS and a length (v1).
+                    cs_per_min: (r.cs_seconds > 0)
+                        .then(|| round4(r.cs as f64 / (r.cs_seconds as f64 / 60.0))),
                     last_played_at: r.last_played_ms.and_then(iso),
                 }
             })
@@ -784,7 +785,7 @@ fn pool_body(puuid: &str, f: &pool::Filter, rows: Vec<pool::ChampionRow>) -> Pla
 #[utoipa::path(
     get, path = "/v1/players/{puuid}/champions", tag = "players",
     summary = "A player's champion pool",
-    description = "Per champion: games, wins, win rate, average KDA and when it was last played, grouped at \
+    description = "Per champion: games, wins, win rate, average KDA, CS per minute and when it was last played, grouped at \
                    read time from the archive, most played first. Never contacts Riot, so it costs no quota; \
                    it only reports the games this deployment has archived for the player.",
     params(("puuid" = String, Path, description = "Encrypted player UUID"),
@@ -908,14 +909,28 @@ mod tests {
             kills: 6,
             deaths: 0,
             assists: 10,
+            cs: 390,
+            cs_seconds: 3000,
             last_played_ms: None,
         };
         let f = pool::Filter::default();
         let b = pool_body("p", &f, vec![row(2)]);
         let e = &b.champions[0];
-        assert_eq!((e.win_rate, e.avg_kda, e.cs_per_min), (0.6667, Some(16.0), None));
+        assert_eq!(
+            (e.win_rate, e.avg_kda, e.cs_per_min),
+            (0.6667, Some(16.0), Some(7.8))
+        );
         assert_eq!(b.archived_games, 3);
         let unswept = pool_body("p", &f, vec![row(0)]);
         assert_eq!(unswept.champions[0].avg_kda, None, "absent, not zero");
+        let no_length = pool_body(
+            "p",
+            &f,
+            vec![pool::ChampionRow {
+                cs_seconds: 0,
+                ..row(2)
+            }],
+        );
+        assert_eq!(no_length.champions[0].cs_per_min, None);
     }
 }

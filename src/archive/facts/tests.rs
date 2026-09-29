@@ -78,11 +78,30 @@ fn participants_missing_a_required_column_are_left_out() {
             kills: None,
             deaths: None,
             assists: None,
+            cs: None,
             items: vec![0; 6],
             runes: None,
             summoners: None,
         }
     );
+}
+
+#[test]
+fn cs_is_lane_plus_jungle_and_absent_only_when_both_are() {
+    let cs = |extra: &str| {
+        let body = format!(
+            r#"{{"info":{{"participants":[{{"puuid":"a","teamId":100,"championId":1,"win":true{extra}}}]}}}}"#
+        );
+        extract(body.as_bytes()).unwrap()[0].cs
+    };
+    assert_eq!(
+        cs(r#","totalMinionsKilled":150,"neutralMinionsKilled":12"#),
+        Some(162)
+    );
+    assert_eq!(cs(r#","neutralMinionsKilled":98"#), Some(98));
+    assert_eq!(cs(""), None);
+    let ranked = extract(RANKED).unwrap();
+    assert!(ranked.iter().all(|f| f.cs.is_some()));
 }
 
 #[test]
