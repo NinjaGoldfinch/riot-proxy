@@ -1,6 +1,7 @@
 //! Background work (docs/design/06): the durable queue and its workers, and the
 //! ticks that feed it; handlers arrive in P6-05 and P6-06.
 
+pub mod poll;
 pub mod scheduler;
 pub mod ticks;
 
@@ -28,4 +29,6 @@ pub mod priority {
     pub const MAINTENANCE: i64 = 30_000;
 }
 
-pub use scheduler::{Enqueued, Handler, Job, JobError, NewJob, Registry, Scheduler, Workers, enqueue_on};
+pub use scheduler::{
+    Enqueued, Handler, Job, JobError, NewJob, Queue, Registry, Scheduler, Workers, enqueue_on,
+};

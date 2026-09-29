@@ -365,3 +365,16 @@ Accepted. `jobs::ticks` runs one interval loop per repeating job, and ticks only
 - **Priorities:** polls use design/06's 10 000 band. Design/06 does not band `ddragon:sync`; it shares `maintenance`'s 30 000.
 - **Tests:** the loop's timing is tested under paused time with a counting action, and the fan-out against a real database. The plan wanted both in one paused-time test, but tokio's paused clock auto-advances while SQLite's blocking reads are awaited, so that test would count phantom ticks.
 - **Wiring:** ticks and workers start from `serve` once their handlers exist (P6-05 to P6-07); until then a tick would queue jobs that fail as unknown kinds.
+
+## ADR-049 — Poll handlers (2026-09-30)
+Accepted. `jobs::poll` ports v1's `pollLive`, `pollRank` and `pollMatches`. Every Riot call is `Priority::Bulk` (design/06).
+- **State lives on the player's row**, where v1 kept Redis keys with a TTL: `players.in_game_id`, `last_rank` (a JSON snapshot by queue) and `last_seen_match_id`. It survives restarts, so a restart neither re-announces games in progress nor treats every rank as a new baseline.
+- **`poll:live`:**
+  - A game id different from the stored one publishes `game.started` with v1's payload (`queueId` from `gameQueueConfigId`, `championId` from the player's participant).
+  - A 404 after a game publishes `game.ended` with `puuid`, `platform` and `gameId`. `queueId` and `championId` are not stored and so are absent. It also queues `poll:matches` a minute later, deduped with the tick's own poll (v1).
+  - Other errors are retried, never read as "not in game". Going straight from one game to another publishes only the new start, as v1 did.
+- **`poll:rank`:** the first snapshot is a baseline. After that, one `rank.changed` per queue whose `{tier, rank, lp}` moved, with `before: null` for a new queue. As in v1, a queue that disappears is not reported.
+- **`poll:matches`** (v1 #46): pages from the newest match back to the cursor, 5 ids on the first page and 100 per page after it, up to `TRACK_CATCHUP_LIMIT`. Anything deeper hands over to `backfill:player` (`reason: "catchup"`, deduped per player).
+  - Archive jobs are deduped by match id. Their priority follows design/06: the first page is the interactive band (0), and deeper matches get `100 + depth / 10`.
+  - **Fix over v1:** v1 moved the cursor only when a new match still needed archiving, so a player whose new games had already been archived (by a lookup, say) was paged further back every tick. v2 moves the cursor to the newest id seen.
+- `jobs::Queue`, the database plus the wake signal, is split out of `Scheduler` so handlers can enqueue while the scheduler holds them.

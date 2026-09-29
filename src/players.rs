@@ -29,10 +29,13 @@ pub struct Player {
     /// JSON `{done, cursor, limit}` (v1 #44); `None` until a backfill starts.
     pub backfill_state: Option<String>,
     pub updated_at: i64,
+    /// The game `poll:live` last saw the player in (v1 kept it in Redis).
+    pub in_game_id: Option<i64>,
+    /// JSON `{queue: {tier, rank, lp}}`, `poll:rank`'s last snapshot.
+    pub last_rank: Option<String>,
 }
 
-const COLUMNS: &str =
-    "puuid, platform, game_name, tag_line, tracked, last_seen_match_id, backfill_state, updated_at";
+const COLUMNS: &str = "puuid, platform, game_name, tag_line, tracked, last_seen_match_id, backfill_state, updated_at, in_game_id, last_rank";
 
 fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Player> {
     Ok(Player {
@@ -44,6 +47,8 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Player> {
         last_seen_match_id: r.get(5)?,
         backfill_state: r.get(6)?,
         updated_at: r.get(7)?,
+        in_game_id: r.get(8)?,
+        last_rank: r.get(9)?,
     })
 }
 
@@ -128,6 +133,43 @@ pub async fn set_tracked(
         let n = c.execute(
             "UPDATE players SET tracked = ?1, updated_at = ?2 WHERE key_scope = ?3 AND puuid = ?4",
             rusqlite::params![tracked, now_ms, scope, puuid],
+        )?;
+        Ok::<_, DbError>(n > 0)
+    })
+    .await
+}
+
+/// The poll state a player row carries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PollState {
+    /// `poll:live`: the game in progress, or none.
+    InGame(Option<i64>),
+    /// `poll:rank`: the JSON snapshot.
+    LastRank(String),
+    /// `poll:matches`: the newest match id seen.
+    LastSeenMatch(String),
+}
+
+/// Record poll state on an existing row; `false` if there is no such player.
+pub async fn set_poll_state(
+    db: &Db,
+    key_scope: &str,
+    puuid: &str,
+    state: PollState,
+) -> Result<bool, DbError> {
+    let (scope, puuid) = (key_scope.to_string(), puuid.to_string());
+    db.write(move |c| {
+        let (column, value): (&str, rusqlite::types::Value) = match state {
+            PollState::InGame(g) => (
+                "in_game_id",
+                g.map_or(rusqlite::types::Value::Null, rusqlite::types::Value::Integer),
+            ),
+            PollState::LastRank(j) => ("last_rank", rusqlite::types::Value::Text(j)),
+            PollState::LastSeenMatch(m) => ("last_seen_match_id", rusqlite::types::Value::Text(m)),
+        };
+        let n = c.execute(
+            &format!("UPDATE players SET {column} = ?1 WHERE key_scope = ?2 AND puuid = ?3"),
+            rusqlite::params![value, scope, puuid],
         )?;
         Ok::<_, DbError>(n > 0)
     })
@@ -230,6 +272,48 @@ mod tests {
             "another scope's row"
         );
         assert_eq!(counts(&db, "s1").await.unwrap(), (2, 0));
+    }
+
+    #[tokio::test]
+    async fn poll_state_is_stored_on_the_row() {
+        let (_d, db) = db();
+        upsert(&db, "s1", at("p1", "kr"), 1).await.unwrap();
+        assert!(
+            set_poll_state(&db, "s1", "p1", PollState::InGame(Some(7)))
+                .await
+                .unwrap()
+        );
+        assert!(
+            set_poll_state(&db, "s1", "p1", PollState::LastRank("{}".into()))
+                .await
+                .unwrap()
+        );
+        assert!(
+            set_poll_state(&db, "s1", "p1", PollState::LastSeenMatch("KR_1".into()))
+                .await
+                .unwrap()
+        );
+        let p = get(&db, "s1", "p1").await.unwrap().unwrap();
+        assert_eq!(
+            (
+                p.in_game_id,
+                p.last_rank.as_deref(),
+                p.last_seen_match_id.as_deref()
+            ),
+            (Some(7), Some("{}"), Some("KR_1"))
+        );
+        assert!(
+            set_poll_state(&db, "s1", "p1", PollState::InGame(None))
+                .await
+                .unwrap()
+        );
+        assert_eq!(get(&db, "s1", "p1").await.unwrap().unwrap().in_game_id, None);
+        assert!(
+            !set_poll_state(&db, "s2", "p1", PollState::InGame(None))
+                .await
+                .unwrap(),
+            "other scope"
+        );
     }
 
     #[tokio::test]
