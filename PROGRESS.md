@@ -123,7 +123,7 @@ The response shape of `/v1/players/by-riot-id/{gameName}/{tagLine}/profile` matc
 - [x] P6-05 poll handlers (#50)
 - [x] P6-06 archive + backfill handlers (#51)
 - [x] P6-07 WS auth + wiring (#52)
-- [ ] P6-08 admin routes (jobs)
+- [x] P6-08 admin routes (jobs) (#53)
 Exit check: _pending_
 
 ## P7 — Data Dragon, ladder, analytics, dashboard
@@ -150,7 +150,7 @@ Exit check: _pending_
 ## Notes for the next task
 - **P4 exit check is still open:** the owner needs to confirm `/docs` renders in a browser (headless Chromium crashed on Scalar here). Tag `phase-P4` after that.
 - **P7-04 `facts:reextract`** must re-derive `FACTS_VERSION` < 2 rows *and* fill `matches.game_duration` where it is NULL (V0003, ADR-043).
-- **P6:** `POST /v1/admin/players/names/backfill` (v1 job route) is unassigned; do it with the jobs (ADR-044). (P6-06 gave `players.backfill_state` its shape, ADR-050.)
+- **Unassigned:** `POST /v1/admin/players/names/backfill` (v1's job that fills Riot IDs from archived matches) is in no plan task; raised with the owner at the P6 review (ADR-044). (P6-06 gave `players.backfill_state` its shape, ADR-050.)
 - **Events** keep v1's names plus `crawl.phase` (ADR-045): P7-04 publishes `analytics.updated`; P7-02/03 publish `crawl.phase` and `ladder.crawl.completed`; the dashboard's names already match.
 - **Ask the owner at P7-04:** remakes are stored as ordinary facts rows (ADR-041); should analytics exclude them?
 - **Ask the owner at P7-04:** v1's analytics routes read tables design/04 doesn't have (bans, runes, spells, analytics slices; ADR-039).

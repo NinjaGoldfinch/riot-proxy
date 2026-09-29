@@ -406,3 +406,13 @@ Accepted. `routes::ws` wires the hub (ADR-045) to `/v1/ws`.
 - **Revocation closes sockets:** `DELETE /v1/admin/consumers/{id}` closes that consumer's open sockets with 4401 "key revoked" (ADR-045 fix 3).
 - **The `metrics` topic** (v1 `MetricsBroadcaster`) publishes `metrics.snapshot` every `METRICS_INTERVAL_S`, only while a socket holds the topic. The snapshot carries v1's `v`, `keyScope`, `totals` (archived matches, tracked and known players), `ws` and `events` sections; the rest of v1's document arrives with the dashboard in P7-06. v1's Redis lock for electing a publisher across API instances is not needed with one process.
 - **Documented** in the OpenAPI document as `GET /v1/ws` under the `ws` tag, with the protocol, topics, events and close codes as prose (design/06). v1's document had no path for it, so the contract compare shows it as added.
+
+## ADR-052 — Admin routes for jobs (2026-09-30)
+Accepted. The job routes are v2's own: v1's queues were BullMQ's, with no admin API beyond `POST /v1/admin/backfill`. Design/06 says only that `/v1/admin/jobs` "lists and retries failed rows", so the shapes below are v2's.
+- `GET /v1/admin/jobs?state=&kind=&limit=` lists rows newest first (limit 1–500, default 50). Each row is `{id, kind, dedupeKey, priority, state, attempts, runAfter, claimedAt, finishedAt, error, payload}`, with ISO timestamps as elsewhere.
+- `GET /v1/admin/jobs/stats` returns row counts by kind and by state, plus totals.
+- `POST /v1/admin/jobs/{id}/retry` puts a **failed** row back to `pending` now, with attempts reset. It is refused, with the id, when identical work (same kind and dedupe key) is already pending or running, so a retry can never run a match twice. Any other state is refused.
+- `DELETE /v1/admin/jobs/{id}` cancels a **pending** row: it becomes `failed` with error `cancelled`, so it stays visible and retryable. A running job cannot be taken back from its worker (v1 said the same of BullMQ), so it is refused.
+- Refusals are `VALIDATION` 400s ("Job X is running"), as v1's crawl cancel was; an unknown id is a 404.
+- `POST /v1/admin/backfill` is v1's route, `{puuid, platform, limit? (1–10 000, default 500), fetchTimeline?}` → `{ok, jobId, status}`. It queues through `enqueue_backfill` (`reason: admin`).
+- **Job ids** now come from one monotonic ULID generator, so ids made in the same millisecond still sort in creation order. The claim's tie-break (oldest first) and the list's order (newest first) therefore hold within a millisecond too.

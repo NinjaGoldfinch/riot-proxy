@@ -143,10 +143,23 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Job> {
     })
 }
 
+/// A job id: a ULID from one monotonic generator, so ids made in the same
+/// millisecond still sort in creation order. Claims break priority ties on it
+/// (oldest first) and the admin list sorts on it (newest first).
+fn next_id() -> String {
+    static GENERATOR: std::sync::Mutex<ulid::Generator> = std::sync::Mutex::new(ulid::Generator::new());
+    GENERATOR
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .generate()
+        .unwrap_or_else(|_| ulid::Ulid::generate())
+        .to_string()
+}
+
 /// Queue a job on `conn`, inside the caller's transaction if it has one, so a
 /// handler can fan out in the same write that records its own progress.
 pub fn enqueue_on(conn: &Connection, job: &NewJob, now_ms: i64) -> rusqlite::Result<Enqueued> {
-    let id = ulid::Ulid::generate().to_string();
+    let id = next_id();
     let n = conn.execute(
         "INSERT OR IGNORE INTO jobs (id, kind, dedupe_key, priority, payload, run_after)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -238,6 +251,185 @@ impl Queue {
 
     pub fn db(&self) -> &Db {
         &self.db
+    }
+}
+
+/// A `jobs` row as the admin routes show it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JobRow {
+    pub id: String,
+    pub kind: String,
+    pub dedupe_key: Option<String>,
+    pub priority: i64,
+    pub payload: String,
+    pub state: String,
+    pub attempts: u32,
+    pub run_after: i64,
+    pub claimed_at: Option<i64>,
+    pub finished_at: Option<i64>,
+    pub error: Option<String>,
+}
+
+/// The four states a row can be in (V0001).
+pub const STATES: [&str; 4] = ["pending", "running", "done", "failed"];
+
+const ROW_COLUMNS: &str =
+    "id, kind, dedupe_key, priority, payload, state, attempts, run_after, claimed_at, finished_at, error";
+
+fn full_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<JobRow> {
+    Ok(JobRow {
+        id: r.get(0)?,
+        kind: r.get(1)?,
+        dedupe_key: r.get(2)?,
+        priority: r.get(3)?,
+        payload: r.get(4)?,
+        state: r.get(5)?,
+        attempts: r.get(6)?,
+        run_after: r.get(7)?,
+        claimed_at: r.get(8)?,
+        finished_at: r.get(9)?,
+        error: r.get(10)?,
+    })
+}
+
+/// Why an admin action on a job did nothing.
+#[derive(Debug, thiserror::Error)]
+pub enum JobAction {
+    #[error("no such job")]
+    NotFound,
+    /// The row is in a state the action does not apply to.
+    #[error("job {id} is {state}")]
+    WrongState { id: String, state: String },
+    /// Retrying would duplicate work already pending or running.
+    #[error("an identical job is already queued ({0})")]
+    Duplicate(String),
+    #[error(transparent)]
+    Db(#[from] DbError),
+}
+
+impl Queue {
+    /// Rows, newest first, optionally one state and one kind.
+    pub async fn list(
+        &self,
+        state: Option<&'static str>,
+        kind: Option<String>,
+        limit: u32,
+    ) -> Result<Vec<JobRow>, DbError> {
+        self.db
+            .read(move |c| {
+                let mut s = c.prepare(&format!(
+                    "SELECT {ROW_COLUMNS} FROM jobs
+                      WHERE (?1 IS NULL OR state = ?1) AND (?2 IS NULL OR kind = ?2)
+                      ORDER BY id DESC LIMIT ?3"
+                ))?;
+                let rows = s.query_map(rusqlite::params![state, kind, limit], full_row)?;
+                rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
+            })
+            .await
+    }
+
+    pub async fn get(&self, id: &str) -> Result<Option<JobRow>, DbError> {
+        let id = id.to_string();
+        self.db
+            .read(move |c| {
+                c.query_row(
+                    &format!("SELECT {ROW_COLUMNS} FROM jobs WHERE id = ?1"),
+                    [id],
+                    full_row,
+                )
+                .optional()
+                .map_err(DbError::from)
+            })
+            .await
+    }
+
+    /// Put a `failed` job back to `pending` now, with its attempts reset
+    /// (design/06: "`/v1/admin/jobs` lists and retries failed rows").
+    pub async fn retry(&self, id: &str) -> Result<JobRow, JobAction> {
+        let (id, now) = (id.to_string(), Clock::now().unix_ms);
+        let out = self
+            .db
+            .write(move |c| {
+                let tx = c.transaction().map_err(DbError::from)?;
+                let row = tx
+                    .query_row(&format!("SELECT {ROW_COLUMNS} FROM jobs WHERE id = ?1"), [&id], full_row)
+                    .optional()
+                    .map_err(DbError::from)?
+                    .ok_or(JobAction::NotFound)?;
+                if row.state != "failed" {
+                    return Err(JobAction::WrongState { id, state: row.state });
+                }
+                if let Some(key) = &row.dedupe_key {
+                    let live: Option<String> = tx
+                        .query_row(
+                            "SELECT id FROM jobs WHERE kind = ?1 AND dedupe_key = ?2 AND state IN ('pending', 'running')",
+                            rusqlite::params![row.kind, key],
+                            |r| r.get(0),
+                        )
+                        .optional()
+                        .map_err(DbError::from)?;
+                    if let Some(other) = live {
+                        return Err(JobAction::Duplicate(other));
+                    }
+                }
+                tx.execute(
+                    "UPDATE jobs SET state = 'pending', attempts = 0, run_after = ?2, claimed_at = NULL,
+                            finished_at = NULL, error = NULL WHERE id = ?1",
+                    rusqlite::params![id, now],
+                )
+                .map_err(DbError::from)?;
+                let updated = tx
+                    .query_row(&format!("SELECT {ROW_COLUMNS} FROM jobs WHERE id = ?1"), [&id], full_row)
+                    .map_err(DbError::from)?;
+                tx.commit().map_err(DbError::from)?;
+                Ok(updated)
+            })
+            .await?;
+        self.notify.notify_one();
+        Ok(out)
+    }
+
+    /// Cancel a `pending` job: it becomes `failed` with `cancelled`. A running
+    /// job cannot be taken back from its worker.
+    pub async fn cancel(&self, id: &str) -> Result<JobRow, JobAction> {
+        let (id, now) = (id.to_string(), Clock::now().unix_ms);
+        self.db
+            .write(move |c| {
+                let n = c
+                    .execute(
+                        "UPDATE jobs SET state = 'failed', finished_at = ?2, error = 'cancelled'
+                          WHERE id = ?1 AND state = 'pending'",
+                        rusqlite::params![id, now],
+                    )
+                    .map_err(DbError::from)?;
+                let row = c
+                    .query_row(
+                        &format!("SELECT {ROW_COLUMNS} FROM jobs WHERE id = ?1"),
+                        [&id],
+                        full_row,
+                    )
+                    .optional()
+                    .map_err(DbError::from)?
+                    .ok_or(JobAction::NotFound)?;
+                if n == 0 {
+                    return Err(JobAction::WrongState { id, state: row.state });
+                }
+                Ok(row)
+            })
+            .await
+    }
+
+    /// Rows by kind and state.
+    pub async fn stats(&self) -> Result<Vec<(String, String, i64)>, DbError> {
+        self.db
+            .read(|c| {
+                let mut s = c.prepare(
+                    "SELECT kind, state, count(*) FROM jobs GROUP BY kind, state ORDER BY kind, state",
+                )?;
+                let rows = s.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+                rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
+            })
+            .await
     }
 }
 
@@ -502,3 +694,14 @@ impl Workers {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod ids {
+    #[test]
+    fn ids_made_together_still_sort_in_order() {
+        let ids: Vec<String> = (0..1000).map(|_| super::next_id()).collect();
+        let mut sorted = ids.clone();
+        sorted.sort();
+        assert_eq!(ids, sorted);
+    }
+}

@@ -51,5 +51,6 @@ pub fn handlers(
 }
 
 pub use scheduler::{
-    Enqueued, Handler, Job, JobError, NewJob, Queue, Registry, Scheduler, Workers, enqueue_on,
+    Enqueued, Handler, Job, JobAction, JobError, JobRow, NewJob, Queue, Registry, Scheduler, Workers,
+    enqueue_on,
 };
