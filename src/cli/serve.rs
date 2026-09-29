@@ -94,6 +94,40 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     let addr = listener.local_addr()?;
     tracing::info!(%addr, "listening");
 
+    // Jobs (design/06): handlers over one queue, interrupted work re-queued,
+    // then workers and the poll ticks. `ddragon:sync` and `maintenance` tick
+    // once their handlers exist (P7-01, P7-05).
+    let hub = crate::ws::Hub::new();
+    let queue = crate::jobs::Queue::new(db.clone());
+    let scope = KeyScope::from_key(&config.riot_api_key).as_str().to_string();
+    let poll = Arc::new(crate::jobs::poll::PollContext {
+        fetcher: fetcher.clone(),
+        queue: queue.clone(),
+        hub: hub.clone(),
+        key_scope: scope.clone(),
+        catchup_limit: config.track_catchup_limit,
+        backfill_limit: config.lookup_backfill_limit,
+        archive_timelines: config.archive_timelines,
+    });
+    let archiving = Arc::new(crate::jobs::archive::ArchiveContext {
+        fetcher: fetcher.clone(),
+        queue: queue.clone(),
+        hub: hub.clone(),
+        key_scope: scope.clone(),
+        archive_timelines: config.archive_timelines,
+        lookup_backfill_limit: config.lookup_backfill_limit,
+    });
+    let scheduler =
+        crate::jobs::Scheduler::with_queue(queue.clone(), crate::jobs::handlers(&poll, &archiving));
+    match scheduler.recover().await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(jobs = n, "re-queued jobs a previous process left running"),
+        Err(e) => tracing::warn!(error = %e, "could not re-queue interrupted jobs"),
+    }
+    let workers = scheduler.start(usize::try_from(config.job_concurrency).unwrap_or(8));
+    let ticks =
+        crate::jobs::ticks::Ticks::start(&scheduler, &scope, crate::jobs::ticks::poll_schedule(&config));
+
     let shutdown = app::shutdown_signal()?;
     let auth = Arc::new(Auth::new(&config, db.clone()));
     let state = AppState {
@@ -105,11 +139,17 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         quotas: Arc::new(Quotas::new()),
         limiter_restored: restored,
         refresh: Arc::new(crate::routes::players::RefreshWindows::new()),
+        jobs: queue,
+        hub: hub.clone(),
     };
     let served = app::serve(listener, app::router(state, metrics), shutdown).await;
 
-    // After draining, whether or not serve failed: final limiter checkpoint
-    // (design/05) and flush pending L2 writes (design/04).
+    // After draining, whether or not serve failed: stop ticking, let running
+    // jobs finish (the rest resume on the next boot), close sockets, then the
+    // final limiter checkpoint (design/05) and pending L2 writes (design/04).
+    ticks.shutdown().await;
+    workers.shutdown(JOB_GRACE).await;
+    hub.shutdown();
     checkpoints.abort();
     persist::checkpoint_now(&limiter, &db).await;
     cache.shutdown().await;
@@ -117,6 +157,9 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     served?;
     Ok(())
 }
+
+/// How long running jobs get to finish at shutdown.
+const JOB_GRACE: Duration = Duration::from_secs(10);
 
 fn print_bootstrap_key(key: &str) {
     eprintln!();

@@ -317,7 +317,6 @@ pub struct PlayerRecord {
     #[schema(required = true)]
     last_seen_match_id: Option<String>,
     /// Set with `historyBackfilledAt` still null means a walk that died mid-way.
-    /// Filled by the backfill job (P6-06).
     #[schema(required = true)]
     history_backfill_started_at: Option<String>,
     #[schema(required = true)]
@@ -329,6 +328,7 @@ pub struct PlayerRecord {
 
 impl PlayerRecord {
     fn new(scope: &str, p: players::Player) -> Self {
+        let walk = crate::jobs::archive::BackfillState::parse(p.backfill_state.as_deref());
         Self {
             puuid: p.puuid,
             key_scope: scope.to_string(),
@@ -337,10 +337,9 @@ impl PlayerRecord {
             tag_line: p.tag_line,
             tracked: p.tracked,
             last_seen_match_id: p.last_seen_match_id,
-            // `players.backfill_state` gets its shape with the backfill job (P6-06).
-            history_backfill_started_at: None,
-            history_backfilled_at: None,
-            history_backfill_depth: None,
+            history_backfill_started_at: walk.as_ref().and_then(|w| iso_ms(w.started_at)),
+            history_backfilled_at: walk.as_ref().and_then(|w| w.done_at).and_then(iso_ms),
+            history_backfill_depth: walk.as_ref().map(|w| w.depth),
             updated_at: iso_ms(p.updated_at),
         }
     }
@@ -382,14 +381,14 @@ pub struct TrackPlayer {
     tracked: Option<bool>,
 }
 
-/// The stored row, plus the backfill notice (always `null` until P6-06).
+/// The stored row, plus the history walk tracking queued, if it did (v1 #46).
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TrackedPlayer {
     #[serde(flatten)]
     player: PlayerRecord,
-    #[schema(required = true, value_type = Option<crate::routes::players::BackfillNotice>)]
-    backfill: Option<()>,
+    #[schema(required = true)]
+    backfill: Option<crate::routes::players::BackfillNotice>,
 }
 
 #[derive(Deserialize)]
@@ -477,10 +476,38 @@ async fn track_player(State(state): State<AppState>, Extension(_c): Who, bytes: 
     match players::upsert(&state.db, &scope, row, now_ms()).await {
         Ok(p) => {
             tracing::info!(puuid = %p.puuid, tracked = p.tracked, "tracked player upserted");
-            // v1 queued a history walk here; the job queue arrives in P6-06.
+            // v1 #46: tracking only archived what the poller caught from then on,
+            // so walk the history the way a first lookup does, once.
+            let walked = crate::jobs::archive::BackfillState::parse(p.backfill_state.as_deref())
+                .is_some_and(|w| w.done_at.is_some());
+            let limit = state.config.lookup_backfill_limit;
+            let backfill = if p.tracked && !walked && limit > 0 {
+                let walk = crate::jobs::archive::BackfillPlayer {
+                    puuid: p.puuid.clone(),
+                    platform: p.platform.clone(),
+                    limit,
+                    fetch_timeline: None,
+                    queue_id: None,
+                    reason: Some("track".into()),
+                };
+                match crate::jobs::archive::enqueue_backfill(&state.jobs, &walk).await {
+                    Ok(q) => Some(crate::routes::players::BackfillNotice {
+                        job_id: q.id.clone(),
+                        status: q.status().to_string(),
+                        limit,
+                    }),
+                    Err(e) => {
+                        // Tracking succeeded; a queue that is down must not undo that (v1).
+                        tracing::warn!(error = %e, puuid = %p.puuid, "could not queue backfill on track");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
             ok(&TrackedPlayer {
                 player: PlayerRecord::new(&scope, p),
-                backfill: None,
+                backfill,
             })
         }
         Err(e) => internal(&e, "could not upsert player"),

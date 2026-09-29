@@ -47,13 +47,15 @@ pub fn app_with(env: &[(&str, &str)], upstream: &str) -> (tempfile::TempDir, App
     let auth = std::sync::Arc::new(riot_proxy::http::auth::Auth::new(&config, db.clone()));
     let state = AppState {
         config: config.into(),
-        db,
+        db: db.clone(),
         auth,
         quotas: std::sync::Arc::new(riot_proxy::http::quota::Quotas::new()),
         limiter,
         fetcher,
         limiter_restored: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
         refresh: std::sync::Arc::new(riot_proxy::routes::players::RefreshWindows::new()),
+        jobs: riot_proxy::jobs::Queue::new(db.clone()),
+        hub: riot_proxy::ws::Hub::new(),
     };
     let router = app::router(state.clone(), telemetry::metrics_handle().expect("metrics"));
     (dir, state, router)

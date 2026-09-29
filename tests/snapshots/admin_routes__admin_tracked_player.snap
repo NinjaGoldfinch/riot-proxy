@@ -3,7 +3,11 @@ source: tests/admin_routes.rs
 expression: got
 ---
 {
-  "backfill": null,
+  "backfill": {
+    "jobId": "<ulid>",
+    "limit": 10000,
+    "status": "queued"
+  },
   "gameName": "Hide on bush",
   "historyBackfillDepth": null,
   "historyBackfillStartedAt": null,

@@ -124,10 +124,16 @@ async fn polls_fan_out_one_job_per_tracked_player_of_this_scope() {
         "kinds are independent"
     );
 
-    // Once p1's live poll has run, the next tick queues it again.
+    // Once a player's poll has run, the next tick of that kind queues it again.
+    // (Equal priorities tie on the ULID, so either kind may be claimed.)
     let job = s.claim(i64::MAX).await.unwrap().unwrap();
     s.finish(&job, &Ok(()), 1).await.unwrap();
-    assert_eq!(fan_out(&s, "s1", kinds::POLL_LIVE).await.unwrap(), 1);
+    let kind = if job.kind == kinds::POLL_LIVE {
+        kinds::POLL_LIVE
+    } else {
+        kinds::POLL_RANK
+    };
+    assert_eq!(fan_out(&s, "s1", kind).await.unwrap(), 1);
     assert_eq!(
         fan_out(&s, "s3", kinds::POLL_LIVE).await.unwrap(),
         0,
