@@ -1,0 +1,126 @@
+---
+source: src/events/tests.rs
+expression: frames
+---
+[
+  {
+    "at": 1790247623902,
+    "data": {
+      "championId": 134,
+      "gameId": 8393343196,
+      "platform": "kr",
+      "puuid": "NkQRxdiN3U3pEek5MWbWgaxzG_hpH5imJ9Ttch8ql5KM7D6p6Bh-Hbbvn6UoFVdGUBBIvcnEJv72qw",
+      "queueId": 420
+    },
+    "event": "game.started",
+    "op": "event",
+    "topic": "player:NkQRxdiN3U3pEek5MWbWgaxzG_hpH5imJ9Ttch8ql5KM7D6p6Bh-Hbbvn6UoFVdGUBBIvcnEJv72qw"
+  },
+  {
+    "at": 1790247623902,
+    "data": {
+      "gameId": 8393343196,
+      "puuid": "NkQRxdiN3U3pEek5MWbWgaxzG_hpH5imJ9Ttch8ql5KM7D6p6Bh-Hbbvn6UoFVdGUBBIvcnEJv72qw"
+    },
+    "event": "game.ended",
+    "op": "event",
+    "topic": "player:NkQRxdiN3U3pEek5MWbWgaxzG_hpH5imJ9Ttch8ql5KM7D6p6Bh-Hbbvn6UoFVdGUBBIvcnEJv72qw"
+  },
+  {
+    "at": 1790247623902,
+    "data": {
+      "after": {
+        "lp": 1012,
+        "rank": "I",
+        "tier": "CHALLENGER"
+      },
+      "before": {
+        "lp": 980,
+        "rank": "I",
+        "tier": "GRANDMASTER"
+      },
+      "puuid": "NkQRxdiN3U3pEek5MWbWgaxzG_hpH5imJ9Ttch8ql5KM7D6p6Bh-Hbbvn6UoFVdGUBBIvcnEJv72qw",
+      "queue": "RANKED_SOLO_5x5"
+    },
+    "event": "rank.changed",
+    "op": "event",
+    "topic": "player:NkQRxdiN3U3pEek5MWbWgaxzG_hpH5imJ9Ttch8ql5KM7D6p6Bh-Hbbvn6UoFVdGUBBIvcnEJv72qw"
+  },
+  {
+    "at": 1790247623902,
+    "data": {
+      "matchId": "KR_8393343196",
+      "participants": [
+        "NkQRxdiN3U3pEek5MWbWgaxzG_hpH5imJ9Ttch8ql5KM7D6p6Bh-Hbbvn6UoFVdGUBBIvcnEJv72qw"
+      ],
+      "patch": "16.19",
+      "puuid": "NkQRxdiN3U3pEek5MWbWgaxzG_hpH5imJ9Ttch8ql5KM7D6p6Bh-Hbbvn6UoFVdGUBBIvcnEJv72qw"
+    },
+    "event": "match.archived",
+    "op": "event",
+    "topic": "player:NkQRxdiN3U3pEek5MWbWgaxzG_hpH5imJ9Ttch8ql5KM7D6p6Bh-Hbbvn6UoFVdGUBBIvcnEJv72qw"
+  },
+  {
+    "at": 1790247623902,
+    "data": {
+      "version": "16.19.1"
+    },
+    "event": "patch.new",
+    "op": "event",
+    "topic": "patch"
+  },
+  {
+    "at": 1790247623902,
+    "data": {
+      "crawlId": "01J9ZZZZZZZZZZZZZZZZZZZZZZ",
+      "phase": "collect",
+      "platform": "kr",
+      "queue": "RANKED_SOLO_5x5",
+      "stats": {
+        "entries": 1100
+      }
+    },
+    "event": "crawl.phase",
+    "op": "event",
+    "topic": "ladder"
+  },
+  {
+    "at": 1790247623902,
+    "data": {
+      "crawlId": "01J9ZZZZZZZZZZZZZZZZZZZZZZ",
+      "durationS": 3600,
+      "entries": 1100,
+      "platform": "kr",
+      "players": 1100,
+      "queue": "RANKED_SOLO_5x5"
+    },
+    "event": "ladder.crawl.completed",
+    "op": "event",
+    "topic": "ladder"
+  },
+  {
+    "at": 1790247623902,
+    "data": {
+      "durationS": 12,
+      "platform": "kr",
+      "queue": "RANKED_SOLO_5x5",
+      "tables": {
+        "champion_stats": 170
+      }
+    },
+    "event": "analytics.updated",
+    "op": "event",
+    "topic": "ladder"
+  },
+  {
+    "at": 1790247623902,
+    "data": {
+      "archive": {
+        "matches": 5
+      }
+    },
+    "event": "metrics.snapshot",
+    "op": "event",
+    "topic": "metrics"
+  }
+]

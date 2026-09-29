@@ -118,3 +118,19 @@ async fn unrouted_requests_still_get_a_request_id() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(headers.contains_key(&X_REQUEST_ID));
 }
+
+#[tokio::test]
+async fn published_events_are_counted_by_name() {
+    let handle = metrics_handle().expect("recorder");
+    let event = riot_proxy::events::Event::PatchNew {
+        version: "16.19.1".into(),
+    };
+    riot_proxy::events::publish(&riot_proxy::ws::Hub::new(), &event);
+    handle.run_upkeep();
+    let (_, _, body) = get_body(app(), Request::get("/metrics").body(Body::empty()).unwrap()).await;
+    assert!(body.contains("# TYPE events_published_total counter"), "{body}");
+    assert!(
+        body.contains(r#"events_published_total{name="patch.new"}"#),
+        "{body}"
+    );
+}

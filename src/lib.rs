@@ -9,6 +9,7 @@ pub mod clock;
 pub mod config;
 pub mod consumers;
 pub mod db;
+pub mod events;
 pub mod fetcher;
 pub mod http;
 pub mod metrics;
