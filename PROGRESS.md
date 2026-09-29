@@ -124,7 +124,15 @@ The response shape of `/v1/players/by-riot-id/{gameName}/{tagLine}/profile` matc
 - [x] P6-06 archive + backfill handlers (#51)
 - [x] P6-07 WS auth + wiring (#52)
 - [x] P6-08 admin routes (jobs) (#53)
-Exit check: _pending_
+
+Exit check (2026-09-30, `main` @ `bc15e98` + the exit-check test): **passed.**
+`tests/p6_exit.rs` runs the real `serve` pipeline in-process against wiremock (`ServeOptions::riot_base_url`); "kill" aborts the task, so nothing shuts down gracefully. Run with `cargo test --test p6_exit -- --ignored --nocapture`.
+```
+1. game.started on /v1/ws 9.9 s after the spectator flip: {"championId":134,"gameId":77,"platform":"kr","puuid":"NkQRx…","queueId":420}
+2. killed serve: backfill cursor 100 of 150, backfill row still running (1), 100 archive:match rows
+3. restarted: backfill resumed at 100 and completed (depth 150); page one read 1×; archive:match rows 150, distinct 150, done 150; matches archived 150
+```
+The player was tracked through `POST /v1/admin/tracked-players`, which queued the walk, and `game.started` was read on a socket subscribed to `player:<puuid>` with an admin key. It arrived within one `TRACK_POLL_LIVE_S` (10 s) tick. The restart's `recover()` re-queued the running backfill, and the walk resumed from its saved cursor.
 
 ## P7 — Data Dragon, ladder, analytics, dashboard
 - [ ] P7-01 Data Dragon sync + static serving

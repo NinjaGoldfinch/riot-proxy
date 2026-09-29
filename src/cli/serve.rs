@@ -24,8 +24,23 @@ use crate::riot::limiter::Limiter;
 use crate::riot::limiter::persist;
 use crate::telemetry;
 
+/// What an in-process caller (the P6 exit check) changes about `serve`.
+#[derive(Debug, Clone, Default)]
+pub struct ServeOptions {
+    /// Send every Riot request here (a mock) instead of Riot. `None` in production.
+    pub riot_base_url: Option<String>,
+    /// Leave the global tracing subscriber alone (it can be installed once).
+    pub skip_tracing_init: bool,
+}
+
 pub async fn serve(config: Config) -> anyhow::Result<()> {
-    telemetry::init_tracing(&config)?;
+    serve_with(config, ServeOptions::default()).await
+}
+
+pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result<()> {
+    if !options.skip_tracing_init {
+        telemetry::init_tracing(&config)?;
+    }
     let metrics = telemetry::metrics_handle()?;
     telemetry::spawn_upkeep(metrics.clone());
 
@@ -74,7 +89,10 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         tracing::warn!(key = %key, "CACHE_TTL_OVERRIDES key matches no cacheable endpoint; ignored");
     }
     let fetcher = Fetcher::new(FetcherParts {
-        client: RiotClient::new(&config)?,
+        client: match &options.riot_base_url {
+            Some(url) => RiotClient::with_base_url(&config, url)?,
+            None => RiotClient::new(&config)?,
+        },
         limiter: Arc::clone(&limiter),
         cache: Arc::clone(&cache),
         archive: Arc::new(SqliteArchive::new(
