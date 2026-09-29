@@ -250,6 +250,61 @@ pub async fn revoke(db: &Db, id_or_name: String) -> Result<Consumer, ConsumerErr
     .await
 }
 
+/// Revoke the active consumer with this id (the admin route; v1 `disableConsumer`).
+/// Returns it with its key hash, so the caller can drop the key from the auth
+/// cache at once; `None` if there is no active consumer with that id.
+pub async fn revoke_by_id(db: &Db, id: &str) -> Result<Option<(Consumer, [u8; 32])>, ConsumerError> {
+    let id = id.to_string();
+    db.write(move |c| {
+        let tx = c.transaction()?;
+        let found = tx
+            .query_row(
+                "SELECT id, name, scopes, quota_per_min, created_at, revoked_at, key_sha256 FROM consumers
+                 WHERE id = ?1 AND revoked_at IS NULL",
+                [&id],
+                |r| Ok((from_row(r)?, r.get::<_, Vec<u8>>("key_sha256")?)),
+            )
+            .optional()?;
+        let Some((row, hash)) = found else { return Ok(None) };
+        let mut consumer = with_scopes(row)?;
+        let hash: [u8; 32] = hash
+            .try_into()
+            .map_err(|_| ConsumerError::Corrupt(format!("{}: key hash is not 32 bytes", consumer.id)))?;
+        let at = now_ms();
+        tx.execute(
+            "UPDATE consumers SET revoked_at = ?1 WHERE id = ?2",
+            params![at, consumer.id],
+        )?;
+        tx.commit()?;
+        consumer.revoked_at = Some(at);
+        Ok(Some((consumer, hash)))
+    })
+    .await
+}
+
+/// A consumer by id and key hash, revoked ones included (v1
+/// `findConsumerByIdAndHash`): `revoke-cache` must name a key that belongs to
+/// the consumer in its path.
+pub async fn find_by_id_and_hash(
+    db: &Db,
+    id: &str,
+    hash: [u8; 32],
+) -> Result<Option<Consumer>, ConsumerError> {
+    let id = id.to_string();
+    db.read(move |c| {
+        let found = c
+            .query_row(
+                "SELECT id, name, scopes, quota_per_min, created_at, revoked_at FROM consumers
+                 WHERE id = ?1 AND key_sha256 = ?2",
+                params![id, hash.as_slice()],
+                from_row,
+            )
+            .optional()?;
+        found.map(with_scopes).transpose()
+    })
+    .await
+}
+
 /// On first `serve`: when `consumers` is empty, create `bootstrap-admin` with
 /// read+admin. Uses `import_key` (`BOOTSTRAP_ADMIN_KEY`) if given, otherwise
 /// generates one. Returns `None` when any consumer already exists, so the key is

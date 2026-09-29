@@ -200,19 +200,24 @@ pub async fn sweep(db: &Db) -> Result<usize, DbError> {
 }
 
 /// Delete rows whose key matches `pred` (admin purge, P5-05).
-pub async fn delete_where(db: &Db, pred: impl Fn(&str) -> bool + Send + 'static) -> Result<usize, DbError> {
+pub async fn delete_where(
+    db: &Db,
+    pred: impl Fn(&str) -> bool + Send + 'static,
+) -> Result<Vec<String>, DbError> {
     db.write(move |c| {
         let keys: Vec<String> = {
             let mut stmt = c.prepare("SELECT key FROM cache")?;
             stmt.query_map([], |r| r.get(0))?.collect::<Result<Vec<_>, _>>()?
         };
         let tx = c.transaction()?;
-        let mut n = 0;
-        for k in keys.iter().filter(|k| pred(k)) {
-            n += tx.execute("DELETE FROM cache WHERE key = ?1", [k])?;
+        let mut deleted = Vec::new();
+        for k in keys.into_iter().filter(|k| pred(k)) {
+            if tx.execute("DELETE FROM cache WHERE key = ?1", [&k])? > 0 {
+                deleted.push(k);
+            }
         }
         tx.commit()?;
-        Ok(n)
+        Ok(deleted)
     })
     .await
 }

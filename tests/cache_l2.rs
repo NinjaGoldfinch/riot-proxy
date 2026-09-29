@@ -204,7 +204,10 @@ async fn upserts_replace_and_delete_where_purges() {
         .await
         .unwrap();
     assert_eq!(body, b"2");
-    assert_eq!(l2::delete_where(&db, |k| k.ends_with(":Q")).await.unwrap(), 1);
+    assert_eq!(
+        l2::delete_where(&db, |k| k.ends_with(":Q")).await.unwrap().len(),
+        1
+    );
     assert_eq!(rows(&db).await, 1);
 }
 

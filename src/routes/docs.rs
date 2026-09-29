@@ -103,15 +103,21 @@ pub fn api_router(auth: Option<AppState>) -> OpenApiRouter<AppState> {
         .merge(routes::players::router())
         .merge(routes::riot::router())
         .merge(routes::lol::router());
+    let mut admin = routes::admin::router();
     if let Some(state) = auth {
         read = read.route_layer(axum::middleware::from_fn_with_state(
-            state,
+            state.clone(),
             crate::http::auth::require_read,
+        ));
+        admin = admin.route_layer(axum::middleware::from_fn_with_state(
+            state,
+            crate::http::auth::require_admin,
         ));
     }
     OpenApiRouter::with_openapi(ApiDoc::openapi())
         .merge(routes::health::router())
         .merge(read)
+        .merge(admin)
 }
 
 /// Final touches: the crate version and v1's tag groups.

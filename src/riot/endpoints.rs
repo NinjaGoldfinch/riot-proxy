@@ -295,6 +295,29 @@ impl Endpoint {
         ENDPOINTS.iter().find(|e| e.id == id)
     }
 
+    /// The path parameters of `path` if it is this endpoint's template filled
+    /// in, as they appear (still percent-encoded); `None` otherwise. Lets the
+    /// admin debug routes build the same request, and cache key, as a route.
+    pub fn parse_path(&self, path: &str) -> Option<Vec<String>> {
+        let (tpl, got): (Vec<&str>, Vec<&str>) =
+            (self.path_template.split('/').collect(), path.split('/').collect());
+        if tpl.len() != got.len() {
+            return None;
+        }
+        let mut params = Vec::new();
+        for (t, g) in tpl.iter().zip(&got) {
+            if t.starts_with('{') && t.ends_with('}') {
+                if g.is_empty() {
+                    return None;
+                }
+                params.push((*g).to_string());
+            } else if t != g {
+                return None;
+            }
+        }
+        Some(params)
+    }
+
     /// Names of the `{…}` segments in the template, in order.
     pub fn path_params(&self) -> Vec<&'static str> {
         self.path_template
@@ -518,6 +541,22 @@ mod tests {
             assert_eq!(t.hard, Some(Duration::from_secs(h)), "{id} hard");
         }
         assert_eq!(table.len() + 2, ENDPOINTS.len(), "plus the two immutable ones");
+    }
+
+    #[test]
+    fn parse_path_reads_a_filled_template() {
+        let e = ep("match.byId");
+        assert_eq!(
+            e.parse_path("/lol/match/v5/matches/EUW1_1"),
+            Some(vec!["EUW1_1".to_string()])
+        );
+        assert_eq!(e.parse_path("/lol/match/v5/matches/EUW1_1/timeline"), None);
+        assert_eq!(e.parse_path("/lol/match/v5/matches/"), None);
+        let a = ep("account.byRiotId");
+        assert_eq!(
+            a.parse_path("/riot/account/v1/accounts/by-riot-id/Hide%20on%20bush/KR1"),
+            Some(vec!["Hide%20on%20bush".to_string(), "KR1".to_string()])
+        );
     }
 
     /// v1 "treats matches and timelines as immutable".
