@@ -1,0 +1,73 @@
+---
+source: tests/ws_hub.rs
+expression: log
+---
+[
+  {
+    "consumer": "web",
+    "op": "ready"
+  },
+  {
+    "error": {
+      "code": "VALIDATION",
+      "message": "Unknown topic 'plyer:typo'"
+    },
+    "op": "error"
+  },
+  {
+    "error": {
+      "code": "FORBIDDEN",
+      "message": "Topic 'metrics' requires the admin scope"
+    },
+    "op": "error"
+  },
+  {
+    "op": "subscribed",
+    "topics": [
+      "patch",
+      "player:NkQRxdiN3U3pEek5MWbWgaxzG_hpH5imJ9Ttch8ql5KM7D6p6Bh-Hbbvn6UoFVdGUBBIvcnEJv72qw"
+    ]
+  },
+  {
+    "at": "<now>",
+    "op": "pong"
+  },
+  {
+    "at": 1,
+    "data": {
+      "n": 1
+    },
+    "event": "patch.new",
+    "op": "event",
+    "topic": "patch"
+  },
+  {
+    "at": 1,
+    "data": {
+      "n": 2
+    },
+    "event": "game.started",
+    "op": "event",
+    "topic": "player:NkQRxdiN3U3pEek5MWbWgaxzG_hpH5imJ9Ttch8ql5KM7D6p6Bh-Hbbvn6UoFVdGUBBIvcnEJv72qw"
+  },
+  {
+    "op": "subscribed",
+    "topics": [
+      "player:NkQRxdiN3U3pEek5MWbWgaxzG_hpH5imJ9Ttch8ql5KM7D6p6Bh-Hbbvn6UoFVdGUBBIvcnEJv72qw"
+    ]
+  },
+  {
+    "error": {
+      "code": "VALIDATION",
+      "message": "Unknown op 'dance'"
+    },
+    "op": "error"
+  },
+  {
+    "error": {
+      "code": "VALIDATION",
+      "message": "Invalid JSON"
+    },
+    "op": "error"
+  }
+]

@@ -321,3 +321,21 @@ The OpenAPI compare shows the remaining 11 v1 admin operations missing (jobs, la
 - **Limits** reports every window the limiter holds for the bucket, including the bootstrap limits used before Riot has named any.
 - **`debug/riot`** goes through the limiter and cache like any read. Without `method` it borrows v1's conservative `status.platformData` bucket and keys the cache on the whole path. With `method`, the path must be that endpoint's route (`Endpoint::parse_path`), so the request, cache key and any archive write are exactly the route's. v1 accepted any path under any method, which in v2 would have filed a debug body under the wrong cache key or archive id. Query parameters must be ones the endpoint takes. `debug/cache` reports `{key, present, ageSeconds, stale}` without fetching.
 - **Not assigned to any task:** `POST /v1/admin/players/names/backfill` (a job) belongs with the jobs work in P6.
+
+## ADR-045 — WebSocket protocol and hub (2026-09-30)
+Accepted (owner decisions). Design/06 called its protocol "unchanged from v1 §11", but it differed from v1's code in its frames, topics, event names and `?key=`. The owner chose **v1's wire protocol plus four fixes**, and **design/06's event names** (for P6-02). Design/06 §Protocol now says so.
+- **Kept from v1:**
+  - frames are `op`-tagged: `subscribe`, `unsubscribe` and `ping` from the client; `ready`, `subscribed` (listing everything the socket holds), `pong` and `error` from the server;
+  - topics are `player:<puuid>`, `patch`, and the admin-only `metrics`, `firehose` and `ladder`, so a read key sees only the players it asks for;
+  - browsers authenticate with `?token=`;
+  - the server pings every 30 s and drops a socket after two unanswered pings; a socket holds at most 200 topics; over-long and non-string topics are dropped;
+  - shutdown closes sockets with 1001.
+- **Four fixes over v1:**
+  1. `{"op":"resync","topic":…,"dropped":n}` when a socket falls more than a topic's buffer (256) behind.
+  2. Topics are validated, so a typo is an error frame (`VALIDATION`, "Unknown topic 'x'") rather than a subscription that never fires.
+  3. Sockets whose key is revoked are closed with 4401 "key revoked" (`Hub::close_consumer`, wired to revocation in P6-07); v1 left them open.
+  4. Event frames carry `"op":"event"`, which is additive for v1 clients.
+- **Hub (design/06):** one `broadcast` channel per topic, created on first subscribe and dropped when its last subscriber leaves, so per-player topics cost nothing when nobody follows that player. Event frames are serialised once and shared (`Utf8Bytes`). A socket holding the firehose skips its other topics, so no event arrives twice. **Order is kept within a topic** (and on the firehose) but not across topics, since receivers are polled fairly; v1's single relay happened to keep global order, which its protocol never promised.
+- **Dependencies:** `tokio-stream` (with `sync`, for `StreamMap` and `BroadcastStream`) and, for tests, `tokio-tungstenite`, both already in the lock file through axum. `futures-util` gains its `sink` feature.
+- **Acceptance:** the ignored soak (`tests/ws_soak.rs`) holds 1 000 sockets for 20 s with a 1 s heartbeat and a steady stream of events: 1.89 M frames delivered, 0 resyncs, resident memory +0.2 MiB (281.8 → 281.9 MiB, clients in the same process).
+- **Event names (P6-02), owner's choice:** design/06's `game.started`/`game.ended`, `rank.changed`, `match.archived`, `patch.new`, `crawl.phase` and `metrics`. The embedded dashboard listens for v1's `metrics.snapshot` and `ladder.crawl.completed`, so P7-06 updates it. v1's `analytics.updated` has no design/06 counterpart; that is an owner question at P7-04.
