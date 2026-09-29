@@ -345,3 +345,14 @@ Accepted. `events::Event` holds the nine events of ADR-045: v1's eight plus `cra
 - **Payloads** are v1's, with its spellings (`gameId`, `queueId`, `championId`, `matchId`, `durationS`) and absent optional fields left out rather than nulled. Design/06's additions are optional extra fields: `platform`, `queueId` and `championId` on `game.ended`, and `patch` and `participants` on `match.archived`.
 - **Topics** follow v1's publish calls: player events on `player:<puuid>`, `patch.new` on `patch`, the three ladder and analytics events on `ladder`, and `metrics.snapshot` on `metrics`. A `match.archived` with no player (a crawl archive) goes to the firehose alone; v1 published it to `player:`, which nobody could hold.
 - `crawl.phase.stats` and the `metrics.snapshot` body are free-form JSON until P7-02 and P7-06 fix their shapes.
+
+## ADR-047 — Durable job queue (2026-09-30)
+Accepted. `jobs::Scheduler` is design/06 §Scheduler over the V0001 `jobs` table:
+- `enqueue` is `INSERT OR IGNORE` against the partial unique index, and returns v1's `queued` / `already-queued`. `enqueue_on` does the same inside a caller's transaction, so a handler can fan out and record progress in one write.
+- Claiming is design/06's `UPDATE … RETURNING`, ordered by priority, then `run_after`, then id (for determinism).
+- `JOB_CONCURRENCY` workers wait on a `Notify` with a 1 s fallback.
+- A retryable failure waits `2^attempts × 30 s ± 20 %`, with `attempts` counted at claim so the first retry is about 60 s; the fifth failure is final. A handler can also fail permanently (a bad payload, say). An unknown kind fails at once.
+- **Resuming after a crash** (the plan's "restart resumes", which design/06 does not spell out): `recover()` on boot returns every `running` row to `pending`. The interrupted attempt still counts. Handlers are idempotent (design/06), so re-running the one unfinished job is safe. With a single process, any row still `running` at boot belongs to the previous one.
+- **Panics** in a handler are contained (it runs in its own task) and retried with backoff. **Shutdown** stops claiming, lets running jobs finish within a grace period, then aborts them; their rows stay `running` for `recover`.
+- **Metrics:** `proxy_jobs_total{job,status}` counts every attempt as `completed` or `failed`, as v1 did. `jobs_pending{kind}` (design/07) is sampled every 15 s, and a kind that empties reads 0.
+- Handlers are a small object-safe trait returning a `BoxFuture`, rather than depending on `async-trait`.
