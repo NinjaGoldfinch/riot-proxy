@@ -12,6 +12,7 @@ pub mod db;
 pub mod fetcher;
 pub mod http;
 pub mod metrics;
+pub mod players;
 pub mod riot;
 pub mod routes;
 pub mod singleflight;

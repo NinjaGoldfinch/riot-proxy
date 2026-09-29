@@ -1,0 +1,49 @@
+---
+source: tests/players_routes.rs
+expression: body
+---
+{
+  "archivedGames": 5,
+  "champions": [
+    {
+      "avgKda": 5.3333,
+      "championId": 134,
+      "csPerMin": 8.0676,
+      "games": 2,
+      "lastPlayedAt": "2026-09-24T11:00:23.902Z",
+      "winRate": 1,
+      "wins": 2
+    },
+    {
+      "avgKda": 3,
+      "championId": 105,
+      "csPerMin": 0,
+      "games": 1,
+      "lastPlayedAt": "2026-09-24T08:53:56.455Z",
+      "winRate": 1,
+      "wins": 1
+    },
+    {
+      "avgKda": 7,
+      "championId": 143,
+      "csPerMin": 8.091,
+      "games": 1,
+      "lastPlayedAt": "2026-09-24T09:54:16.131Z",
+      "winRate": 1,
+      "wins": 1
+    },
+    {
+      "avgKda": 2,
+      "championId": 516,
+      "csPerMin": 0,
+      "games": 1,
+      "lastPlayedAt": "2026-09-24T09:25:38.859Z",
+      "winRate": 0,
+      "wins": 0
+    }
+  ],
+  "patch": null,
+  "platform": "kr",
+  "puuid": "NkQRxdiN3U3pEek5MWbWgaxzG_hpH5imJ9Ttch8ql5KM7D6p6Bh-Hbbvn6UoFVdGUBBIvcnEJv72qw",
+  "queue": null
+}

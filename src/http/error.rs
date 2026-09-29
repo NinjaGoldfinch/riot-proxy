@@ -37,6 +37,21 @@ impl ErrorCode {
         Self::Internal,
     ];
 
+    /// The code as serialised (`UPSTREAM_ERROR`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unauthorized => "UNAUTHORIZED",
+            Self::Forbidden => "FORBIDDEN",
+            Self::QuotaExceeded => "QUOTA_EXCEEDED",
+            Self::NotFound => "NOT_FOUND",
+            Self::UpstreamError => "UPSTREAM_ERROR",
+            Self::RateLimited => "RATE_LIMITED",
+            Self::BadRegion => "BAD_REGION",
+            Self::Validation => "VALIDATION",
+            Self::Internal => "INTERNAL",
+        }
+    }
+
     /// v1 `DEFAULT_STATUS`.
     pub fn default_status(self) -> StatusCode {
         match self {

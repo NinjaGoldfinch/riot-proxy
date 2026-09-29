@@ -21,6 +21,7 @@ fn extracts_patch_queue_and_end_from_a_real_match() {
             patch: "16.19".into(),
             queue_id: 420,
             game_end_ms: 1_790_247_623_902,
+            game_duration_s: Some(1682),
         }
     );
 }
@@ -73,6 +74,22 @@ async fn round_trip_is_byte_identical_and_compressed() {
         "zstd shrinks a match well: {stored} of {}",
         MATCH.len()
     );
+}
+
+#[tokio::test]
+async fn the_game_length_is_stored_in_seconds() {
+    let (_dir, db) = db();
+    put(&db, MATCH_ID, "asia", SCOPE, Bytes::from_static(MATCH), 1)
+        .await
+        .unwrap();
+    let secs: Option<i64> = db
+        .read(|c| {
+            c.query_row("SELECT game_duration FROM matches", [], |r| r.get(0))
+                .map_err(DbError::from)
+        })
+        .await
+        .unwrap();
+    assert_eq!(secs, Some(1682));
 }
 
 #[tokio::test]
@@ -182,4 +199,18 @@ async fn a_match_whose_facts_cannot_be_read_is_still_archived() {
         .unwrap();
     assert_eq!(get(&db, "EUW1_1").await.unwrap().unwrap().as_ref(), body);
     assert!(facts_rows(&db).await.is_empty());
+}
+
+#[tokio::test]
+async fn get_many_returns_only_the_archived_ones() {
+    let (_dir, db) = db();
+    assert!(get_many(&db, &[]).await.unwrap().is_empty());
+    put(&db, MATCH_ID, "asia", SCOPE, Bytes::from_static(MATCH), 1)
+        .await
+        .unwrap();
+    let found = get_many(&db, &[MATCH_ID.to_string(), "KR_1".to_string()])
+        .await
+        .unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[MATCH_ID].as_ref(), MATCH);
 }

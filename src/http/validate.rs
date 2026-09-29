@@ -153,9 +153,78 @@ pub fn int_query(name: &str, raw: Option<&str>, min: i64, max: i64) -> Result<Op
     Ok(Some(n))
 }
 
+/// A boolean query parameter. ajv coerced only `true` and `false` from a query
+/// string; anything else is refused (v1).
+pub fn bool_query(name: &str, raw: Option<&str>) -> Result<Option<bool>, ApiError> {
+    match raw {
+        None => Ok(None),
+        Some("true") => Ok(Some(true)),
+        Some("false") => Ok(Some(false)),
+        Some(_) => Err(invalid("querystring", name, "must be boolean")),
+    }
+}
+
+/// `?platform=`: a platform, case-sensitive, `BAD_REGION` otherwise (v1 `PlatformParam`).
+pub fn query_platform(raw: Option<&str>) -> Result<Option<Platform>, ApiError> {
+    raw.map(|v| one_of("querystring", "platform", v, &Platform::ALL, Platform::as_str))
+        .transpose()
+}
+
+/// `?patch=`: `major.minor`, 3–8 characters (v1 `PlayerChampionsQuery`).
+pub fn patch_query(raw: Option<&str>) -> Result<Option<&str>, ApiError> {
+    let Some(v) = raw else { return Ok(None) };
+    length("querystring", "patch", v, 3, 8)?;
+    let ok = v.split_once('.').is_some_and(|(a, b)| {
+        !a.is_empty()
+            && !b.is_empty()
+            && a.bytes().all(|c| c.is_ascii_digit())
+            && b.bytes().all(|c| c.is_ascii_digit())
+    });
+    if ok {
+        Ok(Some(v))
+    } else {
+        Err(invalid(
+            "querystring",
+            "patch",
+            "must match pattern \"^[0-9]+\\.[0-9]+$\"",
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn query_booleans_platforms_and_patches() {
+        assert_eq!(bool_query("refresh", None).unwrap(), None);
+        assert_eq!(bool_query("refresh", Some("true")).unwrap(), Some(true));
+        assert_eq!(bool_query("refresh", Some("false")).unwrap(), Some(false));
+        assert_eq!(
+            msg(bool_query("refresh", Some("1"))),
+            (
+                ErrorCode::Validation,
+                "querystring/refresh must be boolean".into()
+            )
+        );
+        assert_eq!(query_platform(Some("kr")).unwrap(), Some(Platform::Kr));
+        assert_eq!(
+            msg(query_platform(Some("KR"))),
+            (
+                ErrorCode::BadRegion,
+                "querystring/platform must be equal to one of the allowed values".into()
+            )
+        );
+        assert_eq!(patch_query(Some("14.18")).unwrap(), Some("14.18"));
+        assert_eq!(
+            msg(patch_query(Some("14.x"))).1,
+            "querystring/patch must match pattern \"^[0-9]+\\.[0-9]+$\""
+        );
+        assert_eq!(
+            msg(patch_query(Some("1"))).1,
+            "querystring/patch must NOT have fewer than 3 characters"
+        );
+    }
 
     fn msg(r: Result<impl std::fmt::Debug, ApiError>) -> (ErrorCode, String) {
         let e = r.unwrap_err();

@@ -12,6 +12,7 @@ expression: facts
     "kills": 2,
     "deaths": 6,
     "assists": 8,
+    "cs": 195,
     "items": [
       3742,
       3070,
@@ -52,6 +53,7 @@ expression: facts
     "kills": 10,
     "deaths": 4,
     "assists": 8,
+    "cs": 175,
     "items": [
       3157,
       4645,
@@ -92,6 +94,7 @@ expression: facts
     "kills": 5,
     "deaths": 9,
     "assists": 6,
+    "cs": 195,
     "items": [
       3036,
       3172,
@@ -132,6 +135,7 @@ expression: facts
     "kills": 12,
     "deaths": 9,
     "assists": 3,
+    "cs": 223,
     "items": [
       6675,
       3508,
@@ -172,6 +176,7 @@ expression: facts
     "kills": 1,
     "deaths": 4,
     "assists": 16,
+    "cs": 24,
     "items": [
       3869,
       3109,
@@ -212,6 +217,7 @@ expression: facts
     "kills": 8,
     "deaths": 4,
     "assists": 6,
+    "cs": 267,
     "items": [
       3142,
       6695,
@@ -252,6 +258,7 @@ expression: facts
     "kills": 4,
     "deaths": 5,
     "assists": 10,
+    "cs": 215,
     "items": [
       6699,
       2520,
@@ -292,6 +299,7 @@ expression: facts
     "kills": 8,
     "deaths": 6,
     "assists": 14,
+    "cs": 206,
     "items": [
       3137,
       3170,
@@ -332,6 +340,7 @@ expression: facts
     "kills": 6,
     "deaths": 9,
     "assists": 9,
+    "cs": 204,
     "items": [
       1086,
       3087,
@@ -372,6 +381,7 @@ expression: facts
     "kills": 5,
     "deaths": 6,
     "assists": 13,
+    "cs": 30,
     "items": [
       3869,
       3152,

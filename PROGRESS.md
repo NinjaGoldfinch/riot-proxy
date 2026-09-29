@@ -102,7 +102,7 @@ Exit check: _pending_
 - [x] P5-01 archive schema (#40)
 - [x] P5-02 match archive (#41)
 - [x] P5-03 facts extraction (#42)
-- [ ] P5-04 players + composites
+- [x] P5-04 players + composites (#43; snapshots reviewed by owner)
 - [ ] P5-05 admin routes (data)
 Exit check: _pending_
 
@@ -140,6 +140,8 @@ Exit check: _pending_
 
 ## Notes for the next task
 - **P4 exit check is still open:** the owner needs to confirm `/docs` renders in a browser (headless Chromium crashed on Scalar here). Tag `phase-P4` after that.
+- **P7-04 `facts:reextract`** must re-derive `FACTS_VERSION` < 2 rows *and* fill `matches.game_duration` where it is NULL (V0003, ADR-043).
+- **Ask the owner at P7-04:** remakes are stored as ordinary facts rows (ADR-041); should analytics exclude them?
 - **Ask the owner at P7-04:** v1's analytics routes read tables design/04 doesn't have (bans, runes, spells, analytics slices; ADR-039).
 - Routes: follow `src/routes/riot.rs`, which uses `http::validate::*` for v1 rules and `routes::passthrough::{respond, options}`. Add read routers to `routes::docs::api_router`'s `read` group so they get auth+quota. `tests/common::app_with(env, wiremock_uri)` gives a full app. v1's `/v1/lol` bodies are raw passthrough too (`PassthroughResponse`), so P4-05's "typed" part is request validation.
 - OpenAPI: add routes to `routes::docs::api_router()` as `OpenApiRouter`s with `#[utoipa::path]` handlers. `just`/CI check: `cargo run -- spec > /tmp/spec.json && scripts/compare-openapi.py docs/contract/v1-openapi.json /tmp/spec.json --prefix /v1/riot/ --prefix /v1/lol/` (16 missing at P4-03). The `tests/snapshots/openapi__openapi_document.snap` changes with every documented route; review it.

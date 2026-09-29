@@ -43,6 +43,10 @@ pub struct MatchMeta {
     pub patch: String,
     pub queue_id: i64,
     pub game_end_ms: i64,
+    /// `info.gameDuration`, seconds. Riot switched it from milliseconds at 11.20,
+    /// the same patch that added `gameEndTimestamp`, which [`extract`] requires,
+    /// so an archived match always has it in seconds.
+    pub game_duration_s: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -56,6 +60,7 @@ struct Info {
     game_version: Option<String>,
     queue_id: Option<i64>,
     game_end_timestamp: Option<i64>,
+    game_duration: Option<i64>,
 }
 
 /// Read the indexed columns out of a match body. Every one is `NOT NULL` in the
@@ -81,6 +86,7 @@ pub fn extract(body: &[u8]) -> Result<MatchMeta, ArchiveError> {
             .info
             .game_end_timestamp
             .ok_or_else(|| missing("gameEndTimestamp"))?,
+        game_duration_s: b.info.game_duration,
     })
 }
 
@@ -121,6 +127,37 @@ pub async fn get(db: &Db, match_id: &str) -> Result<Option<Bytes>, ArchiveError>
     .await
 }
 
+/// The archived bodies among `match_ids`, by id; ids not archived are absent.
+/// One query for a whole page (v1 `getArchivedMatches`, #54) rather than one
+/// archive read per match.
+pub async fn get_many(
+    db: &Db,
+    match_ids: &[String],
+) -> Result<std::collections::HashMap<String, Bytes>, ArchiveError> {
+    if match_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let ids = match_ids.to_vec();
+    db.read(move |conn| {
+        let mut found = std::collections::HashMap::new();
+        for chunk in ids.chunks(FILTER_CHUNK) {
+            let marks = vec!["?"; chunk.len()].join(",");
+            let mut stmt = conn.prepare(&format!(
+                "SELECT match_id, body_zstd FROM matches WHERE match_id IN ({marks})"
+            ))?;
+            let rows = stmt.query_map(params_from_iter(chunk), |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))
+            })?;
+            for row in rows {
+                let (id, blob) = row?;
+                found.insert(id, decompress(&blob)?);
+            }
+        }
+        Ok::<_, ArchiveError>(found)
+    })
+    .await
+}
+
 /// Archive a match body and its facts. Idempotent: archiving it again rewrites
 /// the same rows (v1 upserted too). `region` is the routing value the match came
 /// from; `key_scope` is the key whose PUUIDs are in the body.
@@ -150,13 +187,24 @@ pub async fn put(
     db.write(move |conn| {
         let tx = conn.transaction()?;
         tx.execute(
-            "INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size, archived_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            "INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size, archived_at, game_duration)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
              ON CONFLICT (match_id) DO UPDATE SET
                region = excluded.region, patch = excluded.patch, queue_id = excluded.queue_id,
                game_end_ms = excluded.game_end_ms, body_zstd = excluded.body_zstd,
-               body_size = excluded.body_size, archived_at = excluded.archived_at",
-            rusqlite::params![id, region, row.patch, row.queue_id, row.game_end_ms, blob, size as i64, now_ms],
+               body_size = excluded.body_size, archived_at = excluded.archived_at,
+               game_duration = excluded.game_duration",
+            rusqlite::params![
+                id,
+                region,
+                row.patch,
+                row.queue_id,
+                row.game_end_ms,
+                blob,
+                size as i64,
+                now_ms,
+                row.game_duration_s
+            ],
         )?;
         facts::write(&tx, &id, &scope, &rows)?;
         tx.commit()?;
