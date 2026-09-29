@@ -101,6 +101,20 @@ pub async fn list(db: &Db, key_scope: &str) -> Result<Vec<Player>, DbError> {
     .await
 }
 
+/// The tracked players of this key scope (v1 `listTrackedPlayers`), what every
+/// poll tick fans out over.
+pub async fn list_tracked(db: &Db, key_scope: &str) -> Result<Vec<Player>, DbError> {
+    let scope = key_scope.to_string();
+    db.read(move |c| {
+        let mut stmt = c.prepare(&format!(
+            "SELECT {COLUMNS} FROM players WHERE key_scope = ?1 AND tracked = 1 ORDER BY puuid"
+        ))?;
+        let rows = stmt.query_map([scope], row)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
+    })
+    .await
+}
+
 /// Set `tracked` on an existing row; `false` if there is no such player.
 pub async fn set_tracked(
     db: &Db,
