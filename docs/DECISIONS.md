@@ -397,3 +397,12 @@ Accepted. `jobs::archive` ports v1's `archiveMatchJob`, `backfillPlayer` and `ma
   - does not tick `ddragon:sync` and `maintenance` until their handlers exist (P7-01, P7-05).
   - `AppState` gains `jobs` (the queue) and `hub`.
 - The full P6 exit-check scenario (track, spectator flip seen on `/v1/ws`, kill mid-backfill, resume) needs `/v1/ws` and runs at the P6 exit check. Here, resume without duplicate archive jobs is tested against the handler.
+
+## ADR-051 — `/v1/ws` (2026-09-30)
+Accepted. `routes::ws` wires the hub (ADR-045) to `/v1/ws`.
+- **Handshake auth** (v1): any active key, sent as the bearer header or `?token=` (v1's name; the plan's `?key=` is not used, ADR-045). `AUTH_DISABLED` runs as `dev-local`. As in v1, a missing or unknown key still completes the upgrade, then gets `{"op":"error","error":{"code":"UNAUTHORIZED","message":"Invalid key"}}` and a 4401 close, so a browser can see why.
+- **Admin topics** (`metrics`, `firehose`, `ladder`) need the admin scope *and* the `ADMIN_IP_ALLOWLIST`, decided once at the handshake (v1). An admin key from a refused address can connect, but only as a reader.
+- **Quota** (design/06, which v1's public route did not apply): the handshake counts as one request against the consumer's quota. Over it, the upgrade is refused with the usual 429 envelope and `X-RateLimit-*` headers.
+- **Revocation closes sockets:** `DELETE /v1/admin/consumers/{id}` closes that consumer's open sockets with 4401 "key revoked" (ADR-045 fix 3).
+- **The `metrics` topic** (v1 `MetricsBroadcaster`) publishes `metrics.snapshot` every `METRICS_INTERVAL_S`, only while a socket holds the topic. The snapshot carries v1's `v`, `keyScope`, `totals` (archived matches, tracked and known players), `ws` and `events` sections; the rest of v1's document arrives with the dashboard in P7-06. v1's Redis lock for electing a publisher across API instances is not needed with one process.
+- **Documented** in the OpenAPI document as `GET /v1/ws` under the `ws` tag, with the protocol, topics, events and close codes as prose (design/06). v1's document had no path for it, so the contract compare shows it as added.

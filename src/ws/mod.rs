@@ -3,6 +3,7 @@
 //! route arrive in P6-07; events in P6-02.
 
 pub mod hub;
+pub mod metrics;
 pub mod protocol;
 pub mod socket;
 
