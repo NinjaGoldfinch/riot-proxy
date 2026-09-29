@@ -47,6 +47,7 @@ Owner decision (2026-09-24, ADR-014): these use the names **exactly as design/07
 | `limiter_bulk_waiters` | gauge | — | Limiter priorities (P2-05), implemented; process-wide total |
 | `limiter_interactive_waiters` | gauge | — | Limiter priorities (P2-05), implemented; process-wide total |
 | `jobs_pending` | gauge | kind | Scheduler (P6-03) |
+| `events_published_total` | counter | name | Events (P6-02), implemented; one per event handed to the hub, whether or not anyone holds its topic |
 | `sqlite_wal_bytes` | gauge | — | Maintenance / sampler (P7-05) |
 
-Labels are provisional until the implementing task confirms them. `limiter_interactive_waiters` comes from P2-05; the other three from design/07 §Observability.
+Labels are provisional until the implementing task confirms them. `limiter_interactive_waiters` comes from P2-05 and `events_published_total` from the plan's P6-02; the others from design/07 §Observability.

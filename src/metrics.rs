@@ -46,6 +46,7 @@ pub const ARCHIVED_MATCHES_TOTAL: &str = "proxy_archived_matches_total";
 // v2 additions: design/07 names, no `proxy_` prefix (ADR-014).
 pub const LIMITER_INTERACTIVE_WAITERS: &str = "limiter_interactive_waiters";
 pub const LIMITER_BULK_WAITERS: &str = "limiter_bulk_waiters";
+pub const EVENTS_PUBLISHED_TOTAL: &str = "events_published_total";
 
 const UPSTREAM_LATENCY_BUCKETS: &[f64] = &[0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0];
 const RL_WAIT_BUCKETS: &[f64] = &[0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0];
@@ -227,6 +228,13 @@ pub const CATALOGUE: &[MetricDef] = &[
         Kind::Gauge,
         &[],
         "Bulk acquires currently waiting (held back by the ceiling or by interactive traffic)",
+        &[],
+    ),
+    def(
+        EVENTS_PUBLISHED_TOTAL,
+        Kind::Counter,
+        &["name"],
+        "Realtime events handed to the WebSocket hub, by event name",
         &[],
     ),
 ];
