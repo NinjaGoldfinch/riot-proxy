@@ -3,7 +3,8 @@
 //! rate-limit usage and the two debug routes. Every route needs the `admin`
 //! scope and passes the admin IP allowlist (the auth guard); quotas apply.
 //!
-//! Job, ladder, analytics and metrics routes arrive with their features (P6–P7).
+//! The job routes (P6-08) are v2's: v1's queues were BullMQ's. Ladder,
+//! analytics and metrics routes arrive with their features (P7).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -51,6 +52,11 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(limits))
         .routes(routes!(debug_riot))
         .routes(routes!(debug_cache))
+        .routes(routes!(list_jobs))
+        .routes(routes!(job_stats))
+        .routes(routes!(retry_job))
+        .routes(routes!(cancel_job))
+        .routes(routes!(queue_backfill))
 }
 
 fn json<T: Serialize>(status: StatusCode, body: &T) -> Response {
@@ -898,4 +904,279 @@ async fn debug_cache(State(state): State<AppState>, Extension(_c): Who, Query(qu
         age_seconds: age.map(|d| u64::try_from(d.as_millis().saturating_add(500) / 1000).unwrap_or(u64::MAX)),
         stale,
     })
+}
+
+// ── Jobs (P6-08) ────────────────────────────────────────────────────────────
+
+/// A row of the durable queue (design/06).
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct JobSummary {
+    /// A ULID.
+    id: String,
+    kind: String,
+    #[schema(required = true)]
+    dedupe_key: Option<String>,
+    /// Lower runs first (design/06 bands).
+    priority: i64,
+    /// `pending`, `running`, `done` or `failed`.
+    state: String,
+    attempts: u32,
+    /// Not before this instant; the backoff after a failure.
+    run_after: Option<String>,
+    #[schema(required = true)]
+    claimed_at: Option<String>,
+    #[schema(required = true)]
+    finished_at: Option<String>,
+    /// The last failure, or `cancelled`.
+    #[schema(required = true)]
+    error: Option<String>,
+    #[schema(value_type = Object)]
+    payload: serde_json::Value,
+}
+
+impl From<crate::jobs::JobRow> for JobSummary {
+    fn from(j: crate::jobs::JobRow) -> Self {
+        Self {
+            id: j.id,
+            kind: j.kind,
+            dedupe_key: j.dedupe_key,
+            priority: j.priority,
+            state: j.state,
+            attempts: j.attempts,
+            run_after: iso_ms(j.run_after),
+            claimed_at: j.claimed_at.and_then(iso_ms),
+            finished_at: j.finished_at.and_then(iso_ms),
+            error: j.error,
+            payload: serde_json::from_str(&j.payload).unwrap_or(serde_json::Value::Null),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct JobList {
+    jobs: Vec<JobSummary>,
+}
+
+fn job_error(e: crate::jobs::JobAction) -> Response {
+    use crate::jobs::JobAction;
+    match e {
+        JobAction::NotFound => ApiError::not_found("No such job").into_response(),
+        JobAction::WrongState { id, state } => {
+            ApiError::new(ErrorCode::Validation, format!("Job {id} is {state}")).into_response()
+        }
+        JobAction::Duplicate(other) => ApiError::new(
+            ErrorCode::Validation,
+            format!("An identical job is already queued ({other})"),
+        )
+        .into_response(),
+        JobAction::Db(e) => internal(&e, "job action failed"),
+    }
+}
+
+#[utoipa::path(
+    get, path = "/v1/admin/jobs", tag = "admin",
+    summary = "List jobs",
+    description = "Rows of the durable job queue, newest first. Filter by `state` and `kind`.",
+    params(("state" = Option<String>, Query, description = "pending, running, done or failed"),
+           ("kind" = Option<String>, Query, description = "e.g. archive:match"),
+           ("limit" = Option<i64>, Query, description = "1–500, default 50")),
+    responses((status = 200, description = "The jobs", body = JobList), LocalErrors),
+)]
+async fn list_jobs(State(state): State<AppState>, Extension(_c): Who, Query(query): Q) -> Response {
+    let parsed = (|| {
+        let st = validate::query_one_of(
+            "state",
+            query.get("state").map(String::as_str),
+            &crate::jobs::scheduler::STATES,
+        )?;
+        let kind = match query.get("kind") {
+            Some(k) if k.chars().count() > 40 => {
+                return Err(validate::invalid(
+                    "querystring",
+                    "kind",
+                    "must NOT have more than 40 characters",
+                ));
+            }
+            other => other.cloned(),
+        };
+        let limit =
+            validate::int_query("limit", query.get("limit").map(String::as_str), 1, 500)?.unwrap_or(50);
+        Ok::<_, ApiError>((st, kind, u32::try_from(limit).unwrap_or(50)))
+    })();
+    let (st, kind, limit) = match parsed {
+        Ok(p) => p,
+        Err(e) => return e.into_response(),
+    };
+    match state.jobs.list(st, kind, limit).await {
+        Ok(rows) => ok(&JobList {
+            jobs: rows.into_iter().map(JobSummary::from).collect(),
+        }),
+        Err(e) => internal(&e, "could not list jobs"),
+    }
+}
+
+/// Rows per state, for one kind or all of them.
+#[derive(Debug, Default, Serialize, ToSchema)]
+pub struct StateCounts {
+    pending: i64,
+    running: i64,
+    done: i64,
+    failed: i64,
+}
+
+impl StateCounts {
+    fn add(&mut self, state: &str, n: i64) {
+        match state {
+            "pending" => self.pending += n,
+            "running" => self.running += n,
+            "done" => self.done += n,
+            "failed" => self.failed += n,
+            _ => {}
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct JobStats {
+    /// By kind.
+    kinds: std::collections::BTreeMap<String, StateCounts>,
+    totals: StateCounts,
+}
+
+#[utoipa::path(
+    get, path = "/v1/admin/jobs/stats", tag = "admin",
+    summary = "Job counts",
+    description = "Rows of the job queue by kind and state. `done` rows are kept for seven days (design/06).",
+    responses((status = 200, description = "The counts", body = JobStats), LocalErrors),
+)]
+async fn job_stats(State(state): State<AppState>, Extension(_c): Who) -> Response {
+    match state.jobs.stats().await {
+        Ok(rows) => {
+            let mut stats = JobStats {
+                kinds: std::collections::BTreeMap::new(),
+                totals: StateCounts::default(),
+            };
+            for (kind, st, n) in rows {
+                stats.kinds.entry(kind).or_default().add(&st, n);
+                stats.totals.add(&st, n);
+            }
+            ok(&stats)
+        }
+        Err(e) => internal(&e, "could not count jobs"),
+    }
+}
+
+#[utoipa::path(
+    post, path = "/v1/admin/jobs/{id}/retry", tag = "admin",
+    summary = "Retry a failed job",
+    description = "Puts a `failed` job back to `pending` now, with its attempts reset. Refused when the same \
+                   work is already queued.",
+    params(("id" = String, Path, description = "Job id (a ULID)")),
+    responses((status = 200, description = "The job", body = JobSummary), LocalErrors),
+)]
+async fn retry_job(
+    State(state): State<AppState>,
+    Extension(_c): Who,
+    path: Result<Path<String>, PathRejection>,
+) -> Response {
+    let Path(id) = match path {
+        Ok(p) => p,
+        Err(e) => return bad_path(&e).into_response(),
+    };
+    if let Err(e) = validate::consumer_id(&id) {
+        return e.into_response();
+    }
+    match state.jobs.retry(&id).await {
+        Ok(row) => {
+            tracing::info!(id = %row.id, kind = %row.kind, "job retried");
+            ok(&JobSummary::from(row))
+        }
+        Err(e) => job_error(e),
+    }
+}
+
+#[utoipa::path(
+    delete, path = "/v1/admin/jobs/{id}", tag = "admin",
+    summary = "Cancel a pending job",
+    description = "A pending job becomes `failed` with error `cancelled`. A running job cannot be taken back \
+                   from its worker.",
+    params(("id" = String, Path, description = "Job id (a ULID)")),
+    responses((status = 200, description = "The job", body = JobSummary), LocalErrors),
+)]
+async fn cancel_job(
+    State(state): State<AppState>,
+    Extension(_c): Who,
+    path: Result<Path<String>, PathRejection>,
+) -> Response {
+    let Path(id) = match path {
+        Ok(p) => p,
+        Err(e) => return bad_path(&e).into_response(),
+    };
+    if let Err(e) = validate::consumer_id(&id) {
+        return e.into_response();
+    }
+    match state.jobs.cancel(&id).await {
+        Ok(row) => {
+            tracing::info!(id = %row.id, kind = %row.kind, "job cancelled");
+            ok(&JobSummary::from(row))
+        }
+        Err(e) => job_error(e),
+    }
+}
+
+/// `POST /v1/admin/backfill` body (v1).
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct QueueBackfill {
+    puuid: String,
+    /// Platform routing value.
+    platform: String,
+    /// 1–10 000, default 500.
+    limit: Option<u32>,
+    /// Default false.
+    fetch_timeline: Option<bool>,
+}
+
+#[utoipa::path(
+    post, path = "/v1/admin/backfill", tag = "admin",
+    summary = "Queue a history walk",
+    description = "Queues `backfill:player` for one player (v1). One walk per player runs at a time.",
+    request_body = QueueBackfill,
+    responses((status = 200, description = "`{ok, jobId, status}`", body = serde_json::Value), LocalErrors),
+)]
+async fn queue_backfill(State(state): State<AppState>, Extension(_c): Who, bytes: Bytes) -> Response {
+    let parsed = (|| {
+        let b = Body::parse(&bytes)?;
+        b.required(&["puuid", "platform"])?;
+        let puuid = b.with("puuid", |loc, v| {
+            validate::puuid_at(loc, v).map(|()| v.to_string())
+        })?;
+        let platform = b.with("platform", validate::platform_at)?;
+        let limit = b.integer("limit", 1, 10_000)?.unwrap_or(500);
+        let fetch_timeline = b.boolean("fetchTimeline")?.unwrap_or(false);
+        Ok::<_, ApiError>((
+            puuid.unwrap_or_default(),
+            platform.ok_or_else(ApiError::internal)?,
+            limit,
+            fetch_timeline,
+        ))
+    })();
+    let (puuid, platform, limit, fetch_timeline) = match parsed {
+        Ok(p) => p,
+        Err(e) => return e.into_response(),
+    };
+    let walk = crate::jobs::archive::BackfillPlayer {
+        puuid,
+        platform: platform.as_str().to_string(),
+        limit: u32::try_from(limit).unwrap_or(500),
+        fetch_timeline: Some(fetch_timeline),
+        queue_id: None,
+        reason: Some("admin".into()),
+    };
+    match crate::jobs::archive::enqueue_backfill(&state.jobs, &walk).await {
+        Ok(q) => ok(&serde_json::json!({"ok": true, "jobId": q.id, "status": q.status()})),
+        Err(e) => internal(&e, "could not queue backfill"),
+    }
 }
