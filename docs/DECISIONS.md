@@ -356,3 +356,12 @@ Accepted. `jobs::Scheduler` is design/06 §Scheduler over the V0001 `jobs` table
 - **Panics** in a handler are contained (it runs in its own task) and retried with backoff. **Shutdown** stops claiming, lets running jobs finish within a grace period, then aborts them; their rows stay `running` for `recover`.
 - **Metrics:** `proxy_jobs_total{job,status}` counts every attempt as `completed` or `failed`, as v1 did. `jobs_pending{kind}` (design/07) is sampled every 15 s, and a kind that empties reads 0.
 - Handlers are a small object-safe trait returning a `BoxFuture`, rather than depending on `async-trait`.
+
+## ADR-048 — Ticks (2026-09-30)
+Accepted. `jobs::ticks` runs one interval loop per repeating job, and ticks only enqueue (design/06).
+- **Schedule** (v1 `scheduleRepeatables`, config names v1's): `poll:live` every `TRACK_POLL_LIVE_S` (60), `poll:rank` every `TRACK_POLL_RANK_S` (600), `poll:matches` every `TRACK_POLL_MATCH_S` (300), `ddragon:sync` every `DDRAGON_SYNC_S` (3600), `maintenance` daily. The ladder-crawl and aggregate ticks arrive with P7-02 and P7-04. v1's daily `names:backfill` tick arrives with its job (ADR-044).
+- **Firing:** the first tick is immediate, so a tick missed while the process was down fires on boot, as design/06 intends. A tick missed because the process stalled is skipped rather than burst.
+- **Fan-out** (v1 `fanOut`): one job per tracked player of the current key scope, `{puuid, platform}`, deduped by PUUID and written in one transaction. A slow poll is therefore never queued twice, and once it has run the next tick re-queues it. `ddragon:sync` and `maintenance` are deduped on their kind.
+- **Priorities:** polls use design/06's 10 000 band. Design/06 does not band `ddragon:sync`; it shares `maintenance`'s 30 000.
+- **Tests:** the loop's timing is tested under paused time with a counting action, and the fan-out against a real database. The plan wanted both in one paused-time test, but tokio's paused clock auto-advances while SQLite's blocking reads are awaited, so that test would count phantom ticks.
+- **Wiring:** ticks and workers start from `serve` once their handlers exist (P6-05 to P6-07); until then a tick would queue jobs that fail as unknown kinds.

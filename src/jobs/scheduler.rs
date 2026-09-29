@@ -233,6 +233,15 @@ impl Scheduler {
         self.notify.notify_one();
     }
 
+    /// Wake every idle worker (after a fan-out queued many jobs at once).
+    pub fn wake_all(&self) {
+        self.notify.notify_waiters();
+    }
+
+    pub fn db(&self) -> &Db {
+        &self.db
+    }
+
     /// Boot: rows a dead process left `running` go back to `pending`. Their
     /// attempt stays counted. Returns how many.
     pub async fn recover(&self) -> Result<usize, DbError> {
