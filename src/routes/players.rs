@@ -430,11 +430,11 @@ async fn profile_by_riot_id(
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BackfillNotice {
-    job_id: String,
+    pub job_id: String,
     /// `queued`, or `already-queued` when another request got there first.
-    status: String,
+    pub status: String,
     /// How far back the walk will go, in matches.
-    limit: u32,
+    pub limit: u32,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -460,15 +460,18 @@ pub struct MatchPage {
     warnings: Vec<String>,
 }
 
-/// v1 `maybeBackfill`: the first page of a lookup records the player. Queueing
-/// the history walk needs the job queue (plan P6-06); until then no notice.
+/// v1 `maybeBackfill` (#44): the first page of a lookup records the player
+/// and, unless a completed walk already accounts for their history, queues one
+/// at bulk priority, so the next page view costs no quota. A walk in flight is
+/// deduped by the queue; a walk that died part-way is queued again.
 async fn maybe_backfill(
     state: &AppState,
     puuid: &str,
     platform: Platform,
     start: i64,
 ) -> Option<BackfillNotice> {
-    if state.config.lookup_backfill_limit == 0 || start != 0 {
+    let limit = state.config.lookup_backfill_limit;
+    if limit == 0 || start != 0 {
         return None;
     }
     let row = crate::players::Upsert {
@@ -476,11 +479,43 @@ async fn maybe_backfill(
         platform: platform.as_str(),
         ..crate::players::Upsert::default()
     };
-    if let Err(e) = crate::players::upsert(&state.db, state.fetcher.key_scope().as_str(), row, now_ms()).await
-    {
-        tracing::warn!(error = %e, "could not record looked-up player");
+    let player =
+        match crate::players::upsert(&state.db, state.fetcher.key_scope().as_str(), row, now_ms()).await {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(error = %e, "could not record looked-up player");
+                return None;
+            }
+        };
+    let done = crate::jobs::archive::BackfillState::parse(player.backfill_state.as_deref())
+        .is_some_and(|s| s.done_at.is_some());
+    if done {
+        return None;
     }
-    None
+    let walk = crate::jobs::archive::BackfillPlayer {
+        puuid: puuid.to_string(),
+        platform: platform.as_str().to_string(),
+        limit,
+        fetch_timeline: None,
+        queue_id: None,
+        reason: Some("lookup".into()),
+    };
+    match crate::jobs::archive::enqueue_backfill(&state.jobs, &walk).await {
+        Ok(q) => {
+            tracing::info!(puuid, job = %q.id, status = q.status(), limit, "queued backfill on first lookup");
+            Some(BackfillNotice {
+                job_id: q.id.clone(),
+                status: q.status().to_string(),
+                limit,
+            })
+        }
+        Err(e) => {
+            // Archiving is an optimisation: a queue that is down must not take
+            // the match history down with it (v1).
+            tracing::warn!(error = %e, puuid, "could not queue lookup backfill");
+            None
+        }
+    }
 }
 
 #[utoipa::path(

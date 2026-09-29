@@ -378,3 +378,22 @@ Accepted. `jobs::poll` ports v1's `pollLive`, `pollRank` and `pollMatches`. Ever
   - Archive jobs are deduped by match id. Their priority follows design/06: the first page is the interactive band (0), and deeper matches get `100 + depth / 10`.
   - **Fix over v1:** v1 moved the cursor only when a new match still needed archiving, so a player whose new games had already been archived (by a lookup, say) was paged further back every tick. v2 moves the cursor to the newest id seen.
 - `jobs::Queue`, the database plus the wake signal, is split out of `Scheduler` so handlers can enqueue while the scheduler holds them.
+
+## ADR-050 — Archive and backfill jobs, and jobs in `serve` (2026-09-30)
+Accepted. `jobs::archive` ports v1's `archiveMatchJob`, `backfillPlayer` and `match-walk.ts`, and `serve` now runs the scheduler.
+- **`archive:match`** fetches the match at bulk priority. The fetcher's archive stores the body and its facts on the way through (P5-02/03). A 404 fails the job for good; other errors are retried. A timeline is fetched when the job asks (or by `ARCHIVE_TIMELINES`), and its failure never fails the archive (v1).
+  - `match.archived` carries `puuid`, `matchId`, `patch` and `participants`, and is published only when the match was not already archived. v1 announced every run, including re-archives.
+- **`backfill:player`** walks ids 100 at a time up to `limit` (v1's default 500) and queues the unarchived ones at `100 + depth / 10`, deduped by match id.
+  - Its state is design/04's `players.backfill_state`: `{startedAt, doneAt, depth, cursor, limit}`, v1 #44's stamps plus a cursor, saved after every page.
+  - **A walk that fails or is killed part-way resumes from its cursor** instead of re-reading from the top as v1 did. A history that grew meanwhile only means re-reading a few ids, never skipping one.
+  - Completion follows v1 `walkIsComplete`: the (unfiltered) history ran out, or the walk was at least `LOOKUP_BACKFILL_LIMIT` deep. A shallow walk never stamps `doneAt`.
+- **Queueing a walk** (`enqueue_backfill`) is deduped per player while pending or running, and counted in `proxy_backfills_queued_total{reason,status}` (v1).
+  - The first page of `/v1/players/{puuid}/matches` queues one (`reason: lookup`) unless a completed walk has accounted for the player, and answers v1's `backfill` notice `{jobId, status, limit}`.
+  - Tracking a player (`POST /v1/admin/tracked-players`) does the same (`reason: track`, v1 #46).
+  - The admin player list's `historyBackfill*` fields now come from `backfill_state`.
+- **`serve`:**
+  - builds the handlers over one `Queue`, runs `recover()`, starts `JOB_CONCURRENCY` workers and the three poll ticks;
+  - at shutdown, stops the ticks, gives running jobs 10 s, then closes WebSocket sockets before the final limiter checkpoint;
+  - does not tick `ddragon:sync` and `maintenance` until their handlers exist (P7-01, P7-05).
+  - `AppState` gains `jobs` (the queue) and `hub`.
+- The full P6 exit-check scenario (track, spectator flip seen on `/v1/ws`, kill mid-backfill, resume) needs `/v1/ws` and runs at the P6 exit check. Here, resume without duplicate archive jobs is tested against the handler.

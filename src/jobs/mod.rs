@@ -1,6 +1,7 @@
 //! Background work (docs/design/06): the durable queue and its workers, and the
 //! ticks that feed it; handlers arrive in P6-05 and P6-06.
 
+pub mod archive;
 pub mod poll;
 pub mod scheduler;
 pub mod ticks;
@@ -27,6 +28,26 @@ pub mod priority {
     pub const BACKFILL: i64 = 20_000;
     /// `aggregate:analytics`, `facts:reextract`, `maintenance`, `ddragon:sync`.
     pub const MAINTENANCE: i64 = 30_000;
+}
+
+/// Every handler that exists, by kind.
+pub fn handlers(
+    poll: &std::sync::Arc<poll::PollContext>,
+    archive: &std::sync::Arc<archive::ArchiveContext>,
+) -> Registry {
+    use std::sync::Arc;
+    Registry::new()
+        .with(kinds::POLL_LIVE, poll::PollLive(Arc::clone(poll)))
+        .with(kinds::POLL_RANK, poll::PollRank(Arc::clone(poll)))
+        .with(kinds::POLL_MATCHES, poll::PollMatches(Arc::clone(poll)))
+        .with(
+            kinds::ARCHIVE_MATCH,
+            archive::ArchiveMatchHandler(Arc::clone(archive)),
+        )
+        .with(
+            kinds::BACKFILL_PLAYER,
+            archive::BackfillPlayerHandler(Arc::clone(archive)),
+        )
 }
 
 pub use scheduler::{

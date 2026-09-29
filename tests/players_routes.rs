@@ -303,11 +303,20 @@ async fn hydrates_every_id_on_the_page_then_serves_it_from_the_archive() {
     let e = env(&[]).await;
     let r = e.get(&page("&count=5")).await;
     assert_eq!((r.status, x_cache(&r).0), (StatusCode::OK, "MISS"));
-    let body = r.json();
+    let mut body = r.json();
     assert_eq!(body["matchIds"], json!(MATCH_IDS));
     assert_eq!(body["matches"].as_array().unwrap().len(), 5);
     assert_eq!(body["hasMore"], true);
-    assert_eq!(body["backfill"], Value::Null, "the backfill job arrives in P6-06");
+    // The first lookup queues the player's history walk (v1 #44).
+    let job = std::mem::replace(&mut body["backfill"]["jobId"], json!("<ulid>"));
+    assert_eq!(job.as_str().unwrap().len(), 26);
+    assert_eq!(
+        (
+            body["backfill"]["status"].clone(),
+            body["backfill"]["limit"].clone()
+        ),
+        (json!("queued"), json!(10_000))
+    );
     insta::assert_json_snapshot!("players_match_page", body);
     let ids = e
         .server

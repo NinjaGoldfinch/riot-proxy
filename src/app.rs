@@ -49,6 +49,10 @@ pub struct AppState {
     pub limiter_restored: Arc<std::sync::atomic::AtomicBool>,
     /// The per-player `?refresh=true` cooldowns of `/v1/players/*`.
     pub refresh: Arc<crate::routes::players::RefreshWindows>,
+    /// The durable job queue (lookups and admin routes enqueue backfills).
+    pub jobs: crate::jobs::Queue,
+    /// The realtime hub `/v1/ws` sockets and job events share.
+    pub hub: crate::ws::Hub,
 }
 
 pub fn router(state: AppState, metrics: PrometheusHandle) -> Router {

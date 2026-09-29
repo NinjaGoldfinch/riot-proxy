@@ -402,6 +402,9 @@ async fn track_by_riot_id_then_untrack() {
     // A timestamp: checked here, left out of the snapshot.
     let updated = got.as_object_mut().unwrap().remove("updatedAt").unwrap();
     assert!(updated.as_str().unwrap().ends_with('Z'));
+    // Tracking queues the history walk once (v1 #46); its id is a fresh ULID.
+    let job = std::mem::replace(&mut got["backfill"]["jobId"], json!("<ulid>"));
+    assert_eq!(job.as_str().unwrap().len(), 26);
     insta::assert_json_snapshot!("admin_tracked_player", got);
 
     // Posting the same Riot ID again re-resolves it (the path after a key rotation).

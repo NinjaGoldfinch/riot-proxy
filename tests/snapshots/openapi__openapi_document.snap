@@ -699,7 +699,7 @@ expression: doc
             ]
           },
           "historyBackfillStartedAt": {
-            "description": "Set with `historyBackfilledAt` still null means a walk that died mid-way.\nFilled by the backfill job (P6-06).",
+            "description": "Set with `historyBackfilledAt` still null means a walk that died mid-way.",
             "type": [
               "string",
               "null"
@@ -1132,7 +1132,7 @@ expression: doc
             "type": "object"
           }
         ],
-        "description": "The stored row, plus the backfill notice (always `null` until P6-06)."
+        "description": "The stored row, plus the history walk tracking queued, if it did (v1 #46)."
       },
       "WindowUsage": {
         "properties": {
