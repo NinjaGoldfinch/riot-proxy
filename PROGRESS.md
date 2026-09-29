@@ -116,7 +116,7 @@ cmp: byte-identical (sha256 71b146e59a3b2818…); no RGAPI- in the server log
 The response shape of `/v1/players/by-riot-id/{gameName}/{tagLine}/profile` matches v1's `ProfileBody` (snapshot `players_routes__players_profile.snap`), reviewed and approved by the owner on #43. The plan's path `/v1/lol/match/{id}` is served as v1's `/v1/lol/matches/{region}/{matchId}`.
 
 ## P6 — Scheduler, jobs, realtime
-- [x] P6-01 WebSocket hub spike (may run any time after P0) (#PR)
+- [x] P6-01 WebSocket hub spike (may run any time after P0) (#46)
 - [ ] P6-02 events
 - [ ] P6-03 durable jobs core
 - [ ] P6-04 ticks
