@@ -12,6 +12,7 @@ pub mod db;
 pub mod events;
 pub mod fetcher;
 pub mod http;
+pub mod jobs;
 pub mod metrics;
 pub mod players;
 pub mod riot;

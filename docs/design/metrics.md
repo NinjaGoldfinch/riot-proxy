@@ -46,7 +46,7 @@ Owner decision (2026-09-24, ADR-014): these use the names **exactly as design/07
 |---|---|---|---|
 | `limiter_bulk_waiters` | gauge | — | Limiter priorities (P2-05), implemented; process-wide total |
 | `limiter_interactive_waiters` | gauge | — | Limiter priorities (P2-05), implemented; process-wide total |
-| `jobs_pending` | gauge | kind | Scheduler (P6-03) |
+| `jobs_pending` | gauge | kind | Scheduler (P6-03), implemented; sampled every 15 s, a kind with nothing pending reads 0 |
 | `events_published_total` | counter | name | Events (P6-02), implemented; one per event handed to the hub, whether or not anyone holds its topic |
 | `sqlite_wal_bytes` | gauge | — | Maintenance / sampler (P7-05) |
 

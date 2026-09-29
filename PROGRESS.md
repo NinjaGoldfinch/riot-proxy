@@ -118,7 +118,7 @@ The response shape of `/v1/players/by-riot-id/{gameName}/{tagLine}/profile` matc
 ## P6 — Scheduler, jobs, realtime
 - [x] P6-01 WebSocket hub spike (may run any time after P0) (#46)
 - [x] P6-02 events (#47)
-- [ ] P6-03 durable jobs core
+- [x] P6-03 durable jobs core (#48)
 - [ ] P6-04 ticks
 - [ ] P6-05 poll handlers
 - [ ] P6-06 archive + backfill handlers
