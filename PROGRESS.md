@@ -123,7 +123,7 @@ The response shape of `/v1/players/by-riot-id/{gameName}/{tagLine}/profile` matc
 - [x] P6-05 poll handlers (#50)
 - [x] P6-06 archive + backfill handlers (#51)
 - [x] P6-07 WS auth + wiring (#52)
-- [x] P6-08 admin routes (jobs) (#PR)
+- [x] P6-08 admin routes (jobs) (#53)
 Exit check: _pending_
 
 ## P7 — Data Dragon, ladder, analytics, dashboard
