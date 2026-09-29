@@ -173,9 +173,78 @@ pub fn enqueue_on(conn: &Connection, job: &NewJob, now_ms: i64) -> rusqlite::Res
     })
 }
 
-/// The queue. Cheap to clone.
+/// Enqueueing, shareable with handlers that fan out (they hold a `Queue` while
+/// the [`Scheduler`] holds them). Cheap to clone.
+#[derive(Debug, Clone)]
+pub struct Queue {
+    db: Db,
+    notify: Arc<Notify>,
+}
+
+impl Queue {
+    pub fn new(db: Db) -> Self {
+        Self {
+            db,
+            notify: Arc::new(Notify::new()),
+        }
+    }
+
+    /// Queue a job and wake an idle worker.
+    pub async fn enqueue(&self, job: NewJob) -> Result<Enqueued, DbError> {
+        let now = Clock::now().unix_ms;
+        let out = self
+            .db
+            .write(move |c| enqueue_on(c, &job, now).map_err(DbError::from))
+            .await?;
+        if out.created {
+            self.notify.notify_one();
+        }
+        Ok(out)
+    }
+
+    /// Queue several jobs in one write; returns how many were new.
+    pub async fn enqueue_all(&self, jobs: Vec<NewJob>) -> Result<usize, DbError> {
+        if jobs.is_empty() {
+            return Ok(0);
+        }
+        let now = Clock::now().unix_ms;
+        let created = self
+            .db
+            .write(move |c| {
+                let tx = c.transaction()?;
+                let mut created = 0;
+                for job in &jobs {
+                    created += usize::from(enqueue_on(&tx, job, now)?.created);
+                }
+                tx.commit()?;
+                Ok::<_, DbError>(created)
+            })
+            .await?;
+        if created > 0 {
+            self.wake_all();
+        }
+        Ok(created)
+    }
+
+    /// Wake a worker after jobs were queued with [`enqueue_on`].
+    pub fn wake(&self) {
+        self.notify.notify_one();
+    }
+
+    /// Wake every idle worker (after a fan-out queued many jobs at once).
+    pub fn wake_all(&self) {
+        self.notify.notify_waiters();
+    }
+
+    pub fn db(&self) -> &Db {
+        &self.db
+    }
+}
+
+/// The queue and its handlers. Cheap to clone.
 #[derive(Clone)]
 pub struct Scheduler {
+    queue: Queue,
     db: Db,
     notify: Arc<Notify>,
     handlers: Arc<HashMap<&'static str, Arc<dyn Handler>>>,
@@ -208,34 +277,36 @@ impl Registry {
 
 impl Scheduler {
     pub fn new(db: Db, handlers: Registry) -> Self {
+        Self::with_queue(Queue::new(db), handlers)
+    }
+
+    /// A scheduler over a queue its handlers already hold.
+    pub fn with_queue(queue: Queue, handlers: Registry) -> Self {
         Self {
-            db,
-            notify: Arc::new(Notify::new()),
+            db: queue.db.clone(),
+            notify: Arc::clone(&queue.notify),
+            queue,
             handlers: Arc::new(handlers.0),
         }
     }
 
+    pub fn queue(&self) -> &Queue {
+        &self.queue
+    }
+
     /// Queue a job and wake an idle worker.
     pub async fn enqueue(&self, job: NewJob) -> Result<Enqueued, DbError> {
-        let now = Clock::now().unix_ms;
-        let out = self
-            .db
-            .write(move |c| enqueue_on(c, &job, now).map_err(DbError::from))
-            .await?;
-        if out.created {
-            self.notify.notify_one();
-        }
-        Ok(out)
+        self.queue.enqueue(job).await
     }
 
     /// Wake a worker after jobs were queued with [`enqueue_on`].
     pub fn wake(&self) {
-        self.notify.notify_one();
+        self.queue.wake();
     }
 
     /// Wake every idle worker (after a fan-out queued many jobs at once).
     pub fn wake_all(&self) {
-        self.notify.notify_waiters();
+        self.queue.wake_all();
     }
 
     pub fn db(&self) -> &Db {
