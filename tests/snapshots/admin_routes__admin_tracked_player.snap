@@ -1,0 +1,17 @@
+---
+source: tests/admin_routes.rs
+expression: got
+---
+{
+  "backfill": null,
+  "gameName": "Hide on bush",
+  "historyBackfillDepth": null,
+  "historyBackfillStartedAt": null,
+  "historyBackfilledAt": null,
+  "keyScope": "1e31d3bf",
+  "lastSeenMatchId": null,
+  "platform": "kr",
+  "puuid": "NkQRxdiN3U3pEek5MWbWgaxzG_hpH5imJ9Ttch8ql5KM7D6p6Bh-Hbbvn6UoFVdGUBBIvcnEJv72qw",
+  "tagLine": "KR1",
+  "tracked": true
+}

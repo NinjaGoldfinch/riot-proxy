@@ -107,11 +107,89 @@ pub fn scoped_purge_pattern(scope: &KeyScope, pattern: &str) -> String {
     }
 }
 
+/// Redis `MATCH` glob semantics, which v1's purge used (`SCAN … MATCH`): `*`,
+/// `?`, `[abc]`, `[^a]`, `[a-z]` and `\\` escapes.
+pub fn glob_match(pattern: &str, key: &str) -> bool {
+    fn go(p: &[char], k: &[char]) -> bool {
+        match p.first() {
+            None => k.is_empty(),
+            Some('*') => (0..=k.len()).any(|i| go(&p[1..], &k[i..])),
+            Some('?') => !k.is_empty() && go(&p[1..], &k[1..]),
+            Some('[') => {
+                let Some(&c) = k.first() else { return false };
+                let mut i = 1;
+                let negate = p.get(1) == Some(&'^');
+                if negate {
+                    i += 1;
+                }
+                let mut hit = false;
+                let mut closed = false;
+                while i < p.len() {
+                    match p[i] {
+                        ']' => {
+                            closed = true;
+                            break;
+                        }
+                        '\\' if i + 1 < p.len() => {
+                            hit |= p[i + 1] == c;
+                            i += 2;
+                        }
+                        lo if p.get(i + 1) == Some(&'-') && i + 2 < p.len() && p[i + 2] != ']' => {
+                            let hi = p[i + 2];
+                            let (lo, hi) = if lo <= hi { (lo, hi) } else { (hi, lo) };
+                            hit |= (lo..=hi).contains(&c);
+                            i += 3;
+                        }
+                        other => {
+                            hit |= other == c;
+                            i += 1;
+                        }
+                    }
+                }
+                // Redis treats an unclosed class as running to the end.
+                let rest = if closed { &p[i + 1..] } else { &p[p.len()..] };
+                hit != negate && go(rest, &k[1..])
+            }
+            Some('\\') if p.len() > 1 => k.first() == Some(&p[1]) && go(&p[2..], &k[1..]),
+            Some(c) => k.first() == Some(c) && go(&p[1..], &k[1..]),
+        }
+    }
+    let p: Vec<char> = pattern.chars().collect();
+    let k: Vec<char> = key.chars().collect();
+    go(&p, &k)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::riot::endpoints::Endpoint;
     use crate::riot::routing::{Platform, Region};
+
+    #[test]
+    fn globs_follow_redis_match() {
+        for (p, k, want) in [
+            ("*", "anything", true),
+            (
+                "ab*:summoner.byPuuid:*",
+                "ab12cd34:summoner.byPuuid:euw1.api:P",
+                true,
+            ),
+            ("ab*:league.*", "ab12cd34:summoner.byPuuid:euw1.api:P", false),
+            ("ab12cd34:summoner.*", "ab12cd34:summoner.byPuuid:h:P", true),
+            ("ab12cd34:*:P", "ab12cd34:summoner.byPuuid:h:P", true),
+            ("h?llo", "hello", true),
+            ("h?llo", "hllo", false),
+            ("h[ae]llo", "hallo", true),
+            ("h[^e]llo", "hello", false),
+            ("h[a-b]llo", "hbllo", true),
+            ("h\\*llo", "h*llo", true),
+            ("h\\*llo", "hello", false),
+            ("exact", "exact", true),
+            ("exact", "exactly", false),
+        ] {
+            assert_eq!(glob_match(p, k), want, "{p} ~ {k}");
+        }
+    }
 
     fn scope() -> KeyScope {
         KeyScope::from_key(&Secret::new("RGAPI-test-key-not-real"))

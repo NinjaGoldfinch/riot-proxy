@@ -36,13 +36,12 @@ use crate::cache::keys::{canonical_query, derived_key};
 use crate::cache::l1::Lookup;
 use crate::clock::Clock;
 use crate::fetcher::{FetchError, FetchOptions, FetchResult, XCache};
-use crate::http::error::ErrorResponse;
 use crate::http::{ApiError, validate};
 use crate::metrics::CACHE_READS_TOTAL;
 use crate::riot::client::RiotRequest;
 use crate::riot::endpoints::{Endpoint, Target, Ttls};
 use crate::riot::routing::Platform;
-use crate::routes::passthrough::{JSON, request, respond};
+use crate::routes::passthrough::{JSON, LocalErrors, UpstreamErrors, request, respond};
 use crate::routes::riot::bad_path;
 
 type Q = Query<HashMap<String, String>>;
@@ -54,49 +53,6 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(profile_by_riot_id))
         .routes(routes!(match_page))
         .routes(routes!(champions))
-}
-
-/// The errors a Riot-backed composite documents (v1 `upstreamErrors`).
-#[derive(utoipa::IntoResponses)]
-pub enum CompositeErrors {
-    /// A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform).
-    #[response(status = 400)]
-    BadRequest(ErrorResponse),
-    /// Missing or invalid key.
-    #[response(status = 401)]
-    Unauthorized(ErrorResponse),
-    /// The key lacks a scope.
-    #[response(status = 403)]
-    Forbidden(ErrorResponse),
-    /// Nothing resolved for this player.
-    #[response(status = 404)]
-    NotFound(ErrorResponse),
-    /// Your consumer quota is spent (`QUOTA_EXCEEDED`).
-    #[response(status = 429)]
-    Quota(ErrorResponse),
-    /// Riot failed or rejected the proxy's key (`UPSTREAM_ERROR`).
-    #[response(status = 502)]
-    Upstream(ErrorResponse),
-    /// Riot's rate limit budget is exhausted (`RATE_LIMITED`, with `Retry-After`).
-    #[response(status = 503)]
-    RateLimited(ErrorResponse),
-}
-
-/// The errors a route that never calls Riot documents (v1 `localErrors`).
-#[derive(utoipa::IntoResponses)]
-pub enum LocalErrors {
-    /// A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform).
-    #[response(status = 400)]
-    BadRequest(ErrorResponse),
-    /// Missing or invalid key.
-    #[response(status = 401)]
-    Unauthorized(ErrorResponse),
-    /// The key lacks a scope.
-    #[response(status = 403)]
-    Forbidden(ErrorResponse),
-    /// Your consumer quota is spent (`QUOTA_EXCEEDED`).
-    #[response(status = 429)]
-    Quota(ErrorResponse),
 }
 
 // ── Shared ──────────────────────────────────────────────────────────────────
@@ -390,7 +346,7 @@ async fn compose_profile(
            ("platform" = Option<String>, Query, description = "Platform routing value; default `DEFAULT_PLATFORM`"),
            ("topMastery" = Option<i64>, Query, description = "1–20, default 5"),
            ("refresh" = Option<bool>, Query, description = "Spend quota to re-read; once a minute per player")),
-    responses((status = 200, description = "The profile", body = ProfileBody), CompositeErrors),
+    responses((status = 200, description = "The profile", body = ProfileBody), UpstreamErrors),
 )]
 async fn profile(
     State(state): State<AppState>,
@@ -420,7 +376,7 @@ async fn profile(
            ("platform" = Option<String>, Query, description = "Platform routing value; default `DEFAULT_PLATFORM`"),
            ("topMastery" = Option<i64>, Query, description = "1–20, default 5"),
            ("refresh" = Option<bool>, Query, description = "Spend quota to re-read; once a minute per player")),
-    responses((status = 200, description = "The profile", body = ProfileBody), CompositeErrors),
+    responses((status = 200, description = "The profile", body = ProfileBody), UpstreamErrors),
 )]
 async fn profile_by_riot_id(
     State(state): State<AppState>,
@@ -541,7 +497,7 @@ async fn maybe_backfill(
            ("queue" = Option<i64>, Query, description = "Queue id, 0–5000"),
            ("type" = Option<String>, Query, description = "ranked, normal, tourney or tutorial"),
            ("refresh" = Option<bool>, Query, description = "Re-read the id list; once a minute per player")),
-    responses((status = 200, description = "The page", body = MatchPage), CompositeErrors),
+    responses((status = 200, description = "The page", body = MatchPage), UpstreamErrors),
 )]
 async fn match_page(
     State(state): State<AppState>,
@@ -743,12 +699,6 @@ fn round4(v: f64) -> f64 {
     (v * 10_000.0).round() / 10_000.0
 }
 
-/// JavaScript's `toISOString`: UTC with milliseconds.
-fn iso(ms: i64) -> Option<String> {
-    let t = jiff::Timestamp::from_millisecond(ms).ok()?;
-    Some(t.strftime("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
-}
-
 fn pool_body(puuid: &str, f: &pool::Filter, rows: Vec<pool::ChampionRow>) -> PlayerChampions {
     PlayerChampions {
         puuid: puuid.to_string(),
@@ -775,7 +725,7 @@ fn pool_body(puuid: &str, f: &pool::Filter, rows: Vec<pool::ChampionRow>) -> Pla
                     // Absent until a game carries both CS and a length (v1).
                     cs_per_min: (r.cs_seconds > 0)
                         .then(|| round4(r.cs as f64 / (r.cs_seconds as f64 / 60.0))),
-                    last_played_at: r.last_played_ms.and_then(iso),
+                    last_played_at: r.last_played_ms.and_then(crate::clock::iso_ms),
                 }
             })
             .collect(),
@@ -893,10 +843,13 @@ mod tests {
     #[test]
     fn iso_matches_javascript() {
         assert_eq!(
-            iso(1_790_247_623_902).as_deref(),
+            crate::clock::iso_ms(1_790_247_623_902).as_deref(),
             Some("2026-09-24T11:00:23.902Z")
         );
-        assert_eq!(iso(0).as_deref(), Some("1970-01-01T00:00:00.000Z"));
+        assert_eq!(
+            crate::clock::iso_ms(0).as_deref(),
+            Some("1970-01-01T00:00:00.000Z")
+        );
     }
 
     #[test]

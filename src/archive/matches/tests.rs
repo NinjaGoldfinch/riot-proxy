@@ -214,3 +214,18 @@ async fn get_many_returns_only_the_archived_ones() {
     assert_eq!(found.len(), 1);
     assert_eq!(found[MATCH_ID].as_ref(), MATCH);
 }
+
+#[tokio::test]
+async fn stats_count_matches_timelines_and_bytes() {
+    let (_dir, db) = db();
+    assert_eq!(stats(&db).await.unwrap(), Stats::default());
+    put(&db, MATCH_ID, "asia", SCOPE, Bytes::from_static(MATCH), 1)
+        .await
+        .unwrap();
+    put_timeline(&db, MATCH_ID, Bytes::from_static(b"{}"))
+        .await
+        .unwrap();
+    let s = stats(&db).await.unwrap();
+    assert_eq!((s.matches, s.timelines, s.raw_bytes), (1, 1, MATCH.len() as i64));
+    assert!(s.stored_bytes > 0 && s.stored_bytes < s.raw_bytes);
+}

@@ -5,6 +5,53 @@ expression: doc
 {
   "components": {
     "schemas": {
+      "AdminStats": {
+        "description": "Archive and tracking counts (v1's three fields, plus archive size).",
+        "properties": {
+          "archiveRawBytes": {
+            "description": "What they decompress to.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "archiveStoredBytes": {
+            "description": "Compressed bytes the archive's match bodies take.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "archivedMatches": {
+            "description": "The whole archive, which is not key-scoped and survives a key rotation.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "archivedTimelines": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "keyScope": {
+            "type": "string"
+          },
+          "knownPlayers": {
+            "description": "Player rows for the current key, tracked or not.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "trackedPlayers": {
+            "description": "Scoped to the current key: zero right after a rotation.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "keyScope",
+          "archivedMatches",
+          "trackedPlayers",
+          "knownPlayers",
+          "archivedTimelines",
+          "archiveStoredBytes",
+          "archiveRawBytes"
+        ],
+        "type": "object"
+      },
       "BackfillNotice": {
         "description": "Present when this lookup queued the player's history for archiving.",
         "properties": {
@@ -26,6 +73,168 @@ expression: doc
           "jobId",
           "status",
           "limit"
+        ],
+        "type": "object"
+      },
+      "CacheProbe": {
+        "description": "What the cache holds for one request.",
+        "properties": {
+          "ageSeconds": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "key": {
+            "type": "string"
+          },
+          "present": {
+            "type": "boolean"
+          },
+          "stale": {
+            "description": "Past its soft TTL (served as `STALE`), or null when absent.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "key",
+          "present",
+          "ageSeconds",
+          "stale"
+        ],
+        "type": "object"
+      },
+      "ConsumerList": {
+        "properties": {
+          "consumers": {
+            "items": {
+              "$ref": "#/components/schemas/ConsumerSummary"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "consumers"
+        ],
+        "type": "object"
+      },
+      "ConsumerSummary": {
+        "description": "A consumer, never its key (v1 `ConsumerSummary`).",
+        "properties": {
+          "createdAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "disabledAt": {
+            "description": "Set when the key was revoked; revoked consumers are kept, never deleted.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "A ULID (v1 used UUIDs).",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "quotaPerMin": {
+            "description": "Requests per minute allowed to this consumer.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "scopes",
+          "quotaPerMin",
+          "disabledAt"
+        ],
+        "type": "object"
+      },
+      "CreateConsumer": {
+        "description": "`POST /v1/admin/consumers` body.",
+        "properties": {
+          "name": {
+            "description": "1–100 characters; unique.",
+            "type": "string"
+          },
+          "quotaPerMin": {
+            "description": "1–1 000 000; default 600.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "scopes": {
+            "description": "`read` and/or `admin`; default `[\"read\"]`.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "CreatedConsumer": {
+        "description": "The new consumer and its key, shown exactly once.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "key": {
+            "description": "The plaintext key. Only its SHA-256 is stored.",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "quotaPerMin": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "warning": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "scopes",
+          "quotaPerMin",
+          "key",
+          "warning"
         ],
         "type": "object"
       },
@@ -95,6 +304,36 @@ expression: doc
         },
         "required": [
           "ok"
+        ],
+        "type": "object"
+      },
+      "Limits": {
+        "description": "One rate-limit bucket (v1 `LimitsResponse`).",
+        "properties": {
+          "frozenMs": {
+            "description": "Milliseconds until a 429-induced freeze on this bucket lifts, or null.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "scope": {
+            "type": "string"
+          },
+          "usage": {
+            "description": "Per-window usage as the limiter sees it; empty before Riot has named the limits.",
+            "items": {
+              "$ref": "#/components/schemas/WindowUsage"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "scope",
+          "usage",
+          "frozenMs"
         ],
         "type": "object"
       },
@@ -429,6 +668,96 @@ expression: doc
         ],
         "type": "object"
       },
+      "PlayerList": {
+        "properties": {
+          "players": {
+            "items": {
+              "$ref": "#/components/schemas/PlayerRecord"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "players"
+        ],
+        "type": "object"
+      },
+      "PlayerRecord": {
+        "description": "A `players` row (v1 `PlayerSummary`).",
+        "properties": {
+          "gameName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "historyBackfillDepth": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "historyBackfillStartedAt": {
+            "description": "Set with `historyBackfilledAt` still null means a walk that died mid-way.\nFilled by the backfill job (P6-06).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "historyBackfilledAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "keyScope": {
+            "description": "Fingerprint of the Riot key this PUUID was encrypted for.",
+            "type": "string"
+          },
+          "lastSeenMatchId": {
+            "description": "Cursor the match poller resumes from.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "platform": {
+            "type": "string"
+          },
+          "puuid": {
+            "type": "string"
+          },
+          "tagLine": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tracked": {
+            "type": "boolean"
+          },
+          "updatedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "puuid",
+          "keyScope",
+          "platform",
+          "gameName",
+          "tagLine",
+          "tracked",
+          "lastSeenMatchId",
+          "historyBackfillStartedAt",
+          "historyBackfilledAt",
+          "historyBackfillDepth"
+        ],
+        "type": "object"
+      },
       "PlayerSummary": {
         "properties": {
           "assists": {
@@ -691,6 +1020,19 @@ expression: doc
         ],
         "type": "object"
       },
+      "Purge": {
+        "description": "`POST /v1/admin/cache/purge` body.",
+        "properties": {
+          "pattern": {
+            "description": "A Redis-style glob (`*`, `?`, `[…]`) over cache keys, 1–200 characters. Scoped to the\ncurrent key unless it already starts with a key scope.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pattern"
+        ],
+        "type": "object"
+      },
       "Ready": {
         "description": "v1 returned `{ok, redis, postgres, keyScope}`. v2 has one store, so `sqlite` replaces\nthe two backend booleans, and `limiter` says the checkpoint was restored\n(design/07). `keyScope` is v1's (ADR-011).",
         "properties": {
@@ -712,6 +1054,107 @@ expression: doc
           "sqlite",
           "limiter",
           "keyScope"
+        ],
+        "type": "object"
+      },
+      "RevokeCache": {
+        "description": "`POST /v1/admin/consumers/{id}/revoke-cache` body.",
+        "properties": {
+          "keyHash": {
+            "description": "The key's SHA-256, 64 hex characters.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "keyHash"
+        ],
+        "type": "object"
+      },
+      "TrackPlayer": {
+        "description": "`POST /v1/admin/tracked-players` body: a PUUID, or a Riot ID to resolve.",
+        "properties": {
+          "gameName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "platform": {
+            "description": "Platform routing value, e.g. `euw1`.",
+            "type": "string"
+          },
+          "puuid": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tagLine": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tracked": {
+            "description": "Default `true`; `false` records the player without polling it.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "platform"
+        ],
+        "type": "object"
+      },
+      "TrackedPlayer": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/PlayerRecord"
+          },
+          {
+            "properties": {
+              "backfill": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/BackfillNotice"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "backfill"
+            ],
+            "type": "object"
+          }
+        ],
+        "description": "The stored row, plus the backfill notice (always `null` until P6-06)."
+      },
+      "WindowUsage": {
+        "properties": {
+          "limit": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "used": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "window": {
+            "description": "`limit:seconds`, e.g. `20:1`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "window",
+          "used",
+          "limit"
         ],
         "type": "object"
       }
@@ -823,6 +1266,1045 @@ expression: doc
         "summary": "Readiness",
         "tags": [
           "ops"
+        ]
+      }
+    },
+    "/v1/admin/cache/purge": {
+      "post": {
+        "description": "Removes matching entries from memory and from the persisted cache. Keys look like `{keyScope}:{endpointId}:{host}:{params…}`, e.g. `summoner.byPuuid:*`. The match archive is not a cache and is never purged.",
+        "operationId": "purge_cache",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Purge"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "`{ok, pattern, deleted}`"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          }
+        },
+        "summary": "Purge cache entries by pattern",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/admin/consumers": {
+      "get": {
+        "description": "Every consumer, including revoked ones (`disabledAt` tells them apart). Keys are never returned: only their SHA-256 is stored, and not even that is exposed here.",
+        "operationId": "list_consumers",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsumerList"
+                }
+              }
+            },
+            "description": "The consumers"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          }
+        },
+        "summary": "List consumers",
+        "tags": [
+          "admin"
+        ]
+      },
+      "post": {
+        "description": "Issues a key. The plaintext key is in this response and nowhere else: only its SHA-256 is stored.",
+        "operationId": "create_consumer",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateConsumer"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedConsumer"
+                }
+              }
+            },
+            "description": "The consumer and its key"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          }
+        },
+        "summary": "Create a consumer",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/admin/consumers/{id}": {
+      "delete": {
+        "description": "The key stops working immediately: it is also dropped from the auth cache. The row is kept, so the key can never be reissued.",
+        "operationId": "revoke_consumer",
+        "parameters": [
+          {
+            "description": "Consumer id (a ULID)",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "`{ok, id}`"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          }
+        },
+        "summary": "Revoke a consumer",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/admin/consumers/{id}/revoke-cache": {
+      "post": {
+        "description": "Forces the next request with this key to be re-checked against the database. The key hash must belong to the consumer in the path. Revoking a consumer already does this.",
+        "operationId": "revoke_cache",
+        "parameters": [
+          {
+            "description": "Consumer id (a ULID)",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeCache"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "`{ok, id, stillActive}`"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          }
+        },
+        "summary": "Drop a key from the auth cache",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/admin/debug/cache": {
+      "get": {
+        "description": "What the proxy has cached for a request, without fetching it: the key, whether an entry is present, its age and whether it is stale.",
+        "operationId": "debug_cache",
+        "parameters": [
+          {
+            "description": "Platform or region, e.g. euw1 or europe",
+            "in": "query",
+            "name": "scope",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Riot path starting with `/`",
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Endpoint id, e.g. summoner.byPuuid",
+            "in": "query",
+            "name": "method",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CacheProbe"
+                }
+              }
+            },
+            "description": "The entry"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          }
+        },
+        "summary": "Inspect a cache entry",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/admin/debug/riot": {
+      "get": {
+        "description": "Fetch any Riot path on a platform or region host, through the limiter and cache like any read. `method` picks the endpoint whose bucket, TTL and cache key apply, and the path must then be that endpoint's route; without it, a conservative default bucket is used. `noCache=true` skips the cache read.",
+        "operationId": "debug_riot",
+        "parameters": [
+          {
+            "description": "Platform or region, e.g. euw1 or europe",
+            "in": "query",
+            "name": "scope",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Riot path starting with `/`, query string allowed",
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Endpoint id, e.g. summoner.byPuuid",
+            "in": "query",
+            "name": "method",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Skip the cache read",
+            "in": "query",
+            "name": "noCache",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {}
+            },
+            "description": "Riot's payload, unmodified. `X-Cache` and `X-Cache-Age` describe where it came from."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found upstream; a cached 404 carries `X-Cache: HIT-NEG`."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot failed or rejected the proxy's key (`UPSTREAM_ERROR`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot's rate limit budget is exhausted (`RATE_LIMITED`, with `Retry-After`)."
+          }
+        },
+        "summary": "Raw Riot passthrough",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/admin/limits/{scope}": {
+      "get": {
+        "description": "Current usage of one Riot rate-limit bucket, and how long any 429 freeze on it has left. The scope is a host, not a game region: platform endpoints bucket by platform (`euw1`), account-v1 and match-v5 by region (`europe`).",
+        "operationId": "limits",
+        "parameters": [
+          {
+            "description": "A platform (`euw1`) or a region (`europe`)",
+            "in": "path",
+            "name": "scope",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Limits"
+                }
+              }
+            },
+            "description": "The bucket"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          }
+        },
+        "summary": "Rate-limit bucket usage",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/admin/stats": {
+      "get": {
+        "description": "`archivedMatches` counts the whole archive, which is not key-scoped: match ids are not encrypted, so it survives a key rotation. `trackedPlayers` is scoped to the current key and reads zero right after one.",
+        "operationId": "stats",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminStats"
+                }
+              }
+            },
+            "description": "The counts"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          }
+        },
+        "summary": "Archive and tracking counts",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/admin/tracked-players": {
+      "get": {
+        "description": "Every player row for the current `keyScope`, tracked or not: tracking is a flag on the row. Rows written under a previous Riot key are not returned, because PUUIDs are encrypted per key.",
+        "operationId": "list_players",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlayerList"
+                }
+              }
+            },
+            "description": "The players"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          }
+        },
+        "summary": "List known players",
+        "tags": [
+          "admin"
+        ]
+      },
+      "post": {
+        "description": "Give a PUUID, or a Riot ID (`gameName` + `tagLine`) which is resolved through account-v1 on the normal cached read path. Re-posting by Riot ID after a key rotation re-resolves the player under the new key.",
+        "operationId": "track_player",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrackPlayer"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrackedPlayer"
+                }
+              }
+            },
+            "description": "The stored player"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot failed or rejected the proxy's key (`UPSTREAM_ERROR`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot's rate limit budget is exhausted (`RATE_LIMITED`, with `Retry-After`)."
+          }
+        },
+        "summary": "Track a player, or re-resolve one by Riot ID",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/admin/tracked-players/{puuid}": {
+      "delete": {
+        "description": "Untracks rather than deletes: the row keeps the identity and backfill state a later lookup reuses.",
+        "operationId": "untrack_player",
+        "parameters": [
+          {
+            "description": "Encrypted player UUID",
+            "in": "path",
+            "name": "puuid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "`{ok, puuid, tracked: false}`"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          }
+        },
+        "summary": "Stop tracking a player",
+        "tags": [
+          "admin"
         ]
       }
     },
@@ -2173,7 +3655,7 @@ expression: doc
                 }
               }
             },
-            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform)."
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
           },
           "401": {
             "content": {
@@ -2193,7 +3675,7 @@ expression: doc
                 }
               }
             },
-            "description": "The key lacks a scope."
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller."
           },
           "404": {
             "content": {
@@ -2203,7 +3685,7 @@ expression: doc
                 }
               }
             },
-            "description": "Nothing resolved for this player."
+            "description": "Not found."
           },
           "429": {
             "content": {
@@ -2314,7 +3796,7 @@ expression: doc
                 }
               }
             },
-            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform)."
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
           },
           "401": {
             "content": {
@@ -2334,7 +3816,17 @@ expression: doc
                 }
               }
             },
-            "description": "The key lacks a scope."
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found."
           },
           "429": {
             "content": {
@@ -2444,7 +3936,7 @@ expression: doc
                 }
               }
             },
-            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform)."
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
           },
           "401": {
             "content": {
@@ -2464,7 +3956,7 @@ expression: doc
                 }
               }
             },
-            "description": "The key lacks a scope."
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller."
           },
           "404": {
             "content": {
@@ -2474,7 +3966,7 @@ expression: doc
                 }
               }
             },
-            "description": "Nothing resolved for this player."
+            "description": "Not found."
           },
           "429": {
             "content": {
@@ -2575,7 +4067,7 @@ expression: doc
                 }
               }
             },
-            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform)."
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
           },
           "401": {
             "content": {
@@ -2595,7 +4087,7 @@ expression: doc
                 }
               }
             },
-            "description": "The key lacks a scope."
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller."
           },
           "404": {
             "content": {
@@ -2605,7 +4097,7 @@ expression: doc
                 }
               }
             },
-            "description": "Nothing resolved for this player."
+            "description": "Not found."
           },
           "429": {
             "content": {

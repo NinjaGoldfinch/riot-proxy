@@ -171,7 +171,7 @@ impl L1 {
     }
 
     /// Remove every key matching `pred` (admin purge, P5-05). Returns how many.
-    pub async fn invalidate_where(&self, pred: impl Fn(&str) -> bool) -> usize {
+    pub async fn invalidate_where(&self, pred: impl Fn(&str) -> bool) -> Vec<String> {
         let keys: Vec<Arc<String>> = self
             .cache
             .iter()
@@ -181,7 +181,7 @@ impl L1 {
         for k in &keys {
             self.cache.invalidate(k.as_str()).await;
         }
-        keys.len()
+        keys.iter().map(|k| k.as_str().to_string()).collect()
     }
 
     /// Apply moka's pending evictions (tests and metrics snapshots).
@@ -349,7 +349,7 @@ mod tests {
         ] {
             l.put(k, Bytes::from_static(b"{}"), &ttls(60, 60)).await.unwrap();
         }
-        assert_eq!(l.invalidate_where(|k| k.ends_with(":A")).await, 2);
+        assert_eq!(l.invalidate_where(|k| k.ends_with(":A")).await.len(), 2);
         assert_eq!(l.get("s:summoner.byPuuid:h:A").await, Lookup::Miss);
         assert!(fresh(&l.get("s:summoner.byPuuid:h:B").await));
     }

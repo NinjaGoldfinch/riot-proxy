@@ -248,6 +248,35 @@ pub async fn put_timeline(db: &Db, match_id: &str, body: Bytes) -> Result<bool, 
     .await
 }
 
+/// Archive totals for `/v1/admin/stats`. The archive is not key-scoped: match
+/// ids are not encrypted, so it survives a key rotation (v1).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Stats {
+    pub matches: i64,
+    pub timelines: i64,
+    /// zstd bytes on disk, and what they decompress to.
+    pub stored_bytes: i64,
+    pub raw_bytes: i64,
+}
+
+pub async fn stats(db: &Db) -> Result<Stats, ArchiveError> {
+    db.read(|c| {
+        let (matches, stored_bytes, raw_bytes) = c.query_row(
+            "SELECT count(*), coalesce(sum(length(body_zstd)), 0), coalesce(sum(body_size), 0) FROM matches",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?;
+        let timelines = c.query_row("SELECT count(*) FROM timelines", [], |r| r.get(0))?;
+        Ok::<_, ArchiveError>(Stats {
+            matches,
+            timelines,
+            stored_bytes,
+            raw_bytes,
+        })
+    })
+    .await
+}
+
 /// The ids not yet archived, in their input order (duplicates kept). What the
 /// backfill and the ladder crawl use to skip matches they already have.
 pub async fn filter_unarchived(db: &Db, match_ids: &[String]) -> Result<Vec<String>, ArchiveError> {

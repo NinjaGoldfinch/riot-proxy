@@ -87,6 +87,53 @@ pub async fn get(db: &Db, key_scope: &str, puuid: &str) -> Result<Option<Player>
     .await
 }
 
+/// Every player row for this key scope, tracked or not (v1 `listPlayers`),
+/// most recently updated first.
+pub async fn list(db: &Db, key_scope: &str) -> Result<Vec<Player>, DbError> {
+    let scope = key_scope.to_string();
+    db.read(move |c| {
+        let mut stmt = c.prepare(&format!(
+            "SELECT {COLUMNS} FROM players WHERE key_scope = ?1 ORDER BY updated_at DESC, puuid"
+        ))?;
+        let rows = stmt.query_map([scope], row)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
+    })
+    .await
+}
+
+/// Set `tracked` on an existing row; `false` if there is no such player.
+pub async fn set_tracked(
+    db: &Db,
+    key_scope: &str,
+    puuid: &str,
+    tracked: bool,
+    now_ms: i64,
+) -> Result<bool, DbError> {
+    let (scope, puuid) = (key_scope.to_string(), puuid.to_string());
+    db.write(move |c| {
+        let n = c.execute(
+            "UPDATE players SET tracked = ?1, updated_at = ?2 WHERE key_scope = ?3 AND puuid = ?4",
+            rusqlite::params![tracked, now_ms, scope, puuid],
+        )?;
+        Ok::<_, DbError>(n > 0)
+    })
+    .await
+}
+
+/// `(known, tracked)` players for this key scope.
+pub async fn counts(db: &Db, key_scope: &str) -> Result<(i64, i64), DbError> {
+    let scope = key_scope.to_string();
+    db.read(move |c| {
+        c.query_row(
+            "SELECT count(*), coalesce(sum(tracked), 0) FROM players WHERE key_scope = ?1",
+            [scope],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(DbError::from)
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -137,6 +184,38 @@ mod tests {
         assert!(get(&db, "s2", "p1").await.unwrap().is_none());
         let fresh = upsert(&db, "s2", at("p1", "euw1"), 1).await.unwrap();
         assert_eq!((fresh.platform.as_str(), fresh.tracked), ("euw1", false));
+    }
+
+    #[tokio::test]
+    async fn list_untrack_and_count() {
+        let (_d, db) = db();
+        upsert(
+            &db,
+            "s1",
+            Upsert {
+                tracked: Some(true),
+                ..at("p1", "kr")
+            },
+            1,
+        )
+        .await
+        .unwrap();
+        upsert(&db, "s1", at("p2", "kr"), 2).await.unwrap();
+        upsert(&db, "s2", at("p3", "kr"), 3).await.unwrap();
+        let names: Vec<_> = list(&db, "s1")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|p| p.puuid)
+            .collect();
+        assert_eq!(names, ["p2", "p1"], "own scope, newest first");
+        assert_eq!(counts(&db, "s1").await.unwrap(), (2, 1));
+        assert!(set_tracked(&db, "s1", "p1", false, 4).await.unwrap());
+        assert!(
+            !set_tracked(&db, "s1", "p3", false, 4).await.unwrap(),
+            "another scope's row"
+        );
+        assert_eq!(counts(&db, "s1").await.unwrap(), (2, 0));
     }
 
     #[tokio::test]

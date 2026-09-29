@@ -39,3 +39,9 @@ impl Clock {
         }
     }
 }
+/// Unix ms as JavaScript's `toISOString` printed it (UTC, milliseconds), which is
+/// how v1 serialised every timestamp in its JSON.
+pub fn iso_ms(ms: i64) -> Option<String> {
+    let t = jiff::Timestamp::from_millisecond(ms).ok()?;
+    Some(t.strftime("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
+}

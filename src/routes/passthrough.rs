@@ -41,6 +41,53 @@ pub enum PassthroughResponses {
     RateLimited(ErrorResponse),
 }
 
+/// The errors of a route that may call Riot (v1 `upstreamErrors`), for the
+/// proxy's own documents; [`PassthroughResponses`] adds Riot's 200.
+#[derive(utoipa::IntoResponses)]
+pub enum UpstreamErrors {
+    /// A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region).
+    #[response(status = 400)]
+    BadRequest(ErrorResponse),
+    /// Missing or invalid key.
+    #[response(status = 401)]
+    Unauthorized(ErrorResponse),
+    /// The key lacks a scope, or the admin IP allowlist refused the caller.
+    #[response(status = 403)]
+    Forbidden(ErrorResponse),
+    /// Not found.
+    #[response(status = 404)]
+    NotFound(ErrorResponse),
+    /// Your consumer quota is spent (`QUOTA_EXCEEDED`).
+    #[response(status = 429)]
+    Quota(ErrorResponse),
+    /// Riot failed or rejected the proxy's key (`UPSTREAM_ERROR`).
+    #[response(status = 502)]
+    Upstream(ErrorResponse),
+    /// Riot's rate limit budget is exhausted (`RATE_LIMITED`, with `Retry-After`).
+    #[response(status = 503)]
+    RateLimited(ErrorResponse),
+}
+
+/// The errors of a route that never calls Riot (v1 `localErrors`).
+#[derive(utoipa::IntoResponses)]
+pub enum LocalErrors {
+    /// A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region).
+    #[response(status = 400)]
+    BadRequest(ErrorResponse),
+    /// Missing or invalid key.
+    #[response(status = 401)]
+    Unauthorized(ErrorResponse),
+    /// The key lacks a scope, or the admin IP allowlist refused the caller.
+    #[response(status = 403)]
+    Forbidden(ErrorResponse),
+    /// Not found.
+    #[response(status = 404)]
+    NotFound(ErrorResponse),
+    /// Your consumer quota is spent (`QUOTA_EXCEEDED`).
+    #[response(status = 429)]
+    Quota(ErrorResponse),
+}
+
 /// Riot answers JSON; so does the proxy (v1 served `application/json; charset=utf-8`).
 pub const JSON: &str = "application/json; charset=utf-8";
 

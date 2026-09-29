@@ -18,7 +18,7 @@ pub const PUUID_MAX: usize = 128;
 pub const MATCH_ID_MIN: usize = 6;
 pub const MATCH_ID_MAX: usize = 40;
 
-fn invalid(location: &str, name: &str, rule: &str) -> ApiError {
+pub(crate) fn invalid(location: &str, name: &str, rule: &str) -> ApiError {
     let message = format!("{location}/{name} {rule}");
     // v1: a platform/region failure is BAD_REGION so consumers can branch on it.
     let lower = message.to_ascii_lowercase();
@@ -69,7 +69,22 @@ pub fn region(value: &str) -> Result<Region, ApiError> {
 }
 
 pub fn platform(value: &str) -> Result<Platform, ApiError> {
-    one_of("params", "platform", value, &Platform::ALL, Platform::as_str)
+    platform_at("params", value)
+}
+
+/// A platform in `location` (`params`, `body`, …).
+pub fn platform_at(location: &str, value: &str) -> Result<Platform, ApiError> {
+    one_of(location, "platform", value, &Platform::ALL, Platform::as_str)
+}
+
+/// `params/scope`: a rate-limit bucket, a platform or a region (v1 `ScopeParam`).
+pub fn limiter_scope(value: &str) -> Result<&'static str, ApiError> {
+    Platform::ALL
+        .iter()
+        .map(|p| p.as_str())
+        .chain(Region::ALL.iter().map(|r| r.as_str()))
+        .find(|s| *s == value)
+        .ok_or_else(|| invalid("params", "scope", "must be equal to one of the allowed values"))
 }
 
 /// A `params/<name>` value from a closed set of strings (ladder enums).
@@ -96,15 +111,27 @@ pub fn query_one_of(
 }
 
 pub fn game_name(value: &str) -> Result<(), ApiError> {
-    length("params", "gameName", value, 1, GAME_NAME_MAX)
+    game_name_at("params", value)
+}
+
+pub fn game_name_at(location: &str, value: &str) -> Result<(), ApiError> {
+    length(location, "gameName", value, 1, GAME_NAME_MAX)
 }
 
 pub fn tag_line(value: &str) -> Result<(), ApiError> {
-    length("params", "tagLine", value, 1, TAG_LINE_MAX)
+    tag_line_at("params", value)
+}
+
+pub fn tag_line_at(location: &str, value: &str) -> Result<(), ApiError> {
+    length(location, "tagLine", value, 1, TAG_LINE_MAX)
 }
 
 pub fn puuid(value: &str) -> Result<(), ApiError> {
-    length("params", "puuid", value, PUUID_MIN, PUUID_MAX)?;
+    puuid_at("params", value)
+}
+
+pub fn puuid_at(location: &str, value: &str) -> Result<(), ApiError> {
+    length(location, "puuid", value, PUUID_MIN, PUUID_MAX)?;
     if value
         .bytes()
         .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
@@ -112,7 +139,7 @@ pub fn puuid(value: &str) -> Result<(), ApiError> {
         Ok(())
     } else {
         Err(invalid(
-            "params",
+            location,
             "puuid",
             "must match pattern \"^[A-Za-z0-9_-]+$\"",
         ))
@@ -191,9 +218,41 @@ pub fn patch_query(raw: Option<&str>) -> Result<Option<&str>, ApiError> {
     }
 }
 
+/// `params/id`: a consumer id, a ULID (v2 ids; v1's were UUIDs, ADR-044).
+pub fn consumer_id(value: &str) -> Result<(), ApiError> {
+    if value.parse::<ulid::Ulid>().is_ok() && value.len() == 26 {
+        Ok(())
+    } else {
+        Err(invalid("params", "id", "must match format \"ulid\""))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn body_locations_scopes_and_ids() {
+        assert_eq!(
+            msg(puuid_at("body", "short")).1,
+            "body/puuid must NOT have fewer than 60 characters"
+        );
+        assert_eq!(msg(platform_at("body", "EUW1")).0, ErrorCode::BadRegion);
+        assert_eq!(limiter_scope("europe").unwrap(), "europe");
+        assert_eq!(limiter_scope("euw1").unwrap(), "euw1");
+        assert_eq!(
+            msg(limiter_scope("mars")),
+            (
+                ErrorCode::Validation,
+                "params/scope must be equal to one of the allowed values".into()
+            )
+        );
+        assert!(consumer_id(&ulid::Ulid::generate().to_string()).is_ok());
+        assert_eq!(
+            msg(consumer_id("not-an-id")).1,
+            "params/id must match format \"ulid\""
+        );
+    }
 
     #[test]
     fn query_booleans_platforms_and_patches() {

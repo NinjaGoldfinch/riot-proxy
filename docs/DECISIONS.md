@@ -296,3 +296,28 @@ Accepted (owner decision: "CS and game length is important"). Design/04 dropped 
 - `match_facts.cs` is `totalMinionsKilled + neutralMinionsKilled`, `NULL` only when both are absent (v1 `extractCs`). `FACTS_VERSION` is now 2.
 - Both columns are nullable: rows written before V0003 have neither, and `facts:reextract` (P7-04) must re-derive them from the stored bodies, **including `matches.game_duration`**, not only the facts rows. No v2 archive exists outside development yet, and `migrate-v1` (P8) derives both from imported bodies.
 - `csPerMin` = CS ÷ minutes, with both summed over only the games that have both values, so a game missing either can't skew the rate. It is absent when no game qualifies, as v1 omitted it; Arena games report their true 0 CS. v1 summed CS over every row and duration over rows with K/D/A, which could mix games from different sets.
+
+## ADR-044 — Admin routes, data subset (2026-09-30)
+Accepted. Twelve operations from v1's `admin.ts`, `health.ts` and `debug.ts`, all behind the admin scope and the admin IP allowlist, with quotas applying:
+- `POST/GET /v1/admin/consumers`
+- `DELETE /v1/admin/consumers/{id}`
+- `POST /v1/admin/consumers/{id}/revoke-cache`
+- `GET/POST /v1/admin/tracked-players`
+- `DELETE /v1/admin/tracked-players/{puuid}`
+- `POST /v1/admin/cache/purge`
+- `GET /v1/admin/stats`
+- `GET /v1/admin/limits/{scope}`
+- `GET /v1/admin/debug/riot`
+- `GET /v1/admin/debug/cache`
+
+The OpenAPI compare shows the remaining 11 v1 admin operations missing (jobs, ladder, analytics, Data Dragon, metrics); each arrives with its feature.
+
+- **Owner decisions:** the plan's `/v1/admin/archive/stats` is served at v1's path, `GET /v1/admin/stats`. It returns v1's `keyScope`, `archivedMatches` and `trackedPlayers`, plus `knownPlayers`, `archivedTimelines`, `archiveStoredBytes` and `archiveRawBytes`. `limits/{scope}`, `revoke-cache` and both debug routes, which no plan task named, are included.
+- **Bodies** are read as v1's ajv did (`coerceTypes: 'array'`, unknown fields dropped), with ajv's messages (`http::body`). A body that is not JSON is a `VALIDATION` 400; v1 answered 500 because its error handler did not recognise Fastify's parse error.
+- **Consumer ids are ULIDs**, so `{id}` is validated as one (`params/id must match format "ulid"`, where v1 said `"uuid"`). Timestamps are ISO strings as v1's were. A duplicate name is a `VALIDATION` 400; v2 names are `UNIQUE` (design/04 DDL, ADR-012).
+- **Revoking a consumer drops its key from the auth cache immediately.** v1 left it working until the cache TTL and offered `revoke-cache` for that; `revoke-cache` remains, and still requires the key hash to belong to the consumer in the path, as v1's later fix did.
+- **Tracking by PUUID keeps a stored Riot ID.** v1 wrote `null` names when a body had no `gameName`/`tagLine`, erasing names an earlier track by Riot ID had stored. Tracking by Riot ID resolves through account-v1 on the cached read path, and Riot's spelling wins; that is also how a player is re-resolved after a key rotation. A Riot ID with no PUUID in the answer is a 404 (v1 crashed). `backfill` is `null` and the `historyBackfill*` fields are `null` until the backfill job (P6-06) gives `players.backfill_state` its shape.
+- **Purge** matches Redis `MATCH` globs (v1 used `SCAN MATCH`) against keys scoped to the current Riot key (`scoped_purge_pattern`), in L1 and L2. `deleted` counts distinct keys removed. An L2 write still queued (up to 2 s of write-behind) can land after a purge, and at worst comes back at the next boot's warm. The match archive is not a cache and is never purged.
+- **Limits** reports every window the limiter holds for the bucket, including the bootstrap limits used before Riot has named any.
+- **`debug/riot`** goes through the limiter and cache like any read. Without `method` it borrows v1's conservative `status.platformData` bucket and keys the cache on the whole path. With `method`, the path must be that endpoint's route (`Endpoint::parse_path`), so the request, cache key and any archive write are exactly the route's. v1 accepted any path under any method, which in v2 would have filed a debug body under the wrong cache key or archive id. Query parameters must be ones the endpoint takes. `debug/cache` reports `{key, present, ageSeconds, stale}` without fetching.
+- **Not assigned to any task:** `POST /v1/admin/players/names/backfill` (a job) belongs with the jobs work in P6.
