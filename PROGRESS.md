@@ -151,7 +151,7 @@ Exit check: _pending_
 - **P4 exit check is still open:** the owner needs to confirm `/docs` renders in a browser (headless Chromium crashed on Scalar here). Tag `phase-P4` after that.
 - **P7-04 `facts:reextract`** must re-derive `FACTS_VERSION` < 2 rows *and* fill `matches.game_duration` where it is NULL (V0003, ADR-043).
 - **P6:** `POST /v1/admin/players/names/backfill` (v1 job route) is unassigned; do it with the jobs (ADR-044). P6-06 must give `players.backfill_state` a shape and fill `historyBackfill*` in `/v1/admin/tracked-players`.
-- **P7-04:** v1's `analytics.updated` WS event has no design/06 name; ask whether to keep it (ADR-045). **P7-06:** the dashboard listens for v1's `metrics.snapshot` / `ladder.crawl.completed`; rename to `metrics` / `crawl.phase`.
+- **Events** keep v1's names plus `crawl.phase` (ADR-045): P7-04 publishes `analytics.updated`; P7-02/03 publish `crawl.phase` and `ladder.crawl.completed`; the dashboard's names already match.
 - **Ask the owner at P7-04:** remakes are stored as ordinary facts rows (ADR-041); should analytics exclude them?
 - **Ask the owner at P7-04:** v1's analytics routes read tables design/04 doesn't have (bans, runes, spells, analytics slices; ADR-039).
 - Routes: follow `src/routes/riot.rs`, which uses `http::validate::*` for v1 rules and `routes::passthrough::{respond, options}`. Add read routers to `routes::docs::api_router`'s `read` group so they get auth+quota. `tests/common::app_with(env, wiremock_uri)` gives a full app. v1's `/v1/lol` bodies are raw passthrough too (`PassthroughResponse`), so P4-05's "typed" part is request validation.

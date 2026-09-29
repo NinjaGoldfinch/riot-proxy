@@ -163,13 +163,16 @@ Auth is the same Bearer key on the upgrade request, or `?token=` for browsers (v
 
 ### Events
 
-`events.rs` is an enum with `#[serde(tag = "name")]`, so the set of event names is exhaustively known to the compiler and `utoipa` can document them under the `ws` tag as prose, as v1 does.
+`events.rs` is an enum tagged `event` (the key v1's frames use), so the set of event names is exhaustively known to the compiler and `utoipa` can document them under the `ws` tag as prose, as v1 does. Names and payload fields are v1's, plus `crawl.phase` (ADR-045).
 
-| Name | Payload |
-|---|---|
-| `game.started` / `game.ended` | puuid, platform, gameId, queue, champion |
-| `rank.changed` | puuid, queue, before, after |
-| `match.archived` | matchId, patch, participants (puuids) |
-| `patch.new` | version |
-| `crawl.phase` | crawlId, phase, stats |
-| `metrics` | the snapshot the dashboard draws |
+| Name | Topic | Payload |
+|---|---|---|
+| `game.started` | `player:<puuid>` | puuid, platform, gameId, queueId, championId |
+| `game.ended` | `player:<puuid>` | puuid, platform, gameId, queueId, championId |
+| `rank.changed` | `player:<puuid>` | puuid, queue, before, after (`{tier, rank, lp}` or null) |
+| `match.archived` | `player:<puuid>` | puuid, matchId, patch, participants (puuids) |
+| `patch.new` | `patch` | version |
+| `crawl.phase` | `ladder` | crawlId, platform, queue, phase, stats |
+| `ladder.crawl.completed` | `ladder` | crawlId, platform, queue, entries, players, durationS |
+| `analytics.updated` | `ladder` | platform, queue, durationS, tables |
+| `metrics.snapshot` | `metrics` | the snapshot the dashboard draws |
