@@ -135,7 +135,7 @@ Exit check (2026-09-30, `main` @ `bc15e98` + the exit-check test): **passed.**
 The player was tracked through `POST /v1/admin/tracked-players`, which queued the walk, and `game.started` was read on a socket subscribed to `player:<puuid>` with an admin key. It arrived within one `TRACK_POLL_LIVE_S` (10 s) tick. The restart's `recover()` re-queued the running backfill, and the walk resumed from its saved cursor.
 
 ## P7 — Data Dragon, ladder, analytics, dashboard
-- [ ] P7-01 Data Dragon sync + static serving
+- [x] P7-01 Data Dragon sync + static serving (#55)
 - [ ] P7-02 ladder enumerate
 - [ ] P7-03 ladder collect + archive
 - [ ] P7-04 analytics (**+ v1's three `/v1/lol/analytics/*` routes, deferred from P4-05 by the owner, ADR-037**)

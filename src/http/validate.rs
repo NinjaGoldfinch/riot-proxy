@@ -218,6 +218,21 @@ pub fn patch_query(raw: Option<&str>) -> Result<Option<&str>, ApiError> {
     }
 }
 
+/// `?version=`: a Data Dragon patch, at most 20 characters (v1 `/v1/static/{file}`).
+pub fn version_query(raw: Option<&str>) -> Result<Option<&str>, ApiError> {
+    let Some(v) = raw else { return Ok(None) };
+    length("querystring", "version", v, 0, 20)?;
+    if crate::r#static::is_version(v) {
+        Ok(Some(v))
+    } else {
+        Err(invalid(
+            "querystring",
+            "version",
+            "must match pattern \"^[0-9]+(\\.[0-9]+)*$\"",
+        ))
+    }
+}
+
 /// `params/id`: a consumer id, a ULID (v2 ids; v1's were UUIDs, ADR-044).
 pub fn consumer_id(value: &str) -> Result<(), ApiError> {
     if value.parse::<ulid::Ulid>().is_ok() && value.len() == 26 {

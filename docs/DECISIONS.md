@@ -416,3 +416,32 @@ Accepted. The job routes are v2's own: v1's queues were BullMQ's, with no admin 
 - Refusals are `VALIDATION` 400s ("Job X is running"), as v1's crawl cancel was; an unknown id is a 404.
 - `POST /v1/admin/backfill` is v1's route, `{puuid, platform, limit? (1–10 000, default 500), fetchTimeline?}` → `{ok, jobId, status}`. It queues through `enqueue_backfill` (`reason: admin`).
 - **Job ids** now come from one monotonic ULID generator, so ids made in the same millisecond still sort in creation order. The claim's tie-break (oldest first) and the list's order (newest first) therefore hold within a millisecond too.
+
+## ADR-053 — Data Dragon mirror (2026-09-30)
+Accepted. `ddragon:sync` (`jobs::ddragon`) fills `DDRAGON_DIR`; `r#static` reads it. Behaviour is v1's `static/ddragon.ts`, `static/champions.ts` and `routes/static.ts` unless listed here.
+- **Sync** (v1):
+  - reads `versions.json`, refreshes the un-versioned queue table (`meta/queues.json`) on every run, and downloads the six data files of the newest patch when it is not mirrored yet, or always with `force`;
+  - a data file Riot does not serve is skipped, not fatal;
+  - a queue-table failure keeps the copy on disk;
+  - `patch.new {version}` is published when a patch is downloaded.
+  - Data Dragon never goes through the limiter.
+  - Errors reaching the version list are `Retry`s with the usual backoff.
+- **"Mirrored" means `versions.json` exists** in the patch directory. The sync writes it last, and every file is written to a temp name and renamed into place.
+  - v1 kept the current version in Redis and, when Redis was empty, took the newest directory on disk even if its sync had died half way. v2 takes the newest *complete* directory. A half-synced patch is finished by the next tick instead of being served incomplete.
+  - The current version is remembered in memory once found.
+  - Syncs are serialised: an admin `force` and the tick can overlap.
+  - `versions.json` is the list fetched at the start of the run; v1 fetched it a second time at the end.
+- **Module paths:** the design's `src/static/champions.rs` is used as written. `static` is a Rust keyword, so the module is `crate::r#static`. The job and the Data Dragon HTTP client (`Cdn`) live in `src/jobs/ddragon.rs`.
+- **Routes** (v1 contract, not named in the plan task but part of "static serving"):
+  - `GET /v1/static/versions` → `{current, versions}`. It is `X-Cache: HIT` from the mirror, or `MISS` when fetched live before the first sync.
+  - `GET /v1/static/queues`.
+  - `GET /v1/static/{file}?version=` with v1's aliases, validation messages and "has not been synced yet" 404s.
+  - All three need a read key (v1).
+  - `POST /v1/admin/ddragon/sync {force?}` → `{ok, jobId}`. Without `force` it joins the tick's queued job (dedupe `ddragon:sync`). A forced sync has its own dedupe key (`ddragon:sync:force`), so it is never swallowed by a pending tick job.
+- **`/ddragon/*`** is `tower-http::ServeDir` over `DDRAGON_DIR`, without a key, as v1's Caddy served it (design/07 §Option B).
+  - Found files carry v1's `Cache-Control: public, max-age=604800, immutable`.
+  - Unlike Caddy's unconditional header, a 404 does not, so a patch requested before it syncs is not cached as missing for a week.
+  - Caddy's `browse` directory listing is not reproduced.
+- **Champion names** (v1 #111): id → name from the current patch's `champion.json`, parsed once per patch. `/v1/players/{puuid}/champions` now fills `championName` for ids the mirror knows and omits it otherwise (v1).
+- **Ticks:** `serve` now ticks `ddragon:sync` every `DDRAGON_SYNC_S` (ADR-048). The first tick is immediate, so a fresh deployment syncs at boot. `ServeOptions::ddragon_urls` points it at a mock in tests.
+- **Signal handling:** `serve` installs its SIGTERM/SIGINT handler before it binds and logs `listening`. Previously a signal in the moment after `listening` hit the default action; the extra client construction made that window visible in the CLI test.

@@ -1,7 +1,8 @@
 //! Background work (docs/design/06): the durable queue and its workers, and the
-//! ticks that feed it; handlers arrive in P6-05 and P6-06.
+//! ticks that feed it, and the handlers by kind.
 
 pub mod archive;
+pub mod ddragon;
 pub mod poll;
 pub mod scheduler;
 pub mod ticks;
@@ -34,6 +35,7 @@ pub mod priority {
 pub fn handlers(
     poll: &std::sync::Arc<poll::PollContext>,
     archive: &std::sync::Arc<archive::ArchiveContext>,
+    ddragon: &std::sync::Arc<ddragon::DdragonSync>,
 ) -> Registry {
     use std::sync::Arc;
     Registry::new()
@@ -47,6 +49,10 @@ pub fn handlers(
         .with(
             kinds::BACKFILL_PLAYER,
             archive::BackfillPlayerHandler(Arc::clone(archive)),
+        )
+        .with(
+            kinds::DDRAGON_SYNC,
+            ddragon::DdragonSyncHandler(Arc::clone(ddragon)),
         )
 }
 

@@ -1176,6 +1176,19 @@ expression: doc
         ],
         "type": "object"
       },
+      "QueueDdragonSync": {
+        "description": "`POST /v1/admin/ddragon/sync` body (v1).",
+        "properties": {
+          "force": {
+            "description": "Re-download a patch that is already mirrored. Default false.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "Ready": {
         "description": "v1 returned `{ok, redis, postgres, keyScope}`. v2 has one store, so `sqlite` replaces\nthe two backend booleans, and `limiter` says the checkpoint was restored\n(design/07). `keyScope` is v1's (ADR-011).",
         "properties": {
@@ -1919,6 +1932,86 @@ expression: doc
           }
         },
         "summary": "Drop a key from the auth cache",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/admin/ddragon/sync": {
+      "post": {
+        "description": "Queues `ddragon:sync` (v1). Without `force` it joins the hourly tick's job when one is queued; a `force` sync is queued once beside it.",
+        "operationId": "queue_ddragon_sync",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueueDdragonSync"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "`{ok, jobId}`"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          }
+        },
+        "summary": "Queue a Data Dragon sync",
         "tags": [
           "admin"
         ]
@@ -4949,6 +5042,254 @@ expression: doc
         "summary": "Account by Riot ID",
         "tags": [
           "riot"
+        ]
+      }
+    },
+    "/v1/static/queues": {
+      "get": {
+        "description": "Maps `queueId` to a map and a description — what `420` means where the archive and the composite routes report one. Refreshed on every `ddragon:sync`, not only on a new patch: Riot adds queue ids when a game mode ships, which is not a patch event.",
+        "operationId": "static_queues",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Riot's `queues.json`"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          }
+        },
+        "summary": "Riot's queue id table",
+        "tags": [
+          "static"
+        ]
+      }
+    },
+    "/v1/static/versions": {
+      "get": {
+        "description": "`{current, versions}`: the mirrored patch (null before the first `ddragon:sync`) and Riot's patch list, newest first. `X-Cache: HIT` from the mirror; before the first sync the list is fetched live from Data Dragon (`MISS`).",
+        "operationId": "static_versions",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "`{current, versions}`"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          }
+        },
+        "summary": "Data Dragon patches",
+        "tags": [
+          "static"
+        ]
+      }
+    },
+    "/v1/static/{file}": {
+      "get": {
+        "description": "Data Dragon's JSON for the mirrored patch, or for `?version=` when that patch was mirrored. Plural aliases name the same files (`champions` is `champion`).",
+        "operationId": "static_file",
+        "parameters": [
+          {
+            "description": "Data Dragon name or alias",
+            "in": "path",
+            "name": "file",
+            "required": true,
+            "schema": {
+              "description": "`/v1/static/{file}`'s names, for the document (v1's enum, in its order).",
+              "enum": [
+                "champion",
+                "item",
+                "runesReforged",
+                "summoner",
+                "profileicon",
+                "map",
+                "champions",
+                "items",
+                "runes",
+                "summoner-spells",
+                "profile-icons",
+                "maps"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "A mirrored patch; default the current one",
+            "example": "16.17.1",
+            "in": "query",
+            "name": "version",
+            "required": false,
+            "schema": {
+              "maxLength": 20,
+              "pattern": "^[0-9]+(\\.[0-9]+)*$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Data Dragon's JSON, untouched"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          }
+        },
+        "summary": "A mirrored Data Dragon file",
+        "tags": [
+          "static"
         ]
       }
     },

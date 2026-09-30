@@ -53,16 +53,20 @@ pub struct AppState {
     pub jobs: crate::jobs::Queue,
     /// The realtime hub `/v1/ws` sockets and job events share.
     pub hub: crate::ws::Hub,
+    /// The Data Dragon mirror `/v1/static/*` and champion names read.
+    pub ddragon: Arc<crate::r#static::Mirror>,
 }
 
 pub fn router(state: AppState, metrics: PrometheusHandle) -> Router {
     let (api, doc) = routes::docs::api_router(Some(state.clone())).split_for_parts();
     let docs_ui = state.config.docs_ui;
     let ui = routes::ui::router(&state.config);
+    let ddragon = routes::statics::files(state.ddragon.dir());
     let mut router = api
         .with_state(state)
         .merge(telemetry::metrics_router(metrics))
-        .merge(ui);
+        .merge(ui)
+        .merge(ddragon);
     if docs_ui {
         router = router.merge(routes::docs::docs_router(routes::docs::finish(doc)));
     }

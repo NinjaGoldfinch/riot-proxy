@@ -57,6 +57,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(retry_job))
         .routes(routes!(cancel_job))
         .routes(routes!(queue_backfill))
+        .routes(routes!(queue_ddragon_sync))
 }
 
 fn json<T: Serialize>(status: StatusCode, body: &T) -> Response {
@@ -1178,5 +1179,44 @@ async fn queue_backfill(State(state): State<AppState>, Extension(_c): Who, bytes
     match crate::jobs::archive::enqueue_backfill(&state.jobs, &walk).await {
         Ok(q) => ok(&serde_json::json!({"ok": true, "jobId": q.id, "status": q.status()})),
         Err(e) => internal(&e, "could not queue backfill"),
+    }
+}
+
+/// `POST /v1/admin/ddragon/sync` body (v1).
+#[derive(Debug, Deserialize, ToSchema)]
+#[allow(dead_code)]
+pub struct QueueDdragonSync {
+    /// Re-download a patch that is already mirrored. Default false.
+    force: Option<bool>,
+}
+
+#[utoipa::path(
+    post, path = "/v1/admin/ddragon/sync", tag = "admin",
+    summary = "Queue a Data Dragon sync",
+    description = "Queues `ddragon:sync` (v1). Without `force` it joins the hourly tick's job when one is \
+        queued; a `force` sync is queued once beside it.",
+    request_body = QueueDdragonSync,
+    responses((status = 200, description = "`{ok, jobId}`", body = serde_json::Value), LocalErrors),
+)]
+async fn queue_ddragon_sync(State(state): State<AppState>, Extension(_c): Who, bytes: Bytes) -> Response {
+    use crate::jobs::{NewJob, kinds, priority};
+    let force = match Body::parse(&bytes).and_then(|b| b.boolean("force")) {
+        Ok(f) => f.unwrap_or(false),
+        Err(e) => return e.into_response(),
+    };
+    let dedupe = if force {
+        "ddragon:sync:force"
+    } else {
+        kinds::DDRAGON_SYNC
+    };
+    let job = NewJob::new(
+        kinds::DDRAGON_SYNC,
+        priority::MAINTENANCE,
+        serde_json::to_value(crate::jobs::ddragon::SyncPayload { force }).unwrap_or_default(),
+    )
+    .dedupe(dedupe);
+    match state.jobs.enqueue(job).await {
+        Ok(q) => ok(&serde_json::json!({"ok": true, "jobId": q.id})),
+        Err(e) => internal(&e, "could not queue ddragon:sync"),
     }
 }

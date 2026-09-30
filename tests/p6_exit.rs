@@ -91,6 +91,8 @@ async fn start(data_dir: &std::path::Path, riot_url: &str) -> (tokio::task::Join
     let options = ServeOptions {
         riot_base_url: Some(riot_url.to_string()),
         skip_tracing_init: true,
+        // Unmocked: the sync fails and retries, but never leaves the machine.
+        ddragon_urls: Some(riot_proxy::jobs::ddragon::CdnUrls::mock(riot_url)),
     };
     let task = tokio::spawn(async move {
         serve_with(config, options).await.unwrap();
