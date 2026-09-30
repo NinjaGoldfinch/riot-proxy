@@ -333,7 +333,7 @@ fn header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     headers.get(name).and_then(|v| v.to_str().ok())
 }
 
-fn webpki_roots() -> Vec<reqwest::Certificate> {
+pub(crate) fn webpki_roots() -> Vec<reqwest::Certificate> {
     webpki_root_certs::TLS_SERVER_ROOT_CERTS
         .iter()
         .filter_map(|der| reqwest::Certificate::from_der(der).ok())

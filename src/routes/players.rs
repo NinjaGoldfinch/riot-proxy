@@ -734,7 +734,12 @@ fn round4(v: f64) -> f64 {
     (v * 10_000.0).round() / 10_000.0
 }
 
-fn pool_body(puuid: &str, f: &pool::Filter, rows: Vec<pool::ChampionRow>) -> PlayerChampions {
+fn pool_body(
+    puuid: &str,
+    f: &pool::Filter,
+    rows: Vec<pool::ChampionRow>,
+    names: &HashMap<i64, String>,
+) -> PlayerChampions {
     PlayerChampions {
         puuid: puuid.to_string(),
         platform: f.platform.clone(),
@@ -751,8 +756,8 @@ fn pool_body(puuid: &str, f: &pool::Filter, rows: Vec<pool::ChampionRow>) -> Pla
                     .then(|| round4((r.kills + r.assists) as f64 / r.deaths.max(1) as f64));
                 PlayerChampionEntry {
                     champion_id: r.champion_id,
-                    // Champion names come from the Data Dragon mirror (plan P7-01).
-                    champion_name: None,
+                    // From the Data Dragon mirror; absent when it does not know the id (v1).
+                    champion_name: names.get(&r.champion_id).cloned(),
                     games: r.games,
                     wins: r.wins,
                     win_rate: round4(wins / games),
@@ -841,7 +846,9 @@ async fn champions(
             return ApiError::internal().into_response();
         }
     };
-    let body = pool_body(&puuid, &filter, rows);
+    let ids: Vec<i64> = rows.iter().map(|r| r.champion_id).collect();
+    let names = state.ddragon.champion_names(&ids).await;
+    let body = pool_body(&puuid, &filter, rows, &names);
     if let Ok(bytes) = serde_json::to_vec(&body) {
         let ttls = Ttls {
             soft: Some(POOL_TTL),
@@ -902,14 +909,14 @@ mod tests {
             last_played_ms: None,
         };
         let f = pool::Filter::default();
-        let b = pool_body("p", &f, vec![row(2)]);
+        let b = pool_body("p", &f, vec![row(2)], &HashMap::new());
         let e = &b.champions[0];
         assert_eq!(
             (e.win_rate, e.avg_kda, e.cs_per_min),
             (0.6667, Some(16.0), Some(7.8))
         );
         assert_eq!(b.archived_games, 3);
-        let unswept = pool_body("p", &f, vec![row(0)]);
+        let unswept = pool_body("p", &f, vec![row(0)], &HashMap::new());
         assert_eq!(unswept.champions[0].avg_kda, None, "absent, not zero");
         let no_length = pool_body(
             "p",
@@ -918,6 +925,7 @@ mod tests {
                 cs_seconds: 0,
                 ..row(2)
             }],
+            &HashMap::new(),
         );
         assert_eq!(no_length.champions[0].cs_per_min, None);
     }

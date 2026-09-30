@@ -92,11 +92,11 @@ pub fn schedule(config: &Config) -> Vec<(&'static str, Duration)> {
     ]
 }
 
-/// The ticks whose handlers exist today: the three polls.
-pub fn poll_schedule(config: &Config) -> Vec<(&'static str, Duration)> {
+/// The ticks whose handlers exist today: the three polls and `ddragon:sync`.
+pub fn running_schedule(config: &Config) -> Vec<(&'static str, Duration)> {
     schedule(config)
         .into_iter()
-        .filter(|(kind, _)| matches!(*kind, kinds::POLL_LIVE | kinds::POLL_RANK | kinds::POLL_MATCHES))
+        .filter(|(kind, _)| *kind != kinds::MAINTENANCE)
         .collect()
 }
 

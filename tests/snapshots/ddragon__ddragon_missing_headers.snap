@@ -1,0 +1,9 @@
+---
+source: tests/ddragon.rs
+expression: headers(&missing)
+---
+{
+  "cache-control": null,
+  "content-type": null,
+  "status": 404
+}

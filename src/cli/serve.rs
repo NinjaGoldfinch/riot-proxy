@@ -31,6 +31,8 @@ pub struct ServeOptions {
     pub riot_base_url: Option<String>,
     /// Leave the global tracing subscriber alone (it can be installed once).
     pub skip_tracing_init: bool,
+    /// Where Data Dragon is fetched from. `None`: Riot's hosts.
+    pub ddragon_urls: Option<crate::jobs::ddragon::CdnUrls>,
 }
 
 pub async fn serve(config: Config) -> anyhow::Result<()> {
@@ -106,6 +108,9 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         swr: config.stale_while_revalidate,
     });
 
+    // Before "listening": a SIGTERM from then on must be a clean shutdown, not
+    // the default action.
+    let shutdown = app::shutdown_signal()?;
     let listener = tokio::net::TcpListener::bind((config.host.as_str(), config.port))
         .await
         .with_context(|| format!("binding {}:{}", config.host, config.port))?;
@@ -113,9 +118,17 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
     tracing::info!(%addr, "listening");
 
     // Jobs (design/06): handlers over one queue, interrupted work re-queued,
-    // then workers and the poll ticks. `ddragon:sync` and `maintenance` tick
-    // once their handlers exist (P7-01, P7-05).
+    // then workers and the ticks. `maintenance` ticks once its handler exists
+    // (P7-05).
     let hub = crate::ws::Hub::new();
+    let mirror = Arc::new(crate::r#static::Mirror::new(
+        config.ddragon_dir.clone(),
+        crate::jobs::ddragon::Cdn::new(&config, options.ddragon_urls.clone().unwrap_or_default())?,
+    ));
+    let ddragon = Arc::new(crate::jobs::ddragon::DdragonSync {
+        mirror: Arc::clone(&mirror),
+        hub: hub.clone(),
+    });
     let queue = crate::jobs::Queue::new(db.clone());
     let scope = KeyScope::from_key(&config.riot_api_key).as_str().to_string();
     let poll = Arc::new(crate::jobs::poll::PollContext {
@@ -136,7 +149,7 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         lookup_backfill_limit: config.lookup_backfill_limit,
     });
     let scheduler =
-        crate::jobs::Scheduler::with_queue(queue.clone(), crate::jobs::handlers(&poll, &archiving));
+        crate::jobs::Scheduler::with_queue(queue.clone(), crate::jobs::handlers(&poll, &archiving, &ddragon));
     match scheduler.recover().await {
         Ok(0) => {}
         Ok(n) => tracing::info!(jobs = n, "re-queued jobs a previous process left running"),
@@ -144,7 +157,7 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
     }
     let workers = scheduler.start(usize::try_from(config.job_concurrency).unwrap_or(8));
     let ticks =
-        crate::jobs::ticks::Ticks::start(&scheduler, &scope, crate::jobs::ticks::poll_schedule(&config));
+        crate::jobs::ticks::Ticks::start(&scheduler, &scope, crate::jobs::ticks::running_schedule(&config));
     // The `metrics` topic ticks only while someone holds it (v1).
     let metrics_topic = crate::ws::metrics::spawn(
         hub.clone(),
@@ -153,7 +166,6 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         Duration::from_secs(u64::from(config.metrics_interval_s)),
     );
 
-    let shutdown = app::shutdown_signal()?;
     let auth = Arc::new(Auth::new(&config, db.clone()));
     let state = AppState {
         config: config.into(),
@@ -166,6 +178,7 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         refresh: Arc::new(crate::routes::players::RefreshWindows::new()),
         jobs: queue,
         hub: hub.clone(),
+        ddragon: mirror,
     };
     let served = app::serve(listener, app::router(state, metrics), shutdown).await;
 

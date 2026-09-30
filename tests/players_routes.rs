@@ -497,6 +497,39 @@ async fn the_pool_is_grouped_from_the_archive_and_never_calls_riot() {
 }
 
 #[tokio::test]
+async fn the_pool_names_the_champions_the_mirror_knows() {
+    let e = env(&[]).await;
+    // A mirrored patch that knows two of the four champions played.
+    let dir = e.state.ddragon.dir().join("16.19.1");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("champion.json"),
+        r#"{"data":{"Syndra":{"key":"134","name":"Syndra"},"Ziggs":{"key":"115","name":"Ziggs"},"Zyra":{"key":"143","name":"Zyra"}}}"#,
+    )
+    .unwrap();
+    std::fs::write(dir.join("versions.json"), r#"["16.19.1"]"#).unwrap();
+
+    e.get(&page("&count=5")).await;
+    let body = e.get(&pool("?platform=kr")).await.json();
+    let names: Vec<(i64, Option<&str>)> = body["champions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| (c["championId"].as_i64().unwrap(), c["championName"].as_str()))
+        .collect();
+    // Unknown ids carry no name at all (v1: absent, not guessed).
+    assert_eq!(
+        names,
+        [
+            (134, Some("Syndra")),
+            (105, None),
+            (143, Some("Zyra")),
+            (516, None)
+        ]
+    );
+}
+
+#[tokio::test]
 async fn the_pool_rejects_what_is_not_a_patch_or_platform() {
     let e = env(&[]).await;
     let bad = e.get(&pool("?patch=latest")).await;

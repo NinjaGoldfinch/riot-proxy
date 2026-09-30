@@ -32,6 +32,9 @@ pub fn app_with(env: &[(&str, &str)], upstream: &str) -> (tempfile::TempDir, App
     let dir = tempfile::tempdir().expect("tempdir");
     let db = Db::open(&dir.path().join("riot-proxy.db"), 2).expect("db");
     let config = config(env);
+    let cdn =
+        riot_proxy::jobs::ddragon::Cdn::new(&config, riot_proxy::jobs::ddragon::CdnUrls::mock(upstream))
+            .expect("cdn");
     let limiter = std::sync::Arc::new(riot_proxy::riot::limiter::Limiter::new(0.8));
     let archive = riot_proxy::archive::SqliteArchive::new(
         db.clone(),
@@ -56,6 +59,7 @@ pub fn app_with(env: &[(&str, &str)], upstream: &str) -> (tempfile::TempDir, App
         refresh: std::sync::Arc::new(riot_proxy::routes::players::RefreshWindows::new()),
         jobs: riot_proxy::jobs::Queue::new(db.clone()),
         hub: riot_proxy::ws::Hub::new(),
+        ddragon: std::sync::Arc::new(riot_proxy::r#static::Mirror::new(dir.path().join("ddragon"), cdn)),
     };
     let router = app::router(state.clone(), telemetry::metrics_handle().expect("metrics"));
     (dir, state, router)

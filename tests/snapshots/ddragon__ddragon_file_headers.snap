@@ -1,0 +1,9 @@
+---
+source: tests/ddragon.rs
+expression: headers(&r)
+---
+{
+  "cache-control": "public, max-age=604800, immutable",
+  "content-type": "application/json",
+  "status": 200
+}

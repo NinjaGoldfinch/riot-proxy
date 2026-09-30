@@ -186,6 +186,18 @@ fn periods_come_from_config() {
     );
 }
 
+#[test]
+fn serve_ticks_every_kind_whose_handler_exists() {
+    let config = Config::from_sources(crate::config::Sources {
+        env: vec![("RIOT_API_KEY".into(), "RGAPI-test-key-not-real".into())],
+        ..crate::config::Sources::default()
+    })
+    .unwrap();
+    let kinds: Vec<&str> = running_schedule(&config).into_iter().map(|(k, _)| k).collect();
+    // `maintenance` joins with its handler (P7-05).
+    assert_eq!(kinds, ["poll:live", "poll:rank", "poll:matches", "ddragon:sync"]);
+}
+
 #[tokio::test]
 async fn running_ticks_enqueue_until_shut_down() {
     let (_d, db) = db();
