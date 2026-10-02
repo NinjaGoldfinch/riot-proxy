@@ -65,6 +65,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(queue_names_backfill))
         .routes(routes!(recompute_analytics))
         .routes(routes!(reextract_facts))
+        .routes(routes!(metrics_snapshot))
+        .routes(routes!(metrics_history))
 }
 
 fn json<T: Serialize>(status: StatusCode, body: &T) -> Response {
@@ -1364,7 +1366,7 @@ pub struct LadderCrawlSummary {
 }
 
 impl LadderCrawlSummary {
-    fn new(c: crate::jobs::ladder::store::Crawl, pending_legs: i64) -> Self {
+    pub(crate) fn new(c: crate::jobs::ladder::store::Crawl, pending_legs: i64) -> Self {
         Self {
             started_at: iso_ms(c.started_at),
             finished_at: c.finished_at.and_then(iso_ms),
@@ -1553,5 +1555,51 @@ async fn reextract_facts(State(state): State<AppState>, Extension(_c): Who) -> R
             &serde_json::json!({"ok": true, "stale": stale}),
         ),
         Err(e) => internal(&e, "could not queue facts:reextract"),
+    }
+}
+
+// ── Metrics ─────────────────────────────────────────────────────────────────
+
+#[utoipa::path(
+    get, path = "/v1/admin/metrics", tag = "admin",
+    summary = "The dashboard's snapshot",
+    description = "v1's `MetricsSnapshot`, the same document the `metrics` topic sends: totals, job queues, \
+        WebSocket counts, events, cache reads, rate-limit usage, flows, ladder crawls, analytics runs and the \
+        process. Counters are cumulative since the process started.",
+    responses((status = 200, description = "The snapshot", body = crate::stats::Snapshot), LocalErrors),
+)]
+async fn metrics_snapshot(State(state): State<AppState>, Extension(_c): Who) -> Response {
+    match state.stats.snapshot().await {
+        Ok(s) => ok(&s),
+        Err(e) => internal(&e, "could not build the metrics snapshot"),
+    }
+}
+
+/// `GET /v1/admin/metrics/history` (v1 `MetricsHistoryResponse`).
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MetricsHistory {
+    /// `METRICS_HISTORY_INTERVAL_S`.
+    interval_s: u32,
+    max_points: i64,
+    /// Oldest first.
+    points: Vec<crate::stats::HistoryPoint>,
+}
+
+#[utoipa::path(
+    get, path = "/v1/admin/metrics/history", tag = "admin",
+    summary = "The dashboard's history",
+    description = "A point every `METRICS_HISTORY_INTERVAL_S`, the newest 1440 kept (24 hours at 60 s), oldest \
+        first (v1).",
+    responses((status = 200, description = "`{intervalS, maxPoints, points}`", body = MetricsHistory), LocalErrors),
+)]
+async fn metrics_history(State(state): State<AppState>, Extension(_c): Who) -> Response {
+    match state.stats.history().await {
+        Ok(points) => ok(&MetricsHistory {
+            interval_s: state.config.metrics_history_interval_s,
+            max_points: crate::stats::HISTORY_MAX_POINTS,
+            points,
+        }),
+        Err(e) => internal(&e, "could not read the metrics history"),
     }
 }

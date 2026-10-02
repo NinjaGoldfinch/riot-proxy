@@ -140,7 +140,7 @@ The player was tracked through `POST /v1/admin/tracked-players`, which queued th
 - [x] P7-03 ladder collect + archive (#57; **+ `GET /v1/admin/ladder/crawls`, `DELETE …/crawls/{id}`, and v1's names job, tick and `POST /v1/admin/players/names/backfill`, owner decisions at P7-02**)
 - [x] P7-04 analytics (#58; **+ v1's three `/v1/lol/analytics/*` routes, deferred from P4-05 by the owner, ADR-037; v1's analytics schema and remakes kept apart, owner decisions, ADR-056**)
 - [x] P7-05 maintenance (#59)
-- [ ] P7-06 dashboard wiring
+- [x] P7-06 dashboard wiring (#60; screenshots in `docs/img/p7-06-*.png`)
 Exit check: _pending_
 
 ## P8 — Contract, migration, packaging

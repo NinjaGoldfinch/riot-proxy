@@ -236,20 +236,17 @@ async fn revoking_a_key_closes_its_open_sockets() {
 #[tokio::test]
 async fn the_metrics_topic_ticks_only_while_held() {
     let e = env(&[]).await;
-    let (hub, db, scope) = (
-        &e.state.hub,
-        &e.state.db,
-        e.state.fetcher.key_scope().as_str().to_string(),
-    );
-    assert!(!metrics::tick(hub, db, &scope).await, "nobody listening: no work");
+    let stats = &e.state.stats;
+    let scope = e.state.fetcher.key_scope().as_str().to_string();
+    assert!(!metrics::tick(stats).await, "nobody listening: no work");
 
     let (_, admin) = e.key("ops", vec![Scope::Read, Scope::Admin], 100).await;
     let mut ws = e.connect(Some(&admin), None).await.unwrap();
     next(&mut ws).await;
     send(&mut ws, json!({"op": "subscribe", "topics": [METRICS]})).await;
     next(&mut ws).await;
-    assert_eq!(hub.receivers(&Topic::named(METRICS)), 1);
-    assert!(metrics::tick(hub, db, &scope).await);
+    assert_eq!(e.state.hub.receivers(&Topic::named(METRICS)), 1);
+    assert!(metrics::tick(stats).await);
     let frame = next(&mut ws).await;
     assert_eq!(
         (frame["event"].as_str(), frame["topic"].as_str()),
@@ -262,6 +259,25 @@ async fn the_metrics_topic_ticks_only_while_held() {
     );
     assert_eq!(data["ws"], json!({"connections": 1, "subscriptions": 1}));
     assert_eq!(data["totals"]["archivedMatches"], 0);
+    // v1's whole document: every section the dashboard reads.
+    assert_eq!(
+        data.as_object().unwrap().keys().collect::<Vec<_>>(),
+        [
+            "analytics",
+            "cache",
+            "events",
+            "flows",
+            "keyScope",
+            "ladder",
+            "limiter",
+            "process",
+            "queues",
+            "totals",
+            "v",
+            "worker",
+            "ws"
+        ]
+    );
 }
 
 #[tokio::test]

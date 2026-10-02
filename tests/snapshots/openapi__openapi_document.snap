@@ -52,6 +52,28 @@ expression: doc
         ],
         "type": "object"
       },
+      "AnalyticsSection": {
+        "properties": {
+          "lastRuns": {
+            "items": {
+              "$ref": "#/components/schemas/RunSummary"
+            },
+            "type": "array"
+          },
+          "topChampions": {
+            "description": "The newest run's ladder, its latest patch, top five by games.",
+            "items": {
+              "$ref": "#/components/schemas/TopChampion"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "lastRuns",
+          "topChampions"
+        ],
+        "type": "object"
+      },
       "BackfillNotice": {
         "description": "Present when this lookup queued the player's history for archiving.",
         "properties": {
@@ -73,6 +95,37 @@ expression: doc
           "jobId",
           "status",
           "limit"
+        ],
+        "type": "object"
+      },
+      "CacheCounts": {
+        "properties": {
+          "hit": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "miss": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "neg": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stale": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "hit",
+          "miss",
+          "neg",
+          "stale"
         ],
         "type": "object"
       },
@@ -735,6 +788,39 @@ expression: doc
         ],
         "type": "object"
       },
+      "Flows": {
+        "properties": {
+          "backfillsQueued": {
+            "additionalProperties": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "description": "`reason:status` → backfills queued (`proxy_backfills_queued_total`).",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "refreshClaims": {
+            "additionalProperties": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "description": "`part:outcome` → refresh claims (`proxy_refresh_claims_total`).",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "backfillsQueued",
+          "refreshClaims"
+        ],
+        "type": "object"
+      },
       "Health": {
         "properties": {
           "ok": {
@@ -743,6 +829,80 @@ expression: doc
         },
         "required": [
           "ok"
+        ],
+        "type": "object"
+      },
+      "HistoryAnalytics": {
+        "properties": {
+          "ageSeconds": {
+            "description": "Seconds since the newest run; null before any.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "rows": {
+            "description": "Rows the last runs wrote, all ladders.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "rows"
+        ],
+        "type": "object"
+      },
+      "HistoryPoint": {
+        "description": "v1 `MetricsHistoryPoint`.",
+        "properties": {
+          "analytics": {
+            "$ref": "#/components/schemas/HistoryAnalytics"
+          },
+          "cache": {
+            "$ref": "#/components/schemas/CacheCounts"
+          },
+          "queues": {
+            "$ref": "#/components/schemas/HistoryQueues"
+          },
+          "t": {
+            "description": "Unix ms.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/Totals"
+          }
+        },
+        "required": [
+          "t",
+          "totals",
+          "queues",
+          "analytics",
+          "cache"
+        ],
+        "type": "object"
+      },
+      "HistoryQueues": {
+        "properties": {
+          "active": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "failed": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "pending": {
+            "description": "Waiting and delayed.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "active",
+          "pending",
+          "failed"
         ],
         "type": "object"
       },
@@ -853,6 +1013,165 @@ expression: doc
           "finishedAt",
           "error",
           "payload"
+        ],
+        "type": "object"
+      },
+      "LadderCrawlSummary": {
+        "description": "One crawl in `GET /v1/admin/ladder/crawls` (v1 `LadderCrawlSummary`).",
+        "properties": {
+          "backfillsEnqueued": {
+            "description": "Players whose match history the collect stage was asked to walk.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "entriesSeen": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "finishedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "matchIdsSeen": {
+            "description": "Distinct matches those players have played, after de-duplication.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "matchesQueued": {
+            "description": "How many of those were not already archived, and so cost a fetch.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "pagesFetched": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "pendingLegs": {
+            "description": "Legs of the current stage still outstanding — apex leagues and (tier, division) walks,\nthen match-id batches, then the archive hand-off. 0 for a finished run.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "phase": {
+            "description": "Which stage a running crawl is in. `enumerate` walks the ladder, `collect` gathers every\ndiscovered player's match ids, and `archive` fetches the matches behind them — in that\norder, so a match shared by ten players is fetched once.",
+            "type": "string"
+          },
+          "platform": {
+            "type": "string"
+          },
+          "playersDiscovered": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "queue": {
+            "type": "string"
+          },
+          "startedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "description": "`running`, `completed`, `failed` or `cancelled`.",
+            "type": "string"
+          },
+          "tierFloor": {
+            "description": "How far down the ladder this run was told to enumerate.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "platform",
+          "queue",
+          "tierFloor",
+          "status",
+          "phase",
+          "finishedAt",
+          "pagesFetched",
+          "entriesSeen",
+          "playersDiscovered",
+          "backfillsEnqueued",
+          "matchIdsSeen",
+          "matchesQueued",
+          "pendingLegs"
+        ],
+        "type": "object"
+      },
+      "LadderSection": {
+        "properties": {
+          "entries": {
+            "description": "Ladder entries this key scope holds.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "lastCompleted": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LadderCrawlSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "running": {
+            "items": {
+              "$ref": "#/components/schemas/LadderCrawlSummary"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "running",
+          "lastCompleted",
+          "entries"
+        ],
+        "type": "object"
+      },
+      "LimiterScope": {
+        "description": "One rate-limit scope's usage (v1's `limiter[]`).",
+        "properties": {
+          "frozenMs": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kind": {
+            "description": "`platform`, `region` or `other`.",
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "methods": {
+            "items": {
+              "$ref": "#/components/schemas/MethodUse"
+            },
+            "type": "array"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "windows": {
+            "items": {
+              "$ref": "#/components/schemas/WindowUse"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "scope",
+          "kind",
+          "label",
+          "frozenMs",
+          "windows",
+          "methods"
         ],
         "type": "object"
       },
@@ -1036,6 +1355,52 @@ expression: doc
         },
         "required": [
           "matchId"
+        ],
+        "type": "object"
+      },
+      "MethodUse": {
+        "properties": {
+          "method": {
+            "type": "string"
+          },
+          "windows": {
+            "items": {
+              "$ref": "#/components/schemas/WindowUse"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "method",
+          "windows"
+        ],
+        "type": "object"
+      },
+      "MetricsHistory": {
+        "description": "`GET /v1/admin/metrics/history` (v1 `MetricsHistoryResponse`).",
+        "properties": {
+          "intervalS": {
+            "description": "`METRICS_HISTORY_INTERVAL_S`.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxPoints": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "points": {
+            "description": "Oldest first.",
+            "items": {
+              "$ref": "#/components/schemas/HistoryPoint"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "intervalS",
+          "maxPoints",
+          "points"
         ],
         "type": "object"
       },
@@ -1508,6 +1873,24 @@ expression: doc
         },
         "type": "object"
       },
+      "ProcessStats": {
+        "properties": {
+          "rssBytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "uptimeSeconds": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "uptimeSeconds",
+          "rssBytes"
+        ],
+        "type": "object"
+      },
       "ProfileBody": {
         "description": "The composite profile. `account`, `summoner`, `league` and `mastery` are\nRiot's payloads verbatim, or `null` if that part failed (see `warnings`).",
         "properties": {
@@ -1615,6 +1998,55 @@ expression: doc
         ],
         "type": "object"
       },
+      "QueueCounts": {
+        "description": "One v1 queue's jobs by state (v1 `QueueCounts`).",
+        "properties": {
+          "active": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "completed": {
+            "description": "Done in the last hour.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "delayed": {
+            "description": "Pending, waiting out a backoff.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "failed": {
+            "description": "Failed in the last 24 hours.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "prioritized": {
+            "description": "Always 0: every v2 job has a priority, so `waiting` holds them all.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "scheduled": {
+            "description": "Always 0: v2's ticks are timers, not parked jobs.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "waiting": {
+            "description": "Pending and due.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "active",
+          "waiting",
+          "prioritized",
+          "delayed",
+          "scheduled",
+          "failed",
+          "completed"
+        ],
+        "type": "object"
+      },
       "QueueDdragonSync": {
         "description": "`POST /v1/admin/ddragon/sync` body (v1).",
         "properties": {
@@ -1685,6 +2117,64 @@ expression: doc
         ],
         "type": "object"
       },
+      "RunSummary": {
+        "description": "One ladder's last analytics recompute (v1 `AnalyticsRunSummary`).",
+        "properties": {
+          "at": {
+            "description": "Unix ms.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "games": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "ms": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "platform": {
+            "type": "string"
+          },
+          "queue": {
+            "type": "string"
+          },
+          "rows": {
+            "additionalProperties": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "status": {
+            "type": "string"
+          },
+          "steps": {
+            "additionalProperties": {
+              "format": "double",
+              "type": "number"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "platform",
+          "queue",
+          "at",
+          "status",
+          "ms",
+          "steps",
+          "rows",
+          "games"
+        ],
+        "type": "object"
+      },
       "SectionsComputedAt": {
         "description": "Each section's recompute time: they are rebuilt in separate transactions.",
         "properties": {
@@ -1725,6 +2215,87 @@ expression: doc
           "items",
           "runes",
           "spells"
+        ],
+        "type": "object"
+      },
+      "Snapshot": {
+        "description": "v1 `MetricsSnapshot`, field for field and in v1's order.",
+        "properties": {
+          "analytics": {
+            "$ref": "#/components/schemas/AnalyticsSection"
+          },
+          "cache": {
+            "$ref": "#/components/schemas/CacheCounts"
+          },
+          "events": {
+            "additionalProperties": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "description": "Frames published per event name since the process started.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "flows": {
+            "$ref": "#/components/schemas/Flows"
+          },
+          "keyScope": {
+            "type": "string"
+          },
+          "ladder": {
+            "$ref": "#/components/schemas/LadderSection"
+          },
+          "limiter": {
+            "items": {
+              "$ref": "#/components/schemas/LimiterScope"
+            },
+            "type": "array"
+          },
+          "process": {
+            "$ref": "#/components/schemas/ProcessStats"
+          },
+          "queues": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/QueueCounts"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/Totals"
+          },
+          "v": {
+            "description": "Bumped only when a field changes meaning.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "worker": {
+            "$ref": "#/components/schemas/Worker"
+          },
+          "ws": {
+            "$ref": "#/components/schemas/WsCounts"
+          }
+        },
+        "required": [
+          "v",
+          "keyScope",
+          "totals",
+          "queues",
+          "ws",
+          "events",
+          "cache",
+          "limiter",
+          "worker",
+          "flows",
+          "ladder",
+          "analytics",
+          "process"
         ],
         "type": "object"
       },
@@ -1780,6 +2351,64 @@ expression: doc
           "running",
           "done",
           "failed"
+        ],
+        "type": "object"
+      },
+      "TopChampion": {
+        "properties": {
+          "championId": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "championName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "games": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "winRate": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "championId",
+          "games",
+          "winRate"
+        ],
+        "type": "object"
+      },
+      "Totals": {
+        "properties": {
+          "activeConsumers": {
+            "description": "Snapshot only (not in history points).",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "archivedMatches": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "knownPlayers": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "trackedPlayers": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "archivedMatches",
+          "trackedPlayers",
+          "knownPlayers"
         ],
         "type": "object"
       },
@@ -1868,6 +2497,68 @@ expression: doc
           "window",
           "used",
           "limit"
+        ],
+        "type": "object"
+      },
+      "WindowUse": {
+        "properties": {
+          "limit": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "used": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "window": {
+            "description": "`limit:seconds`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "window",
+          "used",
+          "limit"
+        ],
+        "type": "object"
+      },
+      "Worker": {
+        "description": "The job workers. They run in this process, so a snapshot that answers is\none taken while they are alive (v1 read a separate worker's heartbeat).",
+        "properties": {
+          "alive": {
+            "type": "boolean"
+          },
+          "lastSeenMs": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "alive"
+        ],
+        "type": "object"
+      },
+      "WsCounts": {
+        "properties": {
+          "connections": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subscriptions": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "connections",
+          "subscriptions"
         ],
         "type": "object"
       }
@@ -3672,6 +4363,150 @@ expression: doc
           }
         },
         "summary": "Rate-limit bucket usage",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/admin/metrics": {
+      "get": {
+        "description": "v1's `MetricsSnapshot`, the same document the `metrics` topic sends: totals, job queues, WebSocket counts, events, cache reads, rate-limit usage, flows, ladder crawls, analytics runs and the process. Counters are cumulative since the process started.",
+        "operationId": "metrics_snapshot",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Snapshot"
+                }
+              }
+            },
+            "description": "The snapshot"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          }
+        },
+        "summary": "The dashboard's snapshot",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/admin/metrics/history": {
+      "get": {
+        "description": "A point every `METRICS_HISTORY_INTERVAL_S`, the newest 1440 kept (24 hours at 60 s), oldest first (v1).",
+        "operationId": "metrics_history",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricsHistory"
+                }
+              }
+            },
+            "description": "`{intervalS, maxPoints, points}`"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          }
+        },
+        "summary": "The dashboard's history",
         "tags": [
           "admin"
         ]

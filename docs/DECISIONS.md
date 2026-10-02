@@ -604,3 +604,34 @@ A failure retries with the scheduler's usual backoff.
 **`riot-proxy backup OUT`** runs the same `VACUUM INTO` on demand, safe while `serve` runs (design/07). Like SQLite, it refuses to overwrite `OUT`. It creates missing parent directories and prints the path and size.
 
 With this, every tick in `schedule()` runs in `serve`: ADR-048's deferral is closed.
+
+## ADR-058 — The dashboard's snapshot and history (2026-10-03)
+Accepted. `stats::Stats` builds v1's `MetricsSnapshot` (`v: 1`), field for field and in v1's order. The same document goes to the `metrics` topic and to `GET /v1/admin/metrics` (v1). Where v1 read Redis, BullMQ or its separate worker, v2 reads what replaced them:
+- **`queues`:** the `jobs` table, grouped by kind into v1's six queue names, so the dashboard's queue panel is unchanged:
+  - `poll`, `archive`, `backfill`, `ddragon`, `ladder`;
+  - `maintenance`, which also holds `aggregate:analytics`, `facts:reextract` and `names:backfill`, as in v1.
+  - Counts: `active` = running; `waiting` = pending and due; `delayed` = pending in backoff; `failed` = failed in the last 24 h; `completed` = done in the last hour (v1's retention windows).
+  - `prioritized` and `scheduled` are always 0: every v2 job has a priority, and ticks are timers, not parked jobs.
+- **`limiter`:** the in-process limiter, covering every scope whose app or method limits Riot has taught it. Each entry has v1's kind, label, `frozenMs`, windows and methods.
+- **`worker`:** `{alive: true, lastSeenMs: 0}`. The workers run in the process that answers, so there is no heartbeat to read.
+- **`cache` and `flows`:** read back from the Prometheus exporter's rendering of `proxy_cache_reads_total`, `proxy_backfills_queued_total` and `proxy_refresh_claims_total`. They are cumulative per process, as in v1.
+- **`ladder`:** running crawls, the last finished crawl (with `pendingLegs` from `crawl_legs`) and the entry count.
+- **`analytics`:**
+  - `lastRuns` comes from a new `analytics_runs` table (`V0006`): one row per ladder, written by every recompute, completed or failed (with the steps that finished). v1 kept it in Redis for 30 days.
+  - `topChampions` lists the newest run's ladder's five most played on its latest patch, summed over tiers, excluding remakes (ADR-056), with names from the mirror.
+- **`process`:** uptime since `serve` started, and RSS from `/proc/self/status` (0 where there is none).
+- **`totals.activeConsumers`:** consumers that are not revoked.
+
+**History:**
+- A point in v1's `MetricsHistoryPoint` shape is sampled every `METRICS_HISTORY_INTERVAL_S` whether or not anyone watches. The first is taken after one interval.
+- `queues.pending` sums waiting and delayed.
+- Points are stored in `metrics_history`, keeping the newest 1440 (v1's cap), alongside maintenance's 24 h trim.
+- `GET /v1/admin/metrics/history` → `{intervalS, maxPoints: 1440, points}`, oldest first, skipping points that do not parse (v1). It takes no parameters (v1).
+
+**Dashboard:** v1's page, plus v2's `crawl.phase` event:
+- it is described in the feed (`platform · queue → phase`);
+- it and `ladder.crawl.completed` refresh the crawl panel at once instead of waiting for the 60 s poll.
+
+**Manual acceptance:** screenshots of the overview and ladder tabs are in `docs/img/`. They were taken from the real `serve` binary, with Data Dragon synced live and representative rows seeded.
+
+The OpenAPI compare against v1 now shows **no missing operations**.

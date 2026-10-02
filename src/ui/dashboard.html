@@ -1741,7 +1741,7 @@
       function badgeClass(event) {
         if (event === 'match.archived') return 'badge archived';
         if (event.startsWith('game.')) return 'badge game';
-        if (event.startsWith('ladder.')) return 'badge ladder';
+        if (event.startsWith('ladder.') || event.startsWith('crawl.')) return 'badge ladder';
         return 'badge';
       }
       function describe(frame) {
@@ -1759,6 +1759,9 @@
           }
           case 'ladder.crawl.completed':
             return `${d.platform ?? '?'} · ${d.queue ?? '?'} · ${fmt(d.entries ?? 0)} entries`;
+          // v2: a crawl moved stage, or ended (`phase` is then its status).
+          case 'crawl.phase':
+            return `${d.platform ?? '?'} · ${d.queue ?? '?'} → ${d.phase ?? '?'}`;
           case 'patch.new':
             return d.version || '';
           default:
@@ -1769,6 +1772,11 @@
         if (frame.event === 'metrics.snapshot') {
           render(frame.data, frame.at);
           return;
+        }
+        // v2: a crawl's stage changes reach the panel without waiting for the poll.
+        if (frame.event === 'crawl.phase' || frame.event === 'ladder.crawl.completed') {
+          fetchSnapshot().catch(console.error);
+          fetchCrawlHistory().catch(console.error);
         }
         if (frame.event === 'match.archived' && prev) {
           optimisticMatches += 1;

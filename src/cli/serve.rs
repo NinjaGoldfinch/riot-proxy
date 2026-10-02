@@ -43,6 +43,7 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
     if !options.skip_tracing_init {
         telemetry::init_tracing(&config)?;
     }
+    let started = std::time::Instant::now();
     let metrics = telemetry::metrics_handle()?;
     telemetry::spawn_upkeep(metrics.clone());
 
@@ -202,12 +203,24 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         crate::jobs::ticks::running_schedule(&config),
         crate::jobs::ticks::ladders(&config),
     );
-    // The `metrics` topic ticks only while someone holds it (v1).
+    // The dashboard's documents: the `metrics` topic ticks only while someone
+    // holds it, the history is sampled regardless (v1).
+    let stats = Arc::new(crate::stats::Stats {
+        hub: hub.clone(),
+        db: db.clone(),
+        key_scope: scope.clone(),
+        limiter: Arc::clone(&limiter),
+        metrics: metrics.clone(),
+        mirror: Arc::clone(&mirror),
+        started,
+    });
     let metrics_topic = crate::ws::metrics::spawn(
-        hub.clone(),
-        db.clone(),
-        scope.clone(),
+        Arc::clone(&stats),
         Duration::from_secs(u64::from(config.metrics_interval_s)),
+    );
+    let history = crate::stats::spawn_history(
+        Arc::clone(&stats),
+        Duration::from_secs(u64::from(config.metrics_history_interval_s)),
     );
 
     let auth = Arc::new(Auth::new(&config, db.clone()));
@@ -223,6 +236,7 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         jobs: queue,
         hub: hub.clone(),
         ddragon: mirror,
+        stats,
     };
     let served = app::serve(listener, app::router(state, metrics), shutdown).await;
 
@@ -231,6 +245,7 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
     // final limiter checkpoint (design/05) and pending L2 writes (design/04).
     ticks.shutdown().await;
     metrics_topic.abort();
+    history.abort();
     workers.shutdown(JOB_GRACE).await;
     hub.shutdown();
     checkpoints.abort();

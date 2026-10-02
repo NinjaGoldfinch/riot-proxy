@@ -82,6 +82,75 @@ pub async fn reextract_if_stale(queue: &Queue) -> Result<bool, DbError> {
     Ok(queue.enqueue(reextract_job()).await?.created)
 }
 
+/// One ladder's last recompute (v1 `AnalyticsRunSummary`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Run {
+    pub at: i64,
+    pub status: String,
+    pub ms: i64,
+    pub steps: BTreeMap<String, f64>,
+    pub rows: BTreeMap<String, i64>,
+    pub games: i64,
+}
+
+/// A ladder's last run, keyed by ladder: the next run replaces it.
+pub async fn record_run(db: &Db, key_scope: &str, ladder: &Ladder, run: &Run) -> Result<(), DbError> {
+    let (scope, l, run) = (key_scope.to_string(), ladder.clone(), run.clone());
+    db.write(move |c| {
+        c.execute(
+            "INSERT OR REPLACE INTO analytics_runs (key_scope, platform, queue, at, status, ms, steps, rows, games)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                scope,
+                l.platform,
+                l.queue,
+                run.at,
+                run.status,
+                run.ms,
+                serde_json::to_string(&run.steps).unwrap_or_else(|_| "{}".into()),
+                serde_json::to_string(&run.rows).unwrap_or_else(|_| "{}".into()),
+                run.games
+            ],
+        )?;
+        Ok(())
+    })
+    .await
+}
+
+/// Every ladder's last run, newest first (v1 `listAnalyticsRuns`).
+pub async fn runs(db: &Db, key_scope: &str) -> Result<Vec<(Ladder, Run)>, DbError> {
+    let scope = key_scope.to_string();
+    db.read(move |c| {
+        let mut stmt = c.prepare(
+            "SELECT platform, queue, at, status, ms, steps, rows, games FROM analytics_runs
+              WHERE key_scope = ?1 ORDER BY at DESC",
+        )?;
+        let rows = stmt
+            .query_map([scope], |r| {
+                let steps: String = r.get(5)?;
+                let rows: String = r.get(6)?;
+                Ok((
+                    Ladder {
+                        platform: r.get(0)?,
+                        queue: r.get(1)?,
+                    },
+                    Run {
+                        at: r.get(2)?,
+                        status: r.get(3)?,
+                        ms: r.get(4)?,
+                        steps: serde_json::from_str(&steps).unwrap_or_default(),
+                        rows: serde_json::from_str(&rows).unwrap_or_default(),
+                        games: r.get(7)?,
+                    },
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    })
+    .await
+}
+
 pub struct AnalyticsContext {
     pub queue: Queue,
     pub hub: Hub,
@@ -109,14 +178,31 @@ impl AnalyticsContext {
         let queue_id = crate::riot::ladder::queue_id(&ladder.queue)
             .ok_or_else(|| JobError::Fail(format!("'{}' is not a ranked queue", ladder.queue)))?;
         let started = Instant::now();
-        let result = self.rebuild(&ladder, i64::from(queue_id)).await;
+        let mut steps = BTreeMap::new();
+        let result = self.rebuild(&ladder, i64::from(queue_id), &mut steps).await;
         let status = if result.is_ok() { "completed" } else { "failed" };
         metrics::counter!(crate::metrics::AGGREGATE_RUNS_TOTAL,
             "platform" => ladder.platform.clone(), "queue" => ladder.queue.clone(), "status" => status)
         .increment(1);
-        let tables = result?;
         let ms = started.elapsed().as_millis();
-        let games: i64 = self.games(&ladder).await.unwrap_or(0);
+        let games: i64 = match &result {
+            Ok(_) => self.games(&ladder).await.unwrap_or(0),
+            Err(_) => 0,
+        };
+        // The dashboard's record of the run, failed ones with the steps that
+        // finished (v1 `recordAnalyticsRun`).
+        let run = Run {
+            at: Clock::now().unix_ms,
+            status: status.into(),
+            ms: i64::try_from(ms).unwrap_or(i64::MAX),
+            steps,
+            rows: result.as_ref().cloned().unwrap_or_default(),
+            games,
+        };
+        if let Err(e) = record_run(self.db(), &self.key_scope, &ladder, &run).await {
+            tracing::warn!(error = %e, "could not record the analytics run");
+        }
+        let tables = result?;
         tracing::info!(platform = %ladder.platform, queue = %ladder.queue, ?tables, games, ms, "analytics recomputed");
         events::publish(
             &self.hub,
@@ -131,7 +217,12 @@ impl AnalyticsContext {
     }
 
     /// The three steps, in v1's order, each timed; rows written by table.
-    async fn rebuild(&self, ladder: &Ladder, queue_id: i64) -> Result<BTreeMap<String, i64>, JobError> {
+    async fn rebuild(
+        &self,
+        ladder: &Ladder,
+        queue_id: i64,
+        steps_done: &mut BTreeMap<String, f64>,
+    ) -> Result<BTreeMap<String, i64>, JobError> {
         let steps: [(&str, Step); 3] = [
             ("champions", analytics::rebuild_champions),
             ("matchups", analytics::rebuild_matchups),
@@ -156,9 +247,11 @@ impl AnalyticsContext {
                 })
                 .await
                 .map_err(|e| store(&e))?;
+            let secs = started.elapsed().as_secs_f64();
             metrics::histogram!(crate::metrics::AGGREGATE_DURATION_SECONDS,
                 "platform" => ladder.platform.clone(), "queue" => ladder.queue.clone(), "step" => name)
-            .record(started.elapsed().as_secs_f64());
+            .record(secs);
+            steps_done.insert(name.to_string(), secs);
             for (table, n) in written {
                 #[allow(clippy::cast_precision_loss)]
                 metrics::gauge!(crate::metrics::AGGREGATE_ROWS,
