@@ -48,6 +48,19 @@ pub fn app_with(env: &[(&str, &str)], upstream: &str) -> (tempfile::TempDir, App
         Some(std::sync::Arc::new(archive)),
     );
     let auth = std::sync::Arc::new(riot_proxy::http::auth::Auth::new(&config, db.clone()));
+    let hub = riot_proxy::ws::Hub::new();
+    let mirror = std::sync::Arc::new(riot_proxy::r#static::Mirror::new(dir.path().join("ddragon"), cdn));
+    let stats = std::sync::Arc::new(riot_proxy::stats::Stats {
+        hub: hub.clone(),
+        db: db.clone(),
+        key_scope: riot_proxy::cache::keys::KeyScope::from_key(&config.riot_api_key)
+            .as_str()
+            .to_string(),
+        limiter: std::sync::Arc::clone(&limiter),
+        metrics: telemetry::metrics_handle().expect("metrics"),
+        mirror: std::sync::Arc::clone(&mirror),
+        started: std::time::Instant::now(),
+    });
     let state = AppState {
         config: config.into(),
         db: db.clone(),
@@ -58,8 +71,9 @@ pub fn app_with(env: &[(&str, &str)], upstream: &str) -> (tempfile::TempDir, App
         limiter_restored: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
         refresh: std::sync::Arc::new(riot_proxy::routes::players::RefreshWindows::new()),
         jobs: riot_proxy::jobs::Queue::new(db.clone()),
-        hub: riot_proxy::ws::Hub::new(),
-        ddragon: std::sync::Arc::new(riot_proxy::r#static::Mirror::new(dir.path().join("ddragon"), cdn)),
+        hub,
+        ddragon: mirror,
+        stats,
     };
     let router = app::router(state.clone(), telemetry::metrics_handle().expect("metrics"));
     (dir, state, router)

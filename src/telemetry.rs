@@ -178,3 +178,61 @@ mod tests {
         assert!(matches!(err, TelemetryError::Subscriber(_)), "{err:?}");
     }
 }
+
+/// A counter's current values by label set, read from the exporter's own text
+/// rendering: what the dashboard's snapshot reports (v1 read prom-client's
+/// registry the same way).
+pub fn counter_values(
+    handle: &PrometheusHandle,
+    name: &str,
+) -> Vec<(std::collections::BTreeMap<String, String>, f64)> {
+    parse_counter(&handle.render(), name)
+}
+
+fn parse_counter(text: &str, name: &str) -> Vec<(std::collections::BTreeMap<String, String>, f64)> {
+    text.lines()
+        .filter(|l| !l.starts_with('#'))
+        .filter_map(|line| {
+            let rest = line.strip_prefix(name)?;
+            let (labels, value) = match rest.strip_prefix('{') {
+                Some(r) => {
+                    let (inside, after) = r.split_once('}')?;
+                    (inside, after.trim())
+                }
+                None if rest.starts_with(' ') => ("", rest.trim()),
+                None => return None,
+            };
+            let labels = labels
+                .split(',')
+                .filter(|p| !p.is_empty())
+                .filter_map(|pair| {
+                    let (k, v) = pair.split_once('=')?;
+                    Some((k.trim().to_string(), v.trim().trim_matches('"').to_string()))
+                })
+                .collect();
+            Some((labels, value.parse().ok()?))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod counter_tests {
+    use super::parse_counter;
+
+    #[test]
+    fn counters_are_read_back_from_the_rendering() {
+        let text = "# TYPE proxy_cache_reads_total counter\n\
+            proxy_cache_reads_total{state=\"hit\"} 12\n\
+            proxy_cache_reads_total{state=\"miss\"} 3\n\
+            proxy_cache_reads_total_other 9\n\
+            proxy_refresh_claims_total{part=\"summoner\",outcome=\"claimed\"} 2\n";
+        let hits = parse_counter(text, "proxy_cache_reads_total");
+        assert_eq!(hits.len(), 2);
+        assert_eq!((hits[0].0["state"].as_str(), hits[0].1), ("hit", 12.0));
+        let claims = parse_counter(text, "proxy_refresh_claims_total");
+        assert_eq!(
+            (claims[0].0["part"].as_str(), claims[0].0["outcome"].as_str()),
+            ("summoner", "claimed")
+        );
+    }
+}

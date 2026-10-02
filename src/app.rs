@@ -55,6 +55,8 @@ pub struct AppState {
     pub hub: crate::ws::Hub,
     /// The Data Dragon mirror `/v1/static/*` and champion names read.
     pub ddragon: Arc<crate::r#static::Mirror>,
+    /// What the dashboard's snapshot and history are read from.
+    pub stats: Arc<crate::stats::Stats>,
 }
 
 pub fn router(state: AppState, metrics: PrometheusHandle) -> Router {

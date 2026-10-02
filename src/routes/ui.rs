@@ -2,7 +2,8 @@
 //! (design/07 §The artefact) and served without a key, as in v1. Each is gated by
 //! its flag: `DEV_UI` (default off in production) and `DASHBOARD_UI` (default on;
 //! the page is inert, and everything behind it needs an admin key).
-//! The pages are v1's `public/*.html`, verbatim; the dashboard's data is wired in P7-06.
+//! The pages are v1's `public/*.html`. The dashboard's data is wired (P7-06); its only
+//! change is following v2's `crawl.phase` event (ADR-058).
 
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
