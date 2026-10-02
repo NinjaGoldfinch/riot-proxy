@@ -1,5 +1,6 @@
 //! Command-line interface (docs/design/07 §First run). `main.rs` only parses and dispatches.
 
+pub mod backup;
 pub mod healthcheck;
 pub mod key;
 #[cfg(feature = "dev-cli")]
@@ -46,6 +47,11 @@ pub enum Command {
     },
     /// Print the OpenAPI document (JSON) to stdout.
     Spec,
+    /// Write a consistent copy of the database to OUT (`VACUUM INTO`), safe while serving.
+    Backup {
+        /// Where to write the copy; must not exist.
+        out: std::path::PathBuf,
+    },
     /// Raw Riot API calls for development (built with --features dev-cli).
     #[cfg(feature = "dev-cli")]
     #[command(subcommand)]
@@ -91,6 +97,7 @@ pub fn run() -> ExitCode {
             Command::Key(cmd) => key::run(&config, cmd).await,
             Command::Healthcheck { timeout } => healthcheck::run(&config, timeout).await,
             Command::Spec => Ok(()),
+            Command::Backup { out } => backup::run(&config, &out).await,
             #[cfg(feature = "dev-cli")]
             Command::Riot(cmd) => riot::run(&config, cmd).await,
         }

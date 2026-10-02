@@ -584,3 +584,23 @@ Accepted. Owner decisions at P7-04 start: v1's analytics tables and routes in pl
   - A match not yet re-extracted (`remake` NULL) counts as no remake.
   - The default changes `/v1/players/{puuid}/champions` too: remakes are no longer in a pool unless asked for. This is a v2 difference the acceptance suite must account for at P8-01.
 - **Fixture:** `archive::analytics` tests rebuild a five-match fixture (a remake, an older patch, another queue, players off the ladder) and assert every table against values computed by hand (plan acceptance).
+
+## ADR-057 — Maintenance and backups (2026-10-03)
+Accepted. `maintenance` (`jobs::maintenance`) runs daily, from the first tick at boot, at the 30 000 band. Its steps run in design/07's order: the backup first, so the other steps can be undone from it.
+1. **Backup:** `VACUUM INTO "$DATA_DIR/backups/riot-proxy-<UTC date>.db"`.
+   - It runs on its own read-only connection, so the writer is not held for the copy.
+   - The copy is written to `.riot-proxy-<date>.db.partial` and renamed, so a copy cut short by a crash is never taken for that day's backup.
+   - One per UTC day: a restart the same day does not take another.
+   - The newest 14 are kept. Only files named `riot-proxy-YYYY-MM-DD.db` are ever deleted.
+   - design/04 said "weekly". design/06, design/07 and the plan say daily, and daily is used; design/04 is corrected.
+2. **Trim:**
+   - `done` jobs finished more than 7 days ago (design/06). `failed` rows stay, for `/v1/admin/jobs` to show and retry.
+   - `metrics_history` older than 24 hours (design/04's 1440 points at 60 s).
+3. **Sweep** expired L2 rows. This is the same sweep `serve` runs at boot.
+4. **Checkpoint:** `PRAGMA wal_checkpoint(TRUNCATE)`.
+
+A failure retries with the scheduler's usual backoff.
+
+**`riot-proxy backup OUT`** runs the same `VACUUM INTO` on demand, safe while `serve` runs (design/07). Like SQLite, it refuses to overwrite `OUT`. It creates missing parent directories and prints the path and size.
+
+With this, every tick in `schedule()` runs in `serve`: ADR-048's deferral is closed.

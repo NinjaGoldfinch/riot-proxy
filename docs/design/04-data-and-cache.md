@@ -56,7 +56,7 @@ Connection policy:
 - **Reader pool** of `n_cores` connections for the HTTP path. WAL means they see a consistent snapshot without blocking.
 - `spawn_blocking` at the boundary; no SQLite call inside an async fn.
 
-A weekly `maintenance` job runs `PRAGMA wal_checkpoint(TRUNCATE)` and `VACUUM INTO 'backups/riot-proxy-YYYY-MM-DD.db'` — that **is** the backup strategy, replacing `pg-backup` + cron. Keep 14, delete older.
+The daily `maintenance` job runs `VACUUM INTO 'backups/riot-proxy-YYYY-MM-DD.db'` and `PRAGMA wal_checkpoint(TRUNCATE)` — that **is** the backup strategy, replacing `pg-backup` + cron. Keep 14, delete older. (Daily, as design/06, design/07 and the plan have it; ADR-057.)
 
 ## Schema (v2 DDL)
 

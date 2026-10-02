@@ -195,7 +195,8 @@ fn serve_ticks_every_kind_whose_handler_exists() {
     })
     .unwrap();
     let kinds: Vec<&str> = running_schedule(&config).into_iter().map(|(k, _)| k).collect();
-    // `maintenance` joins with its handler (P7-05).
+    // Every tick has its handler since P7-05; the crawl and aggregate ticks
+    // are off by default (v1).
     assert_eq!(
         kinds,
         [
@@ -203,6 +204,7 @@ fn serve_ticks_every_kind_whose_handler_exists() {
             "poll:rank",
             "poll:matches",
             "ddragon:sync",
+            "maintenance",
             "names:backfill"
         ]
     );

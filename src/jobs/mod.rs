@@ -5,6 +5,7 @@ pub mod analytics;
 pub mod archive;
 pub mod ddragon;
 pub mod ladder;
+pub mod maintenance;
 pub mod names;
 pub mod poll;
 pub mod scheduler;
@@ -50,6 +51,7 @@ pub fn handlers(
     ladder: &std::sync::Arc<ladder::LadderContext>,
     names: &std::sync::Arc<names::NamesBackfill>,
     analytics: &std::sync::Arc<analytics::AnalyticsContext>,
+    maintenance: &std::sync::Arc<maintenance::Maintenance>,
 ) -> Registry {
     use std::sync::Arc;
     Registry::new()
@@ -93,6 +95,10 @@ pub fn handlers(
         .with(
             kinds::FACTS_REEXTRACT,
             analytics::ReextractHandler(Arc::clone(analytics)),
+        )
+        .with(
+            kinds::MAINTENANCE,
+            maintenance::MaintenanceHandler(Arc::clone(maintenance)),
         )
 }
 
