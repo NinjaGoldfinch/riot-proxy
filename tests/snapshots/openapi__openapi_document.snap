@@ -1179,13 +1179,10 @@ expression: doc
         "description": "One rate-limit bucket (v1 `LimitsResponse`).",
         "properties": {
           "frozenMs": {
-            "description": "Milliseconds until a 429-induced freeze on this bucket lifts, or null.",
+            "description": "Milliseconds until a 429-induced freeze on this bucket lifts; 0 when it\nis not frozen (v1 `isFrozen` answered 0, never null).",
             "format": "int64",
             "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
+            "type": "integer"
           },
           "scope": {
             "type": "string"

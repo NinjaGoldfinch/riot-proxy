@@ -1,14 +1,13 @@
-import type { Redis } from 'ioredis';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { acceptance, cfg } from './helpers/env.js';
 import {
   counter,
   get,
-  jobIdsInState,
+  idle,
+  jobs,
   metrics,
   percentile,
   post,
-  redisClient,
   sleep,
   timed,
   waitFor,
@@ -28,7 +27,6 @@ interface Stats {
 }
 
 let puuid = '';
-let redis: Redis;
 let matchIds: string[] = [];
 let backfillJobId = '';
 let backfillSettled = false;
@@ -38,48 +36,30 @@ async function archivedCount(): Promise<number> {
 }
 
 /**
- * Two ways this probe can read idle while the backfill is very much alive, both
- * of which end the sampler early and let the run reach the inconclusive green
- * path without ever pacing anything:
- *
- *  - the archive jobs a backfill enqueues carry `priority: 10`, and BullMQ
- *    parks prioritized work outside `wait`;
- *  - the backfill only creates that work part-way through its own run, so every
- *    queue is legitimately empty until it does.
- *
- * So: count `prioritized`, and refuse to call anything idle until the backfill
- * we submitted has settled. `failed` counts as settled — the assertion after
- * the drain reports a broken backfill far better than a ten-minute timeout.
+ * Idle means the backfill we submitted has settled and nothing it queued is
+ * still pending or running. v1 read BullMQ's Redis keys here; v2 asks its
+ * `jobs` table through `/v1/admin/jobs` (ADR-059). The settle check stays, for
+ * v1's reason: the backfill creates its archive work part-way through its own
+ * run, so the queues are legitimately empty until it does. `failed` counts as
+ * settled — the assertion after the drain reports a broken backfill far better
+ * than a ten-minute timeout.
  */
 async function queuesIdle(): Promise<boolean> {
   if (!backfillSettled) {
-    const settled = [
-      ...(await jobIdsInState(redis, 'backfill', 'completed')),
-      ...(await jobIdsInState(redis, 'backfill', 'failed')),
-    ];
-    if (!settled.includes(backfillJobId)) return false;
+    const mine = (await jobs({ kind: 'backfill:player' })).find((j) => j.id === backfillJobId);
+    if (!mine || mine.state === 'pending' || mine.state === 'running') return false;
     backfillSettled = true;
   }
-  for (const queue of ['backfill', 'archive'] as const) {
-    for (const state of ['wait', 'active', 'delayed', 'prioritized'] as const) {
-      if ((await jobIdsInState(redis, queue, state)).length > 0) return false;
-    }
-  }
-  return true;
+  return idle(['backfill:player', 'archive:match']);
 }
 
 describe.skipIf(!enabled)('Phase 5 — archive and backfill', () => {
   beforeAll(async () => {
     const { gameName, tagLine, region } = cfg();
-    redis = redisClient();
     const account = await get<{ puuid: string }>(
       `/v1/riot/accounts/by-riot-id/${region}/${encodeURIComponent(gameName)}/${encodeURIComponent(tagLine)}`,
     );
     puuid = account.body.puuid;
-  });
-
-  afterAll(async () => {
-    await redis?.quit();
   });
 
   it('backfills history without degrading interactive latency', async () => {
@@ -126,9 +106,9 @@ describe.skipIf(!enabled)('Phase 5 — archive and backfill', () => {
     );
     await sampler;
 
-    for (const queue of ['backfill', 'archive'] as const) {
-      const failed = await jobIdsInState(redis, queue, 'failed');
-      expect(failed, `${queue} jobs failed: ${failed.join(', ')}`).toEqual([]);
+    for (const kind of ['backfill:player', 'archive:match']) {
+      const failed = (await jobs({ kind, state: 'failed' })).map((j) => `${j.id} ${j.error}`);
+      expect(failed, `${kind} jobs failed: ${failed.join(', ')}`).toEqual([]);
     }
 
     const endedAt = await archivedCount();

@@ -635,3 +635,33 @@ Accepted. `stats::Stats` builds v1's `MetricsSnapshot` (`v: 1`), field for field
 **Manual acceptance:** screenshots of the overview and ladder tabs are in `docs/img/`. They were taken from the real `serve` binary, with Data Dragon synced live and representative rows seeded.
 
 The OpenAPI compare against v1 now shows **no missing operations**.
+
+## ADR-059 — The acceptance suite against v2 (2026-10-03)
+Accepted. Owner decisions at P8-01: a Node mock Riot inside `acceptance/`, mock mode by default with v1's live mode kept as an opt-in, and a required `acceptance` CI job.
+- **Mock Riot** (`acceptance/helpers/mock-riot.ts`, plain `node:http`) serves a small fixed world:
+  - the player `Acceptance#MOCK` on `oc1` with 60 ranked games;
+  - a second player, `Other#MOCK`;
+  - a 30-player MASTER ladder sharing those games;
+  - spectator state, which tests flip through `POST /__mock/state` (a game that ends adds its match to the player's history, as Riot would);
+  - Data Dragon and the queue table.
+  - Rate limits follow Riot's model: app windows per host and method windows per (host, method), `X-*-Rate-Limit[-Count]` headers on every answer, and an accountable typed 429 with `Retry-After` on overflow.
+  - It forgives 50 ms of transport jitter at a window edge. The limiter keeps no more than `limit` admissions in any rolling window *as it admits them* (ADR-023), but requests arrive a few milliseconds off those instants. Real drift would still be caught.
+- **v2 changes the suite needed:**
+  - `RIOT_BASE_URL` and `DDRAGON_BASE_URL` point a real `serve` at a mock. They are refused when `ENV=production`. v1 had no such knob; its suite only ever ran against Riot.
+  - With a fixed base URL, the Riot client sends `x-riot-host`: the host the request was for. The mock uses it to keep per-host buckets and to see routing.
+  - **v1 was right:** `GET /v1/admin/limits/{scope}` now answers `frozenMs: 0` when not frozen. v1's `isFrozen` returned 0; v2 had returned null. Phase 2 caught it.
+- **Harness** (`helpers/setup.ts`), in mock mode:
+  - starts the mock, then `target/debug/riot-proxy serve` (or `RIOT_PROXY_BIN`) on a scratch `DATA_DIR`;
+  - gives `serve` a clean environment: a fake key, a known `BOOTSTRAP_ADMIN_KEY`, fast poll intervals, `CACHE_TTL_OVERRIDES=spectator=5`, a MASTER ladder floor;
+  - runs `serve` in that scratch directory, so the repo's `.env` (which holds a real key) is never read;
+  - loads `.env` only in live mode.
+  - Phases always run in file order, 1 to 7, because they share one server.
+- **Live mode** (`ACCEPTANCE_LIVE=1`) is v1's: a real key, `ACCEPTANCE_RIOT_ID`, a running server or one started from `.env`, and the live game and crawl behind `ACCEPTANCE_LIVE_GAME=1` and `ACCEPTANCE_LADDER=1`. Manual only.
+- **Test changes from v1** (no test is skipped in mock mode; 29 of 29 run):
+  - Redis and BullMQ introspection (phases 5 and 6) becomes `GET /v1/admin/jobs` (ADR-052). BullMQ's custom job-id check becomes ULID ids deduped by PUUID (ADR-048).
+  - Phase 6 injected a `game.started` through Redis. v2 has no Redis, so in mock mode the mock puts the player in a game, and delivery and topic isolation are asserted on real events.
+  - The live-game check runs in mock mode too: `game.started`, `game.ended`, then `match.archived` for the game's own match. In live mode it is still opt-in, and the two injection-based checks do not run there.
+  - Crawl ids are ULIDs, not UUIDs (ADR-054): the regex and the unknown-id DELETE use a well-formed ULID. A UUID would be a 400 for its format before it could be a 404.
+  - "Ladder metrics are published": a labelled histogram has no sample before its first observation, in v1's prom-client as in v2's exporter. So v1's check passed only on deployments that had crawled. It now accepts absence when no crawl has finished, and the crawl checks assert the series afterwards.
+  - The crawl runs whenever mock mode does (v1: `ACCEPTANCE_LADDER=1`). It is a few seconds' work against the mock's ladder.
+- **CI:** an `acceptance` job builds the debug binary, runs `npm ci` and `npm test` in `acceptance/`, and becomes a fifth required check. `just acceptance` runs the same locally.
