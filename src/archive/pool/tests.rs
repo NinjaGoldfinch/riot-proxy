@@ -119,6 +119,7 @@ async fn narrows_by_platform_prefix_queue_and_patch() {
         queue_id: queue,
         patch: patch.map(str::to_string),
         limit: 200,
+        remakes: false,
     };
     assert_eq!(ids(&db, f(Some("eun1"), None, None)).await, [(2, 1)]);
     assert_eq!(
@@ -221,4 +222,34 @@ async fn cs_and_length_are_summed_over_the_same_games() {
     .await;
     let row = &champions(&db, "s1", ME, all()).await.unwrap()[0];
     assert_eq!((row.games, row.cs, row.cs_seconds), (4, 390, 3000));
+}
+
+#[tokio::test]
+async fn remakes_are_left_out_unless_asked_for() {
+    let (_d, db) = db();
+    game(&db, "EUW1_1", 420, "14.18", 1, &[(ME, 1, true, None)]).await;
+    game(&db, "EUW1_2", 420, "14.18", 2, &[(ME, 1, false, None)]).await;
+    game(&db, "EUW1_3", 420, "14.18", 3, &[(ME, 2, true, None)]).await;
+    db.write(|c| {
+        c.execute(
+            "UPDATE matches SET remake = 1 WHERE match_id IN ('EUW1_2', 'EUW1_3')",
+            [],
+        )?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    // Not yet re-extracted (NULL) counts as no remake.
+    assert_eq!(ids(&db, all()).await, [(1, 1)]);
+    assert_eq!(
+        ids(
+            &db,
+            Filter {
+                remakes: true,
+                ..all()
+            }
+        )
+        .await,
+        [(1, 2), (2, 1)]
+    );
 }

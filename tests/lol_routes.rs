@@ -207,7 +207,7 @@ async fn equivalent_match_id_queries_share_one_cache_entry() {
 /// Plan P4-05, as amended by the owner (ADR-037): every v1 `/v1/lol` operation is
 /// documented except the three analytics routes, which P7-04 owns.
 #[test]
-fn every_v1_lol_operation_except_analytics_is_documented() {
+fn every_v1_lol_operation_is_documented() {
     let v1: serde_json::Value =
         serde_json::from_str(include_str!("../docs/contract/v1-openapi.json")).unwrap();
     let ours: serde_json::Value =
@@ -227,14 +227,8 @@ fn every_v1_lol_operation_except_analytics_is_documented() {
             .collect()
     };
     let missing: Vec<String> = ops(&v1).difference(&ops(&ours)).cloned().collect();
-    assert_eq!(
-        missing,
-        [
-            "GET /v1/lol/analytics/champions",
-            "GET /v1/lol/analytics/champions/{championId}",
-            "GET /v1/lol/analytics/champions/{championId}/matchups",
-        ]
-    );
+    // The analytics routes arrived with P7-04 (ADR-056).
+    assert_eq!(missing, Vec::<String>::new());
     assert!(
         ops(&ours).difference(&ops(&v1)).next().is_none(),
         "nothing undocumented in v1"

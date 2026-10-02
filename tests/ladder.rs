@@ -739,6 +739,18 @@ impl Env {
                 kinds::NAMES_BACKFILL,
                 riot_proxy::jobs::names::NamesBackfillHandler(names),
             )
+            .with(
+                kinds::AGGREGATE_ANALYTICS,
+                riot_proxy::jobs::analytics::AggregateHandler(Arc::new(
+                    riot_proxy::jobs::analytics::AnalyticsContext {
+                        queue: Queue::new(self.db.clone()),
+                        hub: self.hub.clone(),
+                        key_scope: self.scope.clone(),
+                        patch_limit: 4,
+                        reextract_batch: 500,
+                    },
+                )),
+            )
     }
 
     /// Run until no job is pending or running.
@@ -847,7 +859,14 @@ async fn a_crawl_runs_every_stage_and_fetches_each_match_once() {
             ("crawl.phase".to_string(), "archive".to_string()),
             ("crawl.phase".to_string(), "completed".to_string()),
             ("ladder.crawl.completed".to_string(), String::new()),
+            // A clean crawl recomputes its ladder's analytics (v1).
+            ("analytics.updated".to_string(), String::new()),
         ]
+    );
+    assert!(
+        e.count("SELECT COUNT(*) FROM champion_stats WHERE platform = 'kr'")
+            .await
+            > 0
     );
 
     // The finished crawl queued names:backfill, which named every player from

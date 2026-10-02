@@ -79,6 +79,9 @@ fn participants_missing_a_required_column_are_left_out() {
             deaths: None,
             assists: None,
             cs: None,
+            gold: None,
+            damage: None,
+            vision: None,
             items: vec![0; 6],
             runes: None,
             summoners: None,
@@ -148,4 +151,45 @@ proptest::proptest! {
         let facts = extract(&body).unwrap();
         proptest::prop_assert!(facts.len() <= 1);
     }
+}
+
+#[test]
+fn gold_damage_and_vision_come_from_riots_fields() {
+    let f = &extract(RANKED).unwrap()[0];
+    assert_eq!((f.gold, f.damage, f.vision), (Some(9549), Some(13_112), Some(29)));
+}
+
+#[test]
+fn extras_flag_remakes_and_list_real_bans() {
+    let ranked = extras(RANKED).unwrap();
+    assert!(!ranked.remake);
+    // Ten picks, two of them `-1` (no ban).
+    assert_eq!(ranked.bans.len(), 8);
+    assert_eq!(
+        ranked.bans[0],
+        Ban {
+            team_id: 100,
+            pick_turn: 1,
+            champion_id: 804
+        }
+    );
+    let remake = extras(REMAKE).unwrap();
+    assert!(remake.remake, "Riot's gameEndedInEarlySurrender");
+    assert_eq!(remake.bans.len(), 8);
+    assert!(!extras(ARENA).unwrap().remake);
+    let partial = extras(
+        br#"{"info":{"teams":[{"bans":[{"championId":1,"pickTurn":1}]},
+        {"teamId":200,"bans":[{"championId":2},{"championId":3,"pickTurn":2}]}]}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        partial.bans,
+        [Ban {
+            team_id: 200,
+            pick_turn: 2,
+            champion_id: 3
+        }],
+        "a ban without a team or a pick turn is left out (v1)"
+    );
+    assert!(extras(b"[]").is_err());
 }

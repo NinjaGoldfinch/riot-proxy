@@ -1,6 +1,7 @@
 //! Route handlers, one module per surface (docs/design/03 §Module layout).
 
 pub mod admin;
+pub mod analytics;
 pub mod docs;
 pub mod health;
 pub mod lol;

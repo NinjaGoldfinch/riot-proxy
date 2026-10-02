@@ -531,3 +531,56 @@ Accepted. Completes the crawl (v1 `jobs/ladder-crawl.ts`) and adds the routes an
   - Bodies are decompressed once per batch of 500 players, since ten players share a match.
   - It runs in the 30 000 band, deduped to one at a time, with a daily tick (v1).
   - `POST /v1/admin/players/names/backfill` queues a pass and answers 202 `{ok, unnamed}`, counted before the pass (v1).
+
+## ADR-056 — Analytics in v1's shape, with remakes kept apart (2026-10-03)
+Accepted. Owner decisions at P7-04 start: v1's analytics tables and routes in place of design/04's three tables; remakes stored apart and excluded by default, with `?remakes=include` for v1's numbers. design/04 and design/06 are updated.
+- **Facts (`V0005`, `FACTS_VERSION` 3):**
+  - `match_facts` gains `gold`, `damage` and `vision` (Riot's `goldEarned`, `totalDamageDealtToChampions`, `visionScore`).
+  - `match_bans` holds `info.teams[].bans`. A `-1` ban, or one without a team or pick turn, is left out (v1 `extractBans`).
+  - `matches.remake` is 1 when any participant has `gameEndedInEarlySurrender`, Riot's remake flag.
+  - `matches.facts_version` records the version that derived the match's rows; it is indexed.
+  - Archiving writes all of these in the match's own transaction.
+- **`facts:reextract`:**
+  - Re-derives, from the stored body, the facts, bans, `remake` and `game_duration` of every match below `FACTS_VERSION`, `FACTS_REEXTRACT_BATCH` at a time, pausing 50 ms between batches (v1).
+  - Facts keep the key scope they were written for.
+  - It needs no cursor: a match it has done is not selected again. A body that no longer derives is stamped and skipped.
+  - `serve` queues it at boot when stale matches exist; that covers ADR-043's note on filling `game_duration`.
+  - v1's admin trigger swept the whole archive. v2's re-derives what is stale, because a version bump is what makes rows stale.
+  - `POST /v1/admin/analytics/reextract` answers 202 `{ok, stale}`; `stale` is a v2 addition.
+- **Aggregates** are v1's tables:
+  - `analytics_slices`, `champion_stats`, `champion_bans`;
+  - `champion_matchups` (no tier);
+  - `champion_items`, `champion_runes`, `champion_spells`.
+  - They are keyed by key scope, platform and queue, plus tier where v1 had it, and by patch.
+  - Each also carries `remake` (0/1) as a key.
+- **`aggregate:analytics`** (v1) rebuilds one ladder for the newest `AGGREGATE_PATCH_LIMIT` patches, numerically ordered, or for all when the limit is 0. Older patches keep their rows. It runs three steps, each its own transaction:
+  - champions: slices, stats and bans;
+  - matchups;
+  - builds: items, runes and spells, a transaction each.
+  - Tier comes from `ladder_entries`, joined at recompute time (ADR-054). Players the ladder does not hold are left out. A match counts in every tier it had a player in.
+  - Stats, matchups and builds follow v1's queries:
+    - `stated_games` and the duration count only rows with a K/D/A;
+    - items skip empty slots and count a duplicate once;
+    - spells are an unordered pair;
+    - matchups need exactly one laner per team, exclude mirrors, and record the ladder player's side.
+  - Metrics are v1's: `proxy_aggregate_duration_seconds{step}`, `proxy_aggregate_rows{table}` and `proxy_aggregate_runs_total{status}`. `analytics.updated {platform, queue, durationS, tables}` is published on success.
+  - The job is deduped per ladder.
+  - Triggers:
+    - a clean crawl end, queued in the crawl's final transaction (ADR-055);
+    - `AGGREGATE_INTERVAL_S` per `LADDER_PLATFORMS` × `LADDER_QUEUES`, off when 0 (v1);
+    - `POST /v1/admin/analytics/recompute {platform?, queue?}`, which answers 202 `{ok, platform, queue}` (v1).
+  - v1's 30-day Redis "last run" record is not kept; P7-06 decides whether the dashboard needs one.
+- **Routes** are v1's three `/v1/lol/analytics/*`, with v1's:
+  - query bounds, defaults and messages;
+  - field names and order;
+  - rounding to 4 places;
+  - `pickRate` clamp, and absent averages without stated games;
+  - newest-patch default;
+  - empty 200 before any recompute;
+  - `Cache-Control: private, max-age=300`;
+  - weak `ETag` and `If-None-Match` handling, including lists and `*` → 304.
+  - The ETag hashes v1's material with SHA-256 (the crate v2 has) rather than SHA-1. ETags are opaque, so no client depends on the hash.
+- **Remakes.** `?remakes=exclude` is the default and `?remakes=include` adds the remake rows back. It applies to the three analytics routes and to `/v1/players/{puuid}/champions`, and is part of the ETag and the pool's cache key.
+  - A match not yet re-extracted (`remake` NULL) counts as no remake.
+  - The default changes `/v1/players/{puuid}/champions` too: remakes are no longer in a pool unless asked for. This is a v2 difference the acceptance suite must account for at P8-01.
+- **Fixture:** `archive::analytics` tests rebuild a five-match fixture (a remake, an older patch, another queue, players off the ladder) and assert every table against values computed by hand (plan acceptance).

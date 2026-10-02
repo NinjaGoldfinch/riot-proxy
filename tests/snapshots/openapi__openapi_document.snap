@@ -109,6 +109,445 @@ expression: doc
         ],
         "type": "object"
       },
+      "ChampionDetailResponse": {
+        "description": "v1 `ChampionDetailResponse`.",
+        "properties": {
+          "championId": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "championName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "computedAt": {
+            "description": "The oldest section's recompute time: how fresh the whole document is.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ChampionItemEntry"
+            },
+            "type": "array"
+          },
+          "matchups": {
+            "items": {
+              "$ref": "#/components/schemas/ChampionMatchupEntry"
+            },
+            "type": "array"
+          },
+          "patch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "platform": {
+            "type": "string"
+          },
+          "queue": {
+            "type": "string"
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runes": {
+            "items": {
+              "$ref": "#/components/schemas/ChampionRuneEntry"
+            },
+            "type": "array"
+          },
+          "sectionsComputedAt": {
+            "$ref": "#/components/schemas/SectionsComputedAt"
+          },
+          "spells": {
+            "items": {
+              "$ref": "#/components/schemas/ChampionSpellEntry"
+            },
+            "type": "array"
+          },
+          "stats": {
+            "items": {
+              "$ref": "#/components/schemas/ChampionStatEntry"
+            },
+            "type": "array"
+          },
+          "tier": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "totalGames": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "championId",
+          "platform",
+          "queue",
+          "tier",
+          "patch",
+          "role",
+          "computedAt",
+          "sectionsComputedAt",
+          "totalGames",
+          "stats",
+          "matchups",
+          "items",
+          "runes",
+          "spells"
+        ],
+        "type": "object"
+      },
+      "ChampionItemEntry": {
+        "properties": {
+          "games": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "itemId": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "winRate": {
+            "format": "double",
+            "type": "number"
+          },
+          "wins": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "itemId",
+          "games",
+          "wins",
+          "winRate"
+        ],
+        "type": "object"
+      },
+      "ChampionMatchupEntry": {
+        "description": "v1 `ChampionMatchupEntry`.",
+        "properties": {
+          "games": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "opponentId": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "opponentName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "type": "string"
+          },
+          "winRate": {
+            "format": "double",
+            "type": "number"
+          },
+          "wins": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "role",
+          "opponentId",
+          "games",
+          "wins",
+          "winRate"
+        ],
+        "type": "object"
+      },
+      "ChampionMatchupsResponse": {
+        "description": "v1 `ChampionMatchupsResponse`.",
+        "properties": {
+          "championId": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "championName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "computedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "matchups": {
+            "items": {
+              "$ref": "#/components/schemas/ChampionMatchupEntry"
+            },
+            "type": "array"
+          },
+          "patch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "platform": {
+            "type": "string"
+          },
+          "queue": {
+            "type": "string"
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "championId",
+          "platform",
+          "queue",
+          "patch",
+          "role",
+          "computedAt",
+          "matchups"
+        ],
+        "type": "object"
+      },
+      "ChampionRuneEntry": {
+        "properties": {
+          "games": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "keystoneId": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "subStyleId": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "winRate": {
+            "format": "double",
+            "type": "number"
+          },
+          "wins": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "keystoneId",
+          "subStyleId",
+          "games",
+          "wins",
+          "winRate"
+        ],
+        "type": "object"
+      },
+      "ChampionSpellEntry": {
+        "properties": {
+          "games": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "spellA": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "spellB": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "winRate": {
+            "format": "double",
+            "type": "number"
+          },
+          "wins": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "spellA",
+          "spellB",
+          "games",
+          "wins",
+          "winRate"
+        ],
+        "type": "object"
+      },
+      "ChampionStatEntry": {
+        "description": "One champion at one tier (v1 `ChampionStatEntry`).",
+        "properties": {
+          "avgDamage": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "avgKda": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "avgVision": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "banRate": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "championId": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "championName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "csPerMin": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "games": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "goldPerMin": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "patch": {
+            "type": "string"
+          },
+          "pickRate": {
+            "description": "Matches picked over the tier's matches, capped at 1. Absent without a slice.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "share": {
+            "description": "Of the games in the rows returned.",
+            "format": "double",
+            "type": "number"
+          },
+          "tier": {
+            "type": "string"
+          },
+          "winRate": {
+            "format": "double",
+            "type": "number"
+          },
+          "wins": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "championId",
+          "tier",
+          "patch",
+          "games",
+          "wins",
+          "winRate",
+          "share"
+        ],
+        "type": "object"
+      },
+      "ChampionStatsResponse": {
+        "description": "v1 `ChampionStatsResponse`.",
+        "properties": {
+          "champions": {
+            "items": {
+              "$ref": "#/components/schemas/ChampionStatEntry"
+            },
+            "type": "array"
+          },
+          "computedAt": {
+            "description": "The newest row's recompute time.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "patch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "platform": {
+            "type": "string"
+          },
+          "queue": {
+            "type": "string"
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tier": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "totalGames": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "platform",
+          "queue",
+          "tier",
+          "patch",
+          "role",
+          "computedAt",
+          "totalGames",
+          "champions"
+        ],
+        "type": "object"
+      },
       "ConsumerList": {
         "properties": {
           "consumers": {
@@ -1213,6 +1652,26 @@ expression: doc
         ],
         "type": "object"
       },
+      "RecomputeAnalytics": {
+        "description": "`POST /v1/admin/analytics/recompute` body (v1).",
+        "properties": {
+          "platform": {
+            "description": "Platform routing value; default `DEFAULT_PLATFORM`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "queue": {
+            "description": "`RANKED_SOLO_5x5` or `RANKED_FLEX_SR`; default the first of `LADDER_QUEUES`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "RevokeCache": {
         "description": "`POST /v1/admin/consumers/{id}/revoke-cache` body.",
         "properties": {
@@ -1223,6 +1682,49 @@ expression: doc
         },
         "required": [
           "keyHash"
+        ],
+        "type": "object"
+      },
+      "SectionsComputedAt": {
+        "description": "Each section's recompute time: they are rebuilt in separate transactions.",
+        "properties": {
+          "items": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "matchups": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "spells": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stats": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "stats",
+          "matchups",
+          "items",
+          "runes",
+          "spells"
         ],
         "type": "object"
       },
@@ -1477,6 +1979,156 @@ expression: doc
         "summary": "Readiness",
         "tags": [
           "ops"
+        ]
+      }
+    },
+    "/v1/admin/analytics/recompute": {
+      "post": {
+        "description": "Queues `aggregate:analytics` for one ladder and answers 202 — the scan runs on the worker. Bounded by `AGGREGATE_PATCH_LIMIT`: only the latest N patches are rebuilt (v1).",
+        "operationId": "recompute_analytics",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecomputeAnalytics"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "`{ok, platform, queue}`"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          }
+        },
+        "summary": "Recompute the analytics tables from the archive",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/admin/analytics/reextract": {
+      "post": {
+        "description": "Queues `facts:reextract`: every match whose facts an older version derived is re-read from its stored body, in batches of `FACTS_REEXTRACT_BATCH`. No Riot call. A second request joins the sweep already queued. Answers 202 with the number of matches to sweep.",
+        "operationId": "reextract_facts",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "`{ok, stale}`"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          }
+        },
+        "summary": "Re-derive match facts from the archive",
+        "tags": [
+          "admin"
         ]
       }
     },
@@ -3420,6 +4072,470 @@ expression: doc
         ]
       }
     },
+    "/v1/lol/analytics/champions": {
+      "get": {
+        "description": "Aggregated from the match archive, with each participant placed at the tier the latest ladder crawl found them at. Recomputed per (platform, queue) when a crawl completes. Sends an `ETag`; a matching `If-None-Match` gets 304. Games Riot flagged as remakes are left out unless `remakes=include`.",
+        "operationId": "champions",
+        "parameters": [
+          {
+            "description": "Default `DEFAULT_PLATFORM`",
+            "in": "query",
+            "name": "platform",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "RANKED_SOLO_5x5 or RANKED_FLEX_SR; default the first of `LADDER_QUEUES`",
+            "in": "query",
+            "name": "queue",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "IRON … CHALLENGER; default every tier",
+            "in": "query",
+            "name": "tier",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`major.minor`; default the newest aggregated patch",
+            "in": "query",
+            "name": "patch",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "TOP, JUNGLE, MIDDLE, BOTTOM, UTILITY or empty; default every role summed",
+            "in": "query",
+            "name": "role",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "≥ 0; default `AGGREGATE_MIN_GAMES`",
+            "in": "query",
+            "name": "minGames",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "1–500, default 200",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "`exclude` (default) or `include`",
+            "in": "query",
+            "name": "remakes",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChampionStatsResponse"
+                }
+              }
+            },
+            "description": "The champions, most played first"
+          },
+          "304": {
+            "description": "Not modified"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          }
+        },
+        "summary": "Champion pick and win rates by tier",
+        "tags": [
+          "lol"
+        ]
+      }
+    },
+    "/v1/lol/analytics/champions/{championId}": {
+      "get": {
+        "description": "Sends an `ETag`; a matching `If-None-Match` gets 304. The stat row(s) at this slice plus this champion's top lane matchups, items, runes and summoner spells — one call for a champion page. Each section is independently trimmed by `minGames`/`limit`; a champion nobody has data for yet still returns 200 with empty arrays rather than a 404.",
+        "operationId": "champion_detail",
+        "parameters": [
+          {
+            "description": "Champion id, ≥ 1",
+            "in": "path",
+            "name": "championId",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Default `DEFAULT_PLATFORM`",
+            "in": "query",
+            "name": "platform",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "RANKED_SOLO_5x5 or RANKED_FLEX_SR",
+            "in": "query",
+            "name": "queue",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "IRON … CHALLENGER; applies to `stats`",
+            "in": "query",
+            "name": "tier",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`major.minor`; default the newest aggregated patch",
+            "in": "query",
+            "name": "patch",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "TOP, JUNGLE, MIDDLE, BOTTOM, UTILITY or empty",
+            "in": "query",
+            "name": "role",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "≥ 0; default `AGGREGATE_MIN_GAMES`",
+            "in": "query",
+            "name": "minGames",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "1–50, default 10, per section",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "`exclude` (default) or `include`",
+            "in": "query",
+            "name": "remakes",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChampionDetailResponse"
+                }
+              }
+            },
+            "description": "The champion's page"
+          },
+          "304": {
+            "description": "Not modified"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          }
+        },
+        "summary": "Champion detail composite",
+        "tags": [
+          "lol"
+        ]
+      }
+    },
+    "/v1/lol/analytics/champions/{championId}/matchups": {
+      "get": {
+        "description": "Sends an `ETag`; a matching `If-None-Match` gets 304. Every lane matchup this champion has archived data for. No tier dimension: sample sizes die fast enough per (champion, opponent, role) alone, and the two laners can sit in different tiers anyway. Mirror lanes are excluded — their win rate is 50% by construction. A matchup is recorded from the tracked ladder player's side, so the opposite champion's view of the same lane only exists when that player is tracked too, and the two directions can disagree.",
+        "operationId": "champion_matchups",
+        "parameters": [
+          {
+            "description": "Champion id, ≥ 1",
+            "in": "path",
+            "name": "championId",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Default `DEFAULT_PLATFORM`",
+            "in": "query",
+            "name": "platform",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "RANKED_SOLO_5x5 or RANKED_FLEX_SR",
+            "in": "query",
+            "name": "queue",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`major.minor`; default the newest aggregated patch",
+            "in": "query",
+            "name": "patch",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "TOP, JUNGLE, MIDDLE, BOTTOM or UTILITY; default every lane",
+            "in": "query",
+            "name": "role",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "≥ 0; no default",
+            "in": "query",
+            "name": "minGames",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "1–200, default 50",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "`exclude` (default) or `include`",
+            "in": "query",
+            "name": "remakes",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChampionMatchupsResponse"
+                }
+              }
+            },
+            "description": "The matchups, most played first"
+          },
+          "304": {
+            "description": "Not modified"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          }
+        },
+        "summary": "A champion's lane matchups",
+        "tags": [
+          "lol"
+        ]
+      }
+    },
     "/v1/lol/league/apex/{platform}/{tier}/{queue}": {
       "get": {
         "description": "MASTER, GRANDMASTER or CHALLENGER for one queue. One request returns every entry; not paged.",
@@ -4886,6 +6002,15 @@ expression: doc
             "schema": {
               "format": "int64",
               "type": "integer"
+            }
+          },
+          {
+            "description": "`exclude` (default) or `include` games Riot flagged as remakes",
+            "in": "query",
+            "name": "remakes",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           }
         ],

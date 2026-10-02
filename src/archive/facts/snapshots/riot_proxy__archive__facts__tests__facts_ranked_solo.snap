@@ -13,6 +13,9 @@ expression: facts
     "deaths": 6,
     "assists": 8,
     "cs": 195,
+    "gold": 9549,
+    "damage": 13112,
+    "vision": 29,
     "items": [
       3742,
       3070,
@@ -54,6 +57,9 @@ expression: facts
     "deaths": 4,
     "assists": 8,
     "cs": 175,
+    "gold": 13574,
+    "damage": 19547,
+    "vision": 67,
     "items": [
       3157,
       4645,
@@ -95,6 +101,9 @@ expression: facts
     "deaths": 9,
     "assists": 6,
     "cs": 195,
+    "gold": 11803,
+    "damage": 18693,
+    "vision": 22,
     "items": [
       3036,
       3172,
@@ -136,6 +145,9 @@ expression: facts
     "deaths": 9,
     "assists": 3,
     "cs": 223,
+    "gold": 15334,
+    "damage": 24759,
+    "vision": 15,
     "items": [
       6675,
       3508,
@@ -177,6 +189,9 @@ expression: facts
     "deaths": 4,
     "assists": 16,
     "cs": 24,
+    "gold": 7793,
+    "damage": 4811,
+    "vision": 97,
     "items": [
       3869,
       3109,
@@ -218,6 +233,9 @@ expression: facts
     "deaths": 4,
     "assists": 6,
     "cs": 267,
+    "gold": 14702,
+    "damage": 20834,
+    "vision": 49,
     "items": [
       3142,
       6695,
@@ -259,6 +277,9 @@ expression: facts
     "deaths": 5,
     "assists": 10,
     "cs": 215,
+    "gold": 13790,
+    "damage": 21335,
+    "vision": 38,
     "items": [
       6699,
       2520,
@@ -300,6 +321,9 @@ expression: facts
     "deaths": 6,
     "assists": 14,
     "cs": 206,
+    "gold": 13360,
+    "damage": 36696,
+    "vision": 33,
     "items": [
       3137,
       3170,
@@ -341,6 +365,9 @@ expression: facts
     "deaths": 9,
     "assists": 9,
     "cs": 204,
+    "gold": 13765,
+    "damage": 26845,
+    "vision": 31,
     "items": [
       1086,
       3087,
@@ -382,6 +409,9 @@ expression: facts
     "deaths": 6,
     "assists": 13,
     "cs": 30,
+    "gold": 10216,
+    "damage": 18864,
+    "vision": 98,
     "items": [
       3869,
       3152,

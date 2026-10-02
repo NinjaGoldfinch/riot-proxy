@@ -4,16 +4,18 @@
 //!
 //! The extraction never panics on a strange body: a missing optional field is a
 //! `NULL`, and a participant missing a `NOT NULL` column (puuid, team, champion,
-//! win) is left out rather than given an invented value. Remakes are recorded as
-//! Riot reports them, as v1 did. Bump [`FACTS_VERSION`] whenever the output of
-//! [`extract`] changes; `facts:reextract` (P7) re-derives older rows.
+//! win) is left out rather than given an invented value. Remakes are rows like
+//! any other; [`extras`] says whether Riot flagged the match one, and analytics
+//! keep the two apart (ADR-056). Bump [`FACTS_VERSION`] whenever the output of
+//! [`extract`] or [`extras`] changes; `facts:reextract` re-derives older rows.
 
 use serde::{Deserialize, Serialize};
 
 /// The version of [`extract`] that wrote a row (`match_facts.facts_version`).
 ///
 /// 2: `cs` (P5-04, ADR-043).
-pub const FACTS_VERSION: i64 = 2;
+/// 3: `gold`, `damage`, `vision`, `match_bans` and `matches.remake` (P7-04, ADR-056).
+pub const FACTS_VERSION: i64 = 3;
 
 /// One `match_facts` row, minus the `match_id` and `key_scope` the caller owns.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -30,6 +32,12 @@ pub struct Fact {
     /// `totalMinionsKilled + neutralMinionsKilled`; `None` only when both are
     /// absent (v1 `extractCs`).
     pub cs: Option<i64>,
+    /// `goldEarned`.
+    pub gold: Option<i64>,
+    /// `totalDamageDealtToChampions`.
+    pub damage: Option<i64>,
+    /// `visionScore`.
+    pub vision: Option<i64>,
     /// `item0`–`item5` in slot order, `0` for an empty slot. The trinket
     /// (`item6`) is left out, as v1's item stats left it out.
     pub items: Vec<i64>,
@@ -98,6 +106,9 @@ struct Participant {
     assists: Option<i64>,
     total_minions_killed: Option<i64>,
     neutral_minions_killed: Option<i64>,
+    gold_earned: Option<i64>,
+    total_damage_dealt_to_champions: Option<i64>,
+    vision_score: Option<i64>,
     item0: Option<i64>,
     item1: Option<i64>,
     item2: Option<i64>,
@@ -170,12 +181,104 @@ pub fn extract(body: &[u8]) -> Result<Vec<Fact>, FactsError> {
                 (None, None) => None,
                 (lane, jungle) => Some(lane.unwrap_or(0) + jungle.unwrap_or(0)),
             },
+            gold: p.gold_earned,
+            damage: p.total_damage_dealt_to_champions,
+            vision: p.vision_score,
             items,
             runes: p.perks.map(runes),
             summoners: p.summoner1_id.zip(p.summoner2_id).map(|(a, b)| [a, b]),
         });
     }
     Ok(facts)
+}
+
+/// What a match says about itself rather than one participant.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Extras {
+    /// Any participant has `gameEndedInEarlySurrender` (Riot's remake flag).
+    pub remake: bool,
+    pub bans: Vec<Ban>,
+}
+
+/// One `info.teams[].bans[]` entry (v1 `extractBans`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ban {
+    pub team_id: i64,
+    pub pick_turn: i64,
+    pub champion_id: i64,
+}
+
+#[derive(Deserialize)]
+struct ExtrasBody {
+    info: ExtrasInfo,
+}
+
+#[derive(Deserialize)]
+struct ExtrasInfo {
+    #[serde(default)]
+    participants: Vec<SurrenderFlag>,
+    #[serde(default)]
+    teams: Vec<Team>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SurrenderFlag {
+    game_ended_in_early_surrender: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Team {
+    team_id: Option<i64>,
+    #[serde(default)]
+    bans: Vec<RawBan>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawBan {
+    champion_id: Option<i64>,
+    pick_turn: Option<i64>,
+}
+
+/// The remake flag and the bans. A ban of `-1` (no ban) or one without a team
+/// or pick turn is left out, as v1 left it out.
+pub fn extras(body: &[u8]) -> Result<Extras, FactsError> {
+    let body: ExtrasBody = serde_json::from_slice(body).map_err(|e| FactsError::NotAMatch(e.to_string()))?;
+    let remake = body
+        .info
+        .participants
+        .iter()
+        .any(|p| p.game_ended_in_early_surrender == Some(true));
+    let bans = body
+        .info
+        .teams
+        .iter()
+        .flat_map(|t| {
+            t.bans.iter().filter_map(move |b| {
+                let champion_id = b.champion_id.filter(|c| *c != -1)?;
+                Some(Ban {
+                    team_id: t.team_id?,
+                    pick_turn: b.pick_turn?,
+                    champion_id,
+                })
+            })
+        })
+        .collect();
+    Ok(Extras { remake, bans })
+}
+
+/// Replace a match's bans.
+pub fn write_bans(conn: &rusqlite::Connection, match_id: &str, bans: &[Ban]) -> rusqlite::Result<()> {
+    conn.execute("DELETE FROM match_bans WHERE match_id = ?1", [match_id])?;
+    let mut stmt = conn.prepare_cached(
+        "INSERT OR IGNORE INTO match_bans (match_id, team_id, pick_turn, champion_id) VALUES (?1, ?2, ?3, ?4)",
+    )?;
+    for b in bans {
+        stmt.execute(rusqlite::params![match_id, b.team_id, b.pick_turn, b.champion_id])?;
+    }
+    Ok(())
 }
 
 fn runes(perks: Perks) -> Runes {
@@ -213,14 +316,14 @@ pub fn write(
     )?;
     let mut stmt = conn.prepare_cached(
         "INSERT INTO match_facts (match_id, key_scope, puuid, team_id, position, champion_id, win,
-           kills, deaths, assists, items, runes, summoners, facts_version, cs)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+           kills, deaths, assists, items, runes, summoners, facts_version, cs, gold, damage, vision)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
          ON CONFLICT (match_id, puuid) DO UPDATE SET
            key_scope = excluded.key_scope, team_id = excluded.team_id, position = excluded.position,
            champion_id = excluded.champion_id, win = excluded.win, kills = excluded.kills,
            deaths = excluded.deaths, assists = excluded.assists, items = excluded.items,
            runes = excluded.runes, summoners = excluded.summoners, facts_version = excluded.facts_version,
-           cs = excluded.cs",
+           cs = excluded.cs, gold = excluded.gold, damage = excluded.damage, vision = excluded.vision",
     )?;
     for f in facts {
         stmt.execute(rusqlite::params![
@@ -239,6 +342,9 @@ pub fn write(
             f.summoners_json(),
             FACTS_VERSION,
             f.cs,
+            f.gold,
+            f.damage,
+            f.vision,
         ])?;
     }
     Ok(())

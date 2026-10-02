@@ -723,10 +723,16 @@ impl LadderContext {
                 let ended = store::end_leg(&tx, &crawl, &leg, failed, now, &mut |tx, crawl| {
                     advance(tx, &scope, crawl, backfill_limit, now)
                 })?;
-                if let Ended::Finished(_) = &ended {
+                if let Ended::Finished(crawl) = &ended {
                     // Completed or failed alike: a name read out of a match
                     // that did land is correct either way (v1).
                     enqueue_on(&tx, &crate::jobs::names::job(), now)?;
+                    // Only a clean run: aggregating part of a ladder as the
+                    // whole is worse than keeping the previous numbers (v1).
+                    if crawl.status == "completed" {
+                        let job = crate::jobs::analytics::aggregate_job(&crawl.platform, &crawl.queue);
+                        enqueue_on(&tx, &job, now)?;
+                    }
                 }
                 tx.commit()?;
                 Ok::<_, DbError>(ended)

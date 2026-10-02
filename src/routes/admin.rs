@@ -63,6 +63,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(list_ladder_crawls))
         .routes(routes!(cancel_ladder_crawl))
         .routes(routes!(queue_names_backfill))
+        .routes(routes!(recompute_analytics))
+        .routes(routes!(reextract_facts))
 }
 
 fn json<T: Serialize>(status: StatusCode, body: &T) -> Response {
@@ -1482,5 +1484,74 @@ async fn queue_names_backfill(State(state): State<AppState>, Extension(_c): Who)
             &serde_json::json!({"ok": true, "unnamed": unnamed}),
         ),
         Err(e) => internal(&e, "could not queue names:backfill"),
+    }
+}
+
+// ── Analytics ───────────────────────────────────────────────────────────────
+
+/// `POST /v1/admin/analytics/recompute` body (v1).
+#[derive(Debug, Deserialize, ToSchema)]
+#[allow(dead_code)]
+pub struct RecomputeAnalytics {
+    /// Platform routing value; default `DEFAULT_PLATFORM`.
+    platform: Option<String>,
+    /// `RANKED_SOLO_5x5` or `RANKED_FLEX_SR`; default the first of `LADDER_QUEUES`.
+    queue: Option<String>,
+}
+
+#[utoipa::path(
+    post, path = "/v1/admin/analytics/recompute", tag = "admin",
+    summary = "Recompute the analytics tables from the archive",
+    description = "Queues `aggregate:analytics` for one ladder and answers 202 — the scan runs on the worker. \
+        Bounded by `AGGREGATE_PATCH_LIMIT`: only the latest N patches are rebuilt (v1).",
+    request_body = RecomputeAnalytics,
+    responses((status = 202, description = "`{ok, platform, queue}`", body = serde_json::Value), LocalErrors),
+)]
+async fn recompute_analytics(State(state): State<AppState>, Extension(_c): Who, bytes: Bytes) -> Response {
+    use crate::riot::ladder::RANKED_QUEUES;
+    let parsed = (|| {
+        let b = Body::parse(&bytes)?;
+        let platform = b.with("platform", validate::platform_at)?;
+        let queue = b.with("queue", |loc, v| body_enum(loc, "queue", v, &RANKED_QUEUES))?;
+        Ok::<_, ApiError>((
+            platform
+                .unwrap_or(state.config.default_platform)
+                .as_str()
+                .to_string(),
+            queue.map_or_else(|| default_ladder_queue(&state), str::to_string),
+        ))
+    })();
+    let (platform, queue) = match parsed {
+        Ok(p) => p,
+        Err(e) => return e.into_response(),
+    };
+    match crate::jobs::analytics::enqueue_aggregate(&state.jobs, &platform, &queue).await {
+        Ok(_) => json(
+            StatusCode::ACCEPTED,
+            &serde_json::json!({"ok": true, "platform": platform, "queue": queue}),
+        ),
+        Err(e) => internal(&e, "could not queue aggregate:analytics"),
+    }
+}
+
+#[utoipa::path(
+    post, path = "/v1/admin/analytics/reextract", tag = "admin",
+    summary = "Re-derive match facts from the archive",
+    description = "Queues `facts:reextract`: every match whose facts an older version derived is re-read from its \
+        stored body, in batches of `FACTS_REEXTRACT_BATCH`. No Riot call. A second request joins the sweep \
+        already queued. Answers 202 with the number of matches to sweep.",
+    responses((status = 202, description = "`{ok, stale}`", body = serde_json::Value), LocalErrors),
+)]
+async fn reextract_facts(State(state): State<AppState>, Extension(_c): Who) -> Response {
+    let stale = match crate::jobs::analytics::stale_matches(&state.db).await {
+        Ok(n) => n,
+        Err(e) => return internal(&e, "could not count stale facts"),
+    };
+    match state.jobs.enqueue(crate::jobs::analytics::reextract_job()).await {
+        Ok(_) => json(
+            StatusCode::ACCEPTED,
+            &serde_json::json!({"ok": true, "stale": stale}),
+        ),
+        Err(e) => internal(&e, "could not queue facts:reextract"),
     }
 }
