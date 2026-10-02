@@ -141,12 +141,9 @@ pub fn ladders(config: &Config) -> Vec<(String, String)> {
         .collect()
 }
 
-/// The ticks whose handlers exist today: all but `maintenance`.
+/// The ticks `serve` runs: every one, now that each has its handler.
 pub fn running_schedule(config: &Config) -> Vec<(&'static str, Duration)> {
     schedule(config)
-        .into_iter()
-        .filter(|(kind, _)| *kind != kinds::MAINTENANCE)
-        .collect()
 }
 
 /// The running tick loops.

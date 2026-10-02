@@ -118,8 +118,7 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
     tracing::info!(%addr, "listening");
 
     // Jobs (design/06): handlers over one queue, interrupted work re-queued,
-    // then workers and the ticks. `maintenance` ticks once its handler exists
-    // (P7-05).
+    // then workers and the ticks.
     let hub = crate::ws::Hub::new();
     let mirror = Arc::new(crate::r#static::Mirror::new(
         config.ddragon_dir.clone(),
@@ -162,6 +161,10 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         db: db.clone(),
         key_scope: scope.clone(),
     });
+    let maintenance = Arc::new(crate::jobs::maintenance::Maintenance {
+        db: db.clone(),
+        backup_dir: config.data_dir.join("backups"),
+    });
     let analytics = Arc::new(crate::jobs::analytics::AnalyticsContext {
         queue: queue.clone(),
         hub: hub.clone(),
@@ -171,7 +174,15 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
     });
     let scheduler = crate::jobs::Scheduler::with_queue(
         queue.clone(),
-        crate::jobs::handlers(&poll, &archiving, &ddragon, &ladder, &names, &analytics),
+        crate::jobs::handlers(
+            &poll,
+            &archiving,
+            &ddragon,
+            &ladder,
+            &names,
+            &analytics,
+            &maintenance,
+        ),
     );
     match scheduler.recover().await {
         Ok(0) => {}

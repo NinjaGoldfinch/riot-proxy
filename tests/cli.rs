@@ -70,6 +70,7 @@ fn every_subcommand_has_help() {
         vec!["key", "revoke", "--help"],
         vec!["healthcheck", "--help"],
         vec!["spec", "--help"],
+        vec!["backup", "--help"],
     ] {
         let out = Command::new(BIN).args(&args).output().unwrap();
         assert!(out.status.success(), "{args:?}");
@@ -413,4 +414,33 @@ async fn riot_get_prints_the_raw_body() {
     .unwrap();
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("NotFound"));
+}
+
+#[test]
+fn backup_writes_a_copy_that_opens_and_never_overwrites() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("data");
+    run(&data, &["key", "create", "--name", "kept"]);
+    let out = tmp.path().join("copies").join("before-upgrade.db");
+    let text = stdout(&run(&data, &["backup", out.to_str().unwrap()]));
+    assert!(
+        text.starts_with(out.to_str().unwrap()) && text.contains("bytes"),
+        "{text}"
+    );
+    let conn = rusqlite::Connection::open(&out).unwrap();
+    let name: String = conn
+        .query_row("SELECT name FROM consumers", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(name, "kept");
+
+    let again = cmd(&data)
+        .args(["backup", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!again.status.success());
+    assert!(
+        String::from_utf8_lossy(&again.stderr).contains("already exists"),
+        "{}",
+        String::from_utf8_lossy(&again.stderr)
+    );
 }
