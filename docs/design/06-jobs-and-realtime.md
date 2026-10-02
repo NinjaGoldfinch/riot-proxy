@@ -93,8 +93,8 @@ Every handler that hits Riot calls the fetcher with `Priority::Bulk`, so the int
 | `ladder:collect` | phase collect | 25 players per job → `crawl_match_ids`; last one flips `phase → archive` |
 | `ladder:archive` | phase archive | `filter_unarchived`, enqueue `archive:match`; ends the crawl `completed`, enqueues `aggregate:analytics` and `names:backfill` |
 | `names:backfill` | crawl end, daily, admin | Riot IDs for nameless players from their latest archived matches; no Riot calls (v1, ADR-055) |
-| `facts:reextract` | admin / version bump | re-derive `match_facts` in batches of `FACTS_REEXTRACT_BATCH`; no Riot calls |
-| `aggregate:analytics` | crawl end, tick, admin | rebuild `champion_*` for the last `AGGREGATE_PATCH_LIMIT` patches |
+| `facts:reextract` | admin / boot when stale | re-derive facts, bans and `remake` for matches below `FACTS_VERSION`, in batches of `FACTS_REEXTRACT_BATCH`; no Riot calls |
+| `aggregate:analytics` | crawl end, tick, admin | rebuild the analytics tables (v1's shape, ADR-056) for the last `AGGREGATE_PATCH_LIMIT` patches; `analytics.updated` |
 | `maintenance` | daily | trim `jobs`/`metrics_history`, sweep L2, WAL checkpoint, `VACUUM INTO` backup |
 
 The three-phase crawl is preserved exactly — it is the reason a ten-participant match is fetched once, and it is a design property, not a queue property.

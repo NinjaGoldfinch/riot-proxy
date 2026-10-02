@@ -103,7 +103,8 @@ pub fn api_router(auth: Option<AppState>) -> OpenApiRouter<AppState> {
         .merge(routes::players::router())
         .merge(routes::riot::router())
         .merge(routes::lol::router())
-        .merge(routes::statics::router());
+        .merge(routes::statics::router())
+        .merge(routes::analytics::router());
     let mut admin = routes::admin::router();
     if let Some(state) = auth {
         read = read.route_layer(axum::middleware::from_fn_with_state(

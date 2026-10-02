@@ -94,19 +94,51 @@ async fn compress(body: Bytes) -> Result<Vec<u8>, ArchiveError> {
     Ok(tokio::task::spawn_blocking(move || zstd::encode_all(body.as_ref(), ZSTD_LEVEL)).await??)
 }
 
+/// Everything derived from a body: its columns, facts and extras.
+pub type Derived = (MatchMeta, Vec<Fact>, facts::Extras);
+
+/// Derive what the archive stores beside a body. Facts are a derivation: a
+/// body they cannot read is still archived.
+pub fn derive(body: &[u8]) -> Result<Derived, ArchiveError> {
+    let meta = extract(body)?;
+    let rows = facts::extract(body).unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "match facts not extracted");
+        Vec::new()
+    });
+    let extras = facts::extras(body).unwrap_or_default();
+    Ok((meta, rows, extras))
+}
+
 /// Parse and compress off the async runtime: a match body is ~100 KB.
-async fn prepare(body: Bytes) -> Result<(MatchMeta, Vec<Fact>, Vec<u8>), ArchiveError> {
+async fn prepare(body: Bytes) -> Result<(Derived, Vec<u8>), ArchiveError> {
     tokio::task::spawn_blocking(move || {
-        let meta = extract(&body)?;
-        // Facts are a derivation: a body they cannot read is still archived.
-        let rows = facts::extract(&body).unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "match facts not extracted");
-            Vec::new()
-        });
+        let derived = derive(&body)?;
         let blob = zstd::encode_all(body.as_ref(), ZSTD_LEVEL)?;
-        Ok((meta, rows, blob))
+        Ok((derived, blob))
     })
     .await?
+}
+
+/// Write a match's derived rows: its `game_duration` and `remake` columns,
+/// its facts for `key_scope`, and its bans. Shared by archiving and
+/// `facts:reextract`.
+pub fn write_derived(
+    tx: &rusqlite::Connection,
+    match_id: &str,
+    key_scope: &str,
+    (meta, rows, extras): &Derived,
+) -> rusqlite::Result<()> {
+    tx.execute(
+        "UPDATE matches SET game_duration = ?2, remake = ?3, facts_version = ?4 WHERE match_id = ?1",
+        rusqlite::params![
+            match_id,
+            meta.game_duration_s,
+            extras.remake,
+            facts::FACTS_VERSION
+        ],
+    )?;
+    facts::write(tx, match_id, key_scope, rows)?;
+    facts::write_bans(tx, match_id, &extras.bans)
 }
 
 fn decompress(blob: &[u8]) -> Result<Bytes, ArchiveError> {
@@ -170,7 +202,8 @@ pub async fn put(
     now_ms: i64,
 ) -> Result<MatchMeta, ArchiveError> {
     let size = body.len();
-    let (meta, rows, blob) = prepare(body).await?;
+    let (derived, blob) = prepare(body).await?;
+    let meta = derived.0.clone();
     tracing::debug!(
         match_id,
         raw_bytes = size,
@@ -206,7 +239,7 @@ pub async fn put(
                 row.game_duration_s
             ],
         )?;
-        facts::write(&tx, &id, &scope, &rows)?;
+        write_derived(&tx, &id, &scope, &derived)?;
         tx.commit()?;
         Ok::<_, ArchiveError>(())
     })

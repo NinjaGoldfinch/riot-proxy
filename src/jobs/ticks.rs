@@ -89,6 +89,19 @@ pub async fn crawl_ladders(scheduler: &Scheduler, ladders: &[(String, String)]) 
     Ok(created)
 }
 
+/// Queue one `aggregate:analytics` per ladder, deduped per ladder (v1).
+pub async fn aggregate_ladders(
+    scheduler: &Scheduler,
+    ladders: &[(String, String)],
+) -> Result<usize, DbError> {
+    let mut created = 0;
+    for (platform, queue) in ladders {
+        let job = crate::jobs::analytics::enqueue_aggregate(scheduler.queue(), platform, queue).await?;
+        created += usize::from(job.created);
+    }
+    Ok(created)
+}
+
 /// Each tick and its period (config names are v1's).
 pub fn schedule(config: &Config) -> Vec<(&'static str, Duration)> {
     let s = |n: u32| Duration::from_secs(u64::from(n));
@@ -106,6 +119,11 @@ pub fn schedule(config: &Config) -> Vec<(&'static str, Duration)> {
     .into_iter()
     // v1: off unless LADDER_CRAWL_S is set; a crawl's cost is opt-in.
     .chain((config.ladder_crawl_s > 0).then(|| (kinds::LADDER_CRAWL, s(config.ladder_crawl_s))))
+    // v1: off unless AGGREGATE_INTERVAL_S is set; a crawl's end recomputes anyway.
+    .chain(
+        (config.aggregate_interval_s > 0)
+            .then(|| (kinds::AGGREGATE_ANALYTICS, s(config.aggregate_interval_s))),
+    )
     .collect()
 }
 
@@ -162,6 +180,7 @@ impl Ticks {
                             fan_out(&scheduler, &scope, kind).await
                         }
                         kinds::LADDER_CRAWL => crawl_ladders(&scheduler, &ladders).await,
+                        kinds::AGGREGATE_ANALYTICS => aggregate_ladders(&scheduler, &ladders).await,
                         _ => singleton(&scheduler, kind, priority::MAINTENANCE)
                             .await
                             .map(usize::from),

@@ -1,6 +1,7 @@
 //! Background work (docs/design/06): the durable queue and its workers, and the
 //! ticks that feed it, and the handlers by kind.
 
+pub mod analytics;
 pub mod archive;
 pub mod ddragon;
 pub mod ladder;
@@ -23,6 +24,8 @@ pub mod kinds {
     pub const LADDER_COLLECT: &str = "ladder:collect";
     pub const LADDER_ARCHIVE: &str = "ladder:archive";
     pub const NAMES_BACKFILL: &str = "names:backfill";
+    pub const AGGREGATE_ANALYTICS: &str = "aggregate:analytics";
+    pub const FACTS_REEXTRACT: &str = "facts:reextract";
     pub const MAINTENANCE: &str = "maintenance";
 }
 
@@ -46,6 +49,7 @@ pub fn handlers(
     ddragon: &std::sync::Arc<ddragon::DdragonSync>,
     ladder: &std::sync::Arc<ladder::LadderContext>,
     names: &std::sync::Arc<names::NamesBackfill>,
+    analytics: &std::sync::Arc<analytics::AnalyticsContext>,
 ) -> Registry {
     use std::sync::Arc;
     Registry::new()
@@ -81,6 +85,14 @@ pub fn handlers(
         .with(
             kinds::NAMES_BACKFILL,
             names::NamesBackfillHandler(Arc::clone(names)),
+        )
+        .with(
+            kinds::AGGREGATE_ANALYTICS,
+            analytics::AggregateHandler(Arc::clone(analytics)),
+        )
+        .with(
+            kinds::FACTS_REEXTRACT,
+            analytics::ReextractHandler(Arc::clone(analytics)),
         )
 }
 

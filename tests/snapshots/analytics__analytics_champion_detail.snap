@@ -1,0 +1,104 @@
+---
+source: tests/analytics.rs
+expression: redact(detail.json())
+---
+{
+  "championId": 134,
+  "computedAt": "<iso>",
+  "items": [
+    {
+      "games": 1,
+      "itemId": 1058,
+      "winRate": 1,
+      "wins": 1
+    },
+    {
+      "games": 1,
+      "itemId": 1082,
+      "winRate": 1,
+      "wins": 1
+    },
+    {
+      "games": 1,
+      "itemId": 2503,
+      "winRate": 1,
+      "wins": 1
+    },
+    {
+      "games": 1,
+      "itemId": 3137,
+      "winRate": 1,
+      "wins": 1
+    },
+    {
+      "games": 1,
+      "itemId": 3170,
+      "winRate": 1,
+      "wins": 1
+    },
+    {
+      "games": 1,
+      "itemId": 4629,
+      "winRate": 1,
+      "wins": 1
+    }
+  ],
+  "matchups": [
+    {
+      "games": 1,
+      "opponentId": 157,
+      "role": "MIDDLE",
+      "winRate": 1,
+      "wins": 1
+    }
+  ],
+  "patch": "16.19",
+  "platform": "kr",
+  "queue": "RANKED_SOLO_5x5",
+  "role": null,
+  "runes": [
+    {
+      "games": 1,
+      "keystoneId": 8229,
+      "subStyleId": 8000,
+      "winRate": 1,
+      "wins": 1
+    }
+  ],
+  "sectionsComputedAt": {
+    "items": "<iso>",
+    "matchups": "<iso>",
+    "runes": "<iso>",
+    "spells": "<iso>",
+    "stats": "<iso>"
+  },
+  "spells": [
+    {
+      "games": 1,
+      "spellA": 4,
+      "spellB": 12,
+      "winRate": 1,
+      "wins": 1
+    }
+  ],
+  "stats": [
+    {
+      "avgDamage": 36696,
+      "avgKda": 3.6667,
+      "avgVision": 33,
+      "banRate": 0,
+      "championId": 134,
+      "csPerMin": 7.3484,
+      "games": 1,
+      "goldPerMin": 476.5755,
+      "patch": "16.19",
+      "pickRate": 1,
+      "share": 1,
+      "tier": "MASTER",
+      "winRate": 1,
+      "wins": 1
+    }
+  ],
+  "tier": null,
+  "totalGames": 1
+}

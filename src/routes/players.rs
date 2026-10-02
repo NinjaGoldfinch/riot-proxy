@@ -711,7 +711,7 @@ pub struct PlayerChampions {
 
 /// A number as JavaScript prints it: a whole value has no `.0` (v1 wrote `1`).
 #[allow(clippy::trivially_copy_pass_by_ref)]
-fn js_number<S: serde::Serializer>(v: &f64, s: S) -> Result<S::Ok, S::Error> {
+pub(crate) fn js_number<S: serde::Serializer>(v: &f64, s: S) -> Result<S::Ok, S::Error> {
     #[allow(clippy::cast_possible_truncation, clippy::float_cmp)]
     let whole = v.fract() == 0.0 && v.abs() < 9.0e15;
     if whole {
@@ -722,7 +722,7 @@ fn js_number<S: serde::Serializer>(v: &f64, s: S) -> Result<S::Ok, S::Error> {
 }
 
 #[allow(clippy::ref_option)]
-fn js_opt_number<S: serde::Serializer>(v: &Option<f64>, s: S) -> Result<S::Ok, S::Error> {
+pub(crate) fn js_opt_number<S: serde::Serializer>(v: &Option<f64>, s: S) -> Result<S::Ok, S::Error> {
     match v {
         Some(n) => js_number(n, s),
         None => s.serialize_none(),
@@ -730,7 +730,7 @@ fn js_opt_number<S: serde::Serializer>(v: &Option<f64>, s: S) -> Result<S::Ok, S
 }
 
 /// Four decimal places, as v1's analytics published.
-fn round4(v: f64) -> f64 {
+pub(crate) fn round4(v: f64) -> f64 {
     (v * 10_000.0).round() / 10_000.0
 }
 
@@ -782,7 +782,8 @@ fn pool_body(
            ("platform" = Option<String>, Query, description = "Only games on this platform (by match id prefix)"),
            ("queue" = Option<i64>, Query, description = "Queue id, 0–5000"),
            ("patch" = Option<String>, Query, description = "`major.minor`, e.g. 14.18"),
-           ("limit" = Option<i64>, Query, description = "1–500, default 200")),
+           ("limit" = Option<i64>, Query, description = "1–500, default 200"),
+           ("remakes" = Option<String>, Query, description = "`exclude` (default) or `include` games Riot flagged as remakes")),
     responses((status = 200, description = "The pool", body = PlayerChampions), LocalErrors),
 )]
 async fn champions(
@@ -802,11 +803,13 @@ async fn champions(
         let queue = validate::int_query("queue", q(&query, "queue"), 0, 5000)?;
         let patch = validate::patch_query(q(&query, "patch"))?;
         let limit = validate::int_query("limit", q(&query, "limit"), 1, 500)?.unwrap_or(200);
+        let remakes = validate::remakes_query(q(&query, "remakes"))?;
         Ok::<_, ApiError>(pool::Filter {
             platform: platform.map(|p| p.as_str().to_string()),
             queue_id: queue,
             patch: patch.map(str::to_string),
             limit: u32::try_from(limit).unwrap_or(200),
+            remakes,
         })
     })();
     let filter = match parsed {
@@ -825,6 +828,7 @@ async fn champions(
             ),
             ("patch", filter.patch.clone().unwrap_or_default()),
             ("limit", filter.limit.to_string()),
+            ("remakes", if filter.remakes { "include" } else { "" }.to_string()),
         ])
     );
     let key = derived_key(scope, "pool", &target);

@@ -162,14 +162,27 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         db: db.clone(),
         key_scope: scope.clone(),
     });
+    let analytics = Arc::new(crate::jobs::analytics::AnalyticsContext {
+        queue: queue.clone(),
+        hub: hub.clone(),
+        key_scope: scope.clone(),
+        patch_limit: config.aggregate_patch_limit,
+        reextract_batch: config.facts_reextract_batch,
+    });
     let scheduler = crate::jobs::Scheduler::with_queue(
         queue.clone(),
-        crate::jobs::handlers(&poll, &archiving, &ddragon, &ladder, &names),
+        crate::jobs::handlers(&poll, &archiving, &ddragon, &ladder, &names, &analytics),
     );
     match scheduler.recover().await {
         Ok(0) => {}
         Ok(n) => tracing::info!(jobs = n, "re-queued jobs a previous process left running"),
         Err(e) => tracing::warn!(error = %e, "could not re-queue interrupted jobs"),
+    }
+    // Facts an older version derived are swept once, in the background.
+    match crate::jobs::analytics::reextract_if_stale(&queue).await {
+        Ok(true) => tracing::info!("queued facts:reextract for matches an older facts version derived"),
+        Ok(false) => {}
+        Err(e) => tracing::warn!(error = %e, "could not check for stale match facts"),
     }
     let workers = scheduler.start(usize::try_from(config.job_concurrency).unwrap_or(8));
     let ticks = crate::jobs::ticks::Ticks::start_with(

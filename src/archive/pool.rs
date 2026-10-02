@@ -12,6 +12,8 @@ pub struct Filter {
     /// `major.minor`, as `matches.patch`.
     pub patch: Option<String>,
     pub limit: u32,
+    /// Count games Riot flagged as remakes (default: leave them out, ADR-056).
+    pub remakes: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,12 +56,13 @@ pub async fn champions(
                AND (?3 IS NULL OR substr(f.match_id, 1, length(?3)) = ?3)
                AND (?4 IS NULL OR m.queue_id = ?4)
                AND (?5 IS NULL OR m.patch = ?5)
+               AND (?7 OR coalesce(m.remake, 0) = 0)
              GROUP BY f.champion_id
              ORDER BY count(*) DESC, f.champion_id
              LIMIT ?6",
         )?;
         let rows = stmt.query_map(
-            rusqlite::params![scope, puuid, prefix, f.queue_id, f.patch, f.limit],
+            rusqlite::params![scope, puuid, prefix, f.queue_id, f.patch, f.limit, f.remakes],
             |r| {
                 Ok(ChampionRow {
                     champion_id: r.get(0)?,

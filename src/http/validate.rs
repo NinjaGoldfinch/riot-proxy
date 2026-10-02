@@ -233,6 +233,12 @@ pub fn version_query(raw: Option<&str>) -> Result<Option<&str>, ApiError> {
     }
 }
 
+/// `?remakes=`: `include` adds the games Riot flagged as remakes back into an
+/// analytics view; `exclude`, the default, leaves them out (v2, ADR-056).
+pub fn remakes_query(raw: Option<&str>) -> Result<bool, ApiError> {
+    Ok(query_one_of("remakes", raw, &["exclude", "include"])? == Some("include"))
+}
+
 /// `params/id`: a consumer id, a ULID (v2 ids; v1's were UUIDs, ADR-044).
 pub fn consumer_id(value: &str) -> Result<(), ApiError> {
     if value.parse::<ulid::Ulid>().is_ok() && value.len() == 26 {

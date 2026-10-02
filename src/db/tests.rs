@@ -87,7 +87,8 @@ async fn readers_have_connection_pragmas_and_see_wal() {
 }
 
 #[tokio::test]
-/// Design/04's tables, with the ladder in v1's shape (V0004, ADR-054).
+/// Design/04's tables, with the ladder (V0004, ADR-054) and analytics (V0005,
+/// ADR-056) in v1's shape.
 async fn migrations_create_exactly_the_design_04_tables() {
     let (_dir, db) = open_temp(1);
     let tables: Vec<String> = db
@@ -103,9 +104,13 @@ async fn migrations_create_exactly_the_design_04_tables() {
     assert_eq!(
         tables,
         [
+            "analytics_slices",
             "cache",
-            "champion_builds",
+            "champion_bans",
+            "champion_items",
             "champion_matchups",
+            "champion_runes",
+            "champion_spells",
             "champion_stats",
             "consumers",
             "crawl_legs",
@@ -114,6 +119,7 @@ async fn migrations_create_exactly_the_design_04_tables() {
             "ladder_crawls",
             "ladder_entries",
             "limiter_state",
+            "match_bans",
             "match_facts",
             "matches",
             "metrics_history",
@@ -194,7 +200,7 @@ async fn a_v1_database_upgrades_to_v2_and_keeps_its_data() {
         })
         .await
         .expect("read");
-    assert_eq!((name.as_str(), versions), ("old", 4));
+    assert_eq!((name.as_str(), versions), ("old", 5));
 }
 
 /// match_facts is a pure derivation of matches: deleting a match cascades (design 04).
@@ -324,11 +330,11 @@ async fn migrations_apply_once_across_reopens() {
         })
         .await
         .expect("insert");
-    assert_eq!(history(first.clone()).await.expect("history"), 4);
+    assert_eq!(history(first.clone()).await.expect("history"), 5);
     drop(first);
 
     let second = Db::open(&path, 1).expect("second open");
-    assert_eq!(history(second.clone()).await.expect("history"), 4, "no re-run");
+    assert_eq!(history(second.clone()).await.expect("history"), 5, "no re-run");
     let name: Option<String> = second
         .read(|c| {
             Ok::<_, DbError>(

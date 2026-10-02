@@ -124,27 +124,38 @@ CREATE TABLE match_facts (                        -- one row per participant; pu
   summoners    TEXT,                              -- JSON [int,int]
   facts_version INTEGER NOT NULL,                 -- bump to trigger facts:reextract
   cs           INTEGER,                           -- lane + jungle minions; V0003 (ADR-043)
+  gold INTEGER, damage INTEGER, vision INTEGER,   -- V0005 (ADR-056)
   PRIMARY KEY (match_id, puuid)
+);
+-- V0005 (ADR-056): matches.remake (Riot's gameEndedInEarlySurrender) and
+-- matches.facts_version (indexed; facts:reextract walks what is below current).
+CREATE TABLE match_bans (                         -- info.teams[].bans, -1 left out
+  match_id TEXT REFERENCES matches(match_id) ON DELETE CASCADE,
+  team_id INTEGER, pick_turn INTEGER, champion_id INTEGER,
+  PRIMARY KEY (match_id, team_id, pick_turn)
 );
 CREATE INDEX facts_player ON match_facts(key_scope, puuid, match_id);
 CREATE INDEX facts_champ  ON match_facts(champion_id);
 
--- Analytics (recomputed; safe to TRUNCATE) ──────────────────────────────────
-CREATE TABLE champion_stats (
-  patch TEXT, queue_id INTEGER, champion_id INTEGER, position TEXT,
-  games INTEGER, wins INTEGER, bans INTEGER,
-  PRIMARY KEY (patch, queue_id, champion_id, position)
+-- Analytics (recomputed; safe to TRUNCATE) ── v1's shape, ADR-056 ───────────
+-- Every table is keyed by (key_scope, platform, queue, …, patch) and carries
+-- remake (0/1) as a key, so a read excludes remakes (default) or sums both.
+CREATE TABLE analytics_slices (                   -- distinct matches per tier: pick/ban-rate denominator
+  key_scope, platform, queue, tier, patch, remake, matches, computed_at,
+  PRIMARY KEY (key_scope, platform, queue, tier, patch, remake)
 );
-CREATE TABLE champion_matchups (
-  patch TEXT, queue_id INTEGER, position TEXT, champion_id INTEGER, vs_champion_id INTEGER,
-  games INTEGER, wins INTEGER,
-  PRIMARY KEY (patch, queue_id, position, champion_id, vs_champion_id)   -- v1 migration 0009 order
+CREATE TABLE champion_stats (                     -- per tier and role
+  key_scope, platform, queue, tier, patch, champion_id, role, remake,
+  games, wins, matches_picked, stated_games, kills, deaths, assists, cs, gold, damage, vision,
+  duration_s, computed_at,
+  PRIMARY KEY (key_scope, platform, queue, tier, patch, champion_id, role, remake)
 );
-CREATE TABLE champion_builds (
-  patch TEXT, queue_id INTEGER, champion_id INTEGER, position TEXT,
-  build_hash TEXT, items TEXT, games INTEGER, wins INTEGER,
-  PRIMARY KEY (patch, queue_id, champion_id, position, build_hash)
-);
+CREATE TABLE champion_bans (key_scope, platform, queue, tier, patch, champion_id, remake, bans, computed_at, …);
+CREATE TABLE champion_matchups (                  -- no tier; one row per (lane, opponent)
+  key_scope, platform, queue, patch, champion_id, role, opponent_id, remake, games, wins, computed_at, …);
+CREATE TABLE champion_items  (… champion_id, role, item_id, remake, games, wins, computed_at);
+CREATE TABLE champion_runes  (… champion_id, role, keystone_id, sub_style_id, remake, games, wins, computed_at);
+CREATE TABLE champion_spells (… champion_id, role, spell_a, spell_b, remake, games, wins, computed_at);  -- spell_a <= spell_b
 
 -- Ladder ──────────────────────────────────────────────────────────────────── (v1's shape, ADR-054)
 CREATE TABLE ladder_crawls (                      -- the run log

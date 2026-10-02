@@ -1,6 +1,7 @@
 //! The permanent store for immutable Riot data (docs/design/04): matches and
 //! their facts; analytics follow in P7.
 
+pub mod analytics;
 pub mod facts;
 pub mod matches;
 pub mod pool;
