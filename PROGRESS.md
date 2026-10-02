@@ -141,6 +141,17 @@ The player was tracked through `POST /v1/admin/tracked-players`, which queued th
 - [x] P7-04 analytics (#58; **+ v1's three `/v1/lol/analytics/*` routes, deferred from P4-05 by the owner, ADR-037; v1's analytics schema and remakes kept apart, owner decisions, ADR-056**)
 - [x] P7-05 maintenance (#59)
 - [x] P7-06 dashboard wiring (#60; screenshots in `docs/img/p7-06-*.png`)
+
+Exit check (2026-10-03, `main` @ `0a3e4bf` + the exit-check test): **passed.**
+`tests/p7_exit.rs` runs the real `serve` in-process against a wiremock ladder of 30 players (`LADDER_QUEUES=RANKED_SOLO_5x5 LADDER_TIER_FLOOR=MASTER`), 12 matches each shared by 10 of them. The crawl is started with `POST /v1/admin/ladder/crawl` and watched on `/v1/ws` (`ladder` and `metrics` topics). Run with `cargo test --test p7_exit -- --ignored --nocapture`.
+```
+crawl: "completed" in 78.8ms
+ladder events: crawl.phase collect → archive → completed, ladder.crawl.completed, analytics.updated
+match fetches: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+counters: entries 30 players 30 walked 30 match ids 12 queued 12
+dashboard: archivedMatches 12 knownPlayers 30 ladder.entries 30 lastCompleted "completed" analytics "completed" topChampions 5 snapshots 1
+```
+Each match was fetched once from Riot, although every one of them is reachable from ten players' histories. The live `metrics.snapshot` on `/v1/ws` and `GET /v1/admin/metrics` both show the finished crawl, and `/dashboard` answers 200. Screenshots of the dashboard rendering live data in a browser are in `docs/img/p7-06-*.png` (#60).
 Exit check: _pending_
 
 ## P8 — Contract, migration, packaging
