@@ -137,7 +137,7 @@ The player was tracked through `POST /v1/admin/tracked-players`, which queued th
 ## P7 — Data Dragon, ladder, analytics, dashboard
 - [x] P7-01 Data Dragon sync + static serving (#55)
 - [x] P7-02 ladder enumerate (#56; **+ v1's ladder schema, `POST /v1/admin/ladder/crawl` and `/options`, owner decisions, ADR-054**)
-- [ ] P7-03 ladder collect + archive (**+ `GET /v1/admin/ladder/crawls`, `DELETE …/crawls/{id}`, and v1's names job, tick and `POST /v1/admin/players/names/backfill`, owner decisions at P7-02**)
+- [x] P7-03 ladder collect + archive (#57; **+ `GET /v1/admin/ladder/crawls`, `DELETE …/crawls/{id}`, and v1's names job, tick and `POST /v1/admin/players/names/backfill`, owner decisions at P7-02**)
 - [ ] P7-04 analytics (**+ v1's three `/v1/lol/analytics/*` routes, deferred from P4-05 by the owner, ADR-037**)
 - [ ] P7-05 maintenance
 - [ ] P7-06 dashboard wiring
@@ -159,6 +159,7 @@ Exit check: _pending_
 - **P4 exit check is still open:** the owner needs to confirm `/docs` renders in a browser (headless Chromium crashed on Scalar here). Tag `phase-P4` after that.
 - **P7-04 `facts:reextract`** must re-derive `FACTS_VERSION` < 2 rows *and* fill `matches.game_duration` where it is NULL (V0003, ADR-043).
 - **Unassigned:** `POST /v1/admin/players/names/backfill` (v1's job that fills Riot IDs from archived matches) is in no plan task; raised with the owner at the P6 review (ADR-044). (P6-06 gave `players.backfill_state` its shape, ADR-050.)
+- **P7-04 must queue `aggregate:analytics` when a crawl completes cleanly** (in `LadderContext::end_leg`'s transaction, beside `names:backfill`; ADR-055).
 - **Events** keep v1's names plus `crawl.phase` (ADR-045): P7-04 publishes `analytics.updated`; P7-02/03 publish `crawl.phase` and `ladder.crawl.completed`; the dashboard's names already match.
 - **Ask the owner at P7-04:** remakes are stored as ordinary facts rows (ADR-041); should analytics exclude them?
 - **Ask the owner at P7-04:** v1's analytics routes read tables design/04 doesn't have (bans, runes, spells, analytics slices; ADR-039).

@@ -91,7 +91,8 @@ Every handler that hits Riot calls the fetcher with `Priority::Bulk`, so the int
 | `ladder:crawl` | tick or admin | create crawl row, fan out `ladder:apex` × 3 + `ladder:walk` × (tier, division) |
 | `ladder:apex` / `ladder:walk` | per crawl | upsert `ladder_entries`; last one flips `phase → collect` |
 | `ladder:collect` | phase collect | 25 players per job → `crawl_match_ids`; last one flips `phase → archive` |
-| `ladder:archive` | phase archive | `filter_unarchived`, enqueue `archive:match`; flips `phase → done`, enqueues `aggregate:analytics` |
+| `ladder:archive` | phase archive | `filter_unarchived`, enqueue `archive:match`; ends the crawl `completed`, enqueues `aggregate:analytics` and `names:backfill` |
+| `names:backfill` | crawl end, daily, admin | Riot IDs for nameless players from their latest archived matches; no Riot calls (v1, ADR-055) |
 | `facts:reextract` | admin / version bump | re-derive `match_facts` in batches of `FACTS_REEXTRACT_BATCH`; no Riot calls |
 | `aggregate:analytics` | crawl end, tick, admin | rebuild `champion_*` for the last `AGGREGATE_PATCH_LIMIT` patches |
 | `maintenance` | daily | trim `jobs`/`metrics_history`, sweep L2, WAL checkpoint, `VACUUM INTO` backup |

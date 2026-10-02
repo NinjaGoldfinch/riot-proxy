@@ -181,7 +181,8 @@ fn periods_come_from_config() {
             ("poll:rank", 600),
             ("poll:matches", 300),
             ("ddragon:sync", 3600),
-            ("maintenance", 86_400)
+            ("maintenance", 86_400),
+            ("names:backfill", 86_400)
         ]
     );
 }
@@ -195,7 +196,16 @@ fn serve_ticks_every_kind_whose_handler_exists() {
     .unwrap();
     let kinds: Vec<&str> = running_schedule(&config).into_iter().map(|(k, _)| k).collect();
     // `maintenance` joins with its handler (P7-05).
-    assert_eq!(kinds, ["poll:live", "poll:rank", "poll:matches", "ddragon:sync"]);
+    assert_eq!(
+        kinds,
+        [
+            "poll:live",
+            "poll:rank",
+            "poll:matches",
+            "ddragon:sync",
+            "names:backfill"
+        ]
+    );
 }
 
 #[tokio::test]

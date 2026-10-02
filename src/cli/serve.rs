@@ -155,10 +155,16 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         key_scope: scope.clone(),
         tier_floor: config.ladder_tier_floor.clone(),
         backfill_limit: config.ladder_backfill_limit,
+        lookup_backfill_limit: config.lookup_backfill_limit,
+        archive_timelines: config.archive_timelines,
+    });
+    let names = Arc::new(crate::jobs::names::NamesBackfill {
+        db: db.clone(),
+        key_scope: scope.clone(),
     });
     let scheduler = crate::jobs::Scheduler::with_queue(
         queue.clone(),
-        crate::jobs::handlers(&poll, &archiving, &ddragon, &ladder),
+        crate::jobs::handlers(&poll, &archiving, &ddragon, &ladder, &names),
     );
     match scheduler.recover().await {
         Ok(0) => {}

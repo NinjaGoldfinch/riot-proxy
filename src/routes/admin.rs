@@ -60,6 +60,9 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(queue_ddragon_sync))
         .routes(routes!(start_ladder_crawl))
         .routes(routes!(ladder_options))
+        .routes(routes!(list_ladder_crawls))
+        .routes(routes!(cancel_ladder_crawl))
+        .routes(routes!(queue_names_backfill))
 }
 
 fn json<T: Serialize>(status: StatusCode, body: &T) -> Response {
@@ -1324,4 +1327,160 @@ async fn ladder_options(State(state): State<AppState>, Extension(_c): Who) -> Re
             "backfillLimit": state.config.ladder_backfill_limit,
         },
     }))
+}
+
+/// One crawl in `GET /v1/admin/ladder/crawls` (v1 `LadderCrawlSummary`).
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LadderCrawlSummary {
+    id: String,
+    platform: String,
+    queue: String,
+    /// How far down the ladder this run was told to enumerate.
+    tier_floor: String,
+    /// `running`, `completed`, `failed` or `cancelled`.
+    status: String,
+    /// Which stage a running crawl is in. `enumerate` walks the ladder, `collect` gathers every
+    /// discovered player's match ids, and `archive` fetches the matches behind them — in that
+    /// order, so a match shared by ten players is fetched once.
+    phase: String,
+    started_at: Option<String>,
+    #[schema(required = true)]
+    finished_at: Option<String>,
+    pages_fetched: i64,
+    entries_seen: i64,
+    players_discovered: i64,
+    /// Players whose match history the collect stage was asked to walk.
+    backfills_enqueued: i64,
+    /// Distinct matches those players have played, after de-duplication.
+    match_ids_seen: i64,
+    /// How many of those were not already archived, and so cost a fetch.
+    matches_queued: i64,
+    /// Legs of the current stage still outstanding — apex leagues and (tier, division) walks,
+    /// then match-id batches, then the archive hand-off. 0 for a finished run.
+    pending_legs: i64,
+}
+
+impl LadderCrawlSummary {
+    fn new(c: crate::jobs::ladder::store::Crawl, pending_legs: i64) -> Self {
+        Self {
+            started_at: iso_ms(c.started_at),
+            finished_at: c.finished_at.and_then(iso_ms),
+            pages_fetched: c.counters.pages_fetched,
+            entries_seen: c.counters.entries_seen,
+            players_discovered: c.counters.players_discovered,
+            backfills_enqueued: c.counters.backfills_enqueued,
+            match_ids_seen: c.counters.match_ids_seen,
+            matches_queued: c.counters.matches_queued,
+            id: c.id,
+            platform: c.platform,
+            queue: c.queue,
+            tier_floor: c.tier_floor,
+            status: c.status,
+            phase: c.phase,
+            pending_legs,
+        }
+    }
+}
+
+#[utoipa::path(
+    get, path = "/v1/admin/ladder/crawls", tag = "admin",
+    summary = "Recent ladder crawls",
+    description = "Newest first, with each crawl's counters and outstanding legs (v1).",
+    params(
+        ("platform" = Option<String>, Query, description = "Platform routing value"),
+        ("queue" = Option<String>, Query, description = "RANKED_SOLO_5x5 or RANKED_FLEX_SR"),
+        ("limit" = Option<i64>, Query, description = "1–100, default 20"),
+    ),
+    responses((status = 200, description = "`{crawls}`", body = serde_json::Value), LocalErrors),
+)]
+async fn list_ladder_crawls(State(state): State<AppState>, Extension(_c): Who, Query(q): Q) -> Response {
+    let parsed = (|| {
+        let platform = validate::query_platform(q.get("platform").map(String::as_str))?;
+        let queue = validate::query_one_of(
+            "queue",
+            q.get("queue").map(String::as_str),
+            &crate::riot::ladder::RANKED_QUEUES,
+        )?;
+        let limit = validate::int_query("limit", q.get("limit").map(String::as_str), 1, 100)?.unwrap_or(20);
+        Ok::<_, ApiError>((platform, queue, limit))
+    })();
+    let (platform, queue, limit) = match parsed {
+        Ok(p) => p,
+        Err(e) => return e.into_response(),
+    };
+    match crate::jobs::ladder::store::list(
+        &state.db,
+        &scope_of(&state),
+        platform.map(|p| p.as_str().to_string()),
+        queue.map(str::to_string),
+        limit,
+    )
+    .await
+    {
+        Ok(rows) => ok(&serde_json::json!({
+            "crawls": rows.into_iter().map(|(c, p)| LadderCrawlSummary::new(c, p)).collect::<Vec<_>>(),
+        })),
+        Err(e) => internal(&e, "could not list crawls"),
+    }
+}
+
+#[utoipa::path(
+    delete, path = "/v1/admin/ladder/crawls/{id}", tag = "admin",
+    summary = "Cancel a running ladder crawl",
+    description = "Marks the crawl cancelled, drops its queued jobs, and lets the running ones stop at \
+        their next status check (v1). A finished crawl cannot be cancelled.",
+    params(("id" = String, Path, description = "Crawl id (ULID)")),
+    responses((status = 200, description = "`{ok, crawlId, status, droppedJobs}`", body = serde_json::Value), LocalErrors),
+)]
+async fn cancel_ladder_crawl(
+    State(state): State<AppState>,
+    Extension(_c): Who,
+    path: Result<Path<String>, PathRejection>,
+) -> Response {
+    use crate::jobs::ladder::store::{self, CancelError};
+    let Path(id) = match path {
+        Ok(p) => p,
+        Err(e) => return bad_path(&e).into_response(),
+    };
+    if let Err(e) = validate::consumer_id(&id) {
+        return e.into_response();
+    }
+    match store::cancel(&state.db, &scope_of(&state), &id, now_ms()).await {
+        Ok((crawl, dropped)) => {
+            tracing::info!(crawl = %id, dropped, "ladder crawl cancelled");
+            crate::events::publish(&state.hub, &crate::jobs::ladder::phase_event(&crawl));
+            ok(&serde_json::json!({"ok": true, "crawlId": id, "status": "cancelled", "droppedJobs": dropped}))
+        }
+        Err(CancelError::NotFound) => {
+            ApiError::not_found("No such ladder crawl for the current key scope").into_response()
+        }
+        Err(CancelError::NotRunning { id, status }) => {
+            ApiError::new(ErrorCode::Validation, format!("Crawl {id} is already {status}")).into_response()
+        }
+        Err(CancelError::Db(e)) => internal(&e, "could not cancel the crawl"),
+    }
+}
+
+#[utoipa::path(
+    post, path = "/v1/admin/players/names/backfill", tag = "admin",
+    summary = "Fill in player Riot IDs from the archive",
+    description = "Reads `riotIdGameName`/`riotIdTagline` out of each nameless player's most recent \
+        archived matches. No upstream request is made, and a player who already has a name is left \
+        alone — a Riot ID from `account-v1` outranks one from a past game.",
+    responses((status = 202, description = "`{ok, unnamed}`: players without a name before the pass runs",
+        body = serde_json::Value), LocalErrors),
+)]
+async fn queue_names_backfill(State(state): State<AppState>, Extension(_c): Who) -> Response {
+    let unnamed = match crate::jobs::names::count_unnamed(&state.db, &scope_of(&state)).await {
+        Ok(n) => n,
+        Err(e) => return internal(&e, "could not count unnamed players"),
+    };
+    match crate::jobs::names::enqueue(&state.jobs).await {
+        Ok(_) => json(
+            StatusCode::ACCEPTED,
+            &serde_json::json!({"ok": true, "unnamed": unnamed}),
+        ),
+        Err(e) => internal(&e, "could not queue names:backfill"),
+    }
 }

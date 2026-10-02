@@ -156,6 +156,29 @@ pub(crate) fn next_id() -> String {
         .to_string()
 }
 
+/// Cancel, on `conn`, the pending jobs of `kinds` whose payload has `key` =
+/// `value` (a crawl's queued legs): they become `failed` / `cancelled`, as
+/// `Queue::cancel` leaves one, so they stay visible. Running ones notice on
+/// their own. Returns how many.
+pub fn cancel_pending_on(
+    conn: &Connection,
+    kinds: &[&str],
+    key: &str,
+    value: &str,
+    now_ms: i64,
+) -> rusqlite::Result<usize> {
+    let path = format!("$.{key}");
+    let mut n = 0;
+    for kind in kinds {
+        n += conn.execute(
+            "UPDATE jobs SET state = 'failed', finished_at = ?4, error = 'cancelled'
+              WHERE state = 'pending' AND kind = ?1 AND json_extract(payload, ?2) = ?3",
+            rusqlite::params![kind, path, value, now_ms],
+        )?;
+    }
+    Ok(n)
+}
+
 /// Queue a job on `conn`, inside the caller's transaction if it has one, so a
 /// handler can fan out in the same write that records its own progress.
 pub fn enqueue_on(conn: &Connection, job: &NewJob, now_ms: i64) -> rusqlite::Result<Enqueued> {
