@@ -492,3 +492,42 @@ Accepted. Owner decisions at P7-02 start: the ladder in v1's shape, v1's four ad
   - `POST /v1/admin/ladder/crawl {platform?, queue?, tierFloor?}` answers 202 `{crawlId, status: started|already-running, platform, queue, legs}`. Defaults are `DEFAULT_PLATFORM`, the first `LADDER_QUEUES`, and `LADDER_TIER_FLOOR`. Body enums are exact, as ajv's were.
   - `GET /v1/admin/ladder/options` → `{platforms[{id,label}], queues, tiers, defaults{platform, queue, tierFloor, backfillLimit}}`.
   - The crawl list and cancel routes arrive with P7-03.
+
+## ADR-055 — Crawl collect and archive, crawl list and cancel, names backfill (2026-10-03)
+Accepted. Completes the crawl (v1 `jobs/ladder-crawl.ts`) and adds the routes and job the owner added to P7-03 (ADR-054).
+- **Stage hand-overs commit with the stage end.** The transaction that deletes a stage's last leg also queues the next stage's legs and jobs:
+  - enumerate → collect: batches of 25 players, `ladder:collect` legs named by offset;
+  - collect → archive: the one `ladder:archive` leg.
+  - A crash can therefore never leave a crawl in a stage with no jobs. v1 needed a "fan-out" sentinel leg to approximate this; v2 does not.
+  - A collect stage with nobody to walk goes straight to archive (v1).
+- **Collect candidates** (v1 `listCrawlBackfillCandidates`): entries this crawl stamped (`last_seen_crawl_id`), minus players whose walk started at or after the crawl did. They are ordered by league points then PUUID, descending. `backfills_enqueued` counts them.
+  - All batches are queued in that one transaction. v1 paged the list with a keyset cursor because its jobs started while it was still paging; v2's are not visible until commit, so the paging hazard does not arise.
+- **`ladder:collect`** (v1):
+  - per player, it checks that the crawl is still running and stamps `backfill_state.startedAt`;
+  - it walks match ids for the ladder's queue (420/440), 100 per page, up to `LADDER_BACKFILL_LIMIT`, into `crawl_match_ids`. `INSERT OR IGNORE` is the de-duplication. `match_ids_seen` counts new ids and survives a re-run, because re-inserted ids are not new.
+  - A 404 skips the player; other errors retry the job.
+  - A walk stamps `doneAt` only when it is at least `LOOKUP_BACKFILL_LIMIT` deep. A queue-filtered walk that runs out says nothing about the rest of the history (v1 `walkIsComplete`).
+- **`ladder:archive`** (v1) drains the set 100 ids at a time. For each batch, one transaction holds:
+  - an `archive:match` job per id `filter_unarchived` returns (deduped on the match id);
+  - the batch's removal from the set;
+  - `matches_queued`.
+  - A crash re-reads at most one batch, and its jobs are deduped.
+  - Priority **20 005**, after every lookup's depth-ranked archive jobs and after the polls. v1's `ARCHIVE_PRIORITY.ladder` (10 000) sat on its own queue; in v2's single queue, 10 000 would starve the polls behind a crawl's tens of thousands of matches.
+- **Crawl end** queues `names:backfill` in the same transaction, for completed and failed crawls alike (v1: a name read from a match that did land is correct either way). It is not queued for cancelled crawls (v1).
+  - `aggregate:analytics` on a clean end is added with its handler in P7-04, so that no job is queued that nothing can run.
+- **`GET /v1/admin/ladder/crawls?platform=&queue=&limit=`** (1–100, default 20) returns v1's `LadderCrawlSummary` rows, newest first, with ISO timestamps and `pendingLegs`.
+- **`DELETE /v1/admin/ladder/crawls/{id}`** (v1):
+  - marks the crawl `cancelled` (never a finished one: "Crawl X is already completed" is a `VALIDATION` 400) and drops its working state;
+  - cancels its queued legs as `failed`/`cancelled` job rows, so they stay visible, as `DELETE /v1/admin/jobs/{id}` leaves them;
+  - answers `{ok, crawlId, status, droppedJobs}`.
+  - Running legs stop at their next status check.
+  - An unknown id is v1's 404. Ids are ULIDs. `crawl.phase` is published with phase `cancelled`.
+- **`names:backfill`** (v1 `backfillNamesFromArchive`):
+  - targets nameless players of the key scope, freshest first (limit 50 000);
+  - reads each one's three most recent archived matches;
+  - takes `riotIdGameName` (or `riotIdName`) and `riotIdTagline` from the newest match that carries them;
+  - fills only null names, so account-v1 and admin names win;
+  - makes no Riot call.
+  - Bodies are decompressed once per batch of 500 players, since ten players share a match.
+  - It runs in the 30 000 band, deduped to one at a time, with a daily tick (v1).
+  - `POST /v1/admin/players/names/backfill` queues a pass and answers 202 `{ok, unnamed}`, counted before the pass (v1).

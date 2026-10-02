@@ -284,3 +284,57 @@ fn entries_take_the_legs_tier_and_default_to_division_one() {
     let no_puuid: RiotEntry = serde_json::from_value(serde_json::json!({"leaguePoints": 1})).unwrap();
     assert!(to_entry(no_puuid, "MASTER").is_none());
 }
+
+#[tokio::test]
+async fn collect_skips_players_walked_since_the_crawl_started_and_goes_best_first() {
+    let (_d, db) = db();
+    let q = Queue::new(db.clone());
+    let s = start_crawl(&q, "s", "CHALLENGER", &req("kr", "RANKED_SOLO_5x5", None))
+        .await
+        .unwrap();
+    let crawl = store::get(&db, "s", &s.crawl_id).await.unwrap().unwrap();
+    let entries: Vec<store::Entry> = [("low", 10), ("high", 900), ("walked", 500), ("old", 300)]
+        .iter()
+        .map(|(p, lp)| store::Entry {
+            puuid: (*p).into(),
+            tier: "CHALLENGER".into(),
+            division: "I".into(),
+            league_points: *lp,
+            wins: 1,
+            losses: 1,
+            veteran: false,
+            inactive: false,
+            fresh_blood: false,
+            hot_streak: false,
+        })
+        .collect();
+    store::write_page(
+        &db,
+        store::Page {
+            key_scope: "s",
+            crawl_id: &crawl.id,
+            platform: "kr",
+            queue: "RANKED_SOLO_5x5",
+            entries: &entries,
+            cursor: None,
+            now: crawl.started_at,
+        },
+    )
+    .await
+    .unwrap();
+    // "walked" started a walk after this crawl began; "old" long before.
+    store::mark_walk_started(&db, "s", "walked", crawl.started_at + 1)
+        .await
+        .unwrap();
+    store::mark_walk_started(&db, "s", "old", crawl.started_at - 1)
+        .await
+        .unwrap();
+    let candidates = db
+        .write(move |c| {
+            let tx = c.transaction()?;
+            store::collect_candidates(&tx, "s", &crawl)
+        })
+        .await
+        .unwrap();
+    assert_eq!(candidates, ["high", "old", "low"]);
+}

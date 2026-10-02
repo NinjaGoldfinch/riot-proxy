@@ -370,3 +370,221 @@ pub fn finish(
     }
     Ok(crawl)
 }
+
+/// Whose match ids the collect stage walks: everyone this crawl stamped on
+/// the ladder, minus players whose walk started since the crawl did (v1
+/// `listCrawlBackfillCandidates`). Best first, so a crawl cancelled part-way
+/// has collected the top of the ladder.
+pub fn collect_candidates(
+    tx: &Transaction<'_>,
+    key_scope: &str,
+    crawl: &Crawl,
+) -> Result<Vec<String>, DbError> {
+    let mut stmt = tx.prepare(
+        "SELECT le.puuid FROM ladder_entries le
+           LEFT JOIN players p ON p.key_scope = le.key_scope AND p.puuid = le.puuid
+          WHERE le.key_scope = ?1 AND le.platform = ?2 AND le.queue = ?3
+            AND le.last_seen_crawl_id = ?4
+            AND coalesce(json_extract(p.backfill_state, '$.startedAt'), 0) < ?5
+          ORDER BY le.league_points DESC, le.puuid DESC",
+    )?;
+    let rows = stmt
+        .query_map(
+            params![key_scope, crawl.platform, crawl.queue, crawl.id, crawl.started_at],
+            |r| r.get(0),
+        )?
+        .collect::<Result<Vec<String>, _>>()?;
+    Ok(rows)
+}
+
+/// Add to a crawl's counters, in SQL: legs bump the same row concurrently (v1).
+pub fn bump(tx: &rusqlite::Connection, crawl_id: &str, column: Counter, by: i64) -> Result<(), DbError> {
+    if by != 0 {
+        let col = column.as_str();
+        tx.execute(
+            &format!("UPDATE ladder_crawls SET {col} = {col} + ?2 WHERE id = ?1"),
+            params![crawl_id, by],
+        )?;
+    }
+    Ok(())
+}
+
+/// The counters a later stage moves.
+#[derive(Debug, Clone, Copy)]
+pub enum Counter {
+    BackfillsEnqueued,
+    MatchIdsSeen,
+    MatchesQueued,
+}
+
+impl Counter {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::BackfillsEnqueued => "backfills_enqueued",
+            Self::MatchIdsSeen => "match_ids_seen",
+            Self::MatchesQueued => "matches_queued",
+        }
+    }
+}
+
+/// Add a page of ids to the crawl's set; returns how many were new. The set
+/// is what makes a match shared by ten players one fetch (v1).
+pub async fn add_match_ids(db: &Db, crawl_id: &str, ids: Vec<String>) -> Result<i64, DbError> {
+    let crawl = crawl_id.to_string();
+    db.write(move |c| {
+        let tx = c.transaction()?;
+        let mut added = 0;
+        {
+            let mut stmt = tx.prepare_cached(
+                "INSERT OR IGNORE INTO crawl_match_ids (crawl_id, match_id) VALUES (?1, ?2)",
+            )?;
+            for id in &ids {
+                added += stmt.execute(params![crawl, id])?;
+            }
+        }
+        tx.commit()?;
+        Ok(i64::try_from(added).unwrap_or(i64::MAX))
+    })
+    .await
+}
+
+/// The next `n` ids of the set, left in place until their jobs exist (v1).
+pub async fn peek_match_ids(db: &Db, crawl_id: &str, n: usize) -> Result<Vec<String>, DbError> {
+    let crawl = crawl_id.to_string();
+    let n = i64::try_from(n).unwrap_or(i64::MAX);
+    db.read(move |c| {
+        let mut stmt =
+            c.prepare("SELECT match_id FROM crawl_match_ids WHERE crawl_id = ?1 ORDER BY match_id LIMIT ?2")?;
+        let rows = stmt
+            .query_map(params![crawl, n], |r| r.get(0))?
+            .collect::<Result<Vec<String>, _>>()?;
+        Ok(rows)
+    })
+    .await
+}
+
+/// Ids handed on: remove them from the set.
+pub fn drop_match_ids(tx: &Transaction<'_>, crawl_id: &str, ids: &[String]) -> Result<(), DbError> {
+    let mut stmt = tx.prepare_cached("DELETE FROM crawl_match_ids WHERE crawl_id = ?1 AND match_id = ?2")?;
+    for id in ids {
+        stmt.execute(params![crawl_id, id])?;
+    }
+    Ok(())
+}
+
+/// Stamp a player's walk as started (v1 `markBackfillStarted`), keeping the
+/// rest of their backfill state.
+pub async fn mark_walk_started(db: &Db, key_scope: &str, puuid: &str, now: i64) -> Result<(), DbError> {
+    let (scope, puuid) = (key_scope.to_string(), puuid.to_string());
+    db.write(move |c| {
+        c.execute(
+            "UPDATE players SET backfill_state = json_set(coalesce(backfill_state, '{}'), '$.startedAt', ?3)
+              WHERE key_scope = ?1 AND puuid = ?2",
+            params![scope, puuid, now],
+        )?;
+        Ok(())
+    })
+    .await
+}
+
+/// Stamp a player's history as accounted for (v1 `markBackfillComplete`).
+pub async fn mark_walk_complete(
+    db: &Db,
+    key_scope: &str,
+    puuid: &str,
+    depth: i64,
+    now: i64,
+) -> Result<(), DbError> {
+    let (scope, puuid) = (key_scope.to_string(), puuid.to_string());
+    db.write(move |c| {
+        c.execute(
+            "UPDATE players SET backfill_state =
+               json_set(coalesce(backfill_state, '{}'), '$.doneAt', ?3, '$.depth', ?4)
+              WHERE key_scope = ?1 AND puuid = ?2",
+            params![scope, puuid, now, depth],
+        )?;
+        Ok(())
+    })
+    .await
+}
+
+/// Recent crawls, newest first, with their outstanding legs (v1 `listCrawls`).
+pub async fn list(
+    db: &Db,
+    key_scope: &str,
+    platform: Option<String>,
+    queue: Option<String>,
+    limit: i64,
+) -> Result<Vec<(Crawl, i64)>, DbError> {
+    let scope = key_scope.to_string();
+    db.read(move |c| {
+        let mut stmt = c.prepare(&format!(
+            "SELECT {COLUMNS} FROM ladder_crawls
+              WHERE key_scope = ?1 AND (?2 IS NULL OR platform = ?2) AND (?3 IS NULL OR queue = ?3)
+              ORDER BY started_at DESC, id DESC LIMIT ?4"
+        ))?;
+        let crawls = stmt
+            .query_map(params![scope, platform, queue, limit], crawl_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        crawls
+            .into_iter()
+            .map(|cr| {
+                let pending = pending_legs(c, &cr.id)?;
+                Ok((cr, pending))
+            })
+            .collect()
+    })
+    .await
+}
+
+/// Why a cancel was refused.
+#[derive(Debug, thiserror::Error)]
+pub enum CancelError {
+    #[error("no such crawl")]
+    NotFound,
+    #[error("crawl {id} is already {status}")]
+    NotRunning { id: String, status: String },
+    #[error(transparent)]
+    Db(#[from] DbError),
+}
+
+/// Cancel a running crawl: the row is marked (never a finished one, v1), its
+/// working state dropped and its queued legs cancelled. Running legs stop at
+/// their next status check. Returns the row and how many jobs were dropped.
+pub async fn cancel(db: &Db, key_scope: &str, id: &str, now: i64) -> Result<(Crawl, usize), CancelError> {
+    let (scope, id) = (key_scope.to_string(), id.to_string());
+    db.write(move |c| {
+        let tx = c.transaction().map_err(DbError::from)?;
+        let existing = tx
+            .query_row(
+                &format!("SELECT {COLUMNS} FROM ladder_crawls WHERE key_scope = ?1 AND id = ?2"),
+                params![scope, id],
+                crawl_row,
+            )
+            .optional()
+            .map_err(DbError::from)?
+            .ok_or(CancelError::NotFound)?;
+        let Some(crawl) = finish(&tx, &id, "cancelled", now)? else {
+            return Err(CancelError::NotRunning {
+                id,
+                status: existing.status,
+            });
+        };
+        let dropped = crate::jobs::scheduler::cancel_pending_on(
+            &tx,
+            &[
+                crate::jobs::kinds::LADDER_APEX,
+                crate::jobs::kinds::LADDER_WALK,
+                crate::jobs::kinds::LADDER_COLLECT,
+                crate::jobs::kinds::LADDER_ARCHIVE,
+            ],
+            "crawlId",
+            &id,
+            now,
+        )
+        .map_err(DbError::from)?;
+        tx.commit().map_err(DbError::from)?;
+        Ok((crawl, dropped))
+    })
+    .await
+}

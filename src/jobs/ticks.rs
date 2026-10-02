@@ -99,6 +99,9 @@ pub fn schedule(config: &Config) -> Vec<(&'static str, Duration)> {
         (kinds::DDRAGON_SYNC, s(config.ddragon_sync_s)),
         // v1: daily.
         (kinds::MAINTENANCE, Duration::from_secs(86_400)),
+        // v1: daily, for the players every other route names nothing for; a
+        // crawl also queues one when it ends.
+        (kinds::NAMES_BACKFILL, Duration::from_secs(86_400)),
     ]
     .into_iter()
     // v1: off unless LADDER_CRAWL_S is set; a crawl's cost is opt-in.

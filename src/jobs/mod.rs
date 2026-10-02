@@ -4,6 +4,7 @@
 pub mod archive;
 pub mod ddragon;
 pub mod ladder;
+pub mod names;
 pub mod poll;
 pub mod scheduler;
 pub mod ticks;
@@ -19,6 +20,9 @@ pub mod kinds {
     pub const LADDER_CRAWL: &str = "ladder:crawl";
     pub const LADDER_APEX: &str = "ladder:apex";
     pub const LADDER_WALK: &str = "ladder:walk";
+    pub const LADDER_COLLECT: &str = "ladder:collect";
+    pub const LADDER_ARCHIVE: &str = "ladder:archive";
+    pub const NAMES_BACKFILL: &str = "names:backfill";
     pub const MAINTENANCE: &str = "maintenance";
 }
 
@@ -41,6 +45,7 @@ pub fn handlers(
     archive: &std::sync::Arc<archive::ArchiveContext>,
     ddragon: &std::sync::Arc<ddragon::DdragonSync>,
     ladder: &std::sync::Arc<ladder::LadderContext>,
+    names: &std::sync::Arc<names::NamesBackfill>,
 ) -> Registry {
     use std::sync::Arc;
     Registry::new()
@@ -65,6 +70,18 @@ pub fn handlers(
         )
         .with(kinds::LADDER_APEX, ladder::LadderApexHandler(Arc::clone(ladder)))
         .with(kinds::LADDER_WALK, ladder::LadderWalkHandler(Arc::clone(ladder)))
+        .with(
+            kinds::LADDER_COLLECT,
+            ladder::LadderCollectHandler(Arc::clone(ladder)),
+        )
+        .with(
+            kinds::LADDER_ARCHIVE,
+            ladder::LadderArchiveHandler(Arc::clone(ladder)),
+        )
+        .with(
+            kinds::NAMES_BACKFILL,
+            names::NamesBackfillHandler(Arc::clone(names)),
+        )
 }
 
 pub use scheduler::{

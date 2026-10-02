@@ -81,6 +81,8 @@ impl Env {
             key_scope: self.scope.clone(),
             tier_floor: "MASTER".into(),
             backfill_limit,
+            lookup_backfill_limit: 500,
+            archive_timelines: false,
         })
     }
 
@@ -249,7 +251,17 @@ async fn enumeration_records_every_apex_league_and_division_page_once() {
             .await,
         12
     );
-    assert_eq!(e.count("SELECT COUNT(*) FROM crawl_legs").await, 0);
+    // The collect stage was queued in the same commit: 12 players, one batch.
+    assert_eq!(
+        e.count("SELECT COUNT(*) FROM crawl_legs WHERE leg = 'ladder:collect:0'")
+            .await,
+        1
+    );
+    assert_eq!(
+        e.count("SELECT COUNT(*) FROM jobs WHERE kind = 'ladder:collect'")
+            .await,
+        1
+    );
 
     let frames = drain(&mut ladder);
     assert_eq!(frames.len(), 1, "{frames:?}");
@@ -281,7 +293,8 @@ async fn the_stage_flips_exactly_once_under_concurrency() {
     // 31 legs, 16 workers, every leg one request: they finish together.
     let crawl = e.run(&e.ctx(100), &id, 16).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
-    assert_eq!(crawl.phase, "collect");
+    // Nobody on the ladder: nothing to collect, straight on to archive (v1).
+    assert_eq!(crawl.phase, "archive");
     let frames = drain(&mut ladder);
     assert_eq!(frames.len(), 1, "one transition, announced once: {frames:?}");
     assert_eq!(e.requests().await.len(), 31);
@@ -590,6 +603,493 @@ async fn the_options_route_lists_what_a_crawl_can_be_asked_for() {
     );
     assert_eq!(
         a.call("GET", "/v1/admin/ladder/options", &a.reader, None)
+            .await
+            .status,
+        StatusCode::FORBIDDEN
+    );
+}
+
+// ── The whole crawl (P7-03) ─────────────────────────────────────────────────
+
+const MATCH: &[u8] = include_bytes!("fixtures/replay/cold-lookup/06-match.byId.body");
+
+fn puuid(i: usize) -> String {
+    format!("P{i:0>77}")
+}
+
+/// Match `k`'s ten players: a sliding window over the ladder, so every
+/// player is in four of the twelve matches and every match is reachable from
+/// ten walks.
+fn players_of(k: usize) -> Vec<usize> {
+    (0..10).map(|j| (k * 5 + j) % 30).collect()
+}
+
+fn match_id(k: usize) -> String {
+    format!("KR_{}", 1000 + k)
+}
+
+/// The fixture match, re-cast with match `k`'s id and players.
+fn match_body(k: usize) -> Vec<u8> {
+    let mut body: Value = serde_json::from_slice(MATCH).unwrap();
+    let players = players_of(k);
+    body["metadata"]["matchId"] = json!(match_id(k));
+    body["metadata"]["participants"] = json!(players.iter().map(|p| puuid(*p)).collect::<Vec<_>>());
+    body["info"]["gameId"] = json!(1000 + k);
+    body["info"]["gameEndTimestamp"] = json!(1_700_000_000_000_i64 + i64::try_from(k).unwrap() * 3_600_000);
+    for (slot, p) in players.iter().enumerate() {
+        let part = &mut body["info"]["participants"][slot];
+        part["puuid"] = json!(puuid(*p));
+        part["riotIdGameName"] = json!(format!("Player{p}"));
+        part["riotIdTagline"] = json!("KR1");
+    }
+    serde_json::to_vec(&body).unwrap()
+}
+
+impl Env {
+    async fn ladder_of_thirty(&self) {
+        let list: Vec<Value> = (0..30)
+            .map(|i| json!({"puuid": puuid(i), "leaguePoints": 1000 - i, "wins": 50, "losses": 40}))
+            .collect();
+        Mock::given(method("GET"))
+            .and(path(apex_path("CHALLENGER")))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"tier": "CHALLENGER", "entries": list})),
+            )
+            .mount(&self.server)
+            .await;
+        for p in 0..30 {
+            let mut ids: Vec<usize> = (0..12).filter(|k| players_of(*k).contains(&p)).collect();
+            ids.sort_unstable_by(|a, b| b.cmp(a));
+            Mock::given(method("GET"))
+                .and(path(format!("/lol/match/v5/matches/by-puuid/{}/ids", puuid(p))))
+                .and(query_param("queue", "420"))
+                .and(query_param("start", "0"))
+                .and(query_param("count", "100"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(ids.iter().map(|k| match_id(*k)).collect::<Vec<_>>()),
+                )
+                .mount(&self.server)
+                .await;
+        }
+        for k in 0..12 {
+            Mock::given(method("GET"))
+                .and(path(format!("/lol/match/v5/matches/{}", match_id(k))))
+                .respond_with(ResponseTemplate::new(200).set_body_bytes(match_body(k)))
+                .mount(&self.server)
+                .await;
+        }
+    }
+
+    /// Every handler a crawl reaches, over one archiving fetcher.
+    fn all_handlers(&self) -> Registry {
+        let config = common::config(&[]);
+        let key = KeyScope::from_key(&config.riot_api_key);
+        let archive = Arc::new(riot_proxy::archive::SqliteArchive::new(
+            self.db.clone(),
+            key,
+            false,
+        ));
+        let fetcher = common::fetcher(
+            &config,
+            &self.server.uri(),
+            Arc::new(Limiter::new(0.8)),
+            Some(archive),
+        );
+        let queue = Queue::new(self.db.clone());
+        let ladder = Arc::new(LadderContext {
+            fetcher: fetcher.clone(),
+            queue: queue.clone(),
+            hub: self.hub.clone(),
+            key_scope: self.scope.clone(),
+            tier_floor: "CHALLENGER".into(),
+            backfill_limit: 100,
+            lookup_backfill_limit: 500,
+            archive_timelines: false,
+        });
+        let archiving = Arc::new(riot_proxy::jobs::archive::ArchiveContext {
+            fetcher,
+            queue,
+            hub: self.hub.clone(),
+            key_scope: self.scope.clone(),
+            archive_timelines: false,
+            lookup_backfill_limit: 500,
+        });
+        let names = Arc::new(riot_proxy::jobs::names::NamesBackfill {
+            db: self.db.clone(),
+            key_scope: self.scope.clone(),
+        });
+        Registry::new()
+            .with(kinds::LADDER_CRAWL, LadderCrawlHandler(Arc::clone(&ladder)))
+            .with(kinds::LADDER_APEX, LadderApexHandler(Arc::clone(&ladder)))
+            .with(kinds::LADDER_WALK, LadderWalkHandler(Arc::clone(&ladder)))
+            .with(
+                kinds::LADDER_COLLECT,
+                ladder::LadderCollectHandler(Arc::clone(&ladder)),
+            )
+            .with(
+                kinds::LADDER_ARCHIVE,
+                ladder::LadderArchiveHandler(Arc::clone(&ladder)),
+            )
+            .with(
+                kinds::ARCHIVE_MATCH,
+                riot_proxy::jobs::archive::ArchiveMatchHandler(Arc::clone(&archiving)),
+            )
+            .with(
+                kinds::NAMES_BACKFILL,
+                riot_proxy::jobs::names::NamesBackfillHandler(names),
+            )
+    }
+
+    /// Run until no job is pending or running.
+    async fn drain_jobs(&self, workers: usize) {
+        let running = Scheduler::with_queue(Queue::new(self.db.clone()), self.all_handlers()).start(workers);
+        tokio::time::timeout(Duration::from_secs(60), async {
+            loop {
+                let open = self
+                    .count("SELECT COUNT(*) FROM jobs WHERE state IN ('pending', 'running')")
+                    .await;
+                if open == 0 {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .expect("the queue drains");
+        running.shutdown(Duration::from_secs(5)).await;
+    }
+
+    async fn fetches_of(&self, path_part: &str) -> usize {
+        self.requests()
+            .await
+            .iter()
+            .filter(|r| r.ends_with(path_part))
+            .count()
+    }
+}
+
+#[tokio::test]
+async fn a_crawl_runs_every_stage_and_fetches_each_match_once() {
+    let e = env().await;
+    e.ladder_of_thirty().await;
+    // Two of the twelve matches are in the archive already.
+    for k in [0, 7] {
+        riot_proxy::archive::matches::put(&e.db, &match_id(k), "asia", &e.scope, match_body(k).into(), 1)
+            .await
+            .unwrap();
+    }
+    let mut ladder = e.hub.subscribe(&Topic::named(LADDER));
+    let id = e.start("CHALLENGER").await;
+    e.drain_jobs(6).await;
+
+    let crawl = e.crawl(&id).await;
+    assert_eq!(
+        (crawl.status.as_str(), crawl.phase.as_str()),
+        ("completed", "archive")
+    );
+    let c = &crawl.counters;
+    assert_eq!(
+        (
+            c.entries_seen,
+            c.backfills_enqueued,
+            c.match_ids_seen,
+            c.matches_queued
+        ),
+        (30, 30, 12, 10),
+        "30 players, 12 distinct matches after de-duplication, 10 not archived"
+    );
+
+    // The point of the stages: each unarchived match fetched exactly once,
+    // however many of its ten players were walked; archived ones never.
+    for k in 0..12 {
+        let expected = usize::from(k != 0 && k != 7);
+        assert_eq!(
+            e.fetches_of(&format!("/matches/{}", match_id(k))).await,
+            expected,
+            "{}",
+            match_id(k)
+        );
+    }
+    assert_eq!(e.count("SELECT COUNT(*) FROM matches").await, 12);
+    assert_eq!(
+        e.count("SELECT COUNT(*) FROM crawl_match_ids").await,
+        0,
+        "set drained"
+    );
+    assert_eq!(e.count("SELECT COUNT(*) FROM crawl_legs").await, 0);
+    // Every player's walk is stamped started; a 100-deep ranked walk is not
+    // a whole history, so none is stamped done (v1 `walkIsComplete`).
+    assert_eq!(
+        e.count("SELECT COUNT(*) FROM players WHERE json_extract(backfill_state, '$.startedAt') > 0")
+            .await,
+        30
+    );
+    assert_eq!(
+        e.count("SELECT COUNT(*) FROM players WHERE json_extract(backfill_state, '$.doneAt') IS NOT NULL")
+            .await,
+        0
+    );
+
+    let events: Vec<(String, String)> = drain(&mut ladder)
+        .iter()
+        .map(|f| {
+            (
+                f["event"].as_str().unwrap().to_string(),
+                f["data"]["phase"].as_str().unwrap_or("").to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        events,
+        [
+            ("crawl.phase".to_string(), "collect".to_string()),
+            ("crawl.phase".to_string(), "archive".to_string()),
+            ("crawl.phase".to_string(), "completed".to_string()),
+            ("ladder.crawl.completed".to_string(), String::new()),
+        ]
+    );
+
+    // The finished crawl queued names:backfill, which named every player from
+    // the archived matches without a request.
+    assert_eq!(
+        e.count("SELECT COUNT(*) FROM jobs WHERE kind = 'names:backfill' AND state = 'done'")
+            .await,
+        1
+    );
+    assert_eq!(
+        e.count("SELECT COUNT(*) FROM players WHERE game_name IS NULL")
+            .await,
+        0
+    );
+    let name: String =
+        e.db.read(|c| {
+            Ok::<_, DbError>(c.query_row(
+                "SELECT game_name || '#' || tag_line FROM players WHERE puuid = ?1",
+                [puuid(3)],
+                |r| r.get(0),
+            )?)
+        })
+        .await
+        .unwrap();
+    assert_eq!(name, "Player3#KR1");
+}
+
+#[tokio::test]
+async fn a_player_match_v5_does_not_know_is_skipped() {
+    let e = env().await;
+    e.apex("CHALLENGER", 2).await;
+    // CHALLENGER-I-1-0 has history; CHALLENGER-I-1-1 is gone (404).
+    Mock::given(method("GET"))
+        .and(path("/lol/match/v5/matches/by-puuid/CHALLENGER-I-1-0/ids"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!(["KR_1", "KR_2"])))
+        .mount(&e.server)
+        .await;
+    let id = e.start("CHALLENGER").await;
+    let ctx = e.ctx(100);
+    // Enumerate by hand, then run the one collect job.
+    ctx.apex(&leg_job(&id, "CHALLENGER", None, 1)).await.unwrap();
+    let payload: String =
+        e.db.read(|c| {
+            Ok::<_, DbError>(c.query_row(
+                "SELECT payload FROM jobs WHERE kind = 'ladder:collect'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .await
+        .unwrap();
+    let job = Job {
+        id: "c".into(),
+        kind: "ladder:collect".into(),
+        dedupe_key: None,
+        priority: 20_003,
+        payload,
+        attempts: 1,
+        run_after: 0,
+    };
+    ctx.collect(&job).await.unwrap();
+    let crawl = e.crawl(&id).await;
+    assert_eq!(
+        (crawl.phase.as_str(), crawl.counters.match_ids_seen),
+        ("archive", 2)
+    );
+}
+
+#[tokio::test]
+async fn crawls_are_listed_and_a_running_one_can_be_cancelled() {
+    let a = app(&[("DEFAULT_PLATFORM", "kr")]).await;
+    let started = a
+        .call(
+            "POST",
+            "/v1/admin/ladder/crawl",
+            &a.admin,
+            Some(json!({"tierFloor": "DIAMOND"})),
+        )
+        .await
+        .json();
+    let id = started["crawlId"].as_str().unwrap().to_string();
+
+    let list = a
+        .call("GET", "/v1/admin/ladder/crawls", &a.admin, None)
+        .await
+        .json();
+    let row = &list["crawls"][0];
+    assert_eq!(
+        (
+            &row["id"],
+            &row["status"],
+            &row["phase"],
+            &row["tierFloor"],
+            &row["pendingLegs"],
+            &row["finishedAt"]
+        ),
+        (
+            &json!(id),
+            &json!("running"),
+            &json!("enumerate"),
+            &json!("DIAMOND"),
+            &json!(7),
+            &Value::Null
+        )
+    );
+    assert!(row["startedAt"].as_str().unwrap().ends_with('Z'));
+    assert_eq!(
+        a.call("GET", "/v1/admin/ladder/crawls?platform=euw1", &a.admin, None)
+            .await
+            .json()["crawls"],
+        json!([])
+    );
+    assert_eq!(
+        a.call("GET", "/v1/admin/ladder/crawls?limit=0", &a.admin, None)
+            .await
+            .json()["error"]["message"],
+        "querystring/limit must be >= 1"
+    );
+
+    let mut ladder = a.state.hub.subscribe(&Topic::named(LADDER));
+    let cancel = a
+        .call("DELETE", &format!("/v1/admin/ladder/crawls/{id}"), &a.admin, None)
+        .await;
+    assert_eq!(cancel.status, StatusCode::OK);
+    assert_eq!(
+        cancel.json(),
+        json!({"ok": true, "crawlId": id, "status": "cancelled", "droppedJobs": 7})
+    );
+    assert_eq!(drain(&mut ladder)[0]["data"]["phase"], "cancelled");
+    let open: i64 = a
+        .state
+        .db
+        .read(|c| {
+            Ok::<_, DbError>(c.query_row(
+                "SELECT COUNT(*) FROM jobs WHERE kind LIKE 'ladder:%' AND state = 'pending'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .await
+        .unwrap();
+    assert_eq!(open, 0, "its queued legs are dropped");
+    let row = &a
+        .call("GET", "/v1/admin/ladder/crawls", &a.admin, None)
+        .await
+        .json()["crawls"][0];
+    assert_eq!(
+        (&row["status"], &row["pendingLegs"]),
+        (&json!("cancelled"), &json!(0))
+    );
+    assert!(row["finishedAt"].is_string());
+
+    let again = a
+        .call("DELETE", &format!("/v1/admin/ladder/crawls/{id}"), &a.admin, None)
+        .await;
+    assert_eq!(
+        (again.status, again.json()["error"]["message"].as_str().unwrap()),
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Crawl {id} is already cancelled").as_str()
+        )
+    );
+    let unknown = a
+        .call(
+            "DELETE",
+            "/v1/admin/ladder/crawls/01J9ZZZZZZZZZZZZZZZZZZZZZZ",
+            &a.admin,
+            None,
+        )
+        .await;
+    assert_eq!(
+        (
+            unknown.status,
+            unknown.json()["error"]["message"].as_str().unwrap()
+        ),
+        (
+            StatusCode::NOT_FOUND,
+            "No such ladder crawl for the current key scope"
+        )
+    );
+    assert_eq!(
+        a.call("DELETE", "/v1/admin/ladder/crawls/nope", &a.admin, None)
+            .await
+            .json()["error"]["message"],
+        "params/id must match format \"ulid\""
+    );
+    for (verb, uri) in [
+        ("GET", "/v1/admin/ladder/crawls"),
+        ("DELETE", "/v1/admin/ladder/crawls/x"),
+    ] {
+        assert_eq!(
+            a.call(verb, uri, &a.reader, None).await.status,
+            StatusCode::FORBIDDEN,
+            "{uri}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_names_route_queues_one_pass_and_counts_whom_it_is_for() {
+    let a = app(&[]).await;
+    let scope = a.state.fetcher.key_scope().as_str().to_string();
+    for (p, name) in [("A", None), ("B", None), ("C", Some("Named"))] {
+        riot_proxy::players::upsert(
+            &a.state.db,
+            &scope,
+            riot_proxy::players::Upsert {
+                puuid: p,
+                platform: "kr",
+                game_name: name,
+                tag_line: name.map(|_| "KR1"),
+                tracked: None,
+            },
+            1,
+        )
+        .await
+        .unwrap();
+    }
+    let r = a
+        .call("POST", "/v1/admin/players/names/backfill", &a.admin, None)
+        .await;
+    assert_eq!(
+        (r.status, r.json()),
+        (StatusCode::ACCEPTED, json!({"ok": true, "unnamed": 2}))
+    );
+    a.call("POST", "/v1/admin/players/names/backfill", &a.admin, None)
+        .await;
+    let queued: i64 = a
+        .state
+        .db
+        .read(|c| {
+            Ok::<_, DbError>(c.query_row(
+                "SELECT COUNT(*) FROM jobs WHERE kind = 'names:backfill' AND priority = 30000",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .await
+        .unwrap();
+    assert_eq!(queued, 1, "one pass at a time");
+    assert_eq!(
+        a.call("POST", "/v1/admin/players/names/backfill", &a.reader, None)
             .await
             .status,
         StatusCode::FORBIDDEN
