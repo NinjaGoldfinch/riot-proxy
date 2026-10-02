@@ -79,6 +79,16 @@ pub async fn singleton(scheduler: &Scheduler, kind: &'static str, priority: i64)
     Ok(scheduler.enqueue(job).await?.created)
 }
 
+/// Queue one `ladder:crawl` per ladder, deduped per ladder; a crawl already
+/// running for one is left alone by the job (v1 one-live-crawl rule).
+pub async fn crawl_ladders(scheduler: &Scheduler, ladders: &[(String, String)]) -> Result<usize, DbError> {
+    let mut created = 0;
+    for (platform, queue) in ladders {
+        created += usize::from(crate::jobs::ladder::enqueue_crawl(scheduler.queue(), platform, queue).await?);
+    }
+    Ok(created)
+}
+
 /// Each tick and its period (config names are v1's).
 pub fn schedule(config: &Config) -> Vec<(&'static str, Duration)> {
     let s = |n: u32| Duration::from_secs(u64::from(n));
@@ -90,9 +100,27 @@ pub fn schedule(config: &Config) -> Vec<(&'static str, Duration)> {
         // v1: daily.
         (kinds::MAINTENANCE, Duration::from_secs(86_400)),
     ]
+    .into_iter()
+    // v1: off unless LADDER_CRAWL_S is set; a crawl's cost is opt-in.
+    .chain((config.ladder_crawl_s > 0).then(|| (kinds::LADDER_CRAWL, s(config.ladder_crawl_s))))
+    .collect()
 }
 
-/// The ticks whose handlers exist today: the three polls and `ddragon:sync`.
+/// The ladders the crawl tick starts: every `LADDER_PLATFORMS` × `LADDER_QUEUES` (v1).
+pub fn ladders(config: &Config) -> Vec<(String, String)> {
+    config
+        .ladder_platforms
+        .iter()
+        .flat_map(|p| {
+            config
+                .ladder_queues
+                .iter()
+                .map(move |q| (p.as_str().to_string(), q.clone()))
+        })
+        .collect()
+}
+
+/// The ticks whose handlers exist today: all but `maintenance`.
 pub fn running_schedule(config: &Config) -> Vec<(&'static str, Duration)> {
     schedule(config)
         .into_iter()
@@ -108,17 +136,29 @@ pub struct Ticks {
 
 impl Ticks {
     pub fn start(scheduler: &Scheduler, key_scope: &str, schedule: Vec<(&'static str, Duration)>) -> Self {
+        Self::start_with(scheduler, key_scope, schedule, Vec::new())
+    }
+
+    /// As [`Ticks::start`], with the ladders a `ladder:crawl` tick starts.
+    pub fn start_with(
+        scheduler: &Scheduler,
+        key_scope: &str,
+        schedule: Vec<(&'static str, Duration)>,
+        ladders: Vec<(String, String)>,
+    ) -> Self {
         let (stop, stopped) = watch::channel(false);
         let mut set = JoinSet::new();
         for (kind, period) in schedule {
             let (scheduler, scope, stopped) = (scheduler.clone(), key_scope.to_string(), stopped.clone());
+            let ladders = ladders.clone();
             set.spawn(every(period, stopped, move || {
-                let (scheduler, scope) = (scheduler.clone(), scope.clone());
+                let (scheduler, scope, ladders) = (scheduler.clone(), scope.clone(), ladders.clone());
                 async move {
                     let result = match kind {
                         kinds::POLL_LIVE | kinds::POLL_RANK | kinds::POLL_MATCHES => {
                             fan_out(&scheduler, &scope, kind).await
                         }
+                        kinds::LADDER_CRAWL => crawl_ladders(&scheduler, &ladders).await,
                         _ => singleton(&scheduler, kind, priority::MAINTENANCE)
                             .await
                             .map(usize::from),

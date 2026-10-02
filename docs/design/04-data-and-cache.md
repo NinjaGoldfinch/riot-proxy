@@ -146,17 +146,29 @@ CREATE TABLE champion_builds (
   PRIMARY KEY (patch, queue_id, champion_id, position, build_hash)
 );
 
--- Ladder ────────────────────────────────────────────────────────────────────
-CREATE TABLE ladder_crawls (
-  id TEXT PRIMARY KEY, platform TEXT, queue TEXT,
-  phase TEXT NOT NULL,                            -- enumerate | collect | archive | done
-  tier_floor TEXT, started_at INTEGER, finished_at INTEGER,
-  stats TEXT                                      -- JSON counters for /dashboard
+-- Ladder ──────────────────────────────────────────────────────────────────── (v1's shape, ADR-054)
+CREATE TABLE ladder_crawls (                      -- the run log
+  id TEXT PRIMARY KEY, key_scope TEXT NOT NULL, platform TEXT NOT NULL, queue TEXT NOT NULL,
+  tier_floor TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'running',         -- running | completed | failed | cancelled
+  phase TEXT NOT NULL DEFAULT 'enumerate',        -- enumerate | collect | archive
+  started_at INTEGER NOT NULL, finished_at INTEGER,
+  pages_fetched INTEGER, entries_seen INTEGER, players_discovered INTEGER,   -- v1's counters,
+  backfills_enqueued INTEGER, match_ids_seen INTEGER, matches_queued INTEGER, -- all NOT NULL DEFAULT 0
+  legs_failed INTEGER NOT NULL DEFAULT 0
 );
-CREATE TABLE ladder_entries (
+CREATE UNIQUE INDEX ladder_crawls_live ON ladder_crawls (key_scope, platform, queue) WHERE status = 'running';
+CREATE TABLE ladder_entries (                     -- the ladder: latest state, outlives crawl rows
+  key_scope TEXT, platform TEXT, queue TEXT, puuid TEXT,
+  tier TEXT, division TEXT, league_points INTEGER, wins INTEGER, losses INTEGER,
+  veteran INTEGER, inactive INTEGER, fresh_blood INTEGER, hot_streak INTEGER,
+  first_seen_crawl_id TEXT, last_seen_crawl_id TEXT, updated_at INTEGER,
+  PRIMARY KEY (key_scope, platform, queue, puuid)
+);
+CREATE TABLE crawl_legs (                         -- a crawl's outstanding jobs
   crawl_id TEXT REFERENCES ladder_crawls(id) ON DELETE CASCADE,
-  key_scope TEXT, puuid TEXT, tier TEXT, division TEXT, lp INTEGER, wins INTEGER, losses INTEGER,
-  PRIMARY KEY (crawl_id, puuid)
+  leg TEXT, cursor INTEGER,                       -- cursor: a walk's next page
+  PRIMARY KEY (crawl_id, leg)
 );
 CREATE TABLE crawl_match_ids (                    -- the "collect" set
   crawl_id TEXT REFERENCES ladder_crawls(id) ON DELETE CASCADE,

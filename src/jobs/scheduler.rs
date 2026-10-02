@@ -146,7 +146,7 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Job> {
 /// A job id: a ULID from one monotonic generator, so ids made in the same
 /// millisecond still sort in creation order. Claims break priority ties on it
 /// (oldest first) and the admin list sorts on it (newest first).
-fn next_id() -> String {
+pub(crate) fn next_id() -> String {
     static GENERATOR: std::sync::Mutex<ulid::Generator> = std::sync::Mutex::new(ulid::Generator::new());
     GENERATOR
         .lock()

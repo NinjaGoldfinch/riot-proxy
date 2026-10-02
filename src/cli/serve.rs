@@ -148,16 +148,30 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         archive_timelines: config.archive_timelines,
         lookup_backfill_limit: config.lookup_backfill_limit,
     });
-    let scheduler =
-        crate::jobs::Scheduler::with_queue(queue.clone(), crate::jobs::handlers(&poll, &archiving, &ddragon));
+    let ladder = Arc::new(crate::jobs::ladder::LadderContext {
+        fetcher: fetcher.clone(),
+        queue: queue.clone(),
+        hub: hub.clone(),
+        key_scope: scope.clone(),
+        tier_floor: config.ladder_tier_floor.clone(),
+        backfill_limit: config.ladder_backfill_limit,
+    });
+    let scheduler = crate::jobs::Scheduler::with_queue(
+        queue.clone(),
+        crate::jobs::handlers(&poll, &archiving, &ddragon, &ladder),
+    );
     match scheduler.recover().await {
         Ok(0) => {}
         Ok(n) => tracing::info!(jobs = n, "re-queued jobs a previous process left running"),
         Err(e) => tracing::warn!(error = %e, "could not re-queue interrupted jobs"),
     }
     let workers = scheduler.start(usize::try_from(config.job_concurrency).unwrap_or(8));
-    let ticks =
-        crate::jobs::ticks::Ticks::start(&scheduler, &scope, crate::jobs::ticks::running_schedule(&config));
+    let ticks = crate::jobs::ticks::Ticks::start_with(
+        &scheduler,
+        &scope,
+        crate::jobs::ticks::running_schedule(&config),
+        crate::jobs::ticks::ladders(&config),
+    );
     // The `metrics` topic ticks only while someone holds it (v1).
     let metrics_topic = crate::ws::metrics::spawn(
         hub.clone(),

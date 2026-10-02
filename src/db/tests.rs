@@ -87,6 +87,7 @@ async fn readers_have_connection_pragmas_and_see_wal() {
 }
 
 #[tokio::test]
+/// Design/04's tables, with the ladder in v1's shape (V0004, ADR-054).
 async fn migrations_create_exactly_the_design_04_tables() {
     let (_dir, db) = open_temp(1);
     let tables: Vec<String> = db
@@ -107,6 +108,7 @@ async fn migrations_create_exactly_the_design_04_tables() {
             "champion_matchups",
             "champion_stats",
             "consumers",
+            "crawl_legs",
             "crawl_match_ids",
             "jobs",
             "ladder_crawls",
@@ -192,7 +194,7 @@ async fn a_v1_database_upgrades_to_v2_and_keeps_its_data() {
         })
         .await
         .expect("read");
-    assert_eq!((name.as_str(), versions), ("old", 3));
+    assert_eq!((name.as_str(), versions), ("old", 4));
 }
 
 /// match_facts is a pure derivation of matches: deleting a match cascades (design 04).
@@ -322,11 +324,11 @@ async fn migrations_apply_once_across_reopens() {
         })
         .await
         .expect("insert");
-    assert_eq!(history(first.clone()).await.expect("history"), 3);
+    assert_eq!(history(first.clone()).await.expect("history"), 4);
     drop(first);
 
     let second = Db::open(&path, 1).expect("second open");
-    assert_eq!(history(second.clone()).await.expect("history"), 3, "no re-run");
+    assert_eq!(history(second.clone()).await.expect("history"), 4, "no re-run");
     let name: Option<String> = second
         .read(|c| {
             Ok::<_, DbError>(
@@ -467,4 +469,38 @@ async fn cs_and_game_duration_columns_exist_and_are_nullable() {
     };
     assert!(cols("matches").await.contains(&("game_duration".to_string(), 0)));
     assert!(cols("match_facts").await.contains(&("cs".to_string(), 0)));
+}
+
+/// One live crawl per ladder (v1's partial unique index), and a crawl's legs and
+/// match ids go with it.
+#[tokio::test]
+async fn one_running_crawl_per_ladder_and_its_state_cascades() {
+    let (_dir, db) = open_temp(1);
+    let (second_live, after_finish, legs) = db
+        .write(|c| {
+            let crawl = |id: &str| {
+                format!(
+                    "INSERT INTO ladder_crawls (id, key_scope, platform, queue, tier_floor, started_at)
+                       VALUES ('{id}', 's', 'kr', 'RANKED_SOLO_5x5', 'MASTER', 1)"
+                )
+            };
+            c.execute(&crawl("A"), [])?;
+            let second_live = c.execute(&crawl("B"), []).is_ok();
+            c.execute("UPDATE ladder_crawls SET status = 'completed' WHERE id = 'A'", [])?;
+            let after_finish = c.execute(&crawl("B"), []).is_ok();
+            c.execute_batch(
+                "INSERT INTO crawl_legs (crawl_id, leg) VALUES ('A', 'ladder:apex:MASTER');
+                 INSERT INTO crawl_match_ids (crawl_id, match_id) VALUES ('A', 'KR_1');
+                 DELETE FROM ladder_crawls WHERE id = 'A';",
+            )?;
+            let legs: i64 = c.query_row(
+                "SELECT (SELECT COUNT(*) FROM crawl_legs) + (SELECT COUNT(*) FROM crawl_match_ids)",
+                [],
+                |r| r.get(0),
+            )?;
+            Ok::<_, DbError>((second_live, after_finish, legs))
+        })
+        .await
+        .expect("write");
+    assert_eq!((second_live, after_finish, legs), (false, true, 0));
 }
