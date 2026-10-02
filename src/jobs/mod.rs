@@ -3,6 +3,7 @@
 
 pub mod archive;
 pub mod ddragon;
+pub mod ladder;
 pub mod poll;
 pub mod scheduler;
 pub mod ticks;
@@ -15,6 +16,9 @@ pub mod kinds {
     pub const ARCHIVE_MATCH: &str = "archive:match";
     pub const BACKFILL_PLAYER: &str = "backfill:player";
     pub const DDRAGON_SYNC: &str = "ddragon:sync";
+    pub const LADDER_CRAWL: &str = "ladder:crawl";
+    pub const LADDER_APEX: &str = "ladder:apex";
+    pub const LADDER_WALK: &str = "ladder:walk";
     pub const MAINTENANCE: &str = "maintenance";
 }
 
@@ -36,6 +40,7 @@ pub fn handlers(
     poll: &std::sync::Arc<poll::PollContext>,
     archive: &std::sync::Arc<archive::ArchiveContext>,
     ddragon: &std::sync::Arc<ddragon::DdragonSync>,
+    ladder: &std::sync::Arc<ladder::LadderContext>,
 ) -> Registry {
     use std::sync::Arc;
     Registry::new()
@@ -54,6 +59,12 @@ pub fn handlers(
             kinds::DDRAGON_SYNC,
             ddragon::DdragonSyncHandler(Arc::clone(ddragon)),
         )
+        .with(
+            kinds::LADDER_CRAWL,
+            ladder::LadderCrawlHandler(Arc::clone(ladder)),
+        )
+        .with(kinds::LADDER_APEX, ladder::LadderApexHandler(Arc::clone(ladder)))
+        .with(kinds::LADDER_WALK, ladder::LadderWalkHandler(Arc::clone(ladder)))
 }
 
 pub use scheduler::{

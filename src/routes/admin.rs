@@ -58,6 +58,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(cancel_job))
         .routes(routes!(queue_backfill))
         .routes(routes!(queue_ddragon_sync))
+        .routes(routes!(start_ladder_crawl))
+        .routes(routes!(ladder_options))
 }
 
 fn json<T: Serialize>(status: StatusCode, body: &T) -> Response {
@@ -1219,4 +1221,107 @@ async fn queue_ddragon_sync(State(state): State<AppState>, Extension(_c): Who, b
         Ok(q) => ok(&serde_json::json!({"ok": true, "jobId": q.id})),
         Err(e) => internal(&e, "could not queue ddragon:sync"),
     }
+}
+
+// ── Ladder ──────────────────────────────────────────────────────────────────
+
+/// `POST /v1/admin/ladder/crawl` body (v1 `LadderCrawlBody`).
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct StartLadderCrawl {
+    /// Platform routing value; default `DEFAULT_PLATFORM`.
+    platform: Option<String>,
+    /// `RANKED_SOLO_5x5` or `RANKED_FLEX_SR`; default the first of `LADDER_QUEUES`.
+    queue: Option<String>,
+    /// Lowest tier to enumerate, inclusive. Defaults to `LADDER_TIER_FLOOR`. `MASTER` and above is
+    /// three requests per queue; `IRON` is the whole ladder, ~15–20 k pages.
+    tier_floor: Option<String>,
+}
+
+/// A body value from a closed set (ajv `enum`).
+fn body_enum(loc: &str, name: &str, value: &str, all: &[&'static str]) -> Result<&'static str, ApiError> {
+    all.iter()
+        .copied()
+        .find(|a| *a == value)
+        .ok_or_else(|| validate::invalid(loc, name, "must be equal to one of the allowed values"))
+}
+
+/// The queue a crawl uses when none is named (v1).
+fn default_ladder_queue(state: &AppState) -> String {
+    state
+        .config
+        .ladder_queues
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "RANKED_SOLO_5x5".into())
+}
+
+#[utoipa::path(
+    post, path = "/v1/admin/ladder/crawl", tag = "admin",
+    summary = "Start a ladder crawl",
+    description = "Creates the crawl and fans out its jobs, then answers 202 with the crawl id (v1). \
+        One crawl runs per ladder: a second start answers `already-running` with the live crawl's id.",
+    request_body = StartLadderCrawl,
+    responses((status = 202, description = "`{crawlId, status: started|already-running, platform, queue, legs}`",
+        body = serde_json::Value), LocalErrors),
+)]
+async fn start_ladder_crawl(State(state): State<AppState>, Extension(_c): Who, bytes: Bytes) -> Response {
+    use crate::riot::ladder::RANKED_QUEUES;
+    let tiers: Vec<&'static str> = crate::riot::ladder::tiers().collect();
+    let parsed = (|| {
+        let b = Body::parse(&bytes)?;
+        let platform = b.with("platform", validate::platform_at)?;
+        let queue = b.with("queue", |loc, v| body_enum(loc, "queue", v, &RANKED_QUEUES))?;
+        let floor = b.with("tierFloor", |loc, v| body_enum(loc, "tierFloor", v, &tiers))?;
+        Ok::<_, ApiError>(crate::jobs::ladder::CrawlRequest {
+            platform: platform
+                .unwrap_or(state.config.default_platform)
+                .as_str()
+                .to_string(),
+            queue: queue.map_or_else(|| default_ladder_queue(&state), str::to_string),
+            tier_floor: floor.map(str::to_string),
+        })
+    })();
+    let req = match parsed {
+        Ok(r) => r,
+        Err(e) => return e.into_response(),
+    };
+    let floor = &state.config.ladder_tier_floor;
+    match crate::jobs::ladder::start_crawl(&state.jobs, &scope_of(&state), floor, &req).await {
+        Ok(s) => json(
+            StatusCode::ACCEPTED,
+            &serde_json::json!({
+                "crawlId": s.crawl_id,
+                // Not a 409: the caller is told which crawl already answers (v1).
+                "status": if s.created { "started" } else { "already-running" },
+                "platform": s.platform,
+                "queue": s.queue,
+                "legs": s.legs,
+            }),
+        ),
+        Err(crate::jobs::ladder::StartError::Invalid(e)) => e.into_response(),
+        Err(crate::jobs::ladder::StartError::Db(e)) => internal(&e, "could not start the crawl"),
+    }
+}
+
+#[utoipa::path(
+    get, path = "/v1/admin/ladder/options", tag = "admin",
+    summary = "Ladders this deployment can crawl, and its configured defaults",
+    description = "For the dashboard's start form (v1): every platform with its label, the ranked queues, \
+        the tiers ascending, and the `LADDER_*` defaults.",
+    responses((status = 200, description = "`{platforms, queues, tiers, defaults}`", body = serde_json::Value), LocalErrors),
+)]
+async fn ladder_options(State(state): State<AppState>, Extension(_c): Who) -> Response {
+    ok(&serde_json::json!({
+        "platforms": Platform::ALL.iter().map(|p| serde_json::json!({"id": p.as_str(), "label": p.label()})).collect::<Vec<_>>(),
+        "queues": crate::riot::ladder::RANKED_QUEUES,
+        "tiers": crate::riot::ladder::tiers().collect::<Vec<_>>(),
+        "defaults": {
+            "platform": state.config.default_platform.as_str(),
+            "queue": default_ladder_queue(&state),
+            "tierFloor": state.config.ladder_tier_floor,
+            "backfillLimit": state.config.ladder_backfill_limit,
+        },
+    }))
 }

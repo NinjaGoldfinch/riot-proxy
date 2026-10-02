@@ -445,3 +445,50 @@ Accepted. `ddragon:sync` (`jobs::ddragon`) fills `DDRAGON_DIR`; `r#static` reads
 - **Champion names** (v1 #111): id → name from the current patch's `champion.json`, parsed once per patch. `/v1/players/{puuid}/champions` now fills `championName` for ids the mirror knows and omits it otherwise (v1).
 - **Ticks:** `serve` now ticks `ddragon:sync` every `DDRAGON_SYNC_S` (ADR-048). The first tick is immediate, so a fresh deployment syncs at boot. `ServeOptions::ddragon_urls` points it at a mock in tests.
 - **Signal handling:** `serve` installs its SIGTERM/SIGINT handler before it binds and logs `listening`. Previously a signal in the moment after `listening` hit the default action; the extra client construction made that window visible in the CLI test.
+
+## ADR-054 — Ladder schema and crawl enumeration (2026-10-03)
+Accepted. Owner decisions at P7-02 start: the ladder in v1's shape, v1's four admin ladder routes, legs as rows, and v1's names job in P7-03.
+- **Schema (`V0004__ladder.sql`)** replaces V0002's three ladder tables, which nothing had written. design/04 is updated to match.
+  - `ladder_crawls` is v1's run log:
+    - `key_scope`;
+    - a `status` (`running | completed | failed | cancelled`) beside the `phase` (`enumerate | collect | archive`);
+    - v1's six counters as columns, instead of design/04's `stats` JSON;
+    - `legs_failed`;
+    - v1's partial unique index: one running crawl per (key_scope, platform, queue).
+  - `ladder_entries` is v1's `league_entries`:
+    - latest state per (key_scope, platform, queue, puuid);
+    - v1's `veteran` / `inactive` / `freshBlood` / `hotStreak` flags;
+    - `first_seen_crawl_id` (set once) and `last_seen_crawl_id` (restamped).
+    - It does not cascade from crawl rows, so P7-04 can port v1's tier slices.
+  - `crawl_legs (crawl_id, leg, cursor)` replaces v1's Redis leg set and walk cursors.
+  - Crawl ids are ULIDs (v1: UUIDs), as consumer ids are (ADR-044).
+- **Stage ends.** A leg deletes its own `crawl_legs` row when it ends. In the same transaction, whoever deletes the last row moves the crawl on:
+  - `failed` if any leg gave up (v1);
+  - otherwise `enumerate → collect`, or straight to `completed` when `LADDER_BACKFILL_LIMIT=0` (v1);
+  - then `collect → archive`, and `archive → completed`.
+  - A re-run of a leg that already ended finds no row and changes nothing. This is why design/06's "decrement a counter" is not used: a counter is decremented twice by a job that crashes after its decrement but before it is marked done. design/06 is updated.
+  - Finishing drops the crawl's remaining legs and match ids (v1 `clearCrawlState`). A crawl that is not running is never moved on or overwritten (v1's guard on `status = 'running'`).
+- **`ladder:crawl`** (v1 `startCrawl`) inserts the crawl row, its legs and their jobs in one transaction. They exist together or not at all; v1 needed an ordering rule to approximate that. The fan-out is:
+  - one `ladder:apex` per apex tier at or above the floor;
+  - one `ladder:walk` per (paged tier, division).
+  - Job dedupe keys are `<crawlId>:<leg>`.
+  - A second start of a running ladder answers that crawl's id (`created: false`).
+  - Validation messages are v1's `assertRankedQueue` / `assertTier`. A tier floor is case-insensitive here, as in v1's `assertTier`.
+- **`ladder:apex` / `ladder:walk`** (v1):
+  - Apex entries take the leg's tier, and division `I` when the entry has none.
+  - A walk pages until the first empty page and checks every 10 pages that its crawl is still running.
+  - Each non-empty page is written in one transaction: the entries, every player as an untracked player (a crawl never tracks anyone), the crawl's counters, and the walk's next-page cursor. A crash re-walks at most one page.
+  - Empty pages are not counted.
+  - Fetches are bulk priority. Its 15-minute wait budget already exceeds v1's 5-minute ladder budget.
+  - A leg ends as failed on a non-retryable error or on its last attempt (v1 `isFinalAttempt`). Retries keep it outstanding.
+- **Priorities** sit inside design/06's 20 000 band, in v1's order: crawl 20 000, apex 20 001, walk 20 002, collect 20 003, archive 20 004.
+- **Events and metrics:**
+  - `crawl.phase {crawlId, platform, queue, phase, stats}` is published on each stage change, and on the crawl's end with `phase` set to the final status. `stats` holds v1's counters.
+  - `ladder.crawl.completed` (v1 fields) is published only for a clean run.
+  - `proxy_ladder_pages_total` and `proxy_ladder_entries_total` count pages; `proxy_ladder_crawl_duration_seconds{platform,queue,status}` records each finished crawl.
+- **Config:** `LADDER_QUEUES` (Riot's casing) and `LADDER_TIER_FLOOR` (trimmed, upper-cased) are now refused at boot when unknown, closing ADR-008's deferred validation.
+- **Tick:** `ladder:crawl` per `LADDER_PLATFORMS` × `LADDER_QUEUES` every `LADDER_CRAWL_S`. It is off when 0, the default (v1), and deduped per ladder.
+- **Routes** (v1):
+  - `POST /v1/admin/ladder/crawl {platform?, queue?, tierFloor?}` answers 202 `{crawlId, status: started|already-running, platform, queue, legs}`. Defaults are `DEFAULT_PLATFORM`, the first `LADDER_QUEUES`, and `LADDER_TIER_FLOOR`. Body enums are exact, as ajv's were.
+  - `GET /v1/admin/ladder/options` → `{platforms[{id,label}], queues, tiers, defaults{platform, queue, tierFloor, backfillLimit}}`.
+  - The crawl list and cancel routes arrive with P7-03.

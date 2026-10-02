@@ -136,8 +136,8 @@ The player was tracked through `POST /v1/admin/tracked-players`, which queued th
 
 ## P7 — Data Dragon, ladder, analytics, dashboard
 - [x] P7-01 Data Dragon sync + static serving (#55)
-- [ ] P7-02 ladder enumerate
-- [ ] P7-03 ladder collect + archive
+- [x] P7-02 ladder enumerate (#56; **+ v1's ladder schema, `POST /v1/admin/ladder/crawl` and `/options`, owner decisions, ADR-054**)
+- [ ] P7-03 ladder collect + archive (**+ `GET /v1/admin/ladder/crawls`, `DELETE …/crawls/{id}`, and v1's names job, tick and `POST /v1/admin/players/names/backfill`, owner decisions at P7-02**)
 - [ ] P7-04 analytics (**+ v1's three `/v1/lol/analytics/*` routes, deferred from P4-05 by the owner, ADR-037**)
 - [ ] P7-05 maintenance
 - [ ] P7-06 dashboard wiring
@@ -187,7 +187,7 @@ Exit check: _pending_
 - rusqlite is held at **0.39** for refinery 0.9 compatibility (ADR-005). Don't bump it without checking refinery's range.
 - reqwest 0.13: the feature is `rustls`, not `rustls-tls`. Every reqwest client must use `tls_certs_only(...)` (webpki roots, or empty for plain HTTP), or it fails to build in `FROM scratch` (ADR-007/013).
 - `metrics-exporter-prometheus` has default features off (no built-in HTTP listener); P0-03 renders `/metrics` from our own axum route.
-- Config: `riot_proxy::config::Config::load(ConfigArgs)`; `ConfigArgs` is a `clap::Args` to `#[command(flatten)]` into `serve` in P0-06. `LOG_LEVEL` is a tracing filter string and `log_format` is already resolved (tty → pretty) for P0-03. Platforms are typed and validated at boot (P1-01). `LADDER_QUEUES`/`LADDER_TIER_FLOOR` are still raw strings; P7-02 must validate them at boot (ADR-008).
+- Config: `riot_proxy::config::Config::load(ConfigArgs)`; `ConfigArgs` is a `clap::Args` to `#[command(flatten)]` into `serve` in P0-06. `LOG_LEVEL` is a tracing filter string and `log_format` is already resolved (tty → pretty) for P0-03. Platforms are typed and validated at boot (P1-01). `LADDER_QUEUES`/`LADDER_TIER_FLOOR` are validated at boot since P7-02 (ADR-054).
 - Telemetry: `telemetry::init_tracing(&config)`, `telemetry::metrics_handle()` (idempotent), `telemetry::spawn_upkeep(handle)` and `telemetry::metrics_router(handle)` for P0-05 to merge. `http::request_id::request_id` goes on as the **outermost** `axum::middleware::from_fn` layer. Metric names are constants in `src/metrics.rs`; use those, not string literals.
 - DB: `db::Db::open(path, readers)` (blocking) or `Db::open_async`; `db.write(|c: &mut Connection| …)` and `db.read(|c: &Connection| …)`, generic over the error type (`E: From<DbError>`). Migrations are `src/db/migrations/V000N__name.sql` (refinery naming, ADR-010); P5-01 adds `V0002__archive.sql`. `Config.database` gives the path (`Database::Sqlite(path)`).
 - Error envelope (owner decision): `{error:{code,message,requestId,retryAfter?}}`. Return `http::ApiError` from handlers; `requestId` is filled in automatically (ADR-011).

@@ -1226,6 +1226,33 @@ expression: doc
         ],
         "type": "object"
       },
+      "StartLadderCrawl": {
+        "description": "`POST /v1/admin/ladder/crawl` body (v1 `LadderCrawlBody`).",
+        "properties": {
+          "platform": {
+            "description": "Platform routing value; default `DEFAULT_PLATFORM`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "queue": {
+            "description": "`RANKED_SOLO_5x5` or `RANKED_FLEX_SR`; default the first of `LADDER_QUEUES`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tierFloor": {
+            "description": "Lowest tier to enumerate, inclusive. Defaults to `LADDER_TIER_FLOOR`. `MASTER` and above is\nthree requests per queue; `IRON` is the whole ladder, ~15–20 k pages.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "StateCounts": {
         "description": "Rows per state, for one kind or all of them.",
         "properties": {
@@ -2579,6 +2606,156 @@ expression: doc
           }
         },
         "summary": "Retry a failed job",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/admin/ladder/crawl": {
+      "post": {
+        "description": "Creates the crawl and fans out its jobs, then answers 202 with the crawl id (v1). One crawl runs per ladder: a second start answers `already-running` with the live crawl's id.",
+        "operationId": "start_ladder_crawl",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartLadderCrawl"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "`{crawlId, status: started|already-running, platform, queue, legs}`"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          }
+        },
+        "summary": "Start a ladder crawl",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/admin/ladder/options": {
+      "get": {
+        "description": "For the dashboard's start form (v1): every platform with its label, the ranked queues, the tiers ascending, and the `LADDER_*` defaults.",
+        "operationId": "ladder_options",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "`{platforms, queues, tiers, defaults}`"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          }
+        },
+        "summary": "Ladders this deployment can crawl, and its configured defaults",
         "tags": [
           "admin"
         ]

@@ -221,3 +221,41 @@ async fn running_ticks_enqueue_until_shut_down() {
     let kinds: Vec<String> = rows(&db).await.into_iter().map(|r| r.0).collect();
     assert_eq!(kinds, ["maintenance", "poll:live"]);
 }
+
+#[tokio::test]
+async fn the_crawl_tick_is_opt_in_and_starts_every_configured_ladder_once() {
+    let config = |extra: &[(&str, &str)]| {
+        let mut env = vec![("RIOT_API_KEY".to_string(), "RGAPI-test-key-not-real".to_string())];
+        env.extend(extra.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+        Config::from_sources(crate::config::Sources {
+            env,
+            ..crate::config::Sources::default()
+        })
+        .unwrap()
+    };
+    // v1: off by default; the cost of a crawl is opt-in.
+    assert!(
+        !schedule(&config(&[]))
+            .iter()
+            .any(|(k, _)| *k == kinds::LADDER_CRAWL)
+    );
+    let on = config(&[
+        ("LADDER_CRAWL_S", "86400"),
+        ("LADDER_PLATFORMS", "kr,euw1"),
+        ("LADDER_QUEUES", "RANKED_SOLO_5x5,RANKED_FLEX_SR"),
+    ]);
+    assert!(running_schedule(&on).contains(&(kinds::LADDER_CRAWL, Duration::from_secs(86_400))));
+    let ladders = ladders(&on);
+    assert_eq!(ladders.len(), 4);
+    assert_eq!(ladders[0], ("kr".to_string(), "RANKED_SOLO_5x5".to_string()));
+
+    let (_d, db) = db();
+    let s = Scheduler::new(db.clone(), Registry::new());
+    assert_eq!(crawl_ladders(&s, &ladders).await.unwrap(), 4);
+    assert_eq!(
+        crawl_ladders(&s, &ladders).await.unwrap(),
+        0,
+        "deduped per ladder"
+    );
+    assert_eq!(rows(&db).await.len(), 4);
+}

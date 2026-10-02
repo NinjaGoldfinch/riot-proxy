@@ -23,6 +23,22 @@ pub fn tiers() -> impl Iterator<Item = &'static str> {
     PAGED_TIERS.into_iter().chain(APEX_TIERS)
 }
 
+/// Whether `tier` is one of [`tiers`] (Riot's casing).
+pub fn is_tier(tier: &str) -> bool {
+    tiers().any(|t| t == tier)
+}
+
+/// The tier and everything above it: how a tier floor becomes a work list (v1
+/// `tiersAtOrAbove`). Empty for an unknown floor.
+pub fn tiers_at_or_above(floor: &str) -> Vec<&'static str> {
+    tiers().skip_while(|t| *t != floor).collect()
+}
+
+/// match-v5's queue id for a ranked ladder.
+pub fn queue_id(queue: &str) -> Option<u32> {
+    QUEUE_IDS.iter().find(|(q, _)| *q == queue).map(|(_, id)| *id)
+}
+
 /// The league-v4 endpoint serving an apex tier (v1 `APEX_LEAGUES`).
 pub fn apex_endpoint(tier: &str) -> Option<&'static str> {
     match tier {
@@ -47,5 +63,18 @@ mod tests {
         }
         assert_eq!(apex_endpoint("DIAMOND"), None);
         assert_eq!(QUEUE_IDS[0], ("RANKED_SOLO_5x5", 420));
+    }
+
+    #[test]
+    fn a_floor_is_itself_and_everything_above() {
+        assert_eq!(
+            tiers_at_or_above("MASTER"),
+            ["MASTER", "GRANDMASTER", "CHALLENGER"]
+        );
+        assert_eq!(tiers_at_or_above("CHALLENGER"), ["CHALLENGER"]);
+        assert_eq!(tiers_at_or_above("IRON").len(), 10);
+        assert!(tiers_at_or_above("master").is_empty(), "Riot's casing only");
+        assert!(is_tier("EMERALD") && !is_tier("UNRANKED"));
+        assert_eq!((queue_id("RANKED_FLEX_SR"), queue_id("ARAM")), (Some(440), None));
     }
 }

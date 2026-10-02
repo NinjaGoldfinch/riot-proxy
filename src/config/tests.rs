@@ -500,3 +500,29 @@ fn dotenv_errors_name_the_line() {
     assert_eq!(parse_dotenv("A=1\n\nbad name=1\n").unwrap_err().0, 3);
     assert_eq!(parse_dotenv("A='x' y\n").unwrap_err().0, 1);
 }
+
+#[test]
+fn unknown_ladders_and_tiers_are_refused_at_boot() {
+    // v1 refused both at boot: a typo must stop the process, not one job.
+    let errs = errors(env(&[
+        ("LADDER_QUEUES", "RANKED_SOLO_5x5,ranked_flex_sr"),
+        ("LADDER_TIER_FLOOR", "masters"),
+    ]));
+    assert_eq!(
+        errs,
+        [
+            "LADDER_QUEUES: 'ranked_flex_sr' is not one of RANKED_SOLO_5x5, RANKED_FLEX_SR",
+            "LADDER_TIER_FLOOR: 'masters' is not one of IRON, BRONZE, SILVER, GOLD, PLATINUM, \
+             EMERALD, DIAMOND, MASTER, GRANDMASTER, CHALLENGER",
+        ]
+    );
+    // A floor is trimmed and upper-cased, as v1's was.
+    let c = load(env(&[
+        ("LADDER_TIER_FLOOR", " emerald "),
+        ("LADDER_QUEUES", "RANKED_FLEX_SR"),
+    ]));
+    assert_eq!(
+        (c.ladder_tier_floor.as_str(), c.ladder_queues),
+        ("EMERALD", vec!["RANKED_FLEX_SR".to_string()])
+    );
+}

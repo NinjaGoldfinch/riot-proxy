@@ -202,8 +202,7 @@ pub struct Config {
     pub acme_email: Option<String>,
 
     pub default_platform: Platform,
-    // Validated against Riot enums by the modules that own them (endpoints in
-    // P1-02, ladder queues and tiers in P7-02).
+    // Validated against the endpoint registry by its owner (P1-02).
     pub cache_ttl_overrides: String,
     /// L1 weight budget in MiB (design/07 §Sizing, default 128).
     pub cache_l1_max_mb: u32,
@@ -455,9 +454,12 @@ impl Config {
             lookup_backfill_limit: v.int("LOOKUP_BACKFILL_LIMIT", 10_000, 0, 10_000),
             track_catchup_limit: v.int("TRACK_CATCHUP_LIMIT", 500, 0, 10_000),
             ladder_crawl_s: v.int("LADDER_CRAWL_S", 0, 0, 604_800),
-            ladder_queues: csv(&v.string("LADDER_QUEUES", "RANKED_SOLO_5x5")),
+            ladder_queues: csv(&v.string("LADDER_QUEUES", "RANKED_SOLO_5x5"))
+                .into_iter()
+                .filter(|q| v.ranked_queue("LADDER_QUEUES", q))
+                .collect(),
             ladder_platforms,
-            ladder_tier_floor: v.string("LADDER_TIER_FLOOR", "MASTER").to_ascii_uppercase(),
+            ladder_tier_floor: v.tier("LADDER_TIER_FLOOR", "MASTER"),
             ladder_backfill_limit: v.int("LADDER_BACKFILL_LIMIT", 100, 0, 10_000),
             facts_reextract_batch: v.int("FACTS_REEXTRACT_BATCH", 500, 1, 10_000),
             aggregate_min_games: v.int("AGGREGATE_MIN_GAMES", 10, 0, 10_000),
@@ -657,6 +659,28 @@ impl Vars {
             self.push(name, &e.message);
             Platform::Euw1
         })
+    }
+
+    /// A ranked ladder in Riot's casing (v1 refused anything else at boot).
+    fn ranked_queue(&mut self, name: &str, raw: &str) -> bool {
+        let ok = crate::riot::ladder::RANKED_QUEUES.contains(&raw);
+        if !ok {
+            let all = crate::riot::ladder::RANKED_QUEUES.join(", ");
+            self.push(name, &format!("'{raw}' is not one of {all}"));
+        }
+        ok
+    }
+
+    /// A tier, trimmed and upper-cased (v1 `tierSetting`).
+    fn tier(&mut self, name: &str, default: &str) -> String {
+        let raw = self.string(name, default);
+        let tier = raw.trim().to_ascii_uppercase();
+        if !crate::riot::ladder::is_tier(&tier) {
+            let all = crate::riot::ladder::tiers().collect::<Vec<_>>().join(", ");
+            self.push(name, &format!("'{raw}' is not one of {all}"));
+            return default.to_string();
+        }
+        tier
     }
 
     fn opt_bool(&mut self, name: &str) -> Option<bool> {

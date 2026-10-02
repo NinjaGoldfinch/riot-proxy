@@ -103,8 +103,8 @@ stateDiagram-v2
     [*] --> enumerate
     enumerate --> collect: last apex/walk job done
     collect --> archive: last collect job done
-    archive --> done: filter_unarchived + enqueue
-    done --> [*]
+    archive --> completed: filter_unarchived + enqueue
+    completed --> [*]
     note right of archive
         one match.byId per match,
         however many of its ten
@@ -112,7 +112,7 @@ stateDiagram-v2
     end note
 ```
 
-"Last job done" is detected by decrementing a counter on the crawl row inside the same write transaction that marks the job done — no race, because there is one writer.
+"Last job done" is detected with `crawl_legs`: one row per outstanding job, which the job deletes as it ends. Whoever deletes the last row moves the crawl on in the same write transaction, so there is no race (one writer), and a job re-run after a crash finds no row and changes nothing — which a bare counter would decrement twice (ADR-054). A crawl whose legs include one that gave up ends `failed` rather than moving on; `cancelled` stops it where it stands.
 
 ## Realtime
 
