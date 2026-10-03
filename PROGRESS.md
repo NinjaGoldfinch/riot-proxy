@@ -152,7 +152,6 @@ counters: entries 30 players 30 walked 30 match ids 12 queued 12
 dashboard: archivedMatches 12 knownPlayers 30 ladder.entries 30 lastCompleted "completed" analytics "completed" topChampions 5 snapshots 1
 ```
 Each match was fetched once from Riot, although every one of them is reachable from ten players' histories. The live `metrics.snapshot` on `/v1/ws` and `GET /v1/admin/metrics` both show the finished crawl, and `/dashboard` answers 200. Screenshots of the dashboard rendering live data in a browser are in `docs/img/p7-06-*.png` (#60).
-Exit check: _pending_
 
 ## P8 — Contract, migration, packaging
 - [x] P8-01 port acceptance suite (#62; mock Riot, live opt-in, required `acceptance` CI job; 29/29, ADR-059)
@@ -161,7 +160,33 @@ Exit check: _pending_
 - [x] P8-04 Postgres feature flag, compile-only (#65; `Store` seam, claim routed through `SqliteStore`, ADR-062)
 - [x] P8-05 release pipeline (#66; three binaries + GHCR image on `v*`, README for v2, ADR-063; `v2.0.0-rc.0` dry run published: three binaries + sha256sums + image digest)
 - [x] P8-06 cut-over runbook (#67; `docs/CUTOVER.md`, ADR-064; owner sign-off pending)
-Exit check: _pending_
+- [x] P8 exit prep (#68; 2.0.0-rc.1, `/docs` in CI's compose check, the release job attaches binaries only)
+
+Exit check (2026-10-04, `main` @ `031acff`, CI run 37127324010 and release run 37127332578): **passed.**
+- **Acceptance suite green against v2 with a mock upstream:** CI job `acceptance` (v1's suite, mock Riot, `serve` from this commit):
+  ```
+  Test Files  5 passed (5)
+       Tests  29 passed (29)
+  ```
+- **`migrate-v1` imports a v1 dump fixture:** `tests/migrate_v1.rs` in CI's `test` job:
+  ```
+  test the_v1_archive_and_players_arrive_and_consumers_do_not ... ok
+  test the_cli_imports_the_text_form_and_the_custom_dump_when_pg_restore_exists ... ok
+  ```
+  Locally (Postgres 17), a plain `pg_dump --data-only -t matches -t players` of the fixture imports as `imported 19 matches, 1 timelines, 12 players`, one malformed body skipped (ADR-064).
+- **`docker compose up` on a clean VM serves `/docs`:** CI's `build-musl` job, on a fresh GitHub-hosted runner, builds the image from `docker-compose.yml`, waits for `/healthz`, then `curl -fsS localhost:8080/docs | grep -qi "<html"` and `/openapi.json` carries `"openapi"`. Both passed.
+- **GitHub release `v2.0.0-rc.1`** (pre-release), https://github.com/NinjaGoldfinch/riot-proxy/releases/tag/v2.0.0-rc.1:
+  ```
+  riot-proxy-darwin-arm64  15225824  5197abf25d782d1484baf9de40ba07319ea783ae4643bc405df584f686ac806a
+  riot-proxy-linux-amd64   17954912  237da9a7034c8413a45ccf059ed740dcd7482e2392deca1f2411632930a03af3  (static-pie, < 20 MiB)
+  riot-proxy-linux-arm64   15238512  46dce345af9d03c8d7d982575528da6418002f8faeffd3030565a39607a3c78a
+  sha256sums
+  image ghcr.io/ninjagoldfinch/riot-proxy:2.0.0-rc.1
+        @sha256:9309b10b0dd2553ca7552881d71c85ac378c6e7540aa121f0ed9c054f7678980  (amd64 + arm64, anonymous pull 200)
+  ```
+  Each binary's `--version` was checked against the tag in the run; the amd64 image passed its own healthcheck. `:2` is not pushed for a pre-release (404), as designed (ADR-063).
+
+Owner items still open from P8: P8-03 TLS on a real domain (manual), P8-06 runbook sign-off.
 
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
