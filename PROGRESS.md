@@ -96,7 +96,7 @@ The plan's exit check says `NEG`; per ADR-022 the value is `HIT-NEG`.
 - [x] P4-04 `/v1/riot/*` passthrough (#37)
 - [x] P4-05 `/v1/lol/*` typed routes (#38)
 - [x] P4-06 dev UI + dashboard shells `[parallel-ok]` (#39)
-Exit check: _pending_
+Exit check (2026-10-04): **passed.** The `spec` and `compare-openapi.py` half passed at P4 (zero missing `/v1/riot/*` and `/v1/lol/*` operation ids, analytics deferred to P7-04 per ADR-037). The owner confirmed in a browser that `/docs` renders Scalar on `v2.0.0-rc.1`, with the info header, response-header table, bearer auth and every tag group (players, riot, lol, static, ws, ops, admin, models).
 
 ## P5 — Archive and composites
 - [x] P5-01 archive schema (#40)
@@ -196,7 +196,6 @@ Owner items still open from P8: P8-03 TLS on a real domain (manual), P8-06 runbo
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
 
 ## Notes for the next task
-- **P4 exit check is still open:** the owner needs to confirm `/docs` renders in a browser (headless Chromium crashed on Scalar here). Tag `phase-P4` after that.
 - **Unassigned:** `POST /v1/admin/players/names/backfill` (v1's job that fills Riot IDs from archived matches) is in no plan task; raised with the owner at the P6 review (ADR-044). (P6-06 gave `players.backfill_state` its shape, ADR-050.)
 - **Events** keep v1's names plus `crawl.phase` (ADR-045): P7-04 publishes `analytics.updated`; P7-02/03 publish `crawl.phase` and `ladder.crawl.completed`; the dashboard's names already match.
 - Routes: follow `src/routes/riot.rs`, which uses `http::validate::*` for v1 rules and `routes::passthrough::{respond, options}`. Add read routers to `routes::docs::api_router`'s `read` group so they get auth+quota. `tests/common::app_with(env, wiremock_uri)` gives a full app. v1's `/v1/lol` bodies are raw passthrough too (`PassthroughResponse`), so P4-05's "typed" part is request validation.
