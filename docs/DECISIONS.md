@@ -756,3 +756,15 @@ Accepted. `docs/CUTOVER.md` (plan P8-06) follows design/08 §Cut-over: deploy be
 - **Import before the first boot**, so tracked players are polled from the start. Then **re-import once v1 is at zero** to pick up matches v1 archived during the overlap; upserts make this a no-op for everything already imported.
 - **No ladder crawls during the overlap** (`LADDER_CRAWL_S=0`, no manual crawls). Both proxies spend one key's budget through separate limiters, so the runbook keeps bulk work out of the overlap. Interactive traffic only moves from one to the other.
 - **Finding stragglers.** v1 does not log requests per consumer (request logging is off) and has no last-used column. The runbook therefore disables v1 keys one at a time through v1's `DELETE /v1/admin/consumers/:id`. v1 has no re-enable route, so the runbook gives the SQL that undoes a disable.
+
+## ADR-065 — No default platform (2026-10-04)
+Accepted (owner, task RC-01). v2 drops v1's `DEFAULT_PLATFORM`. The owner no longer uses v1, so v1 parity does not bind this change. A request that needs a platform must now name one. The proxy never picks one on the caller's behalf.
+- **Removed:** the `DEFAULT_PLATFORM` variable, `Config::default_platform`, and the dev UI's `defaultPlatform`. A leftover `DEFAULT_PLATFORM` in a v1 `.env` is ignored, the same as `REDIS_URL`.
+- **Required, `400 VALIDATION` when missing:**
+  - `?platform=` on `/v1/players/{puuid}/profile`, `/v1/players/by-riot-id/{gameName}/{tagLine}/profile` and `/v1/players/{puuid}/matches`. The error reads "querystring must have required property 'platform'".
+  - `platform` in the bodies of `POST /v1/admin/ladder/crawl` and `POST /v1/admin/analytics/recompute`. The error reads "body must have required property 'platform'".
+- **A filter, not a default:**
+  - `/v1/lol/analytics/champions*` read every platform's aggregates when `?platform=` is absent, and answer `"platform": null`. Every stored count adds up across platforms (match ids are platform-prefixed, so `matches_picked` and the slices do not double-count).
+  - `/v1/players/{puuid}/champions` already treated `platform` as an optional filter and is unchanged.
+- **Scheduled crawls:** an empty `LADDER_PLATFORMS` now schedules no crawl, instead of crawling `DEFAULT_PLATFORM`. `/v1/admin/ladder/options` reports the first of `LADDER_PLATFORMS` (or `null`) as `defaults.platform`. That value only preselects the dashboard's form, which always sends the platform it shows.
+- **Not covered here:** account-v1 region selection (RC-02).

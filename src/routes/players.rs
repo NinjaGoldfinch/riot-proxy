@@ -108,9 +108,9 @@ fn on_account_region(id: &str, platform: Platform) -> Option<Target> {
     Endpoint::by_id(id).and_then(|e| e.target_for_region(platform.account_region()))
 }
 
-/// `?platform=`, defaulting to `DEFAULT_PLATFORM` (v1).
-fn platform_or_default(state: &AppState, query: &HashMap<String, String>) -> Result<Platform, ApiError> {
-    Ok(validate::query_platform(q(query, "platform"))?.unwrap_or(state.config.default_platform))
+/// `?platform=`, required: there is no default platform (ADR-065).
+fn required_platform(query: &HashMap<String, String>) -> Result<Platform, ApiError> {
+    validate::required_query_platform(q(query, "platform"))
 }
 
 /// One part of a fan-out: its Riot payload verbatim, or `None` with a warning
@@ -209,9 +209,9 @@ struct ProfileAsk {
     refresh: bool,
 }
 
-fn profile_query(state: &AppState, query: &HashMap<String, String>) -> Result<ProfileAsk, ApiError> {
+fn profile_query(query: &HashMap<String, String>) -> Result<ProfileAsk, ApiError> {
     Ok(ProfileAsk {
-        platform: platform_or_default(state, query)?,
+        platform: required_platform(query)?,
         top_mastery: validate::int_query("topMastery", q(query, "topMastery"), 1, 20)?.unwrap_or(5),
         refresh: validate::bool_query("refresh", q(query, "refresh"))?.unwrap_or(false),
     })
@@ -343,7 +343,7 @@ async fn compose_profile(
                    its own. A part that fails is `null` and named in `warnings`; only every part failing is a \
                    404. `refresh=true` re-reads every part upstream, at most once a minute per player.",
     params(("puuid" = String, Path, description = "Encrypted player UUID"),
-           ("platform" = Option<String>, Query, description = "Platform routing value; default `DEFAULT_PLATFORM`"),
+           ("platform" = String, Query, description = "Platform routing value, e.g. `oc1`. Required"),
            ("topMastery" = Option<i64>, Query, description = "1–20, default 5"),
            ("refresh" = Option<bool>, Query, description = "Spend quota to re-read; once a minute per player")),
     responses((status = 200, description = "The profile", body = ProfileBody), UpstreamErrors),
@@ -358,7 +358,7 @@ async fn profile(
         Ok(p) => p,
         Err(e) => return bad_path(&e).into_response(),
     };
-    let ask = match validate::puuid(&puuid).and_then(|()| profile_query(&state, &query)) {
+    let ask = match validate::puuid(&puuid).and_then(|()| profile_query(&query)) {
         Ok(a) => a,
         Err(e) => return e.into_response(),
     };
@@ -373,7 +373,7 @@ async fn profile(
                    rather than fetched twice.",
     params(("gameName" = String, Path, description = "The part of a Riot ID before the `#` (1–16 characters)"),
            ("tagLine" = String, Path, description = "The part of a Riot ID after the `#` (1–5 characters)"),
-           ("platform" = Option<String>, Query, description = "Platform routing value; default `DEFAULT_PLATFORM`"),
+           ("platform" = String, Query, description = "Platform routing value, e.g. `oc1`. Required"),
            ("topMastery" = Option<i64>, Query, description = "1–20, default 5"),
            ("refresh" = Option<bool>, Query, description = "Spend quota to re-read; once a minute per player")),
     responses((status = 200, description = "The profile", body = ProfileBody), UpstreamErrors),
@@ -390,7 +390,7 @@ async fn profile_by_riot_id(
     };
     let ask = match validate::game_name(&game_name)
         .and_then(|()| validate::tag_line(&tag_line))
-        .and_then(|()| profile_query(&state, &query))
+        .and_then(|()| profile_query(&query))
     {
         Ok(a) => a,
         Err(e) => return e.into_response(),
@@ -526,7 +526,7 @@ async fn maybe_backfill(
                    full match stays one call away at `/v1/lol/matches/{region}/{matchId}`. A match that \
                    cannot be fetched is left out and named in `warnings`; a failed id lookup fails the page.",
     params(("puuid" = String, Path, description = "Encrypted player UUID"),
-           ("platform" = Option<String>, Query, description = "Platform routing value; default `DEFAULT_PLATFORM`"),
+           ("platform" = String, Query, description = "Platform routing value, e.g. `oc1`. Required"),
            ("start" = Option<i64>, Query, description = "0–10000, default 0"),
            ("count" = Option<i64>, Query, description = "1–20, default 10: every id is its own upstream call"),
            ("queue" = Option<i64>, Query, description = "Queue id, 0–5000"),
@@ -546,7 +546,7 @@ async fn match_page(
     };
     let parsed = (|| {
         validate::puuid(&puuid)?;
-        let platform = platform_or_default(&state, &query)?;
+        let platform = required_platform(&query)?;
         let start = validate::int_query("start", q(&query, "start"), 0, 10_000)?.unwrap_or(0);
         let count = validate::int_query("count", q(&query, "count"), 1, 20)?.unwrap_or(10);
         let queue = validate::int_query("queue", q(&query, "queue"), 0, 5000)?;

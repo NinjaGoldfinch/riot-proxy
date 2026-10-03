@@ -32,10 +32,7 @@ struct Env {
 }
 
 async fn env() -> Env {
-    let (dir, state, router) = common::app_with(
-        &[("DEFAULT_PLATFORM", "kr"), ("AGGREGATE_MIN_GAMES", "0")],
-        "http://127.0.0.1:9",
-    );
+    let (dir, state, router) = common::app_with(&[("AGGREGATE_MIN_GAMES", "0")], "http://127.0.0.1:9");
     let mint = |name: &str, scopes| NewConsumer {
         name: name.into(),
         scopes,
@@ -195,7 +192,7 @@ async fn before_any_recompute_the_routes_answer_empty_documents() {
     assert_eq!(r.status, StatusCode::OK);
     assert_eq!(
         r.json(),
-        json!({"platform": "kr", "queue": "RANKED_SOLO_5x5", "tier": null, "patch": null, "role": null,
+        json!({"platform": null, "queue": "RANKED_SOLO_5x5", "tier": null, "patch": null, "role": null,
                "computedAt": null, "totalGames": 0, "champions": []})
     );
     let d = e.get("/v1/lol/analytics/champions/134").await.json();
@@ -457,7 +454,7 @@ async fn the_admin_routes_queue_a_recompute_and_a_sweep() {
             "/v1/admin/analytics/recompute",
             &e.admin,
             None,
-            Some(json!({"queue": "RANKED_FLEX_SR"})),
+            Some(json!({"platform": "kr", "queue": "RANKED_FLEX_SR"})),
         )
         .await;
     assert_eq!(
@@ -489,12 +486,29 @@ async fn the_admin_routes_queue_a_recompute_and_a_sweep() {
                 "/v1/admin/analytics/recompute",
                 &e.admin,
                 None,
-                Some(json!({"queue": "ARAM"}))
+                Some(json!({"platform": "kr", "queue": "ARAM"}))
             )
             .await
         )
         .1,
         "body/queue must be equal to one of the allowed values"
+    );
+    // No default platform (ADR-065): the body has to name one.
+    assert_eq!(
+        error(
+            &e.call(
+                "POST",
+                "/v1/admin/analytics/recompute",
+                &e.admin,
+                None,
+                Some(json!({"queue": "RANKED_SOLO_5x5"}))
+            )
+            .await
+        ),
+        (
+            StatusCode::BAD_REQUEST,
+            "body must have required property 'platform'".into()
+        )
     );
 
     let r = e
@@ -513,4 +527,56 @@ async fn the_admin_routes_queue_a_recompute_and_a_sweep() {
         );
     }
     let _ = Arc::new(());
+}
+
+/// ADR-065: no platform sums every ladder; `?platform=` narrows to one.
+#[tokio::test]
+async fn without_a_platform_the_routes_sum_every_platform() {
+    let e = env().await;
+    e.seed().await;
+    e.aggregate().await;
+    // The same aggregates again under na1, as if its ladder had been crawled too.
+    e.state
+        .db
+        .write(|c| {
+            for table in [
+                "champion_stats",
+                "champion_bans",
+                "analytics_slices",
+                "champion_matchups",
+                "champion_items",
+                "champion_runes",
+                "champion_spells",
+            ] {
+                c.execute_batch(&format!(
+                    "CREATE TEMP TABLE copy AS SELECT * FROM {table} WHERE platform = 'kr';
+                     UPDATE copy SET platform = 'na1';
+                     INSERT INTO {table} SELECT * FROM copy;
+                     DROP TABLE copy;"
+                ))?;
+            }
+            Ok::<_, DbError>(())
+        })
+        .await
+        .unwrap();
+
+    let all = e.get("/v1/lol/analytics/champions").await.json();
+    let kr = e.get("/v1/lol/analytics/champions?platform=kr").await.json();
+    let na = e.get("/v1/lol/analytics/champions?platform=na1").await.json();
+    assert_eq!(
+        (&all["platform"], &kr["platform"], &na["platform"]),
+        (&json!(null), &json!("kr"), &json!("na1"))
+    );
+    assert_eq!(
+        (&all["totalGames"], &kr["totalGames"], &na["totalGames"]),
+        (&json!(20), &json!(10), &json!(10))
+    );
+    assert_eq!(
+        all["champions"][0]["games"],
+        kr["champions"][0]["games"].as_i64().unwrap() * 2
+    );
+    assert_eq!(
+        e.get("/v1/lol/analytics/champions?platform=euw1").await.json()["totalGames"],
+        0
+    );
 }

@@ -26,7 +26,7 @@ struct Env {
 }
 
 async fn env() -> Env {
-    let (dir, state, router) = common::app_with(&[("DEFAULT_PLATFORM", "kr")], "http://127.0.0.1:9");
+    let (dir, state, router) = common::app_with(&[], "http://127.0.0.1:9");
     let mint = |name: &str, scopes| NewConsumer {
         name: name.into(),
         scopes,

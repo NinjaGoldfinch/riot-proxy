@@ -43,7 +43,10 @@ async fn dev_config_publishes_the_platform_table() {
     assert_eq!(r.headers["cache-control"], "no-store");
     let body = r.json();
     assert_eq!(body["authDisabled"], false);
-    assert_eq!(body["defaultPlatform"], "euw1");
+    assert!(
+        body.get("defaultPlatform").is_none(),
+        "no default platform (ADR-065)"
+    );
     assert_eq!(
         body["regions"],
         serde_json::json!(["americas", "europe", "asia", "sea"])

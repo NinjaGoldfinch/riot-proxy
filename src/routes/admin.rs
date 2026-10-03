@@ -1237,8 +1237,8 @@ async fn queue_ddragon_sync(State(state): State<AppState>, Extension(_c): Who, b
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 pub struct StartLadderCrawl {
-    /// Platform routing value; default `DEFAULT_PLATFORM`.
-    platform: Option<String>,
+    /// Platform routing value. Required: there is no default platform.
+    platform: String,
     /// `RANKED_SOLO_5x5` or `RANKED_FLEX_SR`; default the first of `LADDER_QUEUES`.
     queue: Option<String>,
     /// Lowest tier to enumerate, inclusive. Defaults to `LADDER_TIER_FLOOR`. `MASTER` and above is
@@ -1278,14 +1278,14 @@ async fn start_ladder_crawl(State(state): State<AppState>, Extension(_c): Who, b
     let tiers: Vec<&'static str> = crate::riot::ladder::tiers().collect();
     let parsed = (|| {
         let b = Body::parse(&bytes)?;
-        let platform = b.with("platform", validate::platform_at)?;
+        b.required(&["platform"])?;
+        let platform = b
+            .with("platform", validate::platform_at)?
+            .ok_or_else(ApiError::internal)?;
         let queue = b.with("queue", |loc, v| body_enum(loc, "queue", v, &RANKED_QUEUES))?;
         let floor = b.with("tierFloor", |loc, v| body_enum(loc, "tierFloor", v, &tiers))?;
         Ok::<_, ApiError>(crate::jobs::ladder::CrawlRequest {
-            platform: platform
-                .unwrap_or(state.config.default_platform)
-                .as_str()
-                .to_string(),
+            platform: platform.as_str().to_string(),
             queue: queue.map_or_else(|| default_ladder_queue(&state), str::to_string),
             tier_floor: floor.map(str::to_string),
         })
@@ -1325,7 +1325,8 @@ async fn ladder_options(State(state): State<AppState>, Extension(_c): Who) -> Re
         "queues": crate::riot::ladder::RANKED_QUEUES,
         "tiers": crate::riot::ladder::tiers().collect::<Vec<_>>(),
         "defaults": {
-            "platform": state.config.default_platform.as_str(),
+            // The first scheduled ladder, if any; only preselects the form (ADR-065).
+            "platform": state.config.ladder_platforms.first().map(|p| p.as_str()),
             "queue": default_ladder_queue(&state),
             "tierFloor": state.config.ladder_tier_floor,
             "backfillLimit": state.config.ladder_backfill_limit,
@@ -1495,8 +1496,8 @@ async fn queue_names_backfill(State(state): State<AppState>, Extension(_c): Who)
 #[derive(Debug, Deserialize, ToSchema)]
 #[allow(dead_code)]
 pub struct RecomputeAnalytics {
-    /// Platform routing value; default `DEFAULT_PLATFORM`.
-    platform: Option<String>,
+    /// Platform routing value. Required: there is no default platform.
+    platform: String,
     /// `RANKED_SOLO_5x5` or `RANKED_FLEX_SR`; default the first of `LADDER_QUEUES`.
     queue: Option<String>,
 }
@@ -1513,13 +1514,13 @@ async fn recompute_analytics(State(state): State<AppState>, Extension(_c): Who, 
     use crate::riot::ladder::RANKED_QUEUES;
     let parsed = (|| {
         let b = Body::parse(&bytes)?;
-        let platform = b.with("platform", validate::platform_at)?;
+        b.required(&["platform"])?;
+        let platform = b
+            .with("platform", validate::platform_at)?
+            .ok_or_else(ApiError::internal)?;
         let queue = b.with("queue", |loc, v| body_enum(loc, "queue", v, &RANKED_QUEUES))?;
         Ok::<_, ApiError>((
-            platform
-                .unwrap_or(state.config.default_platform)
-                .as_str()
-                .to_string(),
+            platform.as_str().to_string(),
             queue.map_or_else(|| default_ladder_queue(&state), str::to_string),
         ))
     })();

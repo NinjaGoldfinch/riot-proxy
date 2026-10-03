@@ -478,12 +478,13 @@ impl Stats {
         };
         let (platform, queue) = (newest.platform.clone(), newest.queue.clone());
         let patch =
-            crate::archive::analytics::latest_patch(&self.db, &self.key_scope, &platform, &queue).await?;
+            crate::archive::analytics::latest_patch(&self.db, &self.key_scope, Some(&platform), &queue)
+                .await?;
         let top = match patch {
             Some(p) => {
                 let read = crate::archive::analytics::Read {
                     key_scope: self.key_scope.clone(),
-                    platform,
+                    platform: Some(platform),
                     queue,
                     patch: p,
                     tier: None,

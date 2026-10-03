@@ -37,7 +37,6 @@ pub const VARS: &[&str] = &[
     "ACME_EMAIL",
     "TLS_PORT",
     "TLS_REDIRECT_PORT",
-    "DEFAULT_PLATFORM",
     "CACHE_TTL_OVERRIDES",
     "CACHE_L1_MAX_MB",
     "NEG_TTL_SECONDS",
@@ -209,7 +208,6 @@ pub struct Config {
     /// Plain-HTTP port redirected to HTTPS when `TLS` is on (80); 0 serves none.
     pub tls_redirect_port: u16,
 
-    pub default_platform: Platform,
     // Validated against the endpoint registry by its owner (P1-02).
     pub cache_ttl_overrides: String,
     /// L1 weight budget in MiB (design/07 §Sizing, default 128).
@@ -230,7 +228,7 @@ pub struct Config {
     pub track_catchup_limit: u32,
     pub ladder_crawl_s: u32,
     pub ladder_queues: Vec<String>,
-    /// Empty `LADDER_PLATFORMS` resolves to `[DEFAULT_PLATFORM]`, as in v1.
+    /// Empty `LADDER_PLATFORMS` schedules no crawl: there is no default platform (ADR-065).
     pub ladder_platforms: Vec<Platform>,
     pub ladder_tier_floor: String,
     pub ladder_backfill_limit: u32,
@@ -444,11 +442,10 @@ impl Config {
             }
         }
 
-        let default_platform = v.platform("DEFAULT_PLATFORM", &v.string("DEFAULT_PLATFORM", "euw1"));
-        let ladder_platforms = match csv(&v.string("LADDER_PLATFORMS", "")) {
-            empty if empty.is_empty() => vec![default_platform],
-            list => list.iter().map(|p| v.platform("LADDER_PLATFORMS", p)).collect(),
-        };
+        let ladder_platforms = csv(&v.string("LADDER_PLATFORMS", ""))
+            .iter()
+            .map(|p| v.platform("LADDER_PLATFORMS", p))
+            .collect();
 
         let config = Config {
             riot_api_key: Secret::new(riot_api_key),
@@ -470,7 +467,6 @@ impl Config {
             acme_email: v.opt_string("ACME_EMAIL"),
             tls_port: v.int("TLS_PORT", 443, 1, u16::MAX),
             tls_redirect_port: v.int("TLS_REDIRECT_PORT", 80, 0, u16::MAX),
-            default_platform,
             cache_ttl_overrides: v.string("CACHE_TTL_OVERRIDES", ""),
             cache_l1_max_mb: v.int("CACHE_L1_MAX_MB", 128, 1, 1_048_576),
             neg_ttl_seconds: v.int("NEG_TTL_SECONDS", 30, 1, u32::MAX),

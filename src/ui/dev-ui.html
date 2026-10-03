@@ -498,7 +498,7 @@
 
       const queueName = (id) => queueNames?.get(Number(id)) ?? `queue ${id}`;
 
-      let cfg = { authDisabled: false, defaultPlatform: 'euw1', platforms: [] };
+      let cfg = { authDisabled: false, platforms: [] };
       let dd = null; // { version, championById }
       let state = { riotId: null, puuid: null, platform: null, start: 0 };
       let cooldownTimer = null;
@@ -972,13 +972,11 @@
 
         const url = new URL(location.href);
         const slug = decodeURIComponent(url.pathname.replace(/^\/dev\/?/, ''));
+        // No server default (ADR-065): the URL, else the last one picked,
+        // else whatever the list shows first.
         const platform =
-          url.searchParams.get('platform') ??
-          localStorage.getItem('riot-proxy.platform') ??
-          cfg.defaultPlatform;
-        select.value = cfg.platforms.some((p) => p.value === platform)
-          ? platform
-          : cfg.defaultPlatform;
+          url.searchParams.get('platform') ?? localStorage.getItem('riot-proxy.platform');
+        if (cfg.platforms.some((p) => p.value === platform)) select.value = platform;
 
         select.addEventListener('change', () =>
           localStorage.setItem('riot-proxy.platform', select.value),

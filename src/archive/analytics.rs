@@ -260,7 +260,8 @@ pub fn rebuild_builds(c: &mut Connection, s: &Scope) -> Result<Written, DbError>
 #[derive(Debug, Clone)]
 pub struct Read {
     pub key_scope: String,
-    pub platform: String,
+    /// `None`: every platform summed (ADR-065).
+    pub platform: Option<String>,
     pub queue: String,
     pub patch: String,
     pub tier: Option<String>,
@@ -277,16 +278,20 @@ pub struct Read {
 pub async fn latest_patch(
     db: &Db,
     key_scope: &str,
-    platform: &str,
+    platform: Option<&str>,
     queue: &str,
 ) -> Result<Option<String>, DbError> {
-    let (scope, platform, queue) = (key_scope.to_string(), platform.to_string(), queue.to_string());
+    let (scope, platform, queue) = (
+        key_scope.to_string(),
+        platform.map(str::to_string),
+        queue.to_string(),
+    );
     db.read(move |c| {
         use rusqlite::OptionalExtension;
         Ok(c.query_row(
             &format!(
                 "SELECT patch FROM (SELECT DISTINCT patch FROM champion_stats
-                  WHERE key_scope = ?1 AND platform = ?2 AND queue = ?3)
+                  WHERE key_scope = ?1 AND (?2 IS NULL OR platform = ?2) AND queue = ?3)
                  ORDER BY {PATCH_DESC} LIMIT 1"
             ),
             params![scope, platform, queue],
@@ -297,12 +302,13 @@ pub async fn latest_patch(
     .await
 }
 
-/// The filter a read uses: `?1`–`?4` scope/platform/queue/patch and `?8`
+/// The filter a read uses: `?1`–`?4` scope/platform (NULL: all)/queue/patch and `?8`
 /// whether remakes count always; `?5` tier, `?6` role and `?7` champion for
 /// the tables that have those columns. Unused numbers are bound but unread.
 fn read_where(tier: bool, role: bool, champion: bool) -> String {
-    let mut w =
-        String::from("key_scope = ?1 AND platform = ?2 AND queue = ?3 AND patch = ?4 AND (?8 OR remake = 0)");
+    let mut w = String::from(
+        "key_scope = ?1 AND (?2 IS NULL OR platform = ?2) AND queue = ?3 AND patch = ?4 AND (?8 OR remake = 0)",
+    );
     if tier {
         w.push_str(" AND (?5 IS NULL OR tier = ?5)");
     }

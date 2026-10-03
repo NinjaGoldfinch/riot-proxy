@@ -478,12 +478,24 @@ impl App {
 
 #[tokio::test]
 async fn the_crawl_route_starts_one_crawl_per_ladder_and_answers_202() {
-    let a = app(&[
-        ("DEFAULT_PLATFORM", "kr"),
-        ("LADDER_QUEUES", "RANKED_FLEX_SR,RANKED_SOLO_5x5"),
-    ])
-    .await;
-    let first = a.call("POST", "/v1/admin/ladder/crawl", &a.admin, None).await;
+    let a = app(&[("LADDER_QUEUES", "RANKED_FLEX_SR,RANKED_SOLO_5x5")]).await;
+    // No default platform (ADR-065).
+    let missing = a.call("POST", "/v1/admin/ladder/crawl", &a.admin, None).await;
+    assert_eq!(
+        (missing.status, missing.json()["error"]["message"].clone()),
+        (
+            StatusCode::BAD_REQUEST,
+            json!("body must have required property 'platform'")
+        )
+    );
+    let first = a
+        .call(
+            "POST",
+            "/v1/admin/ladder/crawl",
+            &a.admin,
+            Some(json!({"platform": "kr"})),
+        )
+        .await;
     assert_eq!(first.status, StatusCode::ACCEPTED);
     let body = first.json();
     assert_eq!(
@@ -494,14 +506,14 @@ async fn the_crawl_route_starts_one_crawl_per_ladder_and_answers_202() {
             &json!("RANKED_FLEX_SR"),
             &json!(3)
         ),
-        "defaults: DEFAULT_PLATFORM, the first LADDER_QUEUES, LADDER_TIER_FLOOR"
+        "defaults: the first LADDER_QUEUES, LADDER_TIER_FLOOR"
     );
     let again = a
         .call(
             "POST",
             "/v1/admin/ladder/crawl",
             &a.admin,
-            Some(json!({"queue": "RANKED_FLEX_SR", "tierFloor": "IRON"})),
+            Some(json!({"platform": "kr", "queue": "RANKED_FLEX_SR", "tierFloor": "IRON"})),
         )
         .await;
     assert_eq!(again.status, StatusCode::ACCEPTED);
@@ -544,12 +556,12 @@ async fn the_crawl_route_starts_one_crawl_per_ladder_and_answers_202() {
     );
     for (body, code, message) in [
         (
-            json!({"tierFloor": "master"}),
+            json!({"platform": "kr", "tierFloor": "master"}),
             "VALIDATION",
             "body/tierFloor must be equal to one of the allowed values",
         ),
         (
-            json!({"queue": "ARAM"}),
+            json!({"platform": "kr", "queue": "ARAM"}),
             "VALIDATION",
             "body/queue must be equal to one of the allowed values",
         ),
@@ -577,7 +589,7 @@ async fn the_crawl_route_starts_one_crawl_per_ladder_and_answers_202() {
 #[tokio::test]
 async fn the_options_route_lists_what_a_crawl_can_be_asked_for() {
     let a = app(&[
-        ("DEFAULT_PLATFORM", "kr"),
+        ("LADDER_PLATFORMS", "kr,na1"),
         ("LADDER_TIER_FLOOR", "emerald"),
         ("LADDER_BACKFILL_LIMIT", "50"),
     ])
@@ -599,7 +611,17 @@ async fn the_options_route_lists_what_a_crawl_can_be_asked_for() {
     assert_eq!(body["tiers"][9], "CHALLENGER");
     assert_eq!(
         body["defaults"],
-        json!({"platform": "kr", "queue": SOLO, "tierFloor": "EMERALD", "backfillLimit": 50})
+        json!({"platform": "kr", "queue": SOLO, "tierFloor": "EMERALD", "backfillLimit": 50}),
+        "the form preselects the first scheduled ladder"
+    );
+    let none = app(&[]).await;
+    let r = none
+        .call("GET", "/v1/admin/ladder/options", &none.admin, None)
+        .await;
+    assert_eq!(
+        r.json()["defaults"]["platform"],
+        json!(null),
+        "no ladder, no preselection"
     );
     assert_eq!(
         a.call("GET", "/v1/admin/ladder/options", &a.reader, None)
@@ -937,13 +959,13 @@ async fn a_player_match_v5_does_not_know_is_skipped() {
 
 #[tokio::test]
 async fn crawls_are_listed_and_a_running_one_can_be_cancelled() {
-    let a = app(&[("DEFAULT_PLATFORM", "kr")]).await;
+    let a = app(&[]).await;
     let started = a
         .call(
             "POST",
             "/v1/admin/ladder/crawl",
             &a.admin,
-            Some(json!({"tierFloor": "DIAMOND"})),
+            Some(json!({"platform": "kr", "tierFloor": "DIAMOND"})),
         )
         .await
         .json();

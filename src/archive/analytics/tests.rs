@@ -404,7 +404,7 @@ async fn reads_leave_remakes_out_unless_asked_and_sum_roles() {
     rebuild(&db, 0).await;
     let read = |remakes: bool| Read {
         key_scope: "s".into(),
-        platform: "kr".into(),
+        platform: Some("kr".into()),
         queue: "RANKED_SOLO_5x5".into(),
         patch: "14.18".into(),
         tier: None,
@@ -415,7 +415,7 @@ async fn reads_leave_remakes_out_unless_asked_and_sum_roles() {
         remakes,
     };
     assert_eq!(
-        latest_patch(&db, "s", "kr", "RANKED_SOLO_5x5")
+        latest_patch(&db, "s", Some("kr"), "RANKED_SOLO_5x5")
             .await
             .unwrap()
             .as_deref(),
