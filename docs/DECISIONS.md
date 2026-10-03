@@ -665,3 +665,29 @@ Accepted. Owner decisions at P8-01: a Node mock Riot inside `acceptance/`, mock 
   - "Ladder metrics are published": a labelled histogram has no sample before its first observation, in v1's prom-client as in v2's exporter. So v1's check passed only on deployments that had crawled. It now accepts absence when no crawl has finished, and the crawl checks assert the series afterwards.
   - The crawl runs whenever mock mode does (v1: `ACCEPTANCE_LADDER=1`). It is a few seconds' work against the mock's ladder.
 - **CI:** an `acceptance` job builds the debug binary, runs `npm ci` and `npm test` in `acceptance/`, and becomes a fifth required check. `just acceptance` runs the same locally.
+
+## ADR-060 — `migrate-v1` (2026-10-03)
+Accepted. `riot-proxy migrate-v1 --from <path> [--key-scope <scope>]` (design/08 §Data migration).
+- **Input** comes in either of two forms:
+  - a `pg_dump -Fc` archive, recognised by its `PGDMP` magic and streamed through `pg_restore --data-only -f -`, which must be on `PATH`;
+  - that command's output already written to a file: Postgres COPY text.
+  - The parse runs on a blocking thread and hands rows to the async writer over a bounded channel, so memory is one batch, not the dump.
+  - `pg_restore` must be at least the version of the `pg_dump` that wrote the archive. v1 ran Postgres 18, so a v1 production dump needs `pg_restore` 18 or later.
+- **Matches:**
+  - v1's `matches.data` goes through v2's own archive path (`matches::put`): zstd, then the derived columns, facts, bans and remake flag at the current `FACTS_VERSION`. That is design/08's "re-derives facts", and `facts_version` starts clean.
+  - `archived_at` is v1's `fetched_at`.
+  - `matches.timeline`, which in v1 was a column on `matches` and not its own table, goes to `timelines`.
+  - Bodies are JSON-equal to v1's, not byte-equal to Riot's: v1 stored `jsonb`, which had already reordered them.
+  - A body v2 cannot archive (for example, no `gameEndTimestamp`) is skipped and named in the report. It does not fail the run.
+  - Batches of 64 matches are archived concurrently.
+- **Facts key scope:** this deployment's, or `--key-scope`. v1's `match_participants` carried none. The two are equal when v2 runs with v1's Riot key, as the cut-over plans; the run warns when the players' stored scope differs.
+- **Players** keep v1's own `key_scope`, platform, names, `tracked` and `last_seen_match_id`. v1's three backfill stamps become `backfill_state` `{startedAt, doneAt, depth}` (ADR-050).
+- **Not read:** consumers (counted and reported: "mint new keys", design/08) and every v1 derived table (`match_participants`, `match_bans`, analytics, ladder). The archive regenerates them. Ladder entries come back with the next crawl.
+- **Idempotent:** every write is an upsert, so a re-run changes nothing.
+- **Fixture** (`tests/fixtures/v1-dump/`), built on Postgres 17.11 from v1's ten migrations:
+  - 20 matches (ranked, Arena, a remake, one with a timeline, one malformed body, names with a tab, a backslash, Korean and a newline), 12 players, 2 consumers;
+  - `v1.dump` (custom format) and `v1-data.sql` (its `pg_restore --data-only` text).
+  - Tests import the text form always, and the dump whenever `pg_restore` exists.
+- **Throughput:** 1 837 matches/s in release on the fixture loop (plan: ≥ 1 000), on the development machine. Design/08's "~5k/s" was an estimate.
+- **Binary size (found on this PR):** the static musl binary reached 21.1 MB, over the 20 MB the P0 exit check set. The release profile moves from thin to fat LTO; `aws-lc-rs` is the only crypto backend linked, so there was no duplicate to drop.
+- **CI's `pg_restore` is older than the fixture's `pg_dump`** (16 vs 17), and refuses the archive. The custom-format test runs only where `pg_restore` ≥ 17 exists, and the CLI's error names the version rule.
