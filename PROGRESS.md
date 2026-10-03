@@ -160,7 +160,7 @@ Exit check: _pending_
 - [x] P8-03 built-in TLS (#64; rustls-acme TLS-ALPN-01, 308 redirect, private ops endpoints, ADR-061)
 - [x] P8-04 Postgres feature flag, compile-only (#65; `Store` seam, claim routed through `SqliteStore`, ADR-062)
 - [x] P8-05 release pipeline (#66; three binaries + GHCR image on `v*`, README for v2, ADR-063; `v2.0.0-rc.0` dry-run awaits owner go-ahead)
-- [ ] P8-06 cut-over runbook
+- [x] P8-06 cut-over runbook (#67; `docs/CUTOVER.md`, ADR-064; owner sign-off pending)
 Exit check: _pending_
 
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)

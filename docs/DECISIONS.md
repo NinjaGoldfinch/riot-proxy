@@ -746,3 +746,13 @@ Accepted. `.github/workflows/release.yml` (plan P8-05, design/07).
   - A version with a `-` suffix is marked as a pre-release.
 - **Pull requests** that touch the workflow or `Dockerfile.release` run every build and the image check, but neither log in to GHCR nor publish.
 - **README.md** is written for v2: install, first run, a configuration table (`.env.example` remains the complete list), and operations (HTTPS, systemd, health and metrics, backups, migrating from v1).
+
+## ADR-064 — Cut-over runbook (2026-10-04)
+Accepted. `docs/CUTOVER.md` (plan P8-06) follows design/08 §Cut-over: deploy beside v1, import, move consumers one at a time, watch v1 reach zero, switch it off and keep its data for 14 days. Where the runbook departs from design/08's sketch:
+- **The dump command.** v1 has no `timelines` table; timelines are a column on `matches` (ADR-060). The runbook dumps `-t matches -t players`.
+  - It uses **plain SQL** (`pg_dump --data-only`), not `-Fc`. That avoids needing a `pg_restore` 18 on the v2 host.
+  - Verified: a plain data-only dump of the P8-02 fixture imports exactly as the `pg_restore` text does (19 matches, 1 timeline, 12 players, one skip).
+  - v1's nightly custom-format backups also work, given `pg_restore` 18 or later.
+- **Import before the first boot**, so tracked players are polled from the start. Then **re-import once v1 is at zero** to pick up matches v1 archived during the overlap; upserts make this a no-op for everything already imported.
+- **No ladder crawls during the overlap** (`LADDER_CRAWL_S=0`, no manual crawls). Both proxies spend one key's budget through separate limiters, so the runbook keeps bulk work out of the overlap. Interactive traffic only moves from one to the other.
+- **Finding stragglers.** v1 does not log requests per consumer (request logging is off) and has no last-used column. The runbook therefore disables v1 keys one at a time through v1's `DELETE /v1/admin/consumers/:id`. v1 has no re-enable route, so the runbook gives the SQL that undoes a disable.
