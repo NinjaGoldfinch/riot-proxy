@@ -768,3 +768,23 @@ Accepted (owner, task RC-01). v2 drops v1's `DEFAULT_PLATFORM`. The owner no lon
   - `/v1/players/{puuid}/champions` already treated `platform` as an optional filter and is unchanged.
 - **Scheduled crawls:** an empty `LADDER_PLATFORMS` now schedules no crawl, instead of crawling `DEFAULT_PLATFORM`. `/v1/admin/ladder/options` reports the first of `LADDER_PLATFORMS` (or `null`) as `defaults.platform`. That value only preselects the dashboard's form, which always sends the platform it shows.
 - **Not covered here:** account-v1 region selection (RC-02).
+
+
+## ADR-066 — account-v1 picks its cluster (2026-10-04)
+Accepted (owner, task RC-02). Riot serves every account from each account-v1 cluster: americas, asia and europe. The developer portal says so, and v1 already sent `sea` to asia on that basis. Each cluster has its own rate limits, so the proxy may choose a cluster instead of making the caller choose.
+- **Routes** (owner decision):
+  - New `GET /v1/riot/accounts/by-riot-id/{gameName}/{tagLine}` and `GET /v1/riot/accounts/by-puuid/{puuid}` pick the cluster.
+  - The `/{region}/` routes stay as an explicit pin and never move: a pinned lookup on a frozen cluster is `RATE_LIMITED`, as before.
+  - The two path shapes have different segment counts, so they do not collide.
+- **Internal lookups pick too** (owner decision): the player profile's account part, `profile/by-riot-id`, and the admin track-by-Riot-ID lookup. The admin raw-debug route names its own host and stays pinned.
+- **Order:** asia, then americas, then europe (`Region::ACCOUNT_PICK`, owner).
+- **Failover** (owner decision: limiter-aware plus on 429). The fetcher's upstream leg:
+  1. Takes a token from the first cluster with room now. A zero-budget `acquire` is a non-blocking try that also says when the cluster frees.
+  2. If none has room, waits for whichever frees first, inside the usual wait budget. Past the budget it answers `RATE_LIMITED`, with `Retry-After` from the soonest cluster.
+  3. On a typed 429, `observe` freezes that cluster. The next attempt picks another without waiting.
+  4. On a service 429 (no `X-Rate-Limit-Type`), it moves to the next cluster at once. ADR-021's 500 ms × 2ⁿ backoff applies only once every cluster has answered one. The cluster that answered goes last for the rest of the request.
+  - Bulk callers pick the same way, under the same ceiling and waiter rules.
+- **One cache entry per account:** account-v1 cache keys use `account` in place of the host (`{scope}:account.byPuuid:account:{puuid}`), so a picked lookup and a pinned one, on any region, share the entry and its single-flight.
+  - Existing account entries keyed by host are orphaned once: they are refetched on next use, and the L2 sweep drops them when they expire.
+  - Other regional methods (match-v5) keep their host in the key.
+- **Not changed:** the `/{region}/` routes' validation and `sea` handling; `X-Cache`, error codes and metric names.

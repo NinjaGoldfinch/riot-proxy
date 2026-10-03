@@ -35,6 +35,10 @@ pub struct RiotRequest {
     /// Path parameter values, percent-encoded as they appear in `path` (cache keys).
     pub params: Vec<String>,
     pub query: Vec<(&'static str, String)>,
+    /// account-v1 only: the fetcher picks the cluster from
+    /// [`Region::ACCOUNT_PICK`](crate::riot::routing::Region::ACCOUNT_PICK), and
+    /// `target` is just the first choice (ADR-066).
+    pub pick_cluster: bool,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -53,7 +57,29 @@ impl RiotRequest {
             path: endpoint.path(params)?,
             params: params.iter().map(|p| encode_component(p)).collect(),
             query: Vec::new(),
+            pick_cluster: false,
         })
+    }
+
+    /// An account-v1 request on whichever cluster has room: Riot serves every
+    /// account from americas, asia and europe alike (ADR-066).
+    pub fn account(endpoint: &'static Endpoint, params: &[&str]) -> Result<Self, RequestError> {
+        let first = crate::riot::routing::Region::ACCOUNT_PICK[0];
+        let mut req = Self::new(endpoint, Target::Region(first), params)?;
+        req.pick_cluster = endpoint.host == crate::riot::endpoints::HostKind::Account;
+        Ok(req)
+    }
+
+    /// The hosts to try, in order: the picker's clusters, or the one target.
+    pub fn targets(&self) -> Vec<Target> {
+        if self.pick_cluster {
+            crate::riot::routing::Region::ACCOUNT_PICK
+                .iter()
+                .map(|r| Target::Region(*r))
+                .collect()
+        } else {
+            vec![self.target]
+        }
     }
 
     /// Add a query parameter the endpoint declares. `None` or empty values are

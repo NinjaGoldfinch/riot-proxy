@@ -1,6 +1,5 @@
 ---
 source: tests/openapi.rs
-assertion_line: 12
 expression: doc
 ---
 {
@@ -7218,6 +7217,105 @@ expression: doc
         ]
       }
     },
+    "/v1/riot/accounts/by-puuid/{puuid}": {
+      "get": {
+        "description": "Riot serves every account from each of its account-v1 clusters, so the proxy picks one: `asia`, then `americas`, then `europe`. It takes the first whose rate limits have room, and moves on when Riot answers 429. One cached copy serves this route and the region-pinned one.",
+        "operationId": "account_by_puuid_any",
+        "parameters": [
+          {
+            "description": "Encrypted player UUID (60–128 characters, [A-Za-z0-9_-])",
+            "in": "path",
+            "name": "puuid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {}
+            },
+            "description": "Riot's payload, unmodified. `X-Cache` and `X-Cache-Age` describe where it came from."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found upstream; a cached 404 carries `X-Cache: HIT-NEG`."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot failed or rejected the proxy's key (`UPSTREAM_ERROR`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot's rate limit budget is exhausted (`RATE_LIMITED`, with `Retry-After`)."
+          }
+        },
+        "summary": "Account by PUUID, any cluster",
+        "tags": [
+          "riot"
+        ]
+      }
+    },
     "/v1/riot/accounts/by-puuid/{region}/{puuid}": {
       "get": {
         "description": "account-v1 by PUUID. The body is Riot's, unmodified. PUUIDs are encrypted per API key.",
@@ -7321,6 +7419,114 @@ expression: doc
           }
         },
         "summary": "Account by PUUID",
+        "tags": [
+          "riot"
+        ]
+      }
+    },
+    "/v1/riot/accounts/by-riot-id/{gameName}/{tagLine}": {
+      "get": {
+        "description": "Riot serves every account from each of its account-v1 clusters, so the proxy picks one: `asia`, then `americas`, then `europe`. It takes the first whose rate limits have room, and moves on when Riot answers 429. One cached copy serves this route and the region-pinned one.",
+        "operationId": "account_by_riot_id_any",
+        "parameters": [
+          {
+            "description": "The part of a Riot ID before the `#` (1–16 characters)",
+            "in": "path",
+            "name": "gameName",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The part of a Riot ID after the `#` (1–5 characters)",
+            "in": "path",
+            "name": "tagLine",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {}
+            },
+            "description": "Riot's payload, unmodified. `X-Cache` and `X-Cache-Age` describe where it came from."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found upstream; a cached 404 carries `X-Cache: HIT-NEG`."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot failed or rejected the proxy's key (`UPSTREAM_ERROR`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot's rate limit budget is exhausted (`RATE_LIMITED`, with `Retry-After`)."
+          }
+        },
+        "summary": "Account by Riot ID, any cluster",
         "tags": [
           "riot"
         ]

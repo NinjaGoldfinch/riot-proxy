@@ -25,9 +25,9 @@ use crate::cache::l1::{CacheEntry, Lookup};
 use crate::http::{ApiError, ErrorCode};
 use crate::metrics::CACHE_READS_TOTAL;
 use crate::riot::client::{RiotClient, RiotErrorKind, RiotRequest};
-use crate::riot::endpoints::{Endpoint, TtlPolicy};
+use crate::riot::endpoints::{Endpoint, Target, TtlPolicy};
 use crate::riot::limiter::headers::RateLimitHeaders;
-use crate::riot::limiter::{Limiter, Priority};
+use crate::riot::limiter::{Limiter, Priority, RateLimited};
 use crate::singleflight::{SingleFlight, WorkFailed};
 
 /// v1 §5.5: two retries after a 5xx or a network failure.
@@ -333,12 +333,14 @@ async fn cached_copy(inner: &Inner, key: &str) -> Option<Fetched> {
 /// negatives. Runs once per key at a time (single-flight), on its own task.
 async fn upstream(
     inner: Arc<Inner>,
-    req: RiotRequest,
+    mut req: RiotRequest,
     key: String,
     priority: Priority,
 ) -> Result<Fetched, FetchError> {
     let endpoint: &'static Endpoint = req.endpoint;
-    let scope = req.target.scope();
+    let targets = req.targets();
+    // Clusters that answered a service 429 during this request: tried last.
+    let mut avoid: Vec<Target> = Vec::new();
     let budget = match priority {
         Priority::Interactive => inner.interactive_budget,
         Priority::Bulk => BULK_BUDGET,
@@ -346,17 +348,27 @@ async fn upstream(
     let (mut server_retries, mut service_tries) = (0usize, 0u32);
 
     for _ in 0..MAX_ATTEMPTS {
-        if let Err(limited) = inner
-            .limiter
-            .acquire(scope, endpoint.method_scope_key, priority, budget)
-            .await
+        let target = match acquire_target(
+            &inner.limiter,
+            &targets,
+            &avoid,
+            endpoint.method_scope_key,
+            priority,
+            budget,
+        )
+        .await
         {
-            if let Some(copy) = cached_copy(&inner, &key).await {
-                tracing::warn!(method = endpoint.id, "serving stale while rate limited");
-                return Ok(copy);
+            Ok(t) => t,
+            Err(limited) => {
+                if let Some(copy) = cached_copy(&inner, &key).await {
+                    tracing::warn!(method = endpoint.id, "serving stale while rate limited");
+                    return Ok(copy);
+                }
+                return Err(ApiError::from(limited).into());
             }
-            return Err(ApiError::from(limited).into());
-        }
+        };
+        req.target = target;
+        let scope = target.scope();
 
         let (outcome, headers) = match inner.client.send(&req).await {
             Ok(res) => {
@@ -405,10 +417,23 @@ async fn upstream(
                 retry_after: Some(_),
             } => {
                 // `observe` froze the scope; the next acquire waits it out, or
-                // fails with RATE_LIMITED if the freeze outlasts the budget.
+                // fails with RATE_LIMITED if the freeze outlasts the budget. A
+                // picked account lookup moves to a cluster with room instead.
                 continue;
             }
             RiotErrorKind::RateLimited { .. } => {
+                // A picked account lookup tries every other cluster before backing off.
+                if targets.len() > 1 && !avoid.contains(&target) {
+                    avoid.push(target);
+                    if avoid.len() < targets.len() {
+                        tracing::info!(
+                            method = endpoint.id,
+                            cluster = scope,
+                            "service 429, trying the next cluster"
+                        );
+                        continue;
+                    }
+                }
                 if service_tries < SERVICE_429_TRIES {
                     let backoff = (SERVICE_429_BASE * 2u32.pow(service_tries)).min(SERVICE_429_MAX);
                     service_tries += 1;
@@ -441,6 +466,44 @@ async fn upstream(
     Err(ApiError::new(ErrorCode::UpstreamError, "Upstream request failed").into())
 }
 
+/// A permit on the first target with room now, in `targets` order with the
+/// `avoid`ed ones last. With none free, wait for whichever frees first, inside
+/// `budget`. One target is a plain acquire (ADR-066).
+async fn acquire_target(
+    limiter: &Limiter,
+    targets: &[Target],
+    avoid: &[Target],
+    method: &str,
+    priority: Priority,
+    budget: Duration,
+) -> Result<Target, RateLimited> {
+    if let [only] = targets {
+        limiter.acquire(only.scope(), method, priority, budget).await?;
+        return Ok(*only);
+    }
+    let ordered = targets
+        .iter()
+        .filter(|t| !avoid.contains(t))
+        .chain(targets.iter().filter(|t| avoid.contains(t)));
+    let mut soonest: Option<(Instant, Target)> = None;
+    for &t in ordered {
+        // A zero budget never waits: it takes a token now or says when one frees.
+        match limiter.acquire(t.scope(), method, priority, Duration::ZERO).await {
+            Ok(_) => return Ok(t),
+            Err(l) if soonest.is_none_or(|(at, _)| l.retry_at < at) => soonest = Some((l.retry_at, t)),
+            Err(_) => {}
+        }
+    }
+    let Some((_, t)) = soonest else {
+        // `targets` is never empty; an empty list has nothing to wait for.
+        return Err(RateLimited {
+            retry_at: Instant::now() + budget,
+        });
+    };
+    limiter.acquire(t.scope(), method, priority, budget).await?;
+    Ok(t)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -457,6 +520,109 @@ mod tests {
         ];
         let names: Vec<&str> = all.iter().map(|x| x.as_str()).collect();
         assert_eq!(names, ["HIT", "MISS", "STALE", "HIT-NEG", "ARCHIVE", "BYPASS"]);
+    }
+
+    fn clusters() -> Vec<Target> {
+        crate::riot::routing::Region::ACCOUNT_PICK
+            .iter()
+            .map(|r| Target::Region(*r))
+            .collect()
+    }
+
+    /// ADR-066: the first cluster with room wins; avoided clusters go last.
+    #[tokio::test(start_paused = true)]
+    async fn the_picker_takes_the_first_free_cluster_and_tries_avoided_ones_last() {
+        let limiter = Limiter::new(0.8);
+        let all = clusters();
+        let pick = |avoid: Vec<Target>| {
+            let (limiter, all) = (&limiter, &all);
+            async move {
+                acquire_target(
+                    limiter,
+                    all,
+                    &avoid,
+                    "m",
+                    Priority::Interactive,
+                    Duration::from_secs(2),
+                )
+                .await
+                .unwrap()
+                .scope()
+            }
+        };
+        assert_eq!(pick(vec![]).await, "asia");
+        assert_eq!(pick(vec![all[0]]).await, "americas");
+        assert_eq!(
+            pick(vec![all[0], all[1], all[2]]).await,
+            "asia",
+            "all avoided: order again"
+        );
+    }
+
+    /// With every cluster frozen, wait for the soonest, inside the budget.
+    #[tokio::test(start_paused = true)]
+    async fn with_none_free_the_picker_waits_for_the_soonest_cluster() {
+        use crate::riot::limiter::headers::RateLimitType;
+        let limiter = Limiter::new(0.8);
+        for (scope, ms) in [("asia", 5000), ("americas", 1000), ("europe", 3000)] {
+            limiter.freeze(scope, Duration::from_millis(ms), RateLimitType::Method);
+        }
+        let started = Instant::now();
+        let got = acquire_target(
+            &limiter,
+            &clusters(),
+            &[],
+            "m",
+            Priority::Interactive,
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap();
+        assert_eq!(got.scope(), "americas");
+        assert_eq!(started.elapsed(), Duration::from_millis(1000));
+
+        let short = acquire_target(
+            &limiter,
+            &clusters(),
+            &[],
+            "m",
+            Priority::Interactive,
+            Duration::ZERO,
+        )
+        .await;
+        assert!(short.is_ok(), "americas has room again");
+        for scope in ["asia", "americas", "europe"] {
+            limiter.freeze(scope, Duration::from_secs(10), RateLimitType::Method);
+        }
+        let late = acquire_target(
+            &limiter,
+            &clusters(),
+            &[],
+            "m",
+            Priority::Interactive,
+            Duration::from_secs(2),
+        )
+        .await;
+        assert!(late.is_err(), "nothing frees inside the budget");
+    }
+
+    /// A pinned request is a plain acquire on its one target.
+    #[tokio::test(start_paused = true)]
+    async fn a_single_target_is_never_moved() {
+        use crate::riot::limiter::headers::RateLimitType;
+        let limiter = Limiter::new(0.8);
+        limiter.freeze("europe", Duration::from_secs(10), RateLimitType::Method);
+        let europe = [Target::Region(crate::riot::routing::Region::Europe)];
+        let r = acquire_target(
+            &limiter,
+            &europe,
+            &[],
+            "m",
+            Priority::Interactive,
+            Duration::from_secs(2),
+        )
+        .await;
+        assert!(r.is_err());
     }
 
     #[test]

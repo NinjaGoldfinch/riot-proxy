@@ -142,6 +142,10 @@ impl Region {
     /// Regions that actually serve account-v1 (v1 `ACCOUNT_REGIONS`).
     pub const ACCOUNT: [Region; 3] = [Self::Americas, Self::Asia, Self::Europe];
 
+    /// The order the proxy tries account-v1 clusters in when the caller names
+    /// none (owner, RC-02): Riot serves every account from each of them.
+    pub const ACCOUNT_PICK: [Region; 3] = [Self::Asia, Self::Americas, Self::Europe];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Americas => "americas",

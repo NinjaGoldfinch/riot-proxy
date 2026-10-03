@@ -103,9 +103,10 @@ fn on_platform(id: &str, platform: Platform) -> Option<Target> {
     Endpoint::by_id(id).map(|e| e.target_for_platform(platform))
 }
 
-/// account-v1 lives on the platform's account region (`sea` platforms → asia).
-fn on_account_region(id: &str, platform: Platform) -> Option<Target> {
-    Endpoint::by_id(id).and_then(|e| e.target_for_region(platform.account_region()))
+/// account-v1 on whichever cluster has room (ADR-066).
+fn account_request(id: &str, params: &[&str]) -> Result<RiotRequest, ApiError> {
+    let ep = Endpoint::by_id(id).ok_or_else(ApiError::internal)?;
+    RiotRequest::account(ep, params).map_err(|_| ApiError::internal())
 }
 
 /// `?platform=`, required: there is no default platform (ADR-065).
@@ -239,15 +240,7 @@ async fn compose_profile(
     let account = async {
         match account {
             Some(known) => known,
-            None => {
-                let id = "account.byPuuid";
-                fetch(
-                    state,
-                    request(id, on_account_region(id, p), &[puuid], &[]),
-                    bypass,
-                )
-                .await
-            }
+            None => fetch(state, account_request("account.byPuuid", &[puuid]), bypass).await,
         }
     };
     let top = ask.top_mastery.to_string();
@@ -398,13 +391,7 @@ async fn profile_by_riot_id(
     // Always the cached mapping, even on a refresh: it only turns the Riot ID
     // into the PUUID the cooldown is keyed on. A won refresh re-reads the
     // account by PUUID with the rest (v1).
-    let id = "account.byRiotId";
-    let req = request(
-        id,
-        on_account_region(id, ask.platform),
-        &[&game_name, &tag_line],
-        &[],
-    );
+    let req = account_request("account.byRiotId", &[&game_name, &tag_line]);
     let account = match fetch(&state, req, false).await {
         Ok(a) => a,
         Err(e) => return respond(Err(e)),
