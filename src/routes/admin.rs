@@ -34,7 +34,7 @@ use crate::players;
 use crate::riot::client::RiotRequest;
 use crate::riot::endpoints::{ENDPOINTS, Endpoint, Target};
 use crate::riot::routing::{Platform, Region};
-use crate::routes::passthrough::{JSON, LocalErrors, PassthroughResponses, UpstreamErrors, request, respond};
+use crate::routes::passthrough::{JSON, LocalErrors, PassthroughResponses, UpstreamErrors, respond};
 use crate::routes::riot::bad_path;
 
 type Q = Query<HashMap<String, String>>;
@@ -463,7 +463,7 @@ async fn track_player(State(state): State<AppState>, Extension(_c): Who, bytes: 
                 )
                 .into_response();
             };
-            match resolve(&state, platform, &name, &tag).await {
+            match resolve(&state, &name, &tag).await {
                 Ok(account) => {
                     // Riot's spelling of the Riot ID wins over the caller's (v1).
                     game_name = account.game_name.or(game_name);
@@ -532,16 +532,13 @@ async fn track_player(State(state): State<AppState>, Extension(_c): Who, bytes: 
     }
 }
 
-/// account-v1 by Riot ID, through the fetcher (cached like any read).
-async fn resolve(
-    state: &AppState,
-    platform: Platform,
-    name: &str,
-    tag: &str,
-) -> Result<Account, Box<Response>> {
-    let id = "account.byRiotId";
-    let target = Endpoint::by_id(id).and_then(|e| e.target_for_region(platform.account_region()));
-    let req = request(id, target, &[name, tag], &[]).map_err(|e| Box::new(e.into_response()))?;
+/// account-v1 by Riot ID, through the fetcher (cached like any read), on
+/// whichever cluster has room (ADR-066).
+async fn resolve(state: &AppState, name: &str, tag: &str) -> Result<Account, Box<Response>> {
+    let req = Endpoint::by_id("account.byRiotId")
+        .ok_or_else(ApiError::internal)
+        .and_then(|e| RiotRequest::account(e, &[name, tag]).map_err(|_| ApiError::internal()))
+        .map_err(|e| Box::new(e.into_response()))?;
     match state.fetcher.fetch(req, FetchOptions::default()).await {
         Ok(r) => serde_json::from_slice(&r.body).map_err(|_| Box::new(ApiError::upstream().into_response())),
         Err(e) => Err(Box::new(respond(Err(e)))),
@@ -774,6 +771,8 @@ fn debug_request(scope: &str, path: &str, method: Option<&str>) -> Result<RiotRe
         path: raw_path.to_string(),
         params,
         query: Vec::new(),
+        // The debug route names its host: never moved to another cluster.
+        pick_cluster: false,
     };
     for pair in raw_query.split('&').filter(|p| !p.is_empty()) {
         let (k, v) = pair.split_once('=').unwrap_or((pair, ""));

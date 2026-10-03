@@ -43,8 +43,10 @@ Consumers send their key as `Authorization: Bearer rpx_…` (WebSockets may use 
 
 ```bash
 curl -H "Authorization: Bearer $KEY" \
-  http://localhost:8080/v1/riot/accounts/by-riot-id/asia/Hide%20on%20bush/KR1
+  http://localhost:8080/v1/riot/accounts/by-riot-id/Hide%20on%20bush/KR1
 ```
+
+Account lookups need no region. The proxy picks whichever account-v1 cluster has rate-limit room (`asia`, then `americas`, then `europe`). Add a region (`…/by-riot-id/europe/…`) to pin one.
 
 Once running, these pages are served:
 

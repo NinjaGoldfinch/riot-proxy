@@ -19,7 +19,7 @@ use sha2::{Digest, Sha256};
 
 use crate::config::Secret;
 use crate::riot::client::RiotRequest;
-use crate::riot::endpoints::encode_component;
+use crate::riot::endpoints::{HostKind, encode_component};
 
 /// `sha256(RIOT_API_KEY)` as hex, first 8 characters (v1 §7.4 `KEY_SCOPE`).
 ///
@@ -70,7 +70,13 @@ fn short_hash(text: &str) -> String {
 
 /// The canonical key for one upstream request.
 pub fn cache_key(scope: &KeyScope, req: &RiotRequest) -> String {
-    let mut key = format!("{scope}:{}:{}", req.endpoint.id, req.target.host());
+    // account-v1 answers the same from every cluster, so one entry serves a
+    // pinned lookup and a picked one alike (ADR-066).
+    let host = match req.endpoint.host {
+        HostKind::Account => "account".to_string(),
+        _ => req.target.host(),
+    };
+    let mut key = format!("{scope}:{}:{host}", req.endpoint.id);
     for p in &req.params {
         key.push(':');
         key.push_str(p);
@@ -309,13 +315,26 @@ mod tests {
         assert!(spaced.ends_with(":Hide%20on%20bush:KR1"), "{spaced}");
     }
 
-    /// Account lookups from `sea` share the `asia` entry, because Riot serves them there.
+    /// account-v1 answers the same on every cluster, so every region, `sea`
+    /// included, and a picked lookup share one entry (ADR-066). Other regional
+    /// methods keep their host.
     #[test]
-    fn keys_follow_the_resolved_host() {
+    fn account_keys_ignore_the_cluster_and_other_keys_follow_the_host() {
         let e = Endpoint::by_id("account.byPuuid").unwrap();
-        let sea = RiotRequest::new(e, e.target_for_region(Region::Sea).unwrap(), &["P"]).unwrap();
-        let asia = RiotRequest::new(e, e.target_for_region(Region::Asia).unwrap(), &["P"]).unwrap();
-        assert_eq!(cache_key(&scope(), &sea), cache_key(&scope(), &asia));
+        let picked = cache_key(&scope(), &RiotRequest::account(e, &["P"]).unwrap());
+        assert!(picked.contains(":account.byPuuid:account:P"), "{picked}");
+        for r in Region::ALL {
+            let pinned = RiotRequest::new(e, e.target_for_region(r).unwrap(), &["P"]).unwrap();
+            assert_eq!(cache_key(&scope(), &pinned), picked, "{r:?}");
+        }
+        let m = Endpoint::by_id("match.byId").unwrap();
+        let on = |r| {
+            cache_key(
+                &scope(),
+                &RiotRequest::new(m, m.target_for_region(r).unwrap(), &["X"]).unwrap(),
+            )
+        };
+        assert_ne!(on(Region::Asia), on(Region::Europe));
     }
 
     /// v1 "scopes admin purge patterns so one deployment cannot wipe another".

@@ -8,7 +8,7 @@ mod common;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use riot_proxy::consumers::{self, NewConsumer, Scope};
-use wiremock::matchers::path;
+use wiremock::matchers::{header, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const PUUID: &str = "NkQRxdiN3U3pEek5MWbWgaxzG_hpH5imJ9Ttch8ql5KM7D6p6Bh-Hbbvn6UoFVdGUBBIvcnEJv72qw";
@@ -236,6 +236,161 @@ async fn upstream_auth_failure_is_sanitised() {
     assert_eq!(r.json()["error"]["code"], "UPSTREAM_ERROR");
 }
 
+const ASIA: &str = "asia.api.riotgames.com";
+const AMERICAS: &str = "americas.api.riotgames.com";
+const EUROPE: &str = "europe.api.riotgames.com";
+
+/// account-v1 on one cluster: `x-riot-host` names the host a request was meant for.
+fn on_cluster(host: &str, puuid: &str) -> wiremock::MockBuilder {
+    Mock::given(path(format!("/riot/account/v1/accounts/by-puuid/{puuid}"))).and(header("x-riot-host", host))
+}
+
+fn typed_429() -> ResponseTemplate {
+    ResponseTemplate::new(429)
+        .insert_header("x-rate-limit-type", "method")
+        .insert_header("retry-after", "10")
+}
+
+/// RC-02 (ADR-066): without a region, asia is tried first, and the entry is
+/// shared with the region-pinned route, whichever cluster that names.
+#[tokio::test]
+async fn region_less_lookups_start_on_asia_and_share_the_pinned_entry() {
+    let e = env().await;
+    on_cluster(ASIA, PUUID)
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"puuid":"P"}"#))
+        .expect(1)
+        .mount(&e.server)
+        .await;
+    let first = get(&e, &format!("/v1/riot/accounts/by-puuid/{PUUID}"), Some(&e.read)).await;
+    assert_eq!(
+        (first.status, first.headers["x-cache"].to_str().unwrap()),
+        (StatusCode::OK, "MISS")
+    );
+    assert_eq!(first.body, br#"{"puuid":"P"}"#);
+    let pinned = get(
+        &e,
+        &format!("/v1/riot/accounts/by-puuid/europe/{PUUID}"),
+        Some(&e.read),
+    )
+    .await;
+    assert_eq!(pinned.headers["x-cache"], "HIT", "one entry for every cluster");
+
+    let body = br#"{"puuid":"P","gameName":"Hide on bush","tagLine":"KR1"}"#;
+    Mock::given(path("/riot/account/v1/accounts/by-riot-id/Hide%20on%20bush/KR1"))
+        .and(header("x-riot-host", ASIA))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(body.to_vec(), "application/json"))
+        .expect(1)
+        .mount(&e.server)
+        .await;
+    let r = get(
+        &e,
+        "/v1/riot/accounts/by-riot-id/Hide%20on%20bush/KR1",
+        Some(&e.read),
+    )
+    .await;
+    assert_eq!((r.status, r.body.as_slice()), (StatusCode::OK, body.as_slice()));
+}
+
+/// A typed 429 freezes asia; this lookup and the next go to americas, and
+/// asia is not asked again while frozen.
+#[tokio::test]
+async fn a_typed_429_moves_lookups_to_the_next_cluster() {
+    let e = env().await;
+    let other = "Q".repeat(78);
+    Mock::given(path(format!("/riot/account/v1/accounts/by-puuid/{PUUID}")))
+        .and(header("x-riot-host", ASIA))
+        .respond_with(typed_429())
+        .expect(1)
+        .mount(&e.server)
+        .await;
+    for p in [PUUID, other.as_str()] {
+        on_cluster(AMERICAS, p)
+            .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+            .expect(1)
+            .mount(&e.server)
+            .await;
+    }
+    for p in [PUUID, other.as_str()] {
+        let r = get(&e, &format!("/v1/riot/accounts/by-puuid/{p}"), Some(&e.read)).await;
+        assert_eq!(r.status, StatusCode::OK, "{p}");
+    }
+    assert!(e.state.limiter.frozen_for("asia").is_some());
+}
+
+/// A service 429 (no `X-Rate-Limit-Type`) moves on at once, without backing off.
+#[tokio::test]
+async fn a_service_429_tries_the_next_cluster_without_backing_off() {
+    let e = env().await;
+    on_cluster(ASIA, PUUID)
+        .respond_with(ResponseTemplate::new(429))
+        .expect(1)
+        .mount(&e.server)
+        .await;
+    on_cluster(AMERICAS, PUUID)
+        .respond_with(ResponseTemplate::new(429))
+        .expect(1)
+        .mount(&e.server)
+        .await;
+    on_cluster(EUROPE, PUUID)
+        .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+        .expect(1)
+        .mount(&e.server)
+        .await;
+    let started = std::time::Instant::now();
+    let r = get(&e, &format!("/v1/riot/accounts/by-puuid/{PUUID}"), Some(&e.read)).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(400),
+        "no 500 ms service backoff: {:?}",
+        started.elapsed()
+    );
+    assert!(
+        e.state.limiter.frozen_for("asia").is_none(),
+        "a service 429 freezes nothing"
+    );
+}
+
+/// With every cluster frozen past the wait budget: RATE_LIMITED, nothing sent.
+#[tokio::test]
+async fn every_cluster_full_is_rate_limited_without_an_upstream_call() {
+    use riot_proxy::riot::limiter::headers::RateLimitType;
+    let e = env().await;
+    for (scope, secs) in [("asia", 30), ("americas", 20), ("europe", 40)] {
+        e.state
+            .limiter
+            .freeze(scope, std::time::Duration::from_secs(secs), RateLimitType::Method);
+    }
+    let r = get(&e, &format!("/v1/riot/accounts/by-puuid/{PUUID}"), Some(&e.read)).await;
+    assert_eq!(r.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(r.json()["error"]["code"], "RATE_LIMITED");
+    let retry: u64 = r.headers["retry-after"].to_str().unwrap().parse().unwrap();
+    assert!(
+        (19..=20).contains(&retry),
+        "the soonest cluster, americas: {retry}"
+    );
+    assert!(e.server.received_requests().await.unwrap().is_empty());
+}
+
+/// A region-pinned lookup stays on its cluster, as before RC-02.
+#[tokio::test]
+async fn a_pinned_lookup_never_moves_cluster() {
+    use riot_proxy::riot::limiter::headers::RateLimitType;
+    let e = env().await;
+    e.state.limiter.freeze(
+        "europe",
+        std::time::Duration::from_secs(30),
+        RateLimitType::Method,
+    );
+    let r = get(
+        &e,
+        &format!("/v1/riot/accounts/by-puuid/europe/{PUUID}"),
+        Some(&e.read),
+    )
+    .await;
+    assert_eq!(r.json()["error"]["code"], "RATE_LIMITED");
+    assert!(e.server.received_requests().await.unwrap().is_empty());
+}
+
 /// Plan P4-04: OpenAPI compare, `/v1/riot/*` complete.
 #[test]
 fn every_v1_riot_operation_is_documented() {
@@ -260,5 +415,12 @@ fn every_v1_riot_operation_is_documented() {
         v.sort();
         v
     };
-    assert_eq!(ops(&ours), ops(&v1));
+    // v1's operations, plus RC-02's region-less account lookups (ADR-066).
+    let mut want = ops(&v1);
+    want.extend([
+        "get /v1/riot/accounts/by-puuid/{puuid}".to_string(),
+        "get /v1/riot/accounts/by-riot-id/{gameName}/{tagLine}".to_string(),
+    ]);
+    want.sort();
+    assert_eq!(ops(&ours), want);
 }
