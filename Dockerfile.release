@@ -1,0 +1,12 @@
+# The release image (ADR-063): the binaries the release workflow built and
+# attached, in a scratch image like `Dockerfile`'s. Not for local builds; use
+# `Dockerfile` (or `docker compose`) for those.
+FROM scratch
+ARG TARGETARCH
+COPY dist/riot-proxy-linux-${TARGETARCH} /riot-proxy
+VOLUME /data
+EXPOSE 8080
+ENV DATA_DIR=/data
+HEALTHCHECK --interval=30s --timeout=3s CMD ["/riot-proxy", "healthcheck"]
+ENTRYPOINT ["/riot-proxy"]
+CMD ["serve"]
