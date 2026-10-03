@@ -134,8 +134,10 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Only the binaries: build-push-action also uploads a `.dockerbuild` record.
       - uses: actions/download-artifact@v8
         with:
+          pattern: riot-proxy-*
           path: dist
           merge-multiple: true
       - run: cd dist && sha256sum riot-proxy-* > sha256sums && cat sha256sums
