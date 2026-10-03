@@ -703,3 +703,10 @@ Accepted. `serve --tls --domain <d> --acme-email <e>` (or `TLS`, `TLS_DOMAIN`, `
   - A self-signed `rcgen` certificate is passed through `ServeOptions.tls_pem`, which is not part of the operator-facing config. ACME itself needs a real domain and is the owner's manual check.
   - The integration test covers HTTPS 200, the 308 with host, port and query, and the loopback listener.
   - Unit tests cover the private ranges and the middleware with public and private peers.
+- **Binary size (found on this PR):** rustls-acme brings its own HTTP client stack (async-web-client, futures-rustls, async-io), x509-parser, chrono and a second rcgen. These took the static musl binary to 22.2 MB, over the 20 MiB cap. The owner chose `opt-level = "s"` for every dependency, with this crate kept at 3.
+  - Measured musl sizes:
+    - cold crates only at "s": 22.0 MB;
+    - all dependencies at "s": 17.9 MB;
+    - everything at "s": 15.2 MB.
+  - migrate-v1's archive benchmark drops from about 1 850 to about 1 730 matches/s (3 runs each), against a 1 000/s target.
+  - `panic = "abort"` was not considered: it would defeat the catch-panic layer.

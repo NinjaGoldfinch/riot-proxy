@@ -72,3 +72,8 @@ panic = "warn"
 lto = "fat"
 codegen-units = 1
 strip = true
+
+# Dependencies optimise for size, this crate for speed: 22.2 → 17.9 MB static,
+# about 6% off migrate-v1's archive throughput (ADR-061).
+[profile.release.package."*"]
+opt-level = "s"
