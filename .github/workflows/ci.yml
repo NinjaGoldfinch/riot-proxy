@@ -99,6 +99,9 @@ jobs:
           docker compose up -d --build --wait --wait-timeout 60 || true
           for i in $(seq 1 30); do curl -fsS localhost:8080/healthz && break; sleep 1; done
           curl -fsS localhost:8080/healthz
+          # P8 exit check: the compose stack on a clean runner serves /docs.
+          curl -fsS localhost:8080/docs | grep -qi "<html"
+          curl -fsS localhost:8080/openapi.json | grep -q '"openapi"'
           docker compose down
       - if: failure()
         run: docker logs rp || true; docker compose logs || true
