@@ -710,3 +710,20 @@ Accepted. `serve --tls --domain <d> --acme-email <e>` (or `TLS`, `TLS_DOMAIN`, `
     - everything at "s": 15.2 MB.
   - migrate-v1's archive benchmark drops from about 1 850 to about 1 730 matches/s (3 runs each), against a 1 000/s target.
   - `panic = "abort"` was not considered: it would defeat the catch-panic layer.
+
+## ADR-062 — Postgres feature flag, compile-only (2026-10-04)
+Accepted. Design/04 §Postgres compatibility asks for a `Store` trait with `SqliteStore` and `PgStore`. Plan P8-04 asks for the seam with no behaviour.
+- **`src/db/store.rs`:** `trait Store { engine, migrate, claim_job }`.
+  - The trait covers only the engine-specific operations; every other query is shared SQL through `Db`.
+  - Design/06 names the job claim as the one engine-specific statement, and it differs only by Postgres's `FOR UPDATE SKIP LOCKED`.
+  - `claim_sql(engine)` builds both forms from one text.
+  - `$1` binds the same value at each use on both engines; SQLite treats it as one named parameter.
+- **`SqliteStore`** wraps `Db`. `Scheduler::claim` now goes through it. The statement is unchanged apart from `?1` → `$1`, so behaviour is identical and the existing claim tests still cover it.
+- **`PgStore`** exists only with `--features postgres`.
+  - It adds no dependency.
+  - It holds the URL as a `Secret`.
+  - Every call returns `DbError::PostgresUnimplemented`.
+- **Config is unchanged:** `DATABASE_URL=postgres://…` is still refused in every build, so the feature switches nothing on.
+- **CI:** the clippy job also runs `cargo check --all-targets --features postgres` and the store's unit tests with the feature on. The job name and the required checks are unchanged.
+- **Not done:** a real Postgres driver, Postgres migrations (the SQLite DDL uses SQLite types and partial indexes), and the `ROLE=api|worker` split. These belong to whoever implements `PgStore`.
+
