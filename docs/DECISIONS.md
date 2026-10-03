@@ -727,3 +727,22 @@ Accepted. Design/04 §Postgres compatibility asks for a `Store` trait with `Sqli
 - **CI:** the clippy job also runs `cargo check --all-targets --features postgres` and the store's unit tests with the feature on. The job name and the required checks are unchanged.
 - **Not done:** a real Postgres driver, Postgres migrations (the SQLite DDL uses SQLite types and partial indexes), and the `ROLE=api|worker` split. These belong to whoever implements `PgStore`.
 
+
+## ADR-063 — Release pipeline (2026-10-04)
+Accepted. `.github/workflows/release.yml` (plan P8-05, design/07).
+- **Trigger:** a `v*` tag. The tag must equal `v` + Cargo.toml's `version`, and each binary's `--version` must print it. The crate moves to `2.0.0-rc.0` for the dry-run, so `--version` and the OpenAPI `info.version` say what the tag says.
+- **Binaries** (each built natively, no cross-compilers):
+  - `riot-proxy-linux-amd64`: `x86_64-unknown-linux-musl` on `ubuntu-latest`;
+  - `riot-proxy-linux-arm64`: `aarch64-unknown-linux-musl` on `ubuntu-24.04-arm`;
+  - `riot-proxy-darwin-arm64`: `aarch64-apple-darwin` on `macos-15`.
+  - Both Linux binaries must be static and under 20 MB, as in CI.
+- **Image:** `Dockerfile.release` puts the two Linux binaries into scratch images for `linux/amd64` and `linux/arm64`. It is the same layout as `Dockerfile` but copies the release's own binaries, so the image runs exactly what the release page offers and no arm64 build runs under emulation.
+  - Pushed to `ghcr.io/ninjagoldfinch/riot-proxy` as `:<version>` and `:<major>`, with no `:latest`.
+  - A pre-release tag (`v2.0.0-rc.0`) pushes only `:2.0.0-rc.0`, so `:2` never points at an rc.
+  - The amd64 image is run and must pass its own healthcheck.
+- **Release:**
+  - `gh release create` with the three binaries and `sha256sums`.
+  - The notes carry the image tag and digest.
+  - A version with a `-` suffix is marked as a pre-release.
+- **Pull requests** that touch the workflow or `Dockerfile.release` run every build and the image check, but neither log in to GHCR nor publish.
+- **README.md** is written for v2: install, first run, a configuration table (`.env.example` remains the complete list), and operations (HTTPS, systemd, health and metrics, backups, migrating from v1).

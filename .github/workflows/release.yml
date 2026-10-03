@@ -1,0 +1,157 @@
+name: release
+
+# Plan P8-05 (design/07). A `v*` tag builds three static or native binaries,
+# pushes the image to GHCR and publishes a GitHub release with the binaries,
+# `sha256sums` and the image digest. A tag with a pre-release suffix
+# (`v2.0.0-rc.0`) makes a pre-release and does not move `:2`.
+# A pull request that touches this file runs the builds and publishes nothing.
+# See ADR-063.
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths: [".github/workflows/release.yml", "Dockerfile.release"]
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  IMAGE: ghcr.io/ninjagoldfinch/riot-proxy
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: v
+        name: the tag matches Cargo.toml
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $version"
+            exit 1
+          fi
+
+  build:
+    needs: version
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            asset: riot-proxy-linux-amd64
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+            asset: riot-proxy-linux-arm64
+          - target: aarch64-apple-darwin
+            os: macos-15
+            asset: riot-proxy-darwin-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install && rustup target add ${{ matrix.target }}
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: the binary runs and reports the release version
+        run: |
+          bin=target/${{ matrix.target }}/release/riot-proxy
+          file "$bin"
+          "$bin" --version | tee /dev/stderr | grep -qx "riot-proxy ${{ needs.version.outputs.version }}"
+          mkdir dist && cp "$bin" dist/${{ matrix.asset }}
+      - if: runner.os == 'Linux'
+        name: static and under 20 MB
+        run: |
+          bin=dist/${{ matrix.asset }}
+          file "$bin" | grep -qE "static(ally|-pie) linked"
+          test "$(stat -c %s "$bin")" -lt $((20 * 1024 * 1024))
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+
+  image:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: riot-proxy-linux-*
+          path: dist
+          merge-multiple: true
+      - run: chmod +x dist/*
+      - uses: docker/setup-buildx-action@v4
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: latest=false
+          # {{major}} is skipped for pre-releases, so an rc never moves :2.
+          tags: |
+            type=semver,pattern={{version}},value=v${{ needs.version.outputs.version }}
+            type=semver,pattern={{major}},value=v${{ needs.version.outputs.version }}
+      - if: github.event_name == 'push'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile.release
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+      - name: the amd64 image serves and passes its own healthcheck
+        run: |
+          docker buildx build --load --platform linux/amd64 -f Dockerfile.release -t riot-proxy:release .
+          docker run --rm riot-proxy:release --version
+          docker run -d --name rp -e RIOT_API_KEY=ci-dummy-key-not-a-riot-key -p 8080:8080 riot-proxy:release
+          for i in $(seq 1 30); do docker exec rp /riot-proxy healthcheck && break; sleep 1; done
+          docker exec rp /riot-proxy healthcheck
+          docker stop -t 15 rp
+
+  release:
+    if: github.event_name == 'push'
+    needs: [version, build, image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - run: cd dist && sha256sum riot-proxy-* > sha256sums && cat sha256sums
+      - name: publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.version.outputs.version }}
+          DIGEST: ${{ needs.image.outputs.digest }}
+        run: |
+          prerelease=""
+          case "$VERSION" in *-*) prerelease="--prerelease" ;; esac
+          cat > notes.md <<NOTES
+          Image: \`$IMAGE:$VERSION\`
+          Digest: \`$IMAGE@$DIGEST\`
+
+          Binaries are static (Linux, musl) or native (macOS); check them against \`sha256sums\`.
+          NOTES
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag $prerelease
