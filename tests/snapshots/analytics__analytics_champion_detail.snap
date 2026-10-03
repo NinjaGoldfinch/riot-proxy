@@ -1,5 +1,6 @@
 ---
 source: tests/analytics.rs
+assertion_line: 322
 expression: redact(detail.json())
 ---
 {
@@ -53,7 +54,7 @@ expression: redact(detail.json())
     }
   ],
   "patch": "16.19",
-  "platform": "kr",
+  "platform": null,
   "queue": "RANKED_SOLO_5x5",
   "role": null,
   "runes": [

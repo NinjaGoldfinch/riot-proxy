@@ -1,5 +1,6 @@
 ---
 source: tests/analytics.rs
+assertion_line: 251
 expression: redact(body.clone())
 ---
 {
@@ -167,7 +168,7 @@ expression: redact(body.clone())
   ],
   "computedAt": "<iso>",
   "patch": "16.19",
-  "platform": "kr",
+  "platform": null,
   "queue": "RANKED_SOLO_5x5",
   "role": null,
   "tier": null,

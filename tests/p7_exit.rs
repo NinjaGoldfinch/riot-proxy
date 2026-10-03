@@ -120,7 +120,6 @@ async fn a_master_crawl_of_thirty_players_runs_every_stage_and_fetches_each_matc
         ("LADDER_QUEUES", "RANKED_SOLO_5x5"),
         ("LADDER_TIER_FLOOR", "MASTER"),
         ("LADDER_PLATFORMS", "kr"),
-        ("DEFAULT_PLATFORM", "kr"),
         ("AGGREGATE_MIN_GAMES", "0"),
         ("AUTH_DISABLED", "true"),
         ("METRICS_INTERVAL_S", "1"),
@@ -163,7 +162,7 @@ async fn a_master_crawl_of_thirty_players_runs_every_stage_and_fetches_each_matc
 
     let started: Value = http
         .post(format!("{base}/v1/admin/ladder/crawl"))
-        .json(&json!({}))
+        .json(&json!({"platform": "kr"}))
         .send()
         .await
         .unwrap()

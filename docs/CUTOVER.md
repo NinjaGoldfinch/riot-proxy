@@ -42,7 +42,7 @@ YAML
 
 Do not start it yet. Step 2 runs against an empty data directory first, so the archive is in place before the first boot and its tracked players are polled from the start.
 
-Carry over the v1 settings you changed from their defaults. The names are the same. `REDIS_URL` and `SF_LOCK_MS` no longer exist, `DATABASE_URL` is now optional, and `NODE_ENV` becomes `ENV` ([design/07 §Configuration](design/07-deployment.md#configuration)).
+Carry over the v1 settings you changed from their defaults. The names are the same. `REDIS_URL`, `SF_LOCK_MS` and `DEFAULT_PLATFORM` no longer exist (v2 requires `platform` on player and admin routes, ADR-065; set `LADDER_PLATFORMS` explicitly if v1 crawled its default platform), `DATABASE_URL` is now optional, and `NODE_ENV` becomes `ENV` ([design/07 §Configuration](design/07-deployment.md#configuration)).
 
 During the overlap, leave **`LADDER_CRAWL_S=0`** on v2 and do not start crawls by hand. Both proxies share one Riot key, each with its own limiter. The shorter the overlap and the less bulk work either one runs, the less they compete for the key's budget.
 

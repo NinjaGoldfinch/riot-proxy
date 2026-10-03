@@ -62,7 +62,6 @@ Values come from CLI flags, then the environment, then `.env`, then the built-in
 | `ENV` | `development` | `production` refuses `AUTH_DISABLED` and turns `/dev` off |
 | `HOST` / `PORT` | `0.0.0.0` / `8080` | Listen address |
 | `DATA_DIR` | `./data` | SQLite, Data Dragon mirror, backups, ACME state |
-| `DEFAULT_PLATFORM` | `euw1` | Platform when a request names none |
 | `LOG_LEVEL` / `LOG_FORMAT` | `info` / `json` (`pretty` on a terminal) | Logging |
 | `JOB_CONCURRENCY` | `8` | Background jobs run at once |
 | `CACHE_TTL_OVERRIDES` | — | e.g. `league=120,spectator=20` (seconds) |

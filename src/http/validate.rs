@@ -197,6 +197,16 @@ pub fn query_platform(raw: Option<&str>) -> Result<Option<Platform>, ApiError> {
         .transpose()
 }
 
+/// `?platform=` where there is no default to fall back on (ADR-065).
+pub fn required_query_platform(raw: Option<&str>) -> Result<Platform, ApiError> {
+    query_platform(raw)?.ok_or_else(|| {
+        ApiError::new(
+            ErrorCode::Validation,
+            "querystring must have required property 'platform'",
+        )
+    })
+}
+
 /// `?patch=`: `major.minor`, 3–8 characters (v1 `PlayerChampionsQuery`).
 pub fn patch_query(raw: Option<&str>) -> Result<Option<&str>, ApiError> {
     let Some(v) = raw else { return Ok(None) };

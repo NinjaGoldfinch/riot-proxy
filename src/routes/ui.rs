@@ -31,7 +31,6 @@ fn page(html: &'static str) -> Response {
 #[serde(rename_all = "camelCase")]
 struct DevConfig {
     auth_disabled: bool,
-    default_platform: Platform,
     regions: Vec<Region>,
     platforms: Vec<PlatformOption>,
 }
@@ -63,7 +62,6 @@ pub fn router(config: &Config) -> Router {
     if config.dev_ui {
         let dev = DevConfig {
             auth_disabled: config.auth_disabled,
-            default_platform: config.default_platform,
             regions: Region::ALL.to_vec(),
             platforms: Platform::ALL
                 .iter()

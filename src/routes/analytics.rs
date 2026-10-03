@@ -86,7 +86,9 @@ pub struct ChampionStatEntry {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ChampionStatsResponse {
-    platform: String,
+    /// `null` when the request named no platform: every platform summed.
+    #[schema(required = true)]
+    platform: Option<String>,
     queue: String,
     #[schema(required = true)]
     tier: Option<String>,
@@ -122,7 +124,9 @@ pub struct ChampionMatchupsResponse {
     champion_id: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     champion_name: Option<String>,
-    platform: String,
+    /// `null` when the request named no platform: every platform summed.
+    #[schema(required = true)]
+    platform: Option<String>,
     queue: String,
     #[schema(required = true)]
     patch: Option<String>,
@@ -187,7 +191,9 @@ pub struct ChampionDetailResponse {
     champion_id: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     champion_name: Option<String>,
-    platform: String,
+    /// `null` when the request named no platform: every platform summed.
+    #[schema(required = true)]
+    platform: Option<String>,
     queue: String,
     #[schema(required = true)]
     tier: Option<String>,
@@ -209,7 +215,8 @@ pub struct ChampionDetailResponse {
 
 /// What every analytics query names, validated in v1's property order.
 struct Common {
-    platform: String,
+    /// `None`: every platform (ADR-065).
+    platform: Option<String>,
     queue: String,
     tier: Option<String>,
     patch: Option<String>,
@@ -248,10 +255,7 @@ fn common(
     let limit = validate::int_query("limit", q(query, "limit"), min, max)?.unwrap_or(default);
     let remakes = validate::remakes_query(q(query, "remakes"))?;
     Ok(Common {
-        platform: platform
-            .unwrap_or(state.config.default_platform)
-            .as_str()
-            .to_string(),
+        platform: platform.map(|p| p.as_str().to_string()),
         queue: queue.map_or_else(
             || {
                 state
@@ -406,7 +410,7 @@ async fn patch_or_latest(state: &AppState, c: &Common) -> Result<Option<String>,
         return Ok(c.patch.clone());
     }
     let scope = state.fetcher.key_scope().as_str().to_string();
-    analytics::latest_patch(&state.db, &scope, &c.platform, &c.queue).await
+    analytics::latest_patch(&state.db, &scope, c.platform.as_deref(), &c.queue).await
 }
 
 impl Common {
@@ -437,7 +441,7 @@ impl Common {
         crawl found them at. Recomputed per (platform, queue) when a crawl completes. Sends an `ETag`; a matching \
         `If-None-Match` gets 304. Games Riot flagged as remakes are left out unless `remakes=include`.",
     params(
-        ("platform" = Option<String>, Query, description = "Default `DEFAULT_PLATFORM`"),
+        ("platform" = Option<String>, Query, description = "Only this platform's ladder. Omitted sums every platform"),
         ("queue" = Option<String>, Query, description = "RANKED_SOLO_5x5 or RANKED_FLEX_SR; default the first of `LADDER_QUEUES`"),
         ("tier" = Option<String>, Query, description = "IRON … CHALLENGER; default every tier"),
         ("patch" = Option<String>, Query, description = "`major.minor`; default the newest aggregated patch"),
@@ -490,7 +494,7 @@ async fn champions(
         some("champions"),
         computed_at.clone(),
         state.ddragon.current_version().await,
-        some(&c.platform),
+        c.platform.clone(),
         some(&c.queue),
         c.tier.clone(),
         patch.clone(),
@@ -525,7 +529,7 @@ async fn champions(
         only exists when that player is tracked too, and the two directions can disagree.",
     params(
         ("championId" = i64, Path, description = "Champion id, ≥ 1"),
-        ("platform" = Option<String>, Query, description = "Default `DEFAULT_PLATFORM`"),
+        ("platform" = Option<String>, Query, description = "Only this platform's ladder. Omitted sums every platform"),
         ("queue" = Option<String>, Query, description = "RANKED_SOLO_5x5 or RANKED_FLEX_SR"),
         ("patch" = Option<String>, Query, description = "`major.minor`; default the newest aggregated patch"),
         ("role" = Option<String>, Query, description = "TOP, JUNGLE, MIDDLE, BOTTOM or UTILITY; default every lane"),
@@ -579,7 +583,7 @@ async fn champion_matchups(
         some("matchups"),
         computed_at.clone(),
         state.ddragon.current_version().await,
-        some(&c.platform),
+        c.platform.clone(),
         some(&c.queue),
         patch.clone(),
         some(id),
@@ -613,7 +617,7 @@ async fn champion_matchups(
         empty arrays rather than a 404.",
     params(
         ("championId" = i64, Path, description = "Champion id, ≥ 1"),
-        ("platform" = Option<String>, Query, description = "Default `DEFAULT_PLATFORM`"),
+        ("platform" = Option<String>, Query, description = "Only this platform's ladder. Omitted sums every platform"),
         ("queue" = Option<String>, Query, description = "RANKED_SOLO_5x5 or RANKED_FLEX_SR"),
         ("tier" = Option<String>, Query, description = "IRON … CHALLENGER; applies to `stats`"),
         ("patch" = Option<String>, Query, description = "`major.minor`; default the newest aggregated patch"),
@@ -719,7 +723,7 @@ async fn champion_detail(
     parts.extend(section_stamps);
     parts.extend([
         state.ddragon.current_version().await,
-        some(&c.platform),
+        c.platform.clone(),
         some(&c.queue),
         c.tier.clone(),
         patch.clone(),

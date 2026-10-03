@@ -220,7 +220,7 @@ async fn a_riot_id_that_resolves_to_no_puuid_is_a_404() {
         .await;
     let (_dir, state, router) = common::app_with(&[("AUTH_DISABLED", "true")], &server.uri());
     let _ = state;
-    let r = common::get(router, "/v1/players/by-riot-id/x/y/profile").await;
+    let r = common::get(router, "/v1/players/by-riot-id/x/y/profile?platform=kr").await;
     assert_eq!(r.status, StatusCode::NOT_FOUND);
     assert_eq!(
         r.json()["error"]["message"],
@@ -258,23 +258,39 @@ async fn every_part_failing_is_a_404() {
 async fn profile_queries_follow_v1_validation() {
     let e = env(&[]).await;
     for (uri, code, message) in [
+        // No default platform (ADR-065).
+        (
+            format!("/v1/players/{PUUID}/profile"),
+            "VALIDATION",
+            "querystring must have required property 'platform'",
+        ),
+        (
+            "/v1/players/by-riot-id/Hide%20on%20bush/KR1/profile".to_string(),
+            "VALIDATION",
+            "querystring must have required property 'platform'",
+        ),
+        (
+            format!("/v1/players/{PUUID}/matches"),
+            "VALIDATION",
+            "querystring must have required property 'platform'",
+        ),
         (
             format!("/v1/players/{PUUID}/profile?platform=KR"),
             "BAD_REGION",
             "querystring/platform must be equal to one of the allowed values",
         ),
         (
-            format!("/v1/players/{PUUID}/profile?topMastery=21"),
+            format!("/v1/players/{PUUID}/profile?platform=kr&topMastery=21"),
             "VALIDATION",
             "querystring/topMastery must be <= 20",
         ),
         (
-            format!("/v1/players/{PUUID}/profile?refresh=yes"),
+            format!("/v1/players/{PUUID}/profile?platform=kr&refresh=yes"),
             "VALIDATION",
             "querystring/refresh must be boolean",
         ),
         (
-            "/v1/players/short/profile".to_string(),
+            "/v1/players/short/profile?platform=kr".to_string(),
             "VALIDATION",
             "params/puuid must NOT have fewer than 60 characters",
         ),

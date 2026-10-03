@@ -1,5 +1,6 @@
 ---
 source: tests/openapi.rs
+assertion_line: 12
 expression: doc
 ---
 {
@@ -201,7 +202,11 @@ expression: doc
             ]
           },
           "platform": {
-            "type": "string"
+            "description": "`null` when the request named no platform: every platform summed.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "queue": {
             "type": "string"
@@ -359,7 +364,11 @@ expression: doc
             ]
           },
           "platform": {
-            "type": "string"
+            "description": "`null` when the request named no platform: every platform summed.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "queue": {
             "type": "string"
@@ -567,7 +576,11 @@ expression: doc
             ]
           },
           "platform": {
-            "type": "string"
+            "description": "`null` when the request named no platform: every platform summed.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "queue": {
             "type": "string"
@@ -2085,11 +2098,8 @@ expression: doc
         "description": "`POST /v1/admin/analytics/recompute` body (v1).",
         "properties": {
           "platform": {
-            "description": "Platform routing value; default `DEFAULT_PLATFORM`.",
-            "type": [
-              "string",
-              "null"
-            ]
+            "description": "Platform routing value. Required: there is no default platform.",
+            "type": "string"
           },
           "queue": {
             "description": "`RANKED_SOLO_5x5` or `RANKED_FLEX_SR`; default the first of `LADDER_QUEUES`.",
@@ -2099,6 +2109,9 @@ expression: doc
             ]
           }
         },
+        "required": [
+          "platform"
+        ],
         "type": "object"
       },
       "RevokeCache": {
@@ -2300,11 +2313,8 @@ expression: doc
         "description": "`POST /v1/admin/ladder/crawl` body (v1 `LadderCrawlBody`).",
         "properties": {
           "platform": {
-            "description": "Platform routing value; default `DEFAULT_PLATFORM`.",
-            "type": [
-              "string",
-              "null"
-            ]
+            "description": "Platform routing value. Required: there is no default platform.",
+            "type": "string"
           },
           "queue": {
             "description": "`RANKED_SOLO_5x5` or `RANKED_FLEX_SR`; default the first of `LADDER_QUEUES`.",
@@ -2321,6 +2331,9 @@ expression: doc
             ]
           }
         },
+        "required": [
+          "platform"
+        ],
         "type": "object"
       },
       "StateCounts": {
@@ -4910,7 +4923,7 @@ expression: doc
         "operationId": "champions",
         "parameters": [
           {
-            "description": "Default `DEFAULT_PLATFORM`",
+            "description": "Only this platform's ladder. Omitted sums every platform",
             "in": "query",
             "name": "platform",
             "required": false,
@@ -5071,7 +5084,7 @@ expression: doc
             }
           },
           {
-            "description": "Default `DEFAULT_PLATFORM`",
+            "description": "Only this platform's ladder. Omitted sums every platform",
             "in": "query",
             "name": "platform",
             "required": false,
@@ -5232,7 +5245,7 @@ expression: doc
             }
           },
           {
-            "description": "Default `DEFAULT_PLATFORM`",
+            "description": "Only this platform's ladder. Omitted sums every platform",
             "in": "query",
             "name": "platform",
             "required": false,
@@ -6668,10 +6681,10 @@ expression: doc
             }
           },
           {
-            "description": "Platform routing value; default `DEFAULT_PLATFORM`",
+            "description": "Platform routing value, e.g. `oc1`. Required",
             "in": "query",
             "name": "platform",
-            "required": false,
+            "required": true,
             "schema": {
               "type": "string"
             }
@@ -6929,10 +6942,10 @@ expression: doc
             }
           },
           {
-            "description": "Platform routing value; default `DEFAULT_PLATFORM`",
+            "description": "Platform routing value, e.g. `oc1`. Required",
             "in": "query",
             "name": "platform",
-            "required": false,
+            "required": true,
             "schema": {
               "type": "string"
             }
@@ -7089,10 +7102,10 @@ expression: doc
             }
           },
           {
-            "description": "Platform routing value; default `DEFAULT_PLATFORM`",
+            "description": "Platform routing value, e.g. `oc1`. Required",
             "in": "query",
             "name": "platform",
-            "required": false,
+            "required": true,
             "schema": {
               "type": "string"
             }
