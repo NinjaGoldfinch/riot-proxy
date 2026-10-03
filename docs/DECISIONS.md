@@ -689,3 +689,5 @@ Accepted. `riot-proxy migrate-v1 --from <path> [--key-scope <scope>]` (design/08
   - `v1.dump` (custom format) and `v1-data.sql` (its `pg_restore --data-only` text).
   - Tests import the text form always, and the dump whenever `pg_restore` exists.
 - **Throughput:** 1 837 matches/s in release on the fixture loop (plan: ≥ 1 000), on the development machine. Design/08's "~5k/s" was an estimate.
+- **Binary size (found on this PR):** the static musl binary reached 21.1 MB, over the 20 MB the P0 exit check set. The release profile moves from thin to fat LTO; `aws-lc-rs` is the only crypto backend linked, so there was no duplicate to drop.
+- **CI's `pg_restore` is older than the fixture's `pg_dump`** (16 vs 17), and refuses the archive. The custom-format test runs only where `pg_restore` ≥ 17 exists, and the CLI's error names the version rule.

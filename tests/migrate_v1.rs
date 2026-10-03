@@ -180,9 +180,21 @@ fn the_cli_imports_the_text_form_and_the_custom_dump_when_pg_restore_exists() {
     assert!(stdout.contains("skipped KR_9100019"), "{stdout}");
     assert!(stdout.contains("2 consumers not migrated"), "{stdout}");
 
-    // The custom-format dump goes through pg_restore, when there is one.
-    if Command::new("pg_restore").arg("--version").output().is_err() {
-        eprintln!("pg_restore not on PATH: the custom-format path is not exercised here");
+    // The custom-format dump goes through pg_restore, when there is one that
+    // can read it: the fixture was written by pg_dump 17, and an older
+    // pg_restore refuses a newer archive.
+    let major = Command::new("pg_restore")
+        .arg("--version")
+        .output()
+        .ok()
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .split_whitespace()
+                .last()
+                .and_then(|v| v.split('.').next()?.parse::<u32>().ok())
+        });
+    if major.is_none_or(|m| m < 17) {
+        eprintln!("no pg_restore ≥ 17 on PATH ({major:?}): the custom-format path is not exercised here");
         return;
     }
     let dump = format!("{}/{DUMP}", env!("CARGO_MANIFEST_DIR"));

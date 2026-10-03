@@ -64,6 +64,7 @@ expect_used = "warn"
 panic = "warn"
 
 [profile.release]
-lto = "thin"
+# Fat, not thin: the static binary must stay under 20 MB (P0 exit check).
+lto = "fat"
 codegen-units = 1
 strip = true

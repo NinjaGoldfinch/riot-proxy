@@ -387,7 +387,11 @@ pub async fn run(config: &Config, args: &Args) -> anyhow::Result<()> {
     let report = import(&db, input, &scope).await?;
     if let Some(mut child) = child {
         let status = child.wait()?;
-        anyhow::ensure!(status.success(), "pg_restore failed: {status}");
+        anyhow::ensure!(
+            status.success(),
+            "pg_restore failed ({status}); it must be at least the version of the pg_dump \
+             that wrote the archive (v1 ran Postgres 18)"
+        );
     }
     let secs = started.elapsed().as_secs_f64();
     #[allow(clippy::cast_precision_loss)]
