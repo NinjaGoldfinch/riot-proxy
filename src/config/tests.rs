@@ -526,3 +526,27 @@ fn unknown_ladders_and_tiers_are_refused_at_boot() {
         ("EMERALD", vec!["RANKED_FLEX_SR".to_string()])
     );
 }
+
+#[test]
+fn mock_upstreams_are_testing_only() {
+    let c = load(env(&[
+        ("RIOT_BASE_URL", "http://127.0.0.1:9"),
+        ("DDRAGON_BASE_URL", "http://127.0.0.1:9"),
+    ]));
+    assert_eq!(c.riot_base_url.as_deref(), Some("http://127.0.0.1:9"));
+    assert_eq!(c.ddragon_base_url.as_deref(), Some("http://127.0.0.1:9"));
+    assert_eq!(load(env(&[])).riot_base_url, None);
+    let errs = errors(env(&[
+        ("ENV", "production"),
+        ("RIOT_BASE_URL", "http://x"),
+        ("DDRAGON_BASE_URL", "http://x"),
+    ]));
+    assert!(
+        errs.contains(&"RIOT_BASE_URL cannot be set when ENV=production".to_string()),
+        "{errs:?}"
+    );
+    assert!(
+        errs.contains(&"DDRAGON_BASE_URL cannot be set when ENV=production".to_string()),
+        "{errs:?}"
+    );
+}

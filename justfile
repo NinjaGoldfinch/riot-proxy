@@ -37,3 +37,8 @@ docker:
 # One raw Riot call with the key from ./.env, e.g. `just riot account/by-riot-id europe Faker KR1`
 riot *ARGS:
     cargo run --features dev-cli -- riot get {{ARGS}}
+
+# v1's acceptance suite against `serve` and a mock Riot (ACCEPTANCE_LIVE=1: real Riot)
+acceptance:
+    cargo build
+    cd acceptance && npm ci --no-audit --no-fund && npm test

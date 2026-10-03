@@ -92,7 +92,7 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         tracing::warn!(key = %key, "CACHE_TTL_OVERRIDES key matches no cacheable endpoint; ignored");
     }
     let fetcher = Fetcher::new(FetcherParts {
-        client: match &options.riot_base_url {
+        client: match options.riot_base_url.as_ref().or(config.riot_base_url.as_ref()) {
             Some(url) => RiotClient::with_base_url(&config, url)?,
             None => RiotClient::new(&config)?,
         },
@@ -123,7 +123,19 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
     let hub = crate::ws::Hub::new();
     let mirror = Arc::new(crate::r#static::Mirror::new(
         config.ddragon_dir.clone(),
-        crate::jobs::ddragon::Cdn::new(&config, options.ddragon_urls.clone().unwrap_or_default())?,
+        crate::jobs::ddragon::Cdn::new(
+            &config,
+            options
+                .ddragon_urls
+                .clone()
+                .or_else(|| {
+                    config
+                        .ddragon_base_url
+                        .as_deref()
+                        .map(crate::jobs::ddragon::CdnUrls::mock)
+                })
+                .unwrap_or_default(),
+        )?,
     ));
     let ddragon = Arc::new(crate::jobs::ddragon::DdragonSync {
         mirror: Arc::clone(&mirror),

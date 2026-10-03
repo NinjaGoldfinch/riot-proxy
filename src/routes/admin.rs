@@ -685,9 +685,9 @@ pub struct Limits {
     scope: String,
     /// Per-window usage as the limiter sees it; empty before Riot has named the limits.
     usage: Vec<WindowUsage>,
-    /// Milliseconds until a 429-induced freeze on this bucket lifts, or null.
-    #[schema(required = true)]
-    frozen_ms: Option<u64>,
+    /// Milliseconds until a 429-induced freeze on this bucket lifts; 0 when it
+    /// is not frozen (v1 `isFrozen` answered 0, never null).
+    frozen_ms: u64,
 }
 
 #[utoipa::path(
@@ -726,7 +726,7 @@ async fn limits(
             .collect(),
         frozen_ms: limiter
             .frozen_for(scope)
-            .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX)),
+            .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX)),
     })
 }
 

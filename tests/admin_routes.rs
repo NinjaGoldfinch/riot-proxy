@@ -568,7 +568,7 @@ async fn limits_report_bucket_usage() {
         json!({"scope": "kr", "usage": [
             {"window": "20:1", "used": 0, "limit": 20},
             {"window": "100:120", "used": 0, "limit": 100}
-        ], "frozenMs": null})
+        ], "frozenMs": 0})
     );
     e.get(&format!("/v1/lol/summoners/by-puuid/kr/{PUUID}")).await;
     let after = e.get("/v1/admin/limits/kr").await.json();

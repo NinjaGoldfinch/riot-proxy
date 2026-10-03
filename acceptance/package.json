@@ -1,0 +1,17 @@
+{
+  "name": "riot-proxy-acceptance",
+  "private": true,
+  "type": "module",
+  "description": "v1's black-box acceptance suite, run against riot-proxy v2 and a mock Riot (plan P8-01)",
+  "scripts": {
+    "test": "vitest run --config vitest.acceptance.config.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "@types/ws": "^8.18.2",
+    "dotenv": "^18.0.5",
+    "typescript": "^7.0.2",
+    "vitest": "^3.2.7",
+    "ws": "^8.22.0"
+  }
+}

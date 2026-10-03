@@ -231,3 +231,28 @@ async fn error_bodies_snapshot() {
         .collect();
     insta::assert_json_snapshot!("riot_error_bodies", bodies);
 }
+
+/// A fixed base URL (a mock) is told which Riot host each request was for, so
+/// it can keep Riot's per-host buckets; an account lookup for SEA says `asia`.
+#[tokio::test]
+async fn a_mock_base_is_told_the_riot_host() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(header("x-riot-host", "euw1.api.riotgames.com"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/riot/account/v1/accounts/by-riot-id/A/B"))
+        .and(header("x-riot-host", "asia.api.riotgames.com"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let c = client(&server);
+    assert_eq!(c.send(&summoner("P")).await.unwrap().status, 200);
+    let e = Endpoint::by_id("account.byRiotId").unwrap();
+    let account = RiotRequest::new(e, e.target_for_region(Region::Sea).unwrap(), &["A", "B"]).unwrap();
+    assert_eq!(c.send(&account).await.unwrap().status, 200);
+}

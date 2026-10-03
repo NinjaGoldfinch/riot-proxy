@@ -1,4 +1,3 @@
-import { Redis } from 'ioredis';
 import WebSocket from 'ws';
 import { cfg } from './env.js';
 
@@ -244,27 +243,63 @@ export async function subscribe(topics: string[]): Promise<Subscription> {
   return sub;
 }
 
-// ── redis ────────────────────────────────────────────────────────────────────
-
-export function redisClient(): Redis {
-  return new Redis(cfg().redisUrl, { maxRetriesPerRequest: null, lazyConnect: false });
-}
+// ── jobs (v2: the durable `jobs` table, via the admin API) ─────────────────
 
 /**
- * `prioritized` is easy to forget and expensive to miss: BullMQ parks any job
- * enqueued with a `priority` there rather than in `wait`, so a probe that polls
- * only wait/active/delayed reads an empty queue while the work is still
- * pending. It is a zset, like delayed, so the read below already covers it.
+ * v1 read BullMQ's Redis keys directly; v2's queue is the `jobs` table, and
+ * `GET /v1/admin/jobs` is its public view (ADR-052, ADR-059).
  */
-export async function jobIdsInState(
-  redis: Redis,
-  queue: string,
-  state: 'wait' | 'active' | 'failed' | 'completed' | 'delayed' | 'prioritized',
-): Promise<string[]> {
-  const key = `bull:${queue}:${state}`;
-  const type = await redis.type(key);
-  if (type === 'list') return redis.lrange(key, 0, -1);
-  // ioredis 6 types `stop` as string | Buffer; only `start` still takes a number.
-  if (type === 'zset') return redis.zrange(key, 0, '-1');
-  return [];
+export interface JobRow {
+  id: string;
+  kind: string;
+  dedupeKey: string | null;
+  priority: number;
+  state: 'pending' | 'running' | 'done' | 'failed';
+  attempts: number;
+  error: string | null;
+  payload: Record<string, unknown>;
+}
+
+export async function jobs(filter: { kind?: string; state?: JobRow['state'] } = {}): Promise<JobRow[]> {
+  const qs = new URLSearchParams({ limit: '500' });
+  if (filter.kind) qs.set('kind', filter.kind);
+  if (filter.state) qs.set('state', filter.state);
+  return (await get<{ jobs: JobRow[] }>(`/v1/admin/jobs?${qs.toString()}`)).body.jobs;
+}
+
+/** Nothing of these kinds is pending or running. */
+export async function idle(kinds: string[]): Promise<boolean> {
+  for (const kind of kinds) {
+    for (const state of ['pending', 'running'] as const) {
+      if ((await jobs({ kind, state })).length > 0) return false;
+    }
+  }
+  return true;
+}
+
+/** ULIDs, as v2's job and crawl ids are (v1's were BullMQ ids and UUIDs). */
+export const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
+
+// ── the mock Riot (mock mode) ────────────────────────────────────────────────
+
+/** Put players in a game (`gameId`) or out of one (`null`). */
+export async function mockGame(inGame: Record<string, number | null>): Promise<void> {
+  const { mockUrl } = cfg();
+  if (!mockUrl) throw new Error('mockGame needs mock mode');
+  const res = await fetch(new URL('/__mock/state', mockUrl), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ inGame }),
+  });
+  if (!res.ok) throw new Error(`mock state -> ${res.status}`);
+}
+
+/** Requests the mock answered, by `host path`, and its accountable 429s. */
+export async function mockRequests(): Promise<{ requests: Record<string, number>; rejected: number }> {
+  const { mockUrl } = cfg();
+  if (!mockUrl) throw new Error('mockRequests needs mock mode');
+  return (await fetch(new URL('/__mock/requests', mockUrl))).json() as Promise<{
+    requests: Record<string, number>;
+    rejected: number;
+  }>;
 }

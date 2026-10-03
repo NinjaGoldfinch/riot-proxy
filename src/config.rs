@@ -69,6 +69,8 @@ pub const VARS: &[&str] = &[
     "DEV_UI",
     "DOCS_UI",
     "DASHBOARD_UI",
+    "RIOT_BASE_URL",
+    "DDRAGON_BASE_URL",
 ];
 
 /// v1's name for `ENV`. Read only as a fallback when `ENV` is unset, so a ported
@@ -238,6 +240,11 @@ pub struct Config {
     pub dev_ui: bool,
     pub docs_ui: bool,
     pub dashboard_ui: bool,
+    /// Send every Riot request here instead of Riot's hosts (a mock; the
+    /// acceptance suite). Refused in production.
+    pub riot_base_url: Option<String>,
+    /// Fetch Data Dragon and the queue table from here instead. Refused in production.
+    pub ddragon_base_url: Option<String>,
 }
 
 /// Flags that override any variable. Global: accepted before or after any subcommand.
@@ -412,6 +419,17 @@ impl Config {
                 .push("AUTH_DISABLED cannot be enabled when ENV=production".into());
         }
 
+        let riot_base_url = v.opt_string("RIOT_BASE_URL");
+        let ddragon_base_url = v.opt_string("DDRAGON_BASE_URL");
+        for (name, set) in [
+            ("RIOT_BASE_URL", riot_base_url.is_some()),
+            ("DDRAGON_BASE_URL", ddragon_base_url.is_some()),
+        ] {
+            if set && env == Environment::Production {
+                v.errors.push(format!("{name} cannot be set when ENV=production"));
+            }
+        }
+
         let default_platform = v.platform("DEFAULT_PLATFORM", &v.string("DEFAULT_PLATFORM", "euw1"));
         let ladder_platforms = match csv(&v.string("LADDER_PLATFORMS", "")) {
             empty if empty.is_empty() => vec![default_platform],
@@ -472,6 +490,8 @@ impl Config {
             dev_ui: v.opt_bool("DEV_UI").unwrap_or(env != Environment::Production),
             docs_ui: v.bool("DOCS_UI", true),
             dashboard_ui: v.bool("DASHBOARD_UI", true),
+            riot_base_url,
+            ddragon_base_url,
         };
 
         if v.errors.is_empty() {

@@ -155,7 +155,7 @@ Each match was fetched once from Riot, although every one of them is reachable f
 Exit check: _pending_
 
 ## P8 — Contract, migration, packaging
-- [ ] P8-01 port acceptance suite
+- [x] P8-01 port acceptance suite (#62; mock Riot, live opt-in, required `acceptance` CI job; 29/29, ADR-059)
 - [ ] P8-02 `migrate-v1` subcommand
 - [ ] P8-03 built-in TLS `[parallel-ok]`
 - [ ] P8-04 Postgres feature flag (compile-only) `[parallel-ok]`

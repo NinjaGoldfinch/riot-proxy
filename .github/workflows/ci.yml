@@ -9,7 +9,8 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
 
-# Job ids are the required status checks on `main` (fmt, clippy, test, build-musl) —
+# Job ids are the required status checks on `main` (fmt, clippy, test, build-musl,
+# acceptance) —
 # renaming a job means updating branch protection too. See ADR-006.
 # The toolchain, components and musl target all come from rust-toolchain.toml.
 jobs:
@@ -38,6 +39,25 @@ jobs:
       - run: cargo llvm-cov --all-features --workspace --summary-only
       - name: no leaked Riot keys
         run: '! grep -rE "RGAPI-[0-9a-f-]{20,}" tests/ src/ docs/'
+
+  # v1's black-box acceptance suite against `serve` and a mock Riot (P8-01,
+  # ADR-059). Mock mode only: no Riot key is involved.
+  acceptance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: acceptance/package-lock.json
+      - run: cargo build
+      - run: npm ci --no-audit --no-fund
+        working-directory: acceptance
+      - run: npm test
+        working-directory: acceptance
 
   build-musl:
     runs-on: ubuntu-latest

@@ -9,6 +9,7 @@ import {
   subscribe,
   waitFor,
   type Sample,
+  ULID,
   type Subscription,
 } from './helpers/harness.js';
 
@@ -35,7 +36,9 @@ import {
  * `LADDER_BACKFILL_LIMIT=0` to assert the enumeration alone.
  */
 const enabled = acceptance.enabled;
-const crawlEnabled = enabled && process.env['ACCEPTANCE_LADDER'] === '1';
+// Live: ACCEPTANCE_LADDER=1, as v1. Mock mode always crawls: the mock's ladder
+// is 30 players, a few seconds' work (ADR-059).
+const crawlEnabled = acceptance.enabled && acceptance.ladder;
 
 interface CrawlSummary {
   id: string;
@@ -87,7 +90,9 @@ describe.skipIf(!enabled)('Phase 7 — the ladder crawl, live', () => {
     });
 
     it('404s a crawl that does not exist rather than inventing one', async () => {
-      const res = await api('/v1/admin/ladder/crawls/00000000-0000-4000-8000-00000000dead', {
+      // A well-formed id: v2's crawl ids are ULIDs (v1: UUIDs; ADR-054), and a
+      // UUID here is a 400 for its format before it can be a 404.
+      const res = await api('/v1/admin/ladder/crawls/01J9ZZZZZZZZZZZZZZZZZZZZZZ', {
         method: 'DELETE',
       });
       expect(res.status).toBe(404);
@@ -106,13 +111,16 @@ describe.skipIf(!enabled)('Phase 7 — the ladder crawl, live', () => {
     it('publishes the ladder metrics, at zero before a crawl or with a value after', async () => {
       const samples = await metrics();
       const names = new Set(samples.map((s) => s.name));
-      // A counter with no observations is absent from /metrics rather than
-      // zero, so the histogram — which prom-client always emits — is the one
-      // that proves the metric is registered at all.
-      expect(
+      const present =
         names.has('proxy_ladder_crawl_duration_seconds_count') ||
-          names.has('proxy_ladder_crawl_duration_seconds_bucket'),
-      ).toBe(true);
+        names.has('proxy_ladder_crawl_duration_seconds_bucket');
+      if (present) return;
+      // A labelled series has no sample until its first observation — in v1's
+      // prom-client as in v2's exporter — so on a deployment where no crawl has
+      // finished it is legitimately absent (ADR-059). Then none may have: the
+      // crawl checks below assert the series once one does.
+      const listed = await get<{ crawls: CrawlSummary[] }>('/v1/admin/ladder/crawls');
+      expect(listed.body.crawls.filter((c) => c.finishedAt !== null)).toEqual([]);
     });
 
     it('keeps the ladder topic behind the admin scope', async () => {
@@ -126,7 +134,7 @@ describe.skipIf(!enabled)('Phase 7 — the ladder crawl, live', () => {
     });
   });
 
-  describe.skipIf(!crawlEnabled)('a real crawl (ACCEPTANCE_LADDER=1)', () => {
+  describe.skipIf(!crawlEnabled)('a real crawl (mock mode, or ACCEPTANCE_LADDER=1 live)', () => {
     let before: Sample[] = [];
 
     beforeAll(async () => {
@@ -150,7 +158,8 @@ describe.skipIf(!enabled)('Phase 7 — the ladder crawl, live', () => {
       // Master, Grandmaster, Challenger. No paged walk at this floor.
       expect(res.body.legs).toBe(3);
       crawlId = res.body.crawlId;
-      expect(crawlId).toMatch(/^[0-9a-f-]{36}$/);
+      // ULIDs in v2 (v1: UUIDs; ADR-054).
+      expect(crawlId).toMatch(ULID);
     });
 
     it('tells a second trigger which crawl is already answering it', async () => {

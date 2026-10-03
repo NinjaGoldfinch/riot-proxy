@@ -166,6 +166,9 @@ impl From<RiotError> for ApiError {
 }
 
 /// Where requests go. Tests point every host at one mock server.
+/// Sent only to a fixed base URL (a mock): the Riot host the request was for.
+pub const MOCK_HOST_HEADER: &str = "x-riot-host";
+
 #[derive(Debug, Clone)]
 enum Base {
     Https,
@@ -232,14 +235,19 @@ impl RiotClient {
         let host = req.target.host();
         let started = Instant::now();
 
-        let result = self
+        let mut builder = self
             .http
             .get(self.url(req))
             // v1 §5.2: the key goes in a header, never the query string.
             .header(X_RIOT_TOKEN, self.token.clone())
-            .header(header::ACCEPT, "application/json")
-            .send()
-            .await;
+            .header(header::ACCEPT, "application/json");
+        if let Base::Fixed(_) = self.base {
+            // A mock stands in for every Riot host at one address; this says
+            // which host the request was for, so it can keep Riot's per-host
+            // rate-limit buckets and check the routing (ADR-059).
+            builder = builder.header(MOCK_HOST_HEADER, host.as_str());
+        }
+        let result = builder.send().await;
         let (res, body) = match result {
             Ok(res) => {
                 let status = res.status();
