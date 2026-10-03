@@ -35,6 +35,8 @@ pub const VARS: &[&str] = &[
     "TLS",
     "TLS_DOMAIN",
     "ACME_EMAIL",
+    "TLS_PORT",
+    "TLS_REDIRECT_PORT",
     "DEFAULT_PLATFORM",
     "CACHE_TTL_OVERRIDES",
     "CACHE_L1_MAX_MB",
@@ -202,6 +204,10 @@ pub struct Config {
     pub tls: bool,
     pub tls_domain: Option<String>,
     pub acme_email: Option<String>,
+    /// HTTPS port when `TLS` is on (design/07: 443).
+    pub tls_port: u16,
+    /// Plain-HTTP port redirected to HTTPS when `TLS` is on (80); 0 serves none.
+    pub tls_redirect_port: u16,
 
     pub default_platform: Platform,
     // Validated against the endpoint registry by its owner (P1-02).
@@ -419,6 +425,14 @@ impl Config {
                 .push("AUTH_DISABLED cannot be enabled when ENV=production".into());
         }
 
+        if v.bool("TLS", false) {
+            for name in ["TLS_DOMAIN", "ACME_EMAIL"] {
+                if v.opt_string(name).is_none() {
+                    v.errors.push(format!("{name} is required when TLS is on"));
+                }
+            }
+        }
+
         let riot_base_url = v.opt_string("RIOT_BASE_URL");
         let ddragon_base_url = v.opt_string("DDRAGON_BASE_URL");
         for (name, set) in [
@@ -454,6 +468,8 @@ impl Config {
             tls: v.bool("TLS", false),
             tls_domain: v.opt_string("TLS_DOMAIN"),
             acme_email: v.opt_string("ACME_EMAIL"),
+            tls_port: v.int("TLS_PORT", 443, 1, u16::MAX),
+            tls_redirect_port: v.int("TLS_REDIRECT_PORT", 80, 0, u16::MAX),
             default_platform,
             cache_ttl_overrides: v.string("CACHE_TTL_OVERRIDES", ""),
             cache_l1_max_mb: v.int("CACHE_L1_MAX_MB", 128, 1, 1_048_576),

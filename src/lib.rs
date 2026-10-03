@@ -21,4 +21,5 @@ pub mod singleflight;
 pub mod r#static;
 pub mod stats;
 pub mod telemetry;
+pub mod tls;
 pub mod ws;
