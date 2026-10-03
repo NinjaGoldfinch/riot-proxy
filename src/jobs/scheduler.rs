@@ -23,6 +23,7 @@ use tokio::sync::{Notify, watch};
 use tokio::task::JoinSet;
 
 use crate::clock::Clock;
+use crate::db::store::{SqliteStore, Store};
 use crate::db::{Db, DbError};
 use crate::metrics::{JOBS_PENDING, JOBS_TOTAL};
 
@@ -129,9 +130,9 @@ fn random_jitter() -> f64 {
     0.8 + 0.4 * unit
 }
 
-const COLUMNS: &str = "id, kind, dedupe_key, priority, payload, attempts, run_after";
+pub(crate) const COLUMNS: &str = "id, kind, dedupe_key, priority, payload, attempts, run_after";
 
-fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Job> {
+pub(crate) fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Job> {
     Ok(Job {
         id: r.get(0)?,
         kind: r.get(1)?,
@@ -542,26 +543,10 @@ impl Scheduler {
             .await
     }
 
-    /// Claim the highest-priority ready job (design/06 §Claiming).
+    /// Claim the highest-priority ready job (design/06 §Claiming), through
+    /// the engine seam.
     pub async fn claim(&self, now_ms: i64) -> Result<Option<Job>, DbError> {
-        self.db
-            .write(move |c| {
-                c.query_row(
-                    &format!(
-                        "UPDATE jobs SET state = 'running', claimed_at = ?1, attempts = attempts + 1
-                          WHERE id = (SELECT id FROM jobs
-                                       WHERE state = 'pending' AND run_after <= ?1
-                                       ORDER BY priority ASC, run_after ASC, id ASC
-                                       LIMIT 1)
-                          RETURNING {COLUMNS}"
-                    ),
-                    [now_ms],
-                    row,
-                )
-                .optional()
-                .map_err(DbError::from)
-            })
-            .await
+        SqliteStore::new(self.db.clone()).claim_job(now_ms).await
     }
 
     /// Record a run's outcome: `done`, back to `pending` with backoff, or `failed`.

@@ -9,6 +9,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use rusqlite::{Connection, OpenFlags};
 use tokio::sync::{Semaphore, mpsc, oneshot};
 
+pub mod store;
+
 mod embedded {
     refinery::embed_migrations!("src/db/migrations");
 }
@@ -49,6 +51,10 @@ pub enum DbError {
     ReaderJoin(#[from] tokio::task::JoinError),
     #[error("could not start the SQLite writer thread: {0}")]
     Spawn(std::io::Error),
+    /// The `postgres` feature's store is a stub (ADR-062).
+    #[cfg(feature = "postgres")]
+    #[error("the Postgres store is not implemented yet")]
+    PostgresUnimplemented,
 }
 
 type WriteJob = Box<dyn FnOnce(&mut Connection) + Send>;

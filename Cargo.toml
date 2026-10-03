@@ -49,6 +49,8 @@ zstd = "0.14"
 [features]
 # `riot-proxy riot get …`: raw upstream calls for development. Never in release builds.
 dev-cli = []
+# A `Store` implementation for Postgres: a compile-only stub today (P8-04, ADR-062).
+postgres = []
 
 [dev-dependencies]
 futures-util = "0.3"

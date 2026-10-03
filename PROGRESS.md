@@ -158,7 +158,7 @@ Exit check: _pending_
 - [x] P8-01 port acceptance suite (#62; mock Riot, live opt-in, required `acceptance` CI job; 29/29, ADR-059)
 - [x] P8-02 `migrate-v1` subcommand (#63; 1 837 matches/s in release, ADR-060)
 - [x] P8-03 built-in TLS (#64; rustls-acme TLS-ALPN-01, 308 redirect, private ops endpoints, ADR-061)
-- [ ] P8-04 Postgres feature flag (compile-only) `[parallel-ok]`
+- [x] P8-04 Postgres feature flag, compile-only (#65; `Store` seam, claim routed through `SqliteStore`, ADR-062)
 - [ ] P8-05 release pipeline
 - [ ] P8-06 cut-over runbook
 Exit check: _pending_
