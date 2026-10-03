@@ -691,3 +691,15 @@ Accepted. `riot-proxy migrate-v1 --from <path> [--key-scope <scope>]` (design/08
 - **Throughput:** 1 837 matches/s in release on the fixture loop (plan: ≥ 1 000), on the development machine. Design/08's "~5k/s" was an estimate.
 - **Binary size (found on this PR):** the static musl binary reached 21.1 MB, over the 20 MB the P0 exit check set. The release profile moves from thin to fat LTO; `aws-lc-rs` is the only crypto backend linked, so there was no duplicate to drop.
 - **CI's `pg_restore` is older than the fixture's `pg_dump`** (16 vs 17), and refuses the archive. The custom-format test runs only where `pg_restore` ≥ 17 exists, and the CLI's error names the version rule.
+
+## ADR-061 — Built-in TLS (2026-10-03)
+Accepted. `serve --tls --domain <d> --acme-email <e>` (or `TLS`, `TLS_DOMAIN`, `ACME_EMAIL`) is design/07 §Option B.
+- **Certificate:** `rustls-acme` 0.15 with the aws-lc-rs provider, already linked for reqwest, so there is no second crypto backend. It uses Let's Encrypt's production directory, caches the account and certificate in `$DATA_DIR/acme/`, and renews in-process. The challenge is TLS-ALPN-01, answered on the HTTPS port itself, so port 80 is never needed for issuance. ACME events are logged at info, failures at error.
+- **Ports:** HTTPS goes on `TLS_PORT` (default 443). Every request on `TLS_REDIRECT_PORT` (default 80; 0 = no listener) gets a 308 to `https://<host>[:TLS_PORT]<path?query>`. Both bind `HOST`. `TLS_DOMAIN` and `ACME_EMAIL` are required when TLS is on.
+- **Plain HTTP stays up on `127.0.0.1:PORT`** in TLS mode. That is where `riot-proxy healthcheck` connects in TLS mode (always IPv4 loopback) and where local Prometheus scrapes. It is never exposed.
+- **`/metrics` and `/readyz` are private-only in TLS mode.** Loopback, RFC 1918, link-local, IPv6 ULA and IPv4-mapped forms of these pass. Anyone else gets the allowlist's 403 envelope (`FORBIDDEN`). Behind a reverse proxy (TLS off), nothing changes: the proxy in front decides.
+- **One shutdown** drains HTTPS (axum-server's graceful shutdown, `SHUTDOWN_GRACE`), the redirect and the loopback listener together.
+- **Tests:**
+  - A self-signed `rcgen` certificate is passed through `ServeOptions.tls_pem`, which is not part of the operator-facing config. ACME itself needs a real domain and is the owner's manual check.
+  - The integration test covers HTTPS 200, the 308 with host, port and query, and the loopback listener.
+  - Unit tests cover the private ranges and the middleware with public and private peers.

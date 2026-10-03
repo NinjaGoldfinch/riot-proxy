@@ -12,6 +12,7 @@ publish = false
 [dependencies]
 anyhow = "1.0"
 axum = { version = "0.8", features = ["ws"] }
+axum-server = { version = "0.8", default-features = false, features = ["tls-rustls-no-provider"] }
 base64 = "0.23"
 bytes = "1.12"
 clap = { version = "4.6", features = ["derive", "env"] }
@@ -27,6 +28,8 @@ moka = { version = "0.12", features = ["future"] }
 refinery = { version = "0.9", features = ["rusqlite"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "gzip", "rustls", "http2"] }
 rusqlite = { version = "0.39", features = ["bundled"] }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
+rustls-acme = { version = "0.15", default-features = false, features = ["aws-lc-rs", "axum", "tokio", "webpki-roots", "tls12"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["raw_value"] }
 sha2 = "0.11"
@@ -51,6 +54,7 @@ dev-cli = []
 futures-util = "0.3"
 insta = { version = "1.48", features = ["json"] }
 proptest = "1.11"
+rcgen = "0.14"
 tempfile = "3.27"
 tokio-test = "0.4"
 tokio-tungstenite = "0.29"

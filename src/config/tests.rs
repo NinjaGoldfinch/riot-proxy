@@ -550,3 +550,31 @@ fn mock_upstreams_are_testing_only() {
         "{errs:?}"
     );
 }
+
+#[test]
+fn tls_needs_a_domain_and_an_email_and_defaults_to_443_and_80() {
+    let errs = errors(env(&[("TLS", "true")]));
+    assert!(
+        errs.contains(&"TLS_DOMAIN is required when TLS is on".to_string()),
+        "{errs:?}"
+    );
+    assert!(
+        errs.contains(&"ACME_EMAIL is required when TLS is on".to_string()),
+        "{errs:?}"
+    );
+    let on = [
+        ("TLS", "true"),
+        ("TLS_DOMAIN", "api.example.test"),
+        ("ACME_EMAIL", "ops@example.test"),
+    ];
+    let c = load(env(&on));
+    assert_eq!((c.tls_port, c.tls_redirect_port), (443, 80));
+    let mut ports = on.to_vec();
+    ports.extend([("TLS_PORT", "8443"), ("TLS_REDIRECT_PORT", "0")]);
+    let c = load(env(&ports));
+    assert_eq!((c.tls_port, c.tls_redirect_port), (8443, 0));
+    let errs = errors(env(&[("TLS_PORT", "0")]));
+    assert!(errs.iter().any(|e| e.contains("TLS_PORT")), "{errs:?}");
+    // Off, neither is needed.
+    assert!(!load(env(&[])).tls);
+}
