@@ -156,7 +156,7 @@ Exit check: _pending_
 
 ## P8 — Contract, migration, packaging
 - [x] P8-01 port acceptance suite (#62; mock Riot, live opt-in, required `acceptance` CI job; 29/29, ADR-059)
-- [ ] P8-02 `migrate-v1` subcommand
+- [x] P8-02 `migrate-v1` subcommand (#63; 1 837 matches/s in release, ADR-060)
 - [ ] P8-03 built-in TLS `[parallel-ok]`
 - [ ] P8-04 Postgres feature flag (compile-only) `[parallel-ok]`
 - [ ] P8-05 release pipeline

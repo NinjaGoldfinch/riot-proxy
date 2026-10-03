@@ -3,6 +3,7 @@
 pub mod backup;
 pub mod healthcheck;
 pub mod key;
+pub mod migrate_v1;
 #[cfg(feature = "dev-cli")]
 pub mod record;
 #[cfg(feature = "dev-cli")]
@@ -47,6 +48,8 @@ pub enum Command {
     },
     /// Print the OpenAPI document (JSON) to stdout.
     Spec,
+    /// Import v1's archive and players from a Postgres dump (consumers are not migrated).
+    MigrateV1(migrate_v1::Args),
     /// Write a consistent copy of the database to OUT (`VACUUM INTO`), safe while serving.
     Backup {
         /// Where to write the copy; must not exist.
@@ -98,6 +101,7 @@ pub fn run() -> ExitCode {
             Command::Healthcheck { timeout } => healthcheck::run(&config, timeout).await,
             Command::Spec => Ok(()),
             Command::Backup { out } => backup::run(&config, &out).await,
+            Command::MigrateV1(args) => migrate_v1::run(&config, &args).await,
             #[cfg(feature = "dev-cli")]
             Command::Riot(cmd) => riot::run(&config, cmd).await,
         }
