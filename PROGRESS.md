@@ -194,6 +194,7 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 - [x] RC release `v2.0.0-rc.2` (#73; RC-01 + RC-02)
 - [x] RC-03 remove built-in TLS (#74; plain HTTP only; `TLS=true` refuses to boot; musl binary 17.9 → 16.6 MB, ADR-067)
 - [x] RC-04 `TRUST_PROXY` (#75; default off: the admin allowlist uses the TCP peer, `X-Forwarded-For` only behind a trusted proxy, ADR-068)
+- [x] RC release `v2.0.0-rc.3` (#76; RC-03 + RC-04)
 
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
