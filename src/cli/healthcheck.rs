@@ -23,11 +23,7 @@ fn client(timeout: Duration) -> reqwest::Result<reqwest::Client> {
 }
 
 /// The server binds `HOST`, which is usually a wildcard; connect via loopback then.
-/// With `TLS` on, plain HTTP is only on `127.0.0.1` (ADR-061).
 pub fn healthz_url(config: &Config) -> String {
-    if config.tls {
-        return format!("http://127.0.0.1:{}/healthz", config.port);
-    }
     let host = match config.host.as_str() {
         "0.0.0.0" | "" => "127.0.0.1".to_string(),
         "::" | "[::]" => "[::1]".to_string(),
@@ -73,16 +69,5 @@ mod tests {
             healthz_url(&with_host("10.0.0.5")),
             "http://10.0.0.5:9000/healthz"
         );
-    }
-
-    #[test]
-    fn with_tls_the_plain_port_is_reached_on_ipv4_loopback() {
-        let tls = with(&[
-            ("HOST", "::"),
-            ("TLS", "true"),
-            ("TLS_DOMAIN", "api.example.test"),
-            ("ACME_EMAIL", "ops@example.test"),
-        ]);
-        assert_eq!(healthz_url(&tls), "http://127.0.0.1:9000/healthz");
     }
 }

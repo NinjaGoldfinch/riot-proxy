@@ -32,11 +32,6 @@ pub const VARS: &[&str] = &[
     "DATABASE_URL",
     "ROLE",
     "JOB_CONCURRENCY",
-    "TLS",
-    "TLS_DOMAIN",
-    "ACME_EMAIL",
-    "TLS_PORT",
-    "TLS_REDIRECT_PORT",
     "CACHE_TTL_OVERRIDES",
     "CACHE_L1_MAX_MB",
     "NEG_TTL_SECONDS",
@@ -73,6 +68,10 @@ pub const VARS: &[&str] = &[
     "RIOT_BASE_URL",
     "DDRAGON_BASE_URL",
 ];
+
+/// Read only to refuse: built-in TLS was removed (ADR-067), and `TLS=true` must
+/// not quietly come up as plain HTTP.
+const RETIRED_TLS_VAR: &str = "TLS";
 
 /// v1's name for `ENV`. Read only as a fallback when `ENV` is unset, so a ported
 /// `.env` with `NODE_ENV=production` still boots as production (ADR-008).
@@ -200,13 +199,6 @@ pub struct Config {
     pub database: Database,
     pub role: Role,
     pub job_concurrency: u32,
-    pub tls: bool,
-    pub tls_domain: Option<String>,
-    pub acme_email: Option<String>,
-    /// HTTPS port when `TLS` is on (design/07: 443).
-    pub tls_port: u16,
-    /// Plain-HTTP port redirected to HTTPS when `TLS` is on (80); 0 serves none.
-    pub tls_redirect_port: u16,
 
     // Validated against the endpoint registry by its owner (P1-02).
     pub cache_ttl_overrides: String,
@@ -278,15 +270,6 @@ pub struct ConfigArgs {
     /// json | pretty [env: LOG_FORMAT]
     #[arg(long, global = true)]
     pub log_format: Option<String>,
-    /// Terminate TLS in-process via ACME [env: TLS]
-    #[arg(long, global = true)]
-    pub tls: bool,
-    /// Domain to request a certificate for [env: TLS_DOMAIN]
-    #[arg(long, global = true)]
-    pub domain: Option<String>,
-    /// ACME account contact [env: ACME_EMAIL]
-    #[arg(long, global = true)]
-    pub acme_email: Option<String>,
 }
 
 impl ConfigArgs {
@@ -303,9 +286,6 @@ impl ConfigArgs {
             ("ROLE", self.role.clone()),
             ("LOG_LEVEL", self.log_level.clone()),
             ("LOG_FORMAT", self.log_format.clone()),
-            ("TLS", self.tls.then(|| "true".to_string())),
-            ("TLS_DOMAIN", self.domain.clone()),
-            ("ACME_EMAIL", self.acme_email.clone()),
         ];
         pairs
             .into_iter()
@@ -423,12 +403,11 @@ impl Config {
                 .push("AUTH_DISABLED cannot be enabled when ENV=production".into());
         }
 
-        if v.bool("TLS", false) {
-            for name in ["TLS_DOMAIN", "ACME_EMAIL"] {
-                if v.opt_string(name).is_none() {
-                    v.errors.push(format!("{name} is required when TLS is on"));
-                }
-            }
+        if v.bool(RETIRED_TLS_VAR, false) {
+            v.push(
+                RETIRED_TLS_VAR,
+                "built-in TLS was removed; terminate HTTPS in a reverse proxy",
+            );
         }
 
         let riot_base_url = v.opt_string("RIOT_BASE_URL");
@@ -462,11 +441,6 @@ impl Config {
             database,
             role,
             job_concurrency: v.int("JOB_CONCURRENCY", 8, 1, u32::MAX),
-            tls: v.bool("TLS", false),
-            tls_domain: v.opt_string("TLS_DOMAIN"),
-            acme_email: v.opt_string("ACME_EMAIL"),
-            tls_port: v.int("TLS_PORT", 443, 1, u16::MAX),
-            tls_redirect_port: v.int("TLS_REDIRECT_PORT", 80, 0, u16::MAX),
             cache_ttl_overrides: v.string("CACHE_TTL_OVERRIDES", ""),
             cache_l1_max_mb: v.int("CACHE_L1_MAX_MB", 128, 1, 1_048_576),
             neg_ttl_seconds: v.int("NEG_TTL_SECONDS", 30, 1, u32::MAX),
@@ -597,7 +571,9 @@ pub fn parse_dotenv(text: &str) -> Result<Vec<(String, String)>, (usize, String)
 fn known(pairs: Vec<(String, String)>) -> BTreeMap<String, String> {
     pairs
         .into_iter()
-        .filter(|(k, v)| !v.is_empty() && (VARS.contains(&k.as_str()) || k == LEGACY_ENV_VAR))
+        .filter(|(k, v)| {
+            !v.is_empty() && (VARS.contains(&k.as_str()) || k == LEGACY_ENV_VAR || k == RETIRED_TLS_VAR)
+        })
         .collect()
 }
 

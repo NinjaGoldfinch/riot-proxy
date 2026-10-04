@@ -62,7 +62,6 @@ pub struct AppState {
 pub fn router(state: AppState, metrics: PrometheusHandle) -> Router {
     let (api, doc) = routes::docs::api_router(Some(state.clone())).split_for_parts();
     let docs_ui = state.config.docs_ui;
-    let tls = state.config.tls;
     let ui = routes::ui::router(&state.config);
     let ddragon = routes::statics::files(state.ddragon.dir());
     let mut router = api
@@ -72,10 +71,6 @@ pub fn router(state: AppState, metrics: PrometheusHandle) -> Router {
         .merge(ddragon);
     if docs_ui {
         router = router.merge(routes::docs::docs_router(routes::docs::finish(doc)));
-    }
-    if tls {
-        // design/07 Option B: no reverse proxy in front, so ops endpoints are private.
-        router = router.layer(axum::middleware::from_fn(crate::tls::private_ops));
     }
     router
         .fallback(not_found)

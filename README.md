@@ -63,7 +63,7 @@ Values come from CLI flags, then the environment, then `.env`, then the built-in
 | `RIOT_API_KEY` | — | **Required.** Never commit it. |
 | `ENV` | `development` | `production` refuses `AUTH_DISABLED` and turns `/dev` off |
 | `HOST` / `PORT` | `0.0.0.0` / `8080` | Listen address |
-| `DATA_DIR` | `./data` | SQLite, Data Dragon mirror, backups, ACME state |
+| `DATA_DIR` | `./data` | SQLite, Data Dragon mirror, backups |
 | `LOG_LEVEL` / `LOG_FORMAT` | `info` / `json` (`pretty` on a terminal) | Logging |
 | `JOB_CONCURRENCY` | `8` | Background jobs run at once |
 | `CACHE_TTL_OVERRIDES` | — | e.g. `league=120,spectator=20` (seconds) |
@@ -73,20 +73,13 @@ Values come from CLI flags, then the environment, then `.env`, then the built-in
 | `LADDER_CRAWL_S` / `LADDER_TIER_FLOOR` | `0` / `MASTER` | Scheduled ladder crawls (0 = on demand) and their depth |
 | `ADMIN_IP_ALLOWLIST` | — | IPs and CIDRs allowed to reach `/v1/admin/*` |
 | `BOOTSTRAP_ADMIN_KEY` | — | Use this admin key on first run instead of generating one |
-| `TLS` / `TLS_DOMAIN` / `ACME_EMAIL` | off | Built-in HTTPS (below) |
 | `DEV_UI` / `DOCS_UI` / `DASHBOARD_UI` | on (`/dev` off in production) | The three pages |
 
 ## Operations
 
 ### HTTPS
 
-You have two options:
-
-- **Built-in:** `riot-proxy serve --tls --domain api.example.com --acme-email you@example.com` obtains and renews a Let's Encrypt certificate into `$DATA_DIR/acme`.
-  - It serves HTTPS on `TLS_PORT` (443) and redirects HTTP on `TLS_REDIRECT_PORT` (80). On systemd it needs `CAP_NET_BIND_SERVICE`.
-  - Plain HTTP stays on `127.0.0.1:PORT` for the healthcheck.
-  - `/metrics` and `/readyz` answer private addresses only.
-- **Reverse proxy:** put Caddy or nginx in front of `:8080` instead.
+The proxy serves plain HTTP only. It is meant for services on the same host or a private network. If callers reach it over a network you don't trust, put Caddy or nginx in front of `:8080` to terminate HTTPS. `TLS=true`, from the removed built-in TLS, refuses to start (ADR-067).
 
 ### systemd
 

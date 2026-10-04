@@ -54,15 +54,11 @@ services:
 
 That replaces `docker-compose.yml` **and** `docker-compose.prod.yml` from v1. Dev and prod differ only by `.env`.
 
-## Option B — TLS built in (no Caddy)
+## Option B — TLS built in (removed)
 
-```bash
-riot-proxy serve --tls --domain api.ninjagoldfinch.nz --acme-email ninja@ninjagoldfinch.nz
-```
+Built in P8-03 and removed before 2.0.0 (ADR-067). The proxy is never the public edge: it serves plain HTTP to services on the same host or a private network. Where HTTPS is needed, put Caddy (or nginx) in front of `:8080`; the v1 `Caddyfile` works unchanged.
 
-`rustls-acme` obtains and renews a Let's Encrypt certificate into `$DATA_DIR/acme/`, serves 443 and redirects 80. Data Dragon is served from `$DATA_DIR/ddragon` by `tower-http::ServeDir` with `Cache-Control: public, max-age=604800, immutable` — the same headers the v1 Caddyfile set. `/metrics` and `/readyz` are restricted to private ranges by the same middleware that enforces `ADMIN_IP_ALLOWLIST`.
-
-Keep Caddy if you already run it for other services; point it at `:8080` with the v1 `Caddyfile` unchanged.
+Data Dragon is served from `$DATA_DIR/ddragon` by `tower-http::ServeDir` with `Cache-Control: public, max-age=604800, immutable` — the same headers the v1 Caddyfile set.
 
 ## Option C — systemd, no containers
 
@@ -84,7 +80,6 @@ ProtectSystem=strict
 ReadWritePaths=/var/lib/riot-proxy
 PrivateTmp=yes
 NoNewPrivileges=yes
-AmbientCapabilities=CAP_NET_BIND_SERVICE   # only with --tls on 443
 
 [Install]
 WantedBy=multi-user.target
@@ -111,10 +106,9 @@ Same variable names as v1 where the concept survives; removed variables are list
 |---|---|---|
 | `RIOT_API_KEY` | — | required |
 | `RIOT_USER_AGENT` | `riot-proxy/2.0 (+…)` | |
-| `DATA_DIR` | `./data` | **new** — SQLite, ddragon, backups, acme all live here |
+| `DATA_DIR` | `./data` | **new** — SQLite, ddragon, backups all live here |
 | `DATABASE_URL` | `sqlite://$DATA_DIR/riot-proxy.db` | now optional; `postgres://` needs the `postgres` feature |
 | `PORT` / `HOST` | `8080` / `0.0.0.0` | |
-| `TLS` / `TLS_DOMAIN` / `ACME_EMAIL` | off | **new** |
 | `ROLE` | `all` | **new** — `api` / `worker` only with Postgres |
 | `JOB_CONCURRENCY` | `8` | **new** |
 | `LOG_FORMAT` | `json` (tty → `pretty`) | |
