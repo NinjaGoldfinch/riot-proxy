@@ -196,6 +196,10 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 - [x] RC-04 `TRUST_PROXY` (#75; default off: the admin allowlist uses the TCP peer, `X-Forwarded-For` only behind a trusted proxy, ADR-068)
 - [x] RC release `v2.0.0-rc.3` (#76; RC-03 + RC-04)
 
+## OPS — dev environment on Proxmox (owner request 2026-10-05)
+- [~] OPS-01 `:edge` image on every push to `main` (`ci/OPS-01-edge-image`, ADR-069)
+- [ ] OPS-02 Proxmox dev VM: `create-vm.sh` on the host, Docker + compose, a timer that pulls `:edge`
+
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
 
