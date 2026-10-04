@@ -216,19 +216,47 @@ async fn the_admin_allowlist_applies_to_admin_routes_only() {
     assert_eq!(denied.status, StatusCode::FORBIDDEN);
     insta::assert_json_snapshot!("auth_403_admin_ip", redacted(&denied));
 
-    // X-Forwarded-For is trusted (v1 trustProxy): a proxy on 10.x forwarding an outsider is refused.
-    let via_proxy = call(
-        router(e.state.clone(), "10.0.0.2:9"),
+    // TRUST_PROXY off (default, ADR-068): an outsider claiming an allowlisted
+    // address in X-Forwarded-For is still refused; only the TCP peer counts.
+    let spoofed = call(
+        router(e.state.clone(), "203.0.113.9:9"),
         "/admin",
         Some(&e.admin_key),
-        &[("x-forwarded-for", "203.0.113.9")],
+        &[("x-forwarded-for", "127.0.0.1")],
     )
     .await;
-    assert_eq!(via_proxy.status, StatusCode::FORBIDDEN);
+    assert_eq!(spoofed.status, StatusCode::FORBIDDEN);
 
     // Read routes are not allowlisted.
     let read = call(router(e.state, "203.0.113.9:9"), "/read", Some(&e.read_key), &[]).await;
     assert_eq!(read.status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn trust_proxy_takes_the_client_from_x_forwarded_for() {
+    let e = env(&[
+        ("ADMIN_IP_ALLOWLIST", "127.0.0.1,10.0.0.0/8"),
+        ("TRUST_PROXY", "true"),
+    ])
+    .await;
+    let via_proxy = |client: &'static str| {
+        let state = e.state.clone();
+        let key = e.admin_key.clone();
+        async move {
+            call(
+                router(state, "10.0.0.2:9"),
+                "/admin",
+                Some(&key),
+                &[("x-forwarded-for", client)],
+            )
+            .await
+            .status
+        }
+    };
+    // A proxy on 10.x forwarding an outsider is refused (v1 trustProxy)...
+    assert_eq!(via_proxy("203.0.113.9").await, StatusCode::FORBIDDEN);
+    // ...and forwarding an allowlisted client is let through.
+    assert_eq!(via_proxy("10.9.9.9, 10.0.0.2").await, StatusCode::OK);
 }
 
 #[tokio::test]

@@ -60,6 +60,7 @@ pub const VARS: &[&str] = &[
     "DDRAGON_DIR",
     "DDRAGON_LOCALE",
     "ADMIN_IP_ALLOWLIST",
+    "TRUST_PROXY",
     "BOOTSTRAP_ADMIN_KEY",
     "AUTH_DISABLED",
     "DEV_UI",
@@ -231,6 +232,9 @@ pub struct Config {
     pub ddragon_dir: PathBuf,
     pub ddragon_locale: String,
     pub admin_ip_allowlist: Vec<String>,
+    /// Take the client address from `X-Forwarded-For` (a trusted proxy in front).
+    /// Off: the TCP peer, which a caller cannot forge (ADR-068).
+    pub trust_proxy: bool,
     pub bootstrap_admin_key: Option<Secret>,
     pub auth_disabled: bool,
     pub dev_ui: bool,
@@ -471,6 +475,7 @@ impl Config {
             aggregate_interval_s: v.int("AGGREGATE_INTERVAL_S", 0, 0, 604_800),
             ddragon_locale: v.string("DDRAGON_LOCALE", "en_US"),
             admin_ip_allowlist: csv(&v.string("ADMIN_IP_ALLOWLIST", "")),
+            trust_proxy: v.bool("TRUST_PROXY", false),
             bootstrap_admin_key: v.opt_string("BOOTSTRAP_ADMIN_KEY").map(Secret::new),
             auth_disabled,
             dev_ui: v.opt_bool("DEV_UI").unwrap_or(env != Environment::Production),

@@ -215,7 +215,7 @@ Accepted. v1 `src/auth/plugin.ts` semantics, with these choices:
 - **Cache:** consumer lookups are cached in moka for **60 s** (plan P4-01; v1 used 300 s) and unknown keys for 30 s (v1). A CLI `key revoke` runs in another process and can't reach the server's cache, so the TTL bounds how long a revoked key keeps working. The admin API (P5-05) calls `Auth::invalidate` for immediate effect.
 - **Scopes and messages** are v1's: 401 `Missing or invalid API key`; 403 `This key lacks the '<scope>' scope`; 403 `Admin access is not permitted from this address`.
 - **Admin IP allowlist:** exact addresses and CIDR ranges, with IPv4-mapped IPv6 normalised (v1). **IPv6 CIDR ranges are also accepted**; v1 supported only IPv4 CIDR and required IPv6 hosts to be listed one by one. Unparseable entries are logged at warn and ignored.
-- **Client IP** is the leftmost `X-Forwarded-For` entry when present, otherwise the TCP peer, matching v1's Fastify `trustProxy: true`. This assumes a trusted proxy in front (Caddy, design/07). Revisit with built-in TLS (P8-03), where the binary faces clients directly.
+- **Client IP** is the leftmost `X-Forwarded-For` entry when present, otherwise the TCP peer, matching v1's Fastify `trustProxy: true`. (Since ADR-068, only with `TRUST_PROXY=true`.) This assumes a trusted proxy in front (Caddy, design/07). Revisit with built-in TLS (P8-03), where the binary faces clients directly.
 - **`AUTH_DISABLED`** runs every protected request as the synthetic `dev-local` consumer (read+admin, 100 000/min, no allowlist), and is refused in production (ADR-008).
 - Routes opt in with `route_layer(from_fn_with_state(state, require_read | require_admin))`. The consumer is placed in request extensions and recorded on the request span as `consumer` (design/07 log fields).
 
@@ -795,4 +795,11 @@ Accepted (owner, task RC-03). Supersedes ADR-061 and design/07 §Option B. The p
 - **`TLS=true` refuses to boot** with `TLS: built-in TLS was removed; terminate HTTPS in a reverse proxy`, so an old `.env` cannot quietly come up as plain HTTP. `TLS=false` and the other old variables are ignored.
 - **HTTPS, where needed, is a reverse proxy's job** (Caddy or nginx in front of `PORT`, design/07 §Option A).
 - **Binary size:** the static musl binary drops from 17.9 to 16.6 MB. Building dependencies at opt-level 3 again would give 20.87 MB: under the 20 MiB cap by about 100 KB, inside the ~70 KB local-to-CI drift. ADR-061's `opt-level = "s"` for dependencies therefore stays.
-- **Still open:** ADR-033 trusts the leftmost `X-Forwarded-For` for the admin allowlist. With no proxy in front, a caller can set it. That is unchanged here.
+- **Still open:** ADR-033 trusts the leftmost `X-Forwarded-For` for the admin allowlist. With no proxy in front, a caller can set it. That is unchanged here. (Resolved by ADR-068.)
+
+## ADR-068 — `TRUST_PROXY`, off by default (2026-10-05)
+Accepted (owner, task RC-04). Amends ADR-033's client-IP rule. The proxy has no reverse proxy in front (ADR-067), so a caller could put an allowlisted address in `X-Forwarded-For` and pass `ADMIN_IP_ALLOWLIST`. An admin key was still needed, but the allowlist was no defence on its own.
+- **`TRUST_PROXY`** (bool, default `false`; the name is v1's Fastify option). Off: the client address is the TCP peer, and `X-Forwarded-For` is ignored. On: the leftmost `X-Forwarded-For` entry wins when it parses, otherwise the peer, exactly as before.
+- **Default off** is a break from v1, which always trusted the header (owner: v1 parity is dropped). An operator who puts Caddy or nginx in front must set `TRUST_PROXY=true`. Otherwise every request appears to come from the proxy's address, and an allowlist that includes it would admit everyone.
+- **Applies to** every use of the client address: the admin routes' allowlist and the `/v1/ws` admin-topic decision. Nothing else reads it.
+- **Tests:** unit (`client_ip` with the setting on and off), integration (`tests/auth.rs`: a spoofed header is refused by default; through a trusted proxy, an outsider is refused and an allowlisted client is admitted), config default.
