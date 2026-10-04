@@ -447,6 +447,6 @@ Paste this as the first message in the new repo's Claude Code session after boot
 - [ ] Confirm the v1 reference repo URL (`ninja-recorder-deprecated` is what you gave me — double-check it isn't the recorder repo).
 - [ ] Put a **development** Riot key in `.env` for P1-05 / P3-06 recording; never the production key.
 - [ ] Add `RIOT_API_KEY` (dev) as a GitHub Actions secret only if you want the ignored live tests in CI — not required.
-- [ ] Review the P5-04 composite snapshot and the P8-01 skipped-test ADRs personally.
+- [x] ~~Review the P5-04 composite snapshot and the P8-01 skipped-test ADRs personally.~~ The P5-04 snapshots were reviewed by the owner (#43). P8-01 skipped no test: all 29 run in mock mode (ADR-059).
 - [x] ~~Test P8-03 built-in TLS on a real domain.~~ Not needed: built-in TLS was removed (RC-03, ADR-067).
 - [ ] Sign off `docs/CUTOVER.md` before decommissioning v1.
