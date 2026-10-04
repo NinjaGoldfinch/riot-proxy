@@ -72,6 +72,7 @@ Values come from CLI flags, then the environment, then `.env`, then the built-in
 | `ARCHIVE_TIMELINES` | `false` | Also archive match timelines (large) |
 | `LADDER_CRAWL_S` / `LADDER_TIER_FLOOR` | `0` / `MASTER` | Scheduled ladder crawls (0 = on demand) and their depth |
 | `ADMIN_IP_ALLOWLIST` | — | IPs and CIDRs allowed to reach `/v1/admin/*` |
+| `TRUST_PROXY` | `false` | Take the client address from `X-Forwarded-For`. Turn on only behind a reverse proxy that sets it |
 | `BOOTSTRAP_ADMIN_KEY` | — | Use this admin key on first run instead of generating one |
 | `DEV_UI` / `DOCS_UI` / `DASHBOARD_UI` | on (`/dev` off in production) | The three pages |
 
@@ -79,7 +80,7 @@ Values come from CLI flags, then the environment, then `.env`, then the built-in
 
 ### HTTPS
 
-The proxy serves plain HTTP only. It is meant for services on the same host or a private network. If callers reach it over a network you don't trust, put Caddy or nginx in front of `:8080` to terminate HTTPS. `TLS=true`, from the removed built-in TLS, refuses to start (ADR-067).
+The proxy serves plain HTTP only. It is meant for services on the same host or a private network. If callers reach it over a network you don't trust, put Caddy or nginx in front of `:8080` to terminate HTTPS, and set `TRUST_PROXY=true` so the admin allowlist sees the real client. `TLS=true`, from the removed built-in TLS, refuses to start (ADR-067).
 
 ### systemd
 

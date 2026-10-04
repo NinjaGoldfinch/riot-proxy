@@ -109,6 +109,7 @@ Same variable names as v1 where the concept survives; removed variables are list
 | `DATA_DIR` | `./data` | **new** — SQLite, ddragon, backups all live here |
 | `DATABASE_URL` | `sqlite://$DATA_DIR/riot-proxy.db` | now optional; `postgres://` needs the `postgres` feature |
 | `PORT` / `HOST` | `8080` / `0.0.0.0` | |
+| `TRUST_PROXY` | `false` | **new** — v1 always trusted `X-Forwarded-For` (ADR-068) |
 | `ROLE` | `all` | **new** — `api` / `worker` only with Postgres |
 | `JOB_CONCURRENCY` | `8` | **new** |
 | `LOG_FORMAT` | `json` (tty → `pretty`) | |

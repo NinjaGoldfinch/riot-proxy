@@ -74,6 +74,7 @@ fn defaults_match_v1_and_design_07() {
     assert!(c.admin_ip_allowlist.is_empty());
     assert!(c.bootstrap_admin_key.is_none());
     assert!(!c.auth_disabled);
+    assert!(!c.trust_proxy);
     assert!(c.dev_ui);
     assert!(c.docs_ui);
     assert!(c.dashboard_ui);
@@ -153,6 +154,7 @@ fn production_refuses_auth_disabled() {
 
     // Allowed outside production.
     assert!(load(env(&[("AUTH_DISABLED", "true")])).auth_disabled);
+    assert!(load(env(&[("TRUST_PROXY", "true")])).trust_proxy);
 }
 
 #[test]

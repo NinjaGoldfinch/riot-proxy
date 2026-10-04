@@ -125,11 +125,13 @@ pub fn ip_allowed(remote: Option<IpAddr>, allowlist: &[AllowEntry]) -> bool {
     allowlist.iter().any(|e| e.matches(addr))
 }
 
-/// The client address. v1 ran Fastify with `trustProxy: true`, so the leftmost
-/// `X-Forwarded-For` entry wins when present (ADR-033); otherwise the peer.
-pub fn client_ip(headers: &HeaderMap, peer: Option<SocketAddr>) -> Option<IpAddr> {
-    let forwarded = headers
-        .get("x-forwarded-for")
+/// The client address: the TCP peer, or with `trust_proxy` the leftmost
+/// `X-Forwarded-For` entry when present (v1's Fastify `trustProxy: true`, ADR-033).
+/// Off by default: with no proxy in front the header is the caller's to forge (ADR-068).
+pub fn client_ip(headers: &HeaderMap, peer: Option<SocketAddr>, trust_proxy: bool) -> Option<IpAddr> {
+    let forwarded = trust_proxy
+        .then(|| headers.get("x-forwarded-for"))
+        .flatten()
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.split(',').next())
         .and_then(|first| first.trim().parse::<IpAddr>().ok());
@@ -173,6 +175,7 @@ pub struct Auth {
     cache: Cache<[u8; 32], Cached>,
     disabled: bool,
     allowlist: Vec<AllowEntry>,
+    trust_proxy: bool,
 }
 
 impl std::fmt::Debug for Auth {
@@ -209,6 +212,7 @@ impl Auth {
             cache,
             disabled: config.auth_disabled,
             allowlist,
+            trust_proxy: config.trust_proxy,
         }
     }
 
@@ -245,7 +249,7 @@ impl Auth {
         uri: &Uri,
         peer: Option<SocketAddr>,
     ) -> Result<(Arc<Consumer>, bool), ApiError> {
-        let ip = client_ip(headers, peer);
+        let ip = client_ip(headers, peer, self.trust_proxy);
         if self.disabled {
             return Ok((Arc::new(Consumer::dev_local()), true));
         }
@@ -295,7 +299,7 @@ struct Ask {
 }
 
 impl Ask {
-    fn from(req: &Request) -> Self {
+    fn from(req: &Request, trust_proxy: bool) -> Self {
         // What the `ConnectInfo` extractor does: the real peer, or the address
         // `MockConnectInfo` supplies in tests.
         let peer = req
@@ -305,7 +309,7 @@ impl Ask {
             .or_else(|| req.extensions().get::<MockConnectInfo<SocketAddr>>().map(|c| c.0));
         Self {
             token: bearer(req.headers(), req.uri()),
-            ip: client_ip(req.headers(), peer),
+            ip: client_ip(req.headers(), peer, trust_proxy),
             path: req.uri().path().to_string(),
         }
     }
@@ -313,7 +317,7 @@ impl Ask {
 
 /// Authenticate, authorise and meter one request.
 async fn guard(state: AppState, required: Scope, mut req: Request, next: Next) -> Response {
-    let ask = Ask::from(&req);
+    let ask = Ask::from(&req, state.auth.trust_proxy);
     let consumer = match state.auth.authorise(ask, required).await {
         Ok(consumer) => consumer,
         Err(e) => return e.into_response(),
@@ -417,14 +421,17 @@ mod tests {
     }
 
     #[test]
-    fn client_ip_prefers_forwarded_for() {
+    fn client_ip_prefers_forwarded_for_only_behind_a_trusted_proxy() {
         let peer: SocketAddr = "10.0.0.9:5555".parse().unwrap();
         let mut h = HeaderMap::new();
-        assert_eq!(client_ip(&h, Some(peer)), ip("10.0.0.9"));
+        assert_eq!(client_ip(&h, Some(peer), true), ip("10.0.0.9"));
         h.insert("x-forwarded-for", "203.0.113.7, 10.0.0.1".parse().unwrap());
-        assert_eq!(client_ip(&h, Some(peer)), ip("203.0.113.7"));
+        assert_eq!(client_ip(&h, Some(peer), true), ip("203.0.113.7"));
+        // Untrusted: the header is ignored, whatever it says.
+        assert_eq!(client_ip(&h, Some(peer), false), ip("10.0.0.9"));
         h.insert("x-forwarded-for", "garbage".parse().unwrap());
-        assert_eq!(client_ip(&h, Some(peer)), ip("10.0.0.9"));
-        assert_eq!(client_ip(&HeaderMap::new(), None), None);
+        assert_eq!(client_ip(&h, Some(peer), true), ip("10.0.0.9"));
+        assert_eq!(client_ip(&HeaderMap::new(), None, true), None);
+        assert_eq!(client_ip(&HeaderMap::new(), None, false), None);
     }
 }
