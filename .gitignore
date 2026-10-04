@@ -6,3 +6,4 @@
 *.db-shm
 /backups
 node_modules
+/.claude
