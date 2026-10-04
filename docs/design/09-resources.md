@@ -21,7 +21,6 @@ Verify versions on crates.io / pkg.go.dev before pinning; this list is about *wh
 | Logging | `tracing`, `tracing-subscriber` (`json`, `env-filter`) | https://docs.rs/tracing |
 | Config | `figment` or `envy` + `dotenvy` | https://docs.rs/figment |
 | CLI | `clap` (`derive`) | https://docs.rs/clap |
-| TLS + ACME | `axum-server` (`tls-rustls`), `rustls-acme` | https://docs.rs/rustls-acme |
 | Hashing / ids | `sha2`, `hex`, `ulid` | |
 | Time | `jiff` | https://docs.rs/jiff |
 | Cron-style ticks | `tokio-cron-scheduler` (optional; `tokio::time::interval` is enough) | |

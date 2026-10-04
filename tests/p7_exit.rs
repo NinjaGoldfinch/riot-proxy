@@ -130,7 +130,6 @@ async fn a_master_crawl_of_thirty_players_runs_every_stage_and_fetches_each_matc
         skip_tracing_init: true,
         // Unmocked: the sync fails and retries, but never leaves the machine.
         ddragon_urls: Some(riot_proxy::jobs::ddragon::CdnUrls::mock(&server.uri())),
-        tls_pem: None,
     };
     let task = tokio::spawn(async move { serve_with(config, options).await.unwrap() });
     let base = format!("http://127.0.0.1:{port}");

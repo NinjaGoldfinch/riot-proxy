@@ -186,12 +186,13 @@ Exit check (2026-10-04, `main` @ `031acff`, CI run 37127324010 and release run 3
   ```
   Each binary's `--version` was checked against the tag in the run; the amd64 image passed its own healthcheck. `:2` is not pushed for a pre-release (404), as designed (ADR-063).
 
-Owner items still open from P8: P8-03 TLS on a real domain (manual), P8-06 runbook sign-off.
+Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS check was dropped with the feature in RC-03.)
 
 ## RC — fixes before 2.0.0 (owner requests after rc.1)
 - [x] RC-01 no default platform (#70; player + admin routes require it, analytics sums every platform without it, ADR-065)
 - [x] RC-02 account-v1 without a region (#71; region-less `/v1/riot/accounts/*` routes, every internal lookup picks asia → americas → europe by limiter room and 429s, one shared cache entry, ADR-066)
 - [x] RC release `v2.0.0-rc.2` (#73; RC-01 + RC-02)
+- [ ] RC-03 remove built-in TLS (plain HTTP only; `TLS=true` refuses to boot; musl binary 17.9 → 16.6 MB, ADR-067)
 
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.

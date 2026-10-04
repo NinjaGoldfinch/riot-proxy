@@ -12,7 +12,6 @@ publish = false
 [dependencies]
 anyhow = "1.0"
 axum = { version = "0.8", features = ["ws"] }
-axum-server = { version = "0.8", default-features = false, features = ["tls-rustls-no-provider"] }
 base64 = "0.23"
 bytes = "1.12"
 clap = { version = "4.6", features = ["derive", "env"] }
@@ -28,8 +27,6 @@ moka = { version = "0.12", features = ["future"] }
 refinery = { version = "0.9", features = ["rusqlite"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "gzip", "rustls", "http2"] }
 rusqlite = { version = "0.39", features = ["bundled"] }
-rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
-rustls-acme = { version = "0.15", default-features = false, features = ["aws-lc-rs", "axum", "tokio", "webpki-roots", "tls12"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["raw_value"] }
 sha2 = "0.11"
@@ -56,7 +53,6 @@ postgres = []
 futures-util = "0.3"
 insta = { version = "1.48", features = ["json"] }
 proptest = "1.11"
-rcgen = "0.14"
 tempfile = "3.27"
 tokio-test = "0.4"
 tokio-tungstenite = "0.29"
@@ -76,6 +72,7 @@ codegen-units = 1
 strip = true
 
 # Dependencies optimise for size, this crate for speed: 22.2 → 17.9 MB static,
-# about 6% off migrate-v1's archive throughput (ADR-061).
+# about 6% off migrate-v1's archive throughput (ADR-061). Without built-in TLS
+# (ADR-067) dependencies at 3 would be 20.87 MB: too close to the cap.
 [profile.release.package."*"]
 opt-level = "s"

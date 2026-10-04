@@ -22,7 +22,7 @@
 
   <!-- B: builtin TLS -->
   <rect x="315" y="55" width="270" height="280" rx="12" fill="#1e293b" stroke="#334155"/>
-  <text x="450" y="80" text-anchor="middle" fill="#c4b5fd" font-weight="600" font-size="14">B · Built-in TLS, no proxy</text>
+  <text x="450" y="80" text-anchor="middle" fill="#c4b5fd" font-weight="600" font-size="14">B · Built-in TLS — removed (ADR-067)</text>
   <rect x="345" y="100" width="210" height="60" rx="8" fill="#4c1d95" stroke="#8b5cf6"/>
   <text x="450" y="124" text-anchor="middle" fill="#ede9fe">riot-proxy serve --tls</text>
   <text x="450" y="144" text-anchor="middle" fill="#ddd6fe" font-size="11">rustls + ACME · :443 (+:80 redirect)</text>

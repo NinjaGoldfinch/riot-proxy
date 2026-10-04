@@ -97,7 +97,7 @@ docker compose logs riot-proxy | grep "bootstrap admin key (shown once)"
   ```
 - [ ] Prometheus scrapes v2's `/metrics`. The metric names are v1's, so `ops/grafana/riot-proxy-dashboard.json` and `ops/prometheus-alerts.yml` apply unchanged.
 
-Expose v2 the way v1 was exposed. Either add a site to v1's Caddyfile that points at v2's port, or use v2's built-in TLS on its own host (`--tls --domain … --acme-email …`, [README](../README.md#https)).
+Expose v2 the way v1 was exposed: add a site to v1's Caddyfile that points at v2's port. v2 has no built-in TLS ([README](../README.md#https)).
 
 ## 4. Move consumers, one at a time
 

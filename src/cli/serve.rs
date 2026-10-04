@@ -33,8 +33,6 @@ pub struct ServeOptions {
     pub skip_tracing_init: bool,
     /// Where Data Dragon is fetched from. `None`: Riot's hosts.
     pub ddragon_urls: Option<crate::jobs::ddragon::CdnUrls>,
-    /// With `TLS` on: this certificate instead of ACME (tests; ACME needs a real domain).
-    pub tls_pem: Option<(Vec<u8>, Vec<u8>)>,
 }
 
 pub async fn serve(config: Config) -> anyhow::Result<()> {
@@ -114,16 +112,9 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
     // Before "listening": a SIGTERM from then on must be a clean shutdown, not
     // the default action.
     let shutdown = app::shutdown_signal()?;
-    // With TLS the proxy faces the internet itself, so plain HTTP stays on
-    // loopback: the healthcheck and local scraping use it (ADR-061).
-    let plain_host = if config.tls {
-        "127.0.0.1"
-    } else {
-        config.host.as_str()
-    };
-    let listener = tokio::net::TcpListener::bind((plain_host, config.port))
+    let listener = tokio::net::TcpListener::bind((config.host.as_str(), config.port))
         .await
-        .with_context(|| format!("binding {plain_host}:{}", config.port))?;
+        .with_context(|| format!("binding {}:{}", config.host, config.port))?;
     let addr = listener.local_addr()?;
     tracing::info!(%addr, "listening");
 
@@ -244,7 +235,6 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         Duration::from_secs(u64::from(config.metrics_history_interval_s)),
     );
 
-    let tls_plan = config.tls.then(|| TlsPlan::new(&config, options.tls_pem.clone()));
     let auth = Arc::new(Auth::new(&config, db.clone()));
     let state = AppState {
         config: config.into(),
@@ -260,10 +250,7 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         ddragon: mirror,
         stats,
     };
-    let served = match tls_plan {
-        Some(plan) => serve_tls(plan, listener, app::router(state, metrics), shutdown).await,
-        None => app::serve(listener, app::router(state, metrics), shutdown).await,
-    };
+    let served = app::serve(listener, app::router(state, metrics), shutdown).await;
 
     // After draining, whether or not serve failed: stop ticking, let running
     // jobs finish (the rest resume on the next boot), close sockets, then the
@@ -279,60 +266,6 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
     tracing::info!("limiter checkpoint and L2 flushed; stopped");
     served?;
     Ok(())
-}
-
-/// What TLS mode needs from the config, taken before the config moves into
-/// the app state.
-struct TlsPlan {
-    source: crate::tls::Source,
-    https: std::net::SocketAddr,
-    redirect: Option<std::net::SocketAddr>,
-}
-
-impl TlsPlan {
-    fn new(config: &Config, pem: Option<(Vec<u8>, Vec<u8>)>) -> Self {
-        let source = match pem {
-            Some((cert, key)) => crate::tls::Source::Pem { cert, key },
-            None => crate::tls::Source::Acme {
-                domain: config.tls_domain.clone().unwrap_or_default(),
-                email: config.acme_email.clone().unwrap_or_default(),
-                cache: config.data_dir.join("acme"),
-                production: true,
-            },
-        };
-        let host: std::net::IpAddr = config
-            .host
-            .parse()
-            .unwrap_or(std::net::IpAddr::from([0, 0, 0, 0]));
-        Self {
-            source,
-            https: std::net::SocketAddr::new(host, config.tls_port),
-            redirect: (config.tls_redirect_port > 0)
-                .then(|| std::net::SocketAddr::new(host, config.tls_redirect_port)),
-        }
-    }
-}
-
-/// HTTPS (and the redirect) beside plain HTTP on loopback, one shutdown for all.
-async fn serve_tls(
-    plan: TlsPlan,
-    loopback: tokio::net::TcpListener,
-    router: axum::Router,
-    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
-) -> std::io::Result<()> {
-    let (tx, rx) = tokio::sync::watch::channel(false);
-    tokio::spawn(async move {
-        shutdown.await;
-        let _ = tx.send(true);
-    });
-    let mut plain_rx = rx.clone();
-    let plain = app::serve(loopback, router.clone(), async move {
-        let _ = plain_rx.wait_for(|s| *s).await;
-    });
-    let secure = crate::tls::serve(router, plan.https, plan.redirect, plan.source, rx);
-    let (plain, secure) = tokio::join!(plain, secure);
-    plain?;
-    secure.map_err(std::io::Error::other)
 }
 
 /// How long running jobs get to finish at shutdown.

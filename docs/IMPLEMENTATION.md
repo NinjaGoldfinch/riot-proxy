@@ -448,5 +448,5 @@ Paste this as the first message in the new repo's Claude Code session after boot
 - [ ] Put a **development** Riot key in `.env` for P1-05 / P3-06 recording; never the production key.
 - [ ] Add `RIOT_API_KEY` (dev) as a GitHub Actions secret only if you want the ignored live tests in CI — not required.
 - [ ] Review the P5-04 composite snapshot and the P8-01 skipped-test ADRs personally.
-- [ ] Test P8-03 built-in TLS on a real domain.
+- [x] ~~Test P8-03 built-in TLS on a real domain.~~ Not needed: built-in TLS was removed (RC-03, ADR-067).
 - [ ] Sign off `docs/CUTOVER.md` before decommissioning v1.

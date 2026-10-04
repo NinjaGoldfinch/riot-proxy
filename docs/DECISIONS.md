@@ -693,7 +693,7 @@ Accepted. `riot-proxy migrate-v1 --from <path> [--key-scope <scope>]` (design/08
 - **CI's `pg_restore` is older than the fixture's `pg_dump`** (16 vs 17), and refuses the archive. The custom-format test runs only where `pg_restore` ≥ 17 exists, and the CLI's error names the version rule.
 
 ## ADR-061 — Built-in TLS (2026-10-03)
-Accepted. `serve --tls --domain <d> --acme-email <e>` (or `TLS`, `TLS_DOMAIN`, `ACME_EMAIL`) is design/07 §Option B.
+Superseded by ADR-067 (built-in TLS removed). Accepted. `serve --tls --domain <d> --acme-email <e>` (or `TLS`, `TLS_DOMAIN`, `ACME_EMAIL`) is design/07 §Option B.
 - **Certificate:** `rustls-acme` 0.15 with the aws-lc-rs provider, already linked for reqwest, so there is no second crypto backend. It uses Let's Encrypt's production directory, caches the account and certificate in `$DATA_DIR/acme/`, and renews in-process. The challenge is TLS-ALPN-01, answered on the HTTPS port itself, so port 80 is never needed for issuance. ACME events are logged at info, failures at error.
 - **Ports:** HTTPS goes on `TLS_PORT` (default 443). Every request on `TLS_REDIRECT_PORT` (default 80; 0 = no listener) gets a 308 to `https://<host>[:TLS_PORT]<path?query>`. Both bind `HOST`. `TLS_DOMAIN` and `ACME_EMAIL` are required when TLS is on.
 - **Plain HTTP stays up on `127.0.0.1:PORT`** in TLS mode. That is where `riot-proxy healthcheck` connects in TLS mode (always IPv4 loopback) and where local Prometheus scrapes. It is never exposed.
@@ -788,3 +788,11 @@ Accepted (owner, task RC-02). Riot serves every account from each account-v1 clu
   - Existing account entries keyed by host are orphaned once: they are refetched on next use, and the L2 sweep drops them when they expire.
   - Other regional methods (match-v5) keep their host in the key.
 - **Not changed:** the `/{region}/` routes' validation and `sea` handling; `X-Cache`, error codes and metric names.
+
+## ADR-067 — Built-in TLS removed (2026-10-05)
+Accepted (owner, task RC-03). Supersedes ADR-061 and design/07 §Option B. The proxy is never the public edge. It only takes plain HTTP from the owner's own services, so ACME, the 80→443 redirect and the private-only `/metrics` and `/readyz` were code nobody would run. The owner's real-domain check of P8-03 is dropped with it.
+- **Removed:** `src/tls.rs`; the `--tls`, `--domain` and `--acme-email` flags; `TLS_DOMAIN`, `ACME_EMAIL`, `TLS_PORT` and `TLS_REDIRECT_PORT`; the `rustls-acme` and `axum-server` dependencies, the direct `rustls` one (reqwest still links it) and `rcgen`. `serve` binds `HOST:PORT` only, and `healthcheck` always follows `HOST`.
+- **`TLS=true` refuses to boot** with `TLS: built-in TLS was removed; terminate HTTPS in a reverse proxy`, so an old `.env` cannot quietly come up as plain HTTP. `TLS=false` and the other old variables are ignored.
+- **HTTPS, where needed, is a reverse proxy's job** (Caddy or nginx in front of `PORT`, design/07 §Option A).
+- **Binary size:** the static musl binary drops from 17.9 to 16.6 MB. Building dependencies at opt-level 3 again would give 20.87 MB: under the 20 MiB cap by about 100 KB, inside the ~70 KB local-to-CI drift. ADR-061's `opt-level = "s"` for dependencies therefore stays.
+- **Still open:** ADR-033 trusts the leftmost `X-Forwarded-For` for the admin allowlist. With no proxy in front, a caller can set it. That is unchanged here.

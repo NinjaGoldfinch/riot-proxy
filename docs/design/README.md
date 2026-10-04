@@ -26,7 +26,7 @@ Everything else in these docs follows from that observation.
 | Archive / relational data | PostgreSQL 18 | **SQLite (WAL)**; Postgres behind a feature flag for archives past ~50 GB |
 | Job queue | BullMQ on Redis | In-process scheduler + SQLite-backed durable job table |
 | Realtime fan-out | Redis pub/sub → WS | `tokio::sync::broadcast` → WS |
-| TLS / static | Caddy container | Caddy **or** the binary's own `--tls` (rustls + ACME) |
+| TLS / static | Caddy container | Caddy (or any reverse proxy) for TLS; the binary serves static files. Built-in TLS was removed (ADR-067) |
 | Deploy artefact | 5 images, 4 volumes | 1 image (~15 MB), 1 volume |
 | Cold start | ~10 s (Node + migrate + healthchecks) | < 100 ms |
 | Idle RSS | ~300–400 MB across services | ~20–40 MB |

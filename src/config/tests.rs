@@ -42,7 +42,6 @@ fn defaults_match_v1_and_design_07() {
     assert_eq!(c.ddragon_dir, PathBuf::from("./data/ddragon"));
     assert_eq!(c.role, Role::All);
     assert_eq!(c.job_concurrency, 8);
-    assert!(!c.tls);
     assert_eq!(c.riot_user_agent, DEFAULT_USER_AGENT);
     assert_eq!(c.cache_l1_max_mb, 128);
     assert_eq!(c.neg_ttl_seconds, 30);
@@ -125,13 +124,10 @@ fn every_flag_overrides_its_variable() {
         role: Some("all".into()),
         log_level: Some("warn".into()),
         log_format: Some("pretty".into()),
-        tls: true,
-        domain: Some("api.example.test".into()),
-        acme_email: Some("ops@example.test".into()),
     };
     let c = load(Sources {
         args,
-        ..env(&[("TLS", "false"), ("ENV", "production")])
+        ..env(&[("ENV", "production")])
     });
     assert_eq!(c.host, "127.0.0.1");
     assert_eq!(c.port, 9000);
@@ -140,9 +136,6 @@ fn every_flag_overrides_its_variable() {
     assert_eq!(c.env, Environment::Test);
     assert_eq!(c.log_level, "warn");
     assert_eq!(c.log_format, LogFormat::Pretty);
-    assert!(c.tls);
-    assert_eq!(c.tls_domain.as_deref(), Some("api.example.test"));
-    assert_eq!(c.acme_email.as_deref(), Some("ops@example.test"));
 }
 
 #[test]
@@ -543,29 +536,21 @@ fn mock_upstreams_are_testing_only() {
 }
 
 #[test]
-fn tls_needs_a_domain_and_an_email_and_defaults_to_443_and_80() {
-    let errs = errors(env(&[("TLS", "true")]));
-    assert!(
-        errs.contains(&"TLS_DOMAIN is required when TLS is on".to_string()),
-        "{errs:?}"
-    );
-    assert!(
-        errs.contains(&"ACME_EMAIL is required when TLS is on".to_string()),
-        "{errs:?}"
-    );
-    let on = [
-        ("TLS", "true"),
+fn tls_true_is_refused_now_that_built_in_tls_is_gone() {
+    // ADR-067: a leftover `TLS=true` must not quietly serve plain HTTP.
+    for on in ["true", "1"] {
+        let errs = errors(env(&[("TLS", on)]));
+        assert_eq!(
+            errs,
+            vec!["TLS: built-in TLS was removed; terminate HTTPS in a reverse proxy".to_string()],
+            "{on}"
+        );
+    }
+    // Off, or the old companions on their own, still boot (and are ignored).
+    load(env(&[
+        ("TLS", "false"),
         ("TLS_DOMAIN", "api.example.test"),
         ("ACME_EMAIL", "ops@example.test"),
-    ];
-    let c = load(env(&on));
-    assert_eq!((c.tls_port, c.tls_redirect_port), (443, 80));
-    let mut ports = on.to_vec();
-    ports.extend([("TLS_PORT", "8443"), ("TLS_REDIRECT_PORT", "0")]);
-    let c = load(env(&ports));
-    assert_eq!((c.tls_port, c.tls_redirect_port), (8443, 0));
-    let errs = errors(env(&[("TLS_PORT", "0")]));
-    assert!(errs.iter().any(|e| e.contains("TLS_PORT")), "{errs:?}");
-    // Off, neither is needed.
-    assert!(!load(env(&[])).tls);
+        ("TLS_PORT", "443"),
+    ]));
 }
