@@ -810,3 +810,11 @@ Accepted (owner, task OPS-01). The owner wants a dev VM on Proxmox (OPS-02) that
 - **amd64 only.** The dev VM is amd64; one target keeps the run short. Releases stay multi-arch (ADR-063).
 - **Not a release.** `:edge` never moves `:2` or a version tag, and nothing here creates a GitHub release. A pull request that touches the workflow builds and smoke-tests without pushing.
 - **Not a required check.** Required checks stay as ADR-006 lists them; an `edge` failure does not block merges, it just leaves `:edge` on the last good commit.
+
+## ADR-070 — Proxmox dev VM that follows `:edge` (2026-10-05)
+Accepted (owner, task OPS-02). The owner wants a dev environment on their Proxmox host that updates itself when `main` moves.
+- **`deploy/proxmox/create-vm.sh`**, run as root on the host, makes a Debian 13 cloud-image VM with `qm` (Proxmox VE 8+, `import-from`). Proxmox's own cloud-init sets the user, SSH keys and address; a vendor-data snippet (`cicustom vendor=`) installs Debian's `docker.io` + `docker-compose` (Compose v2), the stack in `/opt/riot-proxy` and the update timer. Using vendor-data, not user-data, keeps the Proxmox UI's cloud-init settings working.
+- **Updates by polling, not webhooks.** `riot-proxy-update.timer` runs `docker compose pull && up -d` every 2 minutes against `:edge` (ADR-069). The VM needs no inbound access from GitHub and no Rust toolchain. `RIOT_PROXY_TAG` in `.env` pins a `sha-<short>` or release tag.
+- **The Riot key never passes through the host.** The VM boots with an empty `RIOT_API_KEY`, and the stack stays down until the owner sets it in the VM's `.env` (mode 600).
+- **Plain HTTP on the LAN, `ENV=development`.** As ADR-067: put Caddy in front if it ever needs HTTPS.
+- **Tests:** `deploy/proxmox/test.sh` in a new CI job `ops` (not a required check): shellcheck, `cloud-init schema`, the embedded files byte-for-byte, the dry-run `qm` commands, and `riot-proxy-update` against a fake `docker`.

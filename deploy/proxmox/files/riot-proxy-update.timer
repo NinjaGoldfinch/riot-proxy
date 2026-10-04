@@ -1,0 +1,9 @@
+[Unit]
+Description=Check for a new riot-proxy image every 2 minutes
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=2min
+
+[Install]
+WantedBy=timers.target

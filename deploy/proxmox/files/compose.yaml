@@ -1,0 +1,10 @@
+# The dev VM's stack (OPS-02). `riot-proxy-update` pulls and restarts it.
+# RIOT_PROXY_TAG (in .env) pins a build: `edge` follows main, `sha-<short>` or a
+# release version holds still.
+services:
+  riot-proxy:
+    image: ghcr.io/ninjagoldfinch/riot-proxy:${RIOT_PROXY_TAG:-edge}
+    restart: unless-stopped
+    env_file: .env
+    ports: ["8080:8080"]
+    volumes: ["./data:/data"]
