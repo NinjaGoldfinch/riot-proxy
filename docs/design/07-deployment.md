@@ -113,7 +113,7 @@ Same variable names as v1 where the concept survives; removed variables are list
 | `ROLE` | `all` | **new** — `api` / `worker` only with Postgres |
 | `JOB_CONCURRENCY` | `8` | **new** |
 | `LOG_FORMAT` | `json` (tty → `pretty`) | |
-| `ENV` | `development` | replaces `NODE_ENV`; `production` refuses `AUTH_DISABLED`, turns `DEV_UI` off |
+| `ENV` | `development` | replaces `NODE_ENV`; `production` refuses `AUTH_DISABLED` and always turns `DEV_UI` off (ADR-071) |
 | `REDIS_URL` | — | **removed** |
 | `SF_LOCK_MS` | — | **removed** (no cross-process single-flight) |
 | `DDRAGON_DIR` | `$DATA_DIR/ddragon` | now derived |

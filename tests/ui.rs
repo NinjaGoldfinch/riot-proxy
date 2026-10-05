@@ -1,5 +1,5 @@
-//! `/dev` and `/dashboard` (plan P4-06): served without a key when enabled, 404
-//! when not, v1's config documents.
+//! `/dev` and `/dashboard` (plan P4-06, DEV-01): served without a key when
+//! enabled, 404 when not, and their config documents.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;
@@ -11,7 +11,7 @@ fn app(env: &[(&str, &str)]) -> (tempfile::TempDir, axum::Router) {
     (dir, router)
 }
 
-/// v1 dev UI: "serves the page without a key".
+/// The dev explorer is served without a key (design/10).
 #[tokio::test]
 async fn dev_ui_is_served_without_a_key() {
     let (_d, router) = app(&[]);
@@ -20,29 +20,41 @@ async fn dev_ui_is_served_without_a_key() {
     assert_eq!(r.headers["content-type"], "text/html; charset=utf-8");
     assert_eq!(r.headers["cache-control"], "no-store");
     let body = String::from_utf8(r.body).unwrap();
-    assert!(body.contains("riot-proxy"));
-    assert_eq!(body, riot_proxy::routes::ui::DEV_UI_HTML, "v1's page, verbatim");
+    assert_eq!(body, riot_proxy::routes::ui::DEV_UI_HTML);
 }
 
-/// v1 dev UI: "serves the same document for a client-side profile route".
-#[tokio::test]
-async fn dev_ui_client_routes_get_the_same_document() {
-    let (_d, router) = app(&[]);
-    let root = common::get(router.clone(), "/dev").await;
-    let deep = common::get(router, "/dev/NinjaGoldfinch-OCENZ?platform=oc1").await;
-    assert_eq!(deep.status, StatusCode::OK);
-    assert_eq!(deep.body, root.body);
+/// One file, nothing fetched from elsewhere: no CDN, no external script.
+#[test]
+fn dev_ui_is_self_contained() {
+    let html = riot_proxy::routes::ui::DEV_UI_HTML;
+    for needle in ["http://", "https://", "<script src", "<link "] {
+        assert!(!html.contains(needle), "dev-ui.html contains {needle:?}");
+    }
+    // It reads the two documents the router serves beside it.
+    assert!(html.contains("/dev/config.json"));
+    assert!(html.contains("/dev/openapi.json"));
 }
 
-/// v1 dev UI: "publishes the platform table the page builds its selector from".
+/// The page keeps its state in the hash, so there are no client-side paths (ADR-071).
 #[tokio::test]
-async fn dev_config_publishes_the_platform_table() {
+async fn dev_ui_has_no_catch_all() {
     let (_d, router) = app(&[]);
+    let r = common::get(router, "/dev/NinjaGoldfinch-OCENZ").await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn dev_config_publishes_what_the_page_needs() {
+    let (_d, router) = app(&[("DOCS_UI", "false")]);
     let r = common::get(router, "/dev/config.json").await;
     assert_eq!(r.status, StatusCode::OK);
     assert_eq!(r.headers["cache-control"], "no-store");
     let body = r.json();
     assert_eq!(body["authDisabled"], false);
+    assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(body["env"], "development");
+    assert_eq!(body["docsUi"], false);
+    assert_eq!(body["dashboardUi"], true);
     assert!(
         body.get("defaultPlatform").is_none(),
         "no default platform (ADR-065)"
@@ -56,7 +68,25 @@ async fn dev_config_publishes_the_platform_table() {
     assert!(platforms.contains(&serde_json::json!({"value": "oc1", "label": "Oceania", "region": "sea"})));
 }
 
-/// v1 dev UI: "still requires a key for the data the page fetches".
+/// The explorer's forms come from the spec, so it is served even with `DOCS_UI=false`.
+#[tokio::test]
+async fn dev_openapi_is_the_published_document_even_without_docs_ui() {
+    let (_d, router) = app(&[("DOCS_UI", "false")]);
+    assert_eq!(
+        common::get(router.clone(), "/openapi.json").await.status,
+        StatusCode::NOT_FOUND
+    );
+    let r = common::get(router, "/dev/openapi.json").await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.headers["content-type"], "application/json");
+    assert_eq!(r.headers["cache-control"], "no-store");
+    assert_eq!(
+        r.json(),
+        serde_json::to_value(riot_proxy::routes::docs::spec()).unwrap()
+    );
+}
+
+/// The page is public; the API behind it is not.
 #[tokio::test]
 async fn the_api_behind_the_page_still_needs_a_key() {
     let (_d, router) = app(&[]);
@@ -64,11 +94,16 @@ async fn the_api_behind_the_page_still_needs_a_key() {
     assert_eq!(r.status, StatusCode::UNAUTHORIZED);
 }
 
+/// ADR-071: never in production, not even with `DEV_UI=true`; off by flag elsewhere.
 #[tokio::test]
-async fn dev_ui_is_off_in_production_by_default_and_by_flag() {
-    for env in [vec![("ENV", "production")], vec![("DEV_UI", "false")]] {
+async fn dev_ui_is_off_in_production_and_by_flag() {
+    for env in [
+        vec![("ENV", "production")],
+        vec![("ENV", "production"), ("DEV_UI", "true")],
+        vec![("DEV_UI", "false")],
+    ] {
         let (_d, router) = app(&env);
-        for p in ["/dev", "/dev/x", "/dev/config.json"] {
+        for p in ["/dev", "/dev/config.json", "/dev/openapi.json"] {
             assert_eq!(
                 common::get(router.clone(), p).await.status,
                 StatusCode::NOT_FOUND,
@@ -76,9 +111,6 @@ async fn dev_ui_is_off_in_production_by_default_and_by_flag() {
             );
         }
     }
-    // Explicitly on in production (v1: an explicit DEV_UI wins).
-    let (_d, router) = app(&[("ENV", "production"), ("DEV_UI", "true")]);
-    assert_eq!(common::get(router, "/dev").await.status, StatusCode::OK);
 }
 
 #[tokio::test]

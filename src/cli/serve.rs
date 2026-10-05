@@ -88,6 +88,9 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
     }
     let cache = Arc::new(ResponseCache::new(l1, Some(L2Writer::spawn(db.clone()))));
     let policy = TtlPolicy::from_config(&config);
+    if config.dev_ui_ignored {
+        tracing::warn!("DEV_UI=true ignored: /dev is never served when ENV=production");
+    }
     for key in policy.ineffective_overrides() {
         tracing::warn!(key = %key, "CACHE_TTL_OVERRIDES key matches no cacheable endpoint; ignored");
     }

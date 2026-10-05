@@ -183,10 +183,17 @@ fn legacy_node_env_is_honoured_when_env_is_unset() {
 }
 
 #[test]
-fn dev_ui_follows_env_unless_set() {
-    assert!(!load(env(&[("ENV", "production")])).dev_ui);
-    assert!(load(env(&[("ENV", "production"), ("DEV_UI", "true")])).dev_ui);
+fn dev_ui_is_never_on_in_production() {
+    let prod = load(env(&[("ENV", "production")]));
+    assert!(!prod.dev_ui);
+    assert!(!prod.dev_ui_ignored, "unset is not a request");
+    // ADR-071: an explicit DEV_UI=true no longer wins in production.
+    let forced = load(env(&[("ENV", "production"), ("DEV_UI", "true")]));
+    assert!(!forced.dev_ui);
+    assert!(forced.dev_ui_ignored);
     assert!(!load(env(&[("DEV_UI", "false")])).dev_ui);
+    assert!(load(env(&[("ENV", "test")])).dev_ui);
+    assert!(!load(env(&[("DEV_UI", "true")])).dev_ui_ignored);
 }
 
 #[test]

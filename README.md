@@ -52,7 +52,7 @@ Once running, these pages are served:
 
 - `/docs`: the OpenAPI reference for every route.
 - `/dashboard`: the operational dashboard (it needs an admin key).
-- `/dev`: a browser client, off when `ENV=production`.
+- `/dev`: a dev explorer that can call every endpoint and shows the raw responses (design/10). It is never served when `ENV=production`.
 
 ## Configuration
 
@@ -74,7 +74,7 @@ Values come from CLI flags, then the environment, then `.env`, then the built-in
 | `ADMIN_IP_ALLOWLIST` | — | IPs and CIDRs allowed to reach `/v1/admin/*` |
 | `TRUST_PROXY` | `false` | Take the client address from `X-Forwarded-For`. Turn on only behind a reverse proxy that sets it |
 | `BOOTSTRAP_ADMIN_KEY` | — | Use this admin key on first run instead of generating one |
-| `DEV_UI` / `DOCS_UI` / `DASHBOARD_UI` | on (`/dev` off in production) | The three pages |
+| `DEV_UI` / `DOCS_UI` / `DASHBOARD_UI` | on (`/dev` always off in production) | The three pages |
 
 ## Operations
 
