@@ -803,3 +803,10 @@ Accepted (owner, task RC-04). Amends ADR-033's client-IP rule. The proxy has no 
 - **Default off** is a break from v1, which always trusted the header (owner: v1 parity is dropped). An operator who puts Caddy or nginx in front must set `TRUST_PROXY=true`. Otherwise every request appears to come from the proxy's address, and an allowlist that includes it would admit everyone.
 - **Applies to** every use of the client address: the admin routes' allowlist and the `/v1/ws` admin-topic decision. Nothing else reads it.
 - **Tests:** unit (`client_ip` with the setting on and off), integration (`tests/auth.rs`: a spoofed header is refused by default; through a trusted proxy, an outsider is refused and an allowlisted client is admitted), config default.
+
+## ADR-069 — `:edge` image on every push to `main` (2026-10-05)
+Accepted (owner, task OPS-01). The owner wants a dev VM on Proxmox (OPS-02) that follows `main` without building Rust on the VM.
+- **`.github/workflows/edge.yml`** builds the static amd64 binary on every push to `main` and pushes `ghcr.io/ninjagoldfinch/riot-proxy:edge` and `:sha-<short>` from `Dockerfile.release`, after the image passes its own healthcheck. The OCI `revision` label carries the commit.
+- **amd64 only.** The dev VM is amd64; one target keeps the run short. Releases stay multi-arch (ADR-063).
+- **Not a release.** `:edge` never moves `:2` or a version tag, and nothing here creates a GitHub release. A pull request that touches the workflow builds and smoke-tests without pushing.
+- **Not a required check.** Required checks stay as ADR-006 lists them; an `edge` failure does not block merges, it just leaves `:edge` on the last good commit.
