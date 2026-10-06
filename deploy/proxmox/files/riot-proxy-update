@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Pull the stack's image and recreate the container if it changed (OPS-02).
+# Run by riot-proxy-update.timer every 2 minutes; safe to run by hand.
+set -euo pipefail
+
+dir=${RIOT_PROXY_DIR:-/opt/riot-proxy}
+cd "$dir"
+
+if ! grep -qE '^RIOT_API_KEY=.+' .env 2>/dev/null; then
+  echo "riot-proxy-update: no RIOT_API_KEY in $dir/.env; not starting" >&2
+  exit 0
+fi
+
+before=$(docker compose images -q riot-proxy 2>/dev/null || true)
+docker compose pull --quiet
+docker compose up -d --remove-orphans
+after=$(docker compose images -q riot-proxy 2>/dev/null || true)
+
+if [ "$before" != "$after" ]; then
+  image=$(docker compose config --images)
+  rev=$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image" 2>/dev/null || true)
+  echo "riot-proxy-update: now running $image (${rev:-unknown revision})"
+  docker image prune -f >/dev/null
+fi

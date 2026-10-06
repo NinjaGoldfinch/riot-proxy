@@ -24,6 +24,32 @@ Pick one:
   ```
 - **From source:** `cargo build --release`. The toolchain is pinned in `rust-toolchain.toml`. For a static Linux binary, run `just musl` (it needs `musl-tools`).
 
+## Dev VM on Proxmox
+
+This creates a Debian VM that runs the `:edge` image and updates itself within about 2 minutes of each push to `main`. It needs Proxmox VE 8 or later. Run these on the Proxmox host, as root:
+
+```bash
+# once: let the 'local' storage hold cloud-init snippets
+#   Datacenter → Storage → local → Content → add "Snippets"
+
+curl -fsSL https://github.com/NinjaGoldfinch/riot-proxy/archive/refs/heads/main.tar.gz | tar xz
+cd riot-proxy-main/deploy/proxmox
+./create-vm.sh --ssh-keys ~/.ssh/my-laptop.pub            # DHCP, next free VM id
+# or: ./create-vm.sh --ssh-keys key.pub --vmid 210 --ip 192.168.68.50/22 --gw 192.168.68.1
+```
+
+Docker is installed on first boot, which takes a few minutes. Then:
+
+```bash
+qm guest cmd <vmid> network-get-interfaces     # its address
+ssh riot@<vm>
+nano /opt/riot-proxy/.env                      # set RIOT_API_KEY=
+sudo riot-proxy-update                         # start now instead of waiting for the timer
+docker compose -f /opt/riot-proxy/compose.yaml logs | grep -i "admin key"   # the bootstrap admin key, shown once
+```
+
+Open `http://<vm>:8080/dev`, `/docs` or `/dashboard`. [deploy/proxmox/README.md](deploy/proxmox/README.md) covers the options (`./create-vm.sh --help`, `--dry-run`), how to pin a version, and how to rebuild the VM.
+
 ## First run
 
 ```bash

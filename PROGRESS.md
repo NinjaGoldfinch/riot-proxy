@@ -197,8 +197,8 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 - [x] RC release `v2.0.0-rc.3` (#76; RC-03 + RC-04)
 
 ## OPS — dev environment on Proxmox (owner request 2026-10-05)
-- [~] OPS-01 `:edge` image on every push to `main` (`ci/OPS-01-edge-image`, ADR-069)
-- [ ] OPS-02 Proxmox dev VM: `create-vm.sh` on the host, Docker + compose, a timer that pulls `:edge`
+- [x] OPS-01 `:edge` image on every push to `main` (#79, ADR-069)
+- [x] OPS-02 Proxmox dev VM (#80; `deploy/proxmox/`, CI job `ops`, ADR-070)
 
 ## DEV — dev explorer (owner request 2026-10-05)
 - [x] DEV-01 dev explorer at `/dev` (#81; replaces v1's dev UI, forms from the OpenAPI document, never in production, design/10, ADR-071)

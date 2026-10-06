@@ -105,3 +105,11 @@ jobs:
           docker compose down
       - if: failure()
         run: docker logs rp || true; docker compose logs || true
+
+  # OPS-02: the Proxmox dev VM kit. Not a required check (ADR-070).
+  ops:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: sudo apt-get update && sudo apt-get install -y shellcheck python3-yaml cloud-init
+      - run: deploy/proxmox/test.sh

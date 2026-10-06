@@ -1,0 +1,8 @@
+[Unit]
+Description=Pull and restart riot-proxy if the image changed
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/riot-proxy-update
