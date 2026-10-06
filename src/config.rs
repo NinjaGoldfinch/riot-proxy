@@ -237,7 +237,10 @@ pub struct Config {
     pub trust_proxy: bool,
     pub bootstrap_admin_key: Option<Secret>,
     pub auth_disabled: bool,
+    /// `/dev`: never in production, whatever `DEV_UI` says (ADR-071).
     pub dev_ui: bool,
+    /// `DEV_UI=true` was set with `ENV=production` and ignored; `serve` warns.
+    pub dev_ui_ignored: bool,
     pub docs_ui: bool,
     pub dashboard_ui: bool,
     /// Send every Riot request here instead of Riot's hosts (a mock; the
@@ -407,6 +410,10 @@ impl Config {
                 .push("AUTH_DISABLED cannot be enabled when ENV=production".into());
         }
 
+        let dev_ui_flag = v.opt_bool("DEV_UI");
+        let dev_ui_set = dev_ui_flag.is_some();
+        let dev_ui = dev_ui_flag.unwrap_or(true);
+
         if v.bool(RETIRED_TLS_VAR, false) {
             v.push(
                 RETIRED_TLS_VAR,
@@ -478,7 +485,8 @@ impl Config {
             trust_proxy: v.bool("TRUST_PROXY", false),
             bootstrap_admin_key: v.opt_string("BOOTSTRAP_ADMIN_KEY").map(Secret::new),
             auth_disabled,
-            dev_ui: v.opt_bool("DEV_UI").unwrap_or(env != Environment::Production),
+            dev_ui: dev_ui && env != Environment::Production,
+            dev_ui_ignored: dev_ui && env == Environment::Production && dev_ui_set,
             docs_ui: v.bool("DOCS_UI", true),
             dashboard_ui: v.bool("DASHBOARD_UI", true),
             riot_base_url,

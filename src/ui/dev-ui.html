@@ -1,1014 +1,565 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="robots" content="noindex" />
-    <title>riot-proxy dev UI</title>
-    <style>
-      :root {
-        --bg: #0e1116;
-        --panel: #161b22;
-        --line: #262d38;
-        --text: #d7dee8;
-        --dim: #7d8794;
-        --accent: #58a6ff;
-        --win: #2ea043;
-        --loss: #d1444a;
-        --warn: #d29922;
-        --mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
-      }
-      * {
-        box-sizing: border-box;
-      }
-      body {
-        margin: 0;
-        background: var(--bg);
-        color: var(--text);
-        font:
-          14px/1.5 system-ui,
-          -apple-system,
-          'Segoe UI',
-          sans-serif;
-      }
-      main {
-        max-width: 980px;
-        margin: 0 auto;
-        padding: 24px 16px 80px;
-      }
-      h1 {
-        font: 600 15px/1 var(--mono);
-        letter-spacing: 0.04em;
-        margin: 0 0 16px;
-        color: var(--dim);
-      }
-      h2 {
-        font: 600 12px/1 var(--mono);
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        color: var(--dim);
-        margin: 0 0 10px;
-      }
-      section {
-        margin-top: 24px;
-      }
-      .panel {
-        background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        padding: 14px;
-      }
-      form {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-      }
-      input,
-      select,
-      button {
-        font: inherit;
-        color: var(--text);
-        background: #0b0e13;
-        border: 1px solid var(--line);
-        border-radius: 4px;
-        padding: 7px 9px;
-      }
-      input:focus,
-      select:focus {
-        outline: 1px solid var(--accent);
-        border-color: var(--accent);
-      }
-      #riotId {
-        flex: 1 1 240px;
-        font-family: var(--mono);
-      }
-      button {
-        cursor: pointer;
-        background: #1f2733;
-      }
-      button:hover:not(:disabled) {
-        border-color: var(--accent);
-      }
-      button:disabled {
-        opacity: 0.45;
-        cursor: default;
-      }
-      label.inline {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        color: var(--dim);
-        font-size: 12px;
-      }
-      .toolbar {
-        display: flex;
-        gap: 14px;
-        align-items: center;
-        flex-wrap: wrap;
-        margin-top: 10px;
-      }
-      .msg {
-        margin-top: 14px;
-        padding: 10px 12px;
-        border-radius: 4px;
-        font-family: var(--mono);
-        font-size: 12.5px;
-        white-space: pre-wrap;
-      }
-      .msg.err {
-        background: #2b1416;
-        border: 1px solid #5c2126;
-        color: #ff9c9c;
-      }
-      .msg.info {
-        background: #12202e;
-        border: 1px solid #1f3d58;
-        color: #9ecbff;
-      }
-      .msg.warn {
-        background: #2a2210;
-        border: 1px solid #55461a;
-        color: #e3c07b;
-      }
-      .chip {
-        font: 11px/1 var(--mono);
-        color: var(--dim);
-        border: 1px solid var(--line);
-        border-radius: 999px;
-        padding: 4px 8px;
-        white-space: nowrap;
-      }
-      .chips {
-        display: flex;
-        gap: 6px;
-        flex-wrap: wrap;
-        margin-bottom: 10px;
-      }
-      .panel-head {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
-        gap: 12px;
-      }
-      .panel-head .chips {
-        margin-bottom: 10px;
-      }
-      #refresh {
-        flex: none;
-        font-family: var(--mono);
-        font-size: 12px;
-      }
-      /* ── summoner ─────────────────────────────────────────────────────── */
-      .summoner {
-        display: flex;
-        gap: 14px;
-        align-items: center;
-      }
-      .summoner img {
-        width: 64px;
-        height: 64px;
-        border-radius: 6px;
-        border: 1px solid var(--line);
-        background: #0b0e13;
-      }
-      .summoner .name {
-        font:
-          600 20px/1.2 system-ui,
-          sans-serif;
-      }
-      .summoner .tag {
-        color: var(--dim);
-        font-weight: 400;
-      }
-      .kv {
-        font-family: var(--mono);
-        font-size: 12px;
-        color: var(--dim);
-        word-break: break-all;
-      }
-      /* ── grids ────────────────────────────────────────────────────────── */
-      .grid {
-        display: grid;
-        gap: 10px;
-        grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-      }
-      .rank .queue {
-        font: 600 11px/1 var(--mono);
-        letter-spacing: 0.06em;
-        color: var(--dim);
-        text-transform: uppercase;
-      }
-      .rank .tier {
-        font:
-          600 17px/1.4 system-ui,
-          sans-serif;
-      }
-      .mastery {
-        display: flex;
-        gap: 10px;
-        flex-wrap: wrap;
-      }
-      .mastery figure {
-        margin: 0;
-        width: 64px;
-        text-align: center;
-      }
-      .mastery img {
-        width: 48px;
-        height: 48px;
-        border-radius: 5px;
-        border: 1px solid var(--line);
-      }
-      .mastery figcaption {
-        font: 11px/1.3 var(--mono);
-        color: var(--dim);
-        margin-top: 4px;
-      }
-      /* ── champion pool ────────────────────────────────────────────────── */
-      .pool {
-        display: grid;
-        /* Same `minmax(0, …)` reasoning as `.match`: the champion name is the
-           column that has to give when the panel is narrow. */
-        grid-template-columns: 32px minmax(0, 1fr) auto auto auto;
-        gap: 8px 12px;
-        align-items: center;
-      }
-      .pool img {
-        width: 32px;
-        height: 32px;
-        border-radius: 5px;
-        border: 1px solid var(--line);
-      }
-      .pool .num {
-        font: 12px/1 var(--mono);
-        color: var(--dim);
-        text-align: right;
-        white-space: nowrap;
-      }
-      .pool .name {
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-      /* ── matches ──────────────────────────────────────────────────────── */
-      .match {
-        display: grid;
-        /* `minmax(0, …)` rather than `1fr`: the meta line is long enough to
-           set a min-content width that would otherwise push the KDA column
-           off the right edge instead of wrapping. */
-        grid-template-columns: 48px minmax(0, 1fr) auto auto;
-        gap: 12px;
-        align-items: center;
-        padding: 10px 12px;
-        border: 1px solid var(--line);
-        border-left-width: 3px;
-        border-radius: 5px;
-        background: var(--panel);
-        margin-bottom: 8px;
-      }
-      @media (max-width: 760px) {
-        .match {
-          grid-template-columns: 48px minmax(0, 1fr);
-        }
-        .match .items,
-        .match .kda {
-          grid-column: 2;
-          text-align: left;
-        }
-      }
-      .match.win {
-        border-left-color: var(--win);
-      }
-      .match.loss {
-        border-left-color: var(--loss);
-      }
-      .match img.champ {
-        width: 48px;
-        height: 48px;
-        border-radius: 5px;
-      }
-      .match .meta {
-        font: 11px/1.5 var(--mono);
-        color: var(--dim);
-      }
-      .match .champ-name {
-        font-weight: 600;
-      }
-      .match .kda {
-        font-family: var(--mono);
-        text-align: right;
-        white-space: nowrap;
-      }
-      .match .kda small {
-        display: block;
-        color: var(--dim);
-      }
-      .items {
-        display: flex;
-        gap: 2px;
-      }
-      .items span,
-      .items img {
-        width: 24px;
-        height: 24px;
-        border-radius: 3px;
-        border: 1px solid var(--line);
-        background: #0b0e13;
-        display: block;
-      }
-      .pager {
-        display: flex;
-        gap: 8px;
-        align-items: center;
-        margin-top: 12px;
-      }
-      /* ── raw ──────────────────────────────────────────────────────────── */
-      details {
-        margin-top: 10px;
-        border-top: 1px dashed var(--line);
-        padding-top: 8px;
-      }
-      summary {
-        cursor: pointer;
-        font: 11px/1 var(--mono);
-        color: var(--dim);
-        letter-spacing: 0.06em;
-      }
-      pre {
-        font: 12px/1.5 var(--mono);
-        background: #0b0e13;
-        border: 1px solid var(--line);
-        border-radius: 4px;
-        padding: 10px;
-        overflow: auto;
-        max-height: 460px;
-        margin: 8px 0 0;
-      }
-      .hidden {
-        display: none !important;
-      }
-      footer {
-        margin-top: 40px;
-        color: var(--dim);
-        font: 11px/1.6 var(--mono);
-      }
-      a {
-        color: var(--accent);
-      }
-    </style>
-  </head>
-  <body>
-    <main>
-      <h1>riot-proxy · dev ui</h1>
-
-      <div class="panel">
-        <form id="search">
-          <input
-            id="riotId"
-            placeholder="GameName#TAG"
-            autocomplete="off"
-            spellcheck="false"
-            required
-          />
-          <select id="platform" title="Platform routing value"></select>
-          <button type="submit" id="go">Look up</button>
-        </form>
-        <div class="toolbar">
-          <label class="inline" id="tokenWrap">
-            key
-            <input
-              id="token"
-              type="password"
-              placeholder="rpx_…"
-              autocomplete="off"
-              size="18"
-              style="font-family: var(--mono)"
-            />
-          </label>
-          <label class="inline">
-            page size
-            <select id="pageSize">
-              <option>5</option>
-              <option selected>10</option>
-              <option>20</option>
-            </select>
-          </label>
-          <label class="inline"> <input type="checkbox" id="rawAll" /> expand all raw JSON </label>
-        </div>
-        <div id="msg" class="msg hidden"></div>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>riot-proxy · dev explorer</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --sunk: #0b0e13; --line: #262d38;
+    --text: #d7dee8; --dim: #7d8794; --accent: #58a6ff;
+    --good: #2ea043; --bad: #d1444a; --warn: #d29922;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, sans-serif; }
+  a { color: var(--accent); }
+  header { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  header h1 { font-size: 15px; margin: 0; }
+  header .links { margin-left: auto; display: flex; gap: 12px; }
+  nav { display: flex; gap: 2px; padding: 0 16px; border-bottom: 1px solid var(--line); }
+  nav a { padding: 8px 14px; color: var(--dim); text-decoration: none; border-bottom: 2px solid transparent; }
+  nav a.on { color: var(--text); border-color: var(--accent); }
+  main { padding: 16px; }
+  .tab { display: none; } .tab.on { display: block; }
+  .badge { font: 11px var(--mono); padding: 2px 7px; border-radius: 10px; border: 1px solid var(--line); color: var(--dim); }
+  .badge.bad { color: #fff; background: var(--bad); border-color: var(--bad); }
+  input, select, textarea, button { font: inherit; color: var(--text); background: var(--sunk); border: 1px solid var(--line); border-radius: 5px; padding: 5px 8px; }
+  textarea { font-family: var(--mono); font-size: 12px; width: 100%; min-height: 120px; }
+  button { cursor: pointer; background: var(--panel); }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #04111f; font-weight: 600; }
+  label { color: var(--dim); font-size: 12px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; min-width: 0; overflow-x: auto; }
+  .card h3 { margin: 0 0 8px; font-size: 13px; display: flex; gap: 8px; align-items: center; }
+  .card h3 button { margin-left: auto; font-size: 11px; padding: 1px 8px; }
+  .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+  .muted { color: var(--dim); }
+  .mono { font-family: var(--mono); font-size: 12px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 3px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td.mono { overflow-wrap: anywhere; }
+  th { color: var(--dim); font-weight: 500; }
+  pre { margin: 0; padding: 10px; background: var(--sunk); border: 1px solid var(--line); border-radius: 6px; font: 12px/1.45 var(--mono); overflow: auto; max-height: 60vh; white-space: pre-wrap; word-break: break-all; }
+  .m { font: 600 11px var(--mono); display: inline-block; min-width: 50px; }
+  .m-GET { color: var(--dim); } .m-POST { color: var(--warn); } .m-DELETE { color: var(--bad); }
+  .pill { font: 600 12px var(--mono); padding: 1px 8px; border-radius: 10px; color: #fff; background: var(--dim); }
+  .s2 { background: var(--good); } .s3 { background: var(--accent); } .s4 { background: var(--warn); } .s5, .s0 { background: var(--bad); }
+  .ok { color: var(--good); } .no { color: var(--bad); }
+  /* explorer */
+  .explorer { display: grid; grid-template-columns: 330px 1fr; gap: 16px; align-items: start; }
+  .ops { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; max-height: calc(100vh - 140px); overflow: auto; }
+  .ops input { width: calc(100% - 16px); margin: 8px; }
+  .ops h4 { margin: 8px 10px 2px; font-size: 11px; text-transform: uppercase; color: var(--dim); letter-spacing: .05em; }
+  .ops a { display: block; padding: 2px 10px; color: var(--text); text-decoration: none; font: 12px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ops a:hover, .ops a.on { background: var(--sunk); }
+  .params { display: grid; grid-template-columns: max-content 1fr; gap: 6px 10px; align-items: center; margin: 10px 0; }
+  .params input, .params select { width: 100%; }
+  .req { color: var(--bad); }
+  /* viewer */
+  .viewer .head { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 8px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .chip { font: 11px var(--mono); padding: 2px 8px; background: var(--sunk); border: 1px solid var(--line); border-radius: 4px; }
+  .chip b { color: var(--accent); font-weight: 500; }
+  .err { background: #3a1416; border: 1px solid var(--bad); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; }
+  .seg button.on { border-color: var(--accent); color: var(--accent); }
+  details > summary { cursor: pointer; color: var(--dim); margin: 6px 0; }
+  .j-k { color: #79c0ff; } .j-s { color: #a5d6ff; } .j-n { color: #ffa657; } .j-b { color: #ff7b72; }
+  /* live */
+  .log { max-height: 65vh; overflow: auto; }
+  .log details { border-bottom: 1px solid var(--line); }
+  .log summary { font: 12px var(--mono); color: var(--text); margin: 0; padding: 3px 4px; }
+  .bar { height: 6px; background: var(--sunk); border-radius: 3px; overflow: hidden; min-width: 80px; }
+  .bar i { display: block; height: 100%; background: var(--accent); }
+  .win { color: var(--good); } .loss { color: var(--bad); }
+  @media (max-width: 900px) { .explorer { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>riot-proxy · dev explorer</h1>
+  <span class="badge" id="ver">…</span>
+  <span class="badge bad" id="noauth" hidden>AUTH DISABLED</span>
+  <span class="row" id="keyBox"><label for="key">API key</label><input id="key" type="password" size="28" autocomplete="off" placeholder="Bearer key"></span>
+  <span class="row"><label for="rid">X-Request-Id</label><input id="rid" size="16" placeholder="auto"></span>
+  <span class="links" id="links"></span>
+</header>
+<nav id="nav">
+  <a href="#explorer">Explorer</a><a href="#status">Status</a><a href="#player">Player</a><a href="#live">Live</a><a href="#history">History</a>
+</nav>
+<main>
+  <section class="tab" id="tab-explorer">
+    <div class="explorer">
+      <div class="ops"><input id="opFilter" placeholder="filter operations…"><div id="opList"></div></div>
+      <div>
+        <div class="card" id="opForm"><span class="muted">Pick an operation, or use <b>Raw request</b> for any URL.</span></div>
+        <div class="viewer" id="exView"></div>
       </div>
+    </div>
+  </section>
 
-      <section id="profileSection" class="hidden">
-        <h2>Summoner</h2>
-        <div class="panel">
-          <div class="panel-head">
-            <div class="chips" id="profileChips"></div>
-            <button type="button" id="refresh" title="Re-read this player from Riot">Update</button>
-          </div>
-          <div class="summoner">
-            <img id="pIcon" alt="" width="64" height="64" />
-            <div>
-              <div class="name"><span id="pName">—</span><span class="tag" id="pTag"></span></div>
-              <div class="kv" id="pLevel"></div>
-              <div class="kv" id="pPuuid"></div>
-            </div>
-          </div>
-          <details class="rawBlock">
-            <summary>raw · /v1/players/by-riot-id/…/profile</summary>
-            <pre id="rawProfile"></pre>
-          </details>
-        </div>
-      </section>
+  <section class="tab" id="tab-status">
+    <div class="row" style="margin-bottom:12px">
+      <button id="stRefresh" class="primary">Refresh</button>
+      <label><input type="checkbox" id="stAuto"> auto-refresh 5 s</label>
+      <span class="muted" id="stAt"></span>
+    </div>
+    <div class="grid" id="stCards"></div>
+    <div class="viewer" id="stView"></div>
+  </section>
 
-      <section id="rankSection" class="hidden">
-        <h2>Ranked</h2>
-        <div class="chips" id="rankChips"></div>
-        <div class="grid" id="ranks"></div>
-      </section>
+  <section class="tab" id="tab-player">
+    <form class="row card" id="plForm">
+      <input id="plId" size="28" placeholder="GameName#TAG" required>
+      <select id="plPlatform" required></select>
+      <label><input type="checkbox" id="plRefresh"> refresh (admin)</label>
+      <button class="primary">Look up</button>
+      <span class="muted" id="plMsg"></span>
+    </form>
+    <div id="plOut"></div>
+    <div class="viewer" id="plView"></div>
+  </section>
 
-      <section id="masterySection" class="hidden">
-        <h2>Top mastery</h2>
-        <div class="chips" id="masteryChips"></div>
-        <div class="panel"><div class="mastery" id="mastery"></div></div>
-      </section>
+  <section class="tab" id="tab-live">
+    <div class="card">
+      <div class="row">
+        <button id="wsConn" class="primary">Connect</button>
+        <span class="mono" id="wsState">closed</span>
+        <span class="muted">topics:</span>
+        <label><input type="checkbox" value="patch" class="wsT" checked> patch</label>
+        <label><input type="checkbox" value="metrics" class="wsT"> metrics</label>
+        <label><input type="checkbox" value="ladder" class="wsT"> ladder</label>
+        <label><input type="checkbox" value="firehose" class="wsT"> firehose</label>
+        <input id="wsPlayer" size="30" placeholder="player:<puuid> (optional)">
+        <button id="wsSub">Apply topics</button>
+        <button id="wsPing">Ping</button>
+        <label><input type="checkbox" id="wsPause"> pause</label>
+        <input id="wsFilter" size="14" placeholder="filter…">
+        <button id="wsClear">Clear</button>
+      </div>
+      <p class="muted mono" id="wsHeld">subscribed: —</p>
+    </div>
+    <div class="card log" id="wsLog"></div>
+  </section>
 
-      <section id="poolSection" class="hidden">
-        <h2>Champion pool</h2>
-        <div class="chips" id="poolChips"></div>
-        <div class="panel"><div class="pool" id="pool"></div></div>
-        <details class="raw">
-          <summary>raw · /v1/players/{puuid}/champions</summary>
-          <pre id="rawPool"></pre>
-        </details>
-      </section>
+  <section class="tab" id="tab-history">
+    <div class="row" style="margin-bottom:12px"><button id="hClear">Clear history</button><span class="muted">last 50 requests, stored in this browser (no bodies)</span></div>
+    <div class="card"><table><thead><tr><th>when</th><th>method</th><th>path</th><th>status</th><th>ms</th><th>request id</th><th></th></tr></thead><tbody id="hRows"></tbody></table></div>
+    <div class="viewer" id="hView"></div>
+  </section>
+</main>
 
-      <section id="matchSection" class="hidden">
-        <h2>Matches</h2>
-        <div class="chips" id="matchChips"></div>
-        <div id="matches"></div>
-        <div class="pager">
-          <button id="prev" type="button">← newer</button>
-          <button id="next" type="button">older →</button>
-          <span class="chip" id="pageLabel"></span>
-        </div>
-        <details class="rawBlock">
-          <summary>raw · /v1/players/{puuid}/matches</summary>
-          <pre id="rawMatches"></pre>
-        </details>
-      </section>
+<script type="module">
+const $ = (s, el = document) => el.querySelector(s);
+const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const store = {
+  get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
+  set: (k, v) => localStorage.setItem(k, JSON.stringify(v)),
+};
+let cfg = { authDisabled: false, platforms: [], regions: [] };
+let spec = { paths: {}, tags: [] };
 
-      <footer>
-        Development tool. Not endorsed by Riot Games. Icons from
-        <a href="https://developer.riotgames.com/docs/lol#data-dragon">Data Dragon</a>.
-        <br />
-        This page is player-shaped — show me this account. For the endpoint-shaped view of the same
-        API, with a request console, see
-        <a href="/docs">the API reference</a>.
-      </footer>
-    </main>
+// ---------- request core ----------
+const KEY_HEADERS = ['x-cache', 'x-cache-age', 'x-request-id', 'x-ratelimit-limit', 'x-ratelimit-remaining', 'x-ratelimit-reset', 'retry-after', 'etag', 'content-type'];
 
-    <script type="module">
-      const $ = (id) => document.getElementById(id);
-      const DDRAGON = 'https://ddragon.leagueoflegends.com';
+function requestHeaders(body) {
+  const h = {};
+  const key = $('#key').value.trim();
+  if (key && !cfg.authDisabled) h.Authorization = `Bearer ${key}`;
+  if ($('#rid').value.trim()) h['X-Request-Id'] = $('#rid').value.trim();
+  if (body != null) h['Content-Type'] = 'application/json';
+  return h;
+}
 
-      /* Queue names come from the proxy's own mirror of Riot's queue table
-         (`/v1/static/queues`, #115) rather than from a list typed in here. The
-         old list was a dozen ids copied by hand, which is one game mode away
-         from being wrong — and was the reason `queue ${id}` showed up beside
-         real names for anything Riot had shipped since. */
-      let queueNames = null;
+/** One call through the proxy, timed and measured; every tab uses it. */
+async function call(method, path, body = null, { record = true } = {}) {
+  const headers = requestHeaders(body);
+  const t0 = performance.now();
+  const res = { method, path, body, at: Date.now(), headers: [], status: 0, statusText: '', text: '', json: undefined, sent: { ...headers } };
+  if (res.sent.Authorization) res.sent.Authorization = 'Bearer ••••';
+  try {
+    const r = await fetch(path, { method, headers, body: body ?? undefined });
+    res.text = await r.text();
+    res.status = r.status;
+    res.statusText = r.statusText;
+    res.headers = [...r.headers.entries()];
+  } catch (e) {
+    res.text = String(e);
+    res.statusText = 'network error';
+  }
+  res.ms = Math.round(performance.now() - t0);
+  res.bytes = new TextEncoder().encode(res.text).length;
+  try { res.json = JSON.parse(res.text); } catch { /* not JSON */ }
+  if (record) remember(res);
+  return res;
+}
 
-      async function loadQueues() {
-        if (queueNames) return queueNames;
-        queueNames = new Map();
-        try {
-          const { data } = await api('/v1/static/queues');
-          for (const q of data) {
-            /* `description` is null for Custom games and reads
-               "5v5 Ranked Solo games" for the ones that have it; the map name
-               is the useful half when there is no description. */
-            queueNames.set(Number(q.queueId), q.description || q.map || `queue ${q.queueId}`);
-          }
-        } catch {
-          /* Not synced yet, or no key: fall back to the raw id rather than
-             failing a lookup over a label. */
-        }
-        return queueNames;
-      }
+function curl(res) {
+  const q = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
+  const parts = [`curl -i -X ${res.method} ${q(location.origin + res.path)}`];
+  if (!cfg.authDisabled) parts.push(`-H "Authorization: Bearer $RIOT_PROXY_KEY"`);
+  if (res.sent['X-Request-Id']) parts.push(`-H ${q('X-Request-Id: ' + res.sent['X-Request-Id'])}`);
+  if (res.body != null) parts.push(`-H 'Content-Type: application/json'`, `--data ${q(res.body)}`);
+  return parts.join(' \\\n  ');
+}
 
-      const queueName = (id) => queueNames?.get(Number(id)) ?? `queue ${id}`;
+function prettyJson(v) {
+  const s = JSON.stringify(v, null, 2);
+  if (s.length > 1_000_000) return esc(s); // colouring a huge timeline is not worth the wait
+  return esc(s).replace(/(&quot;(?:\\.|[^&\\]|&(?!quot;))*&quot;)(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g,
+    (m, str, colon, lit) => str ? `<span class="${colon ? 'j-k' : 'j-s'}">${str}</span>${colon || ''}` : `<span class="${lit ? 'j-b' : 'j-n'}">${m}</span>`);
+}
 
-      let cfg = { authDisabled: false, platforms: [] };
-      let dd = null; // { version, championById }
-      let state = { riotId: null, puuid: null, platform: null, start: 0 };
-      let cooldownTimer = null;
+const fmtBytes = (n) => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(2)} MB`;
 
-      /* ── plumbing ──────────────────────────────────────────────────── */
+const pending = (el, what) => (el.innerHTML = `<div class="card muted">sending ${esc(what)}…</div>`);
 
-      function message(text, kind = 'info') {
-        const el = $('msg');
-        el.textContent = text;
-        el.className = `msg ${kind}`;
-        el.classList.toggle('hidden', !text);
-      }
+/** The shared response viewer. */
+function view(el, res, title = 'Response') {
+  if (!res) { el.innerHTML = ''; return; }
+  const h = Object.fromEntries(res.headers);
+  const chips = KEY_HEADERS.filter((k) => h[k] != null).map((k) => `<span class="chip">${k}: <b>${esc(h[k])}</b></span>`).join('');
+  const e = res.json?.error;
+  el.innerHTML = `<div class="card">
+    <h3>${esc(title)}</h3>
+    <div class="head">
+      <span class="pill s${String(res.status)[0]}">${res.status || 'ERR'} ${esc(res.statusText)}</span>
+      <span class="m m-${res.method}">${res.method}</span><span class="mono">${esc(res.path)}</span>
+      <span class="muted">${res.ms} ms · ${fmtBytes(res.bytes)}</span>
+    </div>
+    ${e ? `<div class="err"><b>${esc(e.code)}</b> ${esc(e.message)}${e.retryAfter != null ? ` · retry after ${esc(e.retryAfter)} s` : ''} <span class="mono muted">${esc(e.requestId)}</span></div>` : ''}
+    <div class="chips">${chips}</div>
+    <div class="row seg">
+      <button data-v="pretty" class="${res.json !== undefined ? 'on' : ''}" ${res.json === undefined ? 'disabled' : ''}>Pretty</button>
+      <button data-v="raw" class="${res.json === undefined ? 'on' : ''}">Raw</button>
+      <button data-c="body">Copy body</button><button data-c="curl">Copy as curl</button>
+      ${h['x-request-id'] ? '<button data-c="rid">Copy request id</button>' : ''}
+      <span class="muted" data-msg></span>
+    </div>
+    <pre data-body style="margin-top:8px"></pre>
+    <details><summary>response headers (${res.headers.length})</summary><table>${res.headers.map(([k, v]) => `<tr><th class="mono">${esc(k)}</th><td class="mono">${esc(v)}</td></tr>`).join('')}</table></details>
+    <details><summary>request</summary><pre>${esc(curl(res))}\n\n${esc(JSON.stringify(res.sent, null, 2))}</pre></details>
+  </div>`;
+  const pre = $('[data-body]', el);
+  const show = (mode) => {
+    pre.innerHTML = mode === 'pretty' ? prettyJson(res.json) : esc(res.text || '(empty body)');
+    el.querySelectorAll('[data-v]').forEach((b) => b.classList.toggle('on', b.dataset.v === mode));
+  };
+  show(res.json !== undefined ? 'pretty' : 'raw');
+  el.querySelectorAll('[data-v]').forEach((b) => (b.onclick = () => show(b.dataset.v)));
+  el.querySelectorAll('[data-c]').forEach((b) => (b.onclick = async () => {
+    const text = { body: res.text, curl: curl(res), rid: h['x-request-id'] }[b.dataset.c];
+    await navigator.clipboard.writeText(text);
+    $('[data-msg]', el).textContent = 'copied';
+  }));
+}
 
-      /** One call to the proxy, unwrapping its error envelope (§6.1). */
-      async function api(path) {
-        const headers = { accept: 'application/json' };
-        const token = $('token').value.trim();
-        if (token) headers.authorization = `Bearer ${token}`;
+// ---------- history ----------
+function remember(res) {
+  const h = store.get('rp.dev.history', []);
+  h.unshift({ at: res.at, method: res.method, path: res.path, body: res.body, status: res.status, ms: res.ms, rid: Object.fromEntries(res.headers)['x-request-id'] });
+  store.set('rp.dev.history', h.slice(0, 50));
+}
 
-        const res = await fetch(path, { headers });
-        const body = await res.json().catch(() => null);
-        if (!res.ok) {
-          const err = body?.error;
-          throw new Error(
-            err ? `${err.code} (${res.status}): ${err.message}` : `HTTP ${res.status}`,
-          );
-        }
-        return {
-          data: body,
-          cache: res.headers.get('X-Cache') ?? '—',
-          age: res.headers.get('X-Cache-Age') ?? '—',
-        };
-      }
+function renderHistory() {
+  const h = store.get('rp.dev.history', []);
+  $('#hRows').innerHTML = h.length ? h.map((r, i) => `<tr>
+    <td class="muted">${new Date(r.at).toLocaleTimeString()}</td><td><span class="m m-${r.method}">${r.method}</span></td>
+    <td class="mono">${esc(r.path)}</td><td><span class="pill s${String(r.status)[0]}">${r.status || 'ERR'}</span></td>
+    <td>${r.ms}</td><td class="mono muted">${esc(r.rid)}</td>
+    <td class="row"><button data-replay="${i}">Replay</button><button data-edit="${i}">Edit</button></td></tr>`).join('')
+    : '<tr><td colspan="7" class="muted">nothing yet</td></tr>';
+  $('#hRows').onclick = async (ev) => {
+    const i = ev.target.dataset.replay ?? ev.target.dataset.edit;
+    if (i == null) return;
+    const r = h[i];
+    if (ev.target.dataset.edit != null) { location.hash = 'explorer'; rawForm(r); return; }
+    if (r.method !== 'GET' && !confirm(`${r.method} ${r.path}?`)) return;
+    pending($('#hView'), r.path);
+    view($('#hView'), await call(r.method, r.path, r.body), 'Replay');
+    renderHistory();
+  };
+}
 
-      /** Data Dragon is a public CDN and deliberately not proxied (§5.6). */
-      async function ddragon() {
-        if (dd) return dd;
-        const versions = await (await fetch(`${DDRAGON}/api/versions.json`)).json();
-        const version = versions[0];
-        const champs = await (
-          await fetch(`${DDRAGON}/cdn/${version}/data/en_US/champion.json`)
-        ).json();
-        const championById = new Map();
-        for (const champ of Object.values(champs.data)) {
-          championById.set(Number(champ.key), champ);
-        }
-        dd = { version, championById };
-        return dd;
-      }
+// ---------- explorer ----------
+const METHODS = ['get', 'post', 'put', 'patch', 'delete'];
 
-      const champIcon = (id) => {
-        const champ = dd?.championById.get(Number(id));
-        return champ ? `${DDRAGON}/cdn/${dd.version}/img/champion/${champ.id}.png` : '';
-      };
-      const champName = (id, fallback) => dd?.championById.get(Number(id))?.name ?? fallback ?? id;
+function operations() {
+  const ops = [];
+  for (const [path, item] of Object.entries(spec.paths)) {
+    for (const m of METHODS) {
+      if (!item[m]) continue;
+      const o = item[m];
+      ops.push({ id: `${m.toUpperCase()} ${path}`, method: m.toUpperCase(), path, tag: o.tags?.[0] ?? 'other', summary: o.summary ?? '', description: o.description ?? '', params: [...(item.parameters ?? []), ...(o.parameters ?? [])], body: o.requestBody });
+    }
+  }
+  return ops;
+}
 
-      const el = (tag, props = {}, children = []) => {
-        const node = Object.assign(document.createElement(tag), props);
-        for (const child of [].concat(children)) {
-          if (child) node.append(child);
-        }
-        return node;
-      };
+const resolve = (s) => (s?.$ref ? spec.components?.schemas?.[s.$ref.split('/').pop()] ?? {} : s ?? {});
 
-      const chip = (text) => el('span', { className: 'chip', textContent: text });
+function skeleton(schema) {
+  const s = resolve(schema);
+  const out = {};
+  for (const [k, p0] of Object.entries(s.properties ?? {})) {
+    const p = resolve(p0);
+    const t = [].concat(p.type ?? 'string').find((x) => x !== 'null');
+    out[k] = p.example ?? p.default ?? p.enum?.[0] ?? { integer: 0, number: 0, boolean: false, array: [], object: {} }[t] ?? '';
+  }
+  return out;
+}
 
-      /**
-       * `age: 4231` is a header value; `changed 1h ago` is an answer. The proxy
-       * holds this timestamp still when a re-fetch comes back identical, so a
-       * label that has not moved means the data genuinely has not.
-       */
-      function ago(seconds) {
-        const n = Number(seconds);
-        if (seconds === null || !Number.isFinite(n)) return 'age unknown';
-        if (n < 60) return `changed ${n}s ago`;
-        if (n < 3600) return `changed ${Math.floor(n / 60)}m ago`;
-        if (n < 86400) return `changed ${Math.floor(n / 3600)}h ago`;
-        return `changed ${Math.floor(n / 86400)}d ago`;
-      }
+function renderOpList() {
+  const f = $('#opFilter').value.toLowerCase();
+  const ops = operations().filter((o) => !f || `${o.id} ${o.summary}`.toLowerCase().includes(f));
+  const order = (spec.tags ?? []).map((t) => t.name);
+  const tags = [...new Set(ops.map((o) => o.tag))].sort((a, b) => (order.indexOf(a) + 1 || 99) - (order.indexOf(b) + 1 || 99));
+  const current = decodeURIComponent(location.hash.split('?op=')[1] ?? '');
+  $('#opList').innerHTML = `<a href="#explorer?op=RAW" class="${current === 'RAW' ? 'on' : ''}">✎ Raw request</a>` + tags.map((t) => `<h4>${esc(t)}</h4>` + ops.filter((o) => o.tag === t).map((o) =>
+    `<a href="#explorer?op=${encodeURIComponent(o.id)}" title="${esc(o.summary)}" class="${o.id === current ? 'on' : ''}"><span class="m m-${o.method}">${o.method}</span>${esc(o.path)}</a>`).join('')).join('');
+}
 
-      /**
-       * The Update button is the only thing here that deliberately spends
-       * upstream quota, so it stays disabled for as long as the proxy says the
-       * cooldown has left to run — the server enforces the same window, this
-       * just stops the click being wasted.
-       */
-      function cooldown(seconds) {
-        clearInterval(cooldownTimer);
-        let left = Math.max(0, Math.ceil(Number(seconds) || 0));
-        const tick = () => {
-          const button = $('refresh');
-          button.disabled = left > 0;
-          button.textContent = left > 0 ? `Update (${left}s)` : 'Update';
-          if (left <= 0) clearInterval(cooldownTimer);
-          left -= 1;
-        };
-        tick();
-        cooldownTimer = setInterval(tick, 1000);
-      }
-      const show = (id, on = true) => $(id).classList.toggle('hidden', !on);
-      const json = (id, value) => ($(id).textContent = JSON.stringify(value, null, 2));
+function paramInput(p, remembered) {
+  const s = resolve(p.schema);
+  const id = `p-${p.in}-${p.name}`;
+  const v = esc(remembered[p.name] ?? '');
+  if (s.enum) return `<select id="${id}"><option value=""></option>${s.enum.map((e) => `<option ${String(e) === remembered[p.name] ? 'selected' : ''}>${esc(e)}</option>`).join('')}</select>`;
+  if ([].concat(s.type).includes('boolean')) return `<select id="${id}"><option value=""></option><option ${remembered[p.name] === 'true' ? 'selected' : ''}>true</option><option ${remembered[p.name] === 'false' ? 'selected' : ''}>false</option></select>`;
+  const list = { platform: 'dl-platform', region: 'dl-region' }[p.name];
+  return `<input id="${id}" value="${v}" ${list ? `list="${list}"` : ''} placeholder="${esc([].concat(s.type ?? '').join('|'))}">`;
+}
 
-      /* ── Riot ID parsing ───────────────────────────────────────────── */
+function opForm(op) {
+  const el = $('#opForm');
+  el.oninput = null;
+  if (op.path === '/v1/ws') {
+    el.innerHTML = `<h3><span class="m m-GET">GET</span> /v1/ws</h3><p>WebSocket upgrade. Use the <a href="#live">Live</a> tab.</p>`;
+    return;
+  }
+  const remembered = store.get('rp.dev.params', {});
+  el.innerHTML = `<h3><span class="m m-${op.method}">${op.method}</span><span class="mono">${esc(op.path)}</span></h3>
+    <div>${esc(op.summary)}</div>
+    ${op.description && op.description !== op.summary ? `<details><summary>description</summary><div class="muted" style="white-space:pre-wrap">${esc(op.description)}</div></details>` : ''}
+    ${op.params.length ? `<div class="params">${op.params.map((p) => `<label for="p-${p.in}-${p.name}" title="${esc(p.description)}">${esc(p.name)}${p.required ? '<span class="req">*</span>' : ''} <span class="muted">${p.in}</span></label>${paramInput(p, remembered)}`).join('')}</div>` : ''}
+    ${op.body ? `<label>JSON body</label><textarea id="opBody">${esc(JSON.stringify(skeleton(op.body.content?.['application/json']?.schema), null, 2))}</textarea>` : ''}
+    <div class="row" style="margin-top:8px"><button class="primary" id="opSend">Send</button><span class="mono muted" id="opUrl"></span></div>`;
+  const build = () => {
+    let path = op.path;
+    const qs = new URLSearchParams();
+    for (const p of op.params) {
+      const v = $(`#p-${p.in}-${p.name}`, el).value.trim();
+      if (p.in === 'path') path = path.replace(`{${p.name}}`, v ? encodeURIComponent(v) : `{${p.name}}`);
+      else if (p.in === 'query' && v !== '') qs.set(p.name, v);
+    }
+    return path + (qs.size ? `?${qs}` : '');
+  };
+  const sync = () => ($('#opUrl').textContent = build());
+  el.oninput = sync;
+  sync();
+  $('#opSend').onclick = async () => {
+    const url = build();
+    if (url.includes('{')) { $('#opUrl').textContent = 'fill the required path parameters'; return; }
+    const keep = store.get('rp.dev.params', {});
+    for (const p of op.params) { const v = $(`#p-${p.in}-${p.name}`, el).value.trim(); if (v) keep[p.name] = v; }
+    store.set('rp.dev.params', keep);
+    const body = $('#opBody', el)?.value.trim() || null;
+    if (op.method !== 'GET' && !confirm(`${op.method} ${url}?`)) return;
+    pending($('#exView'), url);
+    view($('#exView'), await call(op.method, url, body));
+  };
+}
 
-      /**
-       * `/dev/NinjaGoldfinch-OCENZ` and `NinjaGoldfinch#OCENZ` are the same
-       * thing. Tag lines never contain `-`, so the *last* one separates them —
-       * game names legitimately do.
-       */
-      function parseRiotId(raw) {
-        const value = raw.trim();
-        if (!value) return null;
-        const hash = value.lastIndexOf('#');
-        const dash = value.lastIndexOf('-');
-        const at = hash >= 0 ? hash : dash;
-        if (at <= 0 || at === value.length - 1) return null;
-        return { gameName: value.slice(0, at), tagLine: value.slice(at + 1) };
-      }
+function rawForm(prefill = {}) {
+  const el = $('#opForm');
+  el.oninput = null;
+  el.innerHTML = `<h3>Raw request</h3><p class="muted">Any same-origin path: unknown routes, <span class="mono">/ddragon/*</span>, <span class="mono">/metrics</span>…</p>
+    <div class="row"><select id="rawM">${METHODS.map((m) => `<option ${m.toUpperCase() === prefill.method ? 'selected' : ''}>${m.toUpperCase()}</option>`).join('')}</select>
+    <input id="rawP" style="flex:1" value="${esc(prefill.path ?? '/healthz')}"></div>
+    <label>body (optional)</label><textarea id="rawB">${esc(prefill.body ?? '')}</textarea>
+    <div class="row" style="margin-top:8px"><button class="primary" id="rawSend">Send</button></div>`;
+  $('#rawSend').onclick = async () => {
+    const m = $('#rawM').value;
+    const p = $('#rawP').value.trim();
+    if (m !== 'GET' && !confirm(`${m} ${p}?`)) return;
+    pending($('#exView'), p);
+    view($('#exView'), await call(m, p, $('#rawB').value.trim() || null));
+  };
+}
 
-      /* ── rendering ─────────────────────────────────────────────────── */
+function showOp() {
+  renderOpList();
+  const id = decodeURIComponent(location.hash.split('?op=')[1] ?? '');
+  if (id === 'RAW') return rawForm();
+  const op = operations().find((o) => o.id === id);
+  if (op) opForm(op);
+}
 
-      function renderProfile(result) {
-        const p = result.data;
-        json('rawProfile', p);
+// ---------- status ----------
+const kv = (o) => `<table>${Object.entries(o ?? {}).map(([k, v]) => `<tr><th>${esc(k)}</th><td class="mono">${esc(typeof v === 'object' && v !== null ? JSON.stringify(v) : v)}</td></tr>`).join('')}</table>`;
+const flag = (b) => `<span class="${b ? 'ok' : 'no'}">${b ? '●' : '○'}</span>`;
+const statusRes = {};
 
-        const ages = p.ageSeconds ?? {};
-        $('profileChips').replaceChildren(
-          chip(`X-Cache: ${result.cache}`),
-          chip(ago(ages.summoner ?? ages.account)),
-          chip(`platform: ${p.platform}`),
-          chip(`region: ${p.region}`),
-        );
-        // Each section carries its own age: they are four independent Riot
-        // calls and go stale at four different rates.
-        $('rankChips').replaceChildren(chip(ago(ages.league)));
-        $('masteryChips').replaceChildren(chip(ago(ages.mastery)));
+async function refreshStatus() {
+  const [hz, rz, m] = await Promise.all([call('GET', '/healthz', null, { record: false }), call('GET', '/readyz', null, { record: false }), call('GET', '/v1/admin/metrics', null, { record: false })]);
+  Object.assign(statusRes, { healthz: hz, readyz: rz, metrics: m });
+  const card = (name, title, body) => `<div class="card"><h3>${title}<button data-raw="${name}">raw</button></h3>${body}</div>`;
+  const r = rz.json ?? {};
+  let html = card('readyz', `Health <span class="pill s${String(rz.status)[0]}">${rz.status}</span>`,
+    `<div class="row">${flag(hz.json?.ok)} healthz ${flag(r.sqlite)} sqlite ${flag(r.limiter)} limiter ${flag(r.ok)} ready</div><p class="muted mono">keyScope: ${esc(r.keyScope)}</p>`);
+  const s = m.json;
+  if (m.status !== 200 || !s) {
+    html += card('metrics', 'Admin metrics', `<div class="err">${esc(s?.error?.code ?? m.status)} ${esc(s?.error?.message ?? 'unavailable')}</div><p class="muted">Needs an admin key (or AUTH_DISABLED).</p>`);
+  } else {
+    const c = s.cache ?? {};
+    const reads = (c.hit ?? 0) + (c.miss ?? 0) + (c.stale ?? 0) + (c.neg ?? 0);
+    html += card('metrics', 'Totals', kv({ ...s.totals, rss: fmtBytes(s.process?.rssBytes ?? 0), uptime: `${Math.round(s.process?.uptimeSeconds ?? 0)} s`, worker: s.worker?.alive ? 'alive' : 'down', wsConnections: s.ws?.connections, wsSubscriptions: s.ws?.subscriptions }));
+    html += card('metrics', `Cache <span class="muted">${reads ? Math.round(((c.hit + (c.stale ?? 0) + (c.neg ?? 0)) / reads) * 100) : 0}% served from cache</span>`, kv(c));
+    html += card('metrics', 'Queues', `<table><tr><th></th>${['waiting', 'active', 'delayed', 'completed', 'failed'].map((k) => `<th>${k}</th>`).join('')}</tr>${Object.entries(s.queues ?? {}).map(([q, n]) => `<tr><th>${esc(q)}</th>${['waiting', 'active', 'delayed', 'completed', 'failed'].map((k) => `<td class="${k === 'failed' && n[k] ? 'no' : ''}">${n[k] ?? 0}</td>`).join('')}</tr>`).join('')}</table>`);
+    const win = (name, w, i, cls = '') => `<tr class="${cls}"><td class="mono">${i ? '' : name}</td><td class="mono">${esc(w.window)}</td><td>${w.used}/${w.limit}</td><td><div class="bar"><i style="width:${Math.min(100, (w.used / (w.limit || 1)) * 100)}%"></i></div></td></tr>`;
+    html += card('metrics', 'Rate limiter', `<table><tr><th>scope / method</th><th>window</th><th>used</th><th></th></tr>${(s.limiter ?? []).map((l) =>
+      (l.windows ?? []).map((w, i) => win(`${esc(l.label || l.scope)}${l.frozenMs ? ` <span class="no">frozen ${l.frozenMs} ms</span>` : ''}`, w, i)).join('') +
+      (l.methods ?? []).flatMap((m) => (m.windows ?? []).map((w, i) => win(`&nbsp;&nbsp;${esc(m.method)}`, w, i, 'muted'))).join('')).join('') || '<tr><td colspan="4" class="muted">no Riot calls yet</td></tr>'}</table>`);
+    html += card('metrics', 'Events emitted', Object.keys(s.events ?? {}).length ? kv(s.events) : '<span class="muted">none since start</span>');
+  }
+  $('#stCards').innerHTML = html;
+  $('#stAt').textContent = `updated ${new Date().toLocaleTimeString()}`;
+  $('#stCards').onclick = (ev) => ev.target.dataset.raw && view($('#stView'), statusRes[ev.target.dataset.raw], ev.target.dataset.raw);
+}
 
-        const account = p.account ?? {};
-        const summoner = p.summoner ?? {};
-        $('pName').textContent = account.gameName ?? '(unknown)';
-        $('pTag').textContent = account.tagLine ? `#${account.tagLine}` : '';
-        $('pLevel').textContent = summoner.summonerLevel
-          ? `level ${summoner.summonerLevel}`
-          : 'summoner-v4 unavailable';
-        $('pPuuid').textContent = p.puuid;
-        $('pIcon').src = summoner.profileIconId
-          ? `${DDRAGON}/cdn/${dd.version}/img/profileicon/${summoner.profileIconId}.png`
-          : '';
-        show('profileSection');
-        cooldown(p.refreshAvailableIn);
+let stTimer = null;
+$('#stRefresh').onclick = refreshStatus;
+$('#stAuto').onchange = (ev) => { clearInterval(stTimer); if (ev.target.checked) stTimer = setInterval(() => location.hash.startsWith('#status') && refreshStatus(), 5000); };
 
-        renderRanks(p.league ?? []);
-        renderMastery(p.mastery ?? []);
+// ---------- player ----------
+let champNames = null;
+async function championNames() {
+  if (champNames) return champNames;
+  const r = await call('GET', '/v1/static/champion', null, { record: false });
+  champNames = Object.fromEntries(Object.values(r.json?.data ?? {}).map((c) => [Number(c.key), c.name]));
+  return champNames;
+}
 
-        if (p.warnings?.length) message(p.warnings.join('\n'), 'warn');
-      }
+$('#plForm').onsubmit = async (ev) => {
+  ev.preventDefault();
+  const [name, tag] = $('#plId').value.split('#').map((s) => s.trim());
+  const platform = $('#plPlatform').value;
+  if (!name || !tag) { $('#plMsg').textContent = 'use GameName#TAG'; return; }
+  store.set('rp.dev.player', { id: $('#plId').value, platform });
+  const refresh = $('#plRefresh').checked ? '&refresh=true' : '';
+  $('#plMsg').textContent = 'loading…';
+  $('#plOut').innerHTML = '';
+  const prof = await call('GET', `/v1/players/by-riot-id/${encodeURIComponent(name)}/${encodeURIComponent(tag)}/profile?platform=${platform}&topMastery=5${refresh}`);
+  const raws = { profile: prof };
+  if (prof.status !== 200) { $('#plMsg').textContent = ''; view($('#plView'), prof, 'profile'); return; }
+  const p = prof.json;
+  const [matches, names] = await Promise.all([call('GET', `/v1/players/${p.puuid}/matches?platform=${platform}&count=10${refresh}`), championNames()]);
+  raws.matches = matches;
+  $('#plMsg').textContent = `${prof.ms + matches.ms} ms`;
+  const champ = (id) => names[id] ?? `#${id}`;
+  const card = (name, title, body) => `<div class="card"><h3>${title}<button data-raw="${name}">raw</button></h3>${body}</div>`;
+  const xc = (r) => `<span class="chip">X-Cache: <b>${esc(Object.fromEntries(r.headers)['x-cache'] ?? '—')}</b></span>`;
+  const league = (p.league ?? []).map((e) => `<tr><td>${esc(e.queueType)}</td><td>${esc(e.tier)} ${esc(e.rank)}</td><td>${e.leaguePoints} LP</td><td>${e.wins}W ${e.losses}L</td><td>${Math.round((e.wins / ((e.wins + e.losses) || 1)) * 100)}%</td></tr>`).join('');
+  const mastery = (p.mastery ?? []).map((m) => `<tr><td>${esc(champ(m.championId))}</td><td>lvl ${m.championLevel}</td><td>${Number(m.championPoints).toLocaleString()}</td></tr>`).join('');
+  const rows = (matches.json?.matches ?? []).map((g) => {
+    const s = g.player ?? {};
+    const res = s.gameEndedInEarlySurrender ? ['remake', 'muted'] : s.win ? ['win', 'win'] : ['loss', 'loss'];
+    return `<tr><td class="${res[1]}">${res[0]}</td><td>${esc(s.championName ?? champ(s.championId))}</td><td>${s.kills}/${s.deaths}/${s.assists}</td><td>${(s.totalMinionsKilled ?? 0) + (s.neutralMinionsKilled ?? 0)} cs</td><td>${esc(g.gameMode)} ${g.queueId ?? ''}</td><td>${Math.round((g.gameDuration ?? 0) / 60)}m</td><td class="muted">${g.gameEndTimestamp ? new Date(g.gameEndTimestamp).toLocaleString() : ''}</td><td><a href="#" data-match="${esc(g.matchId)}" class="mono">${esc(g.matchId)}</a></td></tr>`;
+  }).join('');
+  $('#plOut').innerHTML = `<div class="grid">
+    ${card('profile', `${esc(p.account?.gameName)}<span class="muted">#${esc(p.account?.tagLine)}</span> ${xc(prof)}`, kv({ level: p.summoner?.summonerLevel, platform: p.platform, region: p.region, puuid: p.puuid, refreshAvailableIn: `${p.refreshAvailableIn} s`, ageSeconds: p.ageSeconds }) + (p.warnings?.length ? `<div class="err">${esc(p.warnings.join('; '))}</div>` : ''))}
+    ${card('profile', 'Ranked', league ? `<table>${league}</table>` : `<span class="muted">${p.league ? 'unranked' : 'unavailable (see warnings)'}</span>`)}
+    ${card('profile', 'Top mastery', mastery ? `<table>${mastery}</table>` : `<span class="muted">${p.mastery ? 'none' : 'unavailable (see warnings)'}</span>`)}
+    </div>${card('matches', `Recent matches ${xc(matches)} ${matches.json?.backfill ? '<span class="chip">backfill queued</span>' : ''}`, rows ? `<table><tr><th></th><th>champion</th><th>KDA</th><th>CS</th><th>mode</th><th>length</th><th>ended</th><th>match</th></tr>${rows}</table>` : `<span class="muted">${matches.status === 200 ? 'no matches' : esc(matches.json?.error?.message ?? matches.status)}</span>`)}`;
+  $('#plOut').onclick = async (e) => {
+    if (e.target.dataset.raw) view($('#plView'), raws[e.target.dataset.raw], e.target.dataset.raw);
+    if (e.target.dataset.match) {
+      e.preventDefault();
+      view($('#plView'), await call('GET', `/v1/lol/matches/${p.region}/${e.target.dataset.match}`), e.target.dataset.match);
+    }
+  };
+  view($('#plView'), null);
+};
 
-      function renderRanks(entries) {
-        const ranked = entries.filter((e) => e.tier);
-        show('rankSection', entries.length > 0);
-        $('ranks').replaceChildren(
-          ...(ranked.length
-            ? ranked.map((e) => {
-                const games = (e.wins ?? 0) + (e.losses ?? 0);
-                const wr = games ? Math.round((e.wins / games) * 100) : 0;
-                return el('div', { className: 'panel rank' }, [
-                  el('div', { className: 'queue', textContent: e.queueType ?? 'unknown queue' }),
-                  el('div', {
-                    className: 'tier',
-                    textContent: `${e.tier} ${e.rank ?? ''} · ${e.leaguePoints ?? 0} LP`.trim(),
-                  }),
-                  el('div', {
-                    className: 'kv',
-                    textContent: `${e.wins ?? 0}W ${e.losses ?? 0}L · ${wr}% over ${games}`,
-                  }),
-                  rawBlock('league entry', e),
-                ]);
-              })
-            : [el('div', { className: 'panel kv', textContent: 'unranked in every queue' })]),
-        );
-      }
+// ---------- live ----------
+let ws = null;
+let held = [];
+const frames = [];
 
-      function renderMastery(list) {
-        show('masterySection', list.length > 0);
-        $('mastery').replaceChildren(
-          ...list.map((m) =>
-            el('figure', {}, [
-              el('img', {
-                src: champIcon(m.championId),
-                alt: champName(m.championId),
-                title: champName(m.championId),
-                loading: 'lazy',
-              }),
-              el('figcaption', {
-                textContent: `M${m.championLevel} · ${Intl.NumberFormat().format(m.championPoints)}`,
-              }),
-            ]),
-          ),
-        );
-      }
+function topics() {
+  const t = [...document.querySelectorAll('.wsT:checked')].map((c) => c.value);
+  const p = $('#wsPlayer').value.trim();
+  if (p) t.push(p.startsWith('player:') ? p : `player:${p}`);
+  return t;
+}
 
-      /* The pool is read out of the proxy's own archive, not from Riot, so it
-         only ever describes games this deployment has actually stored — which
-         is why the header says how many that is rather than implying it knows
-         the player's whole history. Nothing here spends quota, so it is not
-         behind the Update button. */
-      function renderPool(result) {
-        const pool = result.data;
-        json('rawPool', pool);
-        show('poolSection', pool.champions.length > 0);
-        $('poolChips').replaceChildren(
-          chip(`X-Cache: ${result.cache}`),
-          chip(`${pool.archivedGames} archived games`),
-          chip(`${pool.champions.length} champions`),
-        );
+function renderFrames() {
+  const f = $('#wsFilter').value.toLowerCase();
+  $('#wsLog').innerHTML = frames.filter((x) => !f || x.raw.toLowerCase().includes(f)).map((x) =>
+    `<details><summary>${new Date(x.at).toLocaleTimeString()} <span class="${x.dir === '→' ? 'm-POST' : ''}">${x.dir}</span> <b>${esc(x.msg.op)}</b> ${esc(x.msg.event ?? '')} <span class="muted">${esc(x.msg.topic ?? '')}</span></summary><pre>${prettyJson(x.msg)}</pre></details>`).join('') || '<span class="muted">no frames</span>';
+}
 
-        $('pool').replaceChildren(
-          ...pool.champions.flatMap((c) => [
-            el('img', {
-              src: champIcon(c.championId),
-              alt: champName(c.championId, c.championName),
-              loading: 'lazy',
-            }),
-            el('div', {
-              className: 'name',
-              textContent: champName(c.championId, c.championName),
-              title: c.lastPlayedAt
-                ? `last played ${new Date(c.lastPlayedAt).toLocaleString()}`
-                : '',
-            }),
-            el('div', { className: 'num', textContent: `${c.games}g` }),
-            el('div', { className: 'num', textContent: `${Math.round(c.winRate * 100)}%` }),
-            /* Absent rather than zero on a pre-C2 archive, so the dash says
-               "not extracted yet" instead of claiming a real 0.00 KDA. */
-            el('div', {
-              className: 'num',
-              textContent: c.avgKda === undefined ? '—' : `${c.avgKda.toFixed(2)} KDA`,
-            }),
-          ]),
-        );
-      }
+function logFrame(dir, msg) {
+  if ($('#wsPause').checked && dir === '←') return;
+  frames.unshift({ at: Date.now(), dir, msg, raw: JSON.stringify(msg) });
+  frames.length = Math.min(frames.length, 500);
+  renderFrames();
+}
 
-      function renderMatches(result) {
-        const page = result.data;
-        json('rawMatches', page);
-        $('matchChips').replaceChildren(
-          chip(`X-Cache: ${result.cache}`),
-          chip(ago(page.matchIdsAgeSeconds)),
-          chip(`ids: ${page.matchIds.length}`),
-          ...(page.backfill
-            ? [chip(`history ${page.backfill.status} (${page.backfill.limit} max)`)]
-            : []),
-        );
+function send(msg) { if (ws?.readyState === 1) { ws.send(JSON.stringify(msg)); logFrame('→', msg); } }
 
-        $('matches').replaceChildren(
-          ...(page.matches.length
-            ? page.matches.map(renderMatch)
-            : [el('div', { className: 'panel kv', textContent: 'no matches on this page' })]),
-        );
+$('#wsConn').onclick = () => {
+  if (ws) { ws.close(); return; }
+  const key = $('#key').value.trim();
+  const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/v1/ws${key && !cfg.authDisabled ? `?token=${encodeURIComponent(key)}` : ''}`;
+  ws = new WebSocket(url);
+  $('#wsState').textContent = 'connecting…';
+  ws.onopen = () => { $('#wsState').textContent = 'open'; $('#wsConn').textContent = 'Disconnect'; send({ op: 'subscribe', topics: topics() }); };
+  ws.onmessage = (e) => {
+    let msg; try { msg = JSON.parse(e.data); } catch { msg = { op: 'raw', data: e.data }; }
+    if (msg.op === 'subscribed') { held = msg.topics; $('#wsHeld').textContent = `subscribed: ${held.join(', ') || '—'}`; }
+    logFrame('←', msg);
+  };
+  ws.onclose = (e) => { $('#wsState').textContent = `closed (${e.code}${e.reason ? ` ${e.reason}` : ''})`; $('#wsConn').textContent = 'Connect'; ws = null; held = []; };
+};
+$('#wsSub').onclick = () => {
+  const want = topics();
+  const drop = held.filter((t) => !want.includes(t));
+  if (drop.length) send({ op: 'unsubscribe', topics: drop });
+  send({ op: 'subscribe', topics: want });
+};
+$('#wsPing').onclick = () => send({ op: 'ping' });
+$('#wsClear').onclick = () => { frames.length = 0; renderFrames(); };
+$('#wsFilter').oninput = renderFrames;
 
-        $('pageLabel').textContent = `${page.start + 1}–${page.start + page.matchIds.length}`;
-        $('prev').disabled = page.start === 0;
-        $('next').disabled = !page.hasMore;
-        show('matchSection');
-        applyRawToggle();
+// ---------- shell ----------
+function route() {
+  const tab = location.hash.slice(1).split('?')[0] || 'explorer';
+  document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('on', t.id === `tab-${tab}`));
+  document.querySelectorAll('#nav a').forEach((a) => a.classList.toggle('on', a.getAttribute('href') === `#${tab}`));
+  if (tab === 'explorer') showOp();
+  if (tab === 'status' && !$('#stCards').innerHTML) refreshStatus();
+  if (tab === 'history') renderHistory();
+  if (tab === 'live') renderFrames();
+}
 
-        if (page.warnings?.length) message(page.warnings.join('\n'), 'warn');
-      }
-
-      /* The page hands us one summary per match — the player's own line in it,
-         already picked out server-side — rather than the whole game. Anything
-         not here (the other nine players, the timeline) is a single
-         /v1/lol/matches/{region}/{matchId} call away. */
-      function renderMatch(match) {
-        const me = match.player;
-        if (!me) return el('div', { className: 'match', textContent: match.matchId ?? '?' });
-
-        const kda = me.deaths === 0 ? 'perfect' : ((me.kills + me.assists) / me.deaths).toFixed(2);
-        const minutes = (match.gameDuration ?? 0) / 60;
-        const cs = (me.totalMinionsKilled ?? 0) + (me.neutralMinionsKilled ?? 0);
-        const when = match.gameEndTimestamp ?? match.gameCreation;
-        const items = [0, 1, 2, 3, 4, 5, 6].map((i) => me[`item${i}`]);
-
-        return el('div', { className: `match ${me.win ? 'win' : 'loss'}` }, [
-          el('img', {
-            className: 'champ',
-            src: champIcon(me.championId),
-            alt: champName(me.championId, me.championName),
-            loading: 'lazy',
-          }),
-          el('div', {}, [
-            el('div', {
-              className: 'champ-name',
-              textContent: `${champName(me.championId, me.championName)} · ${me.win ? 'Victory' : 'Defeat'}`,
-            }),
-            el('div', {
-              className: 'meta',
-              textContent: [
-                queueName(match.queueId),
-                `${Math.floor(minutes)}m${String(Math.round((minutes % 1) * 60)).padStart(2, '0')}s`,
-                when ? new Date(when).toLocaleString() : '',
-                match.matchId ?? '',
-              ]
-                .filter(Boolean)
-                .join(' · '),
-            }),
-          ]),
-          el(
-            'div',
-            { className: 'items' },
-            items.map((id) =>
-              id
-                ? el('img', {
-                    src: `${DDRAGON}/cdn/${dd.version}/img/item/${id}.png`,
-                    alt: '',
-                    loading: 'lazy',
-                  })
-                : el('span'),
-            ),
-          ),
-          el('div', { className: 'kda' }, [
-            el('div', { textContent: `${me.kills}/${me.deaths}/${me.assists}` }),
-            el('small', {
-              textContent: `${kda} KDA · ${cs} CS (${minutes ? (cs / minutes).toFixed(1) : '0.0'}/m)`,
-            }),
-          ]),
-        ]);
-      }
-
-      function rawBlock(label, value) {
-        const block = el('details', { className: 'rawBlock' }, [
-          el('summary', { textContent: `raw · ${label}` }),
-          el('pre', { textContent: JSON.stringify(value, null, 2) }),
-        ]);
-        block.open = $('rawAll').checked;
-        return block;
-      }
-
-      function applyRawToggle() {
-        const open = $('rawAll').checked;
-        for (const block of document.querySelectorAll('details.rawBlock')) block.open = open;
-      }
-
-      /* ── flow ──────────────────────────────────────────────────────── */
-
-      /**
-       * What actually came of pressing Update. A refresh that returns the same
-       * bytes is a normal outcome and worth saying out loud — otherwise the
-       * only feedback is a set of labels that deliberately did not move.
-       */
-      function refreshOutcome(profile) {
-        if (!profile.refreshed) {
-          return `Already updated less than a minute ago — showing that data.`;
-        }
-        const ages = Object.values(profile.ageSeconds ?? {}).filter((n) => typeof n === 'number');
-        return ages.some((n) => n < 5)
-          ? 'Updated — new data from Riot.'
-          : 'Updated — Riot returned the same data, so nothing here has changed.';
-      }
-
-      /**
-       * A plain lookup never asks the proxy to go upstream — whatever is
-       * cached is what a player looked like, and a cache miss fetches on its
-       * own. `refresh` is only ever set by the Update button.
-       */
-      async function load(riotId, platform, { push = true, refresh = false } = {}) {
-        const parsed = parseRiotId(riotId);
-        if (!parsed) {
-          message('Enter a Riot ID as GameName#TAG (or GameName-TAG).', 'err');
-          return;
-        }
-
-        $('go').disabled = $('refresh').disabled = true;
-        message(refresh ? 'Updating…' : 'Loading…');
-        try {
-          await Promise.all([ddragon(), loadQueues()]);
-          const path =
-            `/v1/players/by-riot-id/${encodeURIComponent(parsed.gameName)}` +
-            `/${encodeURIComponent(parsed.tagLine)}/profile` +
-            `?platform=${platform}&topMastery=8${refresh ? '&refresh=true' : ''}`;
-          const profile = await api(path);
-
-          state = { riotId, puuid: profile.data.puuid, platform, start: 0 };
-          // Set before rendering, so a warning from the document itself wins.
-          message(refresh ? refreshOutcome(profile.data) : '');
-          renderProfile(profile);
-          applyRawToggle();
-          await Promise.all([loadMatches({ refresh }), loadPool()]);
-
-          if (push) {
-            const slug = `${parsed.gameName}-${parsed.tagLine}`;
-            history.pushState({}, '', `/dev/${encodeURIComponent(slug)}?platform=${platform}`);
-          }
-        } catch (err) {
-          message(String(err.message ?? err), 'err');
-          for (const id of [
-            'profileSection',
-            'rankSection',
-            'masterySection',
-            'poolSection',
-            'matchSection',
-          ]) {
-            show(id, false);
-          }
-          // Nothing rendered, so nothing set the cooldown — leave the button
-          // usable rather than stuck on the `disabled` set at the top.
-          cooldown(0);
-        } finally {
-          $('go').disabled = false;
-        }
-      }
-
-      async function loadMatches({ refresh = false } = {}) {
-        if (!state.puuid) return;
-        $('prev').disabled = $('next').disabled = true;
-        try {
-          const count = Number($('pageSize').value);
-          renderMatches(
-            await api(
-              `/v1/players/${state.puuid}/matches` +
-                `?platform=${state.platform}&start=${state.start}&count=${count}` +
-                (refresh ? '&refresh=true' : ''),
-            ),
-          );
-        } catch (err) {
-          message(String(err.message ?? err), 'err');
-          show('matchSection', false);
-        }
-      }
-
-      /* Failure here hides the panel and is otherwise swallowed: the pool is
-         a bonus panel on a page whose point is the profile, and a message
-         would displace whatever the profile itself had to say. */
-      async function loadPool() {
-        if (!state.puuid) return;
-        try {
-          renderPool(await api(`/v1/players/${state.puuid}/champions?platform=${state.platform}`));
-        } catch {
-          show('poolSection', false);
-        }
-      }
-
-      function page(delta) {
-        const count = Number($('pageSize').value);
-        state.start = Math.max(0, state.start + delta * count);
-        void loadMatches();
-      }
-
-      /* ── boot ──────────────────────────────────────────────────────── */
-
-      async function boot() {
-        try {
-          cfg = await (await fetch('/dev/config.json')).json();
-        } catch {
-          message('Could not read /dev/config.json — is the API running?', 'err');
-        }
-
-        const select = $('platform');
-        select.replaceChildren(
-          ...cfg.platforms.map((p) =>
-            el('option', { value: p.value, textContent: `${p.value} · ${p.label}` }),
-          ),
-        );
-
-        // The dev consumer needs no key, so do not ask for one (§7.1).
-        show('tokenWrap', !cfg.authDisabled);
-        $('token').value = localStorage.getItem('riot-proxy.token') ?? '';
-        $('token').addEventListener('change', () =>
-          localStorage.setItem('riot-proxy.token', $('token').value.trim()),
-        );
-
-        const url = new URL(location.href);
-        const slug = decodeURIComponent(url.pathname.replace(/^\/dev\/?/, ''));
-        // No server default (ADR-065): the URL, else the last one picked,
-        // else whatever the list shows first.
-        const platform =
-          url.searchParams.get('platform') ?? localStorage.getItem('riot-proxy.platform');
-        if (cfg.platforms.some((p) => p.value === platform)) select.value = platform;
-
-        select.addEventListener('change', () =>
-          localStorage.setItem('riot-proxy.platform', select.value),
-        );
-        $('search').addEventListener('submit', (event) => {
-          event.preventDefault();
-          void load($('riotId').value, select.value);
-        });
-        $('refresh').addEventListener('click', () => {
-          if (state.riotId) void load(state.riotId, state.platform, { push: false, refresh: true });
-        });
-        $('prev').addEventListener('click', () => page(-1));
-        $('next').addEventListener('click', () => page(1));
-        $('pageSize').addEventListener('change', () => {
-          state.start = 0;
-          void loadMatches();
-        });
-        $('rawAll').addEventListener('change', applyRawToggle);
-        addEventListener('popstate', () => location.reload());
-
-        if (slug) {
-          const parsed = parseRiotId(slug);
-          if (parsed) {
-            $('riotId').value = `${parsed.gameName}#${parsed.tagLine}`;
-            await load(slug, select.value, { push: false });
-            return;
-          }
-        }
-        $('riotId').focus();
-      }
-
-      void boot();
-    </script>
-  </body>
+async function boot() {
+  $('#key').value = store.get('rp.dev.key', '');
+  $('#key').onchange = () => store.set('rp.dev.key', $('#key').value.trim());
+  [cfg, spec] = await Promise.all([fetch('/dev/config.json').then((r) => r.json()), fetch('/dev/openapi.json').then((r) => r.json())]);
+  $('#ver').textContent = `v${cfg.version} · ${cfg.env}`;
+  $('#noauth').hidden = !cfg.authDisabled;
+  $('#keyBox').hidden = cfg.authDisabled;
+  $('#links').innerHTML = [cfg.docsUi && '<a href="/docs">API docs</a>', cfg.dashboardUi && '<a href="/dashboard">Dashboard</a>', '<a href="/metrics">/metrics</a>'].filter(Boolean).join('');
+  document.body.insertAdjacentHTML('beforeend', `<datalist id="dl-platform">${cfg.platforms.map((p) => `<option value="${esc(p.value)}">${esc(p.label)}</option>`).join('')}</datalist><datalist id="dl-region">${cfg.regions.map((r) => `<option value="${esc(r)}">`).join('')}</datalist>`);
+  const last = store.get('rp.dev.player', {});
+  $('#plPlatform').innerHTML = `<option value="">platform…</option>${cfg.platforms.map((p) => `<option value="${esc(p.value)}" ${p.value === last.platform ? 'selected' : ''}>${esc(p.value)} · ${esc(p.label)}</option>`).join('')}`;
+  $('#plId').value = last.id ?? '';
+  $('#opFilter').oninput = renderOpList;
+  window.onhashchange = route;
+  route();
+}
+boot();
+</script>
+</body>
 </html>

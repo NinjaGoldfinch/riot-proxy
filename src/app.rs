@@ -62,7 +62,9 @@ pub struct AppState {
 pub fn router(state: AppState, metrics: PrometheusHandle) -> Router {
     let (api, doc) = routes::docs::api_router(Some(state.clone())).split_for_parts();
     let docs_ui = state.config.docs_ui;
-    let ui = routes::ui::router(&state.config);
+    let doc = routes::docs::finish(doc);
+    let openapi_json: Arc<str> = doc.to_pretty_json().unwrap_or_else(|_| "{}".into()).into();
+    let ui = routes::ui::router(&state.config, openapi_json);
     let ddragon = routes::statics::files(state.ddragon.dir());
     let mut router = api
         .with_state(state)
@@ -70,7 +72,7 @@ pub fn router(state: AppState, metrics: PrometheusHandle) -> Router {
         .merge(ui)
         .merge(ddragon);
     if docs_ui {
-        router = router.merge(routes::docs::docs_router(routes::docs::finish(doc)));
+        router = router.merge(routes::docs::docs_router(doc));
     }
     router
         .fallback(not_found)
