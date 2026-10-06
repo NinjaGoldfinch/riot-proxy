@@ -201,7 +201,7 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 - [ ] OPS-02 Proxmox dev VM: `create-vm.sh` on the host, Docker + compose, a timer that pulls `:edge`
 
 ## DEV — dev explorer (owner request 2026-10-05)
-- [~] DEV-01 dev explorer at `/dev` (`feat/DEV-01-dev-explorer`; replaces v1's dev UI, forms from the OpenAPI document, never in production, design/10, ADR-071)
+- [x] DEV-01 dev explorer at `/dev` (#81; replaces v1's dev UI, forms from the OpenAPI document, never in production, design/10, ADR-071)
 
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
