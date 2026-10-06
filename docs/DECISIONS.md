@@ -31,7 +31,7 @@ Decision: enable `rustls`, and in P1-03 build the client with `ClientBuilder::tl
 Accepted.
 - **Layering.** figment merges three string maps (`.env` < process env < CLI flags, over built-in defaults). A typed pass in `src/config.rs` then parses and validates the result, reporting every bad variable at once like v1's `parseEnv`. figment's `Env` provider is not used: it parses `"12345678"` into a number, and a number then fails to deserialize into a `String` field (`RIOT_API_KEY`, `HOST`). Its `Serialized` string maps also refuse to coerce `"8080"` into `u16`, so figment can only do the merging, not the typing. Only variables in `config::VARS` are read, so unrelated process env vars are ignored. Empty values count as absent (v1 behaviour).
 - **`NODE_ENV` fallback.** design/07 says `ENV` replaces `NODE_ENV`. If `ENV` is unset and `NODE_ENV` is set, `NODE_ENV` is used. Otherwise a v1 `.env` with `NODE_ENV=production` would boot as development, re-enabling `AUTH_DISABLED` and the dev UI. `ENV` wins when both are set.
-- **`DEV_UI`** keeps v1 semantics: unset means on everywhere except production, and an explicit value wins even in production. design/07's "production … turns `DEV_UI` off" is read as the default, which is how v1 behaves.
+- **`DEV_UI`** keeps v1 semantics: unset means on everywhere except production, and an explicit value wins even in production. design/07's "production … turns `DEV_UI` off" is read as the default, which is how v1 behaves. *(Superseded by ADR-071: production now always turns it off.)*
 - **`DDRAGON_DIR`** defaults to `$DATA_DIR/ddragon` ("now derived", design/07). It is still honoured when set, so v1 `.env` files port unchanged.
 - **`RIOT_USER_AGENT`** defaults to `riot-proxy/2.0 (+https://github.com/NinjaGoldfinch/riot-proxy)`. design/07 elides the URL (`riot-proxy/2.0 (+…)`).
 - **Numeric bounds** are v1's TypeBox bounds verbatim. The one new numeric, `JOB_CONCURRENCY`, only requires ≥ 1.
@@ -254,7 +254,7 @@ Accepted.
 - The OpenAPI document shares one `PassthroughResponses` set (200 plus v1's `upstreamErrors` statuses, each referencing `ErrorResponse`).
 
 ## ADR-038 — Dev UI and dashboard shells (2026-09-26)
-Accepted. v1's `public/dev-ui.html` and `public/dashboard.html` are copied verbatim to `src/ui/` and embedded with `include_str!` (design/07: nothing to mount at runtime). Routes are v1's: `/dev` and `/dev/{*rest}` (the same document, for client-side routes), `/dev/config.json` (`authDisabled`, `defaultPlatform`, `regions`, `platforms[{value,label,region}]`), `/dashboard` and `/dashboard/config.json` (`authDisabled`). All are public, carry `Cache-Control: no-store` (v1), are unmetered, and are left out of the OpenAPI document (v1 `hide: true`). `DEV_UI` defaults off in production, where an explicit value wins; `DASHBOARD_UI` defaults on (ADR-008). The dashboard calls `/v1/admin/metrics`, `/metrics/history`, `/tracked-players` and `/v1/ws`, which arrive in P5–P7; P7-06 wires its data and adapts any v1-specific text.
+Accepted. v1's `public/dev-ui.html` and `public/dashboard.html` are copied verbatim to `src/ui/` and embedded with `include_str!` (design/07: nothing to mount at runtime). Routes are v1's: `/dev` and `/dev/{*rest}` (the same document, for client-side routes), `/dev/config.json` (`authDisabled`, `defaultPlatform`, `regions`, `platforms[{value,label,region}]`), `/dashboard` and `/dashboard/config.json` (`authDisabled`). All are public, carry `Cache-Control: no-store` (v1), are unmetered, and are left out of the OpenAPI document (v1 `hide: true`). `DEV_UI` defaults off in production, where an explicit value wins; `DASHBOARD_UI` defaults on (ADR-008). The dashboard calls `/v1/admin/metrics`, `/metrics/history`, `/tracked-players` and `/v1/ws`, which arrive in P5–P7; P7-06 wires its data and adapts any v1-specific text. *(The `/dev` page, its catch-all and its config are superseded by ADR-071.)*
 
 ## ADR-039 — Archive schema (2026-09-26)
 Accepted. `V0002__archive.sql` is design/04 §Schema verbatim for `players`, `matches`, `timelines`, `match_facts`, `champion_stats`, `champion_matchups`, `champion_builds`, `ladder_crawls`, `ladder_entries` and `crawl_match_ids`, with their indexes (plan P5-01: "exactly as design 04"). Existing V0001 databases upgrade in place (tested).
@@ -810,3 +810,30 @@ Accepted (owner, task OPS-01). The owner wants a dev VM on Proxmox (OPS-02) that
 - **amd64 only.** The dev VM is amd64; one target keeps the run short. Releases stay multi-arch (ADR-063).
 - **Not a release.** `:edge` never moves `:2` or a version tag, and nothing here creates a GitHub release. A pull request that touches the workflow builds and smoke-tests without pushing.
 - **Not a required check.** Required checks stay as ADR-006 lists them; an `edge` failure does not block merges, it just leaves `:edge` on the last good commit.
+
+## ADR-071 — Dev explorer replaces v1's dev UI; never in production (2026-10-05)
+Accepted (owner, task DEV-01). Supersedes the `DEV_UI` bullet of ADR-008 and the `/dev` part of the P4-06 decision. Design: design/10.
+- **The page.** `src/ui/dev-ui.html` is rewritten as a dev explorer. It replaces v1's player viewer, which covered five reads and none of passthrough, analytics, admin, the WebSocket or health. It is one file with no external URLs and no build step. It has five hash-routed tabs:
+  - **Explorer**: forms built from the OpenAPI document, plus a raw-request mode.
+  - **Status**: `/healthz`, `/readyz` and `/v1/admin/metrics`, with per-method limiter windows.
+  - **Player**: profile and recent matches rendered.
+  - **Live**: `/v1/ws` topics and a frame log.
+  - **History**: the last 50 requests in `localStorage`.
+  Every view shares one response viewer: status, time, size, the proxy's headers, all headers, a Pretty or Raw body, the error envelope, and copy-as-curl with a `$RIOT_PROXY_KEY` placeholder.
+- **The spec is the inventory.** The explorer reads `/dev/openapi.json`, the same finished document as `/openapi.json`. It is served even when `DOCS_UI=false`, so new routes appear in the explorer without UI work.
+- **Never in production.** `dev_ui = ENV != production && DEV_UI (default true)`. An explicit `DEV_UI=true` no longer wins in production, because the explorer can send admin `POST`/`DELETE` calls. When that setting is ignored, `serve` logs a warning. `DEV_UI=false` still turns the page off elsewhere.
+- **Routes:**
+  - `/dev`, `/dev/config.json` and `/dev/openapi.json`. All are public, `no-store`, and left out of the OpenAPI document, as before.
+  - `config.json` adds `version`, `env`, `docsUi` and `dashboardUi`.
+  - **`/dev/{*rest}` is removed.** The page has no client-side paths, so `/dev/Name-TAG` is now a 404.
+- **Safety in the page:**
+  - A non-GET request asks for confirmation.
+  - The key lives in `localStorage` (`rp.dev.key`) and is sent only as a Bearer header. The exception is the WebSocket handshake, which requires `?token=`.
+- **Tests:**
+  - config: never on in production, the ignored flag is reported, the default is on elsewhere.
+  - integration (`tests/ui.rs`):
+    - 404 for all three routes in production with and without `DEV_UI=true`, and with `DEV_UI=false`.
+    - `/dev/openapi.json` equals `spec()` with `DOCS_UI=false`.
+    - The `config.json` fields.
+    - No catch-all.
+    - The page is self-contained (no `http(s)://`, `<script src` or `<link>`).

@@ -173,7 +173,7 @@ src/
 │   ├── admin.rs         /v1/admin/*
 │   ├── health.rs        /healthz /readyz /metrics
 │   ├── docs.rs          /openapi.json via utoipa, /docs via utoipa-scalar
-│   └── ui.rs            /dev /dashboard — static HTML embedded with include_str!
+│   └── ui.rs            /dev (dev explorer, design/10) /dashboard — static HTML embedded with include_str!
 ├── ws/
 │   ├── hub.rs           topic → broadcast::Sender; subscribe/unsubscribe protocol
 │   └── protocol.rs      frames, same shape as v1 §11
