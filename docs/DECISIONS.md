@@ -845,3 +845,13 @@ Accepted (owner, task DEV-01). Supersedes the `DEV_UI` bullet of ADR-008 and the
     - The `config.json` fields.
     - No catch-all.
     - The page is self-contained (no `http(s)://`, `<script src` or `<link>`).
+
+## ADR-072 — Per-VM login keys for the Proxmox dev VM (2026-10-08)
+Accepted (owner, task OPS-03). Amends ADR-070.
+- **`create-vm.sh --generate-key`** runs `ssh-keygen -t ed25519 -N ''` on the host and writes `<key-dir>/<name>-<vmid>` (default `/root/.ssh/riot-proxy`, mode 700). The comment is `<user>@<name>-<vmid>`. Cloud-init gets only that public key, or that key plus `--ssh-keys` when both are given.
+- **No passphrase.** The script runs unattended. The private key is root-only on the host, and the script prints how to `scp` it off the host and delete it.
+- **Never overwritten.** An existing key file stops the run, so a rebuilt VM can't silently reuse an old key.
+- **`--name` must be a DNS name**, because it is now part of a file path.
+- **Host keys are unchanged.** The Debian cloud image already generates unique host keys on first boot.
+- **Tests:** the dry-run `ssh-keygen` and `--sshkeys` arguments, `--key-dir`/`--name`, the combined case, and two real keys that differ.
+
