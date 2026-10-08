@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 const html = readFileSync(new URL('../src/ui/dev-ui.html', import.meta.url), 'utf8');
 const block = html.match(/\/\/ -{10} pure helpers[^\n]*\n([\s\S]*?)\/\/ -{10} end pure helpers/);
 assert.ok(block, 'the pure helpers block is marked in dev-ui.html');
-const h = new Function(`${block[1]}; return { PAGE_SIZES, MATCH_CALL_MAX, pageCalls, mergePages, pageSummary, queueIndex, scoreboard, walkStatus, archivePage, pageCount };`)();
+const h = new Function(`${block[1]}; return { PAGE_SIZES, MATCH_CALL_MAX, pageCalls, mergePages, pageSummary, queueIndex, scoreboard, walkStatus, archivePage, pageCount, patchOf, clock, kdaRatio, kilo, role };`)();
 
 test('page sizes are 10, 25 and 50', () => assert.deepEqual(h.PAGE_SIZES, [10, 25, 50]));
 
@@ -87,6 +87,31 @@ test('the scoreboard splits a match-v5 body by team and marks the player', () =>
   assert.equal(marked[0].cs, src.totalMinionsKilled + src.neutralMinionsKilled);
   for (const t of teams) assert.equal(t.win, Boolean(match.info.teams.find((x) => x.teamId === t.teamId).win));
   assert.deepEqual(h.scoreboard({}, me), []);
+});
+
+test('each team carries its side and totals for the header', () => {
+  const match = JSON.parse(readFileSync(new URL('../acceptance/fixtures/match.json', import.meta.url), 'utf8'));
+  const [blue, red] = h.scoreboard(match, '');
+  assert.equal(blue.side, 'Blue side');
+  assert.equal(red.side, 'Red side');
+  assert.deepEqual(blue.totals, { kills: 30, deaths: 32, assists: 41, gold: 58053 });
+  assert.deepEqual(red.totals, { kills: 31, deaths: 30, assists: 52, gold: 65833 });
+  assert.equal(h.scoreboard({ info: { teams: [{ teamId: 300 }] } }, '')[0].side, 'team 300');
+});
+
+test('match details are formatted for reading', () => {
+  assert.equal(h.patchOf('16.20.824.8524'), '16.20');
+  assert.equal(h.patchOf(undefined), '');
+  assert.equal(h.clock(1682), '28:02');
+  assert.equal(h.clock(3725), '1:02:05');
+  assert.equal(h.clock(0), '—');
+  assert.equal(h.clock(undefined), '—');
+  assert.equal(h.kdaRatio(0, 5, 7), '1.4');
+  assert.equal(h.kdaRatio(3, 0, 4), 'Perfect');
+  assert.equal(h.kdaRatio(0, 0, 0), '0.0');
+  assert.equal(h.kilo(58053), '58.1k');
+  assert.equal(h.kilo(950), '950');
+  assert.deepEqual(['TOP', 'JUNGLE', 'MIDDLE', 'BOTTOM', 'UTILITY', '', 'Invalid'].map(h.role), ['Top', 'Jgl', 'Mid', 'Bot', 'Sup', '', 'Inv']);
 });
 
 test('walk status reads the player row and the walk job counts', () => {

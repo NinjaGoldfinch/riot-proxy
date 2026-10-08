@@ -81,9 +81,17 @@
   .sumline { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
   tr.match { cursor: pointer; } tr.match:hover, tr.match.open { background: var(--sunk); }
   tr.detail > td { padding: 8px; background: var(--sunk); }
-  .board { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); }
-  .board h4 { margin: 0 0 4px; font-size: 12px; display: flex; gap: 8px; align-items: center; }
-  .board h4 button { margin-left: auto; font-size: 11px; padding: 1px 8px; }
+  td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .mhead { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; margin-bottom: 8px; font-size: 12px; }
+  .mhead .x, .mhead button { font-size: 11px; padding: 1px 8px; }
+  .mhead button:first-of-type { margin-left: auto; }
+  .board { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(560px, 1fr)); }
+  .team { border-left: 3px solid var(--line); padding-left: 8px; min-width: 0; }
+  .team.won { border-color: var(--good); } .team.lost { border-color: var(--bad); }
+  .team h4 { margin: 0 0 4px; font-size: 12px; display: flex; gap: 8px; align-items: baseline; }
+  .team h4 .tot { margin-left: auto; font-weight: 400; font-variant-numeric: tabular-nums; }
+  .team table { table-layout: fixed; }
+  .team td.name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .me { font-weight: 600; color: var(--accent); }
   @media (max-width: 900px) { .explorer { grid-template-columns: 1fr; } }
 </style>
@@ -344,8 +352,31 @@ function scoreboard(match, puuid) {
       gold: p.goldEarned ?? 0, damage: p.totalDamageDealtToChampions ?? 0, vision: p.visionScore ?? 0,
     });
   }
+  for (const t of teams.values()) {
+    const sum = (k) => t.players.reduce((n, p) => n + p[k], 0);
+    t.side = SIDES[t.teamId] ?? `team ${t.teamId}`;
+    t.totals = { kills: sum('kills'), deaths: sum('deaths'), assists: sum('assists'), gold: sum('gold') };
+  }
   return [...teams.values()].sort((a, b) => a.teamId - b.teamId);
 }
+
+/** match-v5 `teamId`s: 100 plays from the blue side, 200 from the red. */
+const SIDES = { 100: 'Blue side', 200: 'Red side' };
+/** match-v5 `teamPosition` as the short role names players use. */
+const ROLES = { TOP: 'Top', JUNGLE: 'Jgl', MIDDLE: 'Mid', BOTTOM: 'Bot', UTILITY: 'Sup' };
+const role = (pos) => ROLES[pos] ?? (pos ? pos.slice(0, 3) : '');
+/** `info.gameVersion` ("16.20.824.8524": major.minor patch, then build numbers) as the patch, "16.20". */
+const patchOf = (v) => (/^\d+\.\d+/.exec(v ?? '')?.[0] ?? '');
+/** Seconds as a game clock, "24:05" (or "1:02:05"). */
+function clock(s) {
+  if (!(s > 0)) return '—';
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = String(Math.floor(s % 60)).padStart(2, '0');
+  return h ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
+}
+/** (K+A)/D to one decimal, "Perfect" with no deaths. */
+const kdaRatio = (k, d, a) => (d ? ((k + a) / d).toFixed(1) : k + a ? 'Perfect' : '0.0');
+/** Gold as "12.8k". */
+const kilo = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 
 /** Where a player's history walk stands, from their row and their `backfill:player` job counts (`/v1/admin/players/{puuid}/archive`). */
 function walkStatus(row, walks = {}) {
@@ -666,14 +697,14 @@ function renderMatches(page, names, q, msg = '') {
     </div>` : '';
     const rows = page.matches.map((g) => {
       const p = g.player ?? {};
-      const res = isRemake(p) ? ['remake', 'muted'] : p.win ? ['win', 'win'] : ['loss', 'loss'];
+      const res = isRemake(p) ? ['Remake', 'muted'] : p.win ? ['Win', 'win'] : ['Loss', 'loss'];
       const open = pl.open.has(g.matchId);
-      return `<tr class="match ${open ? 'open' : ''}" data-match="${esc(g.matchId)}"><td class="${res[1]}">${res[0]}</td><td>${esc(p.championName ?? champ(p.championId))}</td><td>${p.kills}/${p.deaths}/${p.assists}</td><td>${(p.totalMinionsKilled ?? 0) + (p.neutralMinionsKilled ?? 0)} cs</td><td title="${esc(g.gameMode ?? '')}">${esc(q.names[g.queueId] ?? `${g.gameMode ?? 'queue'} ${g.queueId ?? ''}`)}</td><td>${g.gameDuration ? `${Math.round(g.gameDuration / 60)}m` : '—'}</td><td class="muted">${g.gameEndTimestamp ? new Date(g.gameEndTimestamp).toLocaleString() : ''}</td><td class="mono">${open ? '▾' : '▸'} ${esc(g.matchId)}</td></tr>`
+      return `<tr class="match ${open ? 'open' : ''}" data-match="${esc(g.matchId)}"><td class="${res[1]}">${res[0]}</td><td>${esc(p.championName ?? champ(p.championId))}</td><td class="n">${p.kills}/${p.deaths}/${p.assists}</td><td class="n">${(p.totalMinionsKilled ?? 0) + (p.neutralMinionsKilled ?? 0)}</td><td title="${esc(g.gameMode ?? '')}">${esc(q.names[g.queueId] ?? `${g.gameMode ?? 'queue'} ${g.queueId ?? ''}`)}</td><td class="n">${clock(g.gameDuration)}</td><td class="muted">${g.gameEndTimestamp ? new Date(g.gameEndTimestamp).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : ''}</td><td class="mono">${open ? '▾' : '▸'} ${esc(g.matchId)}</td></tr>`
         + (open ? `<tr class="detail" data-detail="${esc(g.matchId)}"><td colspan="8">${detailHtml(g.matchId)}</td></tr>` : '');
     }).join('');
     const none = archive ? (pl.queue ? 'nothing archived in this queue' : 'nothing archived for this player yet') : `${pl.page ? 'no more matches' : 'no matches'}${pl.queue || pl.type ? ' for this filter' : ''}`;
     body = sum + (page.warnings.length ? `<div class="err">${esc(page.warnings.join('; '))}</div>` : '')
-      + (rows ? `<table><tr><th></th><th>champion</th><th>KDA</th><th>CS</th><th>queue</th><th>length</th><th>ended</th><th>match</th></tr>${rows}</table>`
+      + (rows ? `<table><tr><th>result</th><th>champion</th><th class="n">KDA</th><th class="n">CS</th><th>queue</th><th class="n">length</th><th>ended</th><th>match</th></tr>${rows}</table>`
         : `<span class="muted">${none}</span>`);
   }
   $('#plMatches').innerHTML = card('matches', `${archive ? 'Archived matches' : 'Recent matches'} <span class="muted">click a row for the scoreboard</span>`, tools + body, 'data-matches');
@@ -688,11 +719,18 @@ function detailHtml(id) {
   if (r.status !== 200) return `<div class="row"><div class="err">${esc(r.json?.error?.code ?? r.status)} ${esc(r.json?.error?.message ?? '')}</div>${close}</div>`;
   const teams = scoreboard(r.json, pl.p.puuid);
   const info = r.json.info ?? {};
-  return `<div class="board">${teams.map((t, i) => `<div>
-    <h4><span class="${t.win ? 'win' : 'loss'}">${t.win ? 'Victory' : 'Defeat'}</span> <span class="muted">team ${t.teamId}</span>
-      ${i === teams.length - 1 ? `<span class="muted">${esc(info.gameVersion ?? '')} · ${Object.fromEntries(r.headers)['x-cache'] ?? ''}</span><button data-raw-match="${esc(id)}">raw</button>${close}` : ''}</h4>
-    <table><tr><th>player</th><th>champion</th><th>KDA</th><th>CS</th><th>gold</th><th>damage</th><th>vision</th></tr>
-    ${t.players.map((p) => `<tr class="${p.me ? 'me' : ''}"><td>${esc(p.name)} <span class="muted">${esc(p.position)}</span></td><td>${esc(p.champion)} <span class="muted">${p.level ?? ''}</span></td><td>${p.kills}/${p.deaths}/${p.assists}</td><td>${p.cs}</td><td>${p.gold.toLocaleString()}</td><td>${p.damage.toLocaleString()}</td><td>${p.vision}</td></tr>`).join('')}</table>
+  const cache = Object.fromEntries(r.headers)['x-cache'];
+  const head = `<div class="mhead">
+    <span title="gameVersion ${esc(info.gameVersion ?? '')}">patch <b>${esc(patchOf(info.gameVersion) || '?')}</b></span>
+    <span>length <b>${clock(info.gameDuration)}</b></span>
+    ${cache ? `<span class="chip" title="X-Cache">${esc(cache)}</span>` : ''}
+    <button data-raw-match="${esc(id)}">raw</button>${close}</div>`;
+  const cols = '<colgroup><col style="width:38px"><col><col style="width:92px"><col style="width:34px"><col style="width:64px"><col style="width:40px"><col style="width:56px"><col style="width:60px"><col style="width:46px"></colgroup>';
+  return head + `<div class="board">${teams.map((t) => `<div class="team ${t.win ? 'won' : 'lost'}">
+    <h4><span class="${t.win ? 'win' : 'loss'}">${t.win ? 'Victory' : 'Defeat'}</span> <span class="muted">${esc(t.side)}</span>
+      <span class="tot muted">${t.totals.kills}/${t.totals.deaths}/${t.totals.assists} · ${kilo(t.totals.gold)} gold</span></h4>
+    <table>${cols}<tr><th>role</th><th>player</th><th>champion</th><th class="n">lvl</th><th class="n">KDA</th><th class="n">CS</th><th class="n">gold</th><th class="n">damage</th><th class="n">vision</th></tr>
+    ${t.players.map((p) => `<tr class="${p.me ? 'me' : ''}"><td class="muted">${esc(role(p.position))}</td><td class="name" title="${esc(p.name)}">${esc(p.name)}</td><td class="name">${esc(p.champion)}</td><td class="n">${p.level ?? ''}</td><td class="n" title="KDA ${kdaRatio(p.kills, p.deaths, p.assists)}">${p.kills}/${p.deaths}/${p.assists}</td><td class="n">${p.cs}</td><td class="n">${p.gold.toLocaleString()}</td><td class="n">${p.damage.toLocaleString()}</td><td class="n">${p.vision}</td></tr>`).join('')}</table>
   </div>`).join('')}</div>`;
 }
 

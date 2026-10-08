@@ -102,6 +102,7 @@ sequenceDiagram
 - **A summary over the page**: games, W/L, win rate, KDA and CS/min. Remakes are left out of the record and the averages.
 - **Queue names** come from the same `queues.json`, falling back to `gameMode queueId`.
 - **Clicking a match** opens its scoreboard inline: both teams, with the looked-up player marked. It closes with ×, a second click or Esc, and `raw` shows the match body.
+- **Scoreboard layout** (DEV-04). One header row for the match: the patch (`info.gameVersion` cut to major.minor, with the full string on hover), the length as a clock, `X-Cache`, `raw` and ×. Then one block per team, headed by result, side (teamId 100 = Blue, 200 = Red), team K/D/A and gold. Both tables share fixed column widths so they line up. Numbers are right-aligned in tabular figures. Roles are short (Top/Jgl/Mid/Bot/Sup), and champion level has its own `lvl` column. In the match list, the result is capitalised, CS is a bare number, the length is `mm:ss`, and the end time is shown without seconds.
 - **History and backfill card** (DEV-03), from `GET /v1/admin/players/{puuid}/archive`, with exact counts and no caps:
   - tracked or not, and the history walk's state (walking, queued, complete, stopped part-way, never) and depth;
   - how many matches are archived for the player, with W/L, remakes and timelines, the date range, and a count per queue;

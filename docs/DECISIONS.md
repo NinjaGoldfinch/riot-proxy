@@ -876,3 +876,9 @@ Accepted (owner, task DEV-03). Supersedes ADR-073's "no new endpoint" and its ca
 - **The dev page** uses both: exact numbers in the History & backfill card, and an "Archive (all stored)" source for the match list.
 - **Page tests are committed.** `tests/dom/` is a private npm package whose only dependency is `jsdom`. It drives `src/ui/dev-ui.html` against a fake API in the `test` CI job (`just ui-test`). The page itself still has no build step and no dependency.
 
+
+## ADR-075 — Scoreboard layout in `/dev` (2026-10-08)
+Accepted (owner, task DEV-04). Owner feedback on a DEV-03 screenshot: the match meta and buttons sat in the second team's header, so the two team headers didn't line up; the tables had different column widths; numbers were left-aligned; and the build string `16.20.824.8524` meant nothing at a glance.
+- **Match meta moves to its own row** above both teams: patch, length, `X-Cache`, `raw`, ×. The patch is `info.gameVersion` cut to major.minor. The full string is kept on hover, because the build numbers are still useful for telling apart builds of the same patch.
+- **Team blocks**: result, side, and team K/D/A and gold in the header. The side comes from match-v5 `teamId` (100 Blue, 200 Red). The tables use `table-layout: fixed` with one shared `colgroup`, so both teams line up. Numeric columns are right-aligned with tabular figures.
+- Display only: no API, header or metric changes.
