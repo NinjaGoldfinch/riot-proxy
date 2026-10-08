@@ -205,6 +205,7 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 - [x] DEV-01 dev explorer at `/dev` (#81; replaces v1's dev UI, forms from the OpenAPI document, never in production, design/10, ADR-071)
 - [x] DEV-02 player tab: closable windows, matches paged 10/25/50 with queue/type filters, page summary, inline scoreboard, history and backfill card (#84, ADR-073)
 - [x] DEV-03 per-player archive endpoints (`/v1/admin/players/{puuid}/archive[/matches]`), exact backfill counts and an "Archive (all stored)" match source in `/dev`, jsdom page tests in CI (#86, ADR-074)
+- [ ] DEV-04 scoreboard layout: match header row (patch, length, X-Cache, raw, ×), aligned team tables, right-aligned numbers, side and team totals; match list shows the result, CS and length cleanly (#?, ADR-075)
 
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.

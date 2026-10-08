@@ -144,6 +144,16 @@ test('scoreboards and response windows close with × and Esc', async () => {
   await p.settle();
   assert.equal(p.w.document.querySelectorAll('#plMatches tr.detail .board table').length, 2, 'both teams');
   assert.ok(p.$('#plMatches tr.detail tr.me'), 'the player is marked');
+  const head = p.text('#plMatches tr.detail .mhead');
+  assert.match(head, /patch 16\.19/, 'the patch, not the build string');
+  assert.doesNotMatch(head, /821\.7343/);
+  assert.match(head, /length 28:02/);
+  assert.ok(p.$('#plMatches tr.detail .mhead [data-raw-match]') && p.$('#plMatches tr.detail .mhead [data-close-match]'), 'raw and × sit in the match header, not a team header');
+  assert.equal(p.w.document.querySelectorAll('#plMatches tr.detail .team h4 button').length, 0);
+  assert.deepEqual([...p.w.document.querySelectorAll('#plMatches tr.detail .team h4')].map((h) => h.textContent.replace(/\s+/g, ' ').trim()),
+    ['Defeat Blue side 30/32/41 · 58.1k gold', 'Victory Red side 31/30/52 · 65.8k gold']);
+  assert.equal(p.text('#plMatches tr.match td'), 'Loss', 'result capitalised');
+  assert.match(p.text('#plMatches tr.match'), /25:00/, 'length as a clock');
   await p.click('#plMatches [data-close-match]');
   assert.equal(p.$('#plMatches tr.detail'), null);
   p.$('#plMatches tr.match td').click();
