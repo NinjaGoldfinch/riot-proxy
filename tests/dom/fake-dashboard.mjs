@@ -1,0 +1,72 @@
+// The fake admin API both dashboard suites drive the page against: the jsdom
+// tests (dashboard.test.mjs) and the browser layout check (dashboard.browser.test.mjs).
+// Shapes are the OpenAPI document's for the crawl list, a crawl's activity and the
+// job queue.
+import { readFileSync } from 'node:fs';
+
+const html = readFileSync(new URL('../../src/ui/dashboard.html', import.meta.url), 'utf8');
+const ago = (ms) => new Date(Date.now() - ms).toISOString();
+const soon = (ms) => new Date(Date.now() + ms).toISOString();
+
+const RUNNING = '01K0000000000000000000RUN1';
+const DONE = '01K0000000000000000000DON1';
+const crawl = (id, status, phase, extra = {}) => ({
+  id, platform: 'oc1', queue: 'RANKED_SOLO_5x5', tierFloor: 'MASTER', status, phase,
+  startedAt: ago(3_600_000), finishedAt: status === 'running' ? null : ago(60_000),
+  pagesFetched: 12, entriesSeen: 1982, playersDiscovered: 1982, backfillsEnqueued: 1982,
+  matchIdsSeen: 21137, matchesQueued: 0, pendingLegs: status === 'running' ? 30 : 0, ...extra,
+});
+const job = (kind, state, payload, extra = {}) => ({
+  id: `J-${kind}-${state}-${Math.random()}`, kind, dedupeKey: null, priority: 20003, state, attempts: 1,
+  runAfter: ago(1000), claimedAt: state === 'running' ? ago(30_000) : null, finishedAt: null, error: null, payload, ...extra,
+});
+const collect = (offset, state, extra) => job('ladder:collect', state, { crawlId: RUNNING, platform: 'oc1', queue: 'RANKED_SOLO_5x5', offset, puuids: Array(25).fill('p') }, extra);
+
+const ACTIVITY = {
+  [RUNNING]: {
+    crawl: crawl(RUNNING, 'running', 'collect'),
+    asOf: new Date().toISOString(),
+    stages: [
+      { name: 'enumerate', state: 'done', done: 3, total: 3, unit: 'legs', recent: 0, etaSeconds: null },
+      { name: 'collect', state: 'now', done: 50, total: 80, unit: 'batches', recent: 10, etaSeconds: 1800 },
+      { name: 'archive', state: 'waiting', done: 0, total: null, unit: 'ids', recent: 0, etaSeconds: null },
+    ],
+    openLegs: [{ leg: 'ladder:collect:1250', page: null }, { leg: 'ladder:collect:1275', page: null }],
+    running: [collect(1250, 'running')],
+    next: [collect(1275, 'pending'), collect(1300, 'pending', { runAfter: soon(120_000), attempts: 2 })],
+    ahead: 4,
+    failed: [collect(25, 'failed', { error: 'RIOT_UNAVAILABLE: match-v5 503 after 5 tries' })],
+    downloads: { platform: 'oc1', ready: 120, delayed: 3, running: 2, failed: 1, recent: 60, etaSeconds: 1250 },
+  },
+  [DONE]: {
+    crawl: crawl(DONE, 'completed', 'archive'),
+    asOf: new Date().toISOString(),
+    stages: [
+      { name: 'enumerate', state: 'done', done: 3, total: 3, unit: 'legs', recent: 0, etaSeconds: null },
+      { name: 'collect', state: 'done', done: 80, total: 80, unit: 'batches', recent: 0, etaSeconds: null },
+      { name: 'archive', state: 'done', done: 21137, total: 21137, unit: 'ids', recent: 0, etaSeconds: null },
+    ],
+    openLegs: [], running: [], next: [], ahead: null, failed: [],
+    downloads: { platform: 'oc1', ready: 0, delayed: 0, running: 0, failed: 0, recent: 0, etaSeconds: null },
+  },
+};
+const QUEUE = {
+  running: [collect(1250, 'running'), job('archive:match', 'running', { matchId: 'OC1_700001' }, { priority: 100 })],
+  next: [job('archive:match', 'pending', { matchId: 'OC1_700002' }, { priority: 100 }), collect(1275, 'pending')],
+  ready: 2, delayed: 3, nextDelayedAt: soon(90_000),
+};
+
+function api(calls, url, opts) {
+  const u = new URL(url, 'http://localhost');
+  calls.push(`${u.pathname}${u.search}`);
+  const p = u.pathname;
+  if (p === '/dashboard/config.json') return [200, { authDisabled: true }];
+  if (p === '/v1/admin/ladder/crawls') return [200, { crawls: [crawl(RUNNING, 'running', 'collect'), crawl(DONE, 'completed', 'archive')] }];
+  const m = p.match(/^\/v1\/admin\/ladder\/crawls\/(\w+)$/);
+  if (m && opts.method === 'DELETE') return [200, { ok: true, crawlId: m[1], status: 'cancelled', droppedJobs: 3 }];
+  if (m) return ACTIVITY[m[1]] ? [200, ACTIVITY[m[1]]] : [404, { error: { code: 'NOT_FOUND', message: 'No such ladder crawl' } }];
+  if (p === '/v1/admin/jobs/queue') return [200, QUEUE];
+  return [503, { error: { code: 'UNAVAILABLE', message: 'not in this test' } }];
+}
+
+export { html, RUNNING, DONE, ACTIVITY, QUEUE, api };

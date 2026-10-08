@@ -76,7 +76,7 @@ pub struct LadderContext {
 }
 
 /// Players one `ladder:collect` job walks (v1 `COLLECT_BATCH`).
-const COLLECT_BATCH: usize = 25;
+pub const COLLECT_BATCH: usize = 25;
 /// Ids handed to the archive queue at a time (v1 `ARCHIVE_BATCH`).
 const ARCHIVE_BATCH: usize = 100;
 /// A match-id page (v1 `BACKFILL_PAGE`).
@@ -197,6 +197,23 @@ fn checked(
             )
         })?;
     Ok((platform, queue, floor))
+}
+
+/// How many enumerate legs a crawl down to `floor` fans out: one per apex
+/// tier, one per (tier, division) below. The activity view's total (DEV-13).
+pub fn enumerate_legs(floor: &str) -> usize {
+    tiers_at_or_above(floor)
+        .iter()
+        .map(|t| {
+            if APEX_TIERS.contains(t) {
+                1
+            } else if PAGED_TIERS.contains(t) {
+                DIVISIONS.len()
+            } else {
+                0
+            }
+        })
+        .sum()
 }
 
 /// Create the crawl and fan out its legs, all in one transaction: the row,

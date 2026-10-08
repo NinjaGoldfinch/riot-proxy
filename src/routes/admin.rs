@@ -56,6 +56,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(debug_cache))
         .routes(routes!(list_jobs))
         .routes(routes!(job_stats))
+        .routes(routes!(job_queue))
         .routes(routes!(retry_job))
         .routes(routes!(cancel_job))
         .routes(routes!(queue_backfill))
@@ -63,7 +64,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(start_ladder_crawl))
         .routes(routes!(ladder_options))
         .routes(routes!(list_ladder_crawls))
-        .routes(routes!(cancel_ladder_crawl))
+        .routes(routes!(cancel_ladder_crawl, crawl_activity))
         .routes(routes!(queue_names_backfill))
         .routes(routes!(recompute_analytics))
         .routes(routes!(reextract_facts))
@@ -1681,6 +1682,285 @@ async fn cancel_ladder_crawl(
         }
         Err(CancelError::Db(e)) => internal(&e, "could not cancel the crawl"),
     }
+}
+
+// ── Activity: the queue and one crawl's progress (DEV-13) ──────────────────
+
+/// The window "recently" means for pace and ETAs.
+const PACE_WINDOW_MS: i64 = 10 * 60_000;
+/// Rows per job list in the activity views.
+const ACTIVITY_ROWS: u32 = 15;
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct JobQueue {
+    /// Running now, oldest claim first.
+    running: Vec<JobSummary>,
+    /// What the workers claim next, in claim order (`priority`, then `runAfter`, then id).
+    next: Vec<JobSummary>,
+    /// Pending and due.
+    ready: i64,
+    /// Pending but waiting out a backoff.
+    delayed: i64,
+    /// When the soonest delayed job comes due.
+    #[schema(required = true)]
+    next_delayed_at: Option<String>,
+}
+
+#[utoipa::path(
+    get, path = "/v1/admin/jobs/queue", tag = "admin",
+    summary = "What is running and what runs next",
+    description = "The running jobs and the next ones a worker would claim, in the claim order \
+        (design/06 §Claiming), with how many are ready and how many wait out a backoff.",
+    params(("limit" = Option<i64>, Query, description = "1–100 jobs in `next`, default 15")),
+    responses((status = 200, description = "The queue", body = JobQueue), LocalErrors),
+)]
+async fn job_queue(State(state): State<AppState>, Extension(_c): Who, Query(q): Q) -> Response {
+    let limit = match validate::int_query("limit", q.get("limit").map(String::as_str), 1, 100) {
+        Ok(l) => u32::try_from(l.unwrap_or(i64::from(ACTIVITY_ROWS))).unwrap_or(ACTIVITY_ROWS),
+        Err(e) => return e.into_response(),
+    };
+    match state.jobs.view(now_ms(), limit).await {
+        Ok(v) => ok(&JobQueue {
+            running: v.running.into_iter().map(JobSummary::from).collect(),
+            next: v.next.into_iter().map(JobSummary::from).collect(),
+            ready: v.ready,
+            delayed: v.delayed,
+            next_delayed_at: v.next_delayed_at.and_then(iso_ms),
+        }),
+        Err(e) => internal(&e, "could not read the job queue"),
+    }
+}
+
+/// One stage of a crawl and how far through it is.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CrawlStage {
+    /// `enumerate`, `collect` or `archive`.
+    name: &'static str,
+    /// `done`, `now`, `waiting`, or for a crawl that ended early `stopped` (where it ended) and
+    /// `skipped` (never reached).
+    state: &'static str,
+    /// Units finished; `null` where it cannot be known (a stage a stopped crawl ended in).
+    #[schema(required = true)]
+    done: Option<i64>,
+    /// Units in the stage; `null` until the stage before has ended.
+    #[schema(required = true)]
+    total: Option<i64>,
+    /// `legs` (apex leagues and division walks), `batches` (25 players' match ids) or `ids` (handed
+    /// to the archive queue).
+    unit: &'static str,
+    /// Units this crawl finished in the last ten minutes.
+    recent: i64,
+    /// Seconds left at that pace; `null` when idle or not running.
+    #[schema(required = true)]
+    eta_seconds: Option<i64>,
+}
+
+/// A walk in flight: a (tier, division) leg and the page it is on.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenWalk {
+    /// `ladder:walk:GOLD:II`, `ladder:apex:MASTER`, `ladder:collect:50`, `ladder:archive`.
+    leg: String,
+    /// A walk's next page; `null` for a leg that has not started paging.
+    #[schema(required = true)]
+    page: Option<i64>,
+}
+
+/// The crawl-found matches being fetched on this crawl's platform. After the hand-off an
+/// `archive:match` job only names its match, so these count every crawl on the platform.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CrawlDownloads {
+    platform: String,
+    ready: i64,
+    delayed: i64,
+    running: i64,
+    failed: i64,
+    /// Fetched in the last ten minutes.
+    recent: i64,
+    /// Seconds to fetch what is queued at that pace; `null` when idle.
+    #[schema(required = true)]
+    eta_seconds: Option<i64>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CrawlActivity {
+    crawl: LadderCrawlSummary,
+    #[schema(required = true)]
+    as_of: Option<String>,
+    stages: Vec<CrawlStage>,
+    /// Legs still outstanding, with a walk's page.
+    open_legs: Vec<OpenWalk>,
+    /// This crawl's jobs running now.
+    running: Vec<JobSummary>,
+    /// Its next jobs in claim order: ready first, then any waiting out a backoff.
+    next: Vec<JobSummary>,
+    /// Ready jobs of any kind a worker takes before this crawl's next one; `null` when it has
+    /// nothing ready.
+    #[schema(required = true)]
+    ahead: Option<i64>,
+    /// Its failed jobs, newest first.
+    failed: Vec<JobSummary>,
+    downloads: CrawlDownloads,
+}
+
+/// Seconds to finish `left` units at `recent` units per pace window.
+fn eta(left: i64, recent: i64) -> Option<i64> {
+    (left > 0 && recent > 0).then(|| left.saturating_mul(PACE_WINDOW_MS / 1000) / recent)
+}
+
+const STAGES: [(&str, &str); 3] = [("enumerate", "legs"), ("collect", "batches"), ("archive", "ids")];
+
+fn crawl_stages(a: &crate::jobs::ladder::store::Activity) -> Vec<CrawlStage> {
+    use crate::jobs::{kinds, ladder};
+    let c = &a.crawl;
+    let at = STAGES.iter().position(|(n, _)| *n == c.phase).unwrap_or(0);
+    let open = |prefix: &str| {
+        i64::try_from(a.legs.iter().filter(|l| l.leg.starts_with(prefix)).count()).unwrap_or(0)
+    };
+    let recent = |names: &[&str]| -> i64 {
+        a.done_recently
+            .iter()
+            .filter(|(k, _)| names.contains(&k.as_str()))
+            .map(|(_, n)| n)
+            .sum()
+    };
+    let batch = i64::try_from(ladder::COLLECT_BATCH).unwrap_or(25);
+    let totals = [
+        Some(i64::try_from(ladder::enumerate_legs(&c.tier_floor)).unwrap_or(0)),
+        (at > 0 || c.status == "completed").then(|| (c.counters.backfills_enqueued + batch - 1) / batch),
+        (at > 1 || c.status == "completed").then_some(c.counters.match_ids_seen),
+    ];
+    let in_flight = [
+        open(kinds::LADDER_APEX) + open(kinds::LADDER_WALK),
+        open(kinds::LADDER_COLLECT),
+        a.ids_in_set,
+    ];
+    let paces = [
+        recent(&[kinds::LADDER_APEX, kinds::LADDER_WALK]),
+        recent(&[kinds::LADDER_COLLECT]),
+        // The hand-off moves 100 ids a job; ids are the unit worth a rate.
+        0,
+    ];
+    STAGES
+        .iter()
+        .enumerate()
+        .map(|(i, (name, unit))| {
+            let state = match c.status.as_str() {
+                "completed" => "done",
+                "running" if i < at => "done",
+                "running" if i == at => "now",
+                "running" => "waiting",
+                _ if i < at => "done",
+                _ if i == at => "stopped",
+                _ => "skipped",
+            };
+            let total = totals[i];
+            let done = match state {
+                "done" => total,
+                "now" => total.map(|t| (t - in_flight[i]).max(0)),
+                "waiting" | "skipped" => Some(0),
+                _ => None,
+            };
+            let left = match (state, total, done) {
+                ("now", Some(t), Some(d)) => t - d,
+                _ => 0,
+            };
+            CrawlStage {
+                name,
+                state,
+                done,
+                total,
+                unit,
+                recent: paces[i],
+                eta_seconds: eta(left, paces[i]),
+            }
+        })
+        .collect()
+}
+
+#[utoipa::path(
+    get, path = "/v1/admin/ladder/crawls/{id}", tag = "admin",
+    summary = "One crawl's progress and jobs",
+    description = "Where a crawl is: each stage's progress (legs, match-id batches, ids handed to the \
+        archive queue) with pace and ETA over the last ten minutes, the legs in flight with a walk's \
+        page, the crawl's running, next and failed jobs, how many queued jobs are ahead of it, and \
+        the platform's crawl-found match downloads. Admin views only: it scans the job queue.",
+    params(("id" = String, Path, description = "Crawl id (ULID)")),
+    responses((status = 200, description = "The crawl's activity", body = CrawlActivity), LocalErrors),
+)]
+async fn crawl_activity(
+    State(state): State<AppState>,
+    Extension(_c): Who,
+    path: Result<Path<String>, PathRejection>,
+) -> Response {
+    use crate::jobs::ladder::{order, store};
+    let Path(id) = match path {
+        Ok(p) => p,
+        Err(e) => return bad_path(&e).into_response(),
+    };
+    if let Err(e) = validate::consumer_id(&id) {
+        return e.into_response();
+    }
+    let now = now_ms();
+    let activity = match store::activity(
+        &state.db,
+        &scope_of(&state),
+        &id,
+        now,
+        PACE_WINDOW_MS,
+        ACTIVITY_ROWS,
+        order::MATCH,
+    )
+    .await
+    {
+        Ok(Some(a)) => a,
+        Ok(None) => {
+            return ApiError::not_found("No such ladder crawl for the current key scope").into_response();
+        }
+        Err(e) => return internal(&e, "could not read the crawl's activity"),
+    };
+    let stages = crawl_stages(&activity);
+    let d = &activity.downloads;
+    let downloads = CrawlDownloads {
+        platform: activity.crawl.platform.clone(),
+        ready: d.ready,
+        delayed: d.delayed,
+        running: d.running,
+        failed: d.failed,
+        recent: d.done_recently,
+        eta_seconds: eta(d.ready + d.delayed + d.running, d.done_recently),
+    };
+    let pending = i64::try_from(activity.legs.len()).unwrap_or(0);
+    let store::Activity {
+        crawl,
+        legs,
+        running,
+        next,
+        ahead,
+        failed,
+        ..
+    } = activity;
+    ok(&CrawlActivity {
+        crawl: LadderCrawlSummary::new(crawl, pending),
+        as_of: iso_ms(now),
+        stages,
+        open_legs: legs
+            .into_iter()
+            .map(|l| OpenWalk {
+                leg: l.leg,
+                page: l.cursor,
+            })
+            .collect(),
+        running: running.into_iter().map(JobSummary::from).collect(),
+        next: next.into_iter().map(JobSummary::from).collect(),
+        ahead,
+        failed: failed.into_iter().map(JobSummary::from).collect(),
+        downloads,
+    })
 }
 
 #[utoipa::path(

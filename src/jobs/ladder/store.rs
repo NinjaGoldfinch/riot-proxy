@@ -588,3 +588,170 @@ pub async fn cancel(db: &Db, key_scope: &str, id: &str, now: i64) -> Result<(Cra
     })
     .await
 }
+
+// ── Activity (DEV-13) ───────────────────────────────────────────────────────
+
+/// One outstanding leg: `ladder:walk:GOLD:II` with the page it is on, a
+/// collect batch, the archive hand-off.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenLeg {
+    pub leg: String,
+    pub cursor: Option<i64>,
+}
+
+/// Jobs fetching a platform's crawl-found matches. After the hand-off an
+/// `archive:match` names only its match, so these are per platform (every
+/// crawl on it), recognised by the crawl-match priority and the id prefix.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Downloads {
+    pub ready: i64,
+    pub delayed: i64,
+    pub running: i64,
+    pub failed: i64,
+    /// Finished inside the pace window.
+    pub done_recently: i64,
+}
+
+/// Everything the crawl detail view reads, in one snapshot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Activity {
+    pub crawl: Crawl,
+    pub legs: Vec<OpenLeg>,
+    /// Ids still in the collect set, not yet handed to the archive queue.
+    pub ids_in_set: i64,
+    /// This crawl's `ladder:*` jobs that are running, oldest claim first.
+    pub running: Vec<crate::jobs::JobRow>,
+    /// Its pending jobs in claim order (ready ones first, then delayed).
+    pub next: Vec<crate::jobs::JobRow>,
+    /// Ready jobs of any kind a worker would claim before this crawl's next
+    /// ready one; `None` when it has none ready.
+    pub ahead: Option<i64>,
+    /// Its failed jobs, newest first.
+    pub failed: Vec<crate::jobs::JobRow>,
+    /// Its jobs finished inside the pace window, by kind.
+    pub done_recently: Vec<(String, i64)>,
+    pub downloads: Downloads,
+}
+
+/// The crawl and its work, as of `now`. `window_ms` is the pace window;
+/// `limit` caps each job list. `match_priority` is the crawl-match band.
+pub async fn activity(
+    db: &Db,
+    key_scope: &str,
+    id: &str,
+    now: i64,
+    window_ms: i64,
+    limit: u32,
+    match_priority: i64,
+) -> Result<Option<Activity>, DbError> {
+    use crate::jobs::scheduler::{CLAIM_ORDER, ROW_COLUMNS, full_row};
+    let (scope, id) = (key_scope.to_string(), id.to_string());
+    db.read(move |c| {
+        let Some(crawl) = c
+            .query_row(
+                &format!("SELECT {COLUMNS} FROM ladder_crawls WHERE key_scope = ?1 AND id = ?2"),
+                params![scope, id],
+                crawl_row,
+            )
+            .optional()?
+        else {
+            return Ok(None);
+        };
+        let legs = c
+            .prepare("SELECT leg, cursor FROM crawl_legs WHERE crawl_id = ?1 ORDER BY leg")?
+            .query_map([&id], |r| {
+                Ok(OpenLeg {
+                    leg: r.get(0)?,
+                    cursor: r.get(1)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let ids_in_set: i64 = c.query_row(
+            "SELECT count(*) FROM crawl_match_ids WHERE crawl_id = ?1",
+            [&id],
+            |r| r.get(0),
+        )?;
+        // The crawl's own jobs carry its id; `ladder:crawl` itself runs before
+        // the row exists and names none.
+        let mine = "kind LIKE 'ladder:%' AND json_extract(payload, '$.crawlId') = ?1";
+        let rows =
+            |sql: String, args: &[&dyn rusqlite::ToSql]| -> Result<Vec<crate::jobs::JobRow>, DbError> {
+                Ok(c.prepare(&sql)?
+                    .query_map(args, full_row)?
+                    .collect::<Result<Vec<_>, _>>()?)
+            };
+        let running = rows(
+            format!(
+                "SELECT {ROW_COLUMNS} FROM jobs WHERE state = 'running' AND {mine} ORDER BY claimed_at, id"
+            ),
+            &[&id],
+        )?;
+        let next = rows(
+            format!(
+                "SELECT {ROW_COLUMNS} FROM jobs WHERE state = 'pending' AND {mine}
+                  ORDER BY run_after > ?2, {CLAIM_ORDER} LIMIT ?3"
+            ),
+            &[&id, &now, &limit],
+        )?;
+        let failed = rows(
+            format!(
+                "SELECT {ROW_COLUMNS} FROM jobs WHERE state = 'failed' AND {mine} ORDER BY id DESC LIMIT ?2"
+            ),
+            &[&id, &limit],
+        )?;
+        let ahead = match next.first().filter(|j| j.run_after <= now) {
+            Some(j) => Some(c.query_row(
+                "SELECT count(*) FROM jobs WHERE state = 'pending' AND run_after <= ?1
+                   AND (priority, run_after, id) < (?2, ?3, ?4)",
+                params![now, j.priority, j.run_after, j.id],
+                |r| r.get(0),
+            )?),
+            None => None,
+        };
+        let done_recently = c
+            .prepare(&format!(
+                "SELECT kind, count(*) FROM jobs WHERE state = 'done' AND finished_at >= ?2 AND {mine}
+                  GROUP BY kind ORDER BY kind"
+            ))?
+            .query_map(params![id, now - window_ms], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        // `OC1_…` for oc1; `_` is a LIKE wildcard, hence the escape.
+        let prefix = format!("{}\\_%", crawl.platform.to_uppercase());
+        let downloads = c.query_row(
+            "SELECT count(*) FILTER (WHERE state = 'pending' AND run_after <= ?3),
+                    count(*) FILTER (WHERE state = 'pending' AND run_after > ?3),
+                    count(*) FILTER (WHERE state = 'running'),
+                    count(*) FILTER (WHERE state = 'failed'),
+                    count(*) FILTER (WHERE state = 'done' AND finished_at >= ?4)
+               FROM jobs WHERE kind = ?1 AND priority = ?5 AND dedupe_key LIKE ?2 ESCAPE '\\'",
+            params![
+                crate::jobs::kinds::ARCHIVE_MATCH,
+                prefix,
+                now,
+                now - window_ms,
+                match_priority
+            ],
+            |r| {
+                Ok(Downloads {
+                    ready: r.get(0)?,
+                    delayed: r.get(1)?,
+                    running: r.get(2)?,
+                    failed: r.get(3)?,
+                    done_recently: r.get(4)?,
+                })
+            },
+        )?;
+        Ok(Some(Activity {
+            crawl,
+            legs,
+            ids_in_set,
+            running,
+            next,
+            ahead,
+            failed,
+            done_recently,
+            downloads,
+        }))
+    })
+    .await
+}

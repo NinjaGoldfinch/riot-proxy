@@ -74,6 +74,15 @@ Handlers are idempotent as in v1: `archive:match` upserts; polls diff against st
 
 `attempts < 5` → `run_after = now + 2^attempts × 30 s ± 20 %`, state back to `pending`. Otherwise `failed` with `error`. `/v1/admin/jobs` lists and retries failed rows; `maintenance` deletes `done` rows older than 7 days.
 
+### Activity views
+
+Two admin reads show the queue as the workers see it (DEV-13, ADR-087). Both use the same claim order as `claim` (`CLAIM_ORDER`: `priority, run_after, id`), so "up next" is what the workers will actually do next.
+
+- `GET /v1/admin/jobs/queue?limit=` — the running jobs (oldest claim first), the next `limit` ready jobs (1–100, default 15), how many are ready and how many are waiting out a backoff, and when the soonest delayed job comes due.
+- `GET /v1/admin/ladder/crawls/{id}` — one crawl's progress. For each stage (`enumerate` in legs, `collect` in 25-player batches, `archive` in ids handed to the archive queue) it gives `done`/`total`, a state (`done`, `now`, `waiting`, or `stopped`/`skipped` for a crawl that ended early), and a pace and ETA over the last ten minutes. It also lists the legs in flight (with each walk's next page), the crawl's running, next and failed jobs, and how many ready jobs of any kind a worker will claim before the crawl's next one. Last, the platform's crawl-found match downloads. Once handed off, an `archive:match` names only its match, so those counts cover every crawl on the platform.
+
+On `/dashboard` the Ladder tab shows the queue, and each history row opens into that crawl's view. While the tab is visible, running crawls and open rows refresh every 5 s. A finished crawl is fetched once.
+
 ### Bulk limiter priority
 
 Every handler that hits Riot calls the fetcher with `Priority::Bulk`, so the interactive-first and ceiling guarantees in [05](05-rate-limiter.md) apply automatically. The concurrency cap (`JOB_CONCURRENCY`) bounds how many bulk waiters can be parked.
