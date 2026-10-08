@@ -1,7 +1,8 @@
-// The dashboard's crawl activity (DEV-13) driven in jsdom: history rows open a
-// detail with each stage's progress, the crawl's running, next and failed jobs and
-// the platform's match downloads; the job queue panel lists what is running and
-// what runs next. The analytics panel's Recompute now (DEV-16) queues a rebuild. The fake API serves the documented shapes of
+// The dashboard's Ladder tab driven in jsdom. A running crawl is a card: its stage
+// bars and totals, with its legs, jobs, counters and the platform's match downloads
+// folded under "details" (DEV-13, DEV-17). Past crawls page ten at a time and each
+// row opens into the same view; the job queue panel, folded, lists what is running
+// and what runs next. The analytics panel's Recompute now (DEV-16) queues a rebuild. The fake API serves the documented shapes of
 // `GET /v1/admin/ladder/crawls`, `/v1/admin/ladder/crawls/{id}` and
 // `/v1/admin/jobs/queue`, `/v1/admin/ladder/options` and
 // `POST /v1/admin/analytics/recompute` (see the OpenAPI document); the metrics snapshot is a
@@ -11,7 +12,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 
-import { html, RUNNING, DONE, api } from './fake-dashboard.mjs';
+import { html, RUNNING, DONE, api, scene } from './fake-dashboard.mjs';
 
 async function page() {
   const calls = [];
@@ -42,13 +43,81 @@ async function page() {
 // The snapshot is a 503 here; anything else logged is a real failure.
 const realErrors = (errors) => errors.filter((e) => !e.includes('metrics fetch failed: 503'));
 
-test('history rows are buttons that open and close a detail row', async () => {
+test('a running crawl is a card: stage bars and totals, the rest folded under details', async () => {
   const p = await page();
   try {
-    const rows = [...p.w.document.querySelectorAll('#ladderHistory tr[data-run]')];
-    assert.equal(rows.length, 2);
-    assert.equal(rows[0].getAttribute('tabindex'), '0');
-    assert.equal(rows[0].getAttribute('aria-expanded'), 'false');
+    const card = p.$(`#ladderRunning [data-activity="${RUNNING}"]`);
+    assert.ok(card, 'the running crawl has a card');
+    assert.equal(p.$(`#ladderHistory tr[data-run="${RUNNING}"]`), null, 'and is not repeated in the history');
+    assert.ok(p.text('#ladderRunning .crawl-head').includes('oc1 · RANKED_SOLO_5x5'));
+    assert.ok(p.text('#ladderMeta').startsWith('1 running'));
+    const t = card.textContent.replace(/\s+/g, ' ');
+    assert.match(t, /enumerate\s*done/);
+    assert.ok(t.includes('collect') && t.includes('50 / 80 batches of 25 players · 10 in 10m · ~30m 0s left'), t);
+    assert.ok(t.includes('archive') && t.includes('after the stage before'));
+    const bar = card.querySelector('[role="progressbar"][aria-label="collect"]');
+    assert.equal(bar.getAttribute('aria-valuenow'), '63');
+    assert.equal(bar.querySelector('i').style.width, '62.5%');
+    assert.equal(p.text(`#ladderRunning .totals`), '1,982 players21,137 match ids0 matches queued1 failed');
+
+    const more = card.querySelector('details.more');
+    assert.equal(more.open, false, 'details are folded by default');
+    assert.equal(more.querySelector('summary').textContent.replace(/\s+/g, ' '), 'details · 1 running · 2 legs in flight · 1 failed');
+    const d = more.querySelector('.body').textContent.replace(/\s+/g, ' ');
+    assert.ok(d.includes('histories queued1,982') && d.includes('legs left30'), d);
+    assert.ok(d.includes('In flight (2)') && d.includes('players 1250+'));
+    assert.ok(d.includes('Running now (1)') && d.includes('match ids for players 1,250–1,274 · oc1'));
+    assert.ok(d.includes('4 queued job(s) ahead of its next one'));
+    assert.match(d, /match ids for players 1,300–1,324 · oc1\s*due in 1m 5\ds · try 2/, 'a backoff shows when it is due');
+    assert.ok(d.includes('Failed (1)') && d.includes('RIOT_UNAVAILABLE: match-v5 503'));
+    assert.ok(d.includes('Match downloads · every crawl on oc1'));
+    assert.ok(d.includes('120 ready · 3 waiting · 2 running · 1 failed · 60 fetched in 10m · ~20m 50s left'));
+    assert.equal(p.$('#ladderRunning').querySelectorAll('[data-cancel]').length, 1, 'one cancel button, in the card head');
+    assert.equal(p.$('#crawlForm').open, false, 'a crawl is running: the start form stays folded');
+    assert.deepEqual(realErrors(p.errors), []);
+  } finally { p.close(); }
+});
+
+test('with nothing running, the card list says so and the start form is open', async () => {
+  scene.running = false;
+  const p = await page();
+  try {
+    assert.equal(p.text('#ladderRunning'), 'No crawl running.');
+    assert.ok(p.text('#ladderMeta').startsWith('none running'));
+    assert.equal(p.$('#crawlForm').open, true);
+    assert.equal(p.$('#crawlStart').disabled, false);
+  } finally { p.close(); scene.running = true; }
+});
+
+test('an opened details fold stays open when the card refreshes', async () => {
+  const p = await page();
+  try {
+    const more = () => p.$(`#ladderRunning details.more`);
+    more().open = true;
+    more().dispatchEvent(new p.w.Event('toggle'));
+    const count = () => p.calls.filter((c) => c === `/v1/admin/ladder/crawls/${RUNNING}`).length;
+    const before = count();
+    p.w.document.dispatchEvent(new p.w.CustomEvent('dashboard:tab', { detail: 'ladder' }));
+    await p.settle();
+    assert.equal(count(), before + 1, 'refreshed');
+    assert.equal(more().open, true, 'still open');
+  } finally { p.close(); }
+});
+
+test('past crawls list finished runs ten at a time; a row opens into its detail', async () => {
+  const p = await page();
+  try {
+    const rows = () => [...p.w.document.querySelectorAll('#ladderHistory tr[data-run]')];
+    assert.equal(rows().length, 10);
+    assert.equal(rows()[0].dataset.run, DONE, 'newest first');
+    assert.equal(p.text('#ladderHistoryMeta'), '12 run(s) · 1 failed or cancelled');
+    assert.equal(p.text('#historyMore'), 'show 2 more');
+    p.$('#historyMore').click();
+    assert.equal(rows().length, 12);
+    assert.equal(p.text('#historyMore'), 'show fewer');
+
+    assert.equal(rows()[0].getAttribute('tabindex'), '0');
+    assert.equal(rows()[0].getAttribute('aria-expanded'), 'false');
     p.$(`tr[data-run="${DONE}"] td`).click();
     await p.settle();
     assert.ok(p.calls.includes(`/v1/admin/ladder/crawls/${DONE}`));
@@ -57,7 +126,11 @@ test('history rows are buttons that open and close a detail row', async () => {
     assert.equal(p.$(`tr[data-run="${DONE}"]`).getAttribute('aria-expanded'), 'true');
     assert.match(detail.textContent, /archive\s*done/);
     assert.ok(detail.textContent.includes('21,137 / 21,137 ids handed on'));
+    assert.equal(detail.querySelector('details.more').open, true, 'an opened row shows its details');
     assert.ok(!detail.querySelector('[data-cancel]'), 'a finished crawl has nothing to cancel');
+    detail.querySelector('details.more summary').click();
+    await p.settle();
+    assert.ok(p.$(`#ladderHistory [data-activity="${DONE}"]`), 'folding the details leaves the row open');
     p.$(`tr[data-run="${DONE}"] td`).click();
     await p.settle();
     assert.equal(p.$(`#ladderHistory [data-activity="${DONE}"]`), null, 'closed again');
@@ -65,48 +138,21 @@ test('history rows are buttons that open and close a detail row', async () => {
   } finally { p.close(); }
 });
 
-test('a running crawl shows each stage, what it is running and what runs next', async () => {
+test('cancel from the card asks the API and refreshes', async () => {
   const p = await page();
   try {
-    p.$(`tr[data-run="${RUNNING}"] td`).click();
-    await p.settle();
-    const d = p.$(`#ladderHistory [data-activity="${RUNNING}"]`);
-    const t = d.textContent.replace(/\s+/g, ' ');
-    assert.match(t, /enumerate\s*done/);
-    assert.ok(t.includes('collect') && t.includes('50 / 80 batches of 25 players · 10 in 10m · ~30m 0s left'), t);
-    assert.ok(t.includes('archive') && t.includes('after the stage before'));
-    const bar = d.querySelector('[role="progressbar"][aria-label="collect"]');
-    assert.equal(bar.getAttribute('aria-valuenow'), '63');
-    assert.equal(bar.querySelector('i').style.width, '62.5%');
-    assert.ok(t.includes('In flight (2)') && t.includes('players 1250+'));
-    assert.ok(t.includes('Running now (1)') && t.includes('match ids for players 1,250–1,274 · oc1'));
-    assert.ok(t.includes('4 queued job(s) ahead of its next one'));
-    assert.match(t, /match ids for players 1,300–1,324 · oc1\s*due in 1m 5\ds · try 2/, 'a backoff shows when it is due');
-    assert.ok(t.includes('Failed (1)') && t.includes('RIOT_UNAVAILABLE: match-v5 503'));
-    assert.ok(t.includes('Match downloads · every crawl on oc1'));
-    assert.ok(t.includes('120 ready · 3 waiting · 2 running · 1 failed · 60 fetched in 10m · ~20m 50s left'));
-    assert.ok(d.querySelector(`button[data-cancel="${RUNNING}"]`), 'a running crawl can be cancelled from here');
-    assert.deepEqual(realErrors(p.errors), []);
-  } finally { p.close(); }
-});
-
-test('cancel from the detail asks the API and refreshes', async () => {
-  const p = await page();
-  try {
-    p.$(`tr[data-run="${RUNNING}"] td`).click();
-    await p.settle();
     const before = p.calls.length;
-    p.$(`#ladderHistory button[data-cancel="${RUNNING}"]`).click();
+    p.$(`#ladderRunning button[data-cancel="${RUNNING}"]`).click();
     await p.settle();
     assert.ok(p.text('#crawlResult').includes(`Cancelled ${RUNNING}`));
     assert.ok(p.calls.slice(before).includes('/v1/admin/ladder/crawls?limit=50'), 'history refetched');
-    assert.ok(p.$(`tr[data-run="${RUNNING}"]`).classList.contains('open'), 'clicking cancel does not fold the row');
   } finally { p.close(); }
 });
 
-test('the job queue panel lists what is running and what the workers take next', async () => {
+test('the job queue panel is folded and lists what is running and what the workers take next', async () => {
   const p = await page();
   try {
+    assert.equal(p.$('#queueFold').open, false);
     assert.ok(p.calls.includes('/v1/admin/jobs/queue?limit=15'));
     assert.match(p.text('#queueMeta'), /^2 running · 2 ready · 3 waiting out a backoff · next due in 1m \d+s$/);
     const rows = (sel) => [...p.w.document.querySelectorAll(`${sel} li`)].map((li) => [...li.children].map((c) => c.textContent));
@@ -119,10 +165,9 @@ test('the job queue panel lists what is running and what the workers take next',
   } finally { p.close(); }
 });
 
-test('an open running row keeps refreshing; a finished one is fetched once', async () => {
+test('a running crawl keeps refreshing; an opened finished row is fetched once', async () => {
   const p = await page();
   try {
-    p.$(`tr[data-run="${RUNNING}"] td`).click();
     p.$(`tr[data-run="${DONE}"] td`).click();
     await p.settle();
     const count = (id) => p.calls.filter((c) => c === `/v1/admin/ladder/crawls/${id}`).length;
@@ -137,6 +182,7 @@ test('an open running row keeps refreshing; a finished one is fetched once', asy
 test('Recompute now offers the ladder options and queues the chosen ladder', async () => {
   const p = await page();
   try {
+    assert.equal(p.$('#analyticsFold').open, false, 'folded by default');
     assert.equal(p.$('#analyticsStart').disabled, false, 'enabled once the options load');
     assert.deepEqual([...p.$('#analyticsPlatform').options].map((o) => o.value), ['euw1', 'oc1']);
     assert.equal(p.$('#analyticsPlatform').value, 'oc1', 'the configured default is preselected');

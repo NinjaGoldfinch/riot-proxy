@@ -1,5 +1,6 @@
-// The dashboard's Ladder tab in headless Chromium (DEV-13), at a desktop, a tablet
-// and a phone width, with a running and a finished crawl opened in the history:
+// The dashboard's Ladder tab in headless Chromium (DEV-13, DEV-17), at a desktop, a
+// tablet and a phone width, with the running crawl's card, a finished crawl opened in
+// the history and the job queue all unfolded:
 // the page never scrolls sideways, nothing is wider than its panel, and the stage
 // bars and job lists keep to one line per entry. Screenshots go to screenshots/.
 // Skips without a browser, except under CI (see showcase.browser.test.mjs).
@@ -24,7 +25,7 @@ before(async () => {
 after(async () => { await browser?.close(); });
 
 for (const [device, width] of [['desktop', 1280], ['tablet', 820], ['phone', 390]]) {
-  test(`ladder tab at ${device} (${width} px): open runs fit their panels`, { timeout: 60000 }, async (t) => {
+  test(`ladder tab at ${device} (${width} px): cards, open runs and folds fit their panels`, { timeout: 60000 }, async (t) => {
     if (skip) return t.skip(skip);
     const page = await browser.newPage({ viewport: { width, height: 900 } });
     const errors = [];
@@ -37,10 +38,11 @@ for (const [device, width] of [['desktop', 1280], ['tablet', 820], ['phone', 390
         return r.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
       });
       await page.goto('http://dashboard.test/dashboard#ladder');
-      await page.waitForSelector(`tr[data-run="${RUNNING}"]`);
-      await page.click(`tr[data-run="${RUNNING}"] td`);
-      await page.click(`tr[data-run="${DONE}"] td`);
       await page.waitForSelector(`[data-activity="${RUNNING}"] .stages`);
+      await page.click(`[data-activity="${RUNNING}"] details.more summary`);
+      await page.click('#queueFold summary');
+      await page.click('#analyticsFold summary');
+      await page.click(`tr[data-run="${DONE}"] td`);
       await page.waitForSelector(`[data-activity="${DONE}"] .stages`);
       await page.screenshot({ path: new URL(`./screenshots/dashboard-ladder-${device}.png`, import.meta.url).pathname, fullPage: true });
       const m = await page.evaluate(() => {
