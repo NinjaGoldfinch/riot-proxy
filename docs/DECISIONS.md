@@ -882,3 +882,16 @@ Accepted (owner, task DEV-04). Owner feedback on a DEV-03 screenshot: the match 
 - **Match meta moves to its own row** above both teams: patch, length, `X-Cache`, `raw`, ×. The patch is `info.gameVersion` cut to major.minor. The full string is kept on hover, because the build numbers are still useful for telling apart builds of the same patch.
 - **Team blocks**: result, side, and team K/D/A and gold in the header. The side comes from match-v5 `teamId` (100 Blue, 200 Red). The tables use `table-layout: fixed` with one shared `colgroup`, so both teams line up. Numeric columns are right-aligned with tabular figures.
 - Display only: no API, header or metric changes.
+
+## ADR-076 — Data Dragon images are mirrored on first request (2026-10-08)
+Accepted (owner, task DEV-05). Amends v1's §1 non-goal, "images stay on Riot's CDN" (design/07). The owner wants `/dev/showcase` to show champion, profile, item and summoner-spell icons without the page loading anything from another origin.
+- **Filled on demand, not by `ddragon:sync`.** A patch has thousands of profile icons. Downloading all of them every patch would cost far more than the few dozen a page actually shows. `GET /ddragon/{version}/img/{kind}/{file}` serves from disk. On a miss it fetches Data Dragon's `/cdn/{version}/img/{kind}/{file}` once, writes it atomically beside the patch's JSON, and serves that copy from then on. Concurrent misses for one path share a single fetch.
+- **Bounded, because it needs no key** (like the rest of `/ddragon/*`):
+  - the patch must be mirrored;
+  - `kind` must be one of `champion`, `profileicon`, `item`, `spell`;
+  - the file must be an `image.full` that the patch's own data file lists (`champion`, `profileicon`, `item`, `summoner`).
+
+  Anything else gets a 404 without a fetch. So an anonymous caller can make the proxy download only images Riot itself names, once each.
+- **Checked before it is kept.** The body must start with the PNG signature and be at most 1 MiB. Otherwise the request is a 502 and nothing is written. A Riot 404 is passed on as a 404 and is not cached.
+- **Not in scope:** rank emblems, which are not part of Data Dragon, and rune icons, which have nested paths. Pages show tiers as CSS badges.
+- Like the JSON files, no request goes through the Riot limiter. Data Dragon is not rate limited (v1 §5.6).

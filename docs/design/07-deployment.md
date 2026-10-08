@@ -60,6 +60,12 @@ Built in P8-03 and removed before 2.0.0 (ADR-067). The proxy is never the public
 
 Data Dragon is served from `$DATA_DIR/ddragon` by `tower-http::ServeDir` with `Cache-Control: public, max-age=604800, immutable` — the same headers the v1 Caddyfile set.
 
+Images are mirrored on first request (DEV-05, ADR-076). `GET /ddragon/<version>/img/<kind>/<file>` is served from `$DATA_DIR/ddragon/<version>/img/<kind>/` when the file is there. On a miss it is fetched once from Data Dragon's `/cdn/<version>/img/<kind>/<file>`, written to disk and served.
+- `kind` is `champion`, `profileicon`, `item` or `spell`.
+- The patch must already be mirrored.
+- `file` must be an `image.full` listed in that patch's `champion`, `profileicon`, `item` or `summoner` JSON. Anything else is a bare 404 with no fetch.
+- A Riot 404 is a 404. A non-PNG or failed fetch is a 502, and nothing is kept.
+
 ## Option C — systemd, no containers
 
 ```ini
