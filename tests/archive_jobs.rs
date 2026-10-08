@@ -148,6 +148,31 @@ async fn a_backfill_walks_250_ids_across_three_pages() {
 }
 
 #[tokio::test]
+async fn the_default_uncapped_walk_ends_where_the_history_does() {
+    // ADR-081: LOOKUP_BACKFILL_LIMIT defaults to u32::MAX, so a lookup walk
+    // pages 100 at a time until Riot runs out, and that counts as complete.
+    let e = env().await;
+    e.page(0, 100, 0..100).await;
+    e.page(100, 100, 100..200).await;
+    e.page(200, 100, 200..250).await;
+    let mut ctx = e.ctx();
+    ctx.lookup_backfill_limit = u32::MAX;
+    ctx.backfill_player(&backfill(u32::MAX)).await.unwrap();
+
+    assert_eq!(e.archive_jobs().await.len(), 250);
+    let walk = e.walk().await;
+    assert_eq!(
+        (walk.depth, walk.cursor, walk.done_at.is_some(), walk.limit),
+        (250, None, true, u32::MAX)
+    );
+    assert_eq!(
+        e.server.received_requests().await.unwrap().len(),
+        3,
+        "no page past the end"
+    );
+}
+
+#[tokio::test]
 async fn a_walk_that_fails_part_way_resumes_from_its_cursor() {
     let e = env().await;
     e.page(0, 100, 0..100).await;

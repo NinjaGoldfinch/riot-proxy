@@ -722,7 +722,7 @@ function renderMatches(page, names, q, msg = '') {
     const sum = s.games ? `<div class="sumline">
       <span class="chip">${s.games} games on this page</span><span class="chip"><b class="win">${s.wins}W</b> <b class="loss">${s.losses}L</b>${s.remakes ? ` · ${s.remakes} remake` : ''}</span>
       ${s.winRate != null ? `<span class="chip">win rate <b>${s.winRate}%</b></span>` : ''}${s.kda != null ? `<span class="chip">KDA <b>${s.kda}</b> (${s.kills}/${s.deaths}/${s.assists})</span>` : ''}${s.csPerMin != null ? `<span class="chip">CS/min <b>${s.csPerMin}</b></span>` : ''}
-      ${archive ? '<span class="chip">from the archive · no Riot calls</span>' : xc(page.results[0])}${page.backfill ? `<span class="chip">backfill <b>${esc(page.backfill.status)}</b> · ${page.backfill.limit} deep</span>` : ''}
+      ${archive ? '<span class="chip">from the archive · no Riot calls</span>' : xc(page.results[0])}${page.backfill ? `<span class="chip">backfill <b>${esc(page.backfill.status)}</b> · ${page.backfill.limit >= 4294967295 ? 'full history' : `${page.backfill.limit} deep`}</span>` : ''}
     </div>` : '';
     const rows = page.matches.map((g) => {
       const p = g.player ?? {};

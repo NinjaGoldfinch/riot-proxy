@@ -931,3 +931,12 @@ Accepted (owner, task DEV-06). Design/11. Uses ADR-076's local images and ADR-07
 - **Analytics rows are per (champion, tier)**, so the home view sums games and wins per champion for its top-10 lists. It does not sum `pickRate`, which is a ratio per tier and does not add up.
 - **Ladder names** are fetched for the 25 visible rows only, five at a time, and kept for the session: a whole Challenger league is 300 account calls, which a page should not spend on load.
 - Work is split as planned: DEV-06 the shell, gating, coverage guard and home view; DEV-07 the player view; DEV-08 match detail and the champion view. Until then those routes are in `notShowcased` as `planned: DEV-0n`.
+
+## ADR-081 — A lookup backfill walks the whole history by default (2026-10-08)
+Accepted (owner, task DEV-11). Changes P6-06's limit; v1 parity is no longer required.
+- **Owner request:** the first lookup of a profile should "grab all available match page data, instead of grabbing a certain amount of games", with the upper limit "just the integer limit, as it shouldn't stop".
+- `LOOKUP_BACKFILL_LIMIT` now defaults to, and is capped at, `u32::MAX` (v1: default and maximum 10000). The walk already stops on an empty or short page from `match.idsByPuuid`, so in practice it ends where the player's history does; the limit only remains as an opt-in cap. `0` still disables lookup and tracking backfills.
+- The walk's completion rule is unchanged (ran out of unfiltered history, or at least `LOOKUP_BACKFILL_LIMIT` deep). With the new default a walk only stamps `doneAt` by running out, so a player with more than 10000 ids is no longer marked complete at 10000.
+- `.env.example` used to call 10000 "match-v5's ceiling". Nothing in `docs/design/` or v1 sources that, so the claim is dropped rather than repeated.
+- `/dev` shows the uncapped walk as "full history" instead of the number.
+
