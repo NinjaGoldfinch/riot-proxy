@@ -13,6 +13,7 @@ env:
 # acceptance) —
 # renaming a job means updating branch protection too. See ADR-006.
 # The toolchain, components and musl target all come from rust-toolchain.toml.
+# Rust caches are saved from `main` only; pull requests restore them (ADR-079).
 jobs:
   fmt:
     runs-on: ubuntu-latest
@@ -27,6 +28,8 @@ jobs:
       - uses: actions/checkout@v7
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy --all-targets --all-features -- -D warnings
       # P8-04: the Postgres store stub compiles on its own, and its tests pass.
       - run: cargo check --all-targets --features postgres
@@ -38,6 +41,8 @@ jobs:
       - uses: actions/checkout@v7
       - run: rustup toolchain install && rustup component add llvm-tools
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: taiki-e/install-action@cargo-llvm-cov
       - run: cargo llvm-cov --all-features --workspace --summary-only
       # The dev explorer page driven in jsdom (DEV-03, ADR-074).
@@ -59,6 +64,8 @@ jobs:
       - uses: actions/checkout@v7
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -76,6 +83,8 @@ jobs:
       - uses: actions/checkout@v7
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: sudo apt-get update && sudo apt-get install -y musl-tools
       - run: cargo build --release --target x86_64-unknown-linux-musl
       - name: static and under 20 MB
@@ -84,8 +93,13 @@ jobs:
           ls -la "$bin"
           file "$bin" | tee /dev/stderr | grep -qE "static(ally|-pie) linked"
           test "$(stat -c %s "$bin")" -lt $((20 * 1024 * 1024))
+      # The image is the binary above in Dockerfile.release's scratch image, the
+      # same way edge.yml and release.yml ship it. Recompiling it inside
+      # `Dockerfile` here took ten minutes; the `docker` job covers that file (ADR-079).
       - name: docker image builds
-        run: docker build -t riot-proxy:ci .
+        run: |
+          mkdir -p dist && cp target/x86_64-unknown-linux-musl/release/riot-proxy dist/riot-proxy-linux-amd64
+          docker buildx build --load --platform linux/amd64 -f Dockerfile.release -t riot-proxy:ci .
       - name: image runs, serves, and passes its own healthcheck
         run: |
           docker run --rm riot-proxy:ci --version
@@ -101,10 +115,31 @@ jobs:
           docker stop -t 15 rp
           test "$(docker inspect -f '{{.State.ExitCode}}' rp)" = 0
           docker images riot-proxy:ci --format 'image size: {{.Size}}'
+      - if: failure()
+        run: docker logs rp || true
+
+  # The source `Dockerfile` that `docker compose up --build` uses, built with its
+  # layers cached in GitHub Actions, so the dependency layer is reused until
+  # Cargo.toml or Cargo.lock change. Runs alongside build-musl (ADR-079).
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      # Tagged as the image compose names, so `up --no-build` runs this build.
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile
+          load: true
+          tags: ghcr.io/ninjagoldfinch/riot-proxy:2
+          cache-from: type=gha,scope=dockerfile
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,scope=dockerfile,mode=max' || '' }}
       - name: docker compose up serves /healthz
         run: |
+          docker run --rm ghcr.io/ninjagoldfinch/riot-proxy:2 --version
           echo "RIOT_API_KEY=ci-dummy-key-not-a-riot-key" > .env
-          docker compose up -d --build --wait --wait-timeout 60 || true
+          docker compose up -d --no-build --wait --wait-timeout 60 || true
           for i in $(seq 1 30); do curl -fsS localhost:8080/healthz && break; sleep 1; done
           curl -fsS localhost:8080/healthz
           # P8 exit check: the compose stack on a clean runner serves /docs.
@@ -112,7 +147,7 @@ jobs:
           curl -fsS localhost:8080/openapi.json | grep -q '"openapi"'
           docker compose down
       - if: failure()
-        run: docker logs rp || true; docker compose logs || true
+        run: docker compose logs || true
 
   # OPS-02: the Proxmox dev VM kit. Not a required check (ADR-070).
   ops:

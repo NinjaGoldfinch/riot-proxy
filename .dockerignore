@@ -3,5 +3,5 @@
 /backups
 .env
 .git
-node_modules
+**/node_modules
 rust-toolchain.toml
