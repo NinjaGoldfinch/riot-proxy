@@ -38,6 +38,7 @@ usage: $0 --ssh-keys FILE | --generate-key [options]
   --generate-key       make a new ed25519 keypair for this VM in --key-dir
                        (with --ssh-keys, the VM accepts both)
   --key-dir DIR        where --generate-key writes <name>-<vmid>[.pub] (default: $key_dir)
+  --image-dir DIR      where the Debian image is cached (default: $image_dir)
   --vmid N             VM id (default: the cluster's next free id)
   --name NAME          VM name (default: $name)
   --storage ID         disk + cloud-init drive storage (default: $storage)
@@ -62,6 +63,7 @@ while [ $# -gt 0 ]; do
     --ssh-keys) ssh_keys=$2; shift ;;
     --generate-key) gen_key=1 ;;
     --key-dir) key_dir=$2; shift ;;
+    --image-dir) image_dir=$2; shift ;;
     --vmid) vmid=$2; shift ;;
     --name) name=$2; shift ;;
     --storage) storage=$2; shift ;;
@@ -136,6 +138,12 @@ else
   ipconfig="ip=$ip,gw=$gw"
 fi
 
+# Progress on stderr, real runs only; --dry-run output stays just the commands.
+step() { [ "$mode" = dry ] || echo "create-vm: $*" >&2; }
+
+# A progress bar for the image download when someone is watching.
+if [ -t 2 ]; then curl_progress=--progress-bar; else curl_progress=--silent; fi
+
 run() {
   if [ "$mode" = dry ]; then printf '%q ' "$@"; echo; else "$@"; fi
 }
@@ -153,11 +161,37 @@ fi
 snippet="riot-proxy-dev-$vmid.yaml"
 image="$image_dir/$(basename "$IMAGE_URL")"
 
-# A fresh keypair per VM, named after it, so no two VMs share a login key.
+# Fail before the download, not after it, if the key is already there.
+[ "$gen_key" = 0 ] || [ "$mode" = dry ] || [ ! -e "$key_dir/$name-$vmid" ] \
+  || die "$key_dir/$name-$vmid already exists; delete it (and .pub) or pass --key-dir"
+
+# Download (or refresh) the Debian cloud image and check it against Debian's SHA512SUMS.
+run mkdir -p "$image_dir"
+if [ -f "$image" ]; then
+  step "refreshing $image if Debian has a newer one"
+  run curl -fSL "$curl_progress" -z "$image" -o "$image" "$IMAGE_URL"
+else
+  step "downloading the Debian 13 cloud image (~400 MB) to $image"
+  run curl -fSL "$curl_progress" -o "$image" "$IMAGE_URL"
+fi
+if [ "$mode" = run ]; then
+  step "checking it against Debian's SHA512SUMS"
+  sum=$(curl -fsSL "$SUMS_URL" | awk -v f="$(basename "$IMAGE_URL")" '$2==f{print $1}')
+  [ -n "$sum" ] || die "no checksum for $(basename "$IMAGE_URL") in $SUMS_URL"
+  echo "$sum  $image" | sha512sum -c --quiet - || die "checksum mismatch for $image; delete it and retry"
+  snippet_path=$(pvesm path "$snippets:snippets/$snippet")
+  vendor_data > "$snippet_path"
+  echo "create-vm: wrote $snippet_path"
+else
+  echo "# vendor-data → $snippets:snippets/$snippet (see --print-vendor-data)"
+fi
+
+# A fresh keypair per VM, named after it, so no two VMs share a login key. Made after
+# the download so an interrupted download leaves no key behind to block a retry.
 keys_file=$ssh_keys
 if [ "$gen_key" = 1 ]; then
+  step "generating login key $key_dir/$name-$vmid"
   key="$key_dir/$name-$vmid"
-  [ "$mode" = dry ] || [ ! -e "$key" ] || die "$key already exists; delete it (and $key.pub) or pass --key-dir"
   run install -d -m 700 "$key_dir"
   run ssh-keygen -q -t ed25519 -N '' -C "$ciuser@$name-$vmid" -f "$key"
   if [ -n "$ssh_keys" ]; then
@@ -169,24 +203,7 @@ if [ "$gen_key" = 1 ]; then
   fi
 fi
 
-# Download (or refresh) the Debian cloud image and check it against Debian's SHA512SUMS.
-run mkdir -p "$image_dir"
-if [ -f "$image" ]; then
-  run curl -fsSL -z "$image" -o "$image" "$IMAGE_URL"
-else
-  run curl -fsSL -o "$image" "$IMAGE_URL"
-fi
-if [ "$mode" = run ]; then
-  sum=$(curl -fsSL "$SUMS_URL" | awk -v f="$(basename "$IMAGE_URL")" '$2==f{print $1}')
-  [ -n "$sum" ] || die "no checksum for $(basename "$IMAGE_URL") in $SUMS_URL"
-  echo "$sum  $image" | sha512sum -c --quiet - || die "checksum mismatch for $image; delete it and retry"
-  snippet_path=$(pvesm path "$snippets:snippets/$snippet")
-  vendor_data > "$snippet_path"
-  echo "create-vm: wrote $snippet_path"
-else
-  echo "# vendor-data → $snippets:snippets/$snippet (see --print-vendor-data)"
-fi
-
+step "creating VM $vmid ($name)"
 run qm create "$vmid" --name "$name" --ostype l26 --cpu host --cores "$cores" --memory "$memory" \
   --net0 "virtio,bridge=$bridge" --scsihw virtio-scsi-single --agent enabled=1 \
   --serial0 socket --vga serial0
@@ -197,25 +214,40 @@ run qm set "$vmid" --ciuser "$ciuser" --sshkeys "$keys_file" --ipconfig0 "$ipcon
   --cicustom "vendor=$snippets:snippets/$snippet"
 state="created (not started)"
 if [ "$start" = 1 ]; then
+  step "starting VM $vmid"
   run qm start "$vmid"
   state="created and booting"
 fi
 
-login="ssh $ciuser@<vm>"
+# With a static --ip the address is known; with DHCP the owner looks it up (step 1).
+if [ "$ip" = dhcp ]; then
+  addr="<vm-ip>"
+  find_ip="qm guest cmd $vmid network-get-interfaces | grep -o '\"ip-address\" : \"[0-9.]*\"' | grep -v 127.0.0.1
+                         (once the guest agent is up, ~1-2 min; then use that address as <vm-ip> below)"
+else
+  addr=${ip%/*}
+  find_ip="$addr"
+fi
+
+login="ssh $ciuser@$addr"
 if [ "$gen_key" = 1 ]; then
-  login="ssh -i ~/.ssh/$name-$vmid $ciuser@<vm>"
+  login="ssh -i $key $ciuser@$addr"
   cat <<EOF
-create-vm: login key for VM $vmid: $key (public: $key.pub)
-  Copy it to your machine:  scp root@$(hostname):$key ~/.ssh/$name-$vmid
-  then delete it here if you like: rm $key
+create-vm: login key for VM $vmid is $key (on this host; public half: $key.pub)
+  From this host:      $login
+  From another machine, copy the key over first:
+                       scp root@$(hostname):$key ~/.ssh/$name-$vmid && chmod 600 ~/.ssh/$name-$vmid
+                       ssh -i ~/.ssh/$name-$vmid $ciuser@$addr
+  Once copied, you can delete it here: rm $key
 EOF
 fi
 
 cat <<EOF
 create-vm: VM $vmid ($name) $state.
 Next:
-  1. Find its address:   qm guest cmd $vmid network-get-interfaces   (once the agent is up, ~1-2 min)
-  2. Set RIOT_API_KEY:   $login, then edit /opt/riot-proxy/.env
+  1. Its address:        $find_ip
+  2. Log in:             $login
+     and set RIOT_API_KEY in /opt/riot-proxy/.env
   3. Start it now:       sudo riot-proxy-update   (or wait; the timer runs every 2 minutes)
-  4. Open http://<vm>:8080/docs. The admin key is in: docker compose -f /opt/riot-proxy/compose.yaml logs
+  4. Open http://$addr:8080/docs. The admin key is in: docker compose -f /opt/riot-proxy/compose.yaml logs
 EOF
