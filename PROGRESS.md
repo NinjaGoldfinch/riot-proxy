@@ -219,8 +219,8 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 - [x] DEV-14 rune icons mirrored at `/ddragon/{v}/img/perk-images/…` from runesReforged.json; showcase scoreboard and match cards show keystone + secondary style and the champion level as a badge on the portrait; champion builds show rune icons (#103, design/07, design/11, ADR-086)
 - [x] DEV-15 fetched timelines are archived whatever `ARCHIVE_TIMELINES` says; the flag only makes archive jobs fetch them (#102, ADR-085)
 - [x] DEV-16 dashboard Recompute now: queue `aggregate:analytics` for a picked ladder from the Analytics recompute panel (#104, design/06, ADR-088)
+- [x] DEV-17 dashboard Ladder tab cleanup: one card per running crawl (stage bars and totals, the rest in a details fold), past crawls only below and paged by ten, job queue and analytics recompute folded, start form folded unless idle (#105, design/06, ADR-091)
 - [x] DEV-18 manual analytics recompute runs first: the route queues `aggregate:analytics` at priority 0 and lifts a rebuild already queued for the ladder, so the next free worker runs it on the matches archived so far (#106, design/06, ADR-090)
-- [ ] DEV-17 dashboard Ladder tab cleanup: one card per running crawl (stage bars and totals, the rest in a details fold), past crawls only below and paged by ten, job queue and analytics recompute folded, start form folded unless idle (design/06, ADR-089)
 
 ## SCH — scheduler fairness and an elastic pool (owner requests 2026-10-08/09)
 - [ ] SCH-01 rate-limit-aware job claims: one lane per limiter scope plus the job's main endpoint, claims skip a region only when its app limit is full (a capped endpoint blocks only jobs that use it), spread over free regions, rate-limited jobs yield their worker and re-queue without using an attempt (IMPLEMENTATION.md §Post-release — SCH)
