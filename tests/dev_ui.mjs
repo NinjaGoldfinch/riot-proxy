@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 const html = readFileSync(new URL('../src/ui/dev-ui.html', import.meta.url), 'utf8');
 const block = html.match(/\/\/ -{10} pure helpers[^\n]*\n([\s\S]*?)\/\/ -{10} end pure helpers/);
 assert.ok(block, 'the pure helpers block is marked in dev-ui.html');
-const h = new Function(`${block[1]}; return { PAGE_SIZES, MATCH_CALL_MAX, pageCalls, mergePages, pageSummary, queueIndex, scoreboard, walkStatus };`)();
+const h = new Function(`${block[1]}; return { PAGE_SIZES, MATCH_CALL_MAX, pageCalls, mergePages, pageSummary, queueIndex, scoreboard, walkStatus, archivePage, pageCount };`)();
 
 test('page sizes are 10, 25 and 50', () => assert.deepEqual(h.PAGE_SIZES, [10, 25, 50]));
 
@@ -89,12 +89,38 @@ test('the scoreboard splits a match-v5 body by team and marks the player', () =>
   assert.deepEqual(h.scoreboard({}, me), []);
 });
 
-test('walk status reads the player row and the walk jobs', () => {
+test('walk status reads the player row and the walk job counts', () => {
   const row = { historyBackfillStartedAt: '2026-10-08T00:00:00Z', historyBackfilledAt: null, historyBackfillDepth: 300 };
-  assert.equal(h.walkStatus(row, [{ state: 'running' }]).state, 'walking');
-  assert.equal(h.walkStatus(row, [{ state: 'pending' }]).state, 'queued');
-  assert.deepEqual(h.walkStatus(row, [{ state: 'failed' }]), { state: 'stopped', depth: 300, at: row.historyBackfillStartedAt });
-  assert.equal(h.walkStatus({ ...row, historyBackfilledAt: '2026-10-08T01:00:00Z' }, [{ state: 'done' }]).state, 'complete');
-  assert.equal(h.walkStatus({ historyBackfillStartedAt: null }, []).state, 'never');
-  assert.equal(h.walkStatus(undefined, []).state, 'unknown');
+  assert.equal(h.walkStatus(row, { running: 1, pending: 0 }).state, 'walking');
+  assert.equal(h.walkStatus(row, { running: 0, pending: 1 }).state, 'queued');
+  assert.deepEqual(h.walkStatus(row, { failed: 2 }), { state: 'stopped', depth: 300, at: row.historyBackfillStartedAt });
+  assert.equal(h.walkStatus({ ...row, historyBackfilledAt: '2026-10-08T01:00:00Z' }, { done: 1 }).state, 'complete');
+  assert.equal(h.walkStatus({ historyBackfillStartedAt: null }).state, 'never');
+  assert.equal(h.walkStatus(null, {}).state, 'unknown');
+});
+
+test('an archive page reads like a live page, with a known total', () => {
+  const res = { status: 200, json: { puuid: 'p', total: 3, start: 0, count: 2, matches: [
+    { matchId: 'KR_2', queueId: 420, gameEndTimestamp: 2, gameDuration: 1800, remake: false, championId: 134, position: 'MIDDLE', win: true, kills: 8, deaths: 6, assists: 14, cs: 206 },
+    { matchId: 'KR_1', queueId: 440, gameEndTimestamp: 1, gameDuration: null, remake: null, championId: 1, position: null, win: false, kills: null, deaths: null, assists: null, cs: null },
+  ] } };
+  const p = h.archivePage(res);
+  assert.equal(p.total, 3);
+  assert.equal(p.hasMore, true);
+  assert.deepEqual(p.matches.map((m) => m.matchId), ['KR_2', 'KR_1']);
+  assert.deepEqual(p.matches[0].player, { win: true, kills: 8, deaths: 6, assists: 14, totalMinionsKilled: 206, neutralMinionsKilled: 0, championId: 134, teamPosition: 'MIDDLE', gameEndedInEarlySurrender: false });
+  assert.equal(p.matches[1].player.kills, 0);
+  // The summary takes it as is; the game with no stored length stays out of CS/min.
+  const s = h.pageSummary(p.matches);
+  assert.deepEqual([s.wins, s.losses, s.csPerMin], [1, 1, 6.9]);
+  assert.equal(h.archivePage({ ...res, json: { ...res.json, start: 1 } }).hasMore, false);
+  const bad = { status: 403, json: { error: { code: 'FORBIDDEN' } } };
+  assert.equal(h.archivePage(bad).failed, bad);
+});
+
+test('page count is at least one', () => {
+  assert.equal(h.pageCount(0, 25), 1);
+  assert.equal(h.pageCount(25, 25), 1);
+  assert.equal(h.pageCount(26, 25), 2);
+  assert.equal(h.pageCount(912, 50), 19);
 });

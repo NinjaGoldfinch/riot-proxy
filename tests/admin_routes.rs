@@ -158,6 +158,8 @@ async fn every_admin_route_needs_the_admin_scope() {
         ("GET", "/v1/admin/tracked-players".to_string()),
         ("POST", "/v1/admin/tracked-players".to_string()),
         ("DELETE", format!("/v1/admin/tracked-players/{PUUID}")),
+        ("GET", format!("/v1/admin/players/{PUUID}/archive")),
+        ("GET", format!("/v1/admin/players/{PUUID}/archive/matches")),
         ("POST", "/v1/admin/cache/purge".to_string()),
         ("GET", "/v1/admin/stats".to_string()),
         ("GET", "/v1/admin/limits/euw1".to_string()),
@@ -556,6 +558,89 @@ async fn stats_count_the_archive_and_the_players() {
         )
     );
     assert!(s["archiveStoredBytes"].as_i64().unwrap() < s["archiveRawBytes"].as_i64().unwrap());
+}
+
+#[tokio::test]
+async fn a_players_archive_counts_everything_stored_without_calling_riot() {
+    let e = env().await;
+    let empty = e.get(&format!("/v1/admin/players/{PUUID}/archive")).await;
+    assert_eq!(empty.status, StatusCode::OK);
+    let j = empty.json();
+    assert_eq!(
+        (j["player"].clone(), j["archive"]["matches"].clone()),
+        (Value::Null, json!(0))
+    );
+    assert_eq!(
+        j["jobs"]["archive:match"],
+        json!({"pending": 0, "running": 0, "done": 0, "failed": 0})
+    );
+    assert_eq!(j["jobs"]["backfill:player"]["pending"], 0);
+
+    e.get(&format!("/v1/lol/matches/asia/{MATCH_ID}")).await;
+    e.post(
+        "/v1/admin/tracked-players",
+        json!({"platform": "kr", "gameName": "Hide on bush", "tagLine": "KR1"}),
+    )
+    .await;
+    let before = e.upstream_calls().await;
+
+    let j = e.get(&format!("/v1/admin/players/{PUUID}/archive")).await.json();
+    assert_eq!(j["puuid"], PUUID);
+    assert_eq!(j["keyScope"], e.state.fetcher.key_scope().as_str());
+    assert_eq!(j["player"]["tracked"], true);
+    assert_eq!(
+        j["archive"],
+        json!({
+            "matches": 1, "remakes": 0, "wins": 1, "timelines": 0,
+            "oldestGameEnd": "2026-09-24T11:00:23.902Z", "newestGameEnd": "2026-09-24T11:00:23.902Z",
+            "byQueue": [{"queueId": 420, "matches": 1}]
+        })
+    );
+    // Tracking queued this player's history walk.
+    assert_eq!(j["jobs"]["backfill:player"]["pending"], 1);
+    assert_eq!(j["latestJobs"][0]["kind"], "backfill:player");
+
+    let page = e
+        .get(&format!("/v1/admin/players/{PUUID}/archive/matches?count=10"))
+        .await
+        .json();
+    assert_eq!(
+        page,
+        json!({
+            "puuid": PUUID, "total": 1, "start": 0, "count": 10,
+            "matches": [{
+                "matchId": MATCH_ID, "queueId": 420, "gameEndTimestamp": 1_790_247_623_902_i64,
+                "gameDuration": 1682, "remake": false, "championId": 134, "position": "MIDDLE",
+                "win": true, "kills": 8, "deaths": 6, "assists": 14, "cs": 206
+            }]
+        })
+    );
+    let other_queue = e
+        .get(&format!("/v1/admin/players/{PUUID}/archive/matches?queue=440"))
+        .await
+        .json();
+    assert_eq!(
+        (other_queue["total"].clone(), other_queue["matches"].clone()),
+        (json!(0), json!([]))
+    );
+    assert_eq!(e.upstream_calls().await, before, "archive reads never call Riot");
+}
+
+#[tokio::test]
+async fn a_players_archive_validates_its_input() {
+    let e = env().await;
+    for uri in [
+        "/v1/admin/players/short/archive".to_string(),
+        "/v1/admin/players/short/archive/matches".to_string(),
+        format!("/v1/admin/players/{PUUID}/archive/matches?count=0"),
+        format!("/v1/admin/players/{PUUID}/archive/matches?count=101"),
+        format!("/v1/admin/players/{PUUID}/archive/matches?start=-1"),
+        format!("/v1/admin/players/{PUUID}/archive/matches?queue=x"),
+    ] {
+        let r = e.get(&uri).await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{uri}");
+        assert_eq!(r.json()["error"]["code"], "VALIDATION", "{uri}");
+    }
 }
 
 #[tokio::test]

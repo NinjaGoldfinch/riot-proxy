@@ -16,6 +16,10 @@ dev *ARGS:
 test *ARGS:
     cargo test {{ARGS}}
 
+# The dev explorer page in jsdom against a fake API (needs node)
+ui-test:
+    cd tests/dom && npm ci --no-audit --no-fund && npm test
+
 # rustfmt check + clippy with warnings as errors (what CI runs)
 lint:
     cargo fmt --all --check

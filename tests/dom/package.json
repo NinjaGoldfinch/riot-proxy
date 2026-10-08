@@ -1,0 +1,12 @@
+{
+  "name": "riot-proxy-dom-tests",
+  "private": true,
+  "type": "module",
+  "description": "The dev explorer page (src/ui/dev-ui.html) driven in jsdom against a fake API (DEV-03)",
+  "scripts": {
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "jsdom": "^25.0.1"
+  }
+}

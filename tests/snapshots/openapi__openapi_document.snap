@@ -1,5 +1,6 @@
 ---
 source: tests/openapi.rs
+assertion_line: 12
 expression: doc
 ---
 {
@@ -71,6 +72,180 @@ expression: doc
         "required": [
           "lastRuns",
           "topChampions"
+        ],
+        "type": "object"
+      },
+      "ArchiveTotals": {
+        "description": "What the archive holds for one player: exact counts from `match_facts`.",
+        "properties": {
+          "byQueue": {
+            "description": "Most matches first.",
+            "items": {
+              "$ref": "#/components/schemas/QueueCount"
+            },
+            "type": "array"
+          },
+          "matches": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "newestGameEnd": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "oldestGameEnd": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "remakes": {
+            "description": "Matches Riot flagged as remakes; counted in `matches`.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "timelines": {
+            "description": "Of `matches`, how many also have a stored timeline.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "wins": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "matches",
+          "remakes",
+          "wins",
+          "timelines",
+          "oldestGameEnd",
+          "newestGameEnd",
+          "byQueue"
+        ],
+        "type": "object"
+      },
+      "ArchivedLine": {
+        "description": "The player's line in one archived match.",
+        "properties": {
+          "assists": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "championId": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "cs": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "deaths": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "gameDuration": {
+            "description": "Seconds.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "gameEndTimestamp": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "kills": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "matchId": {
+            "type": "string"
+          },
+          "position": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "queueId": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "remake": {
+            "description": "Null until the match's facts have been re-extracted (V0005).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "win": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "matchId",
+          "queueId",
+          "gameEndTimestamp",
+          "gameDuration",
+          "remake",
+          "championId",
+          "position",
+          "win",
+          "kills",
+          "deaths",
+          "assists",
+          "cs"
+        ],
+        "type": "object"
+      },
+      "ArchivedPage": {
+        "description": "`GET /v1/admin/players/{puuid}/archive/matches`.",
+        "properties": {
+          "count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "matches": {
+            "items": {
+              "$ref": "#/components/schemas/ArchivedLine"
+            },
+            "type": "array"
+          },
+          "puuid": {
+            "type": "string"
+          },
+          "start": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "total": {
+            "description": "Every archived match for this player and filter, not just this page.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "puuid",
+          "total",
+          "start",
+          "count",
+          "matches"
         ],
         "type": "object"
       },
@@ -1484,6 +1659,57 @@ expression: doc
         },
         "type": "object"
       },
+      "PlayerArchive": {
+        "description": "`GET /v1/admin/players/{puuid}/archive`.",
+        "properties": {
+          "archive": {
+            "$ref": "#/components/schemas/ArchiveTotals"
+          },
+          "jobs": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/StateCounts"
+            },
+            "description": "This player's `archive:match` and `backfill:player` jobs by state. Uncapped;\n`done` rows are kept for seven days.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "keyScope": {
+            "type": "string"
+          },
+          "latestJobs": {
+            "description": "The newest job of each of those kinds, if any.",
+            "items": {
+              "$ref": "#/components/schemas/JobSummary"
+            },
+            "type": "array"
+          },
+          "player": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PlayerRecord",
+                "description": "The player's row; null if they were never looked up or tracked under this key."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "puuid": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "puuid",
+          "keyScope",
+          "player",
+          "archive",
+          "jobs",
+          "latestJobs"
+        ],
+        "type": "object"
+      },
       "PlayerChampionEntry": {
         "description": "One champion in a player's pool.",
         "properties": {
@@ -2004,6 +2230,24 @@ expression: doc
         "required": [
           "puuid",
           "platform"
+        ],
+        "type": "object"
+      },
+      "QueueCount": {
+        "description": "Archived matches in one queue.",
+        "properties": {
+          "matches": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "queueId": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "queueId",
+          "matches"
         ],
         "type": "object"
       },
@@ -4586,6 +4830,202 @@ expression: doc
           }
         },
         "summary": "Fill in player Riot IDs from the archive",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/admin/players/{puuid}/archive": {
+      "get": {
+        "description": "Exact counts of what the archive holds for one player under the current `keyScope` (every archived match they played in, by queue, with the date range), their row's history-walk state, and their `archive:match` / `backfill:player` jobs by state. Nothing is capped.",
+        "operationId": "player_archive",
+        "parameters": [
+          {
+            "description": "Encrypted player UUID",
+            "in": "path",
+            "name": "puuid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlayerArchive"
+                }
+              }
+            },
+            "description": "The player's archive"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          }
+        },
+        "summary": "One player's archive and backfill",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/admin/players/{puuid}/archive/matches": {
+      "get": {
+        "description": "Their line in every archived match, newest first, from `match_facts`: no Riot call, no quota. `total` counts all of them for the filter.",
+        "operationId": "player_archive_matches",
+        "parameters": [
+          {
+            "description": "Encrypted player UUID",
+            "in": "path",
+            "name": "puuid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "0–1000000, default 0",
+            "in": "query",
+            "name": "start",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "1–100, default 25",
+            "in": "query",
+            "name": "count",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Queue id, 0–5000",
+            "in": "query",
+            "name": "queue",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArchivedPage"
+                }
+              }
+            },
+            "description": "The page"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          }
+        },
+        "summary": "One player's archived matches",
         "tags": [
           "admin"
         ]
