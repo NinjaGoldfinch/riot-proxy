@@ -105,7 +105,7 @@ CREATE TABLE matches (
 CREATE INDEX matches_patch_queue ON matches(patch, queue_id);
 CREATE INDEX matches_end        ON matches(game_end_ms);
 
-CREATE TABLE timelines (                          -- ARCHIVE_TIMELINES=true only
+CREATE TABLE timelines (                          -- every fetched timeline whose match is archived
   match_id  TEXT PRIMARY KEY REFERENCES matches(match_id),
   body_zstd BLOB NOT NULL
 );

@@ -39,7 +39,6 @@ pub fn app_with(env: &[(&str, &str)], upstream: &str) -> (tempfile::TempDir, App
     let archive = riot_proxy::archive::SqliteArchive::new(
         db.clone(),
         riot_proxy::cache::keys::KeyScope::from_key(&config.riot_api_key),
-        config.archive_timelines,
     );
     let fetcher = fetcher(
         &config,

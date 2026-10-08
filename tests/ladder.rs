@@ -707,11 +707,7 @@ impl Env {
     fn all_handlers(&self) -> Registry {
         let config = common::config(&[]);
         let key = KeyScope::from_key(&config.riot_api_key);
-        let archive = Arc::new(riot_proxy::archive::SqliteArchive::new(
-            self.db.clone(),
-            key,
-            false,
-        ));
+        let archive = Arc::new(riot_proxy::archive::SqliteArchive::new(self.db.clone(), key));
         let fetcher = common::fetcher(
             &config,
             &self.server.uri(),

@@ -965,6 +965,12 @@ Accepted (owner request, task DEV-12). Design/11 §Principles.
 - **Real images at Data Dragon's sizes** (champion 120, item and spell 64, profile icon 128), generated in the test as PNGs. A layout bug that needs a loaded image can't hide behind a 404 again.
 - **What is checked is geometry, not pixels:** icon sizes, overflow, line counts, overlap, cell display, tooltip bounds, at three widths. A screenshot diff would break on every font and patch change; these checks only break when the layout does. Screenshots are still uploaded as a CI artifact for a human look.
 
+## ADR-085 — Fetched timelines are always archived (2026-10-09)
+Accepted (owner request, task DEV-15). Amends ADR-040; design/04 §Schema.
+- **Owner request:** "timeline data isn't being cached … it should be cached once it's fetched (it's immutable, like other match endpoints) so can be archived forever." With `ARCHIVE_TIMELINES` off (the default) a timeline was neither archived nor cached: immutable endpoints have no L1 TTL, so every request went to Riot (`X-Cache: MISS`).
+- **Every timeline fetched from Riot is archived**, through the API or a job, whatever `ARCHIVE_TIMELINES` says. The flag now only decides whether archive jobs (`archive:match`, poll, ladder crawls) also fetch timelines, which is how v1 used it. Timelines are still not fetched automatically.
+- **Unchanged:** a timeline is stored only once its match is archived (the `timelines → matches` foreign key, ADR-040). One fetched before its match is served but not stored, and is stored on the next fetch after the match is archived.
+
 ## ADR-087 — Dashboard crawl activity: the queue in claim order, and one view per crawl (2026-10-09)
 Accepted (owner request, task DEV-13). Design/06 §Activity views.
 - **Owner request:** "For the history for ladder crawls, and running events, allow it to be interactable and allow to see what is running currently and what is running next. Also show the status of it as well, where it is in the fetch and any other useful data."

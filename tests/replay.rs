@@ -118,11 +118,7 @@ async fn harness(scenario: &str) -> (Harness, Vec<Exchange>) {
     let limiter = Arc::new(Limiter::new(0.8));
     let dir = tempfile::tempdir().unwrap();
     let db = Db::open(&dir.path().join("riot-proxy.db"), 2).unwrap();
-    let archive = Arc::new(SqliteArchive::new(
-        db,
-        KeyScope::from_key(&config.riot_api_key),
-        false,
-    ));
+    let archive = Arc::new(SqliteArchive::new(db, KeyScope::from_key(&config.riot_api_key)));
     let fetcher = common::fetcher(&config, &server.uri(), Arc::clone(&limiter), Some(archive));
     (
         Harness {

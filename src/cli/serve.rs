@@ -104,7 +104,6 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         archive: Arc::new(SqliteArchive::new(
             db.clone(),
             KeyScope::from_key(&config.riot_api_key),
-            config.archive_timelines,
         )),
         scope: KeyScope::from_key(&config.riot_api_key),
         policy,
