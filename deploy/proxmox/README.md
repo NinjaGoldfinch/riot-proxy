@@ -24,10 +24,10 @@ cd riot-proxy-main/deploy/proxmox
 
 `--generate-key` writes an ed25519 keypair (no passphrase) to
 `/root/.ssh/riot-proxy/<name>-<vmid>` on the host, so every VM gets its own login key.
-Copy the private key to your machine and log in with `ssh -i`; the script prints both
-commands. Add `--ssh-keys` as well to let your usual key in too. It refuses to
-overwrite an existing key: on a rebuild, delete the old one first or the VM gets no
-new key. Each VM's SSH *host* keys are already unique; cloud-init makes them on first boot.
+On the host, log in with that full path (`ssh -i /root/.ssh/riot-proxy/<name>-<vmid> riot@<vm-ip>`).
+To log in from your own machine, `scp` the file to its `~/.ssh/` and `chmod 600` it.
+The script prints both commands. Add `--ssh-keys` as well to let your usual key in too.
+It refuses to overwrite an existing key, so on a rebuild delete the old one first. Each VM's SSH *host* keys are already unique; cloud-init makes them on first boot.
 
 `./create-vm.sh --help` lists the options: storage (`local-lvm`), bridge (`vmbr0`),
 2 cores, 2 GB RAM and a 16 GB disk by default. `--dry-run` prints the `qm` commands
@@ -37,7 +37,8 @@ First boot installs Docker and takes a few minutes. Then:
 
 ```bash
 qm guest cmd <vmid> network-get-interfaces     # its address
-ssh riot@<vm>
+ssh riot@<vm-ip>                               # <vm-ip> is the address above
+# with --generate-key: ssh -i /root/.ssh/riot-proxy/riot-proxy-dev-<vmid> riot@<vm-ip>
 nano /opt/riot-proxy/.env                      # set RIOT_API_KEY=
 sudo riot-proxy-update                         # start now instead of waiting for the timer
 docker compose -f /opt/riot-proxy/compose.yaml logs | grep -i "admin key"   # the bootstrap admin key, shown once

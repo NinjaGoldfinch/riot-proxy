@@ -39,13 +39,17 @@ cd riot-proxy-main/deploy/proxmox
 # or: ./create-vm.sh --generate-key                        # a new login keypair just for this VM
 ```
 
-`--generate-key` writes the keypair to `/root/.ssh/riot-proxy/<name>-<vmid>` on the host and prints how to copy it to your machine; log in with `ssh -i`.
+`--generate-key` writes the keypair to `/root/.ssh/riot-proxy/<name>-<vmid>` on the host and prints the exact `ssh -i` commands for logging in from the host and from your own machine.
 
 Docker is installed on first boot, which takes a few minutes. Then:
 
 ```bash
 qm guest cmd <vmid> network-get-interfaces     # its address
-ssh riot@<vm>                                  # or: ssh -i ~/.ssh/riot-proxy-dev-<vmid> riot@<vm>
+ssh riot@<vm-ip>                               # <vm-ip> is the address above, e.g. 192.168.68.46
+# with --generate-key, from the Proxmox host:
+#   ssh -i /root/.ssh/riot-proxy/riot-proxy-dev-<vmid> riot@<vm-ip>
+# or from your laptop, after scp-ing that file to ~/.ssh/ and chmod 600:
+#   ssh -i ~/.ssh/riot-proxy-dev-<vmid> riot@<vm-ip>
 nano /opt/riot-proxy/.env                      # set RIOT_API_KEY=
 sudo riot-proxy-update                         # start now instead of waiting for the timer
 docker compose -f /opt/riot-proxy/compose.yaml logs | grep -i "admin key"   # the bootstrap admin key, shown once
