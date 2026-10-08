@@ -31,7 +31,6 @@ use crate::riot::endpoints::Endpoint;
 use crate::riot::ladder::{
     APEX_TIERS, DIVISIONS, PAGED_TIERS, RANKED_QUEUES, apex_endpoint, tiers_at_or_above,
 };
-use crate::riot::limiter::Priority;
 use crate::riot::routing::Platform;
 use crate::routes::passthrough::request;
 use crate::ws::Hub;
@@ -55,7 +54,8 @@ pub mod order {
     pub const MATCH: i64 = BACKFILL + 5;
 }
 
-/// Pages a walk covers between checks that its crawl is still running (v1).
+/// Pages a walk covers per turn: it then re-queues itself (SCH-01), and checks
+/// its crawl is still running when it comes back (v1's cancel check).
 const CANCEL_CHECK_PAGES: u32 = 10;
 
 pub struct LadderContext {
@@ -319,8 +319,9 @@ pub async fn enqueue_crawl(queue: &Queue, platform: &str, ladder: &str) -> Resul
     Ok(queue.enqueue(job).await?.created)
 }
 
+/// A fetch failure: retried with backoff, or a yield when the limiter has no room.
 fn retry(e: &FetchError) -> JobError {
-    JobError::Retry(format!("{}: {}", e.api.code.as_str(), e.api.message))
+    JobError::from_fetch(e)
 }
 
 fn store_err(e: &dyn std::fmt::Display) -> JobError {
@@ -383,14 +384,10 @@ impl LadderContext {
         query: &[(&str, Option<String>)],
     ) -> Result<bytes::Bytes, FetchError> {
         let target = Endpoint::by_id(id).map(|e| e.target_for_platform(platform));
-        let req = request(id, target, params, query).map_err(|api| FetchError { api, x_cache: None })?;
-        let opts = FetchOptions {
-            // The bulk budget (15 min) is the generous wait v1 gave ladder
-            // pages: a crawl has nowhere else to be.
-            priority: Priority::Bulk,
-            bypass: false,
-        };
-        self.fetcher.fetch(req, opts).await.map(|r| r.body)
+        let req = request(id, target, params, query).map_err(FetchError::from)?;
+        // v1 waited up to 15 min for a ladder page. A job now waits only
+        // `JOB_YIELD_BUDGET_MS` and gives its worker to another lane (SCH-01).
+        self.fetcher.fetch(req, FetchOptions::JOB).await.map(|r| r.body)
     }
 
     async fn running(&self, crawl_id: &str) -> Result<Option<Crawl>, JobError> {
@@ -439,7 +436,8 @@ impl LadderContext {
 
     /// One (tier, division), page by page until an empty one: a short page is
     /// not the end, the ladder churns under the walk (v1). Resumes on the page
-    /// after the last one stored.
+    /// after the last one stored, which is also how it comes back after
+    /// yielding to the limiter or taking turns every `CANCEL_CHECK_PAGES`.
     pub async fn walk(&self, job: &Job) -> Result<(), JobError> {
         let leg: LegJob = job.payload()?;
         let result = self.walk_leg(&leg).await;
@@ -463,8 +461,13 @@ impl LadderContext {
         let mut page = cursor.unwrap_or(1).max(1);
         let mut walked = 0u32;
         loop {
+            if walked > 0 && walked.is_multiple_of(CANCEL_CHECK_PAGES) {
+                // Take turns (SCH-01): back in the queue behind any
+                // higher-priority work, resuming at the stored cursor.
+                return Err(JobError::take_turns());
+            }
             // A running job cannot be taken back, so a long walk asks (v1).
-            if walked.is_multiple_of(CANCEL_CHECK_PAGES) && self.running(&leg.crawl_id).await?.is_none() {
+            if walked == 0 && self.running(&leg.crawl_id).await?.is_none() {
                 tracing::info!(crawl = %leg.crawl_id, leg = %name, page, "ladder walk stopping; crawl is not running");
                 return Ok(());
             }
@@ -532,6 +535,8 @@ impl LadderContext {
     ) -> Result<(), JobError> {
         let failed = match &result {
             Ok(()) => false,
+            // Runs again: a yield when the limiter has room, a retry after backoff.
+            Err(JobError::Yield { .. }) => return result,
             Err(JobError::Retry(_)) if job.attempts < MAX_ATTEMPTS => return result,
             Err(_) => true,
         };
@@ -559,7 +564,8 @@ impl LadderContext {
         let queue_id = crate::riot::ladder::queue_id(&batch.queue)
             .ok_or_else(|| JobError::Fail(format!("'{}' is not a ranked queue", batch.queue)))?;
         let mut new_ids = 0;
-        for puuid in &batch.puuids {
+        let mut outcome = Ok(());
+        for (done, puuid) in batch.puuids.iter().enumerate() {
             // Per player: a player is one or two requests (v1).
             if self.running(&batch.crawl_id).await?.is_none() {
                 tracing::info!(crawl = %batch.crawl_id, "ladder collect stopping; crawl is not running");
@@ -569,10 +575,28 @@ impl LadderContext {
             store::mark_walk_started(self.db(), &self.key_scope, puuid, now)
                 .await
                 .map_err(|e| store_err(&e))?;
-            new_ids += self
-                .collect_one(&batch.crawl_id, platform, queue_id, puuid)
-                .await?;
+            match self.collect_one(&batch.crawl_id, platform, queue_id, puuid).await {
+                Ok(n) => new_ids += n,
+                // Re-queued with only the players still to do, this one
+                // first (its ids so far are in the set; re-adding is a no-op).
+                Err(JobError::Yield { retry_at, .. }) => {
+                    let rest = CollectJob {
+                        puuids: batch.puuids[done..].to_vec(),
+                        ..batch.clone()
+                    };
+                    outcome = Err(JobError::Yield {
+                        retry_at,
+                        payload: serde_json::to_string(&rest).ok(),
+                    });
+                    break;
+                }
+                Err(e) => {
+                    outcome = Err(e);
+                    break;
+                }
+            }
         }
+        // Counted whether or not the batch got to the end: the ids are in.
         if new_ids > 0 {
             let crawl = batch.crawl_id.clone();
             self.db()
@@ -583,7 +607,7 @@ impl LadderContext {
                 "platform" => batch.platform.clone(), "queue" => batch.queue.clone())
             .increment(u64::try_from(new_ids).unwrap_or(0));
         }
-        Ok(())
+        outcome
     }
 
     /// One player's ranked ids for this ladder's queue, up to
@@ -613,12 +637,8 @@ impl LadderContext {
                     ("queue", Some(queue_id.to_string())),
                 ],
             )
-            .map_err(|api| retry(&FetchError { api, x_cache: None }))?;
-            let opts = FetchOptions {
-                priority: Priority::Bulk,
-                bypass: false,
-            };
-            let ids: Vec<String> = match self.fetcher.fetch(req, opts).await {
+            .map_err(|api| retry(&api.into()))?;
+            let ids: Vec<String> = match self.fetcher.fetch(req, FetchOptions::JOB).await {
                 Ok(r) => serde_json::from_slice(&r.body).unwrap_or_default(),
                 Err(e) if e.api.code == ErrorCode::NotFound => {
                     tracing::warn!(%puuid, "ladder collect skipping a player match-v5 does not know");

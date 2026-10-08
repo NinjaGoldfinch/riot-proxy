@@ -346,3 +346,303 @@ async fn enqueue_or_promote_lifts_a_pending_duplicate_and_leaves_a_running_one()
             .created
     );
 }
+
+// ── SCH-01: rate-limit-aware claims ─────────────────────────────────────────
+
+mod lanes {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use serde_json::json;
+
+    use super::*;
+    use crate::riot::limiter::Limiter;
+    use crate::riot::limiter::headers::LimitWindow;
+
+    fn limited(db: &Db) -> (Scheduler, Arc<Limiter>) {
+        let limiter = Arc::new(Limiter::new(0.8));
+        (sched(db).with_limiter(Arc::clone(&limiter)), limiter)
+    }
+
+    /// `scope`'s app limit used up for two minutes.
+    async fn fill(limiter: &Limiter, scope: &str) {
+        limiter.configure_app(
+            scope,
+            &[LimitWindow {
+                limit: 1,
+                seconds: 120,
+            }],
+        );
+        limiter
+            .acquire(
+                scope,
+                "x",
+                crate::riot::limiter::Priority::Interactive,
+                Duration::ZERO,
+            )
+            .await
+            .unwrap();
+    }
+
+    fn walk(platform: &str, division: &str) -> NewJob {
+        NewJob::new(
+            "ladder:walk",
+            20_002,
+            json!({"crawlId": "c", "platform": platform, "queue": "RANKED_SOLO_5x5", "tier": "DIAMOND", "division": division}),
+        )
+    }
+
+    fn apex(platform: &str) -> NewJob {
+        NewJob::new(
+            "ladder:apex",
+            20_002,
+            json!({"crawlId": "c", "platform": platform, "queue": "RANKED_SOLO_5x5", "tier": "MASTER"}),
+        )
+    }
+
+    fn rank_poll(platform: &str) -> NewJob {
+        NewJob::new("poll:rank", 10_000, json!({"puuid": "p", "platform": platform}))
+    }
+
+    fn lane_of(job: &Job) -> String {
+        let payload: serde_json::Value = serde_json::from_str(&job.payload).unwrap();
+        payload["platform"].as_str().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn only_our_own_limiter_running_out_yields() {
+        use crate::fetcher::FetchError;
+        use crate::http::ApiError;
+        use crate::riot::limiter::RateLimited;
+
+        let at = tokio::time::Instant::now() + Duration::from_secs(30);
+        let ours = FetchError::from(RateLimited { retry_at: at });
+        assert_eq!(ours.api.code, crate::http::ErrorCode::RateLimited);
+        match JobError::from_fetch(&ours) {
+            JobError::Yield { retry_at, payload } => {
+                let expect = Clock::now().unix_ms + 30_000;
+                assert!((retry_at - expect).abs() < 1_000, "{retry_at} vs {expect}");
+                assert_eq!(payload, None);
+            }
+            other => panic!("{other:?}"),
+        }
+        // Riot's own 429 (a service limit with no type) is a real failure:
+        // retried with backoff, and it counts.
+        let riot = FetchError::from(ApiError::rate_limited(5));
+        assert!(matches!(JobError::from_fetch(&riot), JobError::Retry(_)));
+    }
+
+    #[tokio::test]
+    async fn enqueue_stamps_the_lane_and_method() {
+        let (_d, db) = db();
+        let s = sched(&db);
+        let id = s.enqueue(walk("na1", "I")).await.unwrap().id;
+        let none = s
+            .enqueue(NewJob::new("maintenance", 30_000, json!({})))
+            .await
+            .unwrap()
+            .id;
+        let read = |id: String| {
+            db.read(move |c| {
+                c.query_row("SELECT lane, method FROM jobs WHERE id = ?1", [id], |r| {
+                    Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?))
+                })
+                .map_err(DbError::from)
+            })
+        };
+        assert_eq!(
+            read(id).await.unwrap(),
+            (Some("na1".into()), Some("league.entriesByTier".into()))
+        );
+        assert_eq!(read(none).await.unwrap(), (None, None));
+    }
+
+    #[tokio::test]
+    async fn a_blocked_lane_is_skipped_for_a_free_one_even_if_older() {
+        let (_d, db) = db();
+        let (s, limiter) = limited(&db);
+        s.enqueue(walk("na1", "I")).await.unwrap();
+        s.enqueue(walk("na1", "II")).await.unwrap();
+        s.enqueue(walk("euw1", "I")).await.unwrap();
+        fill(&limiter, "na1").await;
+
+        let job = s.claim(i64::MAX).await.unwrap().unwrap();
+        assert_eq!(lane_of(&job), "euw1");
+        assert!(
+            s.claim(i64::MAX).await.unwrap().is_none(),
+            "na1's rows wait for its limit"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_capped_method_blocks_only_its_own_jobs_on_the_lane() {
+        let (_d, db) = db();
+        let (s, limiter) = limited(&db);
+        let capped = s.enqueue(walk("na1", "I")).await.unwrap().id;
+        let other = s.enqueue(apex("na1")).await.unwrap().id;
+        let elsewhere = s.enqueue(walk("euw1", "I")).await.unwrap().id;
+        limiter.configure_method(
+            "na1",
+            "league.entriesByTier",
+            &[LimitWindow {
+                limit: 1,
+                seconds: 120,
+            }],
+        );
+        limiter
+            .acquire(
+                "na1",
+                "league.entriesByTier",
+                crate::riot::limiter::Priority::Interactive,
+                Duration::ZERO,
+            )
+            .await
+            .unwrap();
+
+        // na1's app limit is free: its apex (another method) runs first,
+        // though the capped walk is older and euw1 is just as idle.
+        assert_eq!(s.claim(i64::MAX).await.unwrap().unwrap().id, other);
+        assert_eq!(s.claim(i64::MAX).await.unwrap().unwrap().id, elsewhere);
+        assert!(s.claim(i64::MAX).await.unwrap().is_none());
+        assert_eq!(state(&db, &capped).await.0, "pending");
+    }
+
+    #[tokio::test]
+    async fn a_free_lower_band_beats_a_blocked_higher_one_and_bands_still_rank() {
+        let (_d, db) = db();
+        let (s, limiter) = limited(&db);
+        s.enqueue(rank_poll("kr")).await.unwrap();
+        let walk_na1 = s.enqueue(walk("na1", "I")).await.unwrap().id;
+        let poll_na1 = s.enqueue(rank_poll("na1")).await.unwrap().id;
+        fill(&limiter, "kr").await;
+
+        // The free 10 000 beats the free 20 000.
+        assert_eq!(s.claim(i64::MAX).await.unwrap().unwrap().id, poll_na1);
+        // Then the free 20 000 beats the blocked 10 000: a worker never idles
+        // while there is work it can do.
+        assert_eq!(s.claim(i64::MAX).await.unwrap().unwrap().id, walk_na1);
+        assert!(s.claim(i64::MAX).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn the_first_claims_of_three_crawls_cover_all_three_platforms() {
+        let (_d, db) = db();
+        let s = sched(&db);
+        let q = s.queue().clone();
+        for platform in ["na1", "euw1", "kr"] {
+            let req = crate::jobs::ladder::CrawlRequest {
+                platform: platform.into(),
+                queue: "RANKED_SOLO_5x5".into(),
+                tier_floor: Some("DIAMOND".into()),
+            };
+            crate::jobs::ladder::start_crawl(&q, "s", "MASTER", &req)
+                .await
+                .unwrap();
+        }
+        let mut first: Vec<String> = Vec::new();
+        for _ in 0..3 {
+            first.push(lane_of(&s.claim(i64::MAX).await.unwrap().unwrap()));
+        }
+        first.sort();
+        assert_eq!(first, ["euw1", "kr", "na1"], "na1's 7 legs were queued first");
+        // Then each lane's second job, before any third.
+        let mut next: Vec<String> = Vec::new();
+        for _ in 0..3 {
+            next.push(lane_of(&s.claim(i64::MAX).await.unwrap().unwrap()));
+        }
+        next.sort();
+        assert_eq!(next, ["euw1", "kr", "na1"]);
+    }
+
+    #[tokio::test]
+    async fn a_yield_returns_the_attempt_keeps_the_error_and_can_resume() {
+        let (_d, db) = db();
+        let s = sched(&db);
+        let id = s.enqueue(walk("na1", "I")).await.unwrap().id;
+        let job = s.claim(i64::MAX).await.unwrap().unwrap();
+        s.finish(&job, &Err(JobError::Retry("boom".into())), 1)
+            .await
+            .unwrap();
+        let job = s.claim(i64::MAX).await.unwrap().unwrap();
+        assert_eq!(job.attempts, 2);
+
+        let yielded = Err(JobError::Yield {
+            retry_at: 5_000,
+            payload: Some(r#"{"resume":true}"#.into()),
+        });
+        s.finish(&job, &yielded, 2).await.unwrap();
+        assert_eq!(
+            state(&db, &id).await,
+            ("pending".into(), 1, 5_000, Some("boom".into()))
+        );
+        assert!(s.claim(4_999).await.unwrap().is_none(), "not before retry_at");
+        let again = s.claim(5_000).await.unwrap().unwrap();
+        assert_eq!(
+            (again.attempts, again.payload.as_str()),
+            (2, r#"{"resume":true}"#)
+        );
+
+        // Without a payload the job keeps its own; yields never use up attempts.
+        for _ in 0..(MAX_ATTEMPTS * 2) {
+            let yielded = Err(JobError::Yield {
+                retry_at: 5_000,
+                payload: None,
+            });
+            s.finish(&again, &yielded, 5_000).await.unwrap();
+            s.claim(5_000).await.unwrap().unwrap();
+        }
+        assert_eq!(state(&db, &id).await.1, 2);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_idle_worker_sleeps_until_a_lane_frees_or_a_delayed_row_is_due() {
+        let (_d, db) = db();
+        let (s, limiter) = limited(&db);
+        assert_eq!(s.idle_for().await, IDLE_POLL, "nothing to wait for");
+
+        fill(&limiter, "na1").await;
+        let blocked = s.idle_for().await;
+        assert!(
+            blocked > Duration::from_secs(119) && blocked <= Duration::from_secs(120),
+            "{blocked:?}"
+        );
+
+        let mut soon = rank_poll("euw1");
+        soon.run_after = Some(Clock::now().unix_ms + 2_000);
+        s.enqueue(soon).await.unwrap();
+        let due = s.idle_for().await;
+        assert!(
+            due > Duration::from_millis(1_000) && due <= Duration::from_millis(2_000),
+            "{due:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rows_queued_before_lanes_get_theirs_at_boot() {
+        let (_d, db) = db();
+        let s = sched(&db);
+        let walk_id = s.enqueue(walk("kr", "I")).await.unwrap().id;
+        let done_id = s.enqueue(apex("kr")).await.unwrap().id;
+        s.enqueue(NewJob::new("maintenance", 30_000, json!({})))
+            .await
+            .unwrap();
+        let ids = (walk_id.clone(), done_id.clone());
+        db.write(move |c| {
+            c.execute("UPDATE jobs SET lane = NULL, method = NULL", [])?;
+            c.execute("UPDATE jobs SET state = 'done' WHERE id = ?1", [ids.1])?;
+            Ok::<_, DbError>(())
+        })
+        .await
+        .unwrap();
+        assert_eq!(s.assign_lanes().await.unwrap(), 1, "pending riot work only");
+        assert_eq!(s.assign_lanes().await.unwrap(), 0, "idempotent");
+        let lane: Option<String> = db
+            .read(move |c| {
+                c.query_row("SELECT lane FROM jobs WHERE id = ?1", [walk_id], |r| r.get(0))
+                    .map_err(DbError::from)
+            })
+            .await
+            .unwrap();
+        assert_eq!(lane.as_deref(), Some("kr"));
+    }
+}

@@ -564,7 +564,7 @@ async fn a_manual_recompute_goes_ahead_of_the_queue() {
         .await;
     assert_eq!(r.status, StatusCode::ACCEPTED);
     let first = SqliteStore::new(e.state.db.clone())
-        .claim_job(i64::MAX)
+        .claim_job(i64::MAX, &riot_proxy::db::store::ClaimFilter::open())
         .await
         .unwrap()
         .unwrap();

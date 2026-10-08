@@ -82,6 +82,8 @@ After every upstream response:
 
 Two `Notify`-based queues. On every token release (window reset), wake all interactive waiters first; bulk waiters only if the interactive queue is empty **and** no window is above `BULK_USAGE_CEILING` (0.80). Bulk can therefore starve indefinitely during a burst of user traffic — that is the intended guarantee, and a scheduler gauge (`limiter_bulk_waiters`) shows it.
 
+**Jobs don't wait it out (SCH-01, ADR-089).** `Limiter::bulk_blocked()` reports, under the same rules, which scopes a bulk acquire would wait on (frozen, at the ceiling, out of tokens, or held for an interactive waiter) and which `(scope, method)` pairs are at a method's ceiling, each with when it frees. The job claim skips that work (06 §Claiming). Job fetches wait at most `JOB_YIELD_BUDGET_MS` in `acquire`, then the job re-queues itself for when the limiter has room. Background stale-while-revalidate refreshes keep the 15-minute bulk budget.
+
 ## Persistence across restarts
 
 The one thing Redis actually did for the limiter was survive a process restart. v2 does this with a checkpoint:

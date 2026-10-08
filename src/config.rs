@@ -32,6 +32,7 @@ pub const VARS: &[&str] = &[
     "DATABASE_URL",
     "ROLE",
     "JOB_CONCURRENCY",
+    "JOB_YIELD_BUDGET_MS",
     "CACHE_TTL_OVERRIDES",
     "CACHE_L1_MAX_MB",
     "NEG_TTL_SECONDS",
@@ -200,6 +201,9 @@ pub struct Config {
     pub database: Database,
     pub role: Role,
     pub job_concurrency: u32,
+    /// How long a job's fetch waits for the limiter before the job gives its
+    /// worker back (SCH-01).
+    pub job_yield_budget_ms: u64,
 
     // Validated against the endpoint registry by its owner (P1-02).
     pub cache_ttl_overrides: String,
@@ -452,6 +456,7 @@ impl Config {
             database,
             role,
             job_concurrency: v.int("JOB_CONCURRENCY", 8, 1, u32::MAX),
+            job_yield_budget_ms: v.int("JOB_YIELD_BUDGET_MS", 1000, 0, 900_000),
             cache_ttl_overrides: v.string("CACHE_TTL_OVERRIDES", ""),
             cache_l1_max_mb: v.int("CACHE_L1_MAX_MB", 128, 1, 1_048_576),
             neg_ttl_seconds: v.int("NEG_TTL_SECONDS", 30, 1, u32::MAX),

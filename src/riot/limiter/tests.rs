@@ -827,3 +827,86 @@ async fn waiter_gauges_are_published() {
     queued.await.unwrap().unwrap();
     assert_eq!(l.interactive_waiters(SCOPE), 0);
 }
+
+// ── SCH-01: what a job claim skips ─────────────────────────────────────────
+
+#[tokio::test(start_paused = true)]
+async fn untouched_and_roomy_scopes_are_not_blocked() {
+    let l = limiter_with_app("10:10");
+    assert_eq!(l.bulk_blocked(), super::BulkBlocked::default());
+    for _ in 0..7 {
+        take_bulk(&l).await.unwrap();
+    }
+    assert!(l.bulk_blocked().scopes.is_empty(), "7 of 10 is under 0.80");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_scope_at_the_bulk_ceiling_is_blocked_until_it_drops_below() {
+    let t0 = Instant::now();
+    let l = limiter_with_app("10:10");
+    for i in 0..8 {
+        take(&l, "m").await.unwrap();
+        if i == 0 {
+            advance(Duration::from_secs(1)).await;
+        }
+    }
+    let blocked = l.bulk_blocked();
+    assert_eq!(
+        blocked.scopes,
+        vec![(SCOPE.to_string(), t0 + Duration::from_secs(10))],
+        "8 of 10 holds bulk back until the oldest leaves"
+    );
+    assert!(blocked.scope_blocked(SCOPE) && !blocked.scope_blocked("other"));
+    assert_eq!(blocked.earliest(), Some(t0 + Duration::from_secs(10)));
+    advance(Duration::from_secs(9)).await;
+    assert!(l.bulk_blocked().scopes.is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_frozen_scope_is_blocked_until_the_freeze_ends() {
+    let t0 = Instant::now();
+    let l = limiter_with_app("10:10");
+    l.freeze(SCOPE, Duration::from_secs(30), RateLimitType::Service);
+    assert_eq!(
+        l.bulk_blocked().scopes,
+        vec![(SCOPE.to_string(), t0 + Duration::from_secs(30))]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_capped_method_blocks_only_itself_on_its_scope() {
+    let t0 = Instant::now();
+    let l = limiter_with_app("100:10");
+    l.configure_method(SCOPE, "capped", &w("5:10"));
+    l.configure_method(SCOPE, "roomy", &w("50:10"));
+    for _ in 0..4 {
+        take(&l, "capped").await.unwrap();
+    }
+    let blocked = l.bulk_blocked();
+    assert!(blocked.scopes.is_empty(), "the app limit has room");
+    assert_eq!(
+        blocked.methods,
+        vec![(
+            SCOPE.to_string(),
+            "capped".to_string(),
+            t0 + Duration::from_secs(10)
+        )]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_waiting_interactive_caller_holds_bulk_off_its_scope() {
+    let l = Arc::new(limiter_with_app("1:10"));
+    take(&l, "m").await.unwrap();
+    let waiter = {
+        let l = Arc::clone(&l);
+        tokio::spawn(async move {
+            l.acquire(SCOPE, "m", Priority::Interactive, Duration::from_secs(60))
+                .await
+        })
+    };
+    tokio::task::yield_now().await;
+    assert_eq!(l.interactive_waiters(SCOPE), 1);
+    assert!(l.bulk_blocked().scope_blocked(SCOPE));
+    waiter.abort();
+}

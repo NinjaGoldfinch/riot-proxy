@@ -119,6 +119,7 @@ Same variable names as v1 where the concept survives; removed variables are list
 | `TRUST_PROXY` | `false` | **new** — v1 always trusted `X-Forwarded-For` (ADR-068) |
 | `ROLE` | `all` | **new** — `api` / `worker` only with Postgres |
 | `JOB_CONCURRENCY` | `8` | **new** |
+| `JOB_YIELD_BUDGET_MS` | `1000` | **new** — how long a job's fetch waits for the rate limiter before the job re-queues itself and frees its worker (SCH-01, ADR-089); `0`–`900000` |
 | `LOG_FORMAT` | `json` (tty → `pretty`) | |
 | `ENV` | `development` | replaces `NODE_ENV`; `production` refuses `AUTH_DISABLED` and always turns `DEV_UI` off (ADR-071) |
 | `REDIS_URL` | — | **removed** |

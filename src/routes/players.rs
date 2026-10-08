@@ -142,7 +142,7 @@ async fn fetch(
     req: Result<RiotRequest, ApiError>,
     bypass: bool,
 ) -> Result<FetchResult, FetchError> {
-    let req = req.map_err(|api| FetchError { api, x_cache: None })?;
+    let req = req.map_err(FetchError::from)?;
     state
         .fetcher
         .fetch(

@@ -74,10 +74,12 @@ async fn mount(server: &MockServer, p: &str, tpl: ResponseTemplate) {
 const INTERACTIVE: FetchOptions = FetchOptions {
     priority: Priority::Interactive,
     bypass: false,
+    job: false,
 };
 const BYPASS: FetchOptions = FetchOptions {
     priority: Priority::Interactive,
     bypass: true,
+    job: false,
 };
 
 async fn upstream_calls(server: &MockServer) -> usize {

@@ -23,7 +23,6 @@ use crate::jobs::scheduler::{Handler, Job, JobError, NewJob, Queue};
 use crate::jobs::{kinds, priority};
 use crate::players::{self, PollState};
 use crate::riot::endpoints::Endpoint;
-use crate::riot::limiter::Priority;
 use crate::riot::routing::Platform;
 use crate::routes::passthrough::request;
 use crate::ws::Hub;
@@ -57,8 +56,9 @@ pub struct PollPlayer {
     pub platform: String,
 }
 
+/// A fetch failure: retried with backoff, or a yield when the limiter has no room.
 fn retry(e: &FetchError) -> JobError {
-    JobError::Retry(format!("{}: {}", e.api.code.as_str(), e.api.message))
+    JobError::from_fetch(e)
 }
 
 fn store(e: &crate::db::DbError) -> JobError {
@@ -91,12 +91,8 @@ impl PollContext {
                 Some(e.target_for_platform(platform))
             }
         });
-        let req = request(id, target, params, query).map_err(|api| FetchError { api, x_cache: None })?;
-        let opts = FetchOptions {
-            priority: Priority::Bulk,
-            bypass: false,
-        };
-        self.fetcher.fetch(req, opts).await.map(|r| r.body)
+        let req = request(id, target, params, query).map_err(FetchError::from)?;
+        self.fetcher.fetch(req, FetchOptions::JOB).await.map(|r| r.body)
     }
 
     // ── poll:live ───────────────────────────────────────────────────────────
