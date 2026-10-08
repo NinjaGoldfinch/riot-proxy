@@ -34,17 +34,23 @@ It is in the page bar (design/10 §Page bar) as **Showcase**, right after Dev ex
 | | | `/v1/lol/rotations/{platform}`, `/v1/static/champion` | free rotation as champion icons |
 | | | `/v1/lol/analytics/champions?platform&queue&limit=500` | top 10 by win rate and by games, rows summed over tiers, for the ladder's queue |
 | (every view) | DEV-06 | `/v1/static/versions`, `/v1/static/champion` | patch badge; champion names and icon files |
-| `#/player/{gameName}/{tagLine}` | DEV-07 | profile, ranked entries, spectator, mastery, champion pool, matches, queues | profile header, rank cards, live-game banner, mastery, champion pool, match cards |
+| `#/player/{gameName}/{tagLine}` | DEV-07 | `/v1/players/by-riot-id/{gameName}/{tagLine}/profile?platform&topMastery=3` | header (profile icon, level, top 3 mastery), rank cards from the profile's `league` part (Solo/Duo and Flex always, unranked shown as such; apex tiers without a division), **Refresh** (`refresh=true`, disabled for `refreshAvailableIn`) |
+| | | `/v1/players/{puuid}/matches?platform&start&count=10[&queue]`, `/v1/static/queues`, `/v1/static/summoner` | match cards: result (Arena placement, remake, win, loss), queue name, KDA, CS/min, gold, damage, spells and items; **Load more** while `hasMore`; the backfill notice when the lookup queued one |
+| | | `/v1/players/{puuid}/champions?platform&limit=10[&queue]` | champion pool from the archive; the All / Solo/Duo / Flex tabs filter it and the match history together |
+| | | `/v1/lol/mastery/by-puuid/{platform}/{puuid}` | every mastered champion and the point total, 12 shown until **Show all** (the profile carries only the top few) |
+| | | `/v1/lol/spectator/active/{platform}/{puuid}` | live-game banner: queue, time played, both teams' champions; nothing on a 404 (not in a game) |
 | `#/champion/{id}` | DEV-08 | analytics champion detail and matchups; match and timeline for match detail | rates by tier, matchups, scoreboard, gold-difference graph |
 
-Until DEV-07 and DEV-08 land, the player and champion views say so and link to the explorer.
+Until DEV-08 lands, the champion view says so and links to the explorer. The ranked-entries route is left out: the profile composite already carries the same league-v4 entries (ADR-082).
+
+An image the mirror cannot serve (an item retired since that game, say) becomes the same empty box, with a champion's initials where it has them. Rune icons are not mirrored (ADR-076 kinds: champion, profileicon, item, spell), so match cards show no runes.
 
 ```mermaid
 flowchart LR
   subgraph Page["/dev/showcase — showcase.html (no deps, no build)"]
     S[Search: Riot ID · platform · key]
     H[Home: status · ladder · rotation · top champions]
-    P[Player view — DEV-07]
+    P[Player: profile · ranks · live · matches · pool · mastery]
     C[Champion view — DEV-08]
     D[[API calls drawer · source chips → /dev#explorer]]
     H & P & C --> D

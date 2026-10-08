@@ -69,8 +69,34 @@
   .calls summary { padding: 6px 20px; cursor: pointer; color: var(--dim); }
   .calls table { font-size: 12px; }
   .s2 { color: var(--good); } .s4, .s0 { color: var(--warn); } .s5 { color: var(--bad); }
+  .icon.xs { width: 22px; height: 22px; border-radius: 4px; }
+  .who { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; }
+  .who h2 { font-size: 20px; }
+  .avatar { width: 64px; height: 64px; border-radius: 50%; border: 2px solid var(--line); background: var(--sunk); display: inline-block; }
+  .mains { display: flex; gap: 6px; align-items: center; margin-left: auto; font-size: 12px; }
+  .who .tools { margin-left: 8px; }
+  .ranks { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  .rank { display: flex; flex-direction: column; padding: 8px 10px; border-radius: 8px; background: var(--sunk); border-left: 4px solid var(--tc); }
+  .rank b { color: var(--tc); font-size: 16px; }
+  .banner.live { border-color: var(--good); background: #10241a; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .teams { display: inline-flex; gap: 8px; align-items: center; margin-left: auto; }
+  .team { display: inline-flex; gap: 2px; }
+  .team .me img, .team .me .icon { outline: 2px solid var(--accent); }
+  .matches { display: flex; flex-direction: column; gap: 6px; }
+  .match { display: grid; grid-template-columns: 12em auto 7em 1fr auto; gap: 12px; align-items: center; padding: 8px 10px; border-radius: 8px; background: var(--sunk); border-left: 4px solid var(--dim); font-size: 13px; }
+  .match.win { border-left-color: var(--good); } .match.win .meta b { color: var(--good); }
+  .match.loss { border-left-color: var(--bad); } .match.loss .meta b { color: var(--bad); }
+  .match.place { border-left-color: var(--accent); }
+  .match .meta, .match .kda, .match .cs { display: flex; flex-direction: column; line-height: 1.3; min-width: 0; }
+  .match .meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+  .match .d { color: var(--bad); }
+  .match .kda b { white-space: nowrap; }
+  .pick { display: flex; gap: 4px; align-items: center; }
+  .spells { display: flex; flex-direction: column; gap: 2px; }
+  .items { display: grid; grid-template-columns: repeat(4, 22px); gap: 2px; }
+  .lvl { font: 700 10px var(--mono); color: var(--accent); }
   @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } .search { margin-left: 0; } }
-  @media (max-width: 600px) { .cols { grid-template-columns: 1fr; } .hide-sm { display: none; } .search input[name=id] { width: 100%; } }
+  @media (max-width: 600px) { .match { grid-template-columns: 8em auto 1fr; } .match .cs { display: none; } .match .items { grid-column: 1 / -1; grid-template-columns: repeat(7, 22px); } .cols { grid-template-columns: 1fr; } .hide-sm { display: none; } .search input[name=id] { width: 100%; } }
 </style>
 </head>
 <body>
@@ -104,16 +130,16 @@
     "GET /v1/lol/rotations/{platform}": "home: free rotation",
     "GET /v1/lol/analytics/champions": "home: top champions",
     "GET /v1/static/{file}": "champion names and icons",
-    "GET /v1/static/versions": "patch badge and icon URLs"
+    "GET /v1/static/versions": "patch badge and icon URLs",
+    "GET /v1/players/by-riot-id/{gameName}/{tagLine}/profile": "player: header, top mastery, rank cards, refresh",
+    "GET /v1/players/{puuid}/matches": "player: match history",
+    "GET /v1/players/{puuid}/champions": "player: champion pool",
+    "GET /v1/lol/mastery/by-puuid/{platform}/{puuid}": "player: mastery, every champion (the profile carries only the top few)",
+    "GET /v1/lol/spectator/active/{platform}/{puuid}": "player: live-game banner",
+    "GET /v1/static/queues": "player: queue names on match cards and the live game"
   },
   "notShowcased": {
-    "GET /v1/players/by-riot-id/{gameName}/{tagLine}/profile": "planned: DEV-07 player view",
-    "GET /v1/players/{puuid}/champions": "planned: DEV-07 player view",
-    "GET /v1/players/{puuid}/matches": "planned: DEV-07 player view",
-    "GET /v1/lol/league/entries/by-puuid/{platform}/{puuid}": "planned: DEV-07 player view",
-    "GET /v1/lol/mastery/by-puuid/{platform}/{puuid}": "planned: DEV-07 player view",
-    "GET /v1/lol/spectator/active/{platform}/{puuid}": "planned: DEV-07 player view",
-    "GET /v1/static/queues": "planned: DEV-07 match cards",
+    "GET /v1/lol/league/entries/by-puuid/{platform}/{puuid}": "the profile composite carries the same league-v4 entries, which the rank cards use",
     "GET /v1/lol/matches/{region}/{matchId}": "planned: DEV-08 match detail",
     "GET /v1/lol/matches/{region}/{matchId}/timeline": "planned: DEV-08 gold graph",
     "GET /v1/lol/analytics/champions/{championId}": "planned: DEV-08 champion view",
@@ -133,7 +159,8 @@
 // ---------- pure helpers (unit-tested by tests/showcase.mjs)
 /** Riot's apex tiers, highest first, and the badge colour for each tier. */
 const APEX = ['CHALLENGER', 'GRANDMASTER', 'MASTER'];
-const QUEUES = [['RANKED_SOLO_5x5', 'Solo/Duo'], ['RANKED_FLEX_SR', 'Flex']];
+/** League queue type, label, and its queueId in Riot's queues.json. */
+const QUEUES = [['RANKED_SOLO_5x5', 'Solo/Duo', 420], ['RANKED_FLEX_SR', 'Flex', 440]];
 const TIER_COLOURS = { IRON: '#8c8580', BRONZE: '#b0764a', SILVER: '#9fb2c0', GOLD: '#e0b44c', PLATINUM: '#4fb3a9', EMERALD: '#3dbb6d', DIAMOND: '#6f8ff0', MASTER: '#b765d8', GRANDMASTER: '#e0525a', CHALLENGER: '#f2c94c' };
 const LADDER_PAGE = 25;
 
@@ -215,6 +242,80 @@ function parseRoute(hash) {
 
 /** The dev explorer's link to one operation (design/10). */
 const explorerLink = (op) => `/dev#explorer?op=${encodeURIComponent(op)}`;
+
+/** `Gold II`, or just `Challenger` for an apex tier, which has no divisions. */
+const rankLabel = (e) => (e?.tier ? `${titleCase(e.tier)}${APEX.includes(e.tier) ? '' : ` ${e.rank ?? ''}`}`.trim() : 'Unranked');
+
+/** league-v4 entries as one card per ranked queue: Solo/Duo and Flex always (null when unranked), then any other queue. */
+function rankCards(league) {
+  const list = Array.isArray(league) ? league : [];
+  const known = QUEUES.map(([q, label]) => ({ queueType: q, label, entry: list.find((e) => e.queueType === q) ?? null }));
+  const other = list.filter((e) => !QUEUES.some(([q]) => q === e.queueType)).map((e) => ({ queueType: e.queueType, label: e.queueType, entry: e }));
+  return [...known, ...other];
+}
+
+/** Riot's queues.json as `{ queueId: description }`. */
+function queueNames(list) {
+  return Object.fromEntries((Array.isArray(list) ? list : []).filter((q) => q.description).map((q) => [q.queueId, q.description]));
+}
+
+/** Data Dragon's summoner.json keyed by numeric key → image file. */
+function spellIndex(doc) {
+  const out = {};
+  for (const s of Object.values(doc?.data ?? {})) out[Number(s.key)] = s.image?.full;
+  return out;
+}
+
+/** A match summary's result for its player: an Arena placement, a remake, a win or a loss. */
+function outcome(p) {
+  if (p?.placement) return { kind: 'place', label: `#${p.placement}` };
+  if (p?.gameEndedInEarlySurrender) return { kind: 'remake', label: 'Remake' };
+  if (p?.win === true) return { kind: 'win', label: 'Victory' };
+  if (p?.win === false) return { kind: 'loss', label: 'Defeat' };
+  return { kind: 'unknown', label: '–' };
+}
+
+/** (kills + assists) / deaths, deaths floored at 1, as the champion pool computes it. */
+const kda = (k, d, a) => ((k ?? 0) + (a ?? 0)) / Math.max(1, d ?? 0);
+
+/** match-v5 `gameDuration` in seconds: it was milliseconds before `gameEndTimestamp` existed. */
+const durationSecs = (m) => (m?.gameDuration == null ? null : m.gameEndTimestamp == null ? Math.round(m.gameDuration / 1000) : m.gameDuration);
+
+/** `31:05`, or `1:02:09` past an hour. */
+function clock(secs) {
+  if (secs == null || secs < 0) return '–';
+  const s = Math.floor(secs);
+  const mm = String(Math.floor((s % 3600) / 60)).padStart(s >= 3600 ? 2 : 1, '0');
+  return `${s >= 3600 ? `${Math.floor(s / 3600)}:` : ''}${mm}:${String(s % 60).padStart(2, '0')}`;
+}
+
+/** How long ago a unix-ms time was, coarsely. */
+function ago(ms, now = Date.now()) {
+  if (!ms) return '';
+  const m = Math.max(0, Math.round((now - ms) / 60000));
+  if (m < 60) return `${m} min ago`;
+  if (m < 48 * 60) return `${Math.round(m / 60)} h ago`;
+  return `${Math.round(m / 1440)} d ago`;
+}
+
+/** champion-mastery-v4's list, highest points first, with totals. */
+function masterySummary(list) {
+  const all = [...(Array.isArray(list) ? list : [])].sort((a, b) => b.championPoints - a.championPoints);
+  return { champions: all.length, points: all.reduce((n, m) => n + (m.championPoints ?? 0), 0), list: all };
+}
+
+/** spectator-v5's CurrentGameInfo as teams of participants, the player marked, and seconds played. */
+function liveGame(doc, puuid, now = Date.now()) {
+  const teams = new Map();
+  for (const p of doc?.participants ?? []) {
+    if (!teams.has(p.teamId)) teams.set(p.teamId, []);
+    teams.get(p.teamId).push({ ...p, me: p.puuid === puuid });
+  }
+  const me = (doc?.participants ?? []).find((p) => p.puuid === puuid) ?? null;
+  // gameStartTime is 0 while the game loads; gameLength is Riot's own count then.
+  const secs = doc?.gameStartTime > 0 ? Math.round((now - doc.gameStartTime) / 1000) : (doc?.gameLength ?? null);
+  return { queueId: doc?.gameQueueConfigId ?? null, mode: doc?.gameMode ?? '', secs, me, teams: [...teams.entries()].sort(([a], [b]) => a - b).map(([teamId, players]) => ({ teamId, players })) };
+}
 // ---------- end pure helpers
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -272,13 +373,14 @@ function champIcon(id, cls = '') {
   const c = champions[id];
   const url = imageUrl(version, 'champion', c?.image);
   const label = c?.name ?? `#${id}`;
-  return url ? `<img class="icon ${cls}" src="${esc(url)}" alt="${esc(label)}" loading="lazy">` : `<span class="icon ${cls}">${esc(label.slice(0, 2))}</span>`;
+  return url ? `<img class="icon ${cls}" src="${esc(url)}" alt="${esc(label)}" data-short="${esc(label.slice(0, 2))}" loading="lazy">` : `<span class="icon ${cls}">${esc(label.slice(0, 2))}</span>`;
 }
 
 const platform = () => $('#platform').value;
 
 // ---------- home
 function renderHome() {
+  viewSeq++;
   if (!platform()) {
     $('#view').innerHTML = `<div class="card empty">Pick a platform above to load its ladder, status and rotation.</div>`;
     return;
@@ -397,8 +499,222 @@ async function loadTop() {
   $('#topMeta', el).textContent = `patch ${res.json.patch ?? '–'} · ${QUEUES.find(([q]) => q === state.queue)?.[1]}`;
 }
 
-// ---------- views still to come (DEV-07, DEV-08)
+// ---------- player (DEV-07)
+const OP = {
+  profile: 'GET /v1/players/by-riot-id/{gameName}/{tagLine}/profile',
+  matches: 'GET /v1/players/{puuid}/matches',
+  pool: 'GET /v1/players/{puuid}/champions',
+  mastery: 'GET /v1/lol/mastery/by-puuid/{platform}/{puuid}',
+  live: 'GET /v1/lol/spectator/active/{platform}/{puuid}',
+  queues: 'GET /v1/static/queues',
+  file: 'GET /v1/static/{file}',
+};
+const MATCH_PAGE = 10;
+const MASTERY_SHOWN = 12;
+let queues = null; // queueId → description, once per session
+let spells = null; // summoner spell key → image file, once per session
+// Bumped on every route, so a slow call for a view the user already left draws nothing.
+let viewSeq = 0;
+const pl = { id: null, profile: null, queue: 0, start: 0, matches: [], hasMore: false, mastery: null, masteryAll: false };
+
+async function loadLookups() {
+  const [q, s] = await Promise.all([
+    queues ? null : get('/v1/static/queues'),
+    spells ? null : get('/v1/static/summoner'),
+  ]);
+  if (q?.ok) queues = queueNames(q.json);
+  if (s?.ok) spells = spellIndex(s.json);
+}
+
+const queueName = (id) => (id == null ? '' : queues?.[id] ?? `queue ${id}`);
+const spellIcon = (id) => {
+  const url = imageUrl(version, 'spell', spells?.[id]);
+  return url ? `<img class="icon xs" src="${esc(url)}" alt="spell ${esc(id)}" loading="lazy">` : `<span class="icon xs"></span>`;
+};
+const itemIcon = (id) => {
+  const url = id ? imageUrl(version, 'item', `${id}.png`) : null;
+  return url ? `<img class="icon xs" src="${esc(url)}" alt="item ${esc(id)}" loading="lazy">` : `<span class="icon xs"></span>`;
+};
+const champLink = (id, cls = '') => `<a href="#/champion/${esc(id)}" title="${esc(champions[id]?.name ?? `#${id}`)}">${champIcon(id, cls)}</a>`;
+
+async function renderPlayer({ gameName, tagLine }, refresh = false) {
+  const seq = ++viewSeq;
+  const alive = () => seq === viewSeq;
+  if (!platform()) {
+    $('#view').innerHTML = `<div class="card empty">Pick the platform ${esc(gameName)} #${esc(tagLine)} plays on above.</div>`;
+    return;
+  }
+  if (!refresh) {
+    Object.assign(pl, { id: `${platform()}/${gameName}#${tagLine}`, profile: null, queue: 0, start: 0, matches: [], hasMore: false, mastery: null, masteryAll: false });
+    $('#view').innerHTML = `<section class="card profile" id="pHead"><p class="muted">Looking up ${esc(gameName)} #${esc(tagLine)}…</p></section>`;
+  }
+  const q = new URLSearchParams({ platform: platform(), topMastery: '3' });
+  if (refresh) q.set('refresh', 'true');
+  const [res] = await Promise.all([get(`/v1/players/by-riot-id/${encodeURIComponent(gameName)}/${encodeURIComponent(tagLine)}/profile?${q}`), loadLookups()]);
+  if (!alive()) return;
+  if (!res.ok) {
+    $('#pHead').innerHTML = res.status === 404
+      ? `<p class="err">No player ${esc(gameName)} #${esc(tagLine)}.</p><p class="muted">Check the spelling and the tag. <a href="#/">Back to the home view</a></p>`
+      : failure(res);
+    return;
+  }
+  pl.profile = res.json;
+  $('#view').innerHTML = `<section class="card profile" id="pHead"></section>
+  <div id="pLive"></div>
+  <div class="grid">
+    <div><section class="card" id="pMatches"></section></div>
+    <div>
+      <section class="card" id="pRanks"></section>
+      <section class="card" id="pPool"></section>
+      <section class="card" id="pMastery"></section>
+    </div>
+  </div>`;
+  renderProfile();
+  renderRanks();
+  loadLive(seq);
+  loadMatches(seq, refresh);
+  loadPool(seq);
+  loadMastery(seq);
+}
+
+function renderProfile() {
+  const p = pl.profile;
+  const icon = imageUrl(version, 'profileicon', p.summoner?.profileIconId != null ? `${p.summoner.profileIconId}.png` : null);
+  const wait = p.refreshAvailableIn ?? 0;
+  const top = Array.isArray(p.mastery) ? p.mastery : [];
+  $('#pHead').innerHTML = `<div class="who">
+    ${icon ? `<img class="avatar" src="${esc(icon)}" alt="profile icon">` : '<span class="avatar"></span>'}
+    <div>
+      <h2>${esc(p.account?.gameName ?? '?')} <span class="muted">#${esc(p.account?.tagLine ?? '')}</span></h2>
+      <div class="muted">${p.summoner?.summonerLevel != null ? `Level ${esc(p.summoner.summonerLevel)} · ` : ''}${esc(p.platform)} · ${esc(p.region)}</div>
+      <div>${sources(OP.profile, OP.file)}</div>
+    </div>
+    ${top.length ? `<div class="mains"><span class="muted">Top mastery</span>${top.map((m) => champLink(m.championId)).join('')}</div>` : ''}
+    <div class="tools"><button data-refresh ${wait > 0 ? `disabled title="available again in ${esc(wait)} s"` : 'title="re-read every part upstream (metered: once a minute)"'}>${p.refreshed ? 'Refreshed' : 'Refresh'}</button></div>
+  </div>${p.warnings?.length ? `<p class="err">Partly loaded: ${esc(p.warnings.join('; '))}</p>` : ''}`;
+}
+
+function renderRanks() {
+  const league = pl.profile.league;
+  const body = league == null
+    ? `<p class="muted">Ranked entries could not be fetched (see the warning above).</p>`
+    : `<div class="ranks">${rankCards(league).map(({ label, entry: e }) => {
+      const wr = e ? winRate(e.wins, e.losses) : null;
+      return `<div class="rank" style="--tc:${tierColour(e?.tier)}">
+        <small class="muted">${esc(label)}</small>
+        <b>${esc(rankLabel(e))}</b>
+        ${e ? `<span>${esc(e.leaguePoints)} LP${e.hotStreak ? '<span class="flag hot">hot</span>' : ''}</span>
+        <small class="muted">${esc(e.wins)}W ${esc(e.losses)}L · ${pct(wr)}</small>` : '<small class="muted">no placement this season</small>'}
+      </div>`;
+    }).join('')}</div>`;
+  $('#pRanks').innerHTML = `<header><h2>Ranked</h2></header><div>${sources(OP.profile)}</div>${body}`;
+}
+
+async function loadLive(seq) {
+  const p = pl.profile;
+  const res = await get(`/v1/lol/spectator/active/${platform()}/${encodeURIComponent(p.puuid)}`);
+  // Not in a game is a 404 (spectator-v5); nothing to show then.
+  if (seq !== viewSeq || !res.ok) return;
+  const g = liveGame(res.json, p.puuid);
+  $('#pLive').innerHTML = `<div class="banner live"><b>Live now</b>${g.me ? champLink(g.me.championId, 'sm') : ''}
+    ${esc(queueName(g.queueId) || g.mode)} · ${clock(g.secs)}
+    <span class="teams">${g.teams.map((t) => `<span class="team">${t.players.map((x) => `<span class="${x.me ? 'me' : ''}">${champLink(x.championId, 'sm')}</span>`).join('')}</span>`).join('<span class="muted">vs</span>')}</span>
+    ${sources(OP.live)}</div>`;
+}
+
+function matchesHeader() {
+  const tabs = [[0, 'All'], ...QUEUES.map(([, label, id]) => [id, label])]
+    .map(([id, label]) => `<button data-mqueue="${id}" class="${id === pl.queue ? 'on' : ''}">${esc(label)}</button>`).join('');
+  return `<header><h2>Match history</h2><div class="tools">${tabs}</div></header><div>${sources(OP.matches, OP.queues, OP.file)}</div>`;
+}
+
+async function loadMatches(seq, refresh = false, more = false) {
+  const el = $('#pMatches');
+  const p = pl.profile;
+  if (!more) {
+    pl.start = 0;
+    pl.matches = [];
+    el.innerHTML = matchesHeader() + `<p class="muted">loading…</p>`;
+  }
+  const q = new URLSearchParams({ platform: platform(), start: String(pl.start), count: String(MATCH_PAGE) });
+  if (pl.queue) q.set('queue', String(pl.queue));
+  if (refresh) q.set('refresh', 'true');
+  const res = await get(`/v1/players/${encodeURIComponent(p.puuid)}/matches?${q}`);
+  if (seq !== viewSeq) return;
+  if (!res.ok) { el.innerHTML = matchesHeader() + failure(res); return; }
+  pl.matches.push(...(res.json.matches ?? []));
+  pl.start += MATCH_PAGE;
+  pl.hasMore = Boolean(res.json.hasMore);
+  const bf = res.json.backfill;
+  const note = bf ? `<p class="muted">This lookup queued the player's history for archiving (${esc(bf.status)}); the champion pool fills in as it runs.</p>` : '';
+  const warn = res.json.warnings?.length ? `<p class="err">${esc(res.json.warnings.length)} match${res.json.warnings.length === 1 ? '' : 'es'} could not be loaded.</p>` : '';
+  el.innerHTML = matchesHeader() + (pl.matches.length
+    ? `<div class="matches">${pl.matches.map(matchCard).join('')}</div>`
+    : `<p class="empty">No ${pl.queue ? `${esc(queueName(pl.queue))} ` : ''}games found.</p>`)
+    + warn + note + (pl.hasMore ? `<div class="pager"><button data-more>Load ${MATCH_PAGE} more</button></div>` : '');
+}
+
+function matchCard(m) {
+  const p = m.player ?? {};
+  const o = outcome(p);
+  const secs = durationSecs(m);
+  const cs = (p.totalMinionsKilled ?? 0) + (p.neutralMinionsKilled ?? 0);
+  const items = [p.item0, p.item1, p.item2, p.item3, p.item4, p.item5, p.item6];
+  return `<article class="match ${o.kind}" data-match="${esc(m.matchId)}">
+    <div class="meta"><b>${esc(o.label)}</b><span>${esc(queueName(m.queueId) || m.gameMode || '')}</span><span class="muted">${esc(ago(m.gameEndTimestamp ?? m.gameCreation))} · ${clock(secs)}</span></div>
+    <div class="pick">${champLink(p.championId)}<span class="spells">${spellIcon(p.summoner1Id)}${spellIcon(p.summoner2Id)}</span></div>
+    <div class="kda"><b>${esc(p.kills ?? 0)} / <span class="d">${esc(p.deaths ?? 0)}</span> / ${esc(p.assists ?? 0)}</b><small class="muted">${kda(p.kills, p.deaths, p.assists).toFixed(2)} KDA</small></div>
+    <div class="cs hide-sm"><span>${cs} CS${secs ? ` <small class="muted">(${(cs / (secs / 60)).toFixed(1)}/min)</small>` : ''}</span><small class="muted">${(p.goldEarned ?? 0).toLocaleString()} gold · ${(p.totalDamageDealtToChampions ?? 0).toLocaleString()} dmg</small></div>
+    <div class="items">${items.map(itemIcon).join('')}</div>
+  </article>`;
+}
+
+async function loadPool(seq) {
+  const el = $('#pPool');
+  const head = `<header><h2>Champion pool</h2><span class="muted" id="poolMeta"></span></header><div>${sources(OP.pool)}</div>`;
+  el.innerHTML = head + `<p class="muted">loading…</p>`;
+  const q = new URLSearchParams({ platform: platform(), limit: '10' });
+  if (pl.queue) q.set('queue', String(pl.queue));
+  const res = await get(`/v1/players/${encodeURIComponent(pl.profile.puuid)}/champions?${q}`);
+  if (seq !== viewSeq) return;
+  if (!res.ok) { el.innerHTML = head + failure(res); return; }
+  const rows = res.json.champions ?? [];
+  el.innerHTML = head + (rows.length
+    ? `<table><thead><tr><th>Champion</th><th class="n">Games</th><th>Win rate</th><th class="n">KDA</th><th class="n hide-sm">CS/min</th></tr></thead><tbody>${rows.map((c) => `<tr>
+      <td class="name">${champLink(c.championId, 'sm')} ${esc(champions[c.championId]?.name ?? c.championName ?? `#${c.championId}`)}</td>
+      <td class="n">${esc(c.games)}</td>
+      <td><span class="wr"><span class="bar"><i style="width:${(c.winRate ?? 0) * 100}%"></i></span>${pct(c.winRate)}</span></td>
+      <td class="n">${c.avgKda == null ? '–' : c.avgKda.toFixed(2)}</td>
+      <td class="n hide-sm">${c.csPerMin == null ? '–' : c.csPerMin.toFixed(1)}</td></tr>`).join('')}</tbody></table>`
+    : `<p class="empty">No archived games${pl.queue ? ` in ${esc(queueName(pl.queue))}` : ''} yet.</p>`);
+  $('#poolMeta', el).textContent = `${res.json.archivedGames ?? 0} archived games`;
+}
+
+async function loadMastery(seq) {
+  const el = $('#pMastery');
+  const head = `<header><h2>Mastery</h2><span class="muted" id="mMeta"></span></header><div>${sources(OP.mastery)}</div>`;
+  el.innerHTML = head + `<p class="muted">loading…</p>`;
+  const res = await get(`/v1/lol/mastery/by-puuid/${platform()}/${encodeURIComponent(pl.profile.puuid)}`);
+  if (seq !== viewSeq) return;
+  if (!res.ok) { el.innerHTML = head + failure(res); return; }
+  pl.mastery = masterySummary(res.json);
+  renderMastery();
+}
+
+function renderMastery() {
+  const el = $('#pMastery');
+  const m = pl.mastery;
+  const head = `<header><h2>Mastery</h2><span class="muted">${m.champions} champions · ${m.points.toLocaleString()} points</span></header><div>${sources(OP.mastery)}</div>`;
+  const shown = pl.masteryAll ? m.list : m.list.slice(0, MASTERY_SHOWN);
+  el.innerHTML = head + (m.champions
+    ? `<div class="icons" style="margin-top:8px">${shown.map((x) => `<a class="champ" href="#/champion/${esc(x.championId)}">${champIcon(x.championId)}<span class="lvl" title="mastery level">lvl ${esc(x.championLevel)}</span>${(x.championPoints ?? 0).toLocaleString()}</a>`).join('')}</div>
+      ${m.champions > MASTERY_SHOWN ? `<div class="pager"><button data-mastery>${pl.masteryAll ? 'Show fewer' : `Show all ${m.champions}`}</button></div>` : ''}`
+    : `<p class="empty">No champion mastery yet.</p>`);
+}
+
+// ---------- views still to come (DEV-08)
 function renderLater(title, task, devHash) {
+  viewSeq++;
   $('#view').innerHTML = `<section class="card"><header><h2>${esc(title)}</h2></header>
     <p class="muted">This view arrives with ${esc(task)}. Until then the dev explorer shows the same data raw.</p>
     <p><a href="${esc(devHash)}">Open the dev explorer</a> · <a href="#/">back to the home view</a></p></section>`;
@@ -406,7 +722,7 @@ function renderLater(title, task, devHash) {
 
 function route() {
   const { view, args } = parseRoute(location.hash);
-  if (view === 'player') return renderLater(`${args.gameName} #${args.tagLine}`, 'DEV-07', '/dev#player');
+  if (view === 'player') return renderPlayer(args);
   if (view === 'champion') return renderLater(champions[args.id]?.name ?? `Champion #${args.id}`, 'DEV-08', explorerLink('GET /v1/lol/analytics/champions/{championId}'));
   renderHome();
 }
@@ -418,7 +734,21 @@ document.addEventListener('click', (ev) => {
   if (t.dataset.tier) { state.tier = t.dataset.tier; loadLadder(); }
   if (t.dataset.queue) { state.queue = t.dataset.queue; loadLadder(); loadTop(); }
   if (t.dataset.page) { state.page += Number(t.dataset.page); renderLadder(); }
+  if (t.dataset.mqueue) { pl.queue = Number(t.dataset.mqueue); loadMatches(viewSeq); loadPool(viewSeq); }
+  if ('more' in t.dataset) { t.disabled = true; loadMatches(viewSeq, false, true); }
+  if ('mastery' in t.dataset) { pl.masteryAll = !pl.masteryAll; renderMastery(); }
+  if ('refresh' in t.dataset) { const { view, args } = parseRoute(location.hash); if (view === 'player') renderPlayer(args, true); }
 });
+// An image the mirror cannot serve (an item retired since that game, say) becomes the
+// same empty box, with a champion's initials where it has them.
+document.addEventListener('error', (ev) => {
+  const img = ev.target;
+  if (img.tagName !== 'IMG') return;
+  const box = document.createElement('span');
+  box.className = img.className;
+  box.textContent = img.dataset.short ?? '';
+  img.replaceWith(box);
+}, true);
 
 $('#search').onsubmit = (ev) => {
   ev.preventDefault();

@@ -940,3 +940,11 @@ Accepted (owner, task DEV-11). Changes P6-06's limit; v1 parity is no longer req
 - `.env.example` used to call 10000 "match-v5's ceiling". Nothing in `docs/design/` or v1 sources that, so the claim is dropped rather than repeated.
 - `/dev` shows the uncapped walk as "full history" instead of the number.
 
+## ADR-082 — Showcase player view: one profile call, the ranked-entries route left out (2026-10-09)
+Accepted (task DEV-07). Design/11 §Page map. Builds on ADR-080.
+- **The profile composite is the entry point.** Search and ladder rows go to `#/player/{gameName}/{tagLine}`, which calls `/v1/players/by-riot-id/…/profile` once; its PUUID drives every other card. The rank cards read the composite's `league` part, so `/v1/lol/league/entries/by-puuid/…` goes in `notShowcased` with that reason, as the summoner route already does.
+- **Mastery is called separately** because the composite carries at most the top 20 (`topMastery`). The header uses `topMastery=3`; the mastery card shows the whole collection and its point total.
+- **One queue filter (All, Solo/Duo 420, Flex 440)** drives the match history and the champion pool together, so both answer the same question. The ids are Riot's `queues.json` values, kept beside the league queue types in `QUEUES`.
+- **Refresh is a button**, disabled for `refreshAvailableIn` seconds: it re-reads the profile and the match page with `refresh=true`, showing the metered refresh (P6) as a consumer would use it.
+- **No runes.** The image mirror does not hold rune icons (ADR-076), and a name without an icon adds little, so match cards show champion, spells and items only.
+- `gameDuration` is read as Riot documents match-v5: seconds, or milliseconds on matches without `gameEndTimestamp`. A live game's time comes from `gameStartTime`, or spectator-v5's `gameLength` while `gameStartTime` is still 0.
