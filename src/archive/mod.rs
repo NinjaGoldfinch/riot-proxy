@@ -4,6 +4,7 @@
 pub mod analytics;
 pub mod facts;
 pub mod matches;
+pub mod player;
 pub mod pool;
 
 use bytes::Bytes;

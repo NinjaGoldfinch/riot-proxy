@@ -91,7 +91,7 @@ sequenceDiagram
 |---|---|---|
 | `explorer` | any documented operation | form from `parameters` / `requestBody`, then the response viewer |
 | `status` | `/healthz`, `/readyz`, `/v1/admin/metrics` | readiness pills, totals, limiter scopes, queues, cache; optional 5 s refresh |
-| `player` | `/v1/players/by-riot-id/{gameName}/{tagLine}/profile`, `/v1/players/{puuid}/matches`, `/v1/static/queues`, `/v1/lol/matches/{region}/{matchId}`, `/v1/admin/tracked-players`, `/v1/admin/jobs` | profile card, ranks, top mastery, history and backfill card, recent matches (DEV-02, below) |
+| `player` | `/v1/players/by-riot-id/{gameName}/{tagLine}/profile`, `/v1/players/{puuid}/matches`, `/v1/static/queues`, `/v1/lol/matches/{region}/{matchId}`, `/v1/admin/players/{puuid}/archive`, `/v1/admin/players/{puuid}/archive/matches` | profile card, ranks, top mastery, history and backfill card, recent or archived matches (DEV-02/03, below) |
 | `live` | `/v1/ws` | topic picker, newest-first frame log (500 max), ping |
 | `history` | — | last 50 requests (`localStorage`, without bodies); re-open or replay |
 
@@ -102,9 +102,17 @@ sequenceDiagram
 - **A summary over the page**: games, W/L, win rate, KDA and CS/min. Remakes are left out of the record and the averages.
 - **Queue names** come from the same `queues.json`, falling back to `gameMode queueId`.
 - **Clicking a match** opens its scoreboard inline: both teams, with the looked-up player marked. It closes with ×, a second click or Esc, and `raw` shows the match body.
-- **History and backfill card**: tracked or not, the history walk's state (walking, queued, complete, stopped part-way, never) and depth, the newest seen match, and this player's queued and failed `archive:match` jobs (counted from the latest 500). It also has Track/Untrack and "Queue walk N deep" buttons, which are admin calls behind `confirm()`.
+- **History and backfill card** (DEV-03), from `GET /v1/admin/players/{puuid}/archive`, with exact counts and no caps:
+  - tracked or not, and the history walk's state (walking, queued, complete, stopped part-way, never) and depth;
+  - how many matches are archived for the player, with W/L, remakes and timelines, the date range, and a count per queue;
+  - the newest seen match;
+  - this player's `archive:match` jobs by state (queued, running, done in the last 7 days, failed);
+  - the last walk job.
+
+  Buttons: **Browse all N archived**, Track/Untrack, and "Queue walk N deep". The last two are admin calls behind `confirm()`.
+- **Source: Riot (live) or Archive (all stored)** (DEV-03). The archive source reads `GET /v1/admin/players/{puuid}/archive/matches`: one call per page (`count` up to 100), newest first, with `total`, so the pager shows "page X of Y", First and Last. It filters by queue only, and makes no Riot calls. Its rows render in the same table and scoreboard as live ones.
 - **Every response window has ×**, and Esc closes the newest open thing on the current tab.
-- The pure helpers sit in one marked block that `tests/dev_ui.mjs` unit-tests with `node --test`, run from `cargo test`.
+- The pure helpers sit in one marked block that `tests/dev_ui.mjs` unit-tests with `node --test`, run from `cargo test`. `tests/dom/` drives the whole page in jsdom against a fake API (`just ui-test`; CI job `test`).
 
 ## Safety
 

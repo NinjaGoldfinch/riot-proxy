@@ -306,8 +306,10 @@ function pageSummary(matches) {
     if (isRemake(s)) { t.remakes += 1; continue; }
     if (s.win) t.wins += 1; else t.losses += 1;
     t.kills += s.kills ?? 0; t.deaths += s.deaths ?? 0; t.assists += s.assists ?? 0;
-    t.cs += (s.totalMinionsKilled ?? 0) + (s.neutralMinionsKilled ?? 0);
-    t.minutes += (g.gameDuration ?? 0) / 60;
+    if (g.gameDuration) { // archived rows from before V0003 have no length; leave them out of CS/min
+      t.cs += (s.totalMinionsKilled ?? 0) + (s.neutralMinionsKilled ?? 0);
+      t.minutes += g.gameDuration / 60;
+    }
   }
   const played = t.wins + t.losses;
   return {
@@ -345,15 +347,30 @@ function scoreboard(match, puuid) {
   return [...teams.values()].sort((a, b) => a.teamId - b.teamId);
 }
 
-/** Where a player's history walk stands, from their row (`/v1/admin/tracked-players`) and their walk jobs. */
-function walkStatus(row, walkJobs) {
-  const live = walkJobs.find((j) => j.state === 'pending' || j.state === 'running');
-  if (live) return { state: live.state === 'running' ? 'walking' : 'queued', depth: row?.historyBackfillDepth ?? 0 };
+/** Where a player's history walk stands, from their row and their `backfill:player` job counts (`/v1/admin/players/{puuid}/archive`). */
+function walkStatus(row, walks = {}) {
+  const depth = row?.historyBackfillDepth ?? 0;
+  if (walks.running) return { state: 'walking', depth };
+  if (walks.pending) return { state: 'queued', depth };
   if (!row) return { state: 'unknown' };
-  if (row.historyBackfilledAt) return { state: 'complete', depth: row.historyBackfillDepth ?? 0, at: row.historyBackfilledAt };
-  if (row.historyBackfillStartedAt) return { state: 'stopped', depth: row.historyBackfillDepth ?? 0, at: row.historyBackfillStartedAt };
+  if (row.historyBackfilledAt) return { state: 'complete', depth, at: row.historyBackfilledAt };
+  if (row.historyBackfillStartedAt) return { state: 'stopped', depth, at: row.historyBackfillStartedAt };
   return { state: 'never' };
 }
+
+/** `/v1/admin/players/{puuid}/archive/matches` as a page shaped like the live one, so one table renders both. */
+function archivePage(res) {
+  if (res.status !== 200 || !res.json) return { failed: res };
+  const j = res.json;
+  const matches = (j.matches ?? []).map((l) => ({
+    matchId: l.matchId, queueId: l.queueId, gameDuration: l.gameDuration, gameEndTimestamp: l.gameEndTimestamp,
+    player: { win: l.win, kills: l.kills ?? 0, deaths: l.deaths ?? 0, assists: l.assists ?? 0, totalMinionsKilled: l.cs ?? 0, neutralMinionsKilled: 0, championId: l.championId, teamPosition: l.position, gameEndedInEarlySurrender: Boolean(l.remake) },
+  }));
+  return { matches, warnings: [], backfill: null, total: j.total, hasMore: j.start + matches.length < j.total };
+}
+
+/** How many pages `total` items make at `size` a page (at least one). */
+const pageCount = (total, size) => Math.max(1, Math.ceil(total / size));
 // ---------- end pure helpers ----------
 
 // ---------- history ----------
@@ -554,7 +571,7 @@ const xc = (r) => `<span class="chip">X-Cache: <b>${esc(Object.fromEntries(r.hea
 const when = (iso) => (iso ? new Date(iso).toLocaleString() : '—');
 
 /** The player on screen, and how their match list is paged and filtered. */
-const pl = { p: null, platform: '', raws: {}, page: 0, size: 10, queue: '', type: '', open: new Set(), matchCache: new Map() };
+const pl = { p: null, platform: '', raws: {}, source: 'riot', page: 0, size: 10, queue: '', type: '', open: new Set(), matchCache: new Map() };
 
 $('#plForm').onsubmit = async (ev) => {
   ev.preventDefault();
@@ -569,7 +586,7 @@ $('#plForm').onsubmit = async (ev) => {
   view($('#plView'), null);
   const prof = await call('GET', `/v1/players/by-riot-id/${encodeURIComponent(name)}/${encodeURIComponent(tag)}/profile?platform=${platform}&topMastery=5${refresh ? '&refresh=true' : ''}`);
   if (prof.status !== 200) { $('#plMsg').textContent = ''; view($('#plView'), prof, 'profile'); return; }
-  Object.assign(pl, { p: prof.json, platform, raws: { profile: prof }, page: 0, size: store.get('rp.dev.pageSize', 10), queue: '', type: '', open: new Set(), matchCache: new Map() });
+  Object.assign(pl, { p: prof.json, platform, raws: { profile: prof }, source: 'riot', page: 0, size: store.get('rp.dev.pageSize', 10), queue: '', type: '', open: new Set(), matchCache: new Map() });
   if (!PAGE_SIZES.includes(pl.size)) pl.size = 10;
   const names = await championNames();
   renderProfile(prof, names);
@@ -593,62 +610,74 @@ function renderProfile(prof, names) {
 // --- recent matches: paged, filtered, each row opens a scoreboard ---
 async function loadMatches({ refresh = false } = {}) {
   const [names, q] = await Promise.all([championNames(), queueNames()]);
-  const calls = pageCalls(pl.page, pl.size);
   const seq = (pl.seq = (pl.seq ?? 0) + 1);
   renderMatches(null, names, q, 'loading…');
-  const results = await Promise.all(calls.map((c, i) => {
-    const qs = new URLSearchParams({ platform: pl.platform, start: c.start, count: c.count });
+  let page;
+  if (pl.source === 'archive') {
+    // Everything stored for this player, from the archive: one call, no Riot quota.
+    const qs = new URLSearchParams({ start: pl.page * pl.size, count: pl.size });
     if (pl.queue) qs.set('queue', pl.queue);
-    if (pl.type) qs.set('type', pl.type);
-    if (refresh && i === 0) qs.set('refresh', 'true'); // once a minute per player, so only the first call asks
-    return call('GET', `/v1/players/${pl.p.puuid}/matches?${qs}`);
-  }));
+    const r = await call('GET', `/v1/admin/players/${encodeURIComponent(pl.p.puuid)}/archive/matches?${qs}`);
+    page = { ...archivePage(r), results: [r] };
+  } else {
+    const results = await Promise.all(pageCalls(pl.page, pl.size).map((c, i) => {
+      const qs = new URLSearchParams({ platform: pl.platform, start: c.start, count: c.count });
+      if (pl.queue) qs.set('queue', pl.queue);
+      if (pl.type) qs.set('type', pl.type);
+      if (refresh && i === 0) qs.set('refresh', 'true'); // once a minute per player, so only the first call asks
+      return call('GET', `/v1/players/${pl.p.puuid}/matches?${qs}`);
+    }));
+    page = { ...mergePages(results), results };
+  }
   if (seq !== pl.seq) return; // a newer page or filter was asked for meanwhile
-  results.forEach((r, i) => (pl.raws[`matches${i}`] = r));
-  pl.raws.matches = results[0];
-  renderMatches(results, names, q);
+  page.results.forEach((r, i) => (pl.raws[`matches${i}`] = r));
+  pl.raws.matches = page.results[0];
+  renderMatches(page, names, q);
 }
 
-function renderMatches(results, names, q, msg = '') {
+function renderMatches(page, names, q, msg = '') {
   const champ = (id) => names[id] ?? `#${id}`;
-  const page = results ? mergePages(results) : null;
-  const ms = results ? Math.max(...results.map((r) => r.ms)) : null;
+  const archive = pl.source === 'archive';
+  const ms = page ? Math.max(...page.results.map((r) => r.ms)) : null;
   const start = pl.page * pl.size;
   const n = page?.matches?.length ?? 0;
+  const pages = page?.total != null ? pageCount(page.total, pl.size) : null;
   const tools = `<div class="tools">
+    <label>source <select data-source><option value="riot" ${archive ? '' : 'selected'}>Riot (live)</option><option value="archive" ${archive ? 'selected' : ''}>Archive (all stored)</option></select></label>
     <label>per page <select data-size>${PAGE_SIZES.map((s) => `<option ${s === pl.size ? 'selected' : ''}>${s}</option>`).join('')}</select></label>
     <label>queue <select data-queue><option value="">any</option>${q.current.map((x) => `<option value="${x.queueId}" ${String(x.queueId) === pl.queue ? 'selected' : ''}>${x.queueId} · ${esc(x.description)}${x.map ? ` (${esc(x.map)})` : ''}</option>`).join('')}</select></label>
-    <label>type <select data-type><option value="">any</option>${['ranked', 'normal', 'tourney', 'tutorial'].map((t) => `<option ${t === pl.type ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+    <label title="${archive ? 'the archive filters by queue only' : ''}">type <select data-type ${archive ? 'disabled' : ''}><option value="">any</option>${['ranked', 'normal', 'tourney', 'tutorial'].map((t) => `<option ${t === pl.type ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+    ${archive ? `<button data-goto="0" ${pl.page === 0 || !page ? 'disabled' : ''}>« First</button>` : ''}
     <button data-page="-1" ${pl.page === 0 || !page ? 'disabled' : ''}>‹ Prev</button>
-    <span class="mono">page ${pl.page + 1}${n ? ` · ${start + 1}–${start + n}` : ''}</span>
+    <span class="mono">page ${pl.page + 1}${pages ? ` of ${pages}` : ''}${n ? ` · ${start + 1}–${start + n}` : ''}${page?.total != null ? ` of ${page.total}` : ''}</span>
     <button data-page="1" ${!page?.hasMore ? 'disabled' : ''}>Next ›</button>
-    <button data-reload title="re-read the id list (once a minute per player)">Refresh ids</button>
-    <span class="muted">${esc(msg)}${ms != null ? `${results.length} call${results.length > 1 ? 's' : ''} · ${ms} ms` : ''}</span>
+    ${archive ? `<button data-goto="${(pages ?? 1) - 1}" ${!page?.hasMore ? 'disabled' : ''}>Last »</button>` : '<button data-reload title="re-read the id list (once a minute per player)">Refresh ids</button>'}
+    <span class="muted">${esc(msg)}${ms != null ? `${page.results.length} call${page.results.length > 1 ? 's' : ''} · ${ms} ms` : ''}</span>
   </div>`;
   let body = '';
   if (page?.failed) {
-    body = `<div class="err">${esc(page.failed.json?.error?.code ?? page.failed.status)} ${esc(page.failed.json?.error?.message ?? page.failed.statusText)}</div>`;
+    body = `<div class="err">${esc(page.failed.json?.error?.code ?? page.failed.status)} ${esc(page.failed.json?.error?.message ?? page.failed.statusText)}</div>${archive ? '<p class="muted">The archive view needs an admin key (or AUTH_DISABLED).</p>' : ''}`;
   } else if (page) {
     const s = pageSummary(page.matches);
     const sum = s.games ? `<div class="sumline">
-      <span class="chip">${s.games} games</span><span class="chip"><b class="win">${s.wins}W</b> <b class="loss">${s.losses}L</b>${s.remakes ? ` · ${s.remakes} remake` : ''}</span>
+      <span class="chip">${s.games} games on this page</span><span class="chip"><b class="win">${s.wins}W</b> <b class="loss">${s.losses}L</b>${s.remakes ? ` · ${s.remakes} remake` : ''}</span>
       ${s.winRate != null ? `<span class="chip">win rate <b>${s.winRate}%</b></span>` : ''}${s.kda != null ? `<span class="chip">KDA <b>${s.kda}</b> (${s.kills}/${s.deaths}/${s.assists})</span>` : ''}${s.csPerMin != null ? `<span class="chip">CS/min <b>${s.csPerMin}</b></span>` : ''}
-      ${xc(results[0])}${page.backfill ? `<span class="chip">backfill <b>${esc(page.backfill.status)}</b> · ${page.backfill.limit} deep</span>` : ''}
+      ${archive ? '<span class="chip">from the archive · no Riot calls</span>' : xc(page.results[0])}${page.backfill ? `<span class="chip">backfill <b>${esc(page.backfill.status)}</b> · ${page.backfill.limit} deep</span>` : ''}
     </div>` : '';
     const rows = page.matches.map((g) => {
       const p = g.player ?? {};
       const res = isRemake(p) ? ['remake', 'muted'] : p.win ? ['win', 'win'] : ['loss', 'loss'];
       const open = pl.open.has(g.matchId);
-      return `<tr class="match ${open ? 'open' : ''}" data-match="${esc(g.matchId)}"><td class="${res[1]}">${res[0]}</td><td>${esc(p.championName ?? champ(p.championId))}</td><td>${p.kills}/${p.deaths}/${p.assists}</td><td>${(p.totalMinionsKilled ?? 0) + (p.neutralMinionsKilled ?? 0)} cs</td><td title="${esc(g.gameMode)}">${esc(q.names[g.queueId] ?? `${g.gameMode ?? ''} ${g.queueId ?? ''}`)}</td><td>${Math.round((g.gameDuration ?? 0) / 60)}m</td><td class="muted">${g.gameEndTimestamp ? new Date(g.gameEndTimestamp).toLocaleString() : ''}</td><td class="mono">${open ? '▾' : '▸'} ${esc(g.matchId)}</td></tr>`
+      return `<tr class="match ${open ? 'open' : ''}" data-match="${esc(g.matchId)}"><td class="${res[1]}">${res[0]}</td><td>${esc(p.championName ?? champ(p.championId))}</td><td>${p.kills}/${p.deaths}/${p.assists}</td><td>${(p.totalMinionsKilled ?? 0) + (p.neutralMinionsKilled ?? 0)} cs</td><td title="${esc(g.gameMode ?? '')}">${esc(q.names[g.queueId] ?? `${g.gameMode ?? 'queue'} ${g.queueId ?? ''}`)}</td><td>${g.gameDuration ? `${Math.round(g.gameDuration / 60)}m` : '—'}</td><td class="muted">${g.gameEndTimestamp ? new Date(g.gameEndTimestamp).toLocaleString() : ''}</td><td class="mono">${open ? '▾' : '▸'} ${esc(g.matchId)}</td></tr>`
         + (open ? `<tr class="detail" data-detail="${esc(g.matchId)}"><td colspan="8">${detailHtml(g.matchId)}</td></tr>` : '');
     }).join('');
+    const none = archive ? (pl.queue ? 'nothing archived in this queue' : 'nothing archived for this player yet') : `${pl.page ? 'no more matches' : 'no matches'}${pl.queue || pl.type ? ' for this filter' : ''}`;
     body = sum + (page.warnings.length ? `<div class="err">${esc(page.warnings.join('; '))}</div>` : '')
       + (rows ? `<table><tr><th></th><th>champion</th><th>KDA</th><th>CS</th><th>queue</th><th>length</th><th>ended</th><th>match</th></tr>${rows}</table>`
-        : `<span class="muted">${pl.page ? 'no more matches' : 'no matches'}${pl.queue || pl.type ? ' for this filter' : ''}</span>`);
+        : `<span class="muted">${none}</span>`);
   }
-  $('#plMatches').innerHTML = card('matches', `Recent matches <span class="muted">click a row for the scoreboard</span>`, tools + body, 'data-matches');
-  $('#plMatches').dataset.loaded = page && !page.failed ? '1' : '';
-  pl.lastResults = results;
+  $('#plMatches').innerHTML = card('matches', `${archive ? 'Archived matches' : 'Recent matches'} <span class="muted">click a row for the scoreboard</span>`, tools + body, 'data-matches');
+  pl.lastPage = page;
 }
 
 /** The open scoreboard for one match: loading, an error, or both teams. */
@@ -677,11 +706,12 @@ async function toggleMatch(id) {
   }
 }
 
-const rerenderMatches = async () => renderMatches(pl.lastResults, await championNames(), await queueNames());
+const rerenderMatches = async () => renderMatches(pl.lastPage, await championNames(), await queueNames());
 
 $('#plMatches').onchange = (e) => {
   const d = e.target.dataset;
-  if (d.size != null) { pl.size = Number(e.target.value); store.set('rp.dev.pageSize', pl.size); }
+  if (d.source != null) pl.source = e.target.value;
+  else if (d.size != null) { pl.size = Number(e.target.value); store.set('rp.dev.pageSize', pl.size); }
   else if (d.queue != null) pl.queue = e.target.value;
   else if (d.type != null) pl.type = e.target.value;
   else return;
@@ -696,46 +726,45 @@ $('#plMatches').onclick = (e) => {
   if (t.dataset.rawMatch) return view($('#plView'), pl.matchCache.get(t.dataset.rawMatch), t.dataset.rawMatch);
   if (t.dataset.closeMatch) { pl.open.delete(t.dataset.closeMatch); return rerenderMatches(); }
   if (t.dataset.page) { pl.page = Math.max(0, pl.page + Number(t.dataset.page)); pl.open.clear(); return loadMatches(); }
+  if (t.dataset.goto) { pl.page = Number(t.dataset.goto); pl.open.clear(); return loadMatches(); }
   if (t.dataset.reload != null) return loadMatches({ refresh: true });
   const row = t.closest('tr.match');
   if (row) toggleMatch(row.dataset.match);
 };
 
-// --- what the archive holds for this player, and what is queued ---
+// --- what the archive holds for this player, and what is queued (exact, from the server) ---
 async function loadArchive() {
   const puuid = pl.p.puuid;
-  const [players, walks, pendingArchive, failedArchive] = await Promise.all([
-    call('GET', '/v1/admin/tracked-players', null, { record: false }),
-    call('GET', '/v1/admin/jobs?kind=backfill:player&limit=500', null, { record: false }),
-    call('GET', '/v1/admin/jobs?kind=archive:match&state=pending&limit=500', null, { record: false }),
-    call('GET', '/v1/admin/jobs?kind=archive:match&state=failed&limit=500', null, { record: false }),
-  ]);
-  pl.raws.players = players;
-  pl.raws.walks = walks;
+  const [r, q] = await Promise.all([call('GET', `/v1/admin/players/${encodeURIComponent(puuid)}/archive`, null, { record: false }), queueNames()]);
+  pl.raws.archive = r;
   if (puuid !== pl.p?.puuid) return; // another lookup started meanwhile
   const el = $('#plArchive');
   if (!el) return;
-  if (players.status !== 200) {
-    el.innerHTML = card('players', 'History &amp; backfill', `<div class="err">${esc(players.json?.error?.code ?? players.status)} ${esc(players.json?.error?.message ?? '')}</div><p class="muted">Needs an admin key (or AUTH_DISABLED).</p>`);
+  if (r.status !== 200) {
+    el.innerHTML = card('archive', 'History &amp; backfill', `<div class="err">${esc(r.json?.error?.code ?? r.status)} ${esc(r.json?.error?.message ?? '')}</div><p class="muted">Needs an admin key (or AUTH_DISABLED).</p>`);
     return;
   }
-  const row = (players.json.players ?? []).find((x) => x.puuid === puuid);
-  const mine = (r) => (r.json?.jobs ?? []).filter((j) => j.payload?.puuid === puuid);
-  const walkJobs = mine(walks);
-  const w = walkStatus(row, walkJobs);
+  const { player: row, archive: a, jobs } = r.json;
+  const walks = jobs['backfill:player'] ?? {};
+  const fetches = jobs['archive:match'] ?? {};
+  const w = walkStatus(row, walks);
   const label = { walking: 'walking now', queued: 'walk queued', complete: 'complete', stopped: 'stopped part-way', never: 'never walked', unknown: 'not recorded yet' }[w.state];
-  const capped = (r) => `${mine(r).length}${(r.json?.jobs ?? []).length >= 500 ? '+' : ''}`;
-  const last = walkJobs[0];
-  el.innerHTML = card('players', `History &amp; backfill <button data-arch-reload>refresh</button>`, kv({
+  const last = (r.json.latestJobs ?? []).find((j) => j.kind === 'backfill:player');
+  const day = (iso) => (iso ? new Date(iso).toLocaleDateString() : '—');
+  const played = a.matches - a.remakes;
+  el.innerHTML = card('archive', `History &amp; backfill <button data-arch-reload>refresh</button>`, kv({
     tracked: row ? (row.tracked ? 'yes (polled for new games)' : 'no (looked up only)') : '—',
     'history walk': `${label}${w.depth != null ? ` · ${w.depth} ids deep` : ''}${w.at ? ` · ${when(w.at)}` : ''}`,
+    archived: `${a.matches} matches${a.remakes ? ` (${a.remakes} remakes)` : ''}${played > 0 ? ` · ${a.wins}W ${played - a.wins}L` : ''}${a.timelines ? ` · ${a.timelines} timelines` : ''}`,
+    'date range': a.matches ? `${day(a.oldestGameEnd)} – ${day(a.newestGameEnd)}` : '—',
+    'by queue': a.byQueue.map((x) => `${q.names[x.queueId] ?? `queue ${x.queueId}`}: ${x.matches}`).join(' · ') || '—',
     'newest seen match': row?.lastSeenMatchId ?? '—',
-    'matches queued to archive': capped(pendingArchive),
-    'archive fetches failed': capped(failedArchive),
+    'match fetches (7 d)': `${fetches.pending ?? 0} queued · ${fetches.running ?? 0} running · ${fetches.done ?? 0} done · ${fetches.failed ?? 0} failed`,
     'last walk job': last ? `${last.state}${last.error ? ` · ${last.error}` : ''} · ${last.payload?.limit ?? '?'} deep · ${when(last.finishedAt ?? last.claimedAt ?? last.runAfter)}` : '—',
   }) + `<div class="row" style="margin-top:8px">
+    <button data-browse ${a.matches ? '' : 'disabled'}>Browse all ${a.matches} archived</button>
     <button data-track="${row?.tracked ? 'off' : 'on'}">${row?.tracked ? 'Untrack' : 'Track'}</button>
-    <label>walk <input data-walk-limit type="number" min="1" max="10000" value="${Math.max(500, (w.depth ?? 0) + 500)}" style="width:80px"> deep</label>
+    <label>walk <input data-walk-limit type="number" min="1" max="10000" value="${Math.min(10000, Math.max(500, (w.depth ?? 0) + 500))}" style="width:80px"> deep</label>
     <button data-walk>Queue walk</button>
   </div>`);
 }
@@ -744,6 +773,12 @@ $('#plOut').onclick = async (e) => {
   const t = e.target;
   if (t.dataset.raw) return view($('#plView'), pl.raws[t.dataset.raw], t.dataset.raw);
   if (t.dataset.archReload != null) return loadArchive();
+  if (t.dataset.browse != null) {
+    Object.assign(pl, { source: 'archive', page: 0, type: '' });
+    pl.open.clear();
+    $('#plMatches').scrollIntoView?.({ behavior: 'smooth' });
+    return loadMatches();
+  }
   let res = null;
   if (t.dataset.track === 'on') {
     if (!confirm(`Track ${pl.p.account?.gameName}? It will be polled for new games.`)) return;
