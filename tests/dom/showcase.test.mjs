@@ -1,4 +1,4 @@
-// The showcase's home view (DEV-06) driven in jsdom: the real page, a fake
+// The showcase's home (DEV-06) and player (DEV-07) views driven in jsdom: the real page, a fake
 // same-origin API. Checks the wiring the pure-helper tests (tests/showcase.mjs)
 // can't: which calls each card makes, ladder paging and names, the status banner,
 // source chips and routing.
@@ -17,14 +17,52 @@ const LADDER = 60;
 const entry = (i) => ({ puuid: `P${i}`, leaguePoints: 1000 + i * 10, wins: 100 + i, losses: 100, rank: 'I', hotStreak: i === LADDER - 1, veteran: false, inactive: false, freshBlood: false });
 const CHAMPS = { data: { Annie: { key: '1', id: 'Annie', name: 'Annie', title: 'the Dark Child', image: { full: 'Annie.png' } }, Olaf: { key: '2', id: 'Olaf', name: 'Olaf', title: 'the Berserker', image: { full: 'Olaf.png' } } } };
 
-function api(calls, url, { status = {}, unauthorized = false } = {}) {
+// The player view: the proxy's ProfileBody, MatchPage and PlayerChampions (openapi),
+// with Riot's league-v4 LeagueEntryDTO, champion-mastery-v4 ChampionMasteryDto and
+// spectator-v5 CurrentGameInfo inside.
+const PUUID = 'PUUID-ME';
+const line = (i) => ({ puuid: PUUID, championId: 1 + (i % 2), championName: i % 2 ? 'Olaf' : 'Annie', kills: 5, deaths: 2, assists: 9, champLevel: 16, totalMinionsKilled: 180, neutralMinionsKilled: 6, goldEarned: 12000, totalDamageDealtToChampions: 21000, summoner1Id: 4, summoner2Id: 14, item0: 1001, item1: 0, item6: 3340, teamId: 100, win: i % 3 !== 1, gameEndedInEarlySurrender: i === 2 });
+const summary = (i) => ({ matchId: `OC1_${700000 + i}`, queueId: 420, gameMode: 'CLASSIC', gameCreation: Date.now() - 3600000, gameEndTimestamp: Date.now() - 1800000, gameDuration: 1865, gameVersion: '16.19.1', player: line(i) });
+function players(p, u, { live = false, refreshWait = 0 }) {
+  const by = p.match(/^\/v1\/players\/by-riot-id\/([^/]+)\/([^/]+)\/profile$/);
+  if (by) {
+    if (decodeURIComponent(by[1]) === 'Nobody') return [404, { error: { code: 'NOT_FOUND', message: 'no such Riot ID', requestId: 'r' } }];
+    return [200, { puuid: PUUID, platform: 'oc1', region: 'sea', refreshed: u.searchParams.get('refresh') === 'true', refreshAvailableIn: refreshWait, warnings: [], ageSeconds: { account: 0, summoner: 0, league: 0, mastery: 0 },
+      account: { puuid: PUUID, gameName: decodeURIComponent(by[1]), tagLine: decodeURIComponent(by[2]) },
+      summoner: { puuid: PUUID, profileIconId: 6, revisionDate: 1, summonerLevel: 939 },
+      league: [{ queueType: 'RANKED_SOLO_5x5', tier: 'CHALLENGER', rank: 'I', puuid: PUUID, leaguePoints: 2178, wins: 410, losses: 335, veteran: false, inactive: false, freshBlood: false, hotStreak: true }],
+      mastery: [{ puuid: PUUID, championId: 2, championLevel: 59, championPoints: 623792 }] }];
+  }
+  if (p === `/v1/players/${PUUID}/matches`) {
+    const start = Number(u.searchParams.get('start'));
+    const n = start === 0 ? 10 : 3;
+    return [200, { puuid: PUUID, platform: 'oc1', region: 'sea', start, count: 10, hasMore: n === 10, matchIdsAgeSeconds: 0, refreshed: false, refreshAvailableIn: 0, warnings: [],
+      matchIds: Array.from({ length: n }, (_, i) => `OC1_${700000 + start + i}`), matches: Array.from({ length: n }, (_, i) => summary(start + i)),
+      ...(start === 0 ? { backfill: { jobId: 'j1', status: 'queued', limit: 4294967295 } } : {}) }];
+  }
+  if (p === `/v1/players/${PUUID}/champions`) return [200, { puuid: PUUID, platform: 'oc1', queue: null, patch: null, archivedGames: 12, champions: [
+    { championId: 2, championName: 'Olaf', games: 8, wins: 6, winRate: 0.75, avgKda: 3.5, csPerMin: 6.2, lastPlayedAt: '2026-10-01T00:00:00Z' },
+    { championId: 1, championName: 'Annie', games: 4, wins: 1, winRate: 0.25, avgKda: null, csPerMin: null, lastPlayedAt: null },
+  ] }];
+  if (p === `/v1/lol/mastery/by-puuid/oc1/${PUUID}`) return [200, Array.from({ length: 15 }, (_, i) => ({ puuid: PUUID, championId: i + 1, championLevel: 5, championPoints: 1000 * (i + 1), lastPlayTime: 1 }))];
+  if (p === `/v1/lol/spectator/active/oc1/${PUUID}`) return live
+    ? [200, { gameId: 1, gameType: 'MATCHED_GAME', gameQueueConfigId: 420, gameMode: 'CLASSIC', gameStartTime: Date.now() - 600000, gameLength: 590, platformId: 'OC1', participants: [{ puuid: PUUID, championId: 1, teamId: 100, spell1Id: 4, spell2Id: 14 }, { puuid: 'X', championId: 2, teamId: 200, spell1Id: 4, spell2Id: 11 }] }]
+    : [404, { error: { code: 'NOT_FOUND', message: 'not in a game', requestId: 'r' } }];
+  return null;
+}
+
+function api(calls, url, { status = {}, unauthorized = false, ...opts } = {}) {
   const u = new URL(url, 'http://localhost');
   calls.push(`${u.pathname}${u.search}`);
   const p = u.pathname;
   if (p === '/dev/config.json') return [200, { authDisabled: !unauthorized, version: 'test', env: 'development', platforms: [{ value: 'oc1', label: 'Oceania', region: 'sea' }, { value: 'kr', label: 'Korea', region: 'asia' }], regions: ['sea', 'asia'] }];
   if (p === '/v1/static/versions') return [200, { current: '16.19.1', versions: ['16.19.1'] }];
   if (p === '/v1/static/champion') return [200, CHAMPS];
+  if (p === '/v1/static/summoner') return [200, { data: { SummonerFlash: { key: '4', image: { full: 'SummonerFlash.png' } }, SummonerDot: { key: '14', image: { full: 'SummonerDot.png' } } } }];
+  if (p === '/v1/static/queues') return [200, [{ queueId: 420, map: "Summoner's Rift", description: '5v5 Ranked Solo games', notes: null }, { queueId: 440, map: "Summoner's Rift", description: '5v5 Ranked Flex games', notes: null }]];
   if (unauthorized) return [401, { error: { code: 'UNAUTHORIZED', message: 'missing key', requestId: 'r' } }];
+  const pl = players(p, u, opts);
+  if (pl) return pl;
   if (p.startsWith('/v1/lol/status/')) return [200, { id: 'OC1', name: 'Oceania', locales: ['en_US'], maintenances: [], incidents: [], ...status }];
   if (p.startsWith('/v1/lol/league/apex/')) return [200, { tier: p.split('/')[6], queue: p.split('/')[7], name: 'L', leagueId: 'x', entries: Array.from({ length: LADDER }, (_, i) => entry(i)) }];
   if (p.startsWith('/v1/riot/accounts/by-puuid/')) { const id = p.split('/').pop(); return [200, { puuid: id, gameName: `Player ${id}`, tagLine: 'OCE' }]; }
@@ -106,8 +144,9 @@ test('clicking a named ladder row routes to the player view', async () => {
   const p = await page();
   await p.click('#ladder tbody tr');
   assert.equal(p.w.location.hash, `#/player/Player%20P${LADDER - 1}/OCE`);
-  assert.ok(p.text('#view').includes(`Player P${LADDER - 1} #OCE`));
-  assert.ok(p.text('#view').includes('DEV-07'));
+  assert.ok(p.calls.includes(`/v1/players/by-riot-id/Player%20P${LADDER - 1}/OCE/profile?platform=oc1&topMastery=3`));
+  assert.ok(p.text('#pHead').includes(`Player P${LADDER - 1} #OCE`));
+  assert.deepEqual(p.errors, []);
 });
 
 test('the status banner shows only when there is something to report', async () => {
@@ -160,4 +199,137 @@ test('search goes to the player route; a bad Riot ID stays put', async () => {
   form.dispatchEvent(new p.w.Event('submit', { cancelable: true }));
   await p.settle();
   assert.equal(p.w.location.hash, '#/player/Hide%20on%20bush/KR1');
+});
+
+// ---------- player view (DEV-07)
+
+const playerPage = (opts = {}) => page({ hash: '#/player/Faker/KR1', ...opts });
+
+test('the player view loads the profile, then matches, pool, mastery and live game for its PUUID', async () => {
+  const p = await playerPage();
+  for (const c of [
+    '/v1/players/by-riot-id/Faker/KR1/profile?platform=oc1&topMastery=3',
+    `/v1/players/${PUUID}/matches?platform=oc1&start=0&count=10`,
+    `/v1/players/${PUUID}/champions?platform=oc1&limit=10`,
+    `/v1/lol/mastery/by-puuid/oc1/${PUUID}`,
+    `/v1/lol/spectator/active/oc1/${PUUID}`,
+    '/v1/static/queues',
+    '/v1/static/summoner',
+  ]) assert.ok(p.calls.includes(c), c);
+  assert.ok(p.text('#pHead').includes('Faker #KR1'));
+  assert.ok(p.text('#pHead').includes('Level 939'));
+  assert.equal(p.$('#pHead img.avatar').getAttribute('src'), '/ddragon/16.19.1/img/profileicon/6.png');
+  assert.deepEqual([...p.w.document.querySelectorAll('#pHead .mains img')].map((i) => i.alt), ['Olaf'], 'top mastery from the profile');
+  assert.deepEqual(p.errors, []);
+});
+
+test('rank cards: Challenger without a division, unranked Flex', async () => {
+  const p = await playerPage();
+  const cards = [...p.w.document.querySelectorAll('#pRanks .rank')].map((r) => r.textContent.replace(/\s+/g, ' ').trim());
+  assert.equal(cards.length, 2);
+  assert.match(cards[0], /^Solo\/Duo Challenger 2178 LP\s?hot 410W 335L · 55\.0%$/);
+  assert.match(cards[1], /^Flex Unranked/);
+});
+
+test('match cards: result, queue name, KDA, CS per minute, spells and items from the mirror', async () => {
+  const p = await playerPage();
+  const cards = [...p.w.document.querySelectorAll('#pMatches .match')];
+  assert.equal(cards.length, 10);
+  assert.deepEqual(cards.slice(0, 3).map((c) => c.className), ['match win', 'match loss', 'match remake']);
+  const first = cards[0].textContent.replace(/\s+/g, ' ');
+  for (const bit of ['Victory', '5v5 Ranked Solo games', '31:05', '5 / 2 / 9', '7.00 KDA', '186 CS', '(6.0/min)', '12,000 gold']) assert.ok(first.includes(bit), bit);
+  const srcs = [...cards[0].querySelectorAll('img')].map((i) => i.getAttribute('src'));
+  assert.deepEqual(srcs, [
+    '/ddragon/16.19.1/img/champion/Annie.png',
+    '/ddragon/16.19.1/img/spell/SummonerFlash.png', '/ddragon/16.19.1/img/spell/SummonerDot.png',
+    '/ddragon/16.19.1/img/item/1001.png', '/ddragon/16.19.1/img/item/3340.png',
+  ], 'empty item slots (0) have no image');
+  assert.equal(cards[0].querySelectorAll('.items > *').length, 7);
+  assert.ok(p.text('#pMatches').includes('queued the player\'s history for archiving (queued)'));
+});
+
+test('load more appends the next page and stops when there is no more', async () => {
+  const p = await playerPage();
+  await p.click('#pMatches [data-more]');
+  assert.ok(p.calls.includes(`/v1/players/${PUUID}/matches?platform=oc1&start=10&count=10`));
+  assert.equal(p.w.document.querySelectorAll('#pMatches .match').length, 13);
+  assert.equal(p.$('#pMatches [data-more]'), null);
+});
+
+test('the queue tabs filter match history and the champion pool together', async () => {
+  const p = await playerPage();
+  await p.click('#pMatches [data-mqueue="420"]');
+  assert.ok(p.calls.includes(`/v1/players/${PUUID}/matches?platform=oc1&start=0&count=10&queue=420`));
+  assert.ok(p.calls.includes(`/v1/players/${PUUID}/champions?platform=oc1&limit=10&queue=420`));
+  assert.ok(p.$('#pMatches [data-mqueue="420"]').classList.contains('on'));
+  assert.deepEqual(p.errors, []);
+});
+
+test('champion pool and mastery', async () => {
+  const p = await playerPage();
+  const pool = [...p.w.document.querySelectorAll('#pPool tbody tr')].map((r) => r.textContent.replace(/\s+/g, ' ').trim());
+  assert.deepEqual(pool, ['Olaf 8 75.0% 3.50 6.2', 'Annie 4 25.0% – –']);
+  assert.ok(p.text('#pPool').includes('12 archived games'));
+  assert.ok(p.text('#pMastery').includes('15 champions · 120,000 points'));
+  const shown = () => p.w.document.querySelectorAll('#pMastery .champ').length;
+  assert.equal(shown(), 12);
+  assert.equal(p.$('#pMastery .champ').getAttribute('href'), '#/champion/15', 'highest points first');
+  await p.click('#pMastery [data-mastery]');
+  assert.equal(shown(), 15);
+});
+
+test('the live-game banner shows only while the player is in a game', async () => {
+  const idle = await playerPage();
+  assert.equal(idle.$('#pLive').children.length, 0, 'spectator 404: nothing');
+  assert.deepEqual(idle.errors, []);
+  const live = await playerPage({ live: true });
+  const t = live.text('#pLive');
+  assert.ok(t.includes('Live now') && t.includes('5v5 Ranked Solo games'));
+  assert.match(t, /10:0\d/);
+  assert.equal(live.w.document.querySelectorAll('#pLive .team').length, 2);
+  assert.equal(live.$('#pLive .team .me img').alt, 'Annie');
+});
+
+test('refresh re-reads the profile and the match page, and waits out its window', async () => {
+  const p = await playerPage();
+  await p.click('#pHead [data-refresh]');
+  assert.ok(p.calls.includes('/v1/players/by-riot-id/Faker/KR1/profile?platform=oc1&topMastery=3&refresh=true'));
+  assert.ok(p.calls.includes(`/v1/players/${PUUID}/matches?platform=oc1&start=0&count=10&refresh=true`));
+  assert.ok(p.text('#pHead').includes('Refreshed'));
+  const waiting = await playerPage({ refreshWait: 42 });
+  assert.ok(waiting.$('#pHead [data-refresh]').disabled);
+  assert.match(waiting.$('#pHead [data-refresh]').title, /42 s/);
+});
+
+test('an unknown Riot ID says so; the search box routes to the player view', async () => {
+  const p = await page({ hash: '#/player/Nobody/0000' });
+  assert.ok(p.text('#pHead').includes('No player Nobody #0000'));
+  assert.equal(p.calls.filter((c) => c.includes('/matches')).length, 0);
+  p.$('#search').elements.id.value = 'Faker#KR1';
+  p.$('#search').requestSubmit();
+  await p.settle();
+  assert.equal(p.w.location.hash, '#/player/Faker/KR1');
+  assert.ok(p.text('#pHead').includes('Faker #KR1'));
+  assert.deepEqual(p.errors, []);
+});
+
+test('every player card names its calls', async () => {
+  const p = await playerPage({ live: true });
+  const chips = (sel) => [...p.w.document.querySelectorAll(`${sel} .src`)].map((a) => a.textContent);
+  assert.deepEqual(chips('#pHead'), ['GET /v1/players/by-riot-id/{gameName}/{tagLine}/profile', 'GET /v1/static/{file}']);
+  assert.deepEqual(chips('#pRanks'), ['GET /v1/players/by-riot-id/{gameName}/{tagLine}/profile']);
+  assert.deepEqual(chips('#pMatches'), ['GET /v1/players/{puuid}/matches', 'GET /v1/static/queues', 'GET /v1/static/{file}']);
+  assert.deepEqual(chips('#pPool'), ['GET /v1/players/{puuid}/champions']);
+  assert.deepEqual(chips('#pMastery'), ['GET /v1/lol/mastery/by-puuid/{platform}/{puuid}']);
+  assert.deepEqual(chips('#pLive'), ['GET /v1/lol/spectator/active/{platform}/{puuid}']);
+});
+
+test('leaving the player view before its calls finish draws nothing over the next view', async () => {
+  const p = await playerPage();
+  p.w.location.hash = '#/player/Other/OCE';
+  p.w.location.hash = '#/';
+  await p.settle();
+  assert.ok(p.$('#ladder'), 'home view');
+  assert.equal(p.$('#pMatches'), null);
+  assert.deepEqual(p.errors, []);
 });
