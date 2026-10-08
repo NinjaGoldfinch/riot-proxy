@@ -23,13 +23,14 @@ pub struct SqliteArchive {
     db: Db,
     /// Whose PUUIDs the fetched bodies carry, for `match_facts`.
     scope: KeyScope,
-    /// `ARCHIVE_TIMELINES`: also store timelines. Stored ones are served either way.
-    timelines: bool,
 }
 
 impl SqliteArchive {
-    pub fn new(db: Db, scope: KeyScope, timelines: bool) -> Self {
-        Self { db, scope, timelines }
+    /// Every fetched match and timeline is stored: both are immutable. A timeline
+    /// is stored once its match is (the foreign key). `ARCHIVE_TIMELINES` only
+    /// decides whether archive jobs fetch timelines (ADR-085).
+    pub fn new(db: Db, scope: KeyScope) -> Self {
+        Self { db, scope }
     }
 }
 
@@ -83,14 +84,13 @@ impl Archive for SqliteArchive {
                 )
                 .await
                 .map(|_| ()),
-                Kind::Timeline if self.timelines => match matches::put_timeline(&self.db, &id, body).await {
+                Kind::Timeline => match matches::put_timeline(&self.db, &id, body).await {
                     Ok(false) => {
                         tracing::debug!(match_id = %id, "timeline not archived: its match is not archived yet");
                         Ok(())
                     }
                     other => other.map(|_| ()),
                 },
-                Kind::Timeline => Ok(()),
             };
             if let Err(e) = result {
                 tracing::warn!(error = %e, match_id = %id, "archive write failed");

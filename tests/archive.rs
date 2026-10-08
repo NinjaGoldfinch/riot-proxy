@@ -115,29 +115,33 @@ async fn a_read_keys_refresh_is_still_served_from_the_archive() {
     assert_eq!(e.upstream_calls().await, 1);
 }
 
+/// Timelines are immutable like matches: a fetched one is archived whatever
+/// `ARCHIVE_TIMELINES` says, which only decides whether archive jobs fetch them (ADR-085).
 #[tokio::test]
-async fn timelines_are_archived_only_with_archive_timelines() {
+async fn a_fetched_timeline_is_archived_whatever_archive_timelines_says() {
     let tl = format!("/v1/lol/matches/asia/{MATCH_ID}/timeline");
-
-    let off = env(&[]).await;
-    off.get(&format!("/v1/lol/matches/asia/{MATCH_ID}")).await;
-    for _ in 0..2 {
-        let r = off.get(&tl).await;
-        assert_eq!((r.status, x_cache(&r)), (StatusCode::OK, "MISS"));
+    for vars in [
+        &[][..],
+        &[("ARCHIVE_TIMELINES", "false")],
+        &[("ARCHIVE_TIMELINES", "true")],
+    ] {
+        let e = env(vars).await;
+        e.get(&format!("/v1/lol/matches/asia/{MATCH_ID}")).await;
+        assert_eq!(x_cache(&e.get(&tl).await), "MISS", "{vars:?}");
+        assert_eq!(e.archived("timelines").await, 1, "{vars:?}");
+        let r = e.get(&tl).await;
+        assert_eq!(
+            (r.status, x_cache(&r), r.body.as_slice()),
+            (StatusCode::OK, "ARCHIVE", TIMELINE.as_bytes()),
+            "{vars:?}"
+        );
+        assert_eq!(e.upstream_calls().await, 2, "one match, one timeline: {vars:?}");
     }
-    assert_eq!(off.archived("timelines").await, 0);
-
-    let on = env(&[("ARCHIVE_TIMELINES", "true")]).await;
-    on.get(&format!("/v1/lol/matches/asia/{MATCH_ID}")).await;
-    assert_eq!(x_cache(&on.get(&tl).await), "MISS");
-    let r = on.get(&tl).await;
-    assert_eq!((x_cache(&r), r.body.as_slice()), ("ARCHIVE", TIMELINE.as_bytes()));
-    assert_eq!(on.upstream_calls().await, 2, "one match, one timeline");
 }
 
 #[tokio::test]
 async fn a_timeline_before_its_match_is_not_archived() {
-    let e = env(&[("ARCHIVE_TIMELINES", "true")]).await;
+    let e = env(&[]).await;
     let r = e.get(&format!("/v1/lol/matches/asia/{MATCH_ID}/timeline")).await;
     assert_eq!((r.status, x_cache(&r)), (StatusCode::OK, "MISS"));
     assert_eq!(e.archived("timelines").await, 0);

@@ -52,7 +52,7 @@ impl Env {
     fn ctx(&self) -> ArchiveContext {
         let config = common::config(&[]);
         let key = KeyScope::from_key(&config.riot_api_key);
-        let archive = Arc::new(SqliteArchive::new(self.db.clone(), key, false));
+        let archive = Arc::new(SqliteArchive::new(self.db.clone(), key));
         ArchiveContext {
             fetcher: common::fetcher(
                 &config,

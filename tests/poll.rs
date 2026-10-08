@@ -38,7 +38,7 @@ async fn env(catchup_limit: u32) -> Env {
     let server = MockServer::start().await;
     let config = common::config(&[]);
     let scope = KeyScope::from_key(&config.riot_api_key);
-    let archive = Arc::new(SqliteArchive::new(db.clone(), scope.clone(), false));
+    let archive = Arc::new(SqliteArchive::new(db.clone(), scope.clone()));
     let fetcher = common::fetcher(&config, &server.uri(), Arc::new(Limiter::new(0.8)), Some(archive));
     let hub = Hub::new();
     let events = hub.subscribe(&Topic::named(FIREHOSE));
