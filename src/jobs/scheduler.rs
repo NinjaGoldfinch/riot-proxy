@@ -297,10 +297,10 @@ pub struct JobRow {
 /// The four states a row can be in (V0001).
 pub const STATES: [&str; 4] = ["pending", "running", "done", "failed"];
 
-const ROW_COLUMNS: &str =
+pub(crate) const ROW_COLUMNS: &str =
     "id, kind, dedupe_key, priority, payload, state, attempts, run_after, claimed_at, finished_at, error";
 
-fn full_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<JobRow> {
+pub(crate) fn full_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<JobRow> {
     Ok(JobRow {
         id: r.get(0)?,
         kind: r.get(1)?,
@@ -331,7 +331,57 @@ pub enum JobAction {
     Db(#[from] DbError),
 }
 
+/// The queue as the workers see it (DEV-13): what is running, and what they
+/// claim next, in the claim order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueueView {
+    /// Oldest claim first.
+    pub running: Vec<JobRow>,
+    /// Ready jobs in the order `claim` takes them: `priority, run_after, id`.
+    pub next: Vec<JobRow>,
+    /// Pending and due now.
+    pub ready: i64,
+    /// Pending but waiting out a backoff or a schedule.
+    pub delayed: i64,
+    /// When the soonest delayed job comes due.
+    pub next_delayed_at: Option<i64>,
+}
+
+/// The order `claim` takes ready jobs in (design/06 §Claiming). Kept beside the
+/// views that mirror it, so "up next" means what the workers will do.
+pub(crate) const CLAIM_ORDER: &str = "priority ASC, run_after ASC, id ASC";
+
 impl Queue {
+    /// Running jobs and the next `limit` a worker would claim (DEV-13).
+    pub async fn view(&self, now_ms: i64, limit: u32) -> Result<QueueView, DbError> {
+        self.db
+            .read(move |c| {
+                let running = c
+                    .prepare(&format!(
+                        "SELECT {ROW_COLUMNS} FROM jobs WHERE state = 'running' ORDER BY claimed_at ASC, id ASC"
+                    ))?
+                    .query_map([], full_row)?
+                    .collect::<Result<Vec<_>, _>>()?;
+                let next = c
+                    .prepare(&format!(
+                        "SELECT {ROW_COLUMNS} FROM jobs WHERE state = 'pending' AND run_after <= ?1
+                          ORDER BY {CLAIM_ORDER} LIMIT ?2"
+                    ))?
+                    .query_map(rusqlite::params![now_ms, limit], full_row)?
+                    .collect::<Result<Vec<_>, _>>()?;
+                let (ready, delayed, next_delayed_at) = c.query_row(
+                    "SELECT count(*) FILTER (WHERE run_after <= ?1),
+                            count(*) FILTER (WHERE run_after > ?1),
+                            min(run_after) FILTER (WHERE run_after > ?1)
+                       FROM jobs WHERE state = 'pending'",
+                    [now_ms],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )?;
+                Ok(QueueView { running, next, ready, delayed, next_delayed_at })
+            })
+            .await
+    }
+
     /// Rows, newest first, optionally one state and one kind.
     pub async fn list(
         &self,

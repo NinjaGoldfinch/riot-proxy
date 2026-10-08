@@ -1136,3 +1136,507 @@ async fn the_names_route_queues_one_pass_and_counts_whom_it_is_for() {
         StatusCode::FORBIDDEN
     );
 }
+
+// ── Activity (DEV-13) ───────────────────────────────────────────────────────
+
+/// A raw job row, so a test can put the queue in any state.
+#[allow(clippy::too_many_arguments)]
+async fn put_job(
+    db: &Db,
+    id: &str,
+    kind: &str,
+    dedupe: &str,
+    priority: i64,
+    payload: Value,
+    state: &str,
+    run_after: i64,
+    finished_at: Option<i64>,
+) {
+    let (id, kind, dedupe, payload, state) = (
+        id.to_string(),
+        kind.to_string(),
+        dedupe.to_string(),
+        payload.to_string(),
+        state.to_string(),
+    );
+    db.write(move |c| {
+        c.execute(
+            "INSERT INTO jobs (id, kind, dedupe_key, priority, payload, state, attempts, run_after, claimed_at, finished_at, error)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?7, ?8, CASE WHEN ?6 = 'failed' THEN 'gave up' END)",
+            rusqlite::params![id, kind, dedupe, priority, payload, state, run_after, finished_at],
+        )?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+}
+
+async fn sql(db: &Db, statement: &str, args: Vec<Value>) {
+    let (statement, args) = (statement.to_string(), args);
+    db.write(move |c| {
+        let params: Vec<Box<dyn rusqlite::ToSql>> = args
+            .iter()
+            .map(|v| -> Box<dyn rusqlite::ToSql> {
+                match v {
+                    Value::Number(n) => Box::new(n.as_i64().unwrap()),
+                    other => Box::new(other.as_str().unwrap().to_string()),
+                }
+            })
+            .collect();
+        c.execute(
+            &statement,
+            rusqlite::params_from_iter(params.iter().map(AsRef::as_ref)),
+        )?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+}
+
+fn now_ms() -> i64 {
+    riot_proxy::clock::Clock::now().unix_ms
+}
+
+#[tokio::test]
+async fn a_crawls_activity_shows_each_stage_its_jobs_and_its_place_in_the_queue() {
+    use riot_proxy::jobs::ladder::order;
+    use riot_proxy::jobs::priority;
+    let a = app(&[]).await;
+    let start = |platform: &'static str| {
+        let a = &a;
+        async move {
+            a.call(
+                "POST",
+                "/v1/admin/ladder/crawl",
+                &a.admin,
+                Some(json!({"platform": platform, "tierFloor": "DIAMOND"})),
+            )
+            .await
+            .json()["crawlId"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        }
+    };
+    let id = start("kr").await;
+    let _other = start("euw1").await; // its jobs are not this crawl's
+    let get = |id: String| {
+        let a = &a;
+        async move {
+            a.call("GET", &format!("/v1/admin/ladder/crawls/{id}"), &a.admin, None)
+                .await
+        }
+    };
+    let stage = |v: &Value, i: usize| {
+        let s = &v["stages"][i];
+        (
+            s["name"].as_str().unwrap().to_string(),
+            s["state"].as_str().unwrap().to_string(),
+            s["done"].clone(),
+            s["total"].clone(),
+        )
+    };
+
+    // Fresh: enumeration is under way, nothing done; the later stages wait.
+    let v = get(id.clone()).await.json();
+    assert_eq!(v["crawl"]["id"], json!(id));
+    assert_eq!(
+        stage(&v, 0),
+        ("enumerate".into(), "now".into(), json!(0), json!(7)),
+        "3 apex + 4 Diamond divisions"
+    );
+    assert_eq!(
+        stage(&v, 1),
+        ("collect".into(), "waiting".into(), json!(0), Value::Null)
+    );
+    assert_eq!(
+        stage(&v, 2),
+        ("archive".into(), "waiting".into(), json!(0), Value::Null)
+    );
+    assert_eq!(v["openLegs"].as_array().unwrap().len(), 7);
+    assert_eq!(v["running"], json!([]));
+    let next: Vec<&str> = v["next"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|j| j["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        next,
+        [
+            "ladder:apex",
+            "ladder:apex",
+            "ladder:apex",
+            "ladder:walk",
+            "ladder:walk",
+            "ladder:walk",
+            "ladder:walk"
+        ],
+        "claim order: apex band first"
+    );
+    assert!(
+        v["next"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|j| j["payload"]["crawlId"] == json!(id)),
+        "only this crawl's jobs"
+    );
+    assert_eq!(
+        v["ahead"],
+        json!(0),
+        "kr was queued first; euw1's legs share the band but wait behind it"
+    );
+
+    // A walk on page 4, a leg finished just now, something urgent queued, one leg failed.
+    let now = now_ms();
+    let first_walk = v["next"][3]["id"].as_str().unwrap().to_string();
+    sql(
+        &a.state.db,
+        "UPDATE jobs SET state = 'running', claimed_at = ?1 WHERE id = ?2",
+        vec![json!(now), json!(first_walk)],
+    )
+    .await;
+    sql(
+        &a.state.db,
+        "UPDATE crawl_legs SET cursor = 4 WHERE crawl_id = ?1 AND leg = 'ladder:walk:DIAMOND:I'",
+        vec![json!(id)],
+    )
+    .await;
+    let first_apex = v["next"][0]["id"].as_str().unwrap().to_string();
+    sql(
+        &a.state.db,
+        "UPDATE jobs SET state = 'done', finished_at = ?1 WHERE id = ?2",
+        vec![json!(now), json!(first_apex)],
+    )
+    .await;
+    sql(
+        &a.state.db,
+        "DELETE FROM crawl_legs WHERE crawl_id = ?1 AND leg = 'ladder:apex:CHALLENGER'",
+        vec![json!(id)],
+    )
+    .await;
+    put_job(
+        &a.state.db,
+        "01AAAAAAAAAAAAAAAAAAAAAAAA",
+        kinds::ARCHIVE_MATCH,
+        "KR_9",
+        priority::INTERACTIVE,
+        json!({"matchId": "KR_9"}),
+        "pending",
+        now - 1,
+        None,
+    )
+    .await;
+    put_job(
+        &a.state.db,
+        "01AAAAAAAAAAAAAAAAAAAAAAAB",
+        kinds::LADDER_WALK,
+        "x",
+        order::WALK,
+        json!({"crawlId": id, "tier": "DIAMOND", "division": "IV"}),
+        "failed",
+        now - 5,
+        Some(now - 5),
+    )
+    .await;
+
+    let v = get(id.clone()).await.json();
+    let s = &v["stages"][0];
+    assert_eq!(
+        (
+            s["done"].clone(),
+            s["total"].clone(),
+            s["recent"].clone(),
+            s["etaSeconds"].clone()
+        ),
+        (json!(1), json!(7), json!(1), json!(3600)),
+        "6 left at 1 per 10 min"
+    );
+    assert_eq!(v["running"].as_array().unwrap().len(), 1);
+    assert_eq!(v["running"][0]["kind"], "ladder:walk");
+    let walk = v["openLegs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["leg"] == "ladder:walk:DIAMOND:I")
+        .unwrap();
+    assert_eq!(walk["page"], json!(4));
+    assert_eq!(
+        v["next"].as_array().unwrap().len(),
+        5,
+        "two left the queue: one running, one done"
+    );
+    assert_eq!(v["ahead"], json!(1), "the urgent match goes first");
+    assert_eq!(v["failed"][0]["error"], "gave up");
+
+    // Collect: 60 players are three batches of 25; one is done.
+    sql(
+        &a.state.db,
+        "DELETE FROM crawl_legs WHERE crawl_id = ?1",
+        vec![json!(id)],
+    )
+    .await;
+    sql(
+        &a.state.db,
+        "UPDATE ladder_crawls SET phase = 'collect', backfills_enqueued = 60 WHERE id = ?1",
+        vec![json!(id)],
+    )
+    .await;
+    sql(
+        &a.state.db,
+        "INSERT INTO crawl_legs (crawl_id, leg) VALUES (?1, 'ladder:collect:25'), (?1, 'ladder:collect:50')",
+        vec![json!(id)],
+    )
+    .await;
+    let v = get(id.clone()).await.json();
+    assert_eq!(
+        stage(&v, 0),
+        ("enumerate".into(), "done".into(), json!(7), json!(7))
+    );
+    assert_eq!(stage(&v, 1), ("collect".into(), "now".into(), json!(1), json!(3)));
+    assert_eq!(
+        stage(&v, 2),
+        ("archive".into(), "waiting".into(), json!(0), Value::Null)
+    );
+
+    // Archive: 250 ids seen, 100 still in the set, so 150 handed on.
+    sql(
+        &a.state.db,
+        "DELETE FROM crawl_legs WHERE crawl_id = ?1",
+        vec![json!(id)],
+    )
+    .await;
+    sql(
+        &a.state.db,
+        "UPDATE ladder_crawls SET phase = 'archive', match_ids_seen = 250 WHERE id = ?1",
+        vec![json!(id)],
+    )
+    .await;
+    sql(
+        &a.state.db,
+        "INSERT INTO crawl_legs (crawl_id, leg) VALUES (?1, 'ladder:archive')",
+        vec![json!(id)],
+    )
+    .await;
+    sql(&a.state.db, "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 100) INSERT INTO crawl_match_ids SELECT ?1, 'KR_' || i FROM n", vec![json!(id)]).await;
+    // Downloads on kr: two ready, one fetched just now; other platforms and bands do not count.
+    put_job(
+        &a.state.db,
+        "01AAAAAAAAAAAAAAAAAAAAAAAC",
+        kinds::ARCHIVE_MATCH,
+        "KR_1",
+        order::MATCH,
+        json!({"matchId": "KR_1"}),
+        "pending",
+        now - 1,
+        None,
+    )
+    .await;
+    put_job(
+        &a.state.db,
+        "01AAAAAAAAAAAAAAAAAAAAAAAD",
+        kinds::ARCHIVE_MATCH,
+        "KR_2",
+        order::MATCH,
+        json!({"matchId": "KR_2"}),
+        "pending",
+        now - 1,
+        None,
+    )
+    .await;
+    put_job(
+        &a.state.db,
+        "01AAAAAAAAAAAAAAAAAAAAAAAE",
+        kinds::ARCHIVE_MATCH,
+        "KR_3",
+        order::MATCH,
+        json!({"matchId": "KR_3"}),
+        "done",
+        now - 1,
+        Some(now - 1),
+    )
+    .await;
+    put_job(
+        &a.state.db,
+        "01AAAAAAAAAAAAAAAAAAAAAAAF",
+        kinds::ARCHIVE_MATCH,
+        "EUW1_4",
+        order::MATCH,
+        json!({"matchId": "EUW1_4"}),
+        "pending",
+        now - 1,
+        None,
+    )
+    .await;
+    put_job(
+        &a.state.db,
+        "01AAAAAAAAAAAAAAAAAAAAAAAG",
+        kinds::ARCHIVE_MATCH,
+        "KRX5",
+        order::MATCH,
+        json!({"matchId": "KRX5"}),
+        "pending",
+        now - 1,
+        None,
+    )
+    .await;
+    let v = get(id.clone()).await.json();
+    assert_eq!(
+        stage(&v, 1),
+        ("collect".into(), "done".into(), json!(3), json!(3))
+    );
+    assert_eq!(
+        stage(&v, 2),
+        ("archive".into(), "now".into(), json!(150), json!(250))
+    );
+    assert_eq!(v["stages"][2]["unit"], "ids");
+    assert_eq!(
+        v["downloads"],
+        json!({"platform": "kr", "ready": 2, "delayed": 0, "running": 0, "failed": 0, "recent": 1, "etaSeconds": 1200}),
+        "`_` is not a wildcard: KRX5 is not kr's"
+    );
+
+    // Cancelled in the archive stage: the earlier stages are done, it stopped there.
+    a.call("DELETE", &format!("/v1/admin/ladder/crawls/{id}"), &a.admin, None)
+        .await;
+    let v = get(id.clone()).await.json();
+    assert_eq!(v["crawl"]["status"], "cancelled");
+    assert_eq!(
+        stage(&v, 1),
+        ("collect".into(), "done".into(), json!(3), json!(3))
+    );
+    assert_eq!(
+        stage(&v, 2),
+        ("archive".into(), "stopped".into(), Value::Null, json!(250))
+    );
+    assert_eq!(
+        (v["openLegs"].clone(), v["ahead"].clone()),
+        (json!([]), Value::Null)
+    );
+
+    let unknown = get("01J9ZZZZZZZZZZZZZZZZZZZZZZ".into()).await;
+    assert_eq!(unknown.status, StatusCode::NOT_FOUND);
+    assert_eq!(get("nope".into()).await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        a.call("GET", &format!("/v1/admin/ladder/crawls/{id}"), &a.reader, None)
+            .await
+            .status,
+        StatusCode::FORBIDDEN
+    );
+}
+
+#[tokio::test]
+async fn the_queue_view_lists_running_jobs_and_the_next_in_claim_order() {
+    use riot_proxy::jobs::priority;
+    let a = app(&[]).await;
+    let now = now_ms();
+    let db = &a.state.db;
+    put_job(
+        db,
+        "01AAAAAAAAAAAAAAAAAAAAAAA1",
+        kinds::MAINTENANCE,
+        "m",
+        priority::MAINTENANCE,
+        json!({}),
+        "pending",
+        now - 10,
+        None,
+    )
+    .await;
+    put_job(
+        db,
+        "01AAAAAAAAAAAAAAAAAAAAAAA2",
+        kinds::ARCHIVE_MATCH,
+        "OC1_1",
+        priority::ARCHIVE_DEPTH,
+        json!({"matchId": "OC1_1"}),
+        "pending",
+        now - 5,
+        None,
+    )
+    .await;
+    put_job(
+        db,
+        "01AAAAAAAAAAAAAAAAAAAAAAA3",
+        kinds::ARCHIVE_MATCH,
+        "OC1_2",
+        priority::ARCHIVE_DEPTH,
+        json!({"matchId": "OC1_2"}),
+        "pending",
+        now - 20,
+        None,
+    )
+    .await;
+    put_job(
+        db,
+        "01AAAAAAAAAAAAAAAAAAAAAAA4",
+        kinds::POLL_LIVE,
+        "p",
+        priority::POLL,
+        json!({}),
+        "running",
+        now - 30,
+        None,
+    )
+    .await;
+    put_job(
+        db,
+        "01AAAAAAAAAAAAAAAAAAAAAAA5",
+        kinds::ARCHIVE_MATCH,
+        "OC1_3",
+        priority::INTERACTIVE,
+        json!({"matchId": "OC1_3"}),
+        "pending",
+        now + 60_000,
+        None,
+    )
+    .await;
+    put_job(
+        db,
+        "01AAAAAAAAAAAAAAAAAAAAAAA6",
+        kinds::ARCHIVE_MATCH,
+        "OC1_4",
+        priority::INTERACTIVE,
+        json!({"matchId": "OC1_4"}),
+        "done",
+        now - 40,
+        Some(now - 1),
+    )
+    .await;
+
+    let v = a.call("GET", "/v1/admin/jobs/queue", &a.admin, None).await.json();
+    let ids = |k: &str| -> Vec<String> {
+        v[k].as_array()
+            .unwrap()
+            .iter()
+            .map(|j| j["dedupeKey"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(ids("running"), ["p"]);
+    assert_eq!(
+        ids("next"),
+        ["OC1_2", "OC1_1", "m"],
+        "priority, then run_after; the delayed one is not ready"
+    );
+    assert_eq!((v["ready"].clone(), v["delayed"].clone()), (json!(3), json!(1)));
+    assert!(v["nextDelayedAt"].as_str().unwrap().ends_with('Z'));
+
+    let one = a
+        .call("GET", "/v1/admin/jobs/queue?limit=1", &a.admin, None)
+        .await
+        .json();
+    assert_eq!(one["next"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        a.call("GET", "/v1/admin/jobs/queue?limit=0", &a.admin, None)
+            .await
+            .json()["error"]["message"],
+        "querystring/limit must be >= 1"
+    );
+    assert_eq!(
+        a.call("GET", "/v1/admin/jobs/queue", &a.reader, None)
+            .await
+            .status,
+        StatusCode::FORBIDDEN
+    );
+}

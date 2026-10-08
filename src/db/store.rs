@@ -43,10 +43,11 @@ pub fn claim_sql(engine: Engine) -> String {
         "UPDATE jobs SET state = 'running', claimed_at = $1, attempts = attempts + 1
           WHERE id = (SELECT id FROM jobs
                        WHERE state = 'pending' AND run_after <= $1
-                       ORDER BY priority ASC, run_after ASC, id ASC
+                       ORDER BY {order}
                        LIMIT 1{lock})
           RETURNING {}",
-        scheduler::COLUMNS
+        scheduler::COLUMNS,
+        order = scheduler::CLAIM_ORDER,
     )
 }
 

@@ -1,6 +1,5 @@
 ---
 source: tests/openapi.rs
-assertion_line: 12
 expression: doc
 ---
 {
@@ -847,6 +846,179 @@ expression: doc
         ],
         "type": "object"
       },
+      "CrawlActivity": {
+        "properties": {
+          "ahead": {
+            "description": "Ready jobs of any kind a worker takes before this crawl's next one; `null` when it has\nnothing ready.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "asOf": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "crawl": {
+            "$ref": "#/components/schemas/LadderCrawlSummary"
+          },
+          "downloads": {
+            "$ref": "#/components/schemas/CrawlDownloads"
+          },
+          "failed": {
+            "description": "Its failed jobs, newest first.",
+            "items": {
+              "$ref": "#/components/schemas/JobSummary"
+            },
+            "type": "array"
+          },
+          "next": {
+            "description": "Its next jobs in claim order: ready first, then any waiting out a backoff.",
+            "items": {
+              "$ref": "#/components/schemas/JobSummary"
+            },
+            "type": "array"
+          },
+          "openLegs": {
+            "description": "Legs still outstanding, with a walk's page.",
+            "items": {
+              "$ref": "#/components/schemas/OpenWalk"
+            },
+            "type": "array"
+          },
+          "running": {
+            "description": "This crawl's jobs running now.",
+            "items": {
+              "$ref": "#/components/schemas/JobSummary"
+            },
+            "type": "array"
+          },
+          "stages": {
+            "items": {
+              "$ref": "#/components/schemas/CrawlStage"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "crawl",
+          "asOf",
+          "stages",
+          "openLegs",
+          "running",
+          "next",
+          "ahead",
+          "failed",
+          "downloads"
+        ],
+        "type": "object"
+      },
+      "CrawlDownloads": {
+        "description": "The crawl-found matches being fetched on this crawl's platform. After the hand-off an\n`archive:match` job only names its match, so these count every crawl on the platform.",
+        "properties": {
+          "delayed": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "etaSeconds": {
+            "description": "Seconds to fetch what is queued at that pace; `null` when idle.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "failed": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "platform": {
+            "type": "string"
+          },
+          "ready": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "recent": {
+            "description": "Fetched in the last ten minutes.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "running": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "platform",
+          "ready",
+          "delayed",
+          "running",
+          "failed",
+          "recent",
+          "etaSeconds"
+        ],
+        "type": "object"
+      },
+      "CrawlStage": {
+        "description": "One stage of a crawl and how far through it is.",
+        "properties": {
+          "done": {
+            "description": "Units finished; `null` where it cannot be known (a stage a stopped crawl ended in).",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "etaSeconds": {
+            "description": "Seconds left at that pace; `null` when idle or not running.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "`enumerate`, `collect` or `archive`.",
+            "type": "string"
+          },
+          "recent": {
+            "description": "Units this crawl finished in the last ten minutes.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "state": {
+            "description": "`done`, `now`, `waiting`, or for a crawl that ended early `stopped` (where it ended) and\n`skipped` (never reached).",
+            "type": "string"
+          },
+          "total": {
+            "description": "Units in the stage; `null` until the stage before has ended.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "unit": {
+            "description": "`legs` (apex leagues and division walks), `batches` (25 players' match ids) or `ids` (handed\nto the archive queue).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "state",
+          "done",
+          "total",
+          "unit",
+          "recent",
+          "etaSeconds"
+        ],
+        "type": "object"
+      },
       "CreateConsumer": {
         "description": "`POST /v1/admin/consumers` body.",
         "properties": {
@@ -1104,6 +1276,49 @@ expression: doc
         },
         "required": [
           "jobs"
+        ],
+        "type": "object"
+      },
+      "JobQueue": {
+        "properties": {
+          "delayed": {
+            "description": "Pending but waiting out a backoff.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "next": {
+            "description": "What the workers claim next, in claim order (`priority`, then `runAfter`, then id).",
+            "items": {
+              "$ref": "#/components/schemas/JobSummary"
+            },
+            "type": "array"
+          },
+          "nextDelayedAt": {
+            "description": "When the soonest delayed job comes due.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ready": {
+            "description": "Pending and due.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "running": {
+            "description": "Running now, oldest claim first.",
+            "items": {
+              "$ref": "#/components/schemas/JobSummary"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "running",
+          "next",
+          "ready",
+          "delayed",
+          "nextDelayedAt"
         ],
         "type": "object"
       },
@@ -1585,6 +1800,28 @@ expression: doc
           "intervalS",
           "maxPoints",
           "points"
+        ],
+        "type": "object"
+      },
+      "OpenWalk": {
+        "description": "A walk in flight: a (tier, division) leg and the page it is on.",
+        "properties": {
+          "leg": {
+            "description": "`ladder:walk:GOLD:II`, `ladder:apex:MASTER`, `ladder:collect:50`, `ladder:archive`.",
+            "type": "string"
+          },
+          "page": {
+            "description": "A walk's next page; `null` for a leg that has not started paging.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "leg",
+          "page"
         ],
         "type": "object"
       },
@@ -3969,6 +4206,90 @@ expression: doc
         ]
       }
     },
+    "/v1/admin/jobs/queue": {
+      "get": {
+        "description": "The running jobs and the next ones a worker would claim, in the claim order (design/06 §Claiming), with how many are ready and how many wait out a backoff.",
+        "operationId": "job_queue",
+        "parameters": [
+          {
+            "description": "1–100 jobs in `next`, default 15",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobQueue"
+                }
+              }
+            },
+            "description": "The queue"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          }
+        },
+        "summary": "What is running and what runs next",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/v1/admin/jobs/stats": {
       "get": {
         "description": "Rows of the job queue by kind and state. `done` rows are kept for seven days (design/06).",
@@ -4463,6 +4784,87 @@ expression: doc
           }
         },
         "summary": "Cancel a running ladder crawl",
+        "tags": [
+          "admin"
+        ]
+      },
+      "get": {
+        "description": "Where a crawl is: each stage's progress (legs, match-id batches, ids handed to the archive queue) with pace and ETA over the last ten minutes, the legs in flight with a walk's page, the crawl's running, next and failed jobs, how many queued jobs are ahead of it, and the platform's crawl-found match downloads. Admin views only: it scans the job queue.",
+        "operationId": "crawl_activity",
+        "parameters": [
+          {
+            "description": "Crawl id (ULID)",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrawlActivity"
+                }
+              }
+            },
+            "description": "The crawl's activity"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          }
+        },
+        "summary": "One crawl's progress and jobs",
         "tags": [
           "admin"
         ]
