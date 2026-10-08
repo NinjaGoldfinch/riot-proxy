@@ -18,7 +18,7 @@ test *ARGS:
 
 # The dev explorer page in jsdom against a fake API (needs node)
 ui-test:
-    cd tests/dom && npm ci --no-audit --no-fund && npm test
+    cd tests/dom && npm ci --no-audit --no-fund && npx playwright-core install chromium-headless-shell && npm test
 
 # rustfmt check + clippy with warnings as errors (what CI runs)
 lint:

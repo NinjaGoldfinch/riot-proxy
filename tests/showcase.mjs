@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 const html = readFileSync(new URL('../src/ui/showcase.html', import.meta.url), 'utf8');
 const block = html.match(/\/\/ -{10} pure helpers[^\n]*\n([\s\S]*?)\/\/ -{10} end pure helpers/);
 assert.ok(block, 'the pure helpers block is marked in showcase.html');
-const h = new Function(`${block[1]}; return { APEX, QUEUES, LADDER_PAGE, tierColour, winRate, pct, sortLadder, ladderPage, championIndex, imageUrl, statusNotices, byChampion, topChampions, parseRiotId, parseRoute, explorerLink, rankLabel, rankCards, queueNames, spellIndex, outcome, kda, durationSecs, clock, ago, masterySummary, liveGame, TIERS, SIDES, matchHref, matchTeams, goldDiff, goldScale, signedGold, tierRows, runeNames, itemIndex, roleList };`)();
+const h = new Function(`${block[1]}; return { APEX, QUEUES, LADDER_PAGE, tierColour, winRate, pct, sortLadder, ladderPage, championIndex, imageUrl, statusNotices, byChampion, topChampions, parseRiotId, parseRoute, explorerLink, rankLabel, rankCards, queueNames, spellIndex, outcome, kda, durationSecs, clock, ago, masterySummary, liveGame, TIERS, SIDES, matchHref, matchTeams, goldDiff, goldScale, signedGold, tierRows, runeNames, itemIndex, roleList, thousands };`)();
 
 test('apex tiers and queues are the ones the apex route accepts', () => {
   assert.deepEqual(h.APEX, ['CHALLENGER', 'GRANDMASTER', 'MASTER']);
@@ -266,4 +266,11 @@ test('matchup lanes come back in teamPosition order', () => {
   assert.deepEqual(h.roleList([{ role: 'MIDDLE' }, { role: 'TOP' }, { role: 'MIDDLE' }]), ['TOP', 'MIDDLE']);
   assert.deepEqual(h.roleList(undefined), []);
   assert.deepEqual(h.SIDES, { 100: 'Blue side', 200: 'Red side' });
+});
+
+test('thousands shorten to one decimal from 1,000', () => {
+  assert.equal(h.thousands(12000), '12.0k');
+  assert.equal(h.thousands(21345), '21.3k');
+  assert.equal(h.thousands(999), '999');
+  assert.equal(h.thousands(undefined), '0');
 });

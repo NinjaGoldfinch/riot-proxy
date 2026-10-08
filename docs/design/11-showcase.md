@@ -23,7 +23,9 @@ It is in the page bar (design/10 §Page bar) as **Showcase**, right after Dev ex
 - **No platform by default** (ADR-065). The page asks for one and remembers it in `rp.showcase.platform`.
 - **Teaching first.** Each card carries chips naming its operations; a chip opens that operation in `/dev#explorer`. The **API calls** drawer at the bottom lists every call the page made, with status, time and `X-Cache`.
 - **No invented Riot semantics.** Bodies are read as Riot documents them (league-v4 `LeagueListDTO`, champion-v3 `ChampionInfo`, lol-status-v4 `PlatformDataDto`) or as the proxy's spec does. Rank emblems are not in Data Dragon, so tiers are CSS badges.
-- Pure helpers sit in a marked block that `tests/showcase.mjs` unit-tests; `tests/dom/showcase.test.mjs` drives the page in jsdom against a fake API.
+- Pure helpers sit in a marked block that `tests/showcase.mjs` unit-tests; `tests/dom/showcase.test.mjs` drives the page in jsdom against a fake API (`tests/dom/fake-api.mjs`).
+- **Layout is tested in a real browser** (`tests/dom/showcase.browser.test.mjs`, headless Chromium via `playwright-core`, ADR-084). Every view is checked at 1280, 820 and 390 px against the same fake API, with real PNGs at Data Dragon's sizes. The checks: every icon renders at its class's size (22, 28, 48 px, avatar 64) whatever the image's own size; nothing is wider than its box or the window; compact lines (match-card stats, rank cards, names, numbers, chips) stay on one line; match-card parts don't overlap; table cells stay table cells; the gold tooltip stays inside the chart. Screenshots of each view are a CI artifact.
+- **Sizing rules:** a class sets an icon's size and an image only fills that box. Names and chips end in an ellipsis rather than wrap. Queue labels drop Riot's trailing "games". On phones, match cards put the result row on top and drop CS, and scoreboards drop CS, lane and the damage bar.
 
 ## Page map
 
