@@ -239,6 +239,33 @@ impl Queue {
         Ok(out)
     }
 
+    /// Queue a job, or, when a pending duplicate holds its dedupe key, lift
+    /// that row to `job`'s priority and make it ready now (never lower or
+    /// later than it was), then wake a worker. A running duplicate is left
+    /// alone. For work someone asked for by hand that should not wait behind
+    /// the queue (DEV-18).
+    pub async fn enqueue_or_promote(&self, job: NewJob) -> Result<Enqueued, DbError> {
+        let now = Clock::now().unix_ms;
+        let out = self
+            .db
+            .write(move |c| {
+                let tx = c.transaction()?;
+                let out = enqueue_on(&tx, &job, now)?;
+                if !out.created {
+                    tx.execute(
+                        "UPDATE jobs SET priority = MIN(priority, ?2), run_after = MIN(run_after, ?3)
+                          WHERE id = ?1 AND state = 'pending'",
+                        params![out.id, job.priority, job.run_after.unwrap_or(now)],
+                    )?;
+                }
+                tx.commit()?;
+                Ok::<_, DbError>(out)
+            })
+            .await?;
+        self.notify.notify_one();
+        Ok(out)
+    }
+
     /// Queue several jobs in one write; returns how many were new.
     pub async fn enqueue_all(&self, jobs: Vec<NewJob>) -> Result<usize, DbError> {
         if jobs.is_empty() {

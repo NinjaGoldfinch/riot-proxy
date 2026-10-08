@@ -56,6 +56,17 @@ pub async fn enqueue_aggregate(queue: &Queue, platform: &str, ladder: &str) -> R
     queue.enqueue(aggregate_job(platform, ladder)).await
 }
 
+/// A recompute asked for by hand (`POST /v1/admin/analytics/recompute`,
+/// DEV-18): it goes ahead of every queued job, so the next free worker
+/// rebuilds from the matches archived so far instead of after a crawl's
+/// downloads. No running job is interrupted. A rebuild already queued for
+/// the ladder is moved up rather than queued twice. It makes no Riot call.
+pub async fn enqueue_aggregate_now(queue: &Queue, platform: &str, ladder: &str) -> Result<Enqueued, DbError> {
+    let mut job = aggregate_job(platform, ladder);
+    job.priority = priority::INTERACTIVE;
+    queue.enqueue_or_promote(job).await
+}
+
 /// One sweep at a time (v1).
 pub fn reextract_job() -> NewJob {
     NewJob::new(kinds::FACTS_REEXTRACT, priority::MAINTENANCE, json!({})).dedupe(kinds::FACTS_REEXTRACT)

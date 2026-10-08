@@ -145,6 +145,7 @@ test('Recompute now offers the ladder options and queues the chosen ladder', asy
     await p.settle();
     assert.deepEqual(p.calls.bodies, [['/v1/admin/analytics/recompute', { platform: 'oc1', queue: 'RANKED_FLEX_SR' }]]);
     assert.ok(p.text('#analyticsResult').includes('Queued oc1 · RANKED_FLEX_SR'));
+    assert.ok(p.text('#analyticsResult').includes('ahead of the queue'));
     assert.ok(p.$('#analyticsResult').classList.contains('good'));
     assert.equal(p.$('#analyticsStart').disabled, false, 'ready for another');
     p.$('#analyticsPlatform').value = 'euw1';

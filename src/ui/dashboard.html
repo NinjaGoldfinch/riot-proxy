@@ -1849,8 +1849,8 @@
       }
 
       /**
-       * Queues `aggregate:analytics` for one ladder. The route answers once the
-       * job is queued, not when it has run: the run lands in the table below on
+       * Queues `aggregate:analytics` for one ladder, ahead of every queued job
+       * (DEV-18). The route answers once the job is queued, not when it has run: the run lands in the table below on
        * a later snapshot, with its steps and row counts.
        */
       $('analyticsStart').addEventListener('click', async () => {
@@ -1874,8 +1874,8 @@
           const body = await res.json();
           note(
             'analyticsResult',
-            `Queued ${body.platform} · ${body.queue} — it runs once the jobs ahead of it ` +
-              `are done, and shows in the table below.`,
+            `Queued ${body.platform} · ${body.queue} — the next free worker runs it, ahead of ` +
+              `the queue, on the matches archived so far. It shows in the table below.`,
             'good',
           );
         } catch (err) {
