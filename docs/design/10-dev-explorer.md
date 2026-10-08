@@ -26,7 +26,7 @@ flowchart TD
   B -- no --> C{DEV_UI set?}
   C -- "false" --> OFF
   C -- "unset / true" --> ON[dev_ui = true]
-  ON --> R["routes::ui::router mounts<br/>/dev · /dev/config.json · /dev/openapi.json<br/>routes::dev::router mounts /dev/reset (admin)"]
+  ON --> R["routes::ui::router mounts<br/>/dev · /dev/showcase · /dev/config.json · /dev/openapi.json<br/>routes::dev::router mounts /dev/reset (admin)"]
   OFF --> N["no /dev routes →<br/>fallback 404 envelope"]
 ```
 
@@ -130,10 +130,10 @@ Deletes every piece of fetched data so the proxy starts from empty, without a re
 
 ## Page bar (DEV-10)
 
-`/dev` and `/dashboard` share one bar across the top: **riot-proxy · Dashboard · Dev explorer · API docs · Metrics**, with the version and environment on the right.
+`/dev`, `/dev/showcase` and `/dashboard` share one bar across the top: **riot-proxy · Dashboard · Dev explorer · Showcase · API docs · Metrics**, with the version and environment on the right.
 
 - It is built once at startup by `routes::ui::pagebar` and injected at the `<!-- pagebar -->` marker in each page. Both pages stay single files with no shared asset, and the bar comes from one place.
-- **It lists only pages this config serves** (`routes::ui::pages`): Dashboard under `DASHBOARD_UI`, Dev explorer under `dev_ui`, API docs under `DOCS_UI`, and `/metrics` always. In production the dashboard's bar never links to `/dev`.
+- **It lists only pages this config serves** (`routes::ui::pages`): Dashboard under `DASHBOARD_UI`, Dev explorer and Showcase (design/11) under `dev_ui`, API docs under `DOCS_UI`, and `/metrics` always. In production the dashboard's bar never links to `/dev`.
 - The current page is marked `aria-current="page"`. The bar sticks to the top while the page scrolls.
 - It is a `div role="navigation"` with its own `rp-bar` class, so the pages' own `nav` rules don't restyle it. The dev page's old header links and version badge are gone, since the bar replaces them.
 - `/docs` (Scalar) is third-party HTML, so it gets no bar.

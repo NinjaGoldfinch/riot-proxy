@@ -1,5 +1,5 @@
-//! `/dev` and `/dashboard` (plan P4-06, DEV-01): served without a key when
-//! enabled, 404 when not, and their config documents.
+//! `/dev`, `/dev/showcase` and `/dashboard` (plan P4-06, DEV-01, DEV-06): served
+//! without a key when enabled, 404 when not, and their config documents.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;
@@ -39,14 +39,12 @@ fn dev_ui_is_self_contained() {
     assert!(html.contains("/dev/openapi.json"));
 }
 
-/// The page's pure helpers (paging, summary, scoreboard, walk status) pass their
-/// unit tests in `tests/dev_ui.mjs` (DEV-02). Needs `node`, which GitHub's runners
-/// have; a local run without it skips, CI fails.
-#[test]
-fn dev_ui_helpers_pass_their_node_tests() {
+/// Runs `node --test <file>` from the crate root. Needs `node`, which GitHub's
+/// runners have; a local run without it skips, CI fails.
+fn node_test(file: &str) {
     let dir = env!("CARGO_MANIFEST_DIR");
     let out = match std::process::Command::new("node")
-        .args(["--test", "tests/dev_ui.mjs"])
+        .args(["--test", file])
         .current_dir(dir)
         .output()
     {
@@ -59,10 +57,17 @@ fn dev_ui_helpers_pass_their_node_tests() {
     };
     assert!(
         out.status.success(),
-        "node --test tests/dev_ui.mjs failed:\n{}{}",
+        "node --test {file} failed:\n{}{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+/// The page's pure helpers (paging, summary, scoreboard, walk status) pass their
+/// unit tests in `tests/dev_ui.mjs` (DEV-02).
+#[test]
+fn dev_ui_helpers_pass_their_node_tests() {
+    node_test("tests/dev_ui.mjs");
 }
 
 /// Every response window can be closed, and the match list pages 10, 25 or 50 (DEV-02).
@@ -150,7 +155,7 @@ async fn dev_ui_is_off_in_production_and_by_flag() {
         vec![("DEV_UI", "false")],
     ] {
         let (_d, router) = app(&env);
-        for p in ["/dev", "/dev/config.json", "/dev/openapi.json"] {
+        for p in ["/dev", "/dev/showcase", "/dev/config.json", "/dev/openapi.json"] {
             assert_eq!(
                 common::get(router.clone(), p).await.status,
                 StatusCode::NOT_FOUND,
@@ -212,7 +217,11 @@ fn bar(html: &str) -> &str {
 #[tokio::test]
 async fn pages_share_a_bar_with_the_pages_that_exist() {
     let (_d, router) = app(&[("DOCS_UI", "true")]);
-    for (path, here) in [("/dev", "Dev explorer"), ("/dashboard", "Dashboard")] {
+    for (path, here) in [
+        ("/dev", "Dev explorer"),
+        ("/dev/showcase", "Showcase"),
+        ("/dashboard", "Dashboard"),
+    ] {
         let html = String::from_utf8(common::get(router.clone(), path).await.body).unwrap();
         assert!(
             !html.contains(riot_proxy::routes::ui::PAGEBAR_MARK),
@@ -225,7 +234,11 @@ async fn pages_share_a_bar_with_the_pages_that_exist() {
             .skip(1)
             .map(|s| &s[..s.find('"').unwrap()])
             .collect();
-        assert_eq!(hrefs, ["/dashboard", "/dev", "/docs", "/metrics"], "{path}");
+        assert_eq!(
+            hrefs,
+            ["/dashboard", "/dev", "/dev/showcase", "/docs", "/metrics"],
+            "{path}"
+        );
         assert_eq!(bar.matches("aria-current").count(), 1, "{path}");
         assert!(
             bar.contains(&format!(r#"aria-current="page">{here}</a>"#)),
@@ -256,4 +269,127 @@ async fn every_bar_link_resolves() {
             "{href}"
         );
     }
+}
+
+// ---------- the showcase (DEV-06, design/11)
+
+#[tokio::test]
+async fn showcase_is_served_without_a_key() {
+    let (_d, router) = app(&[]);
+    let r = common::get(router, "/dev/showcase").await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.headers["content-type"], "text/html; charset=utf-8");
+    assert_eq!(r.headers["cache-control"], "no-store");
+    let body = String::from_utf8(r.body).unwrap();
+    let config = common::config(&[]);
+    assert_eq!(
+        body,
+        riot_proxy::routes::ui::render(riot_proxy::routes::ui::SHOWCASE_HTML, &config, "/dev/showcase")
+    );
+}
+
+/// One file; images come from the local Data Dragon mirror (ADR-076), never Riot's CDN.
+#[test]
+fn showcase_is_self_contained() {
+    let html = riot_proxy::routes::ui::SHOWCASE_HTML;
+    for needle in ["http://", "https://", "<script src", "<link "] {
+        assert!(!html.contains(needle), "showcase.html contains {needle:?}");
+    }
+    assert!(html.contains("/dev/config.json"));
+    assert!(html.contains("/ddragon/"));
+}
+
+#[test]
+fn showcase_helpers_pass_their_node_tests() {
+    node_test("tests/showcase.mjs");
+}
+
+/// The page's coverage block: `{showcased: {op: where}, notShowcased: {op: why}}`.
+fn coverage() -> (
+    serde_json::Map<String, serde_json::Value>,
+    serde_json::Map<String, serde_json::Value>,
+) {
+    let html = riot_proxy::routes::ui::SHOWCASE_HTML;
+    let open = r#"<script type="application/json" id="coverage">"#;
+    let start = html.find(open).expect("coverage block") + open.len();
+    let end = start + html[start..].find("</script>").unwrap();
+    let doc: serde_json::Value = serde_json::from_str(&html[start..end]).expect("coverage is JSON");
+    let list = |k: &str| {
+        doc[k]
+            .as_object()
+            .unwrap_or_else(|| panic!("{k} is an object"))
+            .clone()
+    };
+    (list("showcased"), list("notShowcased"))
+}
+
+/// The "change it when the proxy changes" rule (design/11): every `GET` read
+/// route a consumer frontend could call is shown on the page or left out with a
+/// reason, and neither list names a route that no longer exists.
+#[test]
+fn showcase_covers_every_read_route() {
+    const READ_TAGS: [&str; 4] = ["players", "riot", "lol", "static"];
+    let spec = serde_json::to_value(riot_proxy::routes::docs::spec()).unwrap();
+    let mut read = std::collections::BTreeSet::new();
+    let mut all_gets = std::collections::BTreeSet::new();
+    for (path, item) in spec["paths"].as_object().unwrap() {
+        let Some(op) = item.get("get") else { continue };
+        let id = format!("GET {path}");
+        all_gets.insert(id.clone());
+        let tags: Vec<&str> = op["tags"]
+            .as_array()
+            .map(|t| t.iter().filter_map(|x| x.as_str()).collect())
+            .unwrap_or_default();
+        if tags.iter().any(|t| READ_TAGS.contains(t)) {
+            read.insert(id);
+        }
+    }
+    let (shown, left_out) = coverage();
+    let mut problems = vec![];
+    for id in &read {
+        match (shown.contains_key(id), left_out.contains_key(id)) {
+            (false, false) => problems.push(format!(
+                "{id} is a read route the showcase neither uses nor lists in notShowcased (src/ui/showcase.html)"
+            )),
+            (true, true) => problems.push(format!("{id} is in both showcased and notShowcased")),
+            _ => {}
+        }
+    }
+    for id in shown.keys().chain(left_out.keys()) {
+        if !all_gets.contains(id) {
+            problems.push(format!("{id} is listed in the showcase but is not in the spec"));
+        } else if !read.contains(id) {
+            problems.push(format!("{id} is not a read route (tags {READ_TAGS:?})"));
+        }
+    }
+    for (id, why) in &left_out {
+        if why.as_str().is_none_or(|w| w.trim().is_empty()) {
+            problems.push(format!("{id} is left out without a reason"));
+        }
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
+
+/// A route marked as shown is really called by the page: its path up to the
+/// first parameter appears in the script.
+#[test]
+fn showcased_routes_are_called_by_the_page() {
+    let html = riot_proxy::routes::ui::SHOWCASE_HTML;
+    let script = &html[html.find(r#"<script type="module">"#).unwrap()..];
+    let (shown, _) = coverage();
+    for id in shown.keys() {
+        let path = id.trim_start_matches("GET ");
+        let stem = &path[..path.find('{').unwrap_or(path.len())];
+        assert!(
+            script.contains(&format!("`{stem}")) || script.contains(&format!("'{stem}")),
+            "{id}: the page never calls {stem}"
+        );
+    }
+}
+
+/// A card's chip names the operation it used and opens it in the explorer.
+#[test]
+fn showcase_chips_link_to_the_explorer() {
+    let html = riot_proxy::routes::ui::SHOWCASE_HTML;
+    assert!(html.contains("/dev#explorer?op="));
 }

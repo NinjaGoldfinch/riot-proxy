@@ -11,6 +11,7 @@ Single-binary Rust proxy in front of the Riot Games API. Design lives in `docs/d
 - **v1 is reference, not source.** Port its tests and contract artefacts; do not translate its files.
 - **No secrets.** `RIOT_API_KEY` only in `.env` / CI secrets. Fixtures are redacted (CI greps for `RGAPI-`).
 - **Stop and ask** on ambiguity, unmet acceptance criteria, or a dependency that doesn't match the plan.
+- **Keep `/dev/showcase` current:** a new or reshaped read route updates `src/ui/showcase.html` (or its `notShowcased` list) and `docs/design/11-showcase.md`; `tests/ui.rs` fails otherwise.
 - **Log decisions** in `docs/DECISIONS.md` (ADR-nnn). **Tick tasks** in `PROGRESS.md` with the PR number.
 
 ## Layout
