@@ -21,6 +21,7 @@ Read this section fully before starting any task. `CLAUDE.md` restates the hard 
 7. **Stop and ask** when: a design doc is ambiguous, a Riot behaviour is unknown, a task's acceptance criteria can't be met as written, or a dependency's API differs materially from what the plan assumes. Do not silently pick an interpretation.
 8. **Record every non-trivial decision** in `docs/DECISIONS.md` (ADR format, one entry per decision, dated).
 9. **Update `PROGRESS.md`** at the end of every task: tick the task, note the PR number, note anything the next task needs to know.
+10. **Keep the showcase current.** A PR that adds a read route, or changes one's response shape, updates `src/ui/showcase.html` (or its `notShowcased` list, with a reason) and `docs/design/11-showcase.md`. `tests/ui.rs` enforces the first half (design/11 §The coverage rule).
 
 ### 0.2 Task lifecycle
 
