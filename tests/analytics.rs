@@ -478,7 +478,8 @@ async fn the_admin_routes_queue_a_recompute_and_a_sweep() {
             .unwrap()
         }
     };
-    assert_eq!(row("aggregate:analytics").await, "kr:RANKED_FLEX_SR 30000");
+    // Asked for by hand, it goes ahead of the queue (DEV-18).
+    assert_eq!(row("aggregate:analytics").await, "kr:RANKED_FLEX_SR 0");
     assert_eq!(
         error(
             &e.call(
@@ -527,6 +528,50 @@ async fn the_admin_routes_queue_a_recompute_and_a_sweep() {
         );
     }
     let _ = Arc::new(());
+}
+
+/// DEV-18: a recompute asked for by hand runs on the next free worker, not
+/// after the crawl's downloads; a rebuild the crawl already queued moves up.
+#[tokio::test]
+async fn a_manual_recompute_goes_ahead_of_the_queue() {
+    use riot_proxy::db::store::{SqliteStore, Store};
+    use riot_proxy::jobs::NewJob;
+    use riot_proxy::jobs::analytics::enqueue_aggregate;
+    let e = env().await;
+    let q = &e.state.jobs;
+    for i in 0..3 {
+        q.enqueue(NewJob::new(
+            "archive:match",
+            105,
+            json!({"matchId": format!("KR_{i}")}),
+        ))
+        .await
+        .unwrap();
+    }
+    q.enqueue(NewJob::new("ladder:walk", 20_000, json!({})))
+        .await
+        .unwrap();
+    let crawl_end = enqueue_aggregate(q, "kr", "RANKED_SOLO_5x5").await.unwrap();
+
+    let r = e
+        .call(
+            "POST",
+            "/v1/admin/analytics/recompute",
+            &e.admin,
+            None,
+            Some(json!({"platform": "kr", "queue": "RANKED_SOLO_5x5"})),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::ACCEPTED);
+    let first = SqliteStore::new(e.state.db.clone())
+        .claim_job(i64::MAX)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (first.kind.as_str(), first.id.as_str(), first.priority),
+        ("aggregate:analytics", crawl_end.id.as_str(), 0)
+    );
 }
 
 /// ADR-065: no platform sums every ladder; `?platform=` narrows to one.

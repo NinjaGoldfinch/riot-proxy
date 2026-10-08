@@ -278,3 +278,71 @@ async fn for_puuid_counts_a_players_jobs_by_kind_and_state_uncapped() {
     assert_eq!(latest[1].id, walk.id);
     assert_eq!(latest[1].kind, "backfill:player");
 }
+
+#[tokio::test]
+async fn enqueue_or_promote_lifts_a_pending_duplicate_and_leaves_a_running_one() {
+    let (_d, db) = db();
+    let s = sched(&db);
+    let q = s.queue().clone();
+    let later = Clock::now().unix_ms + 3_600_000;
+    s.enqueue(NewJob::new("ladder:walk", 20_000, json!({})).dedupe("w"))
+        .await
+        .unwrap();
+    let mut queued = NewJob::new("aggregate:analytics", 30_000, json!({})).dedupe("kr:Q");
+    queued.run_after = Some(later);
+    let slow = s.enqueue(queued).await.unwrap();
+
+    // The queued rebuild moves up and becomes ready now: no second row.
+    let fast = q
+        .enqueue_or_promote(NewJob::new("aggregate:analytics", 0, json!({})).dedupe("kr:Q"))
+        .await
+        .unwrap();
+    assert!(!fast.created);
+    assert_eq!(fast.id, slow.id);
+    let claimed = s.claim(Clock::now().unix_ms).await.unwrap().unwrap();
+    assert_eq!((claimed.id.as_str(), claimed.priority), (slow.id.as_str(), 0));
+
+    // Running: untouched; a looser request never lowers a pending row.
+    assert!(
+        !q.enqueue_or_promote(NewJob::new("aggregate:analytics", 0, json!({})).dedupe("kr:Q"))
+            .await
+            .unwrap()
+            .created
+    );
+    let walk = q
+        .enqueue_or_promote(NewJob::new("ladder:walk", 30_000, json!({})).dedupe("w"))
+        .await
+        .unwrap();
+    assert!(!walk.created);
+    let rows = db
+        .read(|c| {
+            let mut st = c.prepare("SELECT kind, state, priority FROM jobs ORDER BY kind")?;
+            let rows = st
+                .query_map([], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, i64>(2)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok::<_, DbError>(rows)
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            ("aggregate:analytics".into(), "running".into(), 0),
+            ("ladder:walk".into(), "pending".into(), 20_000),
+        ]
+    );
+
+    // No duplicate: queued fresh.
+    assert!(
+        q.enqueue_or_promote(NewJob::new("aggregate:analytics", 0, json!({})).dedupe("na1:Q"))
+            .await
+            .unwrap()
+            .created
+    );
+}

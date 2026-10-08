@@ -3165,7 +3165,7 @@ expression: doc
     },
     "/v1/admin/analytics/recompute": {
       "post": {
-        "description": "Queues `aggregate:analytics` for one ladder and answers 202 — the scan runs on the worker. Bounded by `AGGREGATE_PATCH_LIMIT`: only the latest N patches are rebuilt (v1).",
+        "description": "Queues `aggregate:analytics` for one ladder and answers 202 — the scan runs on the next free worker, ahead of every queued job (a rebuild already queued for the ladder is moved up), from the matches archived so far. Bounded by `AGGREGATE_PATCH_LIMIT`: only the latest N patches are rebuilt (v1).",
         "operationId": "recompute_analytics",
         "requestBody": {
           "content": {

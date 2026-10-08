@@ -56,7 +56,7 @@ To avoid polling the table at high frequency, `enqueue()` also `notify_one()`s t
 
 | Band | Kinds | Notes |
 |---|---|---|
-| 0–99 | interactive-triggered: `archive:match` for a just-finished game, `?refresh=true` | |
+| 0–99 | interactive-triggered: `archive:match` for a just-finished game, `?refresh=true`, a manual analytics recompute | the recompute moves a rebuild already queued for its ladder up to 0 (DEV-18) |
 | 100–9 999 | `archive:match` ordered by depth in a player's history, in blocks of ten (v1 #31) | `priority = 100 + depth_block` — global, not per player, so anyone's newest ten beat anyone's hundredth |
 | 10 000 | polls | |
 | 20 000 | `backfill:player`, `ladder:*` | |
@@ -83,7 +83,7 @@ Two admin reads show the queue as the workers see it (DEV-13, ADR-087). Both use
 
 On `/dashboard` the Ladder tab shows the queue, and each history row opens into that crawl's view. While the tab is visible, running crawls and open rows refresh every 5 s. A finished crawl is fetched once.
 
-The tab's Analytics recompute panel has a **Recompute now** button. It picks a platform and queue from `GET /v1/admin/ladder/options`, as the crawl form does, and calls `POST /v1/admin/analytics/recompute`. The button only queues the job. The job runs at maintenance priority, after the archive downloads, and the run then appears in the panel's table.
+The tab's Analytics recompute panel has a **Recompute now** button. It picks a platform and queue from `GET /v1/admin/ladder/options`, as the crawl form does, and calls `POST /v1/admin/analytics/recompute`. The button only queues the job. A recompute asked for this way (the button or the route) is queued at priority 0, ahead of every queued job, and a rebuild already queued for the ladder (a crawl's end, the tick) is moved up to 0 rather than queued twice. The next free worker runs it; no running job is interrupted. It rebuilds from the matches archived so far and makes no Riot call, so it does not wait for a crawl's downloads. The run then appears in the panel's table. The crawl-end and tick rebuilds stay at maintenance priority (DEV-18, ADR-090).
 
 ### Bulk limiter priority
 

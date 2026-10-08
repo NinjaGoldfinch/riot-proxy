@@ -2001,7 +2001,8 @@ pub struct RecomputeAnalytics {
 #[utoipa::path(
     post, path = "/v1/admin/analytics/recompute", tag = "admin",
     summary = "Recompute the analytics tables from the archive",
-    description = "Queues `aggregate:analytics` for one ladder and answers 202 — the scan runs on the worker. \
+    description = "Queues `aggregate:analytics` for one ladder and answers 202 — the scan runs on the next free worker, \
+        ahead of every queued job (a rebuild already queued for the ladder is moved up), from the matches archived so far. \
         Bounded by `AGGREGATE_PATCH_LIMIT`: only the latest N patches are rebuilt (v1).",
     request_body = RecomputeAnalytics,
     responses((status = 202, description = "`{ok, platform, queue}`", body = serde_json::Value), LocalErrors),
@@ -2024,7 +2025,7 @@ async fn recompute_analytics(State(state): State<AppState>, Extension(_c): Who, 
         Ok(p) => p,
         Err(e) => return e.into_response(),
     };
-    match crate::jobs::analytics::enqueue_aggregate(&state.jobs, &platform, &queue).await {
+    match crate::jobs::analytics::enqueue_aggregate_now(&state.jobs, &platform, &queue).await {
         Ok(_) => json(
             StatusCode::ACCEPTED,
             &serde_json::json!({"ok": true, "platform": platform, "queue": queue}),
