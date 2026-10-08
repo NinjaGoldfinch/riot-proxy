@@ -215,6 +215,9 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 - [ ] DEV-10 page bar across `/dashboard` and `/dev` (Dashboard · Dev explorer · API docs · Metrics), rendered from config so it links only to pages that exist (ADR-078)
 - [ ] DEV-11 lookup backfill walks the whole history: `LOOKUP_BACKFILL_LIMIT` defaults to and caps at `u32::MAX` (#94, ADR-081)
 
+## SCH — scheduler fairness and an elastic pool (owner requests 2026-10-08/09)
+- [ ] SCH-01 rate-limit-aware job claims: one lane per limiter scope plus the job's main endpoint, claims skip a region only when its app limit is full (a capped endpoint blocks only jobs that use it), spread over free regions, rate-limited jobs yield their worker and re-queue without using an attempt (IMPLEMENTATION.md §Post-release — SCH)
+
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
 
