@@ -885,3 +885,10 @@ Accepted (owner, task DEV-05). Extends ADR-071; design/10 §Reset tab.
 - **Rows are deleted, not the file.** This needs no restart and keeps the writer thread and the reader pool. Freed pages stay in the file until SQLite reuses them; there is no `VACUUM`, because on a large archive that holds the writer for a long time.
 - **Races accepted:** jobs that are mid-run can still write when they finish, and an L2 batch queued in the last 2 s can still land (`FLUSH_EVERY`). Both are reported (`runningJobs`) or show up on the next count refresh. Pausing the scheduler for a dev tool was not worth the coupling.
 
+## ADR-076 — One page bar across `/dashboard` and `/dev`, rendered from config (2026-10-08)
+Accepted (owner, task DEV-06). Extends ADR-071; design/10 §Page bar.
+- **Owner request:** "a taskbar at the top that makes it easy to swap between the dashboard, dev and other pages".
+- **Rendered on the server, once at startup**, into a `<!-- pagebar -->` marker in each embedded page. The alternative was JS in each page reading its `config.json`. That would duplicate the markup and the link logic in two files, and the dashboard's config would have to learn which other pages exist. Rendering it in Rust keeps one list (`routes::ui::pages`), and the links come from the same flags that mount the routes, so the bar cannot link to a 404. In production that means no `/dev` link.
+- Links: Dashboard, Dev explorer, API docs (when `DOCS_UI`) and Metrics (`/metrics` is always mounted). `/docs` is Scalar's page and is left untouched.
+- `/dev` and `/dashboard` responses are therefore no longer byte-identical to the embedded files: the marker is replaced. The tests compare against `render(…)`.
+

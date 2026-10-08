@@ -20,7 +20,11 @@ async fn dev_ui_is_served_without_a_key() {
     assert_eq!(r.headers["content-type"], "text/html; charset=utf-8");
     assert_eq!(r.headers["cache-control"], "no-store");
     let body = String::from_utf8(r.body).unwrap();
-    assert_eq!(body, riot_proxy::routes::ui::DEV_UI_HTML);
+    let config = common::config(&[]);
+    assert_eq!(
+        body,
+        riot_proxy::routes::ui::render(riot_proxy::routes::ui::DEV_UI_HTML, &config, "/dev")
+    );
 }
 
 /// One file, nothing fetched from elsewhere: no CDN, no external script.
@@ -161,10 +165,14 @@ async fn dashboard_is_on_by_default_including_production() {
     let (_d, router) = app(&[("ENV", "production")]);
     let r = common::get(router.clone(), "/dashboard").await;
     assert_eq!(r.status, StatusCode::OK);
-    assert_eq!(
-        String::from_utf8(r.body).unwrap(),
-        riot_proxy::routes::ui::DASHBOARD_HTML
+    let body = String::from_utf8(r.body).unwrap();
+    assert!(
+        body.contains("<div class=\"wrap\">"),
+        "the dashboard itself is served"
     );
+    // In production the bar never offers the dev explorer, which does not exist there.
+    assert!(body.contains(r#"<a href="/dashboard" aria-current="page">Dashboard</a>"#));
+    assert!(!body.contains(r#"href="/dev""#));
     let cfg = common::get(router, "/dashboard/config.json").await;
     assert_eq!(cfg.json(), serde_json::json!({"authDisabled": false}));
 }
@@ -192,4 +200,60 @@ async fn config_reports_auth_disabled() {
         common::get(router, "/dashboard/config.json").await.json()["authDisabled"],
         true
     );
+}
+
+fn bar(html: &str) -> &str {
+    let start = html.find(r#"<div class="rp-bar""#).expect("page bar");
+    &html[start..start + html[start..].find("</div>").unwrap()]
+}
+
+/// Both pages carry one bar linking every page this config serves, the
+/// current one marked, and no leftover marker (DEV-06).
+#[tokio::test]
+async fn pages_share_a_bar_with_the_pages_that_exist() {
+    let (_d, router) = app(&[("DOCS_UI", "true")]);
+    for (path, here) in [("/dev", "Dev explorer"), ("/dashboard", "Dashboard")] {
+        let html = String::from_utf8(common::get(router.clone(), path).await.body).unwrap();
+        assert!(
+            !html.contains(riot_proxy::routes::ui::PAGEBAR_MARK),
+            "{path}: marker replaced"
+        );
+        assert_eq!(html.matches(r#"class="rp-bar""#).count(), 1, "{path}: one bar");
+        let bar = bar(&html);
+        let hrefs: Vec<&str> = bar
+            .split(r#"href=""#)
+            .skip(1)
+            .map(|s| &s[..s.find('"').unwrap()])
+            .collect();
+        assert_eq!(hrefs, ["/dashboard", "/dev", "/docs", "/metrics"], "{path}");
+        assert_eq!(bar.matches("aria-current").count(), 1, "{path}");
+        assert!(
+            bar.contains(&format!(r#"aria-current="page">{here}</a>"#)),
+            "{path}"
+        );
+        assert!(bar.contains(concat!("v", env!("CARGO_PKG_VERSION"))));
+    }
+}
+
+#[tokio::test]
+async fn the_bar_leaves_out_pages_that_are_off() {
+    let (_d, router) = app(&[("DOCS_UI", "false"), ("DASHBOARD_UI", "false")]);
+    let html = String::from_utf8(common::get(router, "/dev").await.body).unwrap();
+    let bar = bar(&html);
+    assert!(!bar.contains("/dashboard") && !bar.contains("/docs"), "{bar}");
+    assert!(bar.contains(r#"href="/metrics""#));
+}
+
+/// Every page the bar links to is really served.
+#[tokio::test]
+async fn every_bar_link_resolves() {
+    let (_d, router) = app(&[("DOCS_UI", "true")]);
+    let config = common::config(&[("DOCS_UI", "true")]);
+    for (href, _) in riot_proxy::routes::ui::pages(&config) {
+        assert_eq!(
+            common::get(router.clone(), href).await.status,
+            StatusCode::OK,
+            "{href}"
+        );
+    }
 }

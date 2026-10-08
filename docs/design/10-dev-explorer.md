@@ -127,6 +127,16 @@ Deletes every piece of fetched data so the proxy starts from empty, without a re
 - **In-flight work:** a job that is running during the reset can still write once it finishes, and so can an L2 batch queued in the last 2 s. The tab warns when jobs are running. Refreshing the counts afterwards shows anything that came back.
 - **UI:** the tab is last in the nav and shown in red. The button is disabled until `reset` is typed exactly. A `confirm()` dialog follows, then the POST. The result card lists rows deleted per table. Afterwards the field is cleared and the player tab's rendered data is dropped.
 
+## Page bar (DEV-06)
+
+`/dev` and `/dashboard` share one bar across the top: **riot-proxy · Dashboard · Dev explorer · API docs · Metrics**, with the version and environment on the right.
+
+- It is built once at startup by `routes::ui::pagebar` and injected at the `<!-- pagebar -->` marker in each page. Both pages stay single files with no shared asset, and the bar comes from one place.
+- **It lists only pages this config serves** (`routes::ui::pages`): Dashboard under `DASHBOARD_UI`, Dev explorer under `dev_ui`, API docs under `DOCS_UI`, and `/metrics` always. In production the dashboard's bar never links to `/dev`.
+- The current page is marked `aria-current="page"`. The bar sticks to the top while the page scrolls.
+- It is a `div role="navigation"` with its own `rp-bar` class, so the pages' own `nav` rules don't restyle it. The dev page's old header links and version badge are gone, since the bar replaces them.
+- `/docs` (Scalar) is third-party HTML, so it gets no bar.
+
 ## Safety
 
 - Any non-`GET` asks for `confirm()` first. The Reset tab also needs the word typed (above).

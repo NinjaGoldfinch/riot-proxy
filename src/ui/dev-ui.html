@@ -16,7 +16,6 @@
   a { color: var(--accent); }
   header { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
   header h1 { font-size: 15px; margin: 0; }
-  header .links { margin-left: auto; display: flex; gap: 12px; }
   nav { display: flex; gap: 2px; padding: 0 16px; border-bottom: 1px solid var(--line); }
   nav a { padding: 8px 14px; color: var(--dim); text-decoration: none; border-bottom: 2px solid transparent; }
   nav a.on { color: var(--text); border-color: var(--accent); }
@@ -94,13 +93,12 @@
 </style>
 </head>
 <body>
+<!-- pagebar -->
 <header>
   <h1>riot-proxy · dev explorer</h1>
-  <span class="badge" id="ver">…</span>
   <span class="badge bad" id="noauth" hidden>AUTH DISABLED</span>
   <span class="row" id="keyBox"><label for="key">API key</label><input id="key" type="password" size="28" autocomplete="off" placeholder="Bearer key"></span>
   <span class="row"><label for="rid">X-Request-Id</label><input id="rid" size="16" placeholder="auto"></span>
-  <span class="links" id="links"></span>
 </header>
 <nav id="nav">
   <a href="#explorer">Explorer</a><a href="#status">Status</a><a href="#player">Player</a><a href="#live">Live</a><a href="#history">History</a><a href="#reset" class="danger">Reset</a>
@@ -952,10 +950,8 @@ async function boot() {
   $('#key').value = store.get('rp.dev.key', '');
   $('#key').onchange = () => store.set('rp.dev.key', $('#key').value.trim());
   [cfg, spec] = await Promise.all([fetch('/dev/config.json').then((r) => r.json()), fetch('/dev/openapi.json').then((r) => r.json())]);
-  $('#ver').textContent = `v${cfg.version} · ${cfg.env}`;
   $('#noauth').hidden = !cfg.authDisabled;
   $('#keyBox').hidden = cfg.authDisabled;
-  $('#links').innerHTML = [cfg.docsUi && '<a href="/docs">API docs</a>', cfg.dashboardUi && '<a href="/dashboard">Dashboard</a>', '<a href="/metrics">/metrics</a>'].filter(Boolean).join('');
   document.body.insertAdjacentHTML('beforeend', `<datalist id="dl-platform">${cfg.platforms.map((p) => `<option value="${esc(p.value)}">${esc(p.label)}</option>`).join('')}</datalist><datalist id="dl-region">${cfg.regions.map((r) => `<option value="${esc(r)}">`).join('')}</datalist>`);
   const last = store.get('rp.dev.player', {});
   $('#plPlatform').innerHTML = `<option value="">platform…</option>${cfg.platforms.map((p) => `<option value="${esc(p.value)}" ${p.value === last.platform ? 'selected' : ''}>${esc(p.value)} · ${esc(p.label)}</option>`).join('')}`;

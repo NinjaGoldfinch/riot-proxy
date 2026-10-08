@@ -206,6 +206,7 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 - [x] DEV-02 player tab: closable windows, matches paged 10/25/50 with queue/type filters, page summary, inline scoreboard, history and backfill card (#84, ADR-073)
 - [x] DEV-03 per-player archive endpoints (`/v1/admin/players/{puuid}/archive[/matches]`), exact backfill counts and an "Archive (all stored)" match source in `/dev`, jsdom page tests in CI (#86, ADR-074)
 - [ ] DEV-05 Reset tab in `/dev`: `GET`/`POST /dev/reset` (admin, dev only) wipes all fetched data and keeps consumers and the limiter checkpoint (ADR-075)
+- [ ] DEV-06 page bar across `/dashboard` and `/dev` (Dashboard · Dev explorer · API docs · Metrics), rendered from config so it links only to pages that exist (ADR-076)
 
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
