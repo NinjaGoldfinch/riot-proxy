@@ -83,6 +83,8 @@ Two admin reads show the queue as the workers see it (DEV-13, ADR-087). Both use
 
 On `/dashboard` the Ladder tab shows the queue, and each history row opens into that crawl's view. While the tab is visible, running crawls and open rows refresh every 5 s. A finished crawl is fetched once.
 
+The tab's Analytics recompute panel has a **Recompute now** button. It picks a platform and queue from `GET /v1/admin/ladder/options`, as the crawl form does, and calls `POST /v1/admin/analytics/recompute`. The button only queues the job. The job runs at maintenance priority, after the archive downloads, and the run then appears in the panel's table.
+
 ### Bulk limiter priority
 
 Every handler that hits Riot calls the fetcher with `Priority::Bulk`, so the interactive-first and ceiling guarantees in [05](05-rate-limiter.md) apply automatically. The concurrency cap (`JOB_CONCURRENCY`) bounds how many bulk waiters can be parked.

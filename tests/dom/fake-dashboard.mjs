@@ -1,7 +1,7 @@
 // The fake admin API both dashboard suites drive the page against: the jsdom
 // tests (dashboard.test.mjs) and the browser layout check (dashboard.browser.test.mjs).
-// Shapes are the OpenAPI document's for the crawl list, a crawl's activity and the
-// job queue.
+// Shapes are the OpenAPI document's for the crawl list, a crawl's activity, the
+// job queue, the ladder options and the analytics recompute.
 import { readFileSync } from 'node:fs';
 
 const html = readFileSync(new URL('../../src/ui/dashboard.html', import.meta.url), 'utf8');
@@ -56,6 +56,15 @@ const QUEUE = {
   ready: 2, delayed: 3, nextDelayedAt: soon(90_000),
 };
 
+// `GET /v1/admin/ladder/options`, trimmed to two platforms.
+const OPTIONS = {
+  platforms: [{ id: 'euw1', label: 'Europe West' }, { id: 'oc1', label: 'Oceania' }],
+  queues: ['RANKED_SOLO_5x5', 'RANKED_FLEX_SR'],
+  tiers: ['IRON', 'BRONZE', 'SILVER', 'GOLD', 'PLATINUM', 'EMERALD', 'DIAMOND', 'MASTER', 'GRANDMASTER', 'CHALLENGER'],
+  defaults: { platform: 'oc1', queue: 'RANKED_SOLO_5x5', tierFloor: 'MASTER', backfillLimit: 100 },
+};
+
+// `opts.body` is the request body as sent; a POST's is recorded on `calls.bodies`.
 function api(calls, url, opts) {
   const u = new URL(url, 'http://localhost');
   calls.push(`${u.pathname}${u.search}`);
@@ -66,7 +75,14 @@ function api(calls, url, opts) {
   if (m && opts.method === 'DELETE') return [200, { ok: true, crawlId: m[1], status: 'cancelled', droppedJobs: 3 }];
   if (m) return ACTIVITY[m[1]] ? [200, ACTIVITY[m[1]]] : [404, { error: { code: 'NOT_FOUND', message: 'No such ladder crawl' } }];
   if (p === '/v1/admin/jobs/queue') return [200, QUEUE];
+  if (p === '/v1/admin/ladder/options') return [200, OPTIONS];
+  if (p === '/v1/admin/analytics/recompute' && opts.method === 'POST') {
+    const body = JSON.parse(opts.body ?? '{}');
+    (calls.bodies ??= []).push([p, body]);
+    if (body.platform === 'euw1') return [400, { error: { code: 'VALIDATION', message: 'not in this test: euw1' } }];
+    return [202, { ok: true, platform: body.platform, queue: body.queue }];
+  }
   return [503, { error: { code: 'UNAVAILABLE', message: 'not in this test' } }];
 }
 
-export { html, RUNNING, DONE, ACTIVITY, QUEUE, api };
+export { html, RUNNING, DONE, ACTIVITY, QUEUE, OPTIONS, api };

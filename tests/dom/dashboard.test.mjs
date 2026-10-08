@@ -1,9 +1,10 @@
 // The dashboard's crawl activity (DEV-13) driven in jsdom: history rows open a
 // detail with each stage's progress, the crawl's running, next and failed jobs and
 // the platform's match downloads; the job queue panel lists what is running and
-// what runs next. The fake API serves the documented shapes of
+// what runs next. The analytics panel's Recompute now (DEV-16) queues a rebuild. The fake API serves the documented shapes of
 // `GET /v1/admin/ladder/crawls`, `/v1/admin/ladder/crawls/{id}` and
-// `/v1/admin/jobs/queue` (see the OpenAPI document); the metrics snapshot is a
+// `/v1/admin/jobs/queue`, `/v1/admin/ladder/options` and
+// `POST /v1/admin/analytics/recompute` (see the OpenAPI document); the metrics snapshot is a
 // 503, which these panels do not depend on.
 //   cd tests/dom && npm ci && npm test
 import { test } from 'node:test';
@@ -19,7 +20,7 @@ async function page() {
     url: 'http://localhost/dashboard#ladder', runScripts: 'dangerously', pretendToBeVisual: true,
     beforeParse(w) {
       w.fetch = async (url, init = {}) => {
-        const [status, body] = api(calls, url, { method: init.method ?? 'GET' });
+        const [status, body] = api(calls, url, { method: init.method ?? 'GET', body: init.body });
         const text = JSON.stringify(body);
         return { ok: status < 300, status, headers: new Map(), text: async () => text, json: async () => JSON.parse(text) };
       };
@@ -130,5 +131,37 @@ test('an open running row keeps refreshing; a finished one is fetched once', asy
     await p.settle();
     assert.equal(count(RUNNING), run0 + 1, 'running: refreshed');
     assert.equal(count(DONE), done0, 'finished: not refetched');
+  } finally { p.close(); }
+});
+
+test('Recompute now offers the ladder options and queues the chosen ladder', async () => {
+  const p = await page();
+  try {
+    assert.equal(p.$('#analyticsStart').disabled, false, 'enabled once the options load');
+    assert.deepEqual([...p.$('#analyticsPlatform').options].map((o) => o.value), ['euw1', 'oc1']);
+    assert.equal(p.$('#analyticsPlatform').value, 'oc1', 'the configured default is preselected');
+    p.$('#analyticsQueue').value = 'RANKED_FLEX_SR';
+    p.$('#analyticsStart').click();
+    await p.settle();
+    assert.deepEqual(p.calls.bodies, [['/v1/admin/analytics/recompute', { platform: 'oc1', queue: 'RANKED_FLEX_SR' }]]);
+    assert.ok(p.text('#analyticsResult').includes('Queued oc1 · RANKED_FLEX_SR'));
+    assert.ok(p.$('#analyticsResult').classList.contains('good'));
+    assert.equal(p.$('#analyticsStart').disabled, false, 'ready for another');
+    p.$('#analyticsPlatform').value = 'euw1';
+    p.$('#analyticsPlatform').dispatchEvent(new p.w.Event('change'));
+    assert.equal(p.text('#analyticsResult'), '', 'a new choice clears the old answer');
+    assert.deepEqual(realErrors(p.errors), []);
+  } finally { p.close(); }
+});
+
+test('a refused recompute shows the API message', async () => {
+  const p = await page();
+  try {
+    p.$('#analyticsPlatform').value = 'euw1';
+    p.$('#analyticsStart').click();
+    await p.settle();
+    assert.equal(p.text('#analyticsResult'), 'not in this test: euw1');
+    assert.ok(p.$('#analyticsResult').classList.contains('bad'));
+    assert.deepEqual(realErrors(p.errors), []);
   } finally { p.close(); }
 });

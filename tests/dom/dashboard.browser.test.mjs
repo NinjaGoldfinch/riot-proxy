@@ -33,7 +33,7 @@ for (const [device, width] of [['desktop', 1280], ['tablet', 820], ['phone', 390
       await page.route('http://dashboard.test/**', (r) => {
         const u = new URL(r.request().url());
         if (u.pathname === '/dashboard') return r.fulfill({ contentType: 'text/html', body: html });
-        const [status, body] = api([], u.pathname + u.search, { method: r.request().method() });
+        const [status, body] = api([], u.pathname + u.search, { method: r.request().method(), body: r.request().postData() });
         return r.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
       });
       await page.goto('http://dashboard.test/dashboard#ladder');
