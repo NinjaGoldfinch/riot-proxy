@@ -18,7 +18,7 @@ use utoipa_axum::routes;
 use crate::app::AppState;
 use crate::http::{ApiError, validate};
 use crate::routes::passthrough::{JSON, LocalErrors};
-use crate::r#static::images::ImageError;
+use crate::r#static::images::{ImageError, RUNE_DIR};
 use crate::r#static::{DATA_FILES, FILE_ALIASES, Mirror, VERSIONS_FILE, resolve_file};
 
 /// v1's Caddyfile header for `/ddragon/*`: a patch's files never change.
@@ -32,13 +32,15 @@ pub fn router() -> OpenApiRouter<AppState> {
 }
 
 /// `/ddragon/<version>/<file>.json` straight from the mirror's directory, and
-/// `/ddragon/<version>/img/<kind>/<file>` filled on first request
+/// `/ddragon/<version>/img/<kind>/<file>` and rune icons at
+/// `/ddragon/<version>/img/perk-images/…` filled on first request
 /// (`static::images`). Only a found file is marked immutable: a 404 for a
 /// patch not synced yet must not be cached for a week.
 pub fn files(mirror: Arc<Mirror>) -> Router {
     // Only what is not on disk yet reaches the fill route.
     let fill = Router::new()
         .route("/{version}/img/{kind}/{file}", get(image))
+        .route("/{version}/img/perk-images/{*icon}", get(rune_image))
         .fallback(|| async { StatusCode::NOT_FOUND })
         .with_state(Arc::clone(&mirror));
     Router::new()
@@ -56,12 +58,28 @@ async fn image(
     State(mirror): State<Arc<Mirror>>,
     UrlPath((version, kind, file)): UrlPath<(String, String, String)>,
 ) -> Response {
-    match mirror.image(&version, &kind, &file).await {
+    png(
+        mirror.image(&version, &kind, &file).await,
+        &version,
+        &format!("{kind}/{file}"),
+    )
+}
+
+async fn rune_image(
+    State(mirror): State<Arc<Mirror>>,
+    UrlPath((version, icon)): UrlPath<(String, String)>,
+) -> Response {
+    let icon = format!("{RUNE_DIR}/{icon}");
+    png(mirror.rune_image(&version, &icon).await, &version, &icon)
+}
+
+fn png(image: Result<Vec<u8>, ImageError>, version: &str, file: &str) -> Response {
+    match image {
         Ok(bytes) => (StatusCode::OK, [(header::CONTENT_TYPE, "image/png")], bytes).into_response(),
         // Bare, like ServeDir's 404 for the JSON files beside it.
         Err(ImageError::NotFound) => StatusCode::NOT_FOUND.into_response(),
         Err(ImageError::Upstream(e)) => {
-            tracing::warn!(error = %e, %version, %kind, %file, "Data Dragon image unavailable");
+            tracing::warn!(error = %e, %version, %file, "Data Dragon image unavailable");
             StatusCode::BAD_GATEWAY.into_response()
         }
     }

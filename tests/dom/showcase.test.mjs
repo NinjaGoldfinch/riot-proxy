@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 
-import { html, LADDER, PUUID, MATCH, api } from './fake-api.mjs';
+import { html, LADDER, PUUID, MATCH, RUNES, api } from './fake-api.mjs';
 
 async function page({ platform = 'oc1', hash = '', ...opts } = {}) {
   const calls = [];
@@ -165,7 +165,7 @@ test('rank cards: Challenger without a division, unranked Flex', async () => {
   assert.match(cards[1], /^Flex Unranked/);
 });
 
-test('match cards: result, queue name, KDA, CS per minute, spells and items from the mirror', async () => {
+test('match cards: result, queue name, KDA, CS per minute, level, spells, runes and items from the mirror', async () => {
   const p = await playerPage();
   const cards = [...p.w.document.querySelectorAll('#pMatches .match')];
   assert.equal(cards.length, 10);
@@ -176,8 +176,14 @@ test('match cards: result, queue name, KDA, CS per minute, spells and items from
   assert.deepEqual(srcs, [
     '/ddragon/16.19.1/img/champion/Annie.png',
     '/ddragon/16.19.1/img/spell/SummonerFlash.png', '/ddragon/16.19.1/img/spell/SummonerDot.png',
+    '/ddragon/16.19.1/img/perk-images/Styles/Precision/Conqueror/Conqueror.png', '/ddragon/16.19.1/img/perk-images/Styles/7200_Domination.png',
     '/ddragon/16.19.1/img/item/1001.png', '/ddragon/16.19.1/img/item/3340.png',
   ], 'empty item slots (0) have no image');
+  assert.deepEqual([...cards[0].querySelectorAll('.runes img')].map((i) => i.getAttribute('title')), ['Conqueror', 'Domination']);
+  const lvl = cards[0].querySelectorAll('.lvl');
+  assert.equal(lvl.length, 1, 'the level once, on the portrait');
+  assert.equal(lvl[0].parentElement.className, 'portrait');
+  assert.equal(lvl[0].textContent, '16');
   assert.equal(cards[0].querySelectorAll('.items > *').length, 7);
   assert.ok(p.text('#pMatches').includes('queued the player\'s history for archiving (queued)'));
 });
@@ -304,6 +310,20 @@ test('the scoreboard: two sides, totals, bans, objectives, every player line', a
   const first = cards[0].querySelector('tbody tr');
   assert.ok(first.textContent.includes(blue[0].riotIdGameName));
   assert.equal(first.querySelector('td.name a').getAttribute('href'), `#/player/${encodeURIComponent(blue[0].riotIdGameName)}/${encodeURIComponent(blue[0].riotIdTagline)}`);
+  // Level once, on the portrait; keystone over secondary style beside the spells, every row.
+  for (const [i, row] of [...p.w.document.querySelectorAll('#mTeams tbody tr')].entries()) {
+    const x = [...blue, ...MATCH.info.participants.filter((y) => y.teamId === 200)][i];
+    const lvl = row.querySelectorAll('.lvl');
+    assert.equal(lvl.length, 1, `row ${i}: one level`);
+    assert.equal(lvl[0].textContent, String(x.champLevel));
+    assert.ok(lvl[0].closest('.portrait'), `row ${i}: level on the portrait`);
+    const runes = [...row.querySelectorAll('.runes img')];
+    assert.equal(runes.length, 2, `row ${i}: keystone and secondary style`);
+    const primary = x.perks.styles.find((s) => s.description === 'primaryStyle');
+    const sub = x.perks.styles.find((s) => s.description === 'subStyle');
+    const want = [RUNES.flatMap((s) => s.slots[0].runes).find((r) => r.id === primary.selections[0].perk), RUNES.find((s) => s.id === sub.style)];
+    assert.deepEqual(runes.map((r) => r.getAttribute('src')), want.map((r) => `/ddragon/16.19.1/img/${r.icon}`), `row ${i}`);
+  }
   assert.ok(p.text('#mHead').includes('5v5 Ranked Solo'), 'queue name from queues.json, without "games"');
   assert.ok(p.text('#mHead').includes('patch 16.19'));
   assert.deepEqual(p.errors, []);
@@ -353,7 +373,10 @@ test('the champion view: rates by tier, builds with names, and the calls it make
   const build = p.text('#cBuild');
   assert.ok(build.includes('Trinity Force') && build.includes('66.7%'));
   assert.ok(build.includes('Conqueror') && build.includes('+ Domination'));
-  assert.deepEqual([...p.w.document.querySelectorAll('#cBuild .spells-row img')].map((i) => i.getAttribute('src')), ['/ddragon/16.19.1/img/spell/SummonerFlash.png', '/ddragon/16.19.1/img/spell/SummonerDot.png']);
+  assert.deepEqual([...p.w.document.querySelectorAll('#cBuild .spells-row img')].map((i) => i.getAttribute('src')), [
+    '/ddragon/16.19.1/img/spell/SummonerFlash.png', '/ddragon/16.19.1/img/spell/SummonerDot.png',
+    '/ddragon/16.19.1/img/perk-images/Styles/Precision/Conqueror/Conqueror.png', '/ddragon/16.19.1/img/perk-images/Styles/7200_Domination.png',
+  ]);
   assert.deepEqual(p.errors, []);
 });
 

@@ -64,6 +64,7 @@ Images are mirrored on first request (DEV-05, ADR-076). `GET /ddragon/<version>/
 - `kind` is `champion`, `profileicon`, `item` or `spell`.
 - The patch must already be mirrored.
 - `file` must be an `image.full` listed in that patch's `champion`, `profileicon`, `item` or `summoner` JSON. Anything else is a bare 404 with no fetch.
+- Rune icons (DEV-14, ADR-086) are at `GET /ddragon/<version>/img/perk-images/…`, the path being a style's or rune's `icon` in that patch's `runesReforged` JSON. Data Dragon keeps them unversioned at `/cdn/img/perk-images/…`; the mirror keeps them per patch all the same, at `$DATA_DIR/ddragon/<version>/img/perk-images/…`.
 - A Riot 404 is a 404. A non-PNG or failed fetch is a 502, and nothing is kept.
 
 ## Option C — systemd, no containers

@@ -5,7 +5,7 @@
 // the parts of a match card side by side without overlapping.
 //
 // Images are served as real PNGs at Data Dragon's own sizes (champion 120 px, item
-// and spell 64 px, profile icon 128 px): the icon bug this suite was written for
+// and spell 64 px, profile icon 128 px; rune icons at 256 px, bigger than any box): the icon bug this suite was written for
 // only shows once an image loads, and a 404 falls back to a fixed-size box.
 //
 // Screenshots of every view land in tests/dom/screenshots/ (git-ignored) for review.
@@ -50,7 +50,7 @@ function png(size, [r, g, b]) {
   const raw = Buffer.concat(Array.from({ length: size }, () => row));
   return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
 }
-const IMAGES = { champion: png(120, [180, 120, 220]), item: png(64, [210, 170, 60]), spell: png(64, [60, 170, 210]), profileicon: png(128, [200, 90, 60]) };
+const IMAGES = { champion: png(120, [180, 120, 220]), item: png(64, [210, 170, 60]), spell: png(64, [60, 170, 210]), profileicon: png(128, [200, 90, 60]), 'perk-images': png(256, [90, 200, 120]) };
 
 // ---------- browser
 let browser = null;
@@ -74,7 +74,7 @@ async function open(width, hash, ready) {
   await page.route('http://showcase.test/**', (r) => {
     const u = new URL(r.request().url());
     if (u.pathname === '/dev/showcase') return r.fulfill({ contentType: 'text/html', body: html });
-    const img = u.pathname.match(/^\/ddragon\/[^/]+\/img\/([a-z]+)\//);
+    const img = u.pathname.match(/^\/ddragon\/[^/]+\/img\/([a-z-]+)\//);
     if (img) return IMAGES[img[1]] ? r.fulfill({ contentType: 'image/png', body: IMAGES[img[1]] }) : r.fulfill({ status: 404, body: '' });
     const [status, body] = api([], u.pathname + u.search, OPTS);
     return r.fulfill({ status, contentType: 'application/json', headers: { 'x-cache': 'HIT' }, body: JSON.stringify(body) });
