@@ -214,7 +214,7 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 - [x] DEV-09 Reset tab in `/dev`: `GET`/`POST /dev/reset` (admin, dev only) wipes all fetched data and keeps consumers and the limiter checkpoint (#91, ADR-077)
 - [x] DEV-10 page bar across `/dashboard` and `/dev` (Dashboard · Dev explorer · API docs · Metrics), rendered from config so it links only to pages that exist (#92, ADR-078)
 - [x] DEV-11 lookup backfill walks the whole history: `LOOKUP_BACKFILL_LIMIT` defaults to and caps at `u32::MAX` (#94, ADR-081)
-- [x] DEV-12 showcase layout tested in headless Chromium (playwright-core) at three widths with real Data Dragon-sized images; icons fixed to their CSS size, match cards, scoreboards, headers and chips fixed on narrow screens (#PR, design/11, ADR-084)
+- [x] DEV-12 showcase layout tested in headless Chromium (playwright-core) at three widths with real Data Dragon-sized images; icons fixed to their CSS size, match cards, scoreboards, headers and chips fixed on narrow screens (#100, design/11, ADR-084)
 
 ## SCH — scheduler fairness and an elastic pool (owner requests 2026-10-08/09)
 - [ ] SCH-01 rate-limit-aware job claims: one lane per limiter scope plus the job's main endpoint, claims skip a region only when its app limit is full (a capped endpoint blocks only jobs that use it), spread over free regions, rate-limited jobs yield their worker and re-queue without using an attempt (IMPLEMENTATION.md §Post-release — SCH)
