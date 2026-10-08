@@ -36,19 +36,22 @@ curl -fsSL https://github.com/NinjaGoldfinch/riot-proxy/archive/refs/heads/main.
 cd riot-proxy-main/deploy/proxmox
 ./create-vm.sh --ssh-keys ~/.ssh/my-laptop.pub            # DHCP, next free VM id
 # or: ./create-vm.sh --ssh-keys key.pub --vmid 210 --ip 192.168.68.50/22 --gw 192.168.68.1
+# or: ./create-vm.sh --generate-key                        # a new login keypair just for this VM
 ```
+
+`--generate-key` writes the keypair to `/root/.ssh/riot-proxy/<name>-<vmid>` on the host and prints how to copy it to your machine; log in with `ssh -i`.
 
 Docker is installed on first boot, which takes a few minutes. Then:
 
 ```bash
 qm guest cmd <vmid> network-get-interfaces     # its address
-ssh riot@<vm>
+ssh riot@<vm>                                  # or: ssh -i ~/.ssh/riot-proxy-dev-<vmid> riot@<vm>
 nano /opt/riot-proxy/.env                      # set RIOT_API_KEY=
 sudo riot-proxy-update                         # start now instead of waiting for the timer
 docker compose -f /opt/riot-proxy/compose.yaml logs | grep -i "admin key"   # the bootstrap admin key, shown once
 ```
 
-Open `http://<vm>:8080/dev`, `/docs` or `/dashboard`. [deploy/proxmox/README.md](deploy/proxmox/README.md) covers the options (`./create-vm.sh --help`, `--dry-run`), how to pin a version, and how to rebuild the VM.
+Open `http://<vm>:8080/dev`, `/docs` or `/dashboard`. [deploy/proxmox/README.md](deploy/proxmox/README.md) covers the options (`./create-vm.sh --help`, `--dry-run`, `--generate-key`), how to pin a version, and how to rebuild the VM.
 
 ## First run
 
