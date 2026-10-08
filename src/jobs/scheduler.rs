@@ -31,6 +31,7 @@ use crate::clock::Clock;
 use crate::db::store::{ClaimFilter, SqliteStore, Store};
 use crate::db::{Db, DbError};
 use crate::fetcher::FetchError;
+use crate::jobs::activity::{self, Activity};
 use crate::metrics::{JOBS_PENDING, JOBS_TOTAL};
 use crate::riot::limiter::Limiter;
 
@@ -635,6 +636,8 @@ pub struct Scheduler {
     /// The limiter the handlers' fetches go through. Without one every lane
     /// counts as open.
     limiter: Option<Arc<Limiter>>,
+    /// What each worker is doing (DEV-19).
+    activity: Activity,
 }
 
 impl std::fmt::Debug for Scheduler {
@@ -675,6 +678,7 @@ impl Scheduler {
             queue,
             handlers: Arc::new(handlers.0),
             limiter: None,
+            activity: Activity::new(),
         }
     }
 
@@ -685,8 +689,19 @@ impl Scheduler {
         self
     }
 
+    /// Record the workers' activity in `activity` (shared with the admin routes).
+    #[must_use]
+    pub fn with_activity(mut self, activity: Activity) -> Self {
+        self.activity = activity;
+        self
+    }
+
     pub fn queue(&self) -> &Queue {
         &self.queue
+    }
+
+    pub fn activity(&self) -> &Activity {
+        &self.activity
     }
 
     /// Queue a job and wake an idle worker.
@@ -869,22 +884,33 @@ impl Scheduler {
             .await
     }
 
-    /// Run one job to completion (a panic is a retryable failure).
-    async fn run(&self, job: Job) {
+    /// Run one job to completion on worker `worker` (0-based); a panic is a
+    /// retryable failure. The handler runs with the job as its task's current
+    /// job, so what it does lands in the job's trace (DEV-19).
+    async fn run(&self, job: Job, worker: usize) {
+        self.activity.claimed(worker, &job.id, &job.kind, job.attempts);
         let outcome = match self.handlers.get(job.kind.as_str()) {
             None => Err(JobError::Fail(format!("no handler for job kind '{}'", job.kind))),
             Some(handler) => {
                 let (handler, j) = (Arc::clone(handler), job.clone());
+                let current = activity::Current::new(self.activity.clone(), &job.id);
                 // Spawned so a panic is contained; the guard aborts the handler
                 // if this worker is itself aborted at shutdown.
-                let mut task = AbortOnDrop(tokio::spawn(async move { handler.run(&j).await }));
+                let mut task = AbortOnDrop(tokio::spawn(activity::within(Some(current), async move {
+                    handler.run(&j).await
+                })));
                 match (&mut task.0).await {
                     Ok(r) => r,
                     Err(e) if e.is_panic() => Err(JobError::Retry("handler panicked".into())),
-                    Err(_) => return, // aborted at shutdown: `recover` re-queues it
+                    Err(_) => {
+                        // aborted at shutdown: `recover` re-queues it
+                        self.activity.finished(&job.id, "aborted");
+                        return;
+                    }
                 }
             }
         };
+        self.activity.finished(&job.id, &outcome_text(&job, &outcome));
         if let Err(e) = self.finish(&job, &outcome, Clock::now().unix_ms).await {
             tracing::error!(error = %e, id = %job.id, "could not record job outcome");
         }
@@ -906,12 +932,14 @@ impl Scheduler {
     pub fn start(&self, concurrency: usize) -> Workers {
         let (stop, stopped) = watch::channel(false);
         let mut set = JoinSet::new();
-        for _ in 0..concurrency.max(1) {
+        let concurrency = concurrency.max(1);
+        self.activity.set_workers(concurrency);
+        for worker in 0..concurrency {
             let (me, mut stopped) = (self.clone(), stopped.clone());
             set.spawn(async move {
                 while !*stopped.borrow() {
                     match me.claim(Clock::now().unix_ms).await {
-                        Ok(Some(job)) => me.run(job).await,
+                        Ok(Some(job)) => me.run(job, worker).await,
                         Ok(None) => {
                             // Armed before the sleep is worked out, so an
                             // enqueue meanwhile still wakes this worker.
@@ -965,6 +993,20 @@ enum Next {
     /// `run_after`, and the error.
     Backoff(i64, String),
     Failed(String),
+}
+
+/// How a run ended, as the trace says it: what [`Scheduler::finish`] makes
+/// of the outcome.
+fn outcome_text(job: &Job, outcome: &Result<(), JobError>) -> String {
+    match outcome {
+        Ok(()) => "done".into(),
+        Err(JobError::Retry(e)) if job.attempts < MAX_ATTEMPTS => format!("retry later: {e}"),
+        Err(JobError::Retry(e) | JobError::Fail(e)) => format!("failed: {e}"),
+        Err(JobError::Yield { retry_at, .. }) => format!(
+            "yielded: no rate-limit room until {}",
+            crate::clock::iso_ms(*retry_at).unwrap_or_default()
+        ),
+    }
 }
 
 struct AbortOnDrop<T>(tokio::task::JoinHandle<T>);

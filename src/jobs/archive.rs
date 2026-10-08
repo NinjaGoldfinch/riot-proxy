@@ -20,6 +20,7 @@ use crate::clock::Clock;
 use crate::events::{self, Event};
 use crate::fetcher::{FetchError, FetchOptions, Fetcher, XCache};
 use crate::http::ErrorCode;
+use crate::jobs::activity;
 use crate::jobs::scheduler::{Enqueued, Handler, Job, JobError, NewJob, Queue};
 use crate::jobs::{kinds, priority};
 use crate::metrics::BACKFILLS_QUEUED_TOTAL;
@@ -151,6 +152,7 @@ impl ArchiveContext {
             request(id, target, &[&a.match_id], &[]).map_err(FetchError::from)
         };
         let req = fetch("match.byId").map_err(|e| retry(&e))?;
+        activity::step(format!("fetching match {}", a.match_id));
         let got = match self.fetcher.fetch(req, BULK).await {
             Ok(r) => r,
             // A match id Riot does not know is not worth retrying.
@@ -169,6 +171,7 @@ impl ArchiveContext {
         }
 
         if a.fetch_timeline.unwrap_or(self.archive_timelines) {
+            activity::step(format!("fetching the timeline of {}", a.match_id));
             match fetch("match.timeline") {
                 Ok(req) => match self.fetcher.fetch(req, BULK).await {
                     Ok(_) => {}
@@ -238,6 +241,7 @@ impl ArchiveContext {
         let mut ran_out = false;
         while start < limit {
             let count = BACKFILL_PAGE.min(limit - start);
+            activity::step(format!("match ids {start}–{} of {limit}", start + count));
             let target =
                 Endpoint::by_id("match.idsByPuuid").and_then(|e| e.target_for_region(platform.region()));
             let req = request(

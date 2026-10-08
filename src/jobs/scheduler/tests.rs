@@ -646,3 +646,28 @@ mod lanes {
         assert_eq!(lane.as_deref(), Some("kr"));
     }
 }
+
+#[test]
+fn a_trace_says_how_each_run_ended() {
+    let job = |attempts| Job {
+        id: "J".into(),
+        kind: "archive:match".into(),
+        dedupe_key: None,
+        priority: 100,
+        payload: "{}".into(),
+        attempts,
+        run_after: 0,
+    };
+    assert_eq!(outcome_text(&job(1), &Ok(())), "done");
+    let retry = Err(JobError::Retry("503".into()));
+    assert_eq!(outcome_text(&job(1), &retry), "retry later: 503");
+    assert_eq!(outcome_text(&job(MAX_ATTEMPTS), &retry), "failed: 503");
+    let yielded = Err(JobError::Yield {
+        retry_at: 1_760_000_000_000,
+        payload: None,
+    });
+    assert_eq!(
+        outcome_text(&job(1), &yielded),
+        "yielded: no rate-limit room until 2025-10-09T08:53:20.000Z"
+    );
+}

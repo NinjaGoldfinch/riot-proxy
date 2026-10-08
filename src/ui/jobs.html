@@ -1,0 +1,551 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>riot-proxy · jobs</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --sunk: #0b0e13; --line: #262d38;
+    --text: #d7dee8; --dim: #7d8794; --accent: #58a6ff;
+    --good: #2ea043; --bad: #d1444a; --warn: #d29922;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, sans-serif; }
+  header { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  header h1 { font-size: 15px; margin: 0; }
+  .grow { flex: 1; }
+  .badge { font: 11px var(--mono); padding: 2px 7px; border-radius: 10px; border: 1px solid var(--line); color: var(--dim); }
+  .badge.bad { color: #fff; background: var(--bad); border-color: var(--bad); }
+  input, button { font: inherit; color: var(--text); background: var(--sunk); border: 1px solid var(--line); border-radius: 5px; padding: 4px 8px; }
+  button { cursor: pointer; background: var(--panel); }
+  button:hover { border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  label { color: var(--dim); font-size: 12px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .muted { color: var(--dim); }
+  .mono { font-family: var(--mono); font-size: 12px; }
+  .note { font-size: 12px; } .note.bad { color: var(--bad); } .note.good { color: var(--good); }
+  /* tabs: Overview, then one per opened job */
+  nav.tabs { display: flex; gap: 2px; padding: 0 12px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: thin; }
+  nav.tabs [role=tab] { display: flex; align-items: center; gap: 6px; padding: 7px 10px; color: var(--dim); background: none; border: 0; border-bottom: 2px solid transparent; border-radius: 0; white-space: nowrap; font-size: 13px; }
+  nav.tabs [role=tab][aria-selected=true] { color: var(--text); border-color: var(--accent); }
+  nav.tabs .x { font-size: 14px; line-height: 1; padding: 0 3px; border-radius: 3px; color: var(--dim); }
+  nav.tabs .x:hover { background: var(--line); color: var(--text); }
+  main { padding: 14px 16px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; min-width: 0; overflow-x: auto; }
+  .card h3 { margin: 0 0 8px; font-size: 13px; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  .grid2 { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); align-items: start; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 3px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--dim); font-weight: 500; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.mono { white-space: nowrap; }
+  tr[data-job] { cursor: pointer; }
+  tr[data-job]:hover, tr[data-job]:focus { background: var(--sunk); outline: none; }
+  .kind { font: 600 12px var(--mono); }
+  .sum { color: var(--dim); font: 12px var(--mono); overflow-wrap: anywhere; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--dim); flex: none; }
+  .dot.running { background: var(--accent); box-shadow: 0 0 0 3px #58a6ff33; }
+  .dot.pending { background: var(--warn); } .dot.done { background: var(--good); } .dot.failed { background: var(--bad); }
+  .pill { font: 600 11px var(--mono); padding: 1px 8px; border-radius: 10px; color: #04111f; background: var(--dim); }
+  .pill.running { background: var(--accent); } .pill.pending { background: var(--warn); }
+  .pill.done { background: var(--good); color: #fff; } .pill.failed { background: var(--bad); color: #fff; }
+  /* workers */
+  .workers { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr)); align-items: start; }
+  .worker { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; background: var(--sunk); min-width: 0; }
+  .worker.busy { border-color: #58a6ff66; cursor: pointer; }
+  .worker.busy:hover, .worker.busy:focus { border-color: var(--accent); outline: none; }
+  .worker .top { display: flex; gap: 6px; align-items: center; font-size: 12px; }
+  .worker .w { font: 600 11px var(--mono); color: var(--dim); }
+  .worker .el { margin-left: auto; font: 11px var(--mono); color: var(--dim); }
+  .worker .now { margin-top: 4px; font: 12px var(--mono); overflow-wrap: anywhere; }
+  .worker .since { font: 11px var(--mono); color: var(--dim); }
+  /* a job's tab */
+  .facts { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; font-size: 13px; }
+  .facts dt { color: var(--dim); } .facts dd { margin: 0; font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+  .nowline { font: 13px var(--mono); padding: 8px 10px; border-left: 3px solid var(--accent); background: var(--sunk); border-radius: 0 6px 6px 0; overflow-wrap: anywhere; }
+  .nowline.over { border-color: var(--dim); color: var(--dim); }
+  pre { margin: 0; padding: 10px; background: var(--sunk); border: 1px solid var(--line); border-radius: 6px; font: 12px/1.45 var(--mono); overflow: auto; max-height: 40vh; white-space: pre-wrap; word-break: break-all; }
+  ol.timeline { list-style: none; margin: 0; padding: 0; max-height: 60vh; overflow: auto; font: 12px/1.5 var(--mono); }
+  ol.timeline li { display: grid; grid-template-columns: 72px 46px 1fr auto; gap: 8px; padding: 2px 6px; border-bottom: 1px solid #1c222b; }
+  ol.timeline .t, ol.timeline .ms { color: var(--dim); text-align: right; }
+  ol.timeline .k { color: var(--dim); }
+  ol.timeline .x { overflow-wrap: anywhere; }
+  .ev-riot .k { color: var(--accent); } .ev-wait .k { color: var(--warn); } .ev-error .k, .ev-error .x { color: var(--bad); }
+  .ev-job .k, .ev-job .x { color: var(--good); font-weight: 600; }
+  .empty { color: var(--dim); font-size: 13px; padding: 6px 0; }
+  @media (max-width: 600px) { .grid2 { grid-template-columns: 1fr; } ol.timeline li { grid-template-columns: 60px 1fr auto; } ol.timeline .k { display: none; } }
+</style>
+</head>
+<body>
+<!-- pagebar -->
+<header>
+  <h1>Jobs</h1>
+  <span class="badge bad" id="noauth" hidden>AUTH DISABLED</span>
+  <form class="row" id="keyBox" hidden>
+    <label for="key">Admin key</label>
+    <input id="key" type="password" size="26" autocomplete="off" placeholder="Bearer key">
+    <button type="submit">Use</button>
+  </form>
+  <span class="note bad" id="keyErr"></span>
+  <span class="grow"></span>
+  <label class="row" for="live"><input type="checkbox" id="live" checked> live</label>
+  <span class="mono muted" id="status">loading…</span>
+</header>
+<nav class="tabs" id="tabs" role="tablist" aria-label="Jobs"></nav>
+<main>
+  <section id="overview" role="tabpanel" aria-label="Overview">
+    <div class="card">
+      <h3>Workers <span class="muted" id="workerSummary"></span></h3>
+      <div class="workers" id="workers"></div>
+    </div>
+    <div class="grid2">
+      <div class="card">
+        <h3>Queue <span class="muted" id="queueSummary"></span></h3>
+        <table id="queue"></table>
+      </div>
+      <div class="card">
+        <h3>By kind</h3>
+        <table id="kinds"></table>
+      </div>
+    </div>
+    <div class="grid2">
+      <div class="card">
+        <h3>Finished here lately</h3>
+        <table id="finished"></table>
+      </div>
+      <div class="card">
+        <h3>Failed</h3>
+        <table id="failed"></table>
+      </div>
+    </div>
+  </section>
+  <section id="jobView" role="tabpanel" hidden></section>
+</main>
+
+<script>
+'use strict';
+// /dev/jobs (DEV-19): what every worker is doing, what is queued, and a tab per
+// job that follows it live. Everything comes from the admin API:
+// /v1/admin/jobs/activity (workers, finished), /v1/admin/jobs/queue,
+// /v1/admin/jobs?state=failed, /v1/admin/jobs/stats and, per open tab,
+// /v1/admin/jobs/{id}/activity?after=<nextSeq>.
+const $ = (id) => document.getElementById(id);
+const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const KEY_STORE = 'rp.dashboard.key'; // shared with /dashboard
+const TABS_STORE = 'rp.jobs.tabs';
+const POLL_MS = 1000;
+const STATS_EVERY = 5;
+
+let key = localStorage.getItem(KEY_STORE) || '';
+let authDisabled = false;
+let active = 'overview';
+/** Open job tabs by id: what the tab strip and the job view need. */
+const tabs = new Map();
+let ticks = 0;
+let busy = false;
+
+// ---------- formatting ----------
+const ms = (iso) => (iso ? Date.parse(iso) : NaN);
+/** "850 ms", "4.2 s", "3m 05s", "2h 10m". */
+function dur(n) {
+  if (!Number.isFinite(n)) return '–';
+  if (n < 1000) return `${Math.max(0, Math.round(n))} ms`;
+  if (n < 60_000) return `${(n / 1000).toFixed(1)} s`;
+  const s = Math.floor(n / 1000);
+  if (s < 3600) return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
+  return `${Math.floor(s / 3600)}h ${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}m`;
+}
+const since = (iso) => dur(Date.now() - ms(iso));
+function when(iso) {
+  if (!iso) return '–';
+  const d = ms(iso) - Date.now();
+  return d > 1000 ? `in ${dur(d)}` : `${dur(-d)} ago`;
+}
+const short = (s, n = 10) => (s && s.length > n + 1 ? `${s.slice(0, n)}…` : s ?? '');
+
+/** One line on what a job is about, from its payload. */
+function about(payload) {
+  const p = payload || {};
+  const bits = [];
+  if (p.matchId) bits.push(p.matchId);
+  if (p.platform) bits.push(p.platform);
+  if (p.queue) bits.push(p.queue);
+  if (p.tier) bits.push([p.tier, p.division].filter(Boolean).join(' '));
+  if (p.offset != null) bits.push(`offset ${p.offset}`);
+  if (Array.isArray(p.puuids)) bits.push(`${p.puuids.length} players`);
+  if (p.puuid) bits.push(`puuid ${short(p.puuid, 8)}`);
+  if (p.crawlId) bits.push(`crawl ${short(p.crawlId, 8)}`);
+  if (p.limit != null) bits.push(`limit ${p.limit}`);
+  return bits.join(' · ');
+}
+
+// ---------- API ----------
+class KeyError extends Error {}
+async function api(path, init = {}) {
+  const headers = Object.assign(key && !authDisabled ? { Authorization: `Bearer ${key}` } : {}, init.headers || {});
+  const res = await fetch(path, Object.assign({}, init, { headers }));
+  if (res.status === 401 || res.status === 403) throw new KeyError('That key was rejected: it needs the admin scope.');
+  const body = await res.json().catch(() => null);
+  if (!res.ok) throw new Error((body && body.error && body.error.message) || `${path}: ${res.status}`);
+  return body;
+}
+
+function askForKey(message) {
+  $('keyBox').hidden = false;
+  $('keyErr').textContent = message || '';
+  $('status').textContent = 'needs an admin key';
+}
+
+$('keyBox').addEventListener('submit', (e) => {
+  e.preventDefault();
+  key = $('key').value.trim();
+  if (!key) return;
+  localStorage.setItem(KEY_STORE, key);
+  $('keyErr').textContent = '';
+  tick(true);
+});
+
+// ---------- tabs ----------
+function saveTabs() {
+  localStorage.setItem(TABS_STORE, JSON.stringify([...tabs.values()].map((t) => ({ id: t.id, kind: t.kind }))));
+}
+
+function stateOf(t) {
+  if (t.job) return t.job.state;
+  if (t.trace) return t.trace.finishedAt ? 'done' : 'running';
+  return '';
+}
+
+function renderTabs() {
+  const strip = [`<button role="tab" data-tab="overview" aria-selected="${active === 'overview'}">Overview</button>`];
+  for (const t of tabs.values()) {
+    strip.push(
+      `<button role="tab" data-tab="${esc(t.id)}" aria-selected="${active === t.id}" title="${esc(t.id)}">` +
+        `<span class="dot ${esc(stateOf(t))}"></span><span>${esc(t.kind || 'job')} · ${esc(short(t.id.slice(-8), 8))}</span>` +
+        `<span class="x" data-close="${esc(t.id)}" role="button" aria-label="close ${esc(t.id)}">×</span></button>`,
+    );
+  }
+  $('tabs').innerHTML = strip.join('');
+}
+
+function show(id) {
+  active = tabs.has(id) ? id : 'overview';
+  $('overview').hidden = active !== 'overview';
+  $('jobView').hidden = active === 'overview';
+  const hash = active === 'overview' ? '' : `#job/${active}`;
+  if (location.hash !== hash) history.replaceState(null, '', hash || location.pathname);
+  renderTabs();
+  if (active !== 'overview') renderJob(tabs.get(active), true);
+  tick(true);
+}
+
+function openTab(id, kind) {
+  if (!id) return;
+  if (!tabs.has(id)) {
+    tabs.set(id, { id, kind, job: null, trace: null, events: [], next: 0, attempt: null, follow: true, missing: false });
+    saveTabs();
+  }
+  show(id);
+}
+
+function closeTab(id) {
+  tabs.delete(id);
+  saveTabs();
+  if (active === id) show('overview');
+  else renderTabs();
+}
+
+$('tabs').addEventListener('click', (e) => {
+  const x = e.target.closest('[data-close]');
+  if (x) {
+    e.stopPropagation();
+    closeTab(x.dataset.close);
+    return;
+  }
+  const tab = e.target.closest('[data-tab]');
+  if (tab) show(tab.dataset.tab);
+});
+
+// Any row or worker card naming a job opens it; Enter does too.
+function openFrom(e) {
+  const el = e.target.closest('[data-job]');
+  if (!el) return;
+  if (e.type === 'keydown' && e.key !== 'Enter') return;
+  openTab(el.dataset.job, el.dataset.kind);
+}
+document.addEventListener('click', (e) => { if (!e.target.closest('#tabs')) openFrom(e); });
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && active !== 'overview' && !e.target.closest('input')) closeTab(active);
+  else openFrom(e);
+});
+
+// ---------- overview ----------
+function renderWorkers(workers) {
+  const busyN = workers.filter((w) => w.jobId).length;
+  $('workerSummary').textContent = workers.length
+    ? `${busyN} of ${workers.length} busy`
+    : '';
+  if (!workers.length) {
+    $('workers').innerHTML = '<div class="empty">No workers in this process (it runs with ROLE=api, or the workers have not started).</div>';
+    return;
+  }
+  $('workers').innerHTML = workers
+    .map((w) =>
+      w.jobId
+        ? `<div class="worker busy" data-job="${esc(w.jobId)}" data-kind="${esc(w.kind)}" tabindex="0" title="open ${esc(w.jobId)}">` +
+          `<div class="top"><span class="dot running"></span><span class="w">W${w.worker}</span><span class="kind">${esc(w.kind)}</span>` +
+          `<span class="el">${esc(since(w.since))}</span></div>` +
+          `<div class="now">${esc(w.now || '…')}</div>` +
+          `<div class="since">${w.nowSince ? `for ${esc(since(w.nowSince))} · ` : ''}${w.events} events</div></div>`
+        : `<div class="worker"><div class="top"><span class="dot"></span><span class="w">W${w.worker}</span>` +
+          `<span class="muted">idle</span><span class="el">${esc(since(w.since))}</span></div></div>`,
+    )
+    .join('');
+}
+
+const jobRow = (j, cells) =>
+  `<tr data-job="${esc(j.id)}" data-kind="${esc(j.kind)}" tabindex="0">${cells.join('')}</tr>`;
+
+function renderQueue(q) {
+  const parts = [`${q.ready} ready`];
+  if (q.delayed) parts.push(`${q.delayed} waiting out a backoff${q.nextDelayedAt ? ` (next ${when(q.nextDelayedAt)})` : ''}`);
+  $('queueSummary').textContent = parts.join(' · ');
+  const rows = q.next.map((j, i) =>
+    jobRow(j, [
+      `<td class="num muted">${i + 1}</td>`,
+      `<td><span class="kind">${esc(j.kind)}</span><div class="sum">${esc(about(j.payload))}</div></td>`,
+      `<td class="num mono">${j.priority}</td>`,
+      `<td class="num">${j.attempts}</td>`,
+      `<td class="mono">${esc(when(j.runAfter))}</td>`,
+    ]),
+  );
+  $('queue').innerHTML = rows.length
+    ? `<thead><tr><th class="num">#</th><th>next to run</th><th class="num">priority</th><th class="num">tries</th><th>ready</th></tr></thead><tbody>${rows.join('')}</tbody>`
+    : '<tbody><tr><td class="empty">Nothing is queued.</td></tr></tbody>';
+}
+
+function renderKinds(stats) {
+  const kinds = Object.entries(stats.kinds || {}).filter(([, c]) => c.pending || c.running || c.failed);
+  $('kinds').innerHTML = kinds.length
+    ? `<thead><tr><th>kind</th><th class="num">running</th><th class="num">pending</th><th class="num">failed</th></tr></thead><tbody>${kinds
+        .map(([k, c]) => `<tr><td class="kind">${esc(k)}</td><td class="num">${c.running}</td><td class="num">${c.pending.toLocaleString('en')}</td><td class="num">${c.failed}</td></tr>`)
+        .join('')}</tbody>`
+    : '<tbody><tr><td class="empty">No pending, running or failed jobs.</td></tr></tbody>';
+}
+
+function renderFinished(list) {
+  $('finished').innerHTML = list.length
+    ? `<thead><tr><th>job</th><th>outcome</th><th class="num">took</th><th>ended</th></tr></thead><tbody>${list
+        .map((f) =>
+          `<tr data-job="${esc(f.jobId)}" data-kind="${esc(f.kind)}" tabindex="0"><td><span class="kind">${esc(f.kind)}</span> <span class="muted mono">W${f.worker}</span></td>` +
+          `<td class="${f.outcome === 'done' ? '' : 'note bad'}">${esc(f.outcome)}</td>` +
+          `<td class="num mono">${esc(dur(ms(f.finishedAt) - ms(f.startedAt)))}</td><td class="mono">${esc(when(f.finishedAt))}</td></tr>`,
+        )
+        .join('')}</tbody>`
+    : '<tbody><tr><td class="empty">No job has finished in this process yet.</td></tr></tbody>';
+}
+
+function renderFailed(jobs) {
+  $('failed').innerHTML = jobs.length
+    ? `<thead><tr><th>job</th><th>error</th><th>ended</th></tr></thead><tbody>${jobs
+        .map((j) =>
+          jobRow(j, [
+            `<td><span class="kind">${esc(j.kind)}</span><div class="sum">${esc(about(j.payload))}</div></td>`,
+            `<td class="note bad">${esc(j.error)}</td>`,
+            `<td class="mono">${esc(when(j.finishedAt))}</td>`,
+          ]),
+        )
+        .join('')}</tbody>`
+    : '<tbody><tr><td class="empty">No failed jobs.</td></tr></tbody>';
+}
+
+async function pollOverview(full) {
+  const [act, queue, failed] = await Promise.all([
+    api('/v1/admin/jobs/activity?limit=30'),
+    api('/v1/admin/jobs/queue?limit=50'),
+    api('/v1/admin/jobs?state=failed&limit=20'),
+  ]);
+  renderWorkers(act.workers);
+  renderFinished(act.finished);
+  renderQueue(queue);
+  renderFailed(failed.jobs);
+  if (full || ticks % STATS_EVERY === 0) renderKinds(await api('/v1/admin/jobs/stats'));
+}
+
+// ---------- one job ----------
+function renderJob(t, rebuild) {
+  const view = $('jobView');
+  if (rebuild || !view.querySelector(`[data-view="${CSS.escape(t.id)}"]`)) {
+    view.innerHTML =
+      `<div data-view="${esc(t.id)}">` +
+      '<div class="card"><h3><span data-f="kind" class="kind"></span><span data-f="pill"></span><span class="mono muted" data-f="id"></span>' +
+      '<span class="grow"></span><button type="button" data-act="retry" hidden>Retry now</button><button type="button" data-act="cancel" hidden>Cancel</button>' +
+      '<span class="note" data-f="msg"></span></h3><div class="nowline" data-f="now"></div></div>' +
+      '<div class="grid2"><div class="card"><h3>Job</h3><dl class="facts" data-f="facts"></dl></div>' +
+      '<div class="card"><h3>Payload</h3><pre data-f="payload"></pre></div></div>' +
+      '<div class="card"><h3>What it did <span class="muted" data-f="runinfo"></span><span class="grow"></span>' +
+      '<label class="row"><input type="checkbox" data-f="follow"> follow</label></h3><ol class="timeline" data-f="timeline"></ol></div></div>';
+    const f = (n) => view.querySelector(`[data-f="${n}"]`);
+    f('follow').checked = t.follow;
+    f('follow').addEventListener('change', (e) => { t.follow = e.target.checked; });
+    view.querySelector('[data-act="retry"]').addEventListener('click', () => act(t, 'retry'));
+    view.querySelector('[data-act="cancel"]').addEventListener('click', () => act(t, 'cancel'));
+    f('timeline').innerHTML = t.events.map((e) => eventLi(t, e)).join('');
+  }
+  const f = (n) => view.querySelector(`[data-f="${n}"]`);
+  const j = t.job;
+  const state = stateOf(t);
+  f('kind').textContent = t.kind || j?.kind || t.trace?.kind || 'job';
+  f('id').textContent = t.id;
+  f('pill').innerHTML = state ? `<span class="pill ${esc(state)}">${esc(state)}</span>` : '';
+  view.querySelector('[data-act="retry"]').hidden = state !== 'failed';
+  view.querySelector('[data-act="cancel"]').hidden = state !== 'pending';
+  const tr = t.trace;
+  const now = f('now');
+  if (t.missing) {
+    now.className = 'nowline over';
+    now.textContent = 'No such job.';
+  } else if (tr && !tr.finishedAt) {
+    now.className = 'nowline';
+    now.textContent = `${tr.now || '…'}${tr.nowSince ? `  ·  for ${since(tr.nowSince)}` : ''}`;
+  } else if (state === 'pending') {
+    now.className = 'nowline over';
+    now.textContent = `Waiting for a worker: ready ${when(j?.runAfter)}, priority ${j?.priority}.`;
+  } else if (tr) {
+    now.className = 'nowline over';
+    now.textContent = `Ended ${when(tr.finishedAt)}: ${tr.outcome}`;
+  } else {
+    now.className = 'nowline over';
+    now.textContent = j ? `${state}. No worker in this process has run it since it started.` : 'loading…';
+  }
+  const facts = [
+    ['state', state],
+    ['priority', j?.priority],
+    ['attempts', j?.attempts],
+    ['dedupe key', j?.dedupeKey],
+    ['ready', j?.runAfter && when(j.runAfter)],
+    ['claimed', j?.claimedAt && when(j.claimedAt)],
+    ['finished', j?.finishedAt && when(j.finishedAt)],
+    ['error', j?.error],
+    ['worker', tr && `W${tr.worker}`],
+  ].filter(([, v]) => v != null && v !== '');
+  f('facts').innerHTML = facts.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
+  f('payload').textContent = j ? JSON.stringify(j.payload, null, 2) : '–';
+  f('runinfo').textContent = tr
+    ? `attempt ${tr.attempt} · started ${when(tr.startedAt)}${tr.finishedAt ? ` · took ${dur(ms(tr.finishedAt) - ms(tr.startedAt))}` : ` · running ${since(tr.startedAt)}`}${tr.dropped ? ` · ${tr.dropped} older events dropped` : ''}`
+    : '';
+  if (!tr && !t.events.length) f('timeline').innerHTML = '<li class="empty">Nothing recorded: the trace lives in the process that runs the job, for its latest run.</li>';
+}
+
+function eventLi(t, e) {
+  const start = t.trace ? ms(t.trace.startedAt) : ms(e.at);
+  return `<li class="ev-${esc(e.kind)}"><span class="t">+${esc(dur(ms(e.at) - start))}</span><span class="k">${esc(e.kind)}</span>` +
+    `<span class="x">${esc(e.text)}</span><span class="ms">${e.ms != null ? esc(dur(e.ms)) : ''}</span></li>`;
+}
+
+async function pollJob(t) {
+  let body;
+  try {
+    body = await api(`/v1/admin/jobs/${encodeURIComponent(t.id)}/activity?after=${t.next}`);
+  } catch (err) {
+    if (err instanceof KeyError) throw err;
+    t.missing = /no such job/i.test(err.message);
+    renderJob(t);
+    renderTabs();
+    return;
+  }
+  t.missing = false;
+  t.job = body.job;
+  if (body.job) t.kind = body.job.kind;
+  const tr = body.trace;
+  // A new attempt replaces the trace: start the timeline again.
+  if (tr && (tr.attempt !== t.attempt || tr.nextSeq < t.next)) {
+    if (t.attempt != null) {
+      t.events = [];
+      t.next = 0;
+      t.trace = tr;
+      t.attempt = tr.attempt;
+      return pollJob(t);
+    }
+    t.attempt = tr.attempt;
+  }
+  t.trace = tr;
+  if (tr) {
+    t.next = tr.nextSeq;
+    t.events.push(...tr.events);
+  }
+  if (active !== t.id) return;
+  renderJob(t);
+  const list = $('jobView').querySelector('[data-f="timeline"]');
+  if (tr && tr.events.length) {
+    if (list.querySelector('.empty')) list.innerHTML = '';
+    list.insertAdjacentHTML('beforeend', tr.events.map((e) => eventLi(t, e)).join(''));
+    if (t.follow) list.scrollTop = list.scrollHeight;
+  }
+  renderTabs();
+}
+
+async function act(t, what) {
+  const msg = $('jobView').querySelector('[data-f="msg"]');
+  const ask = what === 'retry' ? `Run ${t.kind} ${t.id} again now?` : `Cancel ${t.kind} ${t.id}?`;
+  if (!confirm(ask)) return;
+  try {
+    if (what === 'retry') await api(`/v1/admin/jobs/${encodeURIComponent(t.id)}/retry`, { method: 'POST' });
+    else await api(`/v1/admin/jobs/${encodeURIComponent(t.id)}`, { method: 'DELETE' });
+    msg.className = 'note good';
+    msg.textContent = what === 'retry' ? 'queued again' : 'cancelled';
+  } catch (err) {
+    msg.className = 'note bad';
+    msg.textContent = err.message;
+  }
+  await tick(true);
+}
+
+// ---------- the loop ----------
+async function tick(force) {
+  if (busy || (!force && !$('live').checked)) return;
+  if (!authDisabled && !key) return askForKey();
+  busy = true;
+  try {
+    if (active === 'overview') await pollOverview(force);
+    else await pollJob(tabs.get(active));
+    ticks += 1;
+    $('status').textContent = `updated ${new Date().toLocaleTimeString()}`;
+    $('keyBox').hidden = authDisabled || !!key;
+  } catch (err) {
+    if (err instanceof KeyError) {
+      localStorage.removeItem(KEY_STORE);
+      key = '';
+      askForKey(err.message);
+    } else {
+      $('status').textContent = String(err.message || err);
+    }
+  } finally {
+    busy = false;
+  }
+}
+
+async function start() {
+  try {
+    const cfg = await fetch('/dev/config.json').then((r) => r.json());
+    authDisabled = !!cfg.authDisabled;
+  } catch { /* keep asking for a key */ }
+  $('noauth').hidden = !authDisabled;
+  let saved = [];
+  try { saved = JSON.parse(localStorage.getItem(TABS_STORE)) || []; } catch { /* none */ }
+  for (const s of saved) {
+    if (s && s.id) tabs.set(s.id, { id: s.id, kind: s.kind, job: null, trace: null, events: [], next: 0, attempt: null, follow: true, missing: false });
+  }
+  const m = location.hash.match(/^#job\/([\w-]+)$/);
+  if (m) openTab(m[1]);
+  else show('overview');
+  setInterval(() => tick(false), POLL_MS);
+}
+start();
+</script>
+</body>
+</html>

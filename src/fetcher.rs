@@ -23,6 +23,7 @@ use crate::cache::ResponseCache;
 use crate::cache::keys::{KeyScope, cache_key};
 use crate::cache::l1::{CacheEntry, Lookup};
 use crate::http::{ApiError, ErrorCode};
+use crate::jobs::activity;
 use crate::metrics::CACHE_READS_TOTAL;
 use crate::riot::client::{RiotClient, RiotErrorKind, RiotRequest};
 use crate::riot::endpoints::{Endpoint, Target, TtlPolicy};
@@ -41,6 +42,8 @@ const MAX_ATTEMPTS: u32 = 8;
 /// Background refreshes wait rather than fail; this bounds the wait. Jobs
 /// wait at most `JOB_YIELD_BUDGET_MS` and give their worker back (SCH-01).
 pub const BULK_BUDGET: Duration = Duration::from_secs(15 * 60);
+/// A job's trace notes a rate-limit wait from this long on (DEV-19).
+const TRACE_WAIT_FROM: Duration = Duration::from_millis(20);
 
 /// `X-Cache` (v1's four plus design 03's `ARCHIVE` and `BYPASS`; ADR-022, ADR-031).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -256,6 +259,25 @@ impl Fetcher {
     }
 
     pub async fn fetch(&self, req: RiotRequest, opts: FetchOptions) -> Result<FetchResult, FetchError> {
+        // The job running this fetch, if any, logs what it got (DEV-19).
+        let label = activity::tracing_job().then(|| format!("{} {}", req.endpoint.id, req.path));
+        let started = Instant::now();
+        let out = self.fetch_inner(req, opts).await;
+        if let Some(label) = label {
+            let ms = i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX);
+            match &out {
+                Ok(r) => activity::event("riot", format!("{label} → {}", r.x_cache.as_str()), Some(ms)),
+                Err(e) => activity::event(
+                    "error",
+                    format!("{label} → {} {}", e.api.code.as_str(), e.api.message),
+                    Some(ms),
+                ),
+            }
+        }
+        out
+    }
+
+    async fn fetch_inner(&self, req: RiotRequest, opts: FetchOptions) -> Result<FetchResult, FetchError> {
         let key = cache_key(&self.inner.scope, &req);
         let now = Instant::now();
 
@@ -305,9 +327,13 @@ impl Fetcher {
             (false, Priority::Bulk) => BULK_BUDGET,
         };
         let (work_key, priority) = (key.clone(), opts.priority);
+        // The upstream leg runs on its own task; it logs to this job.
+        let current = activity::current();
         let flight = self
             .flight
-            .run(key, move || upstream(inner, req, work_key, priority, budget))
+            .run(key, move || {
+                activity::within(current, upstream(inner, req, work_key, priority, budget))
+            })
             .await;
         let fetched = flight.value?;
         let x_cache = match (fetched.stale, opts.bypass) {
@@ -388,7 +414,12 @@ async fn upstream(
     let mut avoid: Vec<Target> = Vec::new();
     let (mut server_retries, mut service_tries) = (0usize, 0u32);
 
+    let traced = activity::tracing_job();
     for _ in 0..MAX_ATTEMPTS {
+        if traced {
+            activity::now(format!("rate limiter: {} on {}", endpoint.id, req.target.scope()));
+        }
+        let waiting = Instant::now();
         let target = match acquire_target(
             &inner.limiter,
             &targets,
@@ -410,6 +441,21 @@ async fn upstream(
         };
         req.target = target;
         let scope = target.scope();
+        let waited = waiting.elapsed();
+        if traced {
+            if waited >= TRACE_WAIT_FROM {
+                activity::event(
+                    "wait",
+                    format!(
+                        "waited for the {scope} rate limit ({})",
+                        endpoint.method_scope_key
+                    ),
+                    Some(i64::try_from(waited.as_millis()).unwrap_or(i64::MAX)),
+                );
+            }
+            activity::now(format!("calling Riot: {} {} on {scope}", endpoint.id, req.path));
+        }
+        let sent = Instant::now();
 
         let (outcome, headers) = match inner.client.send(&req).await {
             Ok(res) => {
@@ -423,6 +469,18 @@ async fn upstream(
         };
         // The limiter sees every response, errors included (v1 §9.1).
         inner.limiter.observe(scope, endpoint.method_scope_key, &headers);
+        // A success shows as the fetch's own line; a failure here may be
+        // retried, so each one is logged.
+        if traced && let Err(e) = &outcome {
+            let status = e
+                .status
+                .map_or_else(|| format!("{:?}", e.kind), |s| s.to_string());
+            activity::event(
+                "error",
+                format!("Riot answered {status} on {scope}"),
+                Some(i64::try_from(sent.elapsed().as_millis()).unwrap_or(i64::MAX)),
+            );
+        }
 
         let err = match outcome {
             Ok(res) => {
@@ -484,6 +542,13 @@ async fn upstream(
                         ?backoff,
                         "service 429, backing off"
                     );
+                    if traced {
+                        activity::event(
+                            "wait",
+                            format!("service 429 on {scope}: backing off {backoff:?}"),
+                            None,
+                        );
+                    }
                     tokio::time::sleep(jitter(backoff)).await;
                     continue;
                 }
@@ -493,6 +558,13 @@ async fn upstream(
                 if let Some(&backoff) = SERVER_RETRY_BACKOFF.get(server_retries) {
                     server_retries += 1;
                     tracing::warn!(method = endpoint.id, status = ?err.status, try_ = server_retries, "upstream unavailable, retrying");
+                    if traced {
+                        activity::event(
+                            "wait",
+                            format!("Riot unavailable on {scope}: retrying in {backoff:?}"),
+                            None,
+                        );
+                    }
                     tokio::time::sleep(jitter(backoff)).await;
                     continue;
                 }

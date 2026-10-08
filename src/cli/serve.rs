@@ -188,6 +188,7 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         patch_limit: config.aggregate_patch_limit,
         reextract_batch: config.facts_reextract_batch,
     });
+    let activity = crate::jobs::activity::Activity::new();
     let scheduler = crate::jobs::Scheduler::with_queue(
         queue.clone(),
         crate::jobs::handlers(
@@ -200,7 +201,8 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
             &maintenance,
         ),
     )
-    .with_limiter(Arc::clone(&limiter));
+    .with_limiter(Arc::clone(&limiter))
+    .with_activity(activity.clone());
     match scheduler.recover().await {
         Ok(0) => {}
         Ok(n) => tracing::info!(jobs = n, "re-queued jobs a previous process left running"),
@@ -255,6 +257,7 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         limiter_restored: restored,
         refresh: Arc::new(crate::routes::players::RefreshWindows::new()),
         jobs: queue,
+        activity,
         hub: hub.clone(),
         ddragon: mirror,
         stats,

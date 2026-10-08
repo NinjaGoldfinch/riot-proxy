@@ -1,7 +1,8 @@
-//! `/dev`, `/dev/showcase` and `/dashboard`: browser pages embedded in the binary
-//! (design/07 §The artefact) and served without a key. `/dev` is the dev explorer
-//! (design/10, ADR-071) and `/dev/showcase` an example frontend (design/11,
-//! ADR-080); neither is ever served in production. `DASHBOARD_UI` defaults on (the
+//! `/dev`, `/dev/showcase`, `/dev/jobs` and `/dashboard`: browser pages embedded
+//! in the binary (design/07 §The artefact) and served without a key. `/dev` is
+//! the dev explorer (design/10, ADR-071), `/dev/showcase` an example frontend
+//! (design/11, ADR-080) and `/dev/jobs` the live job view (design/10 §Jobs,
+//! DEV-19); none is ever served in production. `DASHBOARD_UI` defaults on (the
 //! page is inert, and everything behind it needs an admin key).
 //! The dashboard is v1's `public/dashboard.html` with its data wired (P7-06); its
 //! only change is following v2's `crawl.phase` event (ADR-058).
@@ -25,6 +26,7 @@ use crate::riot::routing::{Platform, Region};
 pub const DEV_UI_HTML: &str = include_str!("../ui/dev-ui.html");
 pub const DASHBOARD_HTML: &str = include_str!("../ui/dashboard.html");
 pub const SHOWCASE_HTML: &str = include_str!("../ui/showcase.html");
+pub const JOBS_HTML: &str = include_str!("../ui/jobs.html");
 
 const NO_STORE: (header::HeaderName, &str) = (header::CACHE_CONTROL, "no-store");
 
@@ -37,6 +39,7 @@ pub fn pages(config: &Config) -> Vec<(&'static str, &'static str)> {
         (config.dashboard_ui, "/dashboard", "Dashboard"),
         (config.dev_ui, "/dev", "Dev explorer"),
         (config.dev_ui, "/dev/showcase", "Showcase"),
+        (config.dev_ui, "/dev/jobs", "Jobs"),
         (config.docs_ui, "/docs", "API docs"),
         (true, "/metrics", "Metrics"),
     ]
@@ -164,6 +167,7 @@ pub fn router(config: &Config, openapi_json: Arc<str>) -> Router {
                 "/dev/showcase",
                 page(render(SHOWCASE_HTML, config, "/dev/showcase")),
             )
+            .route("/dev/jobs", page(render(JOBS_HTML, config, "/dev/jobs")))
             .route(
                 "/dev/config.json",
                 json_route(serde_json::to_value(dev).unwrap_or_default()),
