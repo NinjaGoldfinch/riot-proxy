@@ -398,51 +398,106 @@
         margin: 0 0 8px;
       }
       .crawl + .crawl {
-        margin-top: 12px;
+        margin-top: 14px;
         border-top: 1px solid var(--line);
-        padding-top: 10px;
+        padding-top: 12px;
       }
       .crawl-head {
         display: flex;
+        flex-wrap: wrap;
         align-items: baseline;
-        gap: 10px;
-        font: 600 12.5px var(--mono);
-        margin-bottom: 4px;
+        gap: 4px 10px;
+        font: 12.5px var(--mono);
+        margin-bottom: 8px;
       }
       .crawl-head .when {
         margin-left: auto;
         color: var(--dim);
         font-weight: 400;
       }
-      /* The three stages, in order, with the one it is in lit. The order is
-         the guarantee — nothing fetches a match until every id is in — so the
-         crawl says which stage it is at rather than only how far along. */
-      .phases {
-        display: flex;
-        align-items: baseline;
-        gap: 7px;
-        font: 11.5px var(--mono);
-        color: var(--dim);
-        margin: 2px 0 6px;
-      }
-      .phases .step.done {
-        color: var(--good);
-      }
-      .phases .step.now {
-        color: var(--accent);
+      .crawl-head .ladder {
         font-weight: 600;
       }
-      /* Label and value read as one token, so they sit together and wrap as a
-         pair rather than being stretched apart by a grid track. */
-      .facts {
+      /* What a crawl has produced, as three numbers under its stage bars. */
+      .totals {
         display: flex;
         flex-wrap: wrap;
-        gap: 2px 20px;
-        font: 12.5px var(--mono);
-      }
-      .facts span .k {
+        gap: 2px 18px;
+        margin: 8px 0 0;
         color: var(--dim);
-        margin-right: 6px;
+      }
+      .totals b {
+        color: var(--text);
+        font-weight: 600;
+      }
+      .totals .bad,
+      .totals .bad b {
+        color: var(--bad);
+      }
+      /* ── folds ──────────────────────────────────────────────────────────── */
+      /* A panel or a crawl's detail that stays shut until asked for. Its
+         summary carries the one line worth reading while it is shut. */
+      details.fold > summary,
+      details.more > summary {
+        cursor: pointer;
+        list-style: none;
+      }
+      details.fold > summary::-webkit-details-marker,
+      details.more > summary::-webkit-details-marker {
+        display: none;
+      }
+      details.fold > summary h2 {
+        margin: 0;
+      }
+      details.fold > summary h2::before,
+      details.more > summary::before,
+      #crawlForm > summary::before {
+        content: '▸';
+        color: var(--dim);
+        width: 1em;
+        display: inline-block;
+      }
+      details.fold[open] > summary h2::before,
+      details.more[open] > summary::before,
+      #crawlForm[open] > summary::before {
+        content: '▾';
+      }
+      details.fold[open] > summary h2 {
+        margin-bottom: 10px;
+      }
+      details.fold > summary:hover h2,
+      details.more > summary:hover {
+        color: var(--text);
+      }
+      #crawlForm {
+        margin-top: 12px;
+        border-top: 1px solid var(--line);
+        padding-top: 10px;
+      }
+      #crawlForm > summary {
+        font: 600 12px var(--mono);
+        color: var(--accent);
+        margin-bottom: 0;
+      }
+      #crawlForm[open] > summary {
+        margin-bottom: 10px;
+      }
+      details.more {
+        margin-top: 6px;
+      }
+      details.more > summary {
+        font: 11.5px var(--mono);
+        color: var(--dim);
+      }
+      details.more .body {
+        margin-top: 6px;
+        padding-left: 12px;
+        border-left: 1px solid var(--line);
+      }
+      button.more-rows {
+        margin-top: 8px;
+        padding: 3px 10px;
+        font: 11.5px var(--mono);
       }
       /* ── crawl activity (DEV-13) ─────────────────────────────────────────── */
       h3.sub {
@@ -529,6 +584,8 @@
         display: flex;
         flex-wrap: wrap;
         gap: 4px 6px;
+        max-height: 7.5em;
+        overflow-y: auto;
       }
       .legs span {
         border: 1px solid var(--line);
@@ -859,40 +916,46 @@
       </div>
 
       <!-- ── ladder ───────────────────────────────────────────────────────── -->
+      <!-- Crawls in flight first, each as its stage bars and three totals; the
+           jobs, legs and counters behind them, the past runs' detail, the job
+           queue and the recompute history stay folded until asked for. -->
       <div class="tab" id="tab-ladder">
         <section>
           <div class="panel">
-            <h2>Start a crawl</h2>
-            <div class="controls">
-              <div class="field">
-                <label for="crawlPlatform">platform</label>
-                <select id="crawlPlatform"></select>
+            <h2>Crawls <span class="status" id="ladderMeta">loading…</span></h2>
+            <div id="ladderRunning"></div>
+            <details class="fold" id="crawlForm">
+              <summary>Start a crawl</summary>
+              <div class="controls">
+                <div class="field">
+                  <label for="crawlPlatform">platform</label>
+                  <select id="crawlPlatform"></select>
+                </div>
+                <div class="field">
+                  <label for="crawlQueue">queue</label>
+                  <select id="crawlQueue"></select>
+                </div>
+                <div class="field">
+                  <label for="crawlTierFloor">enumerate down to</label>
+                  <select id="crawlTierFloor"></select>
+                </div>
+                <button type="button" class="act" id="crawlStart" disabled>Start crawl</button>
               </div>
-              <div class="field">
-                <label for="crawlQueue">queue</label>
-                <select id="crawlQueue"></select>
-              </div>
-              <div class="field">
-                <label for="crawlTierFloor">enumerate down to</label>
-                <select id="crawlTierFloor"></select>
-              </div>
-              <button type="button" class="act" id="crawlStart" disabled>Start crawl</button>
-            </div>
-            <p class="note" id="crawlHint"></p>
+              <p class="note" id="crawlHint"></p>
+            </details>
             <p class="note" id="crawlResult"></p>
           </div>
         </section>
         <section>
           <div class="panel">
-            <h2>Crawls</h2>
-            <p class="meta" id="ladderMeta">loading…</p>
-            <div id="ladderRunning"></div>
+            <h2>Past crawls <span class="status" id="ladderHistoryMeta">loading…</span></h2>
+            <div class="scroll"><table id="ladderHistory"></table></div>
+            <button type="button" class="act more-rows" id="historyMore" hidden></button>
           </div>
         </section>
         <section>
-          <div class="panel">
-            <h2>Job queue</h2>
-            <p class="meta" id="queueMeta">loading…</p>
+          <details class="panel fold" id="queueFold">
+            <summary><h2>Job queue <span class="status" id="queueMeta">loading…</span></h2></summary>
             <div class="queue-cols">
               <div>
                 <h3 class="sub">Running now</h3>
@@ -903,25 +966,13 @@
                 <div id="queueNext"></div>
               </div>
             </div>
-          </div>
+          </details>
         </section>
         <section>
-          <div class="panel">
-            <h2>Last completed</h2>
-            <div id="ladderLast"></div>
-          </div>
-        </section>
-        <section>
-          <div class="panel">
-            <h2>History</h2>
-            <p class="meta" id="ladderHistoryMeta">loading…</p>
-            <p class="meta">Click a run to see its stages, jobs and failures.</p>
-            <div class="scroll"><table id="ladderHistory"></table></div>
-          </div>
-        </section>
-        <section>
-          <div class="panel">
-            <h2>Analytics recompute</h2>
+          <details class="panel fold" id="analyticsFold">
+            <summary>
+              <h2>Analytics recompute <span class="status" id="analyticsMeta">loading…</span></h2>
+            </summary>
             <div class="controls">
               <div class="field">
                 <label for="analyticsPlatform">platform</label>
@@ -934,10 +985,9 @@
               <button type="button" class="act" id="analyticsStart" disabled>Recompute now</button>
             </div>
             <p class="note" id="analyticsResult"></p>
-            <p class="meta" id="analyticsMeta">loading…</p>
             <div class="scroll"><table id="analyticsRuns"></table></div>
             <div id="analyticsTop"></div>
-          </div>
+          </details>
         </section>
       </div>
 
@@ -1292,80 +1342,70 @@
 
       // ── ladder ────────────────────────────────────────────────────────────
       /**
-       * The three stages, in the order a crawl runs them. The order is the
-       * guarantee worth showing: nothing fetches a match until every id is in,
-       * which is what makes a match shared by ten players cost one fetch.
+       * A running crawl as a card: which ladder, which stage, and — once its
+       * activity loads — one bar per stage and the three totals that say what
+       * it has produced. The jobs, legs and counters behind those numbers are
+       * folded under "details"; the card is what an operator glances at.
        */
-      const PHASES = [
-        ['enumerate', 'walking the ladder'],
-        ['collect', 'gathering match ids'],
-        ['archive', 'fetching the matches'],
-      ];
-
-      function phaseChain(c) {
-        const at = PHASES.findIndex(([name]) => name === c.phase);
+      function crawlCard(c) {
+        const cancel = `<button type="button" class="act danger" data-cancel="${esc(c.id)}">cancel</button>`;
         return (
-          '<div class="phases">' +
-          PHASES.map(
-            ([name, hint], i) =>
-              `<span class="step ${i < at ? 'done' : i === at ? 'now' : ''}" ` +
-              `title="${esc(hint)}">${esc(name)}</span>`,
-          ).join('<span>›</span>') +
-          '</div>'
+          `<div class="crawl"><div class="crawl-head">` +
+          `<span class="ladder">${esc(c.platform)} · ${esc(c.queue)}</span>` +
+          `<span class="dim">down to ${esc(c.tierFloor)}</span>` +
+          `<span class="pill running">${esc(c.phase || 'running')}</span>` +
+          `<span class="when">started ${relTime(c.startedAt)}</span>${cancel}</div>` +
+          `<div class="activity" data-activity="${esc(c.id)}">` +
+          `${activityView(c.id, 'loading progress…')}</div>` +
+          `</div>`
         );
       }
 
-      function crawlCard(c) {
-        const facts = [
-          ['pages', fmt(c.pagesFetched)],
-          ['entries', fmt(c.entriesSeen)],
-          ['players', fmt(c.playersDiscovered)],
-          ['walking', fmt(c.backfillsEnqueued)],
-          ['match ids', fmt(c.matchIdsSeen)],
-          ['matches queued', fmt(c.matchesQueued)],
-        ];
-        if (c.status === 'running') facts.push(['legs left', fmt(c.pendingLegs)]);
-        const when =
-          c.status === 'running'
-            ? 'started ' + relTime(c.startedAt)
-            : relTime(c.finishedAt || c.startedAt);
-        const cancel =
-          c.status === 'running'
-            ? `<button type="button" class="act danger" data-cancel="${esc(c.id)}">cancel</button>`
-            : '';
-        return (
-          `<div class="crawl"><div class="crawl-head">` +
-          `<span>${esc(c.platform)} · ${esc(c.queue)}</span>` +
-          `<span class="pill ${esc(c.status)}">${esc(c.status)}</span>` +
-          `<span class="dim">from ${esc(c.tierFloor)}</span>` +
-          `<span class="when">${when}</span>${cancel}</div>` +
-          (c.status === 'running' && c.phase ? phaseChain(c) : '') +
-          `<div class="facts">` +
-          facts.map(([k, v]) => `<span><span class="k">${k}</span>${v}</span>`).join('') +
-          `</div>` +
-          (c.status === 'running'
-            ? `<div class="activity" data-activity="${esc(c.id)}">${activityHtml.get(c.id) ?? '<p class="meta">loading progress…</p>'}</div>`
-            : '') +
-          `</div>`
-        );
+      /**
+       * The crawls in flight come from the snapshot (every tick) and from the
+       * crawl list (every minute, and on a crawl event); whichever is newer
+       * wins. A card is only rebuilt when it would read differently, so an
+       * open "details" fold or a scrolled leg list survives the tick.
+       */
+      let runningCrawls = [];
+      let runningSig = null;
+      function renderRunning(running) {
+        runningCrawls = running;
+        liveCrawls = running.map((c) => c.id);
+        $('tagLadder').textContent = running.length ? String(running.length) : '';
+        $('tagLadder').className = 'tag live';
+        // Nothing to watch: the form is what the operator came for.
+        if (!running.length && !$('crawlForm').dataset.touched) $('crawlForm').open = true;
+        // A crawl that just ended is read afresh if its history row is opened.
+        for (const id of [...activity.keys()]) {
+          if (!liveCrawls.includes(id) && !openRuns.has(id)) activity.delete(id);
+        }
+        const sig = running.map((c) => `${c.id} ${c.phase} ${relTime(c.startedAt)}`).join('|');
+        if (sig === runningSig) return;
+        runningSig = sig;
+        $('ladderRunning').innerHTML = running.length
+          ? running.map(crawlCard).join('')
+          : '<p class="empty">No crawl running.</p>';
+        // A new card fills in now rather than at the next poll.
+        if (activeTab === 'ladder') {
+          for (const id of liveCrawls) if (!activity.has(id)) fetchActivity(id).catch(console.error);
+        }
       }
 
       function renderLadder(snap) {
         const ladder = snap.ladder;
         if (!ladder) return; // an older api instance
-        const running = ladder.running;
-        $('tagLadder').textContent = running.length ? String(running.length) : '';
-        $('tagLadder').className = 'tag live';
+        ladderEntries = ladder.entries;
+        renderRunning(ladder.running);
+        renderLadderMeta();
+      }
+
+      let ladderEntries = null;
+      function renderLadderMeta() {
+        const n = runningCrawls.length;
         $('ladderMeta').textContent =
-          `${fmt(ladder.entries)} league entries stored · ` +
-          (running.length ? `${running.length} crawl(s) in flight` : 'nothing crawling');
-        $('ladderRunning').innerHTML = running.length
-          ? running.map(crawlCard).join('')
-          : '<p class="empty">No crawl running.</p>';
-        liveCrawls = running.map((c) => c.id);
-        $('ladderLast').innerHTML = ladder.lastCompleted
-          ? crawlCard(ladder.lastCompleted)
-          : '<p class="empty">No crawl has finished yet.</p>';
+          (n ? `${n} running` : 'none running') +
+          (ladderEntries == null ? '' : ` · ${fmt(ladderEntries)} league entries stored`);
       }
 
       /**
@@ -1385,18 +1425,18 @@
         const runs = analytics.lastRuns;
 
         if (runs.length === 0) {
-          $('analyticsMeta').textContent =
-            'No recompute has run yet. One is queued when a crawl finishes, every ' +
-            'AGGREGATE_INTERVAL_S if that is set, or by Recompute now.';
+          $('analyticsMeta').textContent = 'none yet';
           $('analyticsRuns').innerHTML = '';
-          $('analyticsTop').innerHTML = '';
+          $('analyticsTop').innerHTML =
+            '<p class="meta">One is queued when a crawl finishes, every ' +
+            'AGGREGATE_INTERVAL_S if that is set, or by Recompute now.</p>';
           return;
         }
 
         const newest = runs[0];
         $('analyticsMeta').textContent =
-          `${runs.length} ladder(s) aggregated · last ${relTime(newest.at)}` +
-          (newest.status === 'failed' ? ' · last run FAILED part way' : '');
+          `last ${relTime(newest.at)} · ${runs.length} ladder(s)` +
+          (newest.status === 'failed' ? ' · last run failed part way' : '');
 
         const head =
           '<tr><th>ladder</th><th>when</th><th>steps (s)</th><th>rows</th><th>games</th></tr>';
@@ -1434,78 +1474,70 @@
       }
 
       /**
-       * Every run this key scope has done, newest first — which ladders have
-       * been crawled, what each one produced, and when it last ran.
-       *
-       * The snapshot carries the crawls in flight and the last completed one,
-       * because those are what an operator watches. This is the other
-       * question — "when was oc1 last done, and did it finish?" — and it is a
-       * table of rows rather than a live number, so it polls with the players
-       * panel rather than riding the tick.
+       * Every finished run this key scope has done, newest first: what each one
+       * produced and how long it took. Running crawls are the cards above, so
+       * they are not repeated here. A row opens into the same stage bars and
+       * details as a card. It polls with the players panel rather than riding
+       * the tick: these rows change when a crawl ends, not every second.
        */
-      const CRAWL_ROWS_SHOWN = 20;
+      const CRAWL_ROWS_SHOWN = 10;
+      let showAllRuns = false;
 
       function renderCrawlHistory(crawls) {
-        if (crawls.length === 0) {
-          $('ladderHistoryMeta').textContent = 'No crawl has run yet.';
+        historyRowsAll = crawls;
+        const running = crawls.filter((c) => c.status === 'running');
+        // The snapshot is the faster source; this one stands in when it is
+        // missing or behind (a crawl started from this page).
+        if (!prev || !prev.ladder || running.some((c) => !liveCrawls.includes(c.id))) {
+          renderRunning(running);
+          renderLadderMeta();
+        }
+        const past = crawls.filter((c) => c.status !== 'running');
+        if (past.length === 0) {
+          $('ladderHistoryMeta').textContent = 'none yet';
           $('ladderHistory').innerHTML = '';
+          $('historyMore').hidden = true;
           return;
         }
-
-        // One entry per ladder, newest first, so "when was this last crawled"
-        // is answerable without reading down the table counting. The table
-        // below is one row per *run*; this is one per ladder.
-        //
-        // The queue is dropped when every run shares one, which is the usual
-        // case: `euw1 · RANKED_SOLO_5x5 4m ago · oc1 · …` puts the same
-        // separator between a platform and its queue as between two ladders,
-        // and stops being readable at the second entry.
-        const oneQueue = new Set(crawls.map((c) => c.queue)).size <= 1;
-        const latest = new Map();
-        for (const c of crawls) {
-          const ladder = oneQueue ? c.platform : `${c.platform} ${c.queue}`;
-          if (!latest.has(ladder)) latest.set(ladder, c);
-        }
-        const ladders = [...latest.entries()]
-          .map(([ladder, c]) => `${ladder} ${relTime(c.finishedAt || c.startedAt)}`)
-          .join(' · ');
+        const failed = past.filter((c) => c.status !== 'completed').length;
         $('ladderHistoryMeta').textContent =
-          `${fmt(crawls.length)} run(s) · last crawled: ${ladders}`;
+          `${fmt(past.length)} run(s)` + (failed ? ` · ${fmt(failed)} failed or cancelled` : '');
 
         const head =
-          '<tr><th>ladder</th><th class="wide">floor</th><th>status</th><th class="wide">entries</th>' +
-          '<th>match ids</th><th class="wide">matches queued</th><th class="wide">took</th><th>updated</th></tr>';
-        historyRowsAll = crawls;
-        historyRows = crawls.slice(0, CRAWL_ROWS_SHOWN);
+          '<tr><th>ladder</th><th class="wide">down to</th><th>status</th><th class="wide">players</th>' +
+          '<th>match ids</th><th class="wide">took</th><th>finished</th></tr>';
+        historyRows = showAllRuns ? past : past.slice(0, CRAWL_ROWS_SHOWN);
         const rows = historyRows
           .map((c) => {
             const took = c.finishedAt
               ? fmtDuration((new Date(c.finishedAt) - new Date(c.startedAt)) / 1000)
-              : '<span class="dim">running</span>';
-            const status =
-              c.status === 'running'
-                ? `<span class="pill running">${esc(c.phase || 'running')}</span>`
-                : `<span class="pill ${esc(c.status)}">${esc(c.status)}</span>`;
+              : '—';
             const open = openRuns.has(c.id);
             return (
               `<tr class="run-row${open ? ' open' : ''}" data-run="${esc(c.id)}" tabindex="0" aria-expanded="${open}">` +
               `<td>${esc(c.platform)} · ${esc(c.queue)}</td>` +
               `<td class="dim wide">${esc(c.tierFloor)}</td>` +
-              `<td>${status}</td>` +
-              `<td class="wide">${fmt(c.entriesSeen)}</td>` +
+              `<td><span class="pill ${esc(c.status)}">${esc(c.status)}</span></td>` +
+              `<td class="wide">${fmt(c.playersDiscovered)}</td>` +
               `<td>${fmt(c.matchIdsSeen)}</td>` +
-              `<td class="wide">${fmt(c.matchesQueued)}</td>` +
               `<td class="dim wide">${took}</td>` +
               `<td class="dim">${relTime(c.finishedAt || c.startedAt)}</td></tr>` +
               (open
-                ? `<tr class="run-detail"><td colspan="8"><div class="activity" data-activity="${esc(c.id)}">` +
-                  `${activityHtml.get(c.id) ?? '<p class="meta">loading…</p>'}</div></td></tr>`
+                ? `<tr class="run-detail"><td colspan="7"><div class="activity" data-activity="${esc(c.id)}">` +
+                  `${activityView(c.id, 'loading…')}</div></td></tr>`
                 : '')
             );
           })
           .join('');
         $('ladderHistory').innerHTML = head + rows;
+        const hidden = past.length - historyRows.length;
+        $('historyMore').hidden = past.length <= CRAWL_ROWS_SHOWN;
+        $('historyMore').textContent = hidden > 0 ? `show ${fmt(hidden)} more` : 'show fewer';
       }
+      $('historyMore').addEventListener('click', () => {
+        showAllRuns = !showAllRuns;
+        renderCrawlHistory(historyRowsAll);
+      });
 
       async function fetchCrawlHistory() {
         const res = await adminFetch('/v1/admin/ladder/crawls?limit=50');
@@ -1516,14 +1548,15 @@
       // ── crawl activity and the job queue (DEV-13) ─────────────────────────
       /**
        * Where a crawl is, from `GET /v1/admin/ladder/crawls/{id}`: each stage's
-       * progress with its pace, the legs in flight (a walk's page), its jobs
-       * running and next, how much of the queue is ahead of it, and the
-       * platform's match downloads. Rendered into every `[data-activity]` box
-       * for that crawl: the running card and an opened history row share it.
+       * progress with its pace, then, folded, the legs in flight (a walk's
+       * page), its jobs running and next, how much of the queue is ahead of it,
+       * its counters and the platform's match downloads. Rendered into the
+       * `[data-activity]` box of a running card or an opened history row.
        */
-      const activityHtml = new Map(); // crawl id → last rendered detail
+      const activity = new Map(); // crawl id → its last activity, or `{ error }`
       const openRuns = new Set(); // history rows the operator opened
-      let liveCrawls = []; // running crawl ids, from the snapshot
+      const openMore = new Set(); // crawls whose "details" fold is open
+      let liveCrawls = []; // running crawl ids
       let historyRows = [];
       let historyRowsAll = [];
       const ACTIVITY_POLL_MS = 5000;
@@ -1630,8 +1663,37 @@
             : `${fmt(d.ready)} ready · ${fmt(d.delayed)} waiting · ${fmt(d.running)} running · ` +
               `${fmt(d.failed)} failed · ${fmt(d.recent)} fetched in 10m` +
               (d.etaSeconds != null ? ` · ~${fmtDuration(d.etaSeconds)} left` : '');
+        // What the crawl has produced, in the order it produces it.
+        const totals =
+          `<p class="totals"><span><b>${fmt(c.playersDiscovered)}</b> players</span>` +
+          `<span><b>${fmt(c.matchIdsSeen)}</b> match ids</span>` +
+          `<span><b>${fmt(c.matchesQueued)}</b> matches queued</span>` +
+          (a.failed.length ? `<span class="bad"><b>${fmt(a.failed.length)}</b> failed</span>` : '') +
+          '</p>';
+        // The counters the totals line does not already show.
+        const counters = [
+          ['pages fetched', fmt(c.pagesFetched)],
+          ['league entries', fmt(c.entriesSeen)],
+          ['histories queued', fmt(c.backfillsEnqueued)],
+          ...(running ? [['legs left', fmt(c.pendingLegs)]] : []),
+          ['started', new Date(c.startedAt).toLocaleString()],
+          ...(c.finishedAt ? [['finished', new Date(c.finishedAt).toLocaleString()]] : []),
+        ];
+        const hint = [
+          running ? `${fmt(a.running.length)} running` : '',
+          a.openLegs.length ? `${fmt(a.openLegs.length)} legs in flight` : '',
+          a.failed.length ? `${fmt(a.failed.length)} failed` : '',
+        ]
+          .filter(Boolean)
+          .join(' · ');
         return (
           `<div class="stages">${a.stages.map(stageRow).join('')}</div>` +
+          totals +
+          `<details class="more" data-more="${esc(c.id)}"${openMore.has(c.id) ? ' open' : ''}>` +
+          `<summary>details${hint ? ` <span class="dim">· ${hint}</span>` : ''}</summary><div class="body">` +
+          '<div class="kvgrid">' +
+          counters.map(([k, v]) => `<div class="kv"><span class="k">${k}</span><span>${v}</span></div>`).join('') +
+          '</div>' +
           (a.openLegs.length
             ? `<h3 class="sub">In flight (${fmt(a.openLegs.length)})</h3><div class="legs">` +
               a.openLegs.map((l) => `<span>${esc(legName(l))}</span>`).join('') +
@@ -1648,20 +1710,34 @@
               '</div>'
             : '') +
           `<h3 class="sub">Match downloads · every crawl on ${esc(d.platform)}</h3><p class="meta">${downloads}</p>` +
-          `<p class="meta">as of ${new Date(a.asOf).toLocaleTimeString()} · ${esc(c.id)}` +
-          (running ? ` · <button type="button" class="act danger" data-cancel="${esc(c.id)}">cancel</button>` : '') +
-          '</p>'
+          `<p class="meta">as of ${new Date(a.asOf).toLocaleTimeString()} · ${esc(c.id)}</p>` +
+          '</div></details>'
         );
+      }
+
+      /** A crawl's box, drawn from its last activity; `loading` until it has one. */
+      function activityView(id, loading) {
+        const a = activity.get(id);
+        if (!a) return `<p class="meta">${loading}</p>`;
+        return a.error ? `<p class="note bad">${esc(a.error)}</p>` : renderActivity(a);
       }
 
       async function fetchActivity(id) {
         const res = await adminFetch('/v1/admin/ladder/crawls/' + encodeURIComponent(id));
         if (!res) return;
-        const html = res.ok
-          ? renderActivity(await res.json())
-          : `<p class="note bad">${esc(await failure(res, 'Could not load the crawl'))}</p>`;
-        activityHtml.set(id, html);
-        for (const el of document.querySelectorAll(`[data-activity="${CSS.escape(id)}"]`)) el.innerHTML = html;
+        activity.set(
+          id,
+          res.ok ? await res.json() : { error: await failure(res, 'Could not load the crawl') },
+        );
+        const html = activityView(id, '');
+        for (const el of document.querySelectorAll(`[data-activity="${CSS.escape(id)}"]`)) {
+          // The leg list scrolls; a refresh keeps the operator's place in it.
+          const legs = el.querySelector('.legs');
+          const top = legs ? legs.scrollTop : 0;
+          el.innerHTML = html;
+          const after = el.querySelector('.legs');
+          if (after) after.scrollTop = top;
+        }
       }
 
       function renderQueue(q) {
@@ -1679,24 +1755,43 @@
         renderQueue(await res.json());
       }
 
-      /** Live crawls and open running rows refresh; a finished opened row loaded once is final. */
+      /** Running crawls refresh; an opened finished row, loaded once, is final. */
       async function pollActivity() {
         if ((!key && !authDisabled) || document.hidden) return;
         if (activeTab !== 'ladder') return;
-        const finished = new Set(historyRows.filter((c) => c.status !== 'running').map((c) => c.id));
-        const ids = new Set([...liveCrawls, ...[...openRuns].filter((id) => !(finished.has(id) && activityHtml.has(id)))]);
+        const ids = new Set([...liveCrawls, ...[...openRuns].filter((id) => !activity.has(id))]);
         await Promise.all([fetchQueue(), ...[...ids].map(fetchActivity)]);
       }
 
       $('ladderHistory').addEventListener('click', (e) => {
-        if (e.target.closest('button[data-cancel]')) return;
+        // Inside an opened row: its own controls, not a fold of the row.
+        if (e.target.closest('tr.run-detail')) return;
         const row = e.target.closest('tr[data-run]');
         if (!row) return;
         const id = row.dataset.run;
         if (openRuns.has(id)) openRuns.delete(id);
-        else openRuns.add(id);
+        else {
+          openRuns.add(id);
+          // The row was asked for; its details are what it has to say.
+          openMore.add(id);
+        }
         renderCrawlHistory(historyRowsAll);
         if (openRuns.has(id)) fetchActivity(id).catch(console.error);
+      });
+      // Which "details" folds are open outlives the re-render that redraws them.
+      $('tab-ladder').addEventListener(
+        'toggle',
+        (e) => {
+          const id = e.target.dataset && e.target.dataset.more;
+          if (!id) return;
+          if (e.target.open) openMore.add(id);
+          else openMore.delete(id);
+        },
+        true, // `toggle` does not bubble
+      );
+      // Opened by hand, the form stays as the operator left it.
+      $('crawlForm').querySelector('summary').addEventListener('click', () => {
+        $('crawlForm').dataset.touched = '1';
       });
       document.addEventListener('dashboard:tab', (e) => {
         if (e.detail === 'ladder' && activityPoll) pollActivity().catch(console.error);
@@ -1910,9 +2005,7 @@
           note('crawlResult', String(err), 'bad');
         }
       }
-      // The running cards and an opened history row both carry a cancel button.
       $('ladderRunning').addEventListener('click', onCancel);
-      $('ladderHistory').addEventListener('click', onCancel);
 
       // ── limiter ───────────────────────────────────────────────────────────
       // Re-rendering the panel each tick would slam every open method list

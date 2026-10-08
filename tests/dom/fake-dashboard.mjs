@@ -16,6 +16,10 @@ const crawl = (id, status, phase, extra = {}) => ({
   pagesFetched: 12, entriesSeen: 1982, playersDiscovered: 1982, backfillsEnqueued: 1982,
   matchIdsSeen: 21137, matchesQueued: 0, pendingLegs: status === 'running' ? 30 : 0, ...extra,
 });
+// Older finished runs behind DONE, enough that the history pages: one failed.
+const OLD = Array.from({ length: 11 }, (_, i) => crawl(`01K00000000000000000000LD${String(i).padStart(2, '0')}`, i === 3 ? 'failed' : 'completed', 'archive', {
+  platform: i % 2 ? 'euw1' : 'oc1', startedAt: ago(86_400_000 * (i + 2)), finishedAt: ago(86_400_000 * (i + 2) - 3_600_000),
+}));
 const job = (kind, state, payload, extra = {}) => ({
   id: `J-${kind}-${state}-${Math.random()}`, kind, dedupeKey: null, priority: 20003, state, attempts: 1,
   runAfter: ago(1000), claimedAt: state === 'running' ? ago(30_000) : null, finishedAt: null, error: null, payload, ...extra,
@@ -64,13 +68,16 @@ const OPTIONS = {
   defaults: { platform: 'oc1', queue: 'RANKED_SOLO_5x5', tierFloor: 'MASTER', backfillLimit: 100 },
 };
 
+// Flip `scene.running` off for a page with no crawl in flight.
+const scene = { running: true };
+
 // `opts.body` is the request body as sent; a POST's is recorded on `calls.bodies`.
 function api(calls, url, opts) {
   const u = new URL(url, 'http://localhost');
   calls.push(`${u.pathname}${u.search}`);
   const p = u.pathname;
   if (p === '/dashboard/config.json') return [200, { authDisabled: true }];
-  if (p === '/v1/admin/ladder/crawls') return [200, { crawls: [crawl(RUNNING, 'running', 'collect'), crawl(DONE, 'completed', 'archive')] }];
+  if (p === '/v1/admin/ladder/crawls') return [200, { crawls: [...(scene.running ? [crawl(RUNNING, 'running', 'collect')] : []), crawl(DONE, 'completed', 'archive'), ...OLD] }];
   const m = p.match(/^\/v1\/admin\/ladder\/crawls\/(\w+)$/);
   if (m && opts.method === 'DELETE') return [200, { ok: true, crawlId: m[1], status: 'cancelled', droppedJobs: 3 }];
   if (m) return ACTIVITY[m[1]] ? [200, ACTIVITY[m[1]]] : [404, { error: { code: 'NOT_FOUND', message: 'No such ladder crawl' } }];
@@ -85,4 +92,4 @@ function api(calls, url, opts) {
   return [503, { error: { code: 'UNAVAILABLE', message: 'not in this test' } }];
 }
 
-export { html, RUNNING, DONE, ACTIVITY, QUEUE, OPTIONS, api };
+export { html, RUNNING, DONE, ACTIVITY, QUEUE, OPTIONS, api, scene };
