@@ -35,6 +35,49 @@ fn dev_ui_is_self_contained() {
     assert!(html.contains("/dev/openapi.json"));
 }
 
+/// The page's pure helpers (paging, summary, scoreboard, walk status) pass their
+/// unit tests in `tests/dev_ui.mjs` (DEV-02). Needs `node`, which GitHub's runners
+/// have; a local run without it skips, CI fails.
+#[test]
+fn dev_ui_helpers_pass_their_node_tests() {
+    let dir = env!("CARGO_MANIFEST_DIR");
+    let out = match std::process::Command::new("node")
+        .args(["--test", "tests/dev_ui.mjs"])
+        .current_dir(dir)
+        .output()
+    {
+        Ok(out) => out,
+        Err(e) if std::env::var_os("CI").is_none() => {
+            eprintln!("skipping: node not runnable ({e})");
+            return;
+        }
+        Err(e) => panic!("node is needed in CI: {e}"),
+    };
+    assert!(
+        out.status.success(),
+        "node --test tests/dev_ui.mjs failed:\n{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// Every response window can be closed, and the match list pages 10, 25 or 50 (DEV-02).
+#[test]
+fn dev_ui_windows_close_and_matches_page() {
+    let html = riot_proxy::routes::ui::DEV_UI_HTML;
+    assert!(
+        html.contains("data-close title=\"close (Esc)\""),
+        "the viewer has a close button"
+    );
+    assert!(html.contains("const PAGE_SIZES = [10, 25, 50];"));
+    assert!(
+        html.contains("data-close-match"),
+        "an open scoreboard has a close button"
+    );
+    // Queue names come from Riot's queues.json through the proxy, not a list in the page.
+    assert!(html.contains("'/v1/static/queues'"));
+}
+
 /// The page keeps its state in the hash, so there are no client-side paths (ADR-071).
 #[tokio::test]
 async fn dev_ui_has_no_catch_all() {
