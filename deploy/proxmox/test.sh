@@ -69,6 +69,36 @@ check "--key-dir and --name place the key" grep -qF -- "-C riot@dev2-124 -f $tmp
 "$here/create-vm.sh" --dry-run --generate-key --ssh-keys "$tmp/keys" --vmid 123 > "$tmp/gen3"
 check "--generate-key with --ssh-keys passes a combined file" bash -c "grep -q -- '--sshkeys /' '$tmp/gen3' && ! grep -q -- '--sshkeys .*\.pub ' '$tmp/gen3' && ! grep -q -- '--sshkeys $tmp/keys ' '$tmp/gen3'"
 check "plain --ssh-keys generates nothing" bash -c "! grep -q ssh-keygen '$tmp/dry'"
+check "--generate-key makes the key after the download" bash -c "[ \$(grep -n '^curl' '$tmp/gen' | cut -d: -f1) -lt \$(grep -n '^ssh-keygen' '$tmp/gen' | cut -d: -f1) ]"
+
+# --- a real run against fake Proxmox tools -----------------------------------
+mkdir -p "$tmp/pve" "$tmp/pve/snippets"
+for t in id qm pvesh pvesm curl; do
+  cat > "$tmp/pve/$t" <<FAKE
+#!/usr/bin/env bash
+echo "$t \$*" >> "$tmp/pve.log"
+case "$t \$*" in
+  "id -u") echo 0 ;;
+  "pvesh get /cluster/nextid") echo 777 ;;
+  "pvesm status"*) printf 'Name Type\nlocal dir\n' ;;
+  "pvesm path"*) echo "$tmp/pve/snippets/vendor.yaml" ;;
+  curl*SHA512SUMS) echo "\$(sha512sum < "$tmp/img/debian-13-genericcloud-amd64.qcow2" | cut -d' ' -f1)  debian-13-genericcloud-amd64.qcow2" ;;
+  curl*) [ -f "$tmp/pve/curl-fails" ] && exit 22; out=\$(sed -n 's/.*-o \([^ ]*\).*/\1/p' <<< "\$*"); echo image > "\$out" ;;
+esac
+FAKE
+  chmod +x "$tmp/pve/$t"
+done
+fake_run() { PATH="$tmp/pve:$PATH" "$here/create-vm.sh" --generate-key --key-dir "$tmp/pvekeys" --image-dir "$tmp/img"; }
+touch "$tmp/pve/curl-fails"
+fake_run > /dev/null 2> "$tmp/run-err" || true
+check "a failed download leaves no key behind" test ! -e "$tmp/pvekeys/riot-proxy-dev-777"
+check "the download is announced" grep -q 'create-vm: downloading the Debian 13 cloud image' "$tmp/run-err"
+rm "$tmp/pve/curl-fails"
+fake_run > "$tmp/run-out" 2> "$tmp/run-err"
+check "a real run makes the key and the VM" bash -c "test -f '$tmp/pvekeys/riot-proxy-dev-777.pub' && grep -q 'qm set 777 --ciuser riot --sshkeys $tmp/pvekeys/riot-proxy-dev-777.pub' '$tmp/pve.log'"
+check "a real run reports each step" bash -c "for s in checking generating creating starting; do grep -q \"create-vm: \$s\" '$tmp/run-err' || exit 1; done"
+check "a second run refuses before downloading" bash -c ": > '$tmp/pve.log'; ! PATH='$tmp/pve:$PATH' '$here/create-vm.sh' --generate-key --key-dir '$tmp/pvekeys' --image-dir '$tmp/img' 2>/dev/null && ! grep -q '^curl' '$tmp/pve.log'"
+
 mkdir -p "$tmp/real"
 check "the generated keys differ per VM" bash -c "ssh-keygen -q -t ed25519 -N '' -f '$tmp/real/a' && ssh-keygen -q -t ed25519 -N '' -f '$tmp/real/b' && ! cmp -s '$tmp/real/a.pub' '$tmp/real/b.pub'"
 check "a static --ip needs --gw" bash -c "! '$here/create-vm.sh' --dry-run --ssh-keys '$tmp/keys' --ip 10.0.0.2/24 >/dev/null 2>&1"
