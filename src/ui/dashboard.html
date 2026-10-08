@@ -922,6 +922,18 @@
         <section>
           <div class="panel">
             <h2>Analytics recompute</h2>
+            <div class="controls">
+              <div class="field">
+                <label for="analyticsPlatform">platform</label>
+                <select id="analyticsPlatform"></select>
+              </div>
+              <div class="field">
+                <label for="analyticsQueue">queue</label>
+                <select id="analyticsQueue"></select>
+              </div>
+              <button type="button" class="act" id="analyticsStart" disabled>Recompute now</button>
+            </div>
+            <p class="note" id="analyticsResult"></p>
             <p class="meta" id="analyticsMeta">loading…</p>
             <div class="scroll"><table id="analyticsRuns"></table></div>
             <div id="analyticsTop"></div>
@@ -1374,7 +1386,8 @@
 
         if (runs.length === 0) {
           $('analyticsMeta').textContent =
-            'No recompute has run yet. One is queued when a crawl finishes, or set AGGREGATE_INTERVAL_S.';
+            'No recompute has run yet. One is queued when a crawl finishes, every ' +
+            'AGGREGATE_INTERVAL_S if that is set, or by Recompute now.';
           $('analyticsRuns').innerHTML = '';
           $('analyticsTop').innerHTML = '';
           return;
@@ -1756,6 +1769,10 @@
           opts.queues.map((q) => ({ value: q, label: q })),
           opts.defaults.queue,
         );
+        // The recompute rebuilds a ladder, so it offers the same ladders.
+        $('analyticsPlatform').innerHTML = $('crawlPlatform').innerHTML;
+        $('analyticsQueue').innerHTML = $('crawlQueue').innerHTML;
+        $('analyticsStart').disabled = false;
         // Descending, so the cheap floors — the ones anyone should reach for
         // first — are at the top of the list rather than the bottom.
         fill(
@@ -1822,6 +1839,47 @@
           fetchCrawlHistory().catch(console.error);
         } catch (err) {
           note('crawlResult', String(err), 'bad');
+        } finally {
+          button.disabled = false;
+        }
+      });
+
+      for (const id of ['analyticsPlatform', 'analyticsQueue']) {
+        $(id).addEventListener('change', () => note('analyticsResult', ''));
+      }
+
+      /**
+       * Queues `aggregate:analytics` for one ladder. The route answers once the
+       * job is queued, not when it has run: the run lands in the table below on
+       * a later snapshot, with its steps and row counts.
+       */
+      $('analyticsStart').addEventListener('click', async () => {
+        const button = $('analyticsStart');
+        button.disabled = true;
+        note('analyticsResult', 'queueing…');
+        try {
+          const res = await adminFetch('/v1/admin/analytics/recompute', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              platform: $('analyticsPlatform').value,
+              queue: $('analyticsQueue').value,
+            }),
+          });
+          if (!res) return;
+          if (!res.ok) {
+            note('analyticsResult', await failure(res, 'Could not queue the recompute'), 'bad');
+            return;
+          }
+          const body = await res.json();
+          note(
+            'analyticsResult',
+            `Queued ${body.platform} · ${body.queue} — it runs once the jobs ahead of it ` +
+              `are done, and shows in the table below.`,
+            'good',
+          );
+        } catch (err) {
+          note('analyticsResult', String(err), 'bad');
         } finally {
           button.disabled = false;
         }
