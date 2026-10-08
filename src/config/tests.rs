@@ -56,7 +56,11 @@ fn defaults_match_v1_and_design_07() {
     assert_eq!(c.track_poll_match_s, 300);
     assert_eq!(c.ddragon_sync_s, 3600);
     assert!(!c.archive_timelines);
-    assert_eq!(c.lookup_backfill_limit, 10_000);
+    assert_eq!(
+        c.lookup_backfill_limit,
+        u32::MAX,
+        "no cap: a walk ends where the history does (ADR-081)"
+    );
     assert_eq!(c.track_catchup_limit, 500);
     assert_eq!(c.ladder_crawl_s, 0);
     assert_eq!(c.ladder_queues, vec!["RANKED_SOLO_5x5"]);
@@ -257,7 +261,7 @@ fn every_invalid_value_is_reported_at_once() {
         ("ENV", "staging"),
         ("LOG_FORMAT", "xml"),
         ("ROLE", "boss"),
-        ("LOOKUP_BACKFILL_LIMIT", "10001"),
+        ("LOOKUP_BACKFILL_LIMIT", "4294967296"),
         ("BULK_USAGE_CEILING_TYPO", "nothing"),
     ]));
     let names: Vec<&str> = errs

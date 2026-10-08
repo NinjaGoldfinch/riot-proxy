@@ -331,7 +331,8 @@ async fn hydrates_every_id_on_the_page_then_serves_it_from_the_archive() {
             body["backfill"]["status"].clone(),
             body["backfill"]["limit"].clone()
         ),
-        (json!("queued"), json!(10_000))
+        (json!("queued"), json!(u32::MAX)),
+        "uncapped by default (ADR-081)"
     );
     insta::assert_json_snapshot!("players_match_page", body);
     let ids = e

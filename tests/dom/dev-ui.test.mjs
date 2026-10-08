@@ -31,7 +31,7 @@ function api(calls, url, opts = {}) {
   if (p === `/v1/players/${PUUID}/matches`) {
     const start = +q('start'), count = +q('count');
     const ms = Array.from({ length: Math.max(0, Math.min(count, LIVE_TOTAL - start)) }, (_, k) => line(start + k));
-    return { puuid: PUUID, matches: ms, matchIds: ms.map((x) => x.matchId), hasMore: ms.length === count && start + count < LIVE_TOTAL, warnings: [], backfill: start === 0 ? { jobId: 'j', status: 'queued', limit: 500 } : null };
+    return { puuid: PUUID, matches: ms, matchIds: ms.map((x) => x.matchId), hasMore: ms.length === count && start + count < LIVE_TOTAL, warnings: [], backfill: start === 0 ? { jobId: 'j', status: 'queued', limit: 4294967295 } : null };
   }
   if (p === `/v1/admin/players/${PUUID}/archive/matches`) {
     const start = +q('start'), count = +q('count');
@@ -96,6 +96,7 @@ test('live matches page by 10, 25 and 50 under the API cap of 20 per call', asyn
   assert.ok(p.text('#plMatches').includes('5v5 Ranked Solo games'), 'queue named from queues.json');
   assert.ok(!p.$('#plMatches [data-queue]').innerHTML.includes('old solo'), 'deprecated queue not offered');
   assert.ok(p.text('#plMatches').includes('win rate'));
+  assert.ok(p.text('#plMatches').includes('backfill queued · full history'), 'the default, uncapped walk');
   await p.choose('#plMatches [data-size]', '25');
   assert.equal(p.rows(), 25);
   assert.ok(p.calls.some((c) => c.endsWith('start=20&count=5')), 'a second call for 21–25');

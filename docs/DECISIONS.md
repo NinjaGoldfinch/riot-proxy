@@ -921,3 +921,12 @@ Accepted (owner request "improve build times on GitHub Actions", task OPS-04). A
 - **Caches are written from `main` only.** The repo was at 10.5 GB of Actions cache, over GitHub's 10 GB cap: every PR saved its own 0.3–0.8 GB Rust cache, which evicted `main`'s. Now `Swatinem/rust-cache` has `save-if: main`, the docker job writes `cache-to` only on `main`, and pull requests restore `main`'s caches.
 - **Not changed:** the release profile (fat LTO, `codegen-units = 1`, deps at `opt-level = "s"`). It keeps the binary under the 20 MB cap (ADR-061), and it is what makes the final link slow.
 - **Required checks:** `docker` is a new job id. Until the owner adds it to branch protection, a broken source `Dockerfile` does not block a merge. A broken shipped image still does, through `build-musl`.
+
+## ADR-081 — A lookup backfill walks the whole history by default (2026-10-08)
+Accepted (owner, task DEV-11). Changes P6-06's limit; v1 parity is no longer required.
+- **Owner request:** the first lookup of a profile should "grab all available match page data, instead of grabbing a certain amount of games", with the upper limit "just the integer limit, as it shouldn't stop".
+- `LOOKUP_BACKFILL_LIMIT` now defaults to, and is capped at, `u32::MAX` (v1: default and maximum 10000). The walk already stops on an empty or short page from `match.idsByPuuid`, so in practice it ends where the player's history does; the limit only remains as an opt-in cap. `0` still disables lookup and tracking backfills.
+- The walk's completion rule is unchanged (ran out of unfiltered history, or at least `LOOKUP_BACKFILL_LIMIT` deep). With the new default a walk only stamps `doneAt` by running out, so a player with more than 10000 ids is no longer marked complete at 10000.
+- `.env.example` used to call 10000 "match-v5's ceiling". Nothing in `docs/design/` or v1 sources that, so the claim is dropped rather than repeated.
+- `/dev` shows the uncapped walk as "full history" instead of the number.
+
