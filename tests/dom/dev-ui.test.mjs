@@ -46,20 +46,27 @@ function api(calls, url, opts = {}) {
     latestJobs: [{ kind: 'backfill:player', state: 'running', payload: { puuid: PUUID, limit: 500 }, attempts: 1 }],
   };
   if (p.startsWith('/v1/lol/matches/')) return match;
+  if (p === '/dev/reset') {
+    const tables = [{ name: 'matches', rows: m === 'POST' ? 112 : 0 }, { name: 'players', rows: 1 }, { name: 'jobs', rows: 2050 }];
+    return m === 'POST' ? { ok: true, tables, l1Entries: 4, runningJobs: 1, tookMs: 3 } : { tables, l1Entries: 4, runningJobs: 1, kept: ['consumers', 'limiter_state'] };
+  }
   return { ok: true };
 }
 
-async function page() {
+async function page({ hash = 'player' } = {}) {
   const calls = [];
+  const sent = [];
+  const prompts = [];
   const errors = [];
   const dom = new JSDOM(html.replace('<script type="module">', '<script>(async()=>{').replace(/<\/script>\s*<\/body>/, '})()</script></body>'), {
-    url: 'http://localhost/dev#player', runScripts: 'dangerously', pretendToBeVisual: true,
+    url: `http://localhost/dev#${hash}`, runScripts: 'dangerously', pretendToBeVisual: true,
     beforeParse(w) {
       w.fetch = async (url, opts) => {
+        if (opts?.body != null) sent.push({ url, method: opts.method, body: opts.body });
         const body = JSON.stringify(api(calls, url, opts));
         return { status: 200, statusText: 'OK', headers: new Map([['x-cache', 'HIT'], ['content-type', 'application/json']]), text: async () => body, json: async () => JSON.parse(body) };
       };
-      w.confirm = () => true;
+      w.confirm = (msg) => { prompts.push(msg); return true; };
       w.TextEncoder = TextEncoder;
       w.addEventListener('error', (e) => errors.push(e.message));
       w.addEventListener('unhandledrejection', (e) => errors.push(String(e.reason)));
@@ -69,16 +76,18 @@ async function page() {
   const $ = (s) => w.document.querySelector(s);
   const settle = async () => { for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 5)); };
   await settle();
-  $('#plId').value = 'Tester#OCE';
-  $('#plPlatform').value = 'oc1';
-  $('#plForm').dispatchEvent(new w.Event('submit', { cancelable: true }));
-  await settle();
+  if (hash === 'player') {
+    $('#plId').value = 'Tester#OCE';
+    $('#plPlatform').value = 'oc1';
+    $('#plForm').dispatchEvent(new w.Event('submit', { cancelable: true }));
+    await settle();
+  }
   const choose = async (sel, value) => { const el = $(sel); el.value = value; el.dispatchEvent(new w.Event('change', { bubbles: true })); await settle(); };
   const click = async (sel) => { $(sel).click(); await settle(); };
   const esc = async () => { w.document.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await settle(); };
   const rows = () => w.document.querySelectorAll('#plMatches tr.match').length;
   const text = (sel) => $(sel)?.textContent ?? '';
-  return { w, $, calls, errors, settle, choose, click, esc, rows, text };
+  return { w, $, calls, sent, prompts, errors, settle, choose, click, esc, rows, text };
 }
 
 test('live matches page by 10, 25 and 50 under the API cap of 20 per call', async () => {
@@ -168,4 +177,37 @@ test('scoreboards and response windows close with × and Esc', async () => {
   await p.esc();
   assert.equal(p.$('#plView').innerHTML, '', 'Esc closes the viewer');
   assert.deepEqual(p.errors, []);
+});
+
+test('the reset tab previews counts and posts only after the word is typed', async () => {
+  const p = await page({ hash: 'reset' });
+  assert.ok(p.calls.includes('GET /dev/reset'), 'opening the tab previews the counts');
+  assert.match(p.text('#rsCounts'), /jobs\s*2,050/);
+  assert.doesNotMatch(p.text('#rsCounts'), /matches/, 'empty tables are not listed');
+  assert.match(p.text('#rsCounts'), /1 job is running/);
+  assert.equal(p.$('#rsGo').disabled, true);
+
+  const type = async (v) => { p.$('#rsWord').value = v; p.$('#rsWord').dispatchEvent(new p.w.Event('input')); await p.settle(); };
+  await type('Reset');
+  assert.equal(p.$('#rsGo').disabled, true, 'the word is case-sensitive');
+  await type('reset');
+  assert.equal(p.$('#rsGo').disabled, false);
+  await p.click('#rsGo');
+  assert.equal(p.prompts.length, 1, 'confirm() before the POST');
+  assert.deepEqual(p.sent, [{ url: '/dev/reset', method: 'POST', body: '{"confirm":"reset"}' }]);
+  assert.match(p.text('#rsDone'), /Reset done/);
+  assert.match(p.text('#rsDone'), /2,163 rows/);
+  assert.equal(p.$('#rsWord').value, '', 'disarmed after a reset');
+  assert.equal(p.$('#rsGo').disabled, true);
+  assert.equal(p.calls.filter((c) => c === 'GET /dev/reset').length, 2, 'counts refresh afterwards');
+  await p.click('#rsDone [data-raw="reset"]');
+  assert.ok(p.$('#rsView [data-close]'), 'raw opens the response window');
+  assert.deepEqual(p.errors, []);
+});
+
+test('the Reset tab is the last in the nav', async () => {
+  const p = await page({ hash: 'reset' });
+  const links = [...p.w.document.querySelectorAll('#nav a')].map((a) => a.getAttribute('href'));
+  assert.equal(links.at(-1), '#reset');
+  assert.ok(p.$('#tab-reset').classList.contains('on'));
 });
