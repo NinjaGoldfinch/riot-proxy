@@ -91,9 +91,20 @@ sequenceDiagram
 |---|---|---|
 | `explorer` | any documented operation | form from `parameters` / `requestBody`, then the response viewer |
 | `status` | `/healthz`, `/readyz`, `/v1/admin/metrics` | readiness pills, totals, limiter scopes, queues, cache; optional 5 s refresh |
-| `player` | `/v1/players/by-riot-id/{gameName}/{tagLine}/profile`, `/v1/players/{puuid}/matches` | profile card, ranks, top mastery, recent matches |
+| `player` | `/v1/players/by-riot-id/{gameName}/{tagLine}/profile`, `/v1/players/{puuid}/matches`, `/v1/static/queues`, `/v1/lol/matches/{region}/{matchId}`, `/v1/admin/tracked-players`, `/v1/admin/jobs` | profile card, ranks, top mastery, history and backfill card, recent matches (DEV-02, below) |
 | `live` | `/v1/ws` | topic picker, newest-first frame log (500 max), ping |
 | `history` | — | last 50 requests (`localStorage`, without bodies); re-open or replay |
+
+## Player tab (DEV-02)
+
+- **Recent matches page by 10, 25 or 50**, with Prev/Next. The size is remembered in `localStorage` (`rp.dev.pageSize`). The matches API serves at most 20 per call, so the page makes 1–3 calls (`start`/`count` chunks) and joins them. Next is enabled only when every call came back full.
+- **Filters**: queue, offered from Riot's `queues.json` via `/v1/static/queues` minus deprecated and unnamed queues, and `type` (`ranked`, `normal`, `tourney`, `tutorial`, as the API documents). A filter change goes back to page 1.
+- **A summary over the page**: games, W/L, win rate, KDA and CS/min. Remakes are left out of the record and the averages.
+- **Queue names** come from the same `queues.json`, falling back to `gameMode queueId`.
+- **Clicking a match** opens its scoreboard inline: both teams, with the looked-up player marked. It closes with ×, a second click or Esc, and `raw` shows the match body.
+- **History and backfill card**: tracked or not, the history walk's state (walking, queued, complete, stopped part-way, never) and depth, the newest seen match, and this player's queued and failed `archive:match` jobs (counted from the latest 500). It also has Track/Untrack and "Queue walk N deep" buttons, which are admin calls behind `confirm()`.
+- **Every response window has ×**, and Esc closes the newest open thing on the current tab.
+- The pure helpers sit in one marked block that `tests/dev_ui.mjs` unit-tests with `node --test`, run from `cargo test`.
 
 ## Safety
 

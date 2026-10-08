@@ -73,6 +73,18 @@
   .bar { height: 6px; background: var(--sunk); border-radius: 3px; overflow: hidden; min-width: 80px; }
   .bar i { display: block; height: 100%; background: var(--accent); }
   .win { color: var(--good); } .loss { color: var(--bad); }
+  .card h3 button.x { margin-left: 4px; font-size: 14px; line-height: 1; padding: 1px 7px; }
+  .card h3 button.x:only-of-type { margin-left: auto; }
+  /* player */
+  .tools { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; margin-bottom: 8px; }
+  .tools button:disabled { opacity: .4; cursor: default; }
+  .sumline { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  tr.match { cursor: pointer; } tr.match:hover, tr.match.open { background: var(--sunk); }
+  tr.detail > td { padding: 8px; background: var(--sunk); }
+  .board { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); }
+  .board h4 { margin: 0 0 4px; font-size: 12px; display: flex; gap: 8px; align-items: center; }
+  .board h4 button { margin-left: auto; font-size: 11px; padding: 1px 8px; }
+  .me { font-weight: 600; color: var(--accent); }
   @media (max-width: 900px) { .explorer { grid-template-columns: 1fr; } }
 </style>
 </head>
@@ -118,6 +130,7 @@
       <span class="muted" id="plMsg"></span>
     </form>
     <div id="plOut"></div>
+    <div id="plMatches"></div>
     <div class="viewer" id="plView"></div>
   </section>
 
@@ -222,7 +235,7 @@ function view(el, res, title = 'Response') {
   const chips = KEY_HEADERS.filter((k) => h[k] != null).map((k) => `<span class="chip">${k}: <b>${esc(h[k])}</b></span>`).join('');
   const e = res.json?.error;
   el.innerHTML = `<div class="card">
-    <h3>${esc(title)}</h3>
+    <h3>${esc(title)}<button class="x" data-close title="close (Esc)">×</button></h3>
     <div class="head">
       <span class="pill s${String(res.status)[0]}">${res.status || 'ERR'} ${esc(res.statusText)}</span>
       <span class="m m-${res.method}">${res.method}</span><span class="mono">${esc(res.path)}</span>
@@ -247,6 +260,7 @@ function view(el, res, title = 'Response') {
     el.querySelectorAll('[data-v]').forEach((b) => b.classList.toggle('on', b.dataset.v === mode));
   };
   show(res.json !== undefined ? 'pretty' : 'raw');
+  $('[data-close]', el).onclick = () => view(el, null);
   el.querySelectorAll('[data-v]').forEach((b) => (b.onclick = () => show(b.dataset.v)));
   el.querySelectorAll('[data-c]').forEach((b) => (b.onclick = async () => {
     const text = { body: res.text, curl: curl(res), rid: h['x-request-id'] }[b.dataset.c];
@@ -254,6 +268,93 @@ function view(el, res, title = 'Response') {
     $('[data-msg]', el).textContent = 'copied';
   }));
 }
+
+// ---------- pure helpers (no DOM; unit-tested by tests/dev_ui.mjs) ----------
+const PAGE_SIZES = [10, 25, 50];
+/** The matches API serves at most 20 per call (every id is an upstream call), so a page of 25 or 50 is several calls. */
+const MATCH_CALL_MAX = 20;
+
+/** Page `page` (0-based) of `size` matches, as the `start`/`count` calls that fetch it. */
+function pageCalls(page, size, max = MATCH_CALL_MAX) {
+  const out = [];
+  for (let start = page * size, left = size; left > 0; start += max, left -= max) out.push({ start, count: Math.min(max, left) });
+  return out;
+}
+
+/** Joins the responses for one page, in call order. The first failed call fails the page. */
+function mergePages(results) {
+  const failed = results.find((r) => r.status !== 200 || !r.json);
+  if (failed) return { failed };
+  const pages = results.map((r) => r.json);
+  return {
+    matches: pages.flatMap((p) => p.matches ?? []),
+    warnings: pages.flatMap((p) => p.warnings ?? []),
+    backfill: pages.find((p) => p.backfill)?.backfill ?? null,
+    // More exists only if every call came back full and the last one says so.
+    hasMore: pages.every((p) => p.hasMore) && pages.length > 0,
+  };
+}
+
+const isRemake = (s) => Boolean(s?.gameEndedInEarlySurrender);
+
+/** Totals over the player's lines on a page; remakes count as neither win nor loss. */
+function pageSummary(matches) {
+  const t = { games: 0, wins: 0, losses: 0, remakes: 0, kills: 0, deaths: 0, assists: 0, cs: 0, minutes: 0 };
+  for (const g of matches) {
+    const s = g.player ?? {};
+    t.games += 1;
+    if (isRemake(s)) { t.remakes += 1; continue; }
+    if (s.win) t.wins += 1; else t.losses += 1;
+    t.kills += s.kills ?? 0; t.deaths += s.deaths ?? 0; t.assists += s.assists ?? 0;
+    t.cs += (s.totalMinionsKilled ?? 0) + (s.neutralMinionsKilled ?? 0);
+    t.minutes += (g.gameDuration ?? 0) / 60;
+  }
+  const played = t.wins + t.losses;
+  return {
+    ...t,
+    winRate: played ? Math.round((t.wins / played) * 100) : null,
+    kda: played ? Math.round(((t.kills + t.assists) / Math.max(1, t.deaths)) * 100) / 100 : null,
+    csPerMin: t.minutes ? Math.round((t.cs / t.minutes) * 10) / 10 : null,
+  };
+}
+
+/** Riot's queues.json as `{queueId: description}`, and the current (not deprecated) queues for a filter. */
+function queueIndex(queues) {
+  const list = Array.isArray(queues) ? queues : [];
+  return {
+    names: Object.fromEntries(list.filter((q) => q.description).map((q) => [q.queueId, q.description])),
+    current: list.filter((q) => q.description && !/^deprecated/i.test(q.notes ?? '')).sort((a, b) => a.queueId - b.queueId),
+  };
+}
+
+/** A match-v5 body as two teams of player lines, the looked-up player marked. */
+function scoreboard(match, puuid) {
+  const info = match?.info ?? {};
+  const teams = new Map((info.teams ?? []).map((t) => [t.teamId, { teamId: t.teamId, win: Boolean(t.win), players: [] }]));
+  for (const p of info.participants ?? []) {
+    if (!teams.has(p.teamId)) teams.set(p.teamId, { teamId: p.teamId, win: Boolean(p.win), players: [] });
+    teams.get(p.teamId).players.push({
+      me: p.puuid === puuid,
+      name: p.riotIdGameName ? `${p.riotIdGameName}#${p.riotIdTagline ?? ''}` : (p.summonerName || p.puuid?.slice(0, 8) || '?'),
+      champion: p.championName, level: p.champLevel, position: p.teamPosition || '',
+      kills: p.kills ?? 0, deaths: p.deaths ?? 0, assists: p.assists ?? 0,
+      cs: (p.totalMinionsKilled ?? 0) + (p.neutralMinionsKilled ?? 0),
+      gold: p.goldEarned ?? 0, damage: p.totalDamageDealtToChampions ?? 0, vision: p.visionScore ?? 0,
+    });
+  }
+  return [...teams.values()].sort((a, b) => a.teamId - b.teamId);
+}
+
+/** Where a player's history walk stands, from their row (`/v1/admin/tracked-players`) and their walk jobs. */
+function walkStatus(row, walkJobs) {
+  const live = walkJobs.find((j) => j.state === 'pending' || j.state === 'running');
+  if (live) return { state: live.state === 'running' ? 'walking' : 'queued', depth: row?.historyBackfillDepth ?? 0 };
+  if (!row) return { state: 'unknown' };
+  if (row.historyBackfilledAt) return { state: 'complete', depth: row.historyBackfillDepth ?? 0, at: row.historyBackfilledAt };
+  if (row.historyBackfillStartedAt) return { state: 'stopped', depth: row.historyBackfillDepth ?? 0, at: row.historyBackfillStartedAt };
+  return { state: 'never' };
+}
+// ---------- end pure helpers ----------
 
 // ---------- history ----------
 function remember(res) {
@@ -440,45 +541,222 @@ async function championNames() {
   return champNames;
 }
 
+let queues = null;
+async function queueNames() {
+  if (queues) return queues;
+  const r = await call('GET', '/v1/static/queues', null, { record: false });
+  queues = queueIndex(r.status === 200 ? r.json : []);
+  return queues;
+}
+
+const card = (name, title, body, extra = '') => `<div class="card" ${extra}><h3>${title}${name ? `<button data-raw="${name}">raw</button>` : ''}</h3>${body}</div>`;
+const xc = (r) => `<span class="chip">X-Cache: <b>${esc(Object.fromEntries(r.headers)['x-cache'] ?? '—')}</b></span>`;
+const when = (iso) => (iso ? new Date(iso).toLocaleString() : '—');
+
+/** The player on screen, and how their match list is paged and filtered. */
+const pl = { p: null, platform: '', raws: {}, page: 0, size: 10, queue: '', type: '', open: new Set(), matchCache: new Map() };
+
 $('#plForm').onsubmit = async (ev) => {
   ev.preventDefault();
   const [name, tag] = $('#plId').value.split('#').map((s) => s.trim());
   const platform = $('#plPlatform').value;
   if (!name || !tag) { $('#plMsg').textContent = 'use GameName#TAG'; return; }
   store.set('rp.dev.player', { id: $('#plId').value, platform });
-  const refresh = $('#plRefresh').checked ? '&refresh=true' : '';
+  const refresh = $('#plRefresh').checked;
   $('#plMsg').textContent = 'loading…';
   $('#plOut').innerHTML = '';
-  const prof = await call('GET', `/v1/players/by-riot-id/${encodeURIComponent(name)}/${encodeURIComponent(tag)}/profile?platform=${platform}&topMastery=5${refresh}`);
-  const raws = { profile: prof };
+  $('#plMatches').innerHTML = '';
+  view($('#plView'), null);
+  const prof = await call('GET', `/v1/players/by-riot-id/${encodeURIComponent(name)}/${encodeURIComponent(tag)}/profile?platform=${platform}&topMastery=5${refresh ? '&refresh=true' : ''}`);
   if (prof.status !== 200) { $('#plMsg').textContent = ''; view($('#plView'), prof, 'profile'); return; }
+  Object.assign(pl, { p: prof.json, platform, raws: { profile: prof }, page: 0, size: store.get('rp.dev.pageSize', 10), queue: '', type: '', open: new Set(), matchCache: new Map() });
+  if (!PAGE_SIZES.includes(pl.size)) pl.size = 10;
+  const names = await championNames();
+  renderProfile(prof, names);
+  $('#plMsg').textContent = `${prof.ms} ms`;
+  await Promise.all([loadMatches({ refresh }), loadArchive()]);
+};
+
+function renderProfile(prof, names) {
   const p = prof.json;
-  const [matches, names] = await Promise.all([call('GET', `/v1/players/${p.puuid}/matches?platform=${platform}&count=10${refresh}`), championNames()]);
-  raws.matches = matches;
-  $('#plMsg').textContent = `${prof.ms + matches.ms} ms`;
   const champ = (id) => names[id] ?? `#${id}`;
-  const card = (name, title, body) => `<div class="card"><h3>${title}<button data-raw="${name}">raw</button></h3>${body}</div>`;
-  const xc = (r) => `<span class="chip">X-Cache: <b>${esc(Object.fromEntries(r.headers)['x-cache'] ?? '—')}</b></span>`;
   const league = (p.league ?? []).map((e) => `<tr><td>${esc(e.queueType)}</td><td>${esc(e.tier)} ${esc(e.rank)}</td><td>${e.leaguePoints} LP</td><td>${e.wins}W ${e.losses}L</td><td>${Math.round((e.wins / ((e.wins + e.losses) || 1)) * 100)}%</td></tr>`).join('');
   const mastery = (p.mastery ?? []).map((m) => `<tr><td>${esc(champ(m.championId))}</td><td>lvl ${m.championLevel}</td><td>${Number(m.championPoints).toLocaleString()}</td></tr>`).join('');
-  const rows = (matches.json?.matches ?? []).map((g) => {
-    const s = g.player ?? {};
-    const res = s.gameEndedInEarlySurrender ? ['remake', 'muted'] : s.win ? ['win', 'win'] : ['loss', 'loss'];
-    return `<tr><td class="${res[1]}">${res[0]}</td><td>${esc(s.championName ?? champ(s.championId))}</td><td>${s.kills}/${s.deaths}/${s.assists}</td><td>${(s.totalMinionsKilled ?? 0) + (s.neutralMinionsKilled ?? 0)} cs</td><td>${esc(g.gameMode)} ${g.queueId ?? ''}</td><td>${Math.round((g.gameDuration ?? 0) / 60)}m</td><td class="muted">${g.gameEndTimestamp ? new Date(g.gameEndTimestamp).toLocaleString() : ''}</td><td><a href="#" data-match="${esc(g.matchId)}" class="mono">${esc(g.matchId)}</a></td></tr>`;
-  }).join('');
   $('#plOut').innerHTML = `<div class="grid">
     ${card('profile', `${esc(p.account?.gameName)}<span class="muted">#${esc(p.account?.tagLine)}</span> ${xc(prof)}`, kv({ level: p.summoner?.summonerLevel, platform: p.platform, region: p.region, puuid: p.puuid, refreshAvailableIn: `${p.refreshAvailableIn} s`, ageSeconds: p.ageSeconds }) + (p.warnings?.length ? `<div class="err">${esc(p.warnings.join('; '))}</div>` : ''))}
     ${card('profile', 'Ranked', league ? `<table>${league}</table>` : `<span class="muted">${p.league ? 'unranked' : 'unavailable (see warnings)'}</span>`)}
     ${card('profile', 'Top mastery', mastery ? `<table>${mastery}</table>` : `<span class="muted">${p.mastery ? 'none' : 'unavailable (see warnings)'}</span>`)}
-    </div>${card('matches', `Recent matches ${xc(matches)} ${matches.json?.backfill ? '<span class="chip">backfill queued</span>' : ''}`, rows ? `<table><tr><th></th><th>champion</th><th>KDA</th><th>CS</th><th>mode</th><th>length</th><th>ended</th><th>match</th></tr>${rows}</table>` : `<span class="muted">${matches.status === 200 ? 'no matches' : esc(matches.json?.error?.message ?? matches.status)}</span>`)}`;
-  $('#plOut').onclick = async (e) => {
-    if (e.target.dataset.raw) view($('#plView'), raws[e.target.dataset.raw], e.target.dataset.raw);
-    if (e.target.dataset.match) {
-      e.preventDefault();
-      view($('#plView'), await call('GET', `/v1/lol/matches/${p.region}/${e.target.dataset.match}`), e.target.dataset.match);
-    }
-  };
-  view($('#plView'), null);
+    <div id="plArchive">${card('', 'History &amp; backfill', '<span class="muted">loading…</span>')}</div>
+  </div>`;
+}
+
+// --- recent matches: paged, filtered, each row opens a scoreboard ---
+async function loadMatches({ refresh = false } = {}) {
+  const [names, q] = await Promise.all([championNames(), queueNames()]);
+  const calls = pageCalls(pl.page, pl.size);
+  const seq = (pl.seq = (pl.seq ?? 0) + 1);
+  renderMatches(null, names, q, 'loading…');
+  const results = await Promise.all(calls.map((c, i) => {
+    const qs = new URLSearchParams({ platform: pl.platform, start: c.start, count: c.count });
+    if (pl.queue) qs.set('queue', pl.queue);
+    if (pl.type) qs.set('type', pl.type);
+    if (refresh && i === 0) qs.set('refresh', 'true'); // once a minute per player, so only the first call asks
+    return call('GET', `/v1/players/${pl.p.puuid}/matches?${qs}`);
+  }));
+  if (seq !== pl.seq) return; // a newer page or filter was asked for meanwhile
+  results.forEach((r, i) => (pl.raws[`matches${i}`] = r));
+  pl.raws.matches = results[0];
+  renderMatches(results, names, q);
+}
+
+function renderMatches(results, names, q, msg = '') {
+  const champ = (id) => names[id] ?? `#${id}`;
+  const page = results ? mergePages(results) : null;
+  const ms = results ? Math.max(...results.map((r) => r.ms)) : null;
+  const start = pl.page * pl.size;
+  const n = page?.matches?.length ?? 0;
+  const tools = `<div class="tools">
+    <label>per page <select data-size>${PAGE_SIZES.map((s) => `<option ${s === pl.size ? 'selected' : ''}>${s}</option>`).join('')}</select></label>
+    <label>queue <select data-queue><option value="">any</option>${q.current.map((x) => `<option value="${x.queueId}" ${String(x.queueId) === pl.queue ? 'selected' : ''}>${x.queueId} · ${esc(x.description)}${x.map ? ` (${esc(x.map)})` : ''}</option>`).join('')}</select></label>
+    <label>type <select data-type><option value="">any</option>${['ranked', 'normal', 'tourney', 'tutorial'].map((t) => `<option ${t === pl.type ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+    <button data-page="-1" ${pl.page === 0 || !page ? 'disabled' : ''}>‹ Prev</button>
+    <span class="mono">page ${pl.page + 1}${n ? ` · ${start + 1}–${start + n}` : ''}</span>
+    <button data-page="1" ${!page?.hasMore ? 'disabled' : ''}>Next ›</button>
+    <button data-reload title="re-read the id list (once a minute per player)">Refresh ids</button>
+    <span class="muted">${esc(msg)}${ms != null ? `${results.length} call${results.length > 1 ? 's' : ''} · ${ms} ms` : ''}</span>
+  </div>`;
+  let body = '';
+  if (page?.failed) {
+    body = `<div class="err">${esc(page.failed.json?.error?.code ?? page.failed.status)} ${esc(page.failed.json?.error?.message ?? page.failed.statusText)}</div>`;
+  } else if (page) {
+    const s = pageSummary(page.matches);
+    const sum = s.games ? `<div class="sumline">
+      <span class="chip">${s.games} games</span><span class="chip"><b class="win">${s.wins}W</b> <b class="loss">${s.losses}L</b>${s.remakes ? ` · ${s.remakes} remake` : ''}</span>
+      ${s.winRate != null ? `<span class="chip">win rate <b>${s.winRate}%</b></span>` : ''}${s.kda != null ? `<span class="chip">KDA <b>${s.kda}</b> (${s.kills}/${s.deaths}/${s.assists})</span>` : ''}${s.csPerMin != null ? `<span class="chip">CS/min <b>${s.csPerMin}</b></span>` : ''}
+      ${xc(results[0])}${page.backfill ? `<span class="chip">backfill <b>${esc(page.backfill.status)}</b> · ${page.backfill.limit} deep</span>` : ''}
+    </div>` : '';
+    const rows = page.matches.map((g) => {
+      const p = g.player ?? {};
+      const res = isRemake(p) ? ['remake', 'muted'] : p.win ? ['win', 'win'] : ['loss', 'loss'];
+      const open = pl.open.has(g.matchId);
+      return `<tr class="match ${open ? 'open' : ''}" data-match="${esc(g.matchId)}"><td class="${res[1]}">${res[0]}</td><td>${esc(p.championName ?? champ(p.championId))}</td><td>${p.kills}/${p.deaths}/${p.assists}</td><td>${(p.totalMinionsKilled ?? 0) + (p.neutralMinionsKilled ?? 0)} cs</td><td title="${esc(g.gameMode)}">${esc(q.names[g.queueId] ?? `${g.gameMode ?? ''} ${g.queueId ?? ''}`)}</td><td>${Math.round((g.gameDuration ?? 0) / 60)}m</td><td class="muted">${g.gameEndTimestamp ? new Date(g.gameEndTimestamp).toLocaleString() : ''}</td><td class="mono">${open ? '▾' : '▸'} ${esc(g.matchId)}</td></tr>`
+        + (open ? `<tr class="detail" data-detail="${esc(g.matchId)}"><td colspan="8">${detailHtml(g.matchId)}</td></tr>` : '');
+    }).join('');
+    body = sum + (page.warnings.length ? `<div class="err">${esc(page.warnings.join('; '))}</div>` : '')
+      + (rows ? `<table><tr><th></th><th>champion</th><th>KDA</th><th>CS</th><th>queue</th><th>length</th><th>ended</th><th>match</th></tr>${rows}</table>`
+        : `<span class="muted">${pl.page ? 'no more matches' : 'no matches'}${pl.queue || pl.type ? ' for this filter' : ''}</span>`);
+  }
+  $('#plMatches').innerHTML = card('matches', `Recent matches <span class="muted">click a row for the scoreboard</span>`, tools + body, 'data-matches');
+  $('#plMatches').dataset.loaded = page && !page.failed ? '1' : '';
+  pl.lastResults = results;
+}
+
+/** The open scoreboard for one match: loading, an error, or both teams. */
+function detailHtml(id) {
+  const r = pl.matchCache.get(id);
+  const close = `<button class="x" data-close-match="${esc(id)}" title="close">×</button>`;
+  if (!r) return `<div class="row"><span class="muted">loading ${esc(id)}…</span>${close}</div>`;
+  if (r.status !== 200) return `<div class="row"><div class="err">${esc(r.json?.error?.code ?? r.status)} ${esc(r.json?.error?.message ?? '')}</div>${close}</div>`;
+  const teams = scoreboard(r.json, pl.p.puuid);
+  const info = r.json.info ?? {};
+  return `<div class="board">${teams.map((t, i) => `<div>
+    <h4><span class="${t.win ? 'win' : 'loss'}">${t.win ? 'Victory' : 'Defeat'}</span> <span class="muted">team ${t.teamId}</span>
+      ${i === teams.length - 1 ? `<span class="muted">${esc(info.gameVersion ?? '')} · ${Object.fromEntries(r.headers)['x-cache'] ?? ''}</span><button data-raw-match="${esc(id)}">raw</button>${close}` : ''}</h4>
+    <table><tr><th>player</th><th>champion</th><th>KDA</th><th>CS</th><th>gold</th><th>damage</th><th>vision</th></tr>
+    ${t.players.map((p) => `<tr class="${p.me ? 'me' : ''}"><td>${esc(p.name)} <span class="muted">${esc(p.position)}</span></td><td>${esc(p.champion)} <span class="muted">${p.level ?? ''}</span></td><td>${p.kills}/${p.deaths}/${p.assists}</td><td>${p.cs}</td><td>${p.gold.toLocaleString()}</td><td>${p.damage.toLocaleString()}</td><td>${p.vision}</td></tr>`).join('')}</table>
+  </div>`).join('')}</div>`;
+}
+
+async function toggleMatch(id) {
+  if (pl.open.has(id)) { pl.open.delete(id); rerenderMatches(); return; }
+  pl.open.add(id);
+  rerenderMatches();
+  if (!pl.matchCache.has(id)) {
+    pl.matchCache.set(id, await call('GET', `/v1/lol/matches/${pl.p.region}/${id}`));
+    rerenderMatches();
+  }
+}
+
+const rerenderMatches = async () => renderMatches(pl.lastResults, await championNames(), await queueNames());
+
+$('#plMatches').onchange = (e) => {
+  const d = e.target.dataset;
+  if (d.size != null) { pl.size = Number(e.target.value); store.set('rp.dev.pageSize', pl.size); }
+  else if (d.queue != null) pl.queue = e.target.value;
+  else if (d.type != null) pl.type = e.target.value;
+  else return;
+  pl.page = 0;
+  pl.open.clear();
+  loadMatches();
+};
+
+$('#plMatches').onclick = (e) => {
+  const t = e.target;
+  if (t.dataset.raw) return view($('#plView'), pl.raws[t.dataset.raw], t.dataset.raw);
+  if (t.dataset.rawMatch) return view($('#plView'), pl.matchCache.get(t.dataset.rawMatch), t.dataset.rawMatch);
+  if (t.dataset.closeMatch) { pl.open.delete(t.dataset.closeMatch); return rerenderMatches(); }
+  if (t.dataset.page) { pl.page = Math.max(0, pl.page + Number(t.dataset.page)); pl.open.clear(); return loadMatches(); }
+  if (t.dataset.reload != null) return loadMatches({ refresh: true });
+  const row = t.closest('tr.match');
+  if (row) toggleMatch(row.dataset.match);
+};
+
+// --- what the archive holds for this player, and what is queued ---
+async function loadArchive() {
+  const puuid = pl.p.puuid;
+  const [players, walks, pendingArchive, failedArchive] = await Promise.all([
+    call('GET', '/v1/admin/tracked-players', null, { record: false }),
+    call('GET', '/v1/admin/jobs?kind=backfill:player&limit=500', null, { record: false }),
+    call('GET', '/v1/admin/jobs?kind=archive:match&state=pending&limit=500', null, { record: false }),
+    call('GET', '/v1/admin/jobs?kind=archive:match&state=failed&limit=500', null, { record: false }),
+  ]);
+  pl.raws.players = players;
+  pl.raws.walks = walks;
+  if (puuid !== pl.p?.puuid) return; // another lookup started meanwhile
+  const el = $('#plArchive');
+  if (!el) return;
+  if (players.status !== 200) {
+    el.innerHTML = card('players', 'History &amp; backfill', `<div class="err">${esc(players.json?.error?.code ?? players.status)} ${esc(players.json?.error?.message ?? '')}</div><p class="muted">Needs an admin key (or AUTH_DISABLED).</p>`);
+    return;
+  }
+  const row = (players.json.players ?? []).find((x) => x.puuid === puuid);
+  const mine = (r) => (r.json?.jobs ?? []).filter((j) => j.payload?.puuid === puuid);
+  const walkJobs = mine(walks);
+  const w = walkStatus(row, walkJobs);
+  const label = { walking: 'walking now', queued: 'walk queued', complete: 'complete', stopped: 'stopped part-way', never: 'never walked', unknown: 'not recorded yet' }[w.state];
+  const capped = (r) => `${mine(r).length}${(r.json?.jobs ?? []).length >= 500 ? '+' : ''}`;
+  const last = walkJobs[0];
+  el.innerHTML = card('players', `History &amp; backfill <button data-arch-reload>refresh</button>`, kv({
+    tracked: row ? (row.tracked ? 'yes (polled for new games)' : 'no (looked up only)') : '—',
+    'history walk': `${label}${w.depth != null ? ` · ${w.depth} ids deep` : ''}${w.at ? ` · ${when(w.at)}` : ''}`,
+    'newest seen match': row?.lastSeenMatchId ?? '—',
+    'matches queued to archive': capped(pendingArchive),
+    'archive fetches failed': capped(failedArchive),
+    'last walk job': last ? `${last.state}${last.error ? ` · ${last.error}` : ''} · ${last.payload?.limit ?? '?'} deep · ${when(last.finishedAt ?? last.claimedAt ?? last.runAfter)}` : '—',
+  }) + `<div class="row" style="margin-top:8px">
+    <button data-track="${row?.tracked ? 'off' : 'on'}">${row?.tracked ? 'Untrack' : 'Track'}</button>
+    <label>walk <input data-walk-limit type="number" min="1" max="10000" value="${Math.max(500, (w.depth ?? 0) + 500)}" style="width:80px"> deep</label>
+    <button data-walk>Queue walk</button>
+  </div>`);
+}
+
+$('#plOut').onclick = async (e) => {
+  const t = e.target;
+  if (t.dataset.raw) return view($('#plView'), pl.raws[t.dataset.raw], t.dataset.raw);
+  if (t.dataset.archReload != null) return loadArchive();
+  let res = null;
+  if (t.dataset.track === 'on') {
+    if (!confirm(`Track ${pl.p.account?.gameName}? It will be polled for new games.`)) return;
+    res = await call('POST', '/v1/admin/tracked-players', JSON.stringify({ platform: pl.platform, puuid: pl.p.puuid }));
+  } else if (t.dataset.track === 'off') {
+    if (!confirm(`Untrack ${pl.p.account?.gameName}?`)) return;
+    res = await call('DELETE', `/v1/admin/tracked-players/${encodeURIComponent(pl.p.puuid)}`);
+  } else if (t.dataset.walk != null) {
+    const limit = Number($('[data-walk-limit]', $('#plOut')).value);
+    if (!confirm(`Queue a history walk ${limit} matches deep?`)) return;
+    res = await call('POST', '/v1/admin/backfill', JSON.stringify({ puuid: pl.p.puuid, platform: pl.platform, limit }));
+  }
+  if (res) { view($('#plView'), res, `${res.method} ${res.path}`); loadArchive(); }
 };
 
 // ---------- live ----------
@@ -533,6 +811,19 @@ $('#wsClear').onclick = () => { frames.length = 0; renderFrames(); };
 $('#wsFilter').oninput = renderFrames;
 
 // ---------- shell ----------
+// Esc closes the newest thing open on the current tab: an open scoreboard, else the response window.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || e.target.matches?.('input, textarea, select')) return;
+  const tab = $('.tab.on');
+  if (tab?.id === 'tab-player' && pl.open.size && !$('#plView').innerHTML) {
+    pl.open.delete([...pl.open].pop());
+    rerenderMatches();
+    return;
+  }
+  const v = tab && $('.viewer', tab);
+  if (v) view(v, null);
+});
+
 function route() {
   const tab = location.hash.slice(1).split('?')[0] || 'explorer';
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('on', t.id === `tab-${tab}`));

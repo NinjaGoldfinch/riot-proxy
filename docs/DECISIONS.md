@@ -856,3 +856,10 @@ Accepted (owner, task OPS-03). Amends ADR-070.
 - **Host keys are unchanged.** The Debian cloud image already generates unique host keys on first boot.
 - **Tests:** the dry-run `ssh-keygen` and `--sshkeys` arguments, `--key-dir`/`--name`, the combined case, and two real keys that differ.
 
+## ADR-073 — Dev explorer player tab: paging, filters, scoreboard, backfill status (2026-10-08)
+Accepted (owner, task DEV-02). Extends ADR-071; design/10 §Player tab.
+- **Page sizes 10, 25 and 50 are done in the page, not the API.** `/v1/players/{puuid}/matches` keeps its `count` cap of 20, because every id is its own upstream call. A page of 25 or 50 is 2–3 `start`/`count` calls joined in order. Only the first call carries `refresh`, which is allowed once a minute per player.
+- **Queue labels and the queue filter use Riot's `queues.json`** through `/v1/static/queues`. The page holds no queue list of its own. Deprecated queues (their `notes` say so) are not offered as filters, but still label old matches.
+- **Backfill status is read from what exists**: the player row (`/v1/admin/tracked-players`) and the job queue (`/v1/admin/jobs`, by `payload.puuid`). No new endpoint. Job lists are capped at 500, so counts at the cap show `500+`.
+- **Testing a no-build page**: the pure helpers sit in one marked block that `tests/dev_ui.mjs` evaluates under `node --test`, which `cargo test` runs (skipped locally without node, required in CI). DOM wiring was checked with a throwaway jsdom smoke run. jsdom is not a project dependency.
+
