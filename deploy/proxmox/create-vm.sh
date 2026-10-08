@@ -219,21 +219,35 @@ if [ "$start" = 1 ]; then
   state="created and booting"
 fi
 
-login="ssh $ciuser@<vm>"
+# With a static --ip the address is known; with DHCP the owner looks it up (step 1).
+if [ "$ip" = dhcp ]; then
+  addr="<vm-ip>"
+  find_ip="qm guest cmd $vmid network-get-interfaces | grep -o '\"ip-address\" : \"[0-9.]*\"' | grep -v 127.0.0.1
+                         (once the guest agent is up, ~1-2 min; then use that address as <vm-ip> below)"
+else
+  addr=${ip%/*}
+  find_ip="$addr"
+fi
+
+login="ssh $ciuser@$addr"
 if [ "$gen_key" = 1 ]; then
-  login="ssh -i ~/.ssh/$name-$vmid $ciuser@<vm>"
+  login="ssh -i $key $ciuser@$addr"
   cat <<EOF
-create-vm: login key for VM $vmid: $key (public: $key.pub)
-  Copy it to your machine:  scp root@$(hostname):$key ~/.ssh/$name-$vmid
-  then delete it here if you like: rm $key
+create-vm: login key for VM $vmid is $key (on this host; public half: $key.pub)
+  From this host:      $login
+  From another machine, copy the key over first:
+                       scp root@$(hostname):$key ~/.ssh/$name-$vmid && chmod 600 ~/.ssh/$name-$vmid
+                       ssh -i ~/.ssh/$name-$vmid $ciuser@$addr
+  Once copied, you can delete it here: rm $key
 EOF
 fi
 
 cat <<EOF
 create-vm: VM $vmid ($name) $state.
 Next:
-  1. Find its address:   qm guest cmd $vmid network-get-interfaces   (once the agent is up, ~1-2 min)
-  2. Set RIOT_API_KEY:   $login, then edit /opt/riot-proxy/.env
+  1. Its address:        $find_ip
+  2. Log in:             $login
+     and set RIOT_API_KEY in /opt/riot-proxy/.env
   3. Start it now:       sudo riot-proxy-update   (or wait; the timer runs every 2 minutes)
-  4. Open http://<vm>:8080/docs. The admin key is in: docker compose -f /opt/riot-proxy/compose.yaml logs
+  4. Open http://$addr:8080/docs. The admin key is in: docker compose -f /opt/riot-proxy/compose.yaml logs
 EOF
