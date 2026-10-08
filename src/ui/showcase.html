@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>riot-proxy · showcase</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --sunk: #0b0e13; --line: #262d38;
+    --text: #d7dee8; --dim: #7d8794; --accent: #58a6ff;
+    --good: #2ea043; --bad: #d1444a; --warn: #d29922;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, sans-serif; }
+  a { color: var(--accent); text-decoration: none; }
+  input, select, button { font: inherit; color: var(--text); background: var(--sunk); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
+  button { cursor: pointer; background: var(--panel); }
+  button:hover, button.on { border-color: var(--accent); }
+  button.on { color: var(--accent); }
+  .hero { padding: 28px 20px 22px; background: linear-gradient(180deg, #131a24, var(--bg)); border-bottom: 1px solid var(--line); }
+  .hero-in { max-width: 1180px; margin: 0 auto; display: flex; flex-wrap: wrap; gap: 14px 24px; align-items: end; }
+  .hero h1 { margin: 0; font-size: 24px; letter-spacing: -.01em; }
+  .hero p { margin: 2px 0 0; color: var(--dim); font-size: 13px; }
+  .search { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; align-items: center; }
+  .search input[name=id] { width: 240px; }
+  .patch { font: 600 11px var(--mono); padding: 3px 9px; border-radius: 10px; border: 1px solid var(--line); color: var(--dim); }
+  main { max-width: 1180px; margin: 0 auto; padding: 18px 20px 60px; }
+  .grid { display: grid; gap: 16px; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); align-items: start; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; min-width: 0; }
+  .card > header { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+  .card h2 { margin: 0; font-size: 15px; }
+  .card .tools { margin-left: auto; display: flex; gap: 4px; flex-wrap: wrap; }
+  .card .tools button { font-size: 12px; padding: 2px 9px; }
+  .src { font: 11px var(--mono); color: var(--dim); border: 1px dashed var(--line); border-radius: 4px; padding: 1px 6px; display: inline-block; margin: 2px 4px 0 0; }
+  .src:hover { color: var(--accent); border-color: var(--accent); }
+  .muted { color: var(--dim); }
+  .empty { color: var(--dim); padding: 18px 0; text-align: center; }
+  .err { color: var(--bad); }
+  .banner { border-radius: 10px; padding: 10px 14px; margin-bottom: 16px; border: 1px solid var(--warn); background: #2a2210; }
+  .banner.critical { border-color: var(--bad); background: #2a1215; }
+  .banner b { margin-right: 6px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+  th { color: var(--dim); font-weight: 500; font-size: 12px; }
+  td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
+  tbody tr[data-href] { cursor: pointer; }
+  tbody tr[data-href]:hover { background: var(--sunk); }
+  td.name { white-space: normal; }
+  td.name small { color: var(--dim); }
+  .wr { display: inline-flex; align-items: center; gap: 6px; }
+  .bar { width: 64px; height: 6px; border-radius: 3px; background: var(--bad); overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--good); }
+  .flag { font: 600 10px var(--mono); margin-left: 6px; padding: 0 5px; border-radius: 3px; border: 1px solid var(--line); color: var(--dim); text-transform: uppercase; vertical-align: 1px; }
+  .flag.hot { color: #ff9b5e; border-color: #6b3a1f; background: #2a1810; }
+  .tier { font: 700 11px var(--mono); padding: 1px 7px; border-radius: 4px; color: #0b0e13; }
+  .pager { display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 10px; font-size: 12px; color: var(--dim); }
+  .icons { display: flex; flex-wrap: wrap; gap: 8px; }
+  .champ { display: inline-flex; flex-direction: column; align-items: center; width: 64px; font-size: 11px; color: var(--text); text-align: center; }
+  .icon { width: 48px; height: 48px; border-radius: 8px; background: var(--sunk); border: 1px solid var(--line); display: inline-grid; place-items: center; font: 700 14px var(--mono); color: var(--dim); overflow: hidden; }
+  .icon img, img.icon { width: 100%; height: 100%; object-fit: cover; }
+  .icon.sm { width: 28px; height: 28px; border-radius: 6px; font-size: 11px; vertical-align: middle; }
+  .top li { display: flex; align-items: center; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--line); }
+  .top ol { margin: 0; padding: 0; list-style: none; }
+  .top .stat { margin-left: auto; text-align: right; font-variant-numeric: tabular-nums; }
+  .top .stat small { display: block; color: var(--dim); }
+  .cols { display: grid; gap: 16px; grid-template-columns: 1fr 1fr; }
+  .calls { position: fixed; left: 0; right: 0; bottom: 0; background: var(--sunk); border-top: 1px solid var(--line); font: 12px var(--mono); max-height: 40vh; overflow: auto; z-index: 50; }
+  .calls summary { padding: 6px 20px; cursor: pointer; color: var(--dim); }
+  .calls table { font-size: 12px; }
+  .s2 { color: var(--good); } .s4, .s0 { color: var(--warn); } .s5 { color: var(--bad); }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } .search { margin-left: 0; } }
+  @media (max-width: 600px) { .cols { grid-template-columns: 1fr; } .hide-sm { display: none; } .search input[name=id] { width: 100%; } }
+</style>
+</head>
+<body>
+<!-- pagebar -->
+<div class="hero">
+  <div class="hero-in">
+    <div>
+      <h1>riot-proxy showcase</h1>
+      <p>An example frontend built only on this proxy's read routes. Every card names the calls behind it.</p>
+    </div>
+    <form class="search" id="search">
+      <input name="id" placeholder="Riot ID, e.g. Faker#KR1" aria-label="Riot ID" autocomplete="off">
+      <select name="platform" id="platform" aria-label="platform"></select>
+      <input id="key" type="password" placeholder="API key (rpx_…)" aria-label="API key" size="16">
+      <button type="submit">Search</button>
+      <span class="patch" id="patch" title="Data Dragon patch">patch …</span>
+    </form>
+  </div>
+</div>
+<main id="view"></main>
+<details class="calls" id="calls"><summary>API calls (0)</summary><table><tbody></tbody></table></details>
+
+<!-- Coverage guard (DEV-06, design/11): every GET read route (tags players, riot, lol,
+     static) is either used here or listed with a reason; tests/ui.rs fails otherwise. -->
+<script type="application/json" id="coverage">
+{
+  "showcased": {
+    "GET /v1/lol/league/apex/{platform}/{tier}/{queue}": "home: ladder",
+    "GET /v1/riot/accounts/by-puuid/{puuid}": "home: ladder names",
+    "GET /v1/lol/status/{platform}": "home: status banner",
+    "GET /v1/lol/rotations/{platform}": "home: free rotation",
+    "GET /v1/lol/analytics/champions": "home: top champions",
+    "GET /v1/static/{file}": "champion names and icons",
+    "GET /v1/static/versions": "patch badge and icon URLs"
+  },
+  "notShowcased": {
+    "GET /v1/players/by-riot-id/{gameName}/{tagLine}/profile": "planned: DEV-07 player view",
+    "GET /v1/players/{puuid}/champions": "planned: DEV-07 player view",
+    "GET /v1/players/{puuid}/matches": "planned: DEV-07 player view",
+    "GET /v1/lol/league/entries/by-puuid/{platform}/{puuid}": "planned: DEV-07 player view",
+    "GET /v1/lol/mastery/by-puuid/{platform}/{puuid}": "planned: DEV-07 player view",
+    "GET /v1/lol/spectator/active/{platform}/{puuid}": "planned: DEV-07 player view",
+    "GET /v1/static/queues": "planned: DEV-07 match cards",
+    "GET /v1/lol/matches/{region}/{matchId}": "planned: DEV-08 match detail",
+    "GET /v1/lol/matches/{region}/{matchId}/timeline": "planned: DEV-08 gold graph",
+    "GET /v1/lol/analytics/champions/{championId}": "planned: DEV-08 champion view",
+    "GET /v1/lol/analytics/champions/{championId}/matchups": "planned: DEV-08 champion view",
+    "GET /v1/players/{puuid}/profile": "same body as the by-riot-id profile, which search uses",
+    "GET /v1/lol/summoners/by-puuid/{platform}/{puuid}": "the profile composite carries the summoner",
+    "GET /v1/lol/matches/ids/{region}/{puuid}": "/v1/players/{puuid}/matches returns the same ids, summarised",
+    "GET /v1/lol/league/entries/{platform}/{queue}/{tier}/{division}": "one division page at a time; the home ladder shows the apex tiers",
+    "GET /v1/riot/accounts/by-riot-id/{gameName}/{tagLine}": "search goes straight to the profile, which resolves the Riot ID",
+    "GET /v1/riot/accounts/by-riot-id/{region}/{gameName}/{tagLine}": "pinned-cluster variant; the page lets the proxy pick (ADR-066)",
+    "GET /v1/riot/accounts/by-puuid/{region}/{puuid}": "pinned-cluster variant; the page lets the proxy pick (ADR-066)"
+  }
+}
+</script>
+
+<script type="module">
+// ---------- pure helpers (unit-tested by tests/showcase.mjs)
+/** Riot's apex tiers, highest first, and the badge colour for each tier. */
+const APEX = ['CHALLENGER', 'GRANDMASTER', 'MASTER'];
+const QUEUES = [['RANKED_SOLO_5x5', 'Solo/Duo'], ['RANKED_FLEX_SR', 'Flex']];
+const TIER_COLOURS = { IRON: '#8c8580', BRONZE: '#b0764a', SILVER: '#9fb2c0', GOLD: '#e0b44c', PLATINUM: '#4fb3a9', EMERALD: '#3dbb6d', DIAMOND: '#6f8ff0', MASTER: '#b765d8', GRANDMASTER: '#e0525a', CHALLENGER: '#f2c94c' };
+const LADDER_PAGE = 25;
+
+const tierColour = (tier) => TIER_COLOURS[String(tier).toUpperCase()] ?? '#7d8794';
+const winRate = (wins, losses) => (wins + losses > 0 ? wins / (wins + losses) : null);
+const pct = (r, digits = 1) => (r == null ? '–' : `${(r * 100).toFixed(digits)}%`);
+const titleCase = (s) => String(s).charAt(0) + String(s).slice(1).toLowerCase();
+
+/** A whole apex league, highest LP first; ties go to more wins. Rank is the position. */
+function sortLadder(entries) {
+  return [...(entries ?? [])]
+    .sort((a, b) => b.leaguePoints - a.leaguePoints || b.wins - a.wins)
+    .map((e, i) => ({ ...e, position: i + 1 }));
+}
+
+/** One page of a sorted ladder, and how many pages there are. */
+function ladderPage(sorted, page, size = LADDER_PAGE) {
+  const pages = Math.max(1, Math.ceil(sorted.length / size));
+  const p = Math.min(Math.max(0, page), pages - 1);
+  return { page: p, pages, rows: sorted.slice(p * size, p * size + size) };
+}
+
+/** Data Dragon's champion.json keyed by numeric id: `{ id, name, title, image }`. */
+function championIndex(doc) {
+  const out = {};
+  for (const c of Object.values(doc?.data ?? {})) out[Number(c.key)] = { id: c.id, name: c.name, title: c.title, image: c.image?.full };
+  return out;
+}
+
+/** A mirrored Data Dragon image (ADR-076), or null without a patch or file. */
+const imageUrl = (version, kind, file) => (version && file ? `/ddragon/${encodeURIComponent(version)}/img/${kind}/${encodeURIComponent(file)}` : null);
+
+/** lol-status-v4 incidents and maintenances, titled in `locale` (falling back to en_US, then the first). */
+function statusNotices(doc, locale = 'en_US') {
+  const title = (s) => {
+    const ts = s.titles ?? [];
+    return (ts.find((t) => t.locale === locale) ?? ts.find((t) => t.locale === 'en_US') ?? ts[0])?.content ?? '(untitled)';
+  };
+  return [
+    ...(doc?.maintenances ?? []).map((s) => ({ kind: 'Maintenance', severity: s.maintenance_status ?? '', title: title(s) })),
+    ...(doc?.incidents ?? []).map((s) => ({ kind: 'Incident', severity: s.incident_severity ?? '', title: title(s) })),
+  ];
+}
+
+/** Analytics rows come per (champion, tier); sum them per champion. */
+function byChampion(rows) {
+  const m = new Map();
+  for (const r of rows ?? []) {
+    const c = m.get(r.championId) ?? { championId: r.championId, championName: r.championName, games: 0, wins: 0 };
+    c.games += r.games;
+    c.wins += r.wins;
+    m.set(r.championId, c);
+  }
+  return [...m.values()].map((c) => ({ ...c, winRate: c.games ? c.wins / c.games : 0 }));
+}
+
+/** The top `n` champions by win rate and by games played. */
+function topChampions(rows, n = 10) {
+  const all = byChampion(rows);
+  return {
+    winRate: [...all].sort((a, b) => b.winRate - a.winRate || b.games - a.games).slice(0, n),
+    played: [...all].sort((a, b) => b.games - a.games || b.winRate - a.winRate).slice(0, n),
+  };
+}
+
+/** `Name#TAG` → `{ gameName, tagLine }`, or null. */
+function parseRiotId(s) {
+  const m = String(s ?? '').trim().match(/^([^#]+?)\s*#\s*([^#\s][^#]*)$/);
+  return m ? { gameName: m[1].trim(), tagLine: m[2].trim() } : null;
+}
+
+/** `#/`, `#/player/{name}/{tag}`, `#/champion/{id}` → `{ view, args }`. */
+function parseRoute(hash) {
+  const parts = String(hash ?? '').replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
+  if (parts[0] === 'player' && parts.length === 3) return { view: 'player', args: { gameName: parts[1], tagLine: parts[2] } };
+  if (parts[0] === 'champion' && /^\d+$/.test(parts[1] ?? '')) return { view: 'champion', args: { id: Number(parts[1]) } };
+  return { view: 'home', args: {} };
+}
+
+/** The dev explorer's link to one operation (design/10). */
+const explorerLink = (op) => `/dev#explorer?op=${encodeURIComponent(op)}`;
+// ---------- end pure helpers
+
+const $ = (s, el = document) => el.querySelector(s);
+const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+// The key is shared with /dev, which stores it JSON-encoded.
+const store = {
+  get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
+  set: (k, v) => localStorage.setItem(k, JSON.stringify(v)),
+};
+
+let cfg = { authDisabled: false, platforms: [] };
+let version = null;
+let champions = {};
+const names = new Map(); // puuid → account, for the session
+const calls = [];
+const state = { tier: 'CHALLENGER', queue: 'RANKED_SOLO_5x5', page: 0, ladder: null, ladderFor: '' };
+
+/** One GET through the proxy, logged in the calls drawer. */
+async function get(path) {
+  const headers = {};
+  const key = $('#key').value.trim();
+  if (key && !cfg.authDisabled) headers.Authorization = `Bearer ${key}`;
+  const t0 = performance.now();
+  const c = { path, status: 0, ms: 0, cache: '' };
+  let json;
+  try {
+    const r = await fetch(path, { headers });
+    c.status = r.status;
+    c.cache = r.headers.get('x-cache') ?? '';
+    const text = await r.text();
+    try { json = JSON.parse(text); } catch { json = undefined; }
+  } catch { /* network error: status 0 */ }
+  c.ms = Math.round(performance.now() - t0);
+  calls.unshift(c);
+  renderCalls();
+  return { ok: c.status >= 200 && c.status < 300, status: c.status, json };
+}
+
+function renderCalls() {
+  $('#calls summary').textContent = `API calls (${calls.length})`;
+  $('#calls tbody').innerHTML = calls.slice(0, 200).map((c) =>
+    `<tr><td class="s${String(c.status)[0]}">${c.status || 'ERR'}</td><td class="n">${c.ms} ms</td><td>${esc(c.cache)}</td><td>GET ${esc(c.path)}</td></tr>`).join('');
+}
+
+/** The "how this was built" chips under a card's title. */
+const sources = (...ops) => ops.map((op) => `<a class="src" href="${esc(explorerLink(op))}" title="open in the dev explorer">${esc(op)}</a>`).join('');
+
+function failure(res) {
+  if (res.status === 401 || res.status === 403) return `<p class="err">This call needs a key with read scope. Paste one above.</p>`;
+  const e = res.json?.error;
+  return `<p class="err">${res.status || 'network error'}${e ? ` · ${esc(e.code)}: ${esc(e.message)}` : ''}</p>`;
+}
+
+function champIcon(id, cls = '') {
+  const c = champions[id];
+  const url = imageUrl(version, 'champion', c?.image);
+  const label = c?.name ?? `#${id}`;
+  return url ? `<img class="icon ${cls}" src="${esc(url)}" alt="${esc(label)}" loading="lazy">` : `<span class="icon ${cls}">${esc(label.slice(0, 2))}</span>`;
+}
+
+const platform = () => $('#platform').value;
+
+// ---------- home
+function renderHome() {
+  if (!platform()) {
+    $('#view').innerHTML = `<div class="card empty">Pick a platform above to load its ladder, status and rotation.</div>`;
+    return;
+  }
+  $('#view').innerHTML = `<div id="status"></div>
+  <div class="grid">
+    <div>
+      <section class="card" id="ladder"></section>
+    </div>
+    <div>
+      <section class="card" id="rotation"><header><h2>Free champion rotation</h2></header><p class="muted">loading…</p></section>
+      <section class="card" id="top"><header><h2>Top champions</h2></header><p class="muted">loading…</p></section>
+    </div>
+  </div>`;
+  loadStatus();
+  loadLadder();
+  loadRotation();
+  loadTop();
+}
+
+async function loadStatus() {
+  const res = await get(`/v1/lol/status/${platform()}`);
+  if (!res.ok) return;
+  const notices = statusNotices(res.json, navigator.language?.replace('-', '_'));
+  $('#status').innerHTML = notices.map((n) =>
+    `<div class="banner ${n.severity === 'critical' ? 'critical' : ''}"><b>${esc(n.kind)}</b>${esc(n.title)} ${sources('GET /v1/lol/status/{platform}')}</div>`).join('');
+}
+
+async function loadLadder() {
+  const key = `${platform()}/${state.tier}/${state.queue}`;
+  const el = $('#ladder');
+  el.innerHTML = ladderHeader() + `<p class="muted">loading…</p>`;
+  if (state.ladderFor !== key) {
+    const res = await get(`/v1/lol/league/apex/${platform()}/${state.tier}/${state.queue}`);
+    if (!res.ok) { el.innerHTML = ladderHeader() + failure(res); return; }
+    state.ladder = sortLadder(res.json?.entries);
+    state.ladderFor = key;
+    state.page = 0;
+  }
+  renderLadder();
+}
+
+function ladderHeader() {
+  const tiers = APEX.map((t) => `<button data-tier="${t}" class="${t === state.tier ? 'on' : ''}">${titleCase(t)}</button>`).join('');
+  const queues = QUEUES.map(([q, l]) => `<button data-queue="${q}" class="${q === state.queue ? 'on' : ''}">${l}</button>`).join('');
+  return `<header><h2>Ladder</h2><span class="tier" style="background:${tierColour(state.tier)}">${state.tier}</span><div class="tools">${tiers}<span style="width:8px"></span>${queues}</div></header>
+  <div>${sources('GET /v1/lol/league/apex/{platform}/{tier}/{queue}', 'GET /v1/riot/accounts/by-puuid/{puuid}')}</div>`;
+}
+
+function renderLadder() {
+  const el = $('#ladder');
+  const { page, pages, rows } = ladderPage(state.ladder, state.page);
+  if (!rows.length) { el.innerHTML = ladderHeader() + `<p class="empty">Nobody in this league yet.</p>`; return; }
+  el.innerHTML = ladderHeader() + `<table><thead><tr><th class="n">#</th><th>Player</th><th class="n">LP</th><th class="n hide-sm">W / L</th><th>Win rate</th></tr></thead><tbody>${rows.map((e) => {
+    const a = names.get(e.puuid);
+    const wr = winRate(e.wins, e.losses);
+    const href = a ? `#/player/${encodeURIComponent(a.gameName)}/${encodeURIComponent(a.tagLine)}` : '';
+    return `<tr data-puuid="${esc(e.puuid)}" ${href ? `data-href="${esc(href)}"` : ''}>
+      <td class="n">${e.position}</td>
+      <td class="name">${a ? `${esc(a.gameName)} <small>#${esc(a.tagLine)}</small>` : '<span class="muted">…</span>'}${e.hotStreak ? '<span class="flag hot" title="hotStreak">hot</span>' : ''}${e.veteran ? '<span class="flag" title="veteran">vet</span>' : ''}</td>
+      <td class="n">${e.leaguePoints.toLocaleString()}</td>
+      <td class="n hide-sm">${e.wins} / ${e.losses}</td>
+      <td><span class="wr"><span class="bar"><i style="width:${(wr ?? 0) * 100}%"></i></span>${pct(wr)}</span></td></tr>`;
+  }).join('')}</tbody></table>
+  <div class="pager"><button data-page="-1" ${page === 0 ? 'disabled' : ''}>Prev</button><span>page ${page + 1} of ${pages} · ${state.ladder.length} players</span><button data-page="1" ${page >= pages - 1 ? 'disabled' : ''}>Next</button></div>`;
+  fillNames(rows);
+}
+
+/** Names for the visible page only, five at a time, cached for the session. */
+async function fillNames(rows) {
+  const todo = rows.filter((e) => e.puuid && !names.has(e.puuid));
+  const shown = state.ladderFor + state.page;
+  for (let i = 0; i < todo.length; i += 5) {
+    await Promise.all(todo.slice(i, i + 5).map(async (e) => {
+      const res = await get(`/v1/riot/accounts/by-puuid/${encodeURIComponent(e.puuid)}`);
+      if (res.ok && res.json?.gameName) names.set(e.puuid, res.json);
+    }));
+    if (state.ladderFor + state.page !== shown || !$('#ladder')) return;
+    renderLadderNames();
+  }
+}
+
+function renderLadderNames() {
+  for (const tr of document.querySelectorAll('#ladder tbody tr')) {
+    const a = names.get(tr.dataset.puuid);
+    if (!a || tr.dataset.href) continue;
+    tr.dataset.href = `#/player/${encodeURIComponent(a.gameName)}/${encodeURIComponent(a.tagLine)}`;
+    $('td.name', tr).firstChild.replaceWith(document.createRange().createContextualFragment(`${esc(a.gameName)} <small>#${esc(a.tagLine)}</small>`));
+  }
+}
+
+async function loadRotation() {
+  const el = $('#rotation');
+  const head = `<header><h2>Free champion rotation</h2></header><div>${sources('GET /v1/lol/rotations/{platform}', 'GET /v1/static/{file}')}</div>`;
+  const res = await get(`/v1/lol/rotations/${platform()}`);
+  if (!res.ok) { el.innerHTML = head + failure(res); return; }
+  const ids = res.json?.freeChampionIds ?? [];
+  el.innerHTML = head + (ids.length
+    ? `<div class="icons" style="margin-top:8px">${ids.map((id) => `<a class="champ" href="#/champion/${id}">${champIcon(id)}${esc(champions[id]?.name ?? `#${id}`)}</a>`).join('')}</div>`
+    : `<p class="empty">No rotation published.</p>`);
+}
+
+async function loadTop() {
+  const el = $('#top');
+  const head = `<header><h2>Top champions</h2><span class="muted" id="topMeta"></span></header><div>${sources('GET /v1/lol/analytics/champions')}</div>`;
+  const q = new URLSearchParams({ platform: platform(), queue: state.queue, limit: '500' });
+  const res = await get(`/v1/lol/analytics/champions?${q}`);
+  if (!res.ok) { el.innerHTML = head + failure(res); return; }
+  const top = topChampions(res.json?.champions);
+  if (!top.played.length) { el.innerHTML = head + `<p class="empty">No analytics yet: they fill in when a ladder crawl for this platform completes.</p>`; return; }
+  const list = (rows, stat) => `<ol>${rows.map((c) => `<li><a href="#/champion/${c.championId}">${champIcon(c.championId, 'sm')}</a><a href="#/champion/${c.championId}">${esc(champions[c.championId]?.name ?? c.championName ?? `#${c.championId}`)}</a><span class="stat">${stat(c)}</span></li>`).join('')}</ol>`;
+  el.innerHTML = head + `<div class="cols top">
+    <div><h3 class="muted" style="font-size:12px;margin:8px 0 2px">Highest win rate</h3>${list(top.winRate, (c) => `${pct(c.winRate)}<small>${c.games} games</small>`)}</div>
+    <div><h3 class="muted" style="font-size:12px;margin:8px 0 2px">Most played</h3>${list(top.played, (c) => `${c.games}<small>${pct(c.winRate)} win</small>`)}</div>
+  </div>`;
+  $('#topMeta', el).textContent = `patch ${res.json.patch ?? '–'} · ${QUEUES.find(([q]) => q === state.queue)?.[1]}`;
+}
+
+// ---------- views still to come (DEV-07, DEV-08)
+function renderLater(title, task, devHash) {
+  $('#view').innerHTML = `<section class="card"><header><h2>${esc(title)}</h2></header>
+    <p class="muted">This view arrives with ${esc(task)}. Until then the dev explorer shows the same data raw.</p>
+    <p><a href="${esc(devHash)}">Open the dev explorer</a> · <a href="#/">back to the home view</a></p></section>`;
+}
+
+function route() {
+  const { view, args } = parseRoute(location.hash);
+  if (view === 'player') return renderLater(`${args.gameName} #${args.tagLine}`, 'DEV-07', '/dev#player');
+  if (view === 'champion') return renderLater(champions[args.id]?.name ?? `Champion #${args.id}`, 'DEV-08', explorerLink('GET /v1/lol/analytics/champions/{championId}'));
+  renderHome();
+}
+
+document.addEventListener('click', (ev) => {
+  const t = ev.target.closest('button, tr[data-href]');
+  if (!t) return;
+  if (t.dataset.href) { location.hash = t.dataset.href; return; }
+  if (t.dataset.tier) { state.tier = t.dataset.tier; loadLadder(); }
+  if (t.dataset.queue) { state.queue = t.dataset.queue; loadLadder(); loadTop(); }
+  if (t.dataset.page) { state.page += Number(t.dataset.page); renderLadder(); }
+});
+
+$('#search').onsubmit = (ev) => {
+  ev.preventDefault();
+  const id = parseRiotId(ev.target.elements.id.value);
+  if (!id) { ev.target.elements.id.setCustomValidity('Name#TAG'); ev.target.elements.id.reportValidity(); return; }
+  location.hash = `#/player/${encodeURIComponent(id.gameName)}/${encodeURIComponent(id.tagLine)}`;
+};
+$('#search').elements.id.oninput = (ev) => ev.target.setCustomValidity('');
+
+async function boot() {
+  $('#key').value = store.get('rp.dev.key', '');
+  $('#key').onchange = () => { store.set('rp.dev.key', $('#key').value.trim()); route(); };
+  cfg = await fetch('/dev/config.json').then((r) => r.json());
+  $('#key').hidden = cfg.authDisabled;
+  const saved = store.get('rp.showcase.platform', '');
+  $('#platform').innerHTML = `<option value="">platform…</option>${cfg.platforms.map((p) => `<option value="${esc(p.value)}" ${p.value === saved ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}`;
+  $('#platform').onchange = () => { store.set('rp.showcase.platform', platform()); state.ladderFor = ''; route(); };
+  const [v, c] = await Promise.all([get('/v1/static/versions'), get('/v1/static/champion')]);
+  version = v.json?.current ?? null;
+  $('#patch').textContent = version ? `patch ${version}` : 'no patch mirrored';
+  if (c.ok) champions = championIndex(c.json);
+  window.onhashchange = route;
+  route();
+}
+boot();
+</script>
+</body>
+</html>

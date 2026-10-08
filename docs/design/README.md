@@ -52,6 +52,7 @@ Everything else in these docs follows from that observation.
 | 08 | [Migration plan](08-migration-plan.md) | Phased build order, v1 → v2 data migration, cut-over |
 | 09 | [Resources](09-resources.md) | Crates, docs, reference projects |
 | 10 | [Dev explorer](10-dev-explorer.md) | The dev-only `/dev` page: gating, what it calls, page map |
+| 11 | [Showcase](11-showcase.md) | The dev-only `/dev/showcase` example frontend: page map and the coverage rule |
 | — | [img/](img/) | Standalone SVG diagrams used above |
 
 All diagrams are Mermaid (rendered natively by GitHub) except the two in `img/`, which are plain SVG so they work in any viewer.

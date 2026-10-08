@@ -1,7 +1,8 @@
-//! `/dev` and `/dashboard`: two browser pages embedded in the binary (design/07
-//! §The artefact) and served without a key. `/dev` is the dev explorer (design/10,
-//! ADR-071), never served in production; `DASHBOARD_UI` defaults on (the page is
-//! inert, and everything behind it needs an admin key).
+//! `/dev`, `/dev/showcase` and `/dashboard`: browser pages embedded in the binary
+//! (design/07 §The artefact) and served without a key. `/dev` is the dev explorer
+//! (design/10, ADR-071) and `/dev/showcase` an example frontend (design/11,
+//! ADR-080); neither is ever served in production. `DASHBOARD_UI` defaults on (the
+//! page is inert, and everything behind it needs an admin key).
 //! The dashboard is v1's `public/dashboard.html` with its data wired (P7-06); its
 //! only change is following v2's `crawl.phase` event (ADR-058).
 //!
@@ -23,6 +24,7 @@ use crate::riot::routing::{Platform, Region};
 
 pub const DEV_UI_HTML: &str = include_str!("../ui/dev-ui.html");
 pub const DASHBOARD_HTML: &str = include_str!("../ui/dashboard.html");
+pub const SHOWCASE_HTML: &str = include_str!("../ui/showcase.html");
 
 const NO_STORE: (header::HeaderName, &str) = (header::CACHE_CONTROL, "no-store");
 
@@ -34,6 +36,7 @@ pub fn pages(config: &Config) -> Vec<(&'static str, &'static str)> {
     [
         (config.dashboard_ui, "/dashboard", "Dashboard"),
         (config.dev_ui, "/dev", "Dev explorer"),
+        (config.dev_ui, "/dev/showcase", "Showcase"),
         (config.docs_ui, "/docs", "API docs"),
         (true, "/metrics", "Metrics"),
     ]
@@ -157,6 +160,10 @@ pub fn router(config: &Config, openapi_json: Arc<str>) -> Router {
         };
         router = router
             .route("/dev", page(render(DEV_UI_HTML, config, "/dev")))
+            .route(
+                "/dev/showcase",
+                page(render(SHOWCASE_HTML, config, "/dev/showcase")),
+            )
             .route(
                 "/dev/config.json",
                 json_route(serde_json::to_value(dev).unwrap_or_default()),
