@@ -50,16 +50,15 @@ async fn env() -> Env {
 impl Env {
     /// A fresh context, as a new process would build it (empty caches).
     fn ctx(&self) -> ArchiveContext {
+        self.ctx_with(Arc::new(Limiter::new(0.8)))
+    }
+
+    fn ctx_with(&self, limiter: Arc<Limiter>) -> ArchiveContext {
         let config = common::config(&[]);
         let key = KeyScope::from_key(&config.riot_api_key);
         let archive = Arc::new(SqliteArchive::new(self.db.clone(), key));
         ArchiveContext {
-            fetcher: common::fetcher(
-                &config,
-                &self.server.uri(),
-                Arc::new(Limiter::new(0.8)),
-                Some(archive),
-            ),
+            fetcher: common::fetcher(&config, &self.server.uri(), limiter, Some(archive)),
             queue: Queue::new(self.db.clone()),
             hub: self.hub.clone(),
             key_scope: self.scope.clone(),
@@ -292,6 +291,63 @@ async fn archiving_announces_a_new_match_once() {
     ctx.archive_match(&archive("KR_8393343196")).await.unwrap();
     assert!(events.try_recv().is_err());
     assert_eq!(e.server.received_requests().await.unwrap().len(), 1);
+}
+
+/// SCH-01: a timeline the limiter has no room for is come back for, not
+/// skipped; the match is announced on the first run and not again.
+#[tokio::test]
+async fn a_rate_limited_timeline_yields_and_the_rerun_fetches_only_it() {
+    use riot_proxy::riot::limiter::Priority;
+    use riot_proxy::riot::limiter::headers::LimitWindow;
+
+    let e = env().await;
+    let m = "/lol/match/v5/matches/KR_8393343196";
+    Mock::given(method("GET"))
+        .and(path(m))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(MATCH, "application/json"))
+        .mount(&e.server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("{m}/timeline")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"metadata": {}, "info": {}})))
+        .mount(&e.server)
+        .await;
+    let limiter = Arc::new(Limiter::new(0.8));
+    let capped = |limit| [LimitWindow { limit, seconds: 120 }];
+    limiter.configure_method("asia", "match.timeline", &capped(1));
+    limiter
+        .acquire(
+            "asia",
+            "match.timeline",
+            Priority::Interactive,
+            std::time::Duration::ZERO,
+        )
+        .await
+        .unwrap();
+    let mut events = e.hub.subscribe(&Topic::named(FIREHOSE));
+    let ctx = e.ctx_with(Arc::clone(&limiter));
+    let mut job = archive("KR_8393343196");
+    job.payload = json!({"matchId": "KR_8393343196", "puuid": P, "fetchTimeline": true}).to_string();
+
+    let first = ctx.archive_match(&job).await.unwrap_err();
+    assert!(
+        matches!(first, JobError::Yield { payload: None, .. }),
+        "{first:?}"
+    );
+    assert!(events.try_recv().is_ok(), "announced with the match");
+
+    limiter.configure_method("asia", "match.timeline", &capped(100));
+    ctx.archive_match(&job).await.unwrap();
+    assert!(events.try_recv().is_err(), "not announced twice");
+    let paths: Vec<String> = e
+        .server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| r.url.path().to_string())
+        .collect();
+    assert_eq!(paths, [m.to_string(), format!("{m}/timeline")]);
 }
 
 #[tokio::test]

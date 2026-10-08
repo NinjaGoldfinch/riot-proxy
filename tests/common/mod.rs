@@ -128,6 +128,7 @@ pub fn fetcher(
         scope: riot_proxy::cache::keys::KeyScope::from_key(&config.riot_api_key),
         policy: riot_proxy::riot::endpoints::TtlPolicy::from_config(config),
         interactive_budget: std::time::Duration::from_millis(config.client_wait_budget_ms),
+        job_budget: std::time::Duration::from_millis(config.job_yield_budget_ms),
         swr: config.stale_while_revalidate,
     })
 }

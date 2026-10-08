@@ -42,6 +42,7 @@ fn defaults_match_v1_and_design_07() {
     assert_eq!(c.ddragon_dir, PathBuf::from("./data/ddragon"));
     assert_eq!(c.role, Role::All);
     assert_eq!(c.job_concurrency, 8);
+    assert_eq!(c.job_yield_budget_ms, 1000);
     assert_eq!(c.riot_user_agent, DEFAULT_USER_AGENT);
     assert_eq!(c.cache_l1_max_mb, 128);
     assert_eq!(c.neg_ttl_seconds, 30);

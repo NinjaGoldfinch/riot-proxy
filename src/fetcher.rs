@@ -38,7 +38,8 @@ const SERVICE_429_BASE: Duration = Duration::from_millis(500);
 const SERVICE_429_MAX: Duration = Duration::from_secs(8);
 /// Typed 429s re-acquire after the freeze; this only stops a pathological loop.
 const MAX_ATTEMPTS: u32 = 8;
-/// Bulk callers (SWR refreshes, jobs) wait rather than fail; this bounds the wait.
+/// Background refreshes wait rather than fail; this bounds the wait. Jobs
+/// wait at most `JOB_YIELD_BUDGET_MS` and give their worker back (SCH-01).
 pub const BULK_BUDGET: Duration = Duration::from_secs(15 * 60);
 
 /// `X-Cache` (v1's four plus design 03's `ARCHIVE` and `BYPASS`; ADR-022, ADR-031).
@@ -81,11 +82,28 @@ pub struct FetchResult {
 pub struct FetchError {
     pub api: ApiError,
     pub x_cache: Option<XCache>,
+    /// Set when our own limiter had no token inside the budget (not when
+    /// Riot answered 429): the first instant one could be free. A job yields
+    /// on it (SCH-01).
+    pub limited_until: Option<Instant>,
 }
 
 impl From<ApiError> for FetchError {
     fn from(api: ApiError) -> Self {
-        Self { api, x_cache: None }
+        Self {
+            api,
+            x_cache: None,
+            limited_until: None,
+        }
+    }
+}
+
+impl From<RateLimited> for FetchError {
+    fn from(limited: RateLimited) -> Self {
+        Self {
+            limited_until: Some(limited.retry_at),
+            ..ApiError::from(limited).into()
+        }
     }
 }
 
@@ -100,6 +118,18 @@ pub struct FetchOptions {
     pub priority: Priority,
     /// Skip every cache read (still writes through): `?refresh=true`, admin only.
     pub bypass: bool,
+    /// A job's fetch: bulk, waiting at most `JOB_YIELD_BUDGET_MS` for the
+    /// limiter before failing with `limited_until` set (SCH-01).
+    pub job: bool,
+}
+
+impl FetchOptions {
+    /// What every job handler fetches with (design/06 §Bulk limiter priority).
+    pub const JOB: Self = Self {
+        priority: Priority::Bulk,
+        bypass: false,
+        job: true,
+    };
 }
 
 impl Default for FetchOptions {
@@ -107,6 +137,7 @@ impl Default for FetchOptions {
         Self {
             priority: Priority::Interactive,
             bypass: false,
+            job: false,
         }
     }
 }
@@ -149,6 +180,7 @@ struct Inner {
     scope: KeyScope,
     policy: TtlPolicy,
     interactive_budget: Duration,
+    job_budget: Duration,
     swr: bool,
 }
 
@@ -176,6 +208,8 @@ pub struct FetcherParts {
     pub policy: TtlPolicy,
     /// `CLIENT_WAIT_BUDGET_MS`
     pub interactive_budget: Duration,
+    /// `JOB_YIELD_BUDGET_MS`
+    pub job_budget: Duration,
     /// `STALE_WHILE_REVALIDATE`
     pub swr: bool,
 }
@@ -190,6 +224,7 @@ impl Fetcher {
             scope,
             policy,
             interactive_budget,
+            job_budget,
             swr,
         } = parts;
         Self {
@@ -201,6 +236,7 @@ impl Fetcher {
                 scope,
                 policy,
                 interactive_budget,
+                job_budget,
                 swr,
             }),
             flight: Arc::new(SingleFlight::new()),
@@ -241,8 +277,8 @@ impl Fetcher {
                 Lookup::Fresh(e) if e.is_negative() => {
                     record("neg");
                     return Err(FetchError {
-                        api: ApiError::not_found("Resource not found upstream (negative-cached)"),
                         x_cache: Some(XCache::HitNeg),
+                        ..ApiError::not_found("Resource not found upstream (negative-cached)").into()
                     });
                 }
                 Lookup::Fresh(e) => {
@@ -263,10 +299,15 @@ impl Fetcher {
         // 3. Miss (or bypass): coalesce, then go upstream.
         record("miss");
         let inner = Arc::clone(&self.inner);
+        let budget = match (opts.job, opts.priority) {
+            (true, _) => inner.job_budget,
+            (false, Priority::Interactive) => inner.interactive_budget,
+            (false, Priority::Bulk) => BULK_BUDGET,
+        };
         let (work_key, priority) = (key.clone(), opts.priority);
         let flight = self
             .flight
-            .run(key, move || upstream(inner, req, work_key, priority))
+            .run(key, move || upstream(inner, req, work_key, priority, budget))
             .await;
         let fetched = flight.value?;
         let x_cache = match (fetched.stale, opts.bypass) {
@@ -287,7 +328,9 @@ impl Fetcher {
         tokio::spawn(async move {
             let work_key = key.clone();
             let out = flight
-                .run(key, move || upstream(inner, req, work_key, Priority::Bulk))
+                .run(key, move || {
+                    upstream(inner, req, work_key, Priority::Bulk, BULK_BUDGET)
+                })
                 .await;
             if let Err(e) = out.value {
                 tracing::debug!(error = %e, "background refresh failed");
@@ -331,20 +374,18 @@ async fn cached_copy(inner: &Inner, key: &str) -> Option<Fetched> {
 
 /// The upstream leg: limiter, HTTP, observe, retries, cache and archive writes,
 /// negatives. Runs once per key at a time (single-flight), on its own task.
+/// `budget` bounds each wait for the limiter.
 async fn upstream(
     inner: Arc<Inner>,
     mut req: RiotRequest,
     key: String,
     priority: Priority,
+    budget: Duration,
 ) -> Result<Fetched, FetchError> {
     let endpoint: &'static Endpoint = req.endpoint;
     let targets = req.targets();
     // Clusters that answered a service 429 during this request: tried last.
     let mut avoid: Vec<Target> = Vec::new();
-    let budget = match priority {
-        Priority::Interactive => inner.interactive_budget,
-        Priority::Bulk => BULK_BUDGET,
-    };
     let (mut server_retries, mut service_tries) = (0usize, 0u32);
 
     for _ in 0..MAX_ATTEMPTS {
@@ -364,7 +405,7 @@ async fn upstream(
                     tracing::warn!(method = endpoint.id, "serving stale while rate limited");
                     return Ok(copy);
                 }
-                return Err(ApiError::from(limited).into());
+                return Err(limited.into());
             }
         };
         req.target = target;

@@ -25,7 +25,6 @@ use crate::jobs::{kinds, priority};
 use crate::metrics::BACKFILLS_QUEUED_TOTAL;
 use crate::players;
 use crate::riot::endpoints::Endpoint;
-use crate::riot::limiter::Priority;
 use crate::riot::routing::Platform;
 use crate::routes::passthrough::request;
 use crate::ws::Hub;
@@ -124,18 +123,16 @@ pub async fn enqueue_backfill(queue: &Queue, walk: &BackfillPlayer) -> Result<En
     Ok(out)
 }
 
+/// A fetch failure: retried with backoff, or a yield when the limiter has no room.
 fn retry(e: &FetchError) -> JobError {
-    JobError::Retry(format!("{}: {}", e.api.code.as_str(), e.api.message))
+    JobError::from_fetch(e)
 }
 
 fn store(e: &impl std::fmt::Display) -> JobError {
     JobError::Retry(format!("store: {e}"))
 }
 
-const BULK: FetchOptions = FetchOptions {
-    priority: Priority::Bulk,
-    bypass: false,
-};
+const BULK: FetchOptions = FetchOptions::JOB;
 
 impl ArchiveContext {
     fn db(&self) -> &crate::db::Db {
@@ -151,7 +148,7 @@ impl ArchiveContext {
             .ok_or_else(|| JobError::Fail(format!("cannot derive region from match id '{}'", a.match_id)))?;
         let fetch = |id: &'static str| {
             let target = Endpoint::by_id(id).and_then(|e| e.target_for_region(region));
-            request(id, target, &[&a.match_id], &[]).map_err(|api| FetchError { api, x_cache: None })
+            request(id, target, &[&a.match_id], &[]).map_err(FetchError::from)
         };
         let req = fetch("match.byId").map_err(|e| retry(&e))?;
         let got = match self.fetcher.fetch(req, BULK).await {
@@ -163,46 +160,29 @@ impl ArchiveContext {
             Err(e) => return Err(retry(&e)),
         };
 
+        // v1 announced every run; v2 only a match that entered the archive
+        // now. Announced before the timeline, so a run that yields on the
+        // timeline (and finds the match archived when it comes back) does
+        // not lose the event.
+        if got.x_cache != XCache::Archive {
+            announce(&self.hub, a.puuid.clone(), &a.match_id, &got.body);
+        }
+
         if a.fetch_timeline.unwrap_or(self.archive_timelines) {
             match fetch("match.timeline") {
-                Ok(req) => {
+                Ok(req) => match self.fetcher.fetch(req, BULK).await {
+                    Ok(_) => {}
+                    // No room for it now: come back for it, rather than
+                    // archive the match without the timeline asked for.
+                    Err(e) if e.limited_until.is_some() => return Err(retry(&e)),
                     // Timelines are large and optional: never fail the archive over one (v1).
-                    if let Err(e) = self.fetcher.fetch(req, BULK).await {
+                    Err(e) => {
                         tracing::warn!(match_id = %a.match_id, error = %e.api.message, "timeline fetch failed");
                     }
-                }
+                },
                 Err(e) => tracing::warn!(match_id = %a.match_id, error = %e.api.message, "timeline request"),
             }
         }
-
-        // v1 announced every run; v2 only a match that entered the archive now.
-        if got.x_cache == XCache::Archive {
-            return Ok(());
-        }
-        #[derive(Deserialize)]
-        struct Body {
-            metadata: Option<Metadata>,
-        }
-        #[derive(Deserialize)]
-        struct Metadata {
-            #[serde(default)]
-            participants: Vec<String>,
-        }
-        let participants = serde_json::from_slice::<Body>(&got.body)
-            .ok()
-            .and_then(|b| b.metadata)
-            .map(|m| m.participants)
-            .unwrap_or_default();
-        let patch = matches::extract(&got.body).ok().map(|m| m.patch);
-        events::publish(
-            &self.hub,
-            &Event::MatchArchived {
-                puuid: a.puuid,
-                match_id: a.match_id,
-                patch,
-                participants,
-            },
-        );
         Ok(())
     }
 
@@ -270,7 +250,7 @@ impl ArchiveContext {
                     ("queue", b.queue_id.map(|q| q.to_string())),
                 ],
             )
-            .map_err(|api| retry(&FetchError { api, x_cache: None }))?;
+            .map_err(|api| retry(&api.into()))?;
             // An error here is retried; the saved cursor makes the retry resume.
             let body = self.fetcher.fetch(req, BULK).await.map_err(|e| retry(&e))?.body;
             let ids: Vec<String> = serde_json::from_slice(&body).unwrap_or_default();
@@ -334,6 +314,34 @@ impl ArchiveContext {
         );
         Ok(())
     }
+}
+
+/// `match.archived` for a match that just entered the archive.
+fn announce(hub: &Hub, puuid: Option<String>, match_id: &str, body: &[u8]) {
+    #[derive(Deserialize)]
+    struct Body {
+        metadata: Option<Metadata>,
+    }
+    #[derive(Deserialize)]
+    struct Metadata {
+        #[serde(default)]
+        participants: Vec<String>,
+    }
+    let participants = serde_json::from_slice::<Body>(body)
+        .ok()
+        .and_then(|b| b.metadata)
+        .map(|m| m.participants)
+        .unwrap_or_default();
+    let patch = matches::extract(body).ok().map(|m| m.patch);
+    events::publish(
+        hub,
+        &Event::MatchArchived {
+            puuid,
+            match_id: match_id.to_string(),
+            patch,
+            participants,
+        },
+    );
 }
 
 pub struct ArchiveMatchHandler(pub Arc<ArchiveContext>);

@@ -27,13 +27,54 @@ pub trait Store: Send + Sync + 'static {
     /// Apply pending migrations. Idempotent.
     fn migrate(&self) -> BoxFuture<'_, Result<(), DbError>>;
 
-    /// Atomically move the highest-priority ready job to `running` and return it.
-    fn claim_job(&self, now_ms: i64) -> BoxFuture<'_, Result<Option<Job>, DbError>>;
+    /// Atomically move the best ready job outside `filter`'s blocked work to
+    /// `running` and return it (design/06 §Claiming).
+    fn claim_job(&self, now_ms: i64, filter: &ClaimFilter) -> BoxFuture<'_, Result<Option<Job>, DbError>>;
 }
 
-/// The job claim (design/06 §Claiming). `$1` binds the same value at every
-/// use on both engines; Postgres also locks the chosen row and skips rows
-/// another worker holds.
+/// What a claim may take (SCH-01): ready rows in `lanes` (the lanes whose app
+/// limit has room) or with no lane, except rows whose `(lane, method)` is in
+/// `methods`. Both are JSON arrays of strings; a pair is `"lane method"`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaimFilter {
+    pub lanes: String,
+    pub methods: String,
+}
+
+impl ClaimFilter {
+    /// Every lane open, no method blocked.
+    pub fn open() -> Self {
+        Self::new(crate::jobs::lanes::all(), std::iter::empty::<(&str, &str)>())
+    }
+
+    pub fn new<'a, 'b>(
+        lanes: impl IntoIterator<Item = &'a str>,
+        methods: impl IntoIterator<Item = (&'b str, &'b str)>,
+    ) -> Self {
+        let lanes: Vec<&str> = lanes.into_iter().collect();
+        let methods: Vec<String> = methods.into_iter().map(|(l, m)| format!("{l} {m}")).collect();
+        Self {
+            lanes: serde_json::to_string(&lanes).unwrap_or_else(|_| "[]".into()),
+            methods: serde_json::to_string(&methods).unwrap_or_else(|_| "[]".into()),
+        }
+    }
+}
+
+/// The job claim (design/06 §Claiming, SCH-01). `$1` is now, `$2` the open
+/// lanes and `$3` the blocked `"lane method"` pairs (see [`ClaimFilter`]);
+/// each binds the same value at every use on both engines.
+///
+/// `heads` is the best ready row of each open lane (in `CLAIM_ORDER`,
+/// skipping blocked methods) and of the lane-less rows: one index seek
+/// per lane, however long the queue. Of those, the claim takes the best
+/// priority band, then the lane with the fewest running jobs, then priority,
+/// `run_after` and id. So N workers cover N lanes before doubling up on one,
+/// and a blocked lane's work never holds up a free one's.
+///
+/// `+run_after` keeps SQLite on `jobs_lane_claim` without `ANALYZE`
+/// statistics. Postgres also locks the chosen row and skips rows another
+/// worker holds; its `json_each` reads differ, which P8-04 settles with the
+/// rest of the stub.
 pub fn claim_sql(engine: Engine) -> String {
     let lock = match engine {
         Engine::Sqlite => "",
@@ -41,13 +82,27 @@ pub fn claim_sql(engine: Engine) -> String {
     };
     format!(
         "UPDATE jobs SET state = 'running', claimed_at = $1, attempts = attempts + 1
-          WHERE id = (SELECT id FROM jobs
-                       WHERE state = 'pending' AND run_after <= $1
-                       ORDER BY {order}
-                       LIMIT 1{lock})
+          WHERE id = (
+            WITH heads(id) AS MATERIALIZED (
+              SELECT (SELECT h.id FROM jobs h
+                       WHERE h.state = 'pending' AND h.lane = lanes.value AND +h.run_after <= $1
+                         AND (h.method IS NULL OR h.lane || ' ' || h.method NOT IN (SELECT value FROM json_each($3)))
+                       ORDER BY {order} LIMIT 1)
+                FROM json_each($2) AS lanes
+              UNION ALL
+              SELECT (SELECT h.id FROM jobs h
+                       WHERE h.state = 'pending' AND h.lane IS NULL AND +h.run_after <= $1
+                       ORDER BY {order} LIMIT 1)
+            )
+            SELECT j.id FROM heads JOIN jobs j ON j.id = heads.id
+             ORDER BY {band},
+                      (SELECT count(*) FROM jobs r WHERE r.state = 'running' AND r.lane IS j.lane),
+                      j.priority, j.run_after, j.id
+             LIMIT 1{lock})
           RETURNING {}",
         scheduler::COLUMNS,
         order = scheduler::CLAIM_ORDER,
+        band = scheduler::CLAIM_BAND,
     )
 }
 
@@ -72,11 +127,16 @@ impl Store for SqliteStore {
         Box::pin(self.db.write(|c| super::migrate(c).map(drop)))
     }
 
-    fn claim_job(&self, now_ms: i64) -> BoxFuture<'_, Result<Option<Job>, DbError>> {
+    fn claim_job(&self, now_ms: i64, filter: &ClaimFilter) -> BoxFuture<'_, Result<Option<Job>, DbError>> {
+        let filter = filter.clone();
         Box::pin(self.db.write(move |c| {
-            c.query_row(&claim_sql(Engine::Sqlite), [now_ms], scheduler::row)
-                .optional()
-                .map_err(DbError::from)
+            c.query_row(
+                &claim_sql(Engine::Sqlite),
+                rusqlite::named_params! {"$1": now_ms, "$2": filter.lanes, "$3": filter.methods},
+                scheduler::row,
+            )
+            .optional()
+            .map_err(DbError::from)
         }))
     }
 }
@@ -112,7 +172,7 @@ impl Store for PgStore {
         self.unimplemented()
     }
 
-    fn claim_job(&self, _now_ms: i64) -> BoxFuture<'_, Result<Option<Job>, DbError>> {
+    fn claim_job(&self, _now_ms: i64, _filter: &ClaimFilter) -> BoxFuture<'_, Result<Option<Job>, DbError>> {
         self.unimplemented()
     }
 }
@@ -140,7 +200,8 @@ mod tests {
         let store: Box<dyn Store> = Box::new(SqliteStore::new(db.clone()));
         assert_eq!(store.engine(), Engine::Sqlite);
         store.migrate().await.unwrap();
-        assert!(store.claim_job(1_000).await.unwrap().is_none());
+        let open = ClaimFilter::open();
+        assert!(store.claim_job(1_000, &open).await.unwrap().is_none());
         db.write(|c| {
             c.execute(
                 "INSERT INTO jobs (id, kind, priority, payload, run_after)
@@ -152,10 +213,10 @@ mod tests {
         .await
         .unwrap();
         // 01B outranks 01A but is not ready until 2 000.
-        let job = store.claim_job(1_000).await.unwrap().unwrap();
+        let job = store.claim_job(1_000, &open).await.unwrap().unwrap();
         assert_eq!((job.id.as_str(), job.attempts), ("01A", 1));
-        assert!(store.claim_job(1_000).await.unwrap().is_none());
-        assert_eq!(store.claim_job(2_000).await.unwrap().unwrap().id, "01B");
+        assert!(store.claim_job(1_000, &open).await.unwrap().is_none());
+        assert_eq!(store.claim_job(2_000, &open).await.unwrap().unwrap().id, "01B");
     }
 
     #[cfg(feature = "postgres")]
@@ -170,7 +231,7 @@ mod tests {
             Err(DbError::PostgresUnimplemented)
         ));
         assert!(matches!(
-            store.claim_job(0).await,
+            store.claim_job(0, &ClaimFilter::open()).await,
             Err(DbError::PostgresUnimplemented)
         ));
     }

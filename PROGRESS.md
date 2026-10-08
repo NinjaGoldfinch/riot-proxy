@@ -223,7 +223,7 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 - [x] DEV-18 manual analytics recompute runs first: the route queues `aggregate:analytics` at priority 0 and lifts a rebuild already queued for the ladder, so the next free worker runs it on the matches archived so far (#106, design/06, ADR-090)
 
 ## SCH — scheduler fairness and an elastic pool (owner requests 2026-10-08/09)
-- [ ] SCH-01 rate-limit-aware job claims: one lane per limiter scope plus the job's main endpoint, claims skip a region only when its app limit is full (a capped endpoint blocks only jobs that use it), spread over free regions, rate-limited jobs yield their worker and re-queue without using an attempt (IMPLEMENTATION.md §Post-release — SCH)
+- [x] SCH-01 rate-limit-aware job claims: one lane per limiter scope plus the job's main endpoint, claims skip a region only when its app limit is full (a capped endpoint blocks only jobs that use it), spread over free regions, rate-limited jobs yield their worker and re-queue without using an attempt (IMPLEMENTATION.md §Post-release — SCH) (#PR, ADR-089)
 - [ ] SCH-02 elastic worker pool: base `JOB_CONCURRENCY` workers, extra workers spun up while all are busy up to `JOB_MAX_WORKERS`, idle extras exit, `JOB_MAX_PER_GROUP` caps the workers one crawl or one player can hold (IMPLEMENTATION.md §Post-release — SCH)
 
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)

@@ -489,4 +489,70 @@ impl Limiter {
     pub fn interactive_waiters(&self, scope: &str) -> usize {
         self.lock().get(scope).map_or(0, |e| e.interactive_waiters)
     }
+
+    /// Where a bulk acquire would have to wait right now, and until when
+    /// (SCH-01, design/05 §Priorities): the job claim skips that work rather
+    /// than hand it to a worker that would only wait.
+    ///
+    /// A scope is blocked when its app limit is: frozen, at
+    /// `BULK_USAGE_CEILING`, out of tokens, or held for a waiting interactive
+    /// caller. A method at its ceiling blocks only that method on that scope.
+    /// Scopes never touched are free.
+    pub fn bulk_blocked(&self) -> BulkBlocked {
+        let now = Instant::now();
+        let mut out = BulkBlocked::default();
+        let mut scopes = self.lock();
+        for (scope, entry) in scopes.iter_mut() {
+            let ceiling =
+                |w: &mut Window| w.until_at_most(max_under_ceiling(w.limit, self.bulk_ceiling), now);
+            let mut until = entry.frozen_until.filter(|&u| u > now).unwrap_or(now);
+            until = entry
+                .app
+                .windows
+                .iter_mut()
+                .map(ceiling)
+                .fold(until, Instant::max);
+            if entry.interactive_waiters > 0 {
+                // Their leaving is not something the claim can wait on; look again soon.
+                until = until.max(now + INTERACTIVE_RECHECK);
+            }
+            if until > now {
+                out.scopes.push((scope.clone(), until));
+                continue;
+            }
+            for (method, state) in &mut entry.methods {
+                let until = state.windows.iter_mut().map(ceiling).fold(now, Instant::max);
+                if until > now {
+                    out.methods.push((scope.clone(), method.clone(), until));
+                }
+            }
+        }
+        out.scopes.sort();
+        out.methods.sort();
+        out
+    }
+}
+
+/// How soon a claim looks again at a scope held for interactive callers.
+const INTERACTIVE_RECHECK: Duration = Duration::from_millis(100);
+
+/// What [`Limiter::bulk_blocked`] found: scopes, and (scope, method) pairs,
+/// with the instant each frees up.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BulkBlocked {
+    pub scopes: Vec<(String, Instant)>,
+    pub methods: Vec<(String, String, Instant)>,
+}
+
+impl BulkBlocked {
+    /// The first instant anything blocked frees up.
+    pub fn earliest(&self) -> Option<Instant> {
+        let scopes = self.scopes.iter().map(|(_, at)| *at);
+        let methods = self.methods.iter().map(|(_, _, at)| *at);
+        scopes.chain(methods).min()
+    }
+
+    pub fn scope_blocked(&self, scope: &str) -> bool {
+        self.scopes.iter().any(|(s, _)| s == scope)
+    }
 }

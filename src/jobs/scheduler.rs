@@ -5,11 +5,16 @@
 //! - **Enqueue** is `INSERT OR IGNORE` against `UNIQUE(kind, dedupe_key)` while
 //!   pending or running, so queueing work that is already queued is a no-op.
 //! - **Claim** is one `UPDATE … RETURNING` on the single writer, so no two
-//!   workers can take the same row.
-//! - **Wake**: `enqueue` notifies an idle worker; idle workers also re-check
-//!   every second.
+//!   workers can take the same row. It skips work the rate limiter has no
+//!   bulk room for and spreads workers over lanes (SCH-01, [`claim_sql`]).
+//! - **Wake**: `enqueue` notifies an idle worker; an idle worker otherwise
+//!   sleeps until the next delayed row is due or a blocked lane frees up.
 //! - **Backoff**: a retryable failure goes back to `pending` after
 //!   `2^attempts × 30 s ± 20 %`; the fifth failure is final (`failed`).
+//! - **Yield**: a job the limiter would make wait goes back to `pending`
+//!   until the limiter has room, without using an attempt.
+//!
+//! [`claim_sql`]: crate::db::store::claim_sql
 //! - **Restart**: rows left `running` by a process that died are reset to
 //!   `pending` on boot ([`Scheduler::recover`]), so the work resumes.
 
@@ -23,16 +28,21 @@ use tokio::sync::{Notify, watch};
 use tokio::task::JoinSet;
 
 use crate::clock::Clock;
-use crate::db::store::{SqliteStore, Store};
+use crate::db::store::{ClaimFilter, SqliteStore, Store};
 use crate::db::{Db, DbError};
+use crate::fetcher::FetchError;
 use crate::metrics::{JOBS_PENDING, JOBS_TOTAL};
+use crate::riot::limiter::Limiter;
 
 /// design/06: `failed` after five attempts.
 pub const MAX_ATTEMPTS: u32 = 5;
 /// design/06: backoff base, `2^attempts × 30 s`.
 pub const BACKOFF_BASE: Duration = Duration::from_secs(30);
-/// design/06: idle workers re-check at least this often.
+/// How long an idle worker sleeps when nothing is delayed or blocked (and
+/// after a failed claim). `enqueue` wakes it sooner.
 pub const IDLE_POLL: Duration = Duration::from_secs(1);
+/// The shortest idle sleep, so a wake time already past cannot spin a worker.
+const MIN_IDLE: Duration = Duration::from_millis(10);
 /// How often `jobs_pending{kind}` is refreshed.
 const PENDING_SAMPLE: Duration = Duration::from_secs(15);
 
@@ -108,6 +118,34 @@ pub enum JobError {
     /// Retrying cannot help (bad payload, unknown kind).
     #[error("{0}")]
     Fail(String),
+    /// The rate limiter has no room until `retry_at` (unix ms): give the
+    /// worker back and run again then (SCH-01). Not a failure and not an
+    /// attempt. `payload`, when set, replaces the job's, so a job can resume
+    /// where it stopped.
+    #[error("rate limited until {retry_at}")]
+    Yield { retry_at: i64, payload: Option<String> },
+}
+
+impl JobError {
+    /// A fetch's failure as a job outcome: the limiter's budget running out
+    /// yields; anything else is retried with backoff.
+    pub fn from_fetch(e: &FetchError) -> Self {
+        match e.limited_until {
+            Some(at) => Self::Yield {
+                retry_at: Clock::now().to_unix_ms(at),
+                payload: None,
+            },
+            None => Self::Retry(format!("{}: {}", e.api.code.as_str(), e.api.message)),
+        }
+    }
+
+    /// Yield the worker now and come back after other ready work had its turn.
+    pub fn take_turns() -> Self {
+        Self::Yield {
+            retry_at: Clock::now().unix_ms,
+            payload: None,
+        }
+    }
 }
 
 /// A job handler, registered per kind. Handlers must be idempotent: a job can
@@ -184,16 +222,19 @@ pub fn cancel_pending_on(
 /// handler can fan out in the same write that records its own progress.
 pub fn enqueue_on(conn: &Connection, job: &NewJob, now_ms: i64) -> rusqlite::Result<Enqueued> {
     let id = next_id();
+    let lane = crate::jobs::lanes::of(job.kind, &job.payload);
     let n = conn.execute(
-        "INSERT OR IGNORE INTO jobs (id, kind, dedupe_key, priority, payload, run_after)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT OR IGNORE INTO jobs (id, kind, dedupe_key, priority, payload, run_after, lane, method)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
             id,
             job.kind,
             job.dedupe_key,
             job.priority,
             job.payload.to_string(),
-            job.run_after.unwrap_or(now_ms)
+            job.run_after.unwrap_or(now_ms),
+            lane.as_ref().map(|l| l.lane),
+            lane.as_ref().map(|l| l.method),
         ],
     )?;
     if n > 0 {
@@ -374,9 +415,17 @@ pub struct QueueView {
     pub next_delayed_at: Option<i64>,
 }
 
-/// The order `claim` takes ready jobs in (design/06 §Claiming). Kept beside the
-/// views that mirror it, so "up next" means what the workers will do.
+/// The priority order inside a lane (design/06 §Claiming). Across lanes the
+/// claim also skips blocked work and spreads workers (SCH-01), so the views
+/// that list "up next" in this order show the order of work, not exactly
+/// which job a worker takes next.
 pub(crate) const CLAIM_ORDER: &str = "priority ASC, run_after ASC, id ASC";
+
+/// design/06's priority bands as a sort key: 0–99, 100–9 999, then each
+/// 10 000 (polls, backfill and ladder, maintenance). Inside the best band a
+/// claim prefers the least busy lane; across bands priority wins.
+pub(crate) const CLAIM_BAND: &str = "CASE WHEN j.priority < 100 THEN 0 WHEN j.priority < 10000 THEN 100 \
+     ELSE j.priority - j.priority % 10000 END";
 
 impl Queue {
     /// Running jobs and the next `limit` a worker would claim (DEV-13).
@@ -583,6 +632,9 @@ pub struct Scheduler {
     db: Db,
     notify: Arc<Notify>,
     handlers: Arc<HashMap<&'static str, Arc<dyn Handler>>>,
+    /// The limiter the handlers' fetches go through. Without one every lane
+    /// counts as open.
+    limiter: Option<Arc<Limiter>>,
 }
 
 impl std::fmt::Debug for Scheduler {
@@ -622,7 +674,15 @@ impl Scheduler {
             notify: Arc::clone(&queue.notify),
             queue,
             handlers: Arc::new(handlers.0),
+            limiter: None,
         }
+    }
+
+    /// Claim around what `limiter` has no bulk room for (SCH-01).
+    #[must_use]
+    pub fn with_limiter(mut self, limiter: Arc<Limiter>) -> Self {
+        self.limiter = Some(limiter);
+        self
     }
 
     pub fn queue(&self) -> &Queue {
@@ -662,44 +722,145 @@ impl Scheduler {
             .await
     }
 
-    /// Claim the highest-priority ready job (design/06 §Claiming), through
-    /// the engine seam.
+    /// Claim the best ready job the limiter has room for (design/06
+    /// §Claiming), through the engine seam.
     pub async fn claim(&self, now_ms: i64) -> Result<Option<Job>, DbError> {
-        SqliteStore::new(self.db.clone()).claim_job(now_ms).await
+        let filter = match &self.limiter {
+            Some(limiter) => {
+                let blocked = limiter.bulk_blocked();
+                let methods = blocked.methods.iter().map(|(l, m, _)| (l.as_str(), m.as_str()));
+                ClaimFilter::new(
+                    crate::jobs::lanes::all().filter(|l| !blocked.scope_blocked(l)),
+                    methods,
+                )
+            }
+            None => ClaimFilter::open(),
+        };
+        SqliteStore::new(self.db.clone()).claim_job(now_ms, &filter).await
     }
 
-    /// Record a run's outcome: `done`, back to `pending` with backoff, or `failed`.
+    /// How long an idle worker sleeps: until the next delayed row is due or
+    /// the first blocked lane or method frees up, whichever is sooner
+    /// (SCH-01). With neither, [`IDLE_POLL`].
+    pub async fn idle_for(&self) -> Duration {
+        let clock = Clock::now();
+        let freed = self
+            .limiter
+            .as_ref()
+            .and_then(|l| l.bulk_blocked().earliest())
+            .map(|at| at.saturating_duration_since(clock.instant));
+        let now_ms = clock.unix_ms;
+        let due = self
+            .db
+            .read(move |c| {
+                c.query_row(
+                    "SELECT min(run_after) FROM jobs WHERE state = 'pending' AND run_after > ?1",
+                    [now_ms],
+                    |r| r.get::<_, Option<i64>>(0),
+                )
+                .map_err(DbError::from)
+            })
+            .await
+            .ok()
+            .flatten()
+            .map(|at| Duration::from_millis(u64::try_from(at - now_ms).unwrap_or(0)));
+        match (freed, due) {
+            (Some(a), Some(b)) => a.min(b),
+            (Some(a), None) => a,
+            (None, Some(b)) => b,
+            (None, None) => IDLE_POLL,
+        }
+        .max(MIN_IDLE)
+    }
+
+    /// Boot: give pending rows queued before lanes existed (V0007) their
+    /// lane, so the claim can spread and skip them too. Returns how many.
+    pub async fn assign_lanes(&self) -> Result<usize, DbError> {
+        self.db
+            .write(|c| {
+                let tx = c.transaction()?;
+                let rows: Vec<(String, String, String)> = {
+                    let mut s = tx.prepare(
+                        "SELECT id, kind, payload FROM jobs WHERE state = 'pending' AND lane IS NULL",
+                    )?;
+                    let rows = s.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+                    rows.collect::<Result<_, _>>()?
+                };
+                let mut n = 0;
+                {
+                    let mut update = tx.prepare("UPDATE jobs SET lane = ?2, method = ?3 WHERE id = ?1")?;
+                    for (id, kind, payload) in rows {
+                        let payload = serde_json::from_str(&payload).unwrap_or_default();
+                        if let Some(lane) = crate::jobs::lanes::of(&kind, &payload) {
+                            n += update.execute(params![id, lane.lane, lane.method])?;
+                        }
+                    }
+                }
+                tx.commit()?;
+                Ok(n)
+            })
+            .await
+    }
+
+    /// Record a run's outcome: `done`, back to `pending` with backoff, or
+    /// `failed`. A yield goes back to `pending` as if never claimed (SCH-01):
+    /// the attempt is returned, the last real failure stays on the row, and
+    /// it is not counted in `jobs_total`.
     pub async fn finish(
         &self,
         job: &Job,
         outcome: &Result<(), JobError>,
         now_ms: i64,
     ) -> Result<(), DbError> {
-        let status = if outcome.is_ok() { "completed" } else { "failed" };
-        metrics::counter!(JOBS_TOTAL, "job" => job.kind.clone(), "status" => status).increment(1);
         let id = job.id.clone();
-        let (state, run_after, error): (&str, Option<i64>, Option<String>) = match outcome {
-            Ok(()) => ("done", None, None),
+        let next = match outcome {
+            Ok(()) => Next::Done,
+            Err(JobError::Yield { retry_at, payload }) => Next::Yield(*retry_at, payload.clone()),
             Err(JobError::Retry(e)) if job.attempts < MAX_ATTEMPTS => {
                 let wait = backoff(job.attempts, random_jitter());
                 let at = now_ms.saturating_add(i64::try_from(wait.as_millis()).unwrap_or(i64::MAX));
-                ("pending", Some(at), Some(e.clone()))
+                Next::Backoff(at, e.clone())
             }
-            Err(JobError::Retry(e) | JobError::Fail(e)) => ("failed", None, Some(e.clone())),
+            Err(JobError::Retry(e) | JobError::Fail(e)) => Next::Failed(e.clone()),
         };
-        if let Some(e) = &error {
-            tracing::warn!(job = %job.kind, id = %job.id, attempts = job.attempts, next = state, error = %e, "job failed");
+        match &next {
+            Next::Done => {
+                metrics::counter!(JOBS_TOTAL, "job" => job.kind.clone(), "status" => "completed")
+                    .increment(1);
+            }
+            Next::Yield(at, _) => {
+                tracing::debug!(job = %job.kind, id = %job.id, retry_at = at, "job yielded to the rate limiter");
+            }
+            Next::Backoff(_, e) | Next::Failed(e) => {
+                metrics::counter!(JOBS_TOTAL, "job" => job.kind.clone(), "status" => "failed").increment(1);
+                let state = if matches!(next, Next::Failed(_)) {
+                    "failed"
+                } else {
+                    "pending"
+                };
+                tracing::warn!(job = %job.kind, id = %job.id, attempts = job.attempts, next = state, error = %e, "job failed");
+            }
         }
         self.db
             .write(move |c| {
-                match run_after {
-                    Some(at) => c.execute(
-                        "UPDATE jobs SET state = 'pending', run_after = ?2, claimed_at = NULL, error = ?3 WHERE id = ?1",
-                        params![id, at, error],
+                match next {
+                    Next::Done => c.execute(
+                        "UPDATE jobs SET state = 'done', finished_at = ?2, error = NULL WHERE id = ?1",
+                        params![id, now_ms],
                     ),
-                    None => c.execute(
-                        "UPDATE jobs SET state = ?2, finished_at = ?3, error = ?4 WHERE id = ?1",
-                        params![id, state, now_ms, error],
+                    Next::Yield(at, payload) => c.execute(
+                        "UPDATE jobs SET state = 'pending', run_after = ?2, claimed_at = NULL,
+                                attempts = max(attempts - 1, 0), payload = coalesce(?3, payload)
+                          WHERE id = ?1",
+                        params![id, at, payload],
+                    ),
+                    Next::Backoff(at, e) => c.execute(
+                        "UPDATE jobs SET state = 'pending', run_after = ?2, claimed_at = NULL, error = ?3 WHERE id = ?1",
+                        params![id, at, e],
+                    ),
+                    Next::Failed(e) => c.execute(
+                        "UPDATE jobs SET state = 'failed', finished_at = ?2, error = ?3 WHERE id = ?1",
+                        params![id, now_ms, e],
                     ),
                 }
                 .map(|_| ())
@@ -752,9 +913,15 @@ impl Scheduler {
                     match me.claim(Clock::now().unix_ms).await {
                         Ok(Some(job)) => me.run(job).await,
                         Ok(None) => {
+                            // Armed before the sleep is worked out, so an
+                            // enqueue meanwhile still wakes this worker.
+                            let woken = me.notify.notified();
+                            tokio::pin!(woken);
+                            woken.as_mut().enable();
+                            let idle = me.idle_for().await;
                             tokio::select! {
-                                () = me.notify.notified() => {}
-                                () = tokio::time::sleep(IDLE_POLL) => {}
+                                () = woken => {}
+                                () = tokio::time::sleep(idle) => {}
                                 _ = stopped.changed() => {}
                             }
                         }
@@ -788,6 +955,16 @@ impl Scheduler {
         });
         Workers { stop, set }
     }
+}
+
+/// Where a finished run leaves its row.
+enum Next {
+    Done,
+    /// `run_after`, and the payload to resume with.
+    Yield(i64, Option<String>),
+    /// `run_after`, and the error.
+    Backoff(i64, String),
+    Failed(String),
 }
 
 struct AbortOnDrop<T>(tokio::task::JoinHandle<T>);

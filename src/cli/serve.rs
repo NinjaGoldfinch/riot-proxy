@@ -108,6 +108,7 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         scope: KeyScope::from_key(&config.riot_api_key),
         policy,
         interactive_budget: Duration::from_millis(config.client_wait_budget_ms),
+        job_budget: Duration::from_millis(config.job_yield_budget_ms),
         swr: config.stale_while_revalidate,
     });
 
@@ -198,11 +199,17 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
             &analytics,
             &maintenance,
         ),
-    );
+    )
+    .with_limiter(Arc::clone(&limiter));
     match scheduler.recover().await {
         Ok(0) => {}
         Ok(n) => tracing::info!(jobs = n, "re-queued jobs a previous process left running"),
         Err(e) => tracing::warn!(error = %e, "could not re-queue interrupted jobs"),
+    }
+    match scheduler.assign_lanes().await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(jobs = n, "gave queued jobs their rate-limit lane"),
+        Err(e) => tracing::warn!(error = %e, "could not give queued jobs their rate-limit lane"),
     }
     // Facts an older version derived are swept once, in the background.
     match crate::jobs::analytics::reextract_if_stale(&queue).await {

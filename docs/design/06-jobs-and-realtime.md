@@ -33,22 +33,41 @@ flowchart LR
 
 ### Claiming
 
-SQLite's single-writer rule makes this atomic without `SELECT … FOR UPDATE SKIP LOCKED`:
+SQLite's single-writer rule makes the claim atomic without `SELECT … FOR UPDATE SKIP LOCKED`. It is one `UPDATE … RETURNING` (`claim_sql`), and since SCH-01 (ADR-089) it is rate-limit aware:
+
+- **Lanes.** Every job that calls Riot carries a `lane`, the limiter scope its requests hit (`Target::scope()`: the platform for league/spectator, the region for match-v5), and a `method`, the endpoint it mainly calls. Both are derived from the kind and payload at enqueue (`jobs::lanes::of`), so every producer agrees: `ladder:walk` → (platform, `league.entriesByTier`), `ladder:apex` → (platform, the apex league), `ladder:collect` / `backfill:player` / `poll:matches` → (region, `match.idsByPuuid`), `archive:match` → (region of the match id, `match.byId`), `poll:live` → (platform, `spectator.activeGame`), `poll:rank` → (platform, `league.entriesByPuuid`). Kinds that make no Riot call have neither and can always be claimed. Rows queued before V0007 get theirs at boot (`assign_lanes`).
+- **Skip blocked work.** Before claiming, the worker asks the limiter what has no bulk room now (`Limiter::bulk_blocked`). A lane is blocked when its *app* limit is: frozen after a typed 429, at `BULK_USAGE_CEILING`, out of tokens, or held for a waiting interactive caller. A method at its ceiling blocks only that `(lane, method)` pair: other endpoints on that lane can still be claimed. The claim excludes both, so a blocked lane's work never holds a worker, and a free lane's lower-band job beats a blocked lane's higher-band one.
+- **Bands, then spread.** Among what is claimable, the best priority band wins (0–99, 100–9 999, then each 10 000; see below). Inside it, the lane with the fewest running jobs wins, then `priority, run_after, id` (`CLAIM_ORDER`). So N workers cover N lanes before doubling up on one, and three crawls queued one after another all start at once, along with a finished crawl's `archive:match` downloads in another region.
 
 ```sql
-UPDATE jobs
-   SET state = 'running', claimed_at = ?now, attempts = attempts + 1
+UPDATE jobs SET state = 'running', claimed_at = $1, attempts = attempts + 1
  WHERE id = (
-   SELECT id FROM jobs
-    WHERE state = 'pending' AND run_after <= ?now
-    ORDER BY priority ASC, run_after ASC
+   WITH heads(id) AS MATERIALIZED (
+     -- each open lane's best ready row, skipping blocked methods
+     SELECT (SELECT h.id FROM jobs h
+              WHERE h.state = 'pending' AND h.lane = lanes.value AND +h.run_after <= $1
+                AND (h.method IS NULL OR h.lane || ' ' || h.method NOT IN (SELECT value FROM json_each($3)))
+              ORDER BY priority, run_after, id LIMIT 1)
+       FROM json_each($2) AS lanes
+     UNION ALL
+     -- and the best row with no lane
+     SELECT (SELECT h.id FROM jobs h WHERE h.state = 'pending' AND h.lane IS NULL AND +h.run_after <= $1
+              ORDER BY priority, run_after, id LIMIT 1))
+   SELECT j.id FROM heads JOIN jobs j ON j.id = heads.id
+    ORDER BY band(j.priority),
+             (SELECT count(*) FROM jobs r WHERE r.state = 'running' AND r.lane IS j.lane),
+             j.priority, j.run_after, j.id
     LIMIT 1)
 RETURNING *;
 ```
 
-The Postgres variant appends `FOR UPDATE SKIP LOCKED` to the subquery; that is the one engine-specific statement in the codebase.
+`$2` is every lane (each platform and region) less the blocked ones, and `$3` the blocked `"lane method"` pairs. One index seek per lane (`jobs_lane_claim`) keeps the claim at about 0.1 ms on a 75 000-row queue, where sorting every ready row took about 60 ms on the single writer. `+run_after` keeps SQLite on that index without `ANALYZE` statistics. The Postgres variant appends `FOR UPDATE SKIP LOCKED` to the subquery; its `json_each` reads are settled with the rest of the stub (P8-04).
 
-To avoid polling the table at high frequency, `enqueue()` also `notify_one()`s the claim loop; idle workers sleep on the `Notify` with a 1 s fallback timeout.
+**Yield instead of waiting.** A job's fetch (`FetchOptions::JOB`) waits at most `JOB_YIELD_BUDGET_MS` (default 1 000) for the limiter, for the app limit or one method's. If it would wait longer, the fetch fails with `limited_until`, and the handler returns `JobError::Yield { retry_at }`. The scheduler puts the row back to `pending` with `run_after = retry_at`, gives the attempt back, keeps the last real error, and counts nothing in `jobs_total`. A 429 that Riot actually sent is still a failure with backoff. Handlers resume where they stopped: a walk from its page cursor, `ladder:collect` re-queued with only the players it has not done (the yield's `payload` replaces the job's), `backfill:player` from `backfill_state`, `archive:match` from the archive (the match is announced before its timeline is fetched, so a timeline yield loses nothing). The other kinds are one request.
+
+**Take turns.** A walk re-queues itself every `CANCEL_CHECK_PAGES` (10) pages, so higher-priority work queued behind it gets a worker. This takes the place of a per-kind concurrency cap.
+
+**Wake.** `enqueue()` also `notify_one()`s the claim loop. A worker that found nothing claimable sleeps until the next delayed row is due or the first blocked lane or method frees up, whichever is sooner (`idle_for`), or 1 s when there is neither. Single process only (`ROLE=all`, the only role SQLite allows), where the limiter and the workers share memory.
 
 ### Priority
 
@@ -72,11 +91,11 @@ Handlers are idempotent as in v1: `archive:match` upserts; polls diff against st
 
 ### Backoff and failure
 
-`attempts < 5` → `run_after = now + 2^attempts × 30 s ± 20 %`, state back to `pending`. Otherwise `failed` with `error`. `/v1/admin/jobs` lists and retries failed rows; `maintenance` deletes `done` rows older than 7 days.
+`attempts < 5` → `run_after = now + 2^attempts × 30 s ± 20 %`, state back to `pending`. A yield to the rate limiter (§Claiming) is not a failure and uses no attempt. Otherwise `failed` with `error`. `/v1/admin/jobs` lists and retries failed rows; `maintenance` deletes `done` rows older than 7 days.
 
 ### Activity views
 
-Two admin reads show the queue as the workers see it (DEV-13, ADR-087). Both use the same claim order as `claim` (`CLAIM_ORDER`: `priority, run_after, id`), so "up next" is what the workers will actually do next.
+Two admin reads show the queue as the workers see it (DEV-13, ADR-087). Both list ready jobs in `CLAIM_ORDER` (`priority, run_after, id`), the order inside a lane. Across lanes a claim also skips work the limiter has no room for and spreads workers (§Claiming), so "up next" is the order of the work, not exactly which job the next worker takes.
 
 - `GET /v1/admin/jobs/queue?limit=` — the running jobs (oldest claim first), the next `limit` ready jobs (1–100, default 15), how many are ready and how many are waiting out a backoff, and when the soonest delayed job comes due.
 - `GET /v1/admin/ladder/crawls/{id}` — one crawl's progress. For each stage (`enumerate` in legs, `collect` in 25-player batches, `archive` in ids handed to the archive queue) it gives `done`/`total`, a state (`done`, `now`, `waiting`, or `stopped`/`skipped` for a crawl that ended early), and a pace and ETA over the last ten minutes. It also lists the legs in flight (with each walk's next page), the crawl's running, next and failed jobs, and how many ready jobs of any kind a worker will claim before the crawl's next one. Last, the platform's crawl-found match downloads. Once handed off, an `archive:match` names only its match, so those counts cover every crawl on the platform.
@@ -87,7 +106,7 @@ The tab's folded Analytics recompute panel has a **Recompute now** button. It pi
 
 ### Bulk limiter priority
 
-Every handler that hits Riot calls the fetcher with `Priority::Bulk`, so the interactive-first and ceiling guarantees in [05](05-rate-limiter.md) apply automatically. The concurrency cap (`JOB_CONCURRENCY`) bounds how many bulk waiters can be parked.
+Every handler that hits Riot calls the fetcher with `FetchOptions::JOB` (`Priority::Bulk`), so the interactive-first and ceiling guarantees in [05](05-rate-limiter.md) apply automatically. A job waits at most `JOB_YIELD_BUDGET_MS` for a token and then yields its worker (§Claiming), so `JOB_CONCURRENCY` bounds how many jobs run, not how many sit parked in `acquire`.
 
 ## Job catalogue (parity with v1)
 

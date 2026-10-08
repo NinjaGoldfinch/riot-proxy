@@ -5,6 +5,7 @@ pub mod analytics;
 pub mod archive;
 pub mod ddragon;
 pub mod ladder;
+pub mod lanes;
 pub mod maintenance;
 pub mod names;
 pub mod poll;
