@@ -211,6 +211,7 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 - [ ] DEV-07 showcase player view (profile, ranks, live game, mastery, champion pool, matches)
 - [ ] DEV-08 showcase match detail (scoreboard, gold graph) and champion view (rates, matchups)
 - [ ] DEV-09 Reset tab in `/dev`: `GET`/`POST /dev/reset` (admin, dev only) wipes all fetched data and keeps consumers and the limiter checkpoint (ADR-077)
+- [ ] DEV-10 page bar across `/dashboard` and `/dev` (Dashboard · Dev explorer · API docs · Metrics), rendered from config so it links only to pages that exist (ADR-078)
 
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
