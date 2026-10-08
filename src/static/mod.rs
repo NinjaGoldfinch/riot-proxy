@@ -3,7 +3,8 @@
 //! (`jobs::ddragon`) writes it; `/v1/static/*` and `/ddragon/*` serve it.
 //!
 //! Data Dragon is not rate limited and never goes through the limiter (v1
-//! §5.6). Images stay on Riot's CDN (v1 §1 non-goals).
+//! §5.6). Images are mirrored on first request, not by the sync (`images`,
+//! ADR-076; v1 left them on Riot's CDN).
 //!
 //! Layout: `DDRAGON_DIR/<version>/<file>.json` per patch, and
 //! `DDRAGON_DIR/meta/queues.json` for the one un-versioned file. A patch
@@ -11,6 +12,7 @@
 //! writes it last, so a sync that died half way is retried, not served.
 
 pub mod champions;
+pub mod images;
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -87,6 +89,10 @@ pub struct Mirror {
     cdn: Cdn,
     current: RwLock<Option<String>>,
     champions: Mutex<Option<ChampionNames>>,
+    /// The image file names each (patch, kind) allows (`images`).
+    image_names: images::Names,
+    /// One fill per image path at a time (`images`).
+    filling: images::Filling,
     /// One sync at a time: the tick and an admin `force` can overlap.
     pub(crate) syncing: tokio::sync::Mutex<()>,
 }
@@ -98,6 +104,8 @@ impl Mirror {
             cdn,
             current: RwLock::new(None),
             champions: Mutex::new(None),
+            image_names: Mutex::default(),
+            filling: tokio::sync::Mutex::default(),
             syncing: tokio::sync::Mutex::new(()),
         }
     }

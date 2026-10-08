@@ -65,7 +65,7 @@ pub fn router(state: AppState, metrics: PrometheusHandle) -> Router {
     let doc = routes::docs::finish(doc);
     let openapi_json: Arc<str> = doc.to_pretty_json().unwrap_or_else(|_| "{}".into()).into();
     let ui = routes::ui::router(&state.config, openapi_json);
-    let ddragon = routes::statics::files(state.ddragon.dir());
+    let ddragon = routes::statics::files(Arc::clone(&state.ddragon));
     let mut router = api
         .with_state(state)
         .merge(telemetry::metrics_router(metrics))

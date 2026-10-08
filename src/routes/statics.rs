@@ -4,12 +4,13 @@
 //! None of these calls Riot's API or touches the limiter.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::sync::Arc;
 
 use axum::Router;
 use axum::extract::{Path as UrlPath, Query, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use axum::routing::get;
 use tower_http::services::ServeDir;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
@@ -17,7 +18,8 @@ use utoipa_axum::routes;
 use crate::app::AppState;
 use crate::http::{ApiError, validate};
 use crate::routes::passthrough::{JSON, LocalErrors};
-use crate::r#static::{DATA_FILES, FILE_ALIASES, VERSIONS_FILE, resolve_file};
+use crate::r#static::images::ImageError;
+use crate::r#static::{DATA_FILES, FILE_ALIASES, Mirror, VERSIONS_FILE, resolve_file};
 
 /// v1's Caddyfile header for `/ddragon/*`: a patch's files never change.
 pub const IMMUTABLE: &str = "public, max-age=604800, immutable";
@@ -29,12 +31,18 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(static_file))
 }
 
-/// `/ddragon/<version>/<file>.json` straight from `dir`. Only a found file is
-/// marked immutable: a 404 for a patch not synced yet must not be cached for
-/// a week.
-pub fn files(dir: &Path) -> Router {
+/// `/ddragon/<version>/<file>.json` straight from the mirror's directory, and
+/// `/ddragon/<version>/img/<kind>/<file>` filled on first request
+/// (`static::images`). Only a found file is marked immutable: a 404 for a
+/// patch not synced yet must not be cached for a week.
+pub fn files(mirror: Arc<Mirror>) -> Router {
+    // Only what is not on disk yet reaches the fill route.
+    let fill = Router::new()
+        .route("/{version}/img/{kind}/{file}", get(image))
+        .fallback(|| async { StatusCode::NOT_FOUND })
+        .with_state(Arc::clone(&mirror));
     Router::new()
-        .nest_service("/ddragon", ServeDir::new(dir))
+        .nest_service("/ddragon", ServeDir::new(mirror.dir()).fallback(fill))
         .layer(axum::middleware::map_response(|mut res: Response| async move {
             if res.status().is_success() {
                 res.headers_mut()
@@ -42,6 +50,21 @@ pub fn files(dir: &Path) -> Router {
             }
             res
         }))
+}
+
+async fn image(
+    State(mirror): State<Arc<Mirror>>,
+    UrlPath((version, kind, file)): UrlPath<(String, String, String)>,
+) -> Response {
+    match mirror.image(&version, &kind, &file).await {
+        Ok(bytes) => (StatusCode::OK, [(header::CONTENT_TYPE, "image/png")], bytes).into_response(),
+        // Bare, like ServeDir's 404 for the JSON files beside it.
+        Err(ImageError::NotFound) => StatusCode::NOT_FOUND.into_response(),
+        Err(ImageError::Upstream(e)) => {
+            tracing::warn!(error = %e, %version, %kind, %file, "Data Dragon image unavailable");
+            StatusCode::BAD_GATEWAY.into_response()
+        }
+    }
 }
 
 /// A local JSON document with v1's `applyCacheHeaders(reply, state, 0)`.

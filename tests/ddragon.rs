@@ -1,6 +1,7 @@
 //! Data Dragon (plan P7-01): `ddragon:sync` against a wiremock CDN (ported from
 //! v1 `test/ddragon-mirror.test.ts`), the `/v1/static/*` routes, the raw files
-//! at `/ddragon/*`, and `POST /v1/admin/ddragon/sync`.
+//! at `/ddragon/*` (images filled on first request, DEV-05), and
+//! `POST /v1/admin/ddragon/sync`.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;
@@ -38,7 +39,12 @@ fn data_path(version: &str, file: &str) -> String {
 fn data_body(version: &str, file: &str) -> Value {
     if file == "champion" {
         return json!({"type": "champion", "version": version, "data": {
-            "Ahri": {"key": "103", "name": "Ahri"}, "Garen": {"key": "86", "name": "Garen"}}});
+            "Ahri": {"key": "103", "name": "Ahri", "image": {"full": "Ahri.png"}},
+            "Garen": {"key": "86", "name": "Garen", "image": {"full": "Garen.png"}}}});
+    }
+    if file == "summoner" {
+        return json!({"type": "summoner", "version": version, "data": {
+            "SummonerFlash": {"key": "4", "image": {"full": "SummonerFlash.png"}}}});
     }
     json!({"file": file, "version": version})
 }
@@ -472,6 +478,141 @@ async fn raw_files_are_served_immutable_without_a_key() {
     // ServeDir resolves inside the mirror only.
     let out = e.call("GET", "/ddragon/../riot-proxy.db", None, None).await;
     assert_ne!(out.status, StatusCode::OK);
+}
+
+// ── /ddragon/*/img/* ────────────────────────────────────────────────────────
+
+/// A PNG as far as the mirror checks: the signature, then anything.
+const PNG: &[u8] = b"\x89PNG\r\n\x1a\nfake-image";
+
+fn img_path(version: &str, kind: &str, file: &str) -> String {
+    format!("/cdn/{version}/img/{kind}/{file}")
+}
+
+impl Env {
+    async fn image(&self, version: &str, kind: &str, file: &str, body: &[u8]) {
+        Mock::given(method("GET"))
+            .and(path(img_path(version, kind, file)))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(body.to_vec()))
+            .mount(&self.server)
+            .await;
+    }
+
+    async fn image_fetches(&self) -> usize {
+        self.requested()
+            .await
+            .iter()
+            .filter(|p| p.contains("/img/"))
+            .count()
+    }
+}
+
+#[tokio::test]
+async fn an_image_is_fetched_once_then_served_from_disk_without_a_key() {
+    let e = env().await;
+    e.publish(NEW, &DATA_FILES).await;
+    e.queues().await;
+    e.sync(false).await;
+    e.image(NEW, "champion", "Ahri.png", PNG).await;
+    e.image(NEW, "spell", "SummonerFlash.png", PNG).await;
+
+    let uri = format!("/ddragon/{NEW}/img/champion/Ahri.png");
+    for _ in 0..2 {
+        let r = e.call("GET", &uri, None, None).await;
+        assert_eq!(r.status, StatusCode::OK);
+        assert_eq!(r.body, PNG);
+        assert_eq!(r.headers["content-type"], "image/png");
+        assert_eq!(r.headers["cache-control"], "public, max-age=604800, immutable");
+    }
+    assert_eq!(e.image_fetches().await, 1, "the second request came from disk");
+    let on_disk = e.state.ddragon.dir().join(NEW).join("img/champion/Ahri.png");
+    assert_eq!(std::fs::read(on_disk).unwrap(), PNG);
+
+    // `spell` images are listed by summoner.json.
+    let r = e
+        .call(
+            "GET",
+            &format!("/ddragon/{NEW}/img/spell/SummonerFlash.png"),
+            None,
+            None,
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn concurrent_misses_for_one_image_fetch_it_once() {
+    let e = env().await;
+    e.publish(NEW, &DATA_FILES).await;
+    e.queues().await;
+    e.sync(false).await;
+    e.image(NEW, "champion", "Garen.png", PNG).await;
+
+    let uri = format!("/ddragon/{NEW}/img/champion/Garen.png");
+    let calls = (0..8).map(|_| e.call("GET", &uri, None, None));
+    for r in futures_util::future::join_all(calls).await {
+        assert_eq!(r.status, StatusCode::OK);
+    }
+    assert_eq!(e.image_fetches().await, 1);
+}
+
+#[tokio::test]
+async fn only_images_the_mirrored_patch_lists_are_fetched() {
+    let e = env().await;
+    e.publish(NEW, &DATA_FILES).await;
+    e.queues().await;
+    e.sync(false).await;
+    // Riot would serve all of these; the mirror must not ask.
+    e.image(NEW, "champion", "Nobody.png", PNG).await;
+    e.image(OLD, "champion", "Ahri.png", PNG).await;
+
+    for uri in [
+        format!("/ddragon/{NEW}/img/champion/Nobody.png"), // not in champion.json
+        format!("/ddragon/{NEW}/img/splash/Ahri.png"),     // not a served kind
+        format!("/ddragon/{NEW}/img/item/Ahri.png"),       // listed under another kind
+        format!("/ddragon/{OLD}/img/champion/Ahri.png"),   // patch not mirrored
+        "/ddragon/latest/img/champion/Ahri.png".to_string(),
+        format!("/ddragon/{NEW}/img/champion/..%2Fchampion.json"),
+        format!("/ddragon/{NEW}/img/champion/%2E%2E%2F..%2Friot-proxy.db"),
+    ] {
+        let r = e.call("GET", &uri, None, None).await;
+        assert_eq!(r.status, StatusCode::NOT_FOUND, "{uri}");
+        assert!(r.headers.get("cache-control").is_none(), "{uri}");
+    }
+    assert_eq!(e.image_fetches().await, 0);
+}
+
+#[tokio::test]
+async fn riot_404s_and_non_images_are_not_kept() {
+    let e = env().await;
+    e.publish(NEW, &DATA_FILES).await;
+    e.queues().await;
+    e.sync(false).await;
+    // Ahri.png is unmocked: wiremock answers 404.
+    let r = e
+        .call(
+            "GET",
+            &format!("/ddragon/{NEW}/img/champion/Ahri.png"),
+            None,
+            None,
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+
+    e.image(NEW, "champion", "Garen.png", b"<html>captive portal</html>")
+        .await;
+    let r = e
+        .call(
+            "GET",
+            &format!("/ddragon/{NEW}/img/champion/Garen.png"),
+            None,
+            None,
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::BAD_GATEWAY);
+
+    let img = e.state.ddragon.dir().join(NEW).join("img/champion");
+    assert!(!img.join("Ahri.png").exists() && !img.join("Garen.png").exists());
 }
 
 // ── POST /v1/admin/ddragon/sync ─────────────────────────────────────────────

@@ -206,6 +206,10 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 - [x] DEV-02 player tab: closable windows, matches paged 10/25/50 with queue/type filters, page summary, inline scoreboard, history and backfill card (#84, ADR-073)
 - [x] DEV-03 per-player archive endpoints (`/v1/admin/players/{puuid}/archive[/matches]`), exact backfill counts and an "Archive (all stored)" match source in `/dev`, jsdom page tests in CI (#86, ADR-074)
 - [ ] DEV-04 scoreboard layout: match header row (patch, length, X-Cache, raw, ×), aligned team tables, right-aligned numbers, side and team totals; match list shows the result, CS and length cleanly (#87, ADR-075)
+- [ ] DEV-05 Data Dragon images mirrored on first request at `/ddragon/{v}/img/{kind}/{file}`: champion, profile icon, item, spell (#?, ADR-076)
+- [ ] DEV-06 `/dev/showcase`: example frontend shell, links from `/dev` and the dashboard, read-route coverage guard, home view (ladder, status, rotation, top champions)
+- [ ] DEV-07 showcase player view (profile, ranks, live game, mastery, champion pool, matches)
+- [ ] DEV-08 showcase match detail (scoreboard, gold graph) and champion view (rates, matchups)
 
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.

@@ -27,6 +27,9 @@ pub const QUEUES_URL: &str = "https://static.developer.riotgames.com/docs/lol/qu
 /// v1's `headersTimeout` / `bodyTimeout`.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const TIMEOUT: Duration = Duration::from_secs(60);
+/// Data Dragon's icons are a few KB; anything this big is not one.
+const MAX_IMAGE: usize = 1024 * 1024;
+const PNG_MAGIC: &[u8] = b"\x89PNG\r\n\x1a\n";
 
 #[derive(Debug, thiserror::Error)]
 pub enum DdragonError {
@@ -36,6 +39,8 @@ pub enum DdragonError {
     Status { url: String, status: u16 },
     #[error("Data Dragon returned invalid JSON for {url}")]
     Json { url: String },
+    #[error("Data Dragon returned something other than a PNG for {url}")]
+    Image { url: String },
     #[error("Data Dragon returned an empty version list")]
     NoVersions,
     #[error("writing the mirror: {0}")]
@@ -77,6 +82,12 @@ impl CdnUrls {
 
     pub fn data(&self, version: &str, locale: &str, file: &str) -> String {
         format!("{}/cdn/{version}/data/{locale}/{file}.json", self.ddragon)
+    }
+
+    /// `/cdn/<version>/img/<kind>/<file>`: Data Dragon's image path, `file`
+    /// being a data file's `image.full` (`Aatrox.png`, `1001.png`).
+    pub fn image(&self, version: &str, kind: &str, file: &str) -> String {
+        format!("{}/cdn/{version}/img/{kind}/{file}", self.ddragon)
     }
 }
 
@@ -134,6 +145,27 @@ impl Cdn {
         Ok(bytes.to_vec())
     }
 
+    /// An image's bytes, checked to be a PNG and no bigger than `MAX_IMAGE`.
+    pub async fn image(&self, url: &str) -> Result<Vec<u8>, DdragonError> {
+        let http = |source| DdragonError::Http {
+            url: url.into(),
+            source,
+        };
+        let res = self.http.get(url).send().await.map_err(http)?;
+        let status = res.status();
+        if !status.is_success() {
+            return Err(DdragonError::Status {
+                url: url.into(),
+                status: status.as_u16(),
+            });
+        }
+        let bytes = res.bytes().await.map_err(http)?;
+        if bytes.len() > MAX_IMAGE || !bytes.starts_with(PNG_MAGIC) {
+            return Err(DdragonError::Image { url: url.into() });
+        }
+        Ok(bytes.to_vec())
+    }
+
     /// Riot's patch list, newest first, as bytes and parsed.
     pub async fn versions(&self) -> Result<(Vec<u8>, Vec<String>), DdragonError> {
         let url = self.urls.versions();
@@ -157,8 +189,9 @@ pub struct SyncResult {
 
 /// Write `bytes` beside `path` and rename it into place, so a reader never
 /// sees half a file.
-async fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let tmp = path.with_extension("json.tmp");
+pub(crate) async fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
     tokio::fs::write(&tmp, bytes).await?;
     tokio::fs::rename(&tmp, path).await
 }
