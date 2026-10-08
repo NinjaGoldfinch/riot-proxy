@@ -1,4 +1,4 @@
-// Unit tests for the showcase's pure helpers (DEV-06, DEV-07). They live in one marked
+// Unit tests for the showcase's pure helpers (DEV-06, DEV-07, DEV-08). They live in one marked
 // block of src/ui/showcase.html, which has no build step, so this test cuts that
 // block out and evaluates it. Run by `cargo test` (tests/ui.rs) when node is on PATH:
 //   node --test tests/showcase.mjs
@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 const html = readFileSync(new URL('../src/ui/showcase.html', import.meta.url), 'utf8');
 const block = html.match(/\/\/ -{10} pure helpers[^\n]*\n([\s\S]*?)\/\/ -{10} end pure helpers/);
 assert.ok(block, 'the pure helpers block is marked in showcase.html');
-const h = new Function(`${block[1]}; return { APEX, QUEUES, LADDER_PAGE, tierColour, winRate, pct, sortLadder, ladderPage, championIndex, imageUrl, statusNotices, byChampion, topChampions, parseRiotId, parseRoute, explorerLink, rankLabel, rankCards, queueNames, spellIndex, outcome, kda, durationSecs, clock, ago, masterySummary, liveGame };`)();
+const h = new Function(`${block[1]}; return { APEX, QUEUES, LADDER_PAGE, tierColour, winRate, pct, sortLadder, ladderPage, championIndex, imageUrl, statusNotices, byChampion, topChampions, parseRiotId, parseRoute, explorerLink, rankLabel, rankCards, queueNames, spellIndex, outcome, kda, durationSecs, clock, ago, masterySummary, liveGame, TIERS, SIDES, matchHref, matchTeams, goldDiff, goldScale, signedGold, tierRows, runeNames, itemIndex, roleList };`)();
 
 test('apex tiers and queues are the ones the apex route accepts', () => {
   assert.deepEqual(h.APEX, ['CHALLENGER', 'GRANDMASTER', 'MASTER']);
@@ -107,6 +107,8 @@ test('hash routes', () => {
   assert.deepEqual(h.parseRoute('#/champion/266'), { view: 'champion', args: { id: 266 } });
   assert.deepEqual(h.parseRoute('#/champion/abc'), { view: 'home', args: {} });
   assert.deepEqual(h.parseRoute('#/nowhere'), { view: 'home', args: {} });
+  assert.deepEqual(h.parseRoute('#/match/sea/OC1_700123'), { view: 'match', args: { region: 'sea', matchId: 'OC1_700123' } });
+  for (const bad of ['#/match/SEA/OC1_1', '#/match/sea/oc1-1', '#/match/sea']) assert.equal(h.parseRoute(bad).view, 'home', bad);
 });
 
 test('source chips open the operation in the dev explorer', () => {
@@ -188,4 +190,80 @@ test('a live game splits into teams, marks the player and counts time from gameS
   assert.deepEqual(g.teams.map((t) => [t.teamId, t.players.map((p) => [p.championId, p.me])]), [[100, [[1, true], [3, false]]], [200, [[2, false]]]]);
   assert.equal(h.liveGame({ ...doc, gameStartTime: 0 }, 'a').secs, 5, 'still loading: Riot\'s gameLength');
   assert.equal(h.liveGame(null, 'a').me, null);
+});
+
+// ---------- match detail and champion view (DEV-08)
+
+const fixture = JSON.parse(readFileSync(new URL('fixtures/replay/cold-lookup/06-match.byId.body', import.meta.url), 'utf8'));
+
+test('match links', () => {
+  assert.equal(h.matchHref('sea', 'OC1_700123'), '#/match/sea/OC1_700123');
+});
+
+test('a Summoner\'s Rift match splits into blue and red side with totals, bans and objectives', () => {
+  const me = fixture.info.participants[7].puuid;
+  const teams = h.matchTeams(fixture, me);
+  assert.deepEqual(teams.map((t) => [t.key, t.label, t.players.length]), [[100, 'Blue side', 5], [200, 'Red side', 5]]);
+  assert.equal(teams.filter((t) => t.win).length, 1, 'exactly one winner');
+  const blue = fixture.info.participants.filter((p) => p.teamId === 100);
+  assert.equal(teams[0].totals.kills, blue.reduce((n, p) => n + p.kills, 0));
+  assert.equal(teams[0].totals.gold, blue.reduce((n, p) => n + p.goldEarned, 0));
+  assert.deepEqual(teams[0].bans, fixture.info.teams[0].bans.map((b) => b.championId).filter((id) => id > 0));
+  assert.equal(teams[0].objectives.tower.kills, fixture.info.teams[0].objectives.tower.kills);
+  assert.equal(teams.flatMap((t) => t.players).filter((p) => p.me).length, 1);
+  assert.equal(teams[1].players.find((p) => p.me).puuid, me);
+  const p = teams[0].players[0];
+  assert.equal(p.cs, blue[0].totalMinionsKilled + blue[0].neutralMinionsKilled);
+});
+
+test('an Arena match groups by subteam, ordered by placement', () => {
+  const arena = { info: { teams: [], participants: [
+    { puuid: 'a', teamId: 100, playerSubteamId: 3, placement: 2, kills: 1 }, { puuid: 'b', teamId: 100, playerSubteamId: 3, placement: 2, kills: 2 },
+    { puuid: 'c', teamId: 200, playerSubteamId: 1, placement: 1, kills: 4 }, { puuid: 'd', teamId: 200, playerSubteamId: 1, placement: 1, kills: 0 },
+  ] } };
+  const teams = h.matchTeams(arena, 'b');
+  assert.deepEqual(teams.map((t) => [t.key, t.label, t.win, t.totals.kills]), [[1, '#1', null, 4], [3, '#2', null, 3]]);
+  assert.deepEqual(h.matchTeams(null, 'x'), []);
+});
+
+test('gold difference is blue minus red per frame, sided by the match\'s participantId', () => {
+  const match = { info: { participants: [{ participantId: 1, teamId: 100 }, { participantId: 2, teamId: 200 }, { participantId: 3, teamId: 200 }] } };
+  const timeline = { info: { frames: [
+    { timestamp: 0, participantFrames: { 1: { participantId: 1, totalGold: 500 }, 2: { participantId: 2, totalGold: 500 }, 3: { participantId: 3, totalGold: 500 } } },
+    { timestamp: 60012, participantFrames: { 1: { participantId: 1, totalGold: 2600 }, 2: { participantId: 2, totalGold: 700 }, 3: { participantId: 3, totalGold: 900 } } },
+  ] } };
+  assert.deepEqual(h.goldDiff(timeline, match), [{ minute: 0, diff: -500 }, { minute: 1, diff: 1000 }]);
+  const arena = { info: { participants: [{ participantId: 1, teamId: 100 }, { participantId: 2, teamId: 300 }] } };
+  assert.deepEqual(h.goldDiff(timeline, arena), [], 'not two sides: no graph');
+  assert.deepEqual(h.goldDiff(null, match), []);
+});
+
+test('the gold axis is symmetric with a round step, and leads read signed', () => {
+  assert.deepEqual(h.goldScale([{ diff: 300 }]), { max: 2000, step: 1000 });
+  assert.deepEqual(h.goldScale([{ diff: -3500 }, { diff: 1200 }]), { max: 4000, step: 2000 });
+  assert.deepEqual(h.goldScale([{ diff: 9000 }]), { max: 10000, step: 5000 });
+  assert.equal(h.signedGold(2300), '+2.3k');
+  assert.equal(h.signedGold(-800), '−800');
+  assert.equal(h.signedGold(0), '0');
+});
+
+test('stat rows sort highest tier first and sum games and wins, not rates', () => {
+  assert.equal(h.TIERS.length, 10);
+  const { rows, all } = h.tierRows([{ tier: 'GOLD', games: 30, wins: 15, pickRate: 0.1 }, { tier: 'CHALLENGER', games: 10, wins: 7, pickRate: 0.4 }]);
+  assert.deepEqual(rows.map((r) => r.tier), ['CHALLENGER', 'GOLD']);
+  assert.deepEqual(all, { games: 40, wins: 22, winRate: 0.55 });
+  assert.deepEqual(h.tierRows(undefined).all, { games: 0, wins: 0, winRate: null });
+});
+
+test('runesReforged.json and item.json are indexed by id', () => {
+  const doc = [{ id: 8000, key: 'Precision', name: 'Precision', slots: [{ runes: [{ id: 8010, name: 'Conqueror' }] }] }];
+  assert.deepEqual(h.runeNames(doc), { 8000: 'Precision', 8010: 'Conqueror' });
+  assert.deepEqual(h.runeNames(null), {});
+  assert.deepEqual(h.itemIndex({ data: { 3078: { name: 'Trinity Force' } } }), { 3078: 'Trinity Force' });
+});
+
+test('matchup lanes come back in teamPosition order', () => {
+  assert.deepEqual(h.roleList([{ role: 'MIDDLE' }, { role: 'TOP' }, { role: 'MIDDLE' }]), ['TOP', 'MIDDLE']);
+  assert.deepEqual(h.roleList(undefined), []);
+  assert.deepEqual(h.SIDES, { 100: 'Blue side', 200: 'Red side' });
 });

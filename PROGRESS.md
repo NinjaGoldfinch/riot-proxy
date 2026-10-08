@@ -210,7 +210,7 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 - [ ] DEV-05 Data Dragon images mirrored on first request at `/ddragon/{v}/img/{kind}/{file}`: champion, profile icon, item, spell (#89, ADR-076)
 - [x] DEV-06 `/dev/showcase`: example frontend shell, Showcase in the page bar, read-route coverage guard, home view (ladder, status, rotation, top champions) (#95, design/11, ADR-080)
 - [x] DEV-07 showcase player view: profile header, rank cards, live-game banner, match history with queue tabs and load more, champion pool, mastery (#98, design/11, ADR-082)
-- [ ] DEV-08 showcase match detail (scoreboard, gold graph) and champion view (rates, matchups)
+- [x] DEV-08 showcase match detail (scoreboard, gold-difference graph) and champion view (rates by tier, builds, matchups) (#99, design/11, ADR-083)
 - [ ] DEV-09 Reset tab in `/dev`: `GET`/`POST /dev/reset` (admin, dev only) wipes all fetched data and keeps consumers and the limiter checkpoint (ADR-077)
 - [ ] DEV-10 page bar across `/dashboard` and `/dev` (Dashboard · Dev explorer · API docs · Metrics), rendered from config so it links only to pages that exist (ADR-078)
 - [ ] DEV-11 lookup backfill walks the whole history: `LOOKUP_BACKFILL_LIMIT` defaults to and caps at `u32::MAX` (#94, ADR-081)

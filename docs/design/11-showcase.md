@@ -39,9 +39,12 @@ It is in the page bar (design/10 §Page bar) as **Showcase**, right after Dev ex
 | | | `/v1/players/{puuid}/champions?platform&limit=10[&queue]` | champion pool from the archive; the All / Solo/Duo / Flex tabs filter it and the match history together |
 | | | `/v1/lol/mastery/by-puuid/{platform}/{puuid}` | every mastered champion and the point total, 12 shown until **Show all** (the profile carries only the top few) |
 | | | `/v1/lol/spectator/active/{platform}/{puuid}` | live-game banner: queue, time played, both teams' champions; nothing on a 404 (not in a game) |
-| `#/champion/{id}` | DEV-08 | analytics champion detail and matchups; match and timeline for match detail | rates by tier, matchups, scoreboard, gold-difference graph |
+| `#/match/{region}/{matchId}` | DEV-08 | `/v1/lol/matches/{region}/{matchId}`, `…/timeline` | opened from a match card, on the region its match page named. Header (queue, date, duration, patch); a scoreboard per side (or per Arena subteam, by placement) with totals, bans, objectives, and per player champion, spells, Riot ID (links to the player), KDA, CS, damage bar, gold, vision, items; the player who opened it highlighted |
+| | | | gold-difference graph: blue side's `totalGold` minus red side's per timeline frame, sided by the match's `participantId` → `teamId`; one diverging line around 0, blue above and red below (validated for the dark surface), direct labels, a crosshair readout on hover or keyboard focus, and a table view. Only for two sides, 100 and 200; a failed timeline costs only the graph |
+| `#/champion/{id}` | DEV-08 | `/v1/lol/analytics/champions/{championId}?queue&limit=10[&platform]`, `/v1/static/runes`, `/v1/static/item` | header with Solo/Duo · Flex tabs (shared with the ladder); rates by tier, highest first (games, win rate, pick and ban rate, KDA, CS/min, gold/min) with games and wins summed over tiers; builds: items by name, spell pairs, keystone + secondary style by name |
+| | | `/v1/lol/analytics/champions/{championId}/matchups?queue&limit=200[&platform]` | every lane matchup, most games first, with lane tabs (the detail carries only the top few). No platform picked: every platform summed, as the route does |
 
-Until DEV-08 lands, the champion view says so and links to the explorer. The ranked-entries route is left out: the profile composite already carries the same league-v4 entries (ADR-082).
+The ranked-entries route is left out: the profile composite already carries the same league-v4 entries (ADR-082).
 
 An image the mirror cannot serve (an item retired since that game, say) becomes the same empty box, with a champion's initials where it has them. Rune icons are not mirrored (ADR-076 kinds: champion, profileicon, item, spell), so match cards show no runes.
 
@@ -51,9 +54,10 @@ flowchart LR
     S[Search: Riot ID · platform · key]
     H[Home: status · ladder · rotation · top champions]
     P[Player: profile · ranks · live · matches · pool · mastery]
-    C[Champion view — DEV-08]
+    C[Champion: tiers · builds · matchups]
+    M[Match: scoreboard · gold graph]
     D[[API calls drawer · source chips → /dev#explorer]]
-    H & P & C --> D
+    H & P & C & M --> D
   end
   subgraph Proxy["riot-proxy (same origin)"]
     CFG["/dev/config.json"]
@@ -61,11 +65,12 @@ flowchart LR
     DD["/ddragon/{v}/img/* (ADR-076)"]
   end
   S --> CFG
-  H & P & C --> R
-  H & P & C --> DD
+  H & P & C & M --> R
+  H & P & C & M --> DD
   S -- "#/player/…" --> P
   H -- "ladder row" --> P
   H -- "champion icon" --> C
+  P -- "match card" --> M
 ```
 
 ## The coverage rule
