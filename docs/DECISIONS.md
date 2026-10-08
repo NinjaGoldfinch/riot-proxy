@@ -876,3 +876,12 @@ Accepted (owner, task DEV-03). Supersedes ADR-073's "no new endpoint" and its ca
 - **The dev page** uses both: exact numbers in the History & backfill card, and an "Archive (all stored)" source for the match list.
 - **Page tests are committed.** `tests/dom/` is a private npm package whose only dependency is `jsdom`. It drives `src/ui/dev-ui.html` against a fake API in the `test` CI job (`just ui-test`). The page itself still has no build step and no dependency.
 
+## ADR-075 — Dev reset: wipe fetched data from `/dev`, keep keys and limits (2026-10-08)
+Accepted (owner, task DEV-05). Extends ADR-071; design/10 §Reset tab.
+- **Owner request:** "a reset option that fully deletes all the fetched data … only accessible from the dev endpoint", in its own tab.
+- **Where:** `GET`/`POST /dev/reset`, merged into the app only when `dev_ui` is on, so it shares the explorer's gating: never in production, and absent with `DEV_UI=false`. It is not a `/v1/admin/*` route: those are in the OpenAPI document and would exist in production. It still needs an admin key (`require_admin`). The `POST` needs `{"confirm":"reset"}`, so a stray or replayed request without the body does nothing.
+- **Scope (owner choice):** every fetched table, the L2 table and L1, all job rows and `metrics_history`. Kept: `consumers`, so the key that pressed the button still works (v1's `reset:db --keep-consumers`); `limiter_state`, the live rate-limit checkpoint for the key (v1 kept it in Redis, which `reset:db` never touched); refinery history; Data Dragon files.
+- **An explicit list, not "every table but…"**. v1 truncated whatever `pg_tables` listed. Here `WIPED`/`KEPT` must between them cover the migrated schema, and a test enforces that, so a new operational table cannot be wiped by accident and a new data table cannot be missed.
+- **Rows are deleted, not the file.** This needs no restart and keeps the writer thread and the reader pool. Freed pages stay in the file until SQLite reuses them; there is no `VACUUM`, because on a large archive that holds the writer for a long time.
+- **Races accepted:** jobs that are mid-run can still write when they finish, and an L2 batch queued in the last 2 s can still land (`FLUSH_EVERY`). Both are reported (`runningJobs`) or show up on the next count refresh. Pausing the scheduler for a dev tool was not worth the coupling.
+

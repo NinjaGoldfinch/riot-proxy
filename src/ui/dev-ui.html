@@ -85,6 +85,11 @@
   .board h4 { margin: 0 0 4px; font-size: 12px; display: flex; gap: 8px; align-items: center; }
   .board h4 button { margin-left: auto; font-size: 11px; padding: 1px 8px; }
   .me { font-weight: 600; color: var(--accent); }
+  /* reset */
+  nav a.danger { margin-left: auto; } nav a.danger.on { border-color: var(--bad); }
+  button.danger { background: var(--bad); border-color: var(--bad); color: #fff; font-weight: 600; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .warnbox { border-left: 3px solid var(--warn); padding: 6px 10px; background: var(--sunk); margin: 8px 0; }
   @media (max-width: 900px) { .explorer { grid-template-columns: 1fr; } }
 </style>
 </head>
@@ -98,7 +103,7 @@
   <span class="links" id="links"></span>
 </header>
 <nav id="nav">
-  <a href="#explorer">Explorer</a><a href="#status">Status</a><a href="#player">Player</a><a href="#live">Live</a><a href="#history">History</a>
+  <a href="#explorer">Explorer</a><a href="#status">Status</a><a href="#player">Player</a><a href="#live">Live</a><a href="#history">History</a><a href="#reset" class="danger">Reset</a>
 </nav>
 <main>
   <section class="tab" id="tab-explorer">
@@ -160,6 +165,23 @@
     <div class="row" style="margin-bottom:12px"><button id="hClear">Clear history</button><span class="muted">last 50 requests, stored in this browser (no bodies)</span></div>
     <div class="card"><table><thead><tr><th>when</th><th>method</th><th>path</th><th>status</th><th>ms</th><th>request id</th><th></th></tr></thead><tbody id="hRows"></tbody></table></div>
     <div class="viewer" id="hView"></div>
+  </section>
+
+  <section class="tab" id="tab-reset">
+    <div class="card">
+      <h3>Reset all fetched data <button id="rsRefresh">refresh counts</button></h3>
+      <p>Deletes every player, archived match, timeline, fact, analytics result, ladder crawl, cache entry (memory and disk), job and metrics point.
+        It keeps API keys and the rate-limiter checkpoint, so this key still works and the proxy stays inside Riot's limits. There is no undo.</p>
+      <div id="rsCounts" class="muted">counting…</div>
+      <div class="row" style="margin-top:10px">
+        <label for="rsWord">type <b class="mono">reset</b> to enable</label>
+        <input id="rsWord" size="10" autocomplete="off" spellcheck="false">
+        <button id="rsGo" class="danger" disabled>Delete all fetched data</button>
+        <span class="muted" id="rsMsg"></span>
+      </div>
+    </div>
+    <div id="rsDone"></div>
+    <div class="viewer" id="rsView"></div>
   </section>
 </main>
 
@@ -371,6 +393,15 @@ function archivePage(res) {
 
 /** How many pages `total` items make at `size` a page (at least one). */
 const pageCount = (total, size) => Math.max(1, Math.ceil(total / size));
+/** The word that arms the Reset tab (`POST /dev/reset` wants it as `{"confirm":"reset"}`). */
+const RESET_WORD = 'reset';
+const resetArmed = (typed) => String(typed ?? '').trim() === RESET_WORD;
+
+/** `/dev/reset` per-table rows as a total and the non-empty tables, largest first. */
+function resetTotals(tables = []) {
+  const nonEmpty = tables.filter((t) => t.rows > 0).sort((a, b) => b.rows - a.rows || a.name.localeCompare(b.name));
+  return { total: tables.reduce((n, t) => n + (t.rows ?? 0), 0), nonEmpty };
+}
 // ---------- end pure helpers ----------
 
 // ---------- history ----------
@@ -845,6 +876,53 @@ $('#wsPing').onclick = () => send({ op: 'ping' });
 $('#wsClear').onclick = () => { frames.length = 0; renderFrames(); };
 $('#wsFilter').oninput = renderFrames;
 
+// ---------- reset ----------
+const rsRes = {};
+const resetTable = (tables, head) => {
+  const { total, nonEmpty } = resetTotals(tables);
+  return { total, html: nonEmpty.length
+    ? `<table><tr><th>table</th><th>${head}</th></tr>${nonEmpty.map((t) => `<tr><td class="mono">${esc(t.name)}</td><td>${t.rows.toLocaleString()}</td></tr>`).join('')}<tr><th>total</th><th>${total.toLocaleString()}</th></tr></table>`
+    : '<span class="muted">every fetched table is empty</span>' };
+};
+
+async function refreshReset() {
+  const r = await call('GET', '/dev/reset', null, { record: false });
+  rsRes.preview = r;
+  if (r.status !== 200 || !r.json) {
+    $('#rsCounts').innerHTML = `<div class="err">${esc(r.json?.error?.code ?? r.status)} ${esc(r.json?.error?.message ?? 'unavailable')}</div><p class="muted">Needs an admin key (or AUTH_DISABLED).</p>`;
+    return;
+  }
+  const p = r.json;
+  const t = resetTable(p.tables, 'rows');
+  $('#rsCounts').innerHTML = `${t.html}
+    <p class="muted">${p.l1Entries.toLocaleString()} in-memory cache entries · kept: <span class="mono">${(p.kept ?? []).map(esc).join(', ')}</span> <button data-raw="preview">raw</button></p>
+    ${p.runningJobs ? `<div class="warnbox">${p.runningJobs} job${p.runningJobs === 1 ? ' is' : 's are'} running. A running job can still write a row or two after the reset. Refresh the counts afterwards and reset again if needed.</div>` : ''}`;
+}
+
+$('#rsRefresh').onclick = refreshReset;
+$('#rsWord').oninput = () => ($('#rsGo').disabled = !resetArmed($('#rsWord').value));
+$('#rsGo').onclick = async () => {
+  if (!resetArmed($('#rsWord').value) || !confirm('Delete ALL fetched data? This cannot be undone.')) return;
+  $('#rsGo').disabled = true;
+  $('#rsMsg').textContent = 'deleting…';
+  const r = await call('POST', '/dev/reset', JSON.stringify({ confirm: RESET_WORD }));
+  rsRes.reset = r;
+  $('#rsWord').value = '';
+  $('#rsMsg').textContent = '';
+  if (r.status === 200 && r.json?.ok) {
+    const t = resetTable(r.json.tables, 'deleted');
+    $('#rsDone').innerHTML = `<div class="card"><h3><span class="ok">Reset done</span> <span class="muted">${t.total.toLocaleString()} rows · ${r.json.l1Entries.toLocaleString()} memory entries · ${r.json.tookMs} ms</span><button data-raw="reset">raw</button></h3>${t.html}</div>`;
+    // The player tab showed rows that are gone now.
+    $('#plOut').innerHTML = $('#plMatches').innerHTML = '';
+    pl.matchCache.clear();
+    pl.open.clear();
+  } else {
+    view($('#rsView'), r, 'Reset failed');
+  }
+  refreshReset();
+};
+$('#tab-reset').addEventListener('click', (ev) => ev.target.dataset.raw && rsRes[ev.target.dataset.raw] && view($('#rsView'), rsRes[ev.target.dataset.raw], ev.target.dataset.raw));
+
 // ---------- shell ----------
 // Esc closes the newest thing open on the current tab: an open scoreboard, else the response window.
 document.addEventListener('keydown', (e) => {
@@ -867,6 +945,7 @@ function route() {
   if (tab === 'status' && !$('#stCards').innerHTML) refreshStatus();
   if (tab === 'history') renderHistory();
   if (tab === 'live') renderFrames();
+  if (tab === 'reset') refreshReset();
 }
 
 async function boot() {
