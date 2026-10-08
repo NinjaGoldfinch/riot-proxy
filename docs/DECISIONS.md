@@ -895,3 +895,13 @@ Accepted (owner, task DEV-05). Amends v1's §1 non-goal, "images stay on Riot's 
 - **Checked before it is kept.** The body must start with the PNG signature and be at most 1 MiB. Otherwise the request is a 502 and nothing is written. A Riot 404 is passed on as a 404 and is not cached.
 - **Not in scope:** rank emblems, which are not part of Data Dragon, and rune icons, which have nested paths. Pages show tiers as CSS badges.
 - Like the JSON files, no request goes through the Riot limiter. Data Dragon is not rate limited (v1 §5.6).
+
+## ADR-077 — Dev reset: wipe fetched data from `/dev`, keep keys and limits (2026-10-08)
+Accepted (owner, task DEV-09). Extends ADR-071; design/10 §Reset tab.
+- **Owner request:** "a reset option that fully deletes all the fetched data … only accessible from the dev endpoint", in its own tab.
+- **Where:** `GET`/`POST /dev/reset`, merged into the app only when `dev_ui` is on, so it shares the explorer's gating: never in production, and absent with `DEV_UI=false`. It is not a `/v1/admin/*` route: those are in the OpenAPI document and would exist in production. It still needs an admin key (`require_admin`). The `POST` needs `{"confirm":"reset"}`, so a stray or replayed request without the body does nothing.
+- **Scope (owner choice):** every fetched table, the L2 table and L1, all job rows and `metrics_history`. Kept: `consumers`, so the key that pressed the button still works (v1's `reset:db --keep-consumers`); `limiter_state`, the live rate-limit checkpoint for the key (v1 kept it in Redis, which `reset:db` never touched); refinery history; Data Dragon files.
+- **An explicit list, not "every table but…"**. v1 truncated whatever `pg_tables` listed. Here `WIPED`/`KEPT` must between them cover the migrated schema, and a test enforces that, so a new operational table cannot be wiped by accident and a new data table cannot be missed.
+- **Rows are deleted, not the file.** This needs no restart and keeps the writer thread and the reader pool. Freed pages stay in the file until SQLite reuses them; there is no `VACUUM`, because on a large archive that holds the writer for a long time.
+- **Races accepted:** jobs that are mid-run can still write when they finish, and an L2 batch queued in the last 2 s can still land (`FLUSH_EVERY`). Both are reported (`runningJobs`) or show up on the next count refresh. Pausing the scheduler for a dev tool was not worth the coupling.
+

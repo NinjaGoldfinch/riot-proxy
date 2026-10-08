@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 const html = readFileSync(new URL('../src/ui/dev-ui.html', import.meta.url), 'utf8');
 const block = html.match(/\/\/ -{10} pure helpers[^\n]*\n([\s\S]*?)\/\/ -{10} end pure helpers/);
 assert.ok(block, 'the pure helpers block is marked in dev-ui.html');
-const h = new Function(`${block[1]}; return { PAGE_SIZES, MATCH_CALL_MAX, pageCalls, mergePages, pageSummary, queueIndex, scoreboard, walkStatus, archivePage, pageCount, patchOf, clock, kdaRatio, kilo, role };`)();
+const h = new Function(`${block[1]}; return { PAGE_SIZES, MATCH_CALL_MAX, pageCalls, mergePages, pageSummary, queueIndex, scoreboard, walkStatus, archivePage, pageCount, patchOf, clock, kdaRatio, kilo, role, RESET_WORD, resetArmed, resetTotals };`)();
 
 test('page sizes are 10, 25 and 50', () => assert.deepEqual(h.PAGE_SIZES, [10, 25, 50]));
 
@@ -148,4 +148,19 @@ test('page count is at least one', () => {
   assert.equal(h.pageCount(25, 25), 1);
   assert.equal(h.pageCount(26, 25), 2);
   assert.equal(h.pageCount(912, 50), 19);
+});
+
+test('the reset button arms only on the exact word', () => {
+  assert.equal(h.RESET_WORD, 'reset');
+  assert.equal(h.resetArmed('reset'), true);
+  assert.equal(h.resetArmed('  reset '), true);
+  for (const t of ['', 'Reset', 'RESET', 'rese', 'reset!', null, undefined]) assert.equal(h.resetArmed(t), false, String(t));
+});
+
+test('reset totals sum every table and list the non-empty ones, largest first', () => {
+  const r = h.resetTotals([{ name: 'jobs', rows: 3 }, { name: 'players', rows: 0 }, { name: 'matches', rows: 40 }, { name: 'cache', rows: 3 }]);
+  assert.equal(r.total, 46);
+  assert.deepEqual(r.nonEmpty.map((t) => t.name), ['matches', 'cache', 'jobs']);
+  assert.deepEqual(h.resetTotals([]), { total: 0, nonEmpty: [] });
+  assert.deepEqual(h.resetTotals(), { total: 0, nonEmpty: [] });
 });

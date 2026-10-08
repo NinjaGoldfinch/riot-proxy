@@ -2,6 +2,7 @@
 
 pub mod admin;
 pub mod analytics;
+pub mod dev;
 pub mod docs;
 pub mod health;
 pub mod lol;

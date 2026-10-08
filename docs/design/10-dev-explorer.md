@@ -26,7 +26,7 @@ flowchart TD
   B -- no --> C{DEV_UI set?}
   C -- "false" --> OFF
   C -- "unset / true" --> ON[dev_ui = true]
-  ON --> R["routes::ui::router mounts<br/>/dev · /dev/config.json · /dev/openapi.json"]
+  ON --> R["routes::ui::router mounts<br/>/dev · /dev/config.json · /dev/openapi.json<br/>routes::dev::router mounts /dev/reset (admin)"]
   OFF --> N["no /dev routes →<br/>fallback 404 envelope"]
 ```
 
@@ -94,6 +94,7 @@ sequenceDiagram
 | `player` | `/v1/players/by-riot-id/{gameName}/{tagLine}/profile`, `/v1/players/{puuid}/matches`, `/v1/static/queues`, `/v1/lol/matches/{region}/{matchId}`, `/v1/admin/players/{puuid}/archive`, `/v1/admin/players/{puuid}/archive/matches` | profile card, ranks, top mastery, history and backfill card, recent or archived matches (DEV-02/03, below) |
 | `live` | `/v1/ws` | topic picker, newest-first frame log (500 max), ping |
 | `history` | — | last 50 requests (`localStorage`, without bodies); re-open or replay |
+| `reset` | `GET /dev/reset`, `POST /dev/reset` | rows per fetched table, then a wipe of all of them (DEV-09, below) |
 
 ## Player tab (DEV-02)
 
@@ -115,8 +116,20 @@ sequenceDiagram
 - **Every response window has ×**, and Esc closes the newest open thing on the current tab.
 - The pure helpers sit in one marked block that `tests/dev_ui.mjs` unit-tests with `node --test`, run from `cargo test`. `tests/dom/` drives the whole page in jsdom against a fake API (`just ui-test`; CI job `test`).
 
+## Reset tab (DEV-09)
+
+Deletes every piece of fetched data so the proxy starts from empty, without a restart or deleting the database file (ADR-077). This is the in-app form of v1's `npm run reset:db -- --keep-consumers`.
+
+- **Endpoint:** `GET /dev/reset` returns rows per table, in-memory cache entries, running jobs and what is kept. `POST /dev/reset` with `{"confirm":"reset"}` does the wipe. It deletes L1 first, then empties the tables in one write transaction, and answers rows deleted per table, `l1Entries`, `runningJobs` and `tookMs`. A missing or wrong `confirm` gets a `VALIDATION` 400 and deletes nothing.
+- **Reachable only from the explorer:** `routes::dev::router` is merged only when `dev_ui` is on, so production and `DEV_UI=false` 404. Both methods sit behind `require_admin`, the same check as `/v1/admin/*`. The route is left out of the OpenAPI document, so no explorer form offers it.
+- **Wiped:** players, matches, timelines, match facts and bans, every analytics table, ladder crawls and their legs, entries and match ids, the L2 `cache` table and L1, every `jobs` row, and `metrics_history`.
+- **Kept:** `consumers` (the key in use keeps working), `limiter_state` (it mirrors Riot's live counts, and losing it could overrun the real limit with the production key), refinery's migration history, the Data Dragon files and the per-player refresh cooldowns.
+- `routes::dev::WIPED` and `KEPT` list every table between them. A unit test fails if a migration adds a table without putting it in one list.
+- **In-flight work:** a job that is running during the reset can still write once it finishes, and so can an L2 batch queued in the last 2 s. The tab warns when jobs are running. Refreshing the counts afterwards shows anything that came back.
+- **UI:** the tab is last in the nav and shown in red. The button is disabled until `reset` is typed exactly. A `confirm()` dialog follows, then the POST. The result card lists rows deleted per table. Afterwards the field is cleared and the player tab's rendered data is dropped.
+
 ## Safety
 
-- Any non-`GET` asks for `confirm()` first.
+- Any non-`GET` asks for `confirm()` first. The Reset tab also needs the word typed (above).
 - The key lives in `localStorage` (`rp.dev.key`). It is sent only as `Authorization: Bearer`, except for the WebSocket handshake, which requires `?token=`.
 - "Copy as curl" writes `$RIOT_PROXY_KEY`, never the key itself.
