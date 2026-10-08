@@ -12,11 +12,22 @@ const LADDER = 60;
 const entry = (i) => ({ puuid: `P${i}`, leaguePoints: 1000 + i * 10, wins: 100 + i, losses: 100, rank: 'I', hotStreak: i === LADDER - 1, veteran: false, inactive: false, freshBlood: false });
 const CHAMPS = { data: { Annie: { key: '1', id: 'Annie', name: 'Annie', title: 'the Dark Child', image: { full: 'Annie.png' } }, Olaf: { key: '2', id: 'Olaf', name: 'Olaf', title: 'the Berserker', image: { full: 'Olaf.png' } } } };
 
+// Data Dragon runesReforged.json: the five styles, a keystone of each that the match fixture uses.
+const style = (id, key, file, keystones) => ({ id, key, name: key, icon: `perk-images/Styles/${file}`,
+  slots: [{ runes: keystones.map(([rid, name]) => ({ id: rid, key: name.replace(/\W/g, ''), name, icon: `perk-images/Styles/${key}/${name.replace(/\W/g, '')}/${name.replace(/\W/g, '')}.png` })) }] });
+const RUNES = [
+  style(8000, 'Precision', '7201_Precision.png', [[8005, 'Press the Attack'], [8008, 'Lethal Tempo'], [8010, 'Conqueror']]),
+  style(8100, 'Domination', '7200_Domination.png', [[8112, 'Electrocute'], [8128, 'Dark Harvest']]),
+  style(8200, 'Sorcery', '7202_Sorcery.png', [[8229, 'Arcane Comet'], [8230, 'Phase Rush']]),
+  style(8300, 'Inspiration', '7203_Whimsy.png', [[8369, 'First Strike']]),
+  style(8400, 'Resolve', '7204_Resolve.png', [[8465, 'Guardian']]),
+];
+
 // The player view: the proxy's ProfileBody, MatchPage and PlayerChampions (openapi),
 // with Riot's league-v4 LeagueEntryDTO, champion-mastery-v4 ChampionMasteryDto and
 // spectator-v5 CurrentGameInfo inside.
 const PUUID = 'PUUID-ME';
-const line = (i) => ({ puuid: PUUID, championId: 1 + (i % 2), championName: i % 2 ? 'Olaf' : 'Annie', kills: 5, deaths: 2, assists: 9, champLevel: 16, totalMinionsKilled: 180, neutralMinionsKilled: 6, goldEarned: 12000, totalDamageDealtToChampions: 21000, summoner1Id: 4, summoner2Id: 14, item0: 1001, item1: 0, item6: 3340, teamId: 100, win: i % 3 !== 1, gameEndedInEarlySurrender: i === 2 });
+const line = (i) => ({ puuid: PUUID, championId: 1 + (i % 2), championName: i % 2 ? 'Olaf' : 'Annie', kills: 5, deaths: 2, assists: 9, champLevel: 16, totalMinionsKilled: 180, neutralMinionsKilled: 6, goldEarned: 12000, totalDamageDealtToChampions: 21000, summoner1Id: 4, summoner2Id: 14, perks: { keystone: 8010, primaryStyle: 8000, subStyle: 8100 }, item0: 1001, item1: 0, item6: 3340, teamId: 100, win: i % 3 !== 1, gameEndedInEarlySurrender: i === 2 });
 const summary = (i) => ({ matchId: `OC1_${700000 + i}`, queueId: 420, gameMode: 'CLASSIC', gameCreation: Date.now() - 3600000, gameEndTimestamp: Date.now() - 1800000, gameDuration: 1865, gameVersion: '16.19.1', player: line(i) });
 function players(p, u, { live = false, refreshWait = 0 }) {
   const by = p.match(/^\/v1\/players\/by-riot-id\/([^/]+)\/([^/]+)\/profile$/);
@@ -92,7 +103,7 @@ function api(calls, url, { status = {}, unauthorized = false, ...opts } = {}) {
   if (p === '/v1/static/versions') return [200, { current: '16.19.1', versions: ['16.19.1'] }];
   if (p === '/v1/static/champion') return [200, CHAMPS];
   if (p === '/v1/static/summoner') return [200, { data: { SummonerFlash: { key: '4', image: { full: 'SummonerFlash.png' } }, SummonerDot: { key: '14', image: { full: 'SummonerDot.png' } } } }];
-  if (p === '/v1/static/runes') return [200, [{ id: 8000, key: 'Precision', name: 'Precision', slots: [{ runes: [{ id: 8010, name: 'Conqueror' }] }] }, { id: 8100, key: 'Domination', name: 'Domination', slots: [] }]];
+  if (p === '/v1/static/runes') return [200, RUNES];
   if (p === '/v1/static/item') return [200, { data: { 3078: { name: 'Trinity Force' } } }];
   if (p === '/v1/static/queues') return [200, [{ queueId: 420, map: "Summoner's Rift", description: '5v5 Ranked Solo games', notes: null }, { queueId: 440, map: "Summoner's Rift", description: '5v5 Ranked Flex games', notes: null }]];
   if (unauthorized) return [401, { error: { code: 'UNAUTHORIZED', message: 'missing key', requestId: 'r' } }];
@@ -110,4 +121,4 @@ function api(calls, url, { status = {}, unauthorized = false, ...opts } = {}) {
   return [404, { error: { code: 'NOT_FOUND', message: p } }];
 }
 
-export { root, html, LADDER, CHAMPS, PUUID, MATCH, TIMELINE, DETAIL, MATCHUPS, api };
+export { root, html, LADDER, CHAMPS, RUNES, PUUID, MATCH, TIMELINE, DETAIL, MATCHUPS, api };

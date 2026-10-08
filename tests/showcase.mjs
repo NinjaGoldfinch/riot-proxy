@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 const html = readFileSync(new URL('../src/ui/showcase.html', import.meta.url), 'utf8');
 const block = html.match(/\/\/ -{10} pure helpers[^\n]*\n([\s\S]*?)\/\/ -{10} end pure helpers/);
 assert.ok(block, 'the pure helpers block is marked in showcase.html');
-const h = new Function(`${block[1]}; return { APEX, QUEUES, LADDER_PAGE, tierColour, winRate, pct, sortLadder, ladderPage, championIndex, imageUrl, statusNotices, byChampion, topChampions, parseRiotId, parseRoute, explorerLink, rankLabel, rankCards, queueNames, spellIndex, outcome, kda, durationSecs, clock, ago, masterySummary, liveGame, TIERS, SIDES, matchHref, matchTeams, goldDiff, goldScale, signedGold, tierRows, runeNames, itemIndex, roleList, thousands };`)();
+const h = new Function(`${block[1]}; return { APEX, QUEUES, LADDER_PAGE, tierColour, winRate, pct, sortLadder, ladderPage, championIndex, imageUrl, statusNotices, byChampion, topChampions, parseRiotId, parseRoute, explorerLink, rankLabel, rankCards, queueNames, spellIndex, outcome, kda, durationSecs, clock, ago, masterySummary, liveGame, TIERS, SIDES, matchHref, matchTeams, goldDiff, goldScale, signedGold, tierRows, runeIndex, runePair, runeUrl, itemIndex, roleList, thousands };`)();
 
 test('apex tiers and queues are the ones the apex route accepts', () => {
   assert.deepEqual(h.APEX, ['CHALLENGER', 'GRANDMASTER', 'MASTER']);
@@ -256,10 +256,33 @@ test('stat rows sort highest tier first and sum games and wins, not rates', () =
 });
 
 test('runesReforged.json and item.json are indexed by id', () => {
-  const doc = [{ id: 8000, key: 'Precision', name: 'Precision', slots: [{ runes: [{ id: 8010, name: 'Conqueror' }] }] }];
-  assert.deepEqual(h.runeNames(doc), { 8000: 'Precision', 8010: 'Conqueror' });
-  assert.deepEqual(h.runeNames(null), {});
+  const doc = [{ id: 8000, key: 'Precision', name: 'Precision', icon: 'perk-images/Styles/7201_Precision.png', slots: [{ runes: [{ id: 8010, name: 'Conqueror', icon: 'perk-images/Styles/Precision/Conqueror/Conqueror.png' }] }] }];
+  assert.deepEqual(h.runeIndex(doc), {
+    8000: { name: 'Precision', icon: 'perk-images/Styles/7201_Precision.png' },
+    8010: { name: 'Conqueror', icon: 'perk-images/Styles/Precision/Conqueror/Conqueror.png' },
+  });
+  assert.deepEqual(h.runeIndex(null), {});
   assert.deepEqual(h.itemIndex({ data: { 3078: { name: 'Trinity Force' } } }), { 3078: 'Trinity Force' });
+});
+
+test('keystone and secondary style from match-v5 perks or the proxy\'s summary', () => {
+  // match-v5 PerksDto: styles tagged primaryStyle / subStyle, the keystone first in the primary's selections.
+  const perks = { statPerks: { defense: 5001, flex: 5008, offense: 5005 }, styles: [
+    { description: 'subStyle', style: 8300, selections: [{ perk: 8304 }, { perk: 8345 }] },
+    { description: 'primaryStyle', style: 8200, selections: [{ perk: 8230 }, { perk: 8226 }, { perk: 8210 }, { perk: 8237 }] },
+  ] };
+  assert.deepEqual(h.runePair({ perks }), { keystone: 8230, subStyle: 8300 });
+  assert.deepEqual(h.runePair({ perks: { keystone: 8010, primaryStyle: 8000, subStyle: 8100 } }), { keystone: 8010, subStyle: 8100 });
+  assert.deepEqual(h.runePair({ perks: { primaryStyle: 8000 } }), { keystone: null, subStyle: null });
+  assert.deepEqual(h.runePair({}), { keystone: null, subStyle: null });
+});
+
+test('rune icons come from the mirror, path segments encoded, perk-images only', () => {
+  assert.equal(h.runeUrl('16.19.1', 'perk-images/Styles/Precision/Conqueror/Conqueror.png'), '/ddragon/16.19.1/img/perk-images/Styles/Precision/Conqueror/Conqueror.png');
+  assert.equal(h.runeUrl('16.19.1', 'perk-images/Styles/A B.png'), '/ddragon/16.19.1/img/perk-images/Styles/A%20B.png');
+  assert.equal(h.runeUrl('16.19.1', 'img/champion/Ahri.png'), null);
+  assert.equal(h.runeUrl(null, 'perk-images/Styles/7201_Precision.png'), null);
+  assert.equal(h.runeUrl('16.19.1', undefined), null);
 });
 
 test('matchup lanes come back in teamPosition order', () => {

@@ -46,6 +46,10 @@ fn data_body(version: &str, file: &str) -> Value {
         return json!({"type": "summoner", "version": version, "data": {
             "SummonerFlash": {"key": "4", "image": {"full": "SummonerFlash.png"}}}});
     }
+    if file == "runesReforged" {
+        return json!([{"id": 8100, "icon": "perk-images/Styles/7200_Domination.png", "slots": [
+            {"runes": [{"id": 8112, "icon": "perk-images/Styles/Domination/Electrocute/Electrocute.png"}]}]}]);
+    }
     json!({"file": file, "version": version})
 }
 
@@ -613,6 +617,76 @@ async fn riot_404s_and_non_images_are_not_kept() {
 
     let img = e.state.ddragon.dir().join(NEW).join("img/champion");
     assert!(!img.join("Ahri.png").exists() && !img.join("Garen.png").exists());
+}
+
+const ELECTROCUTE: &str = "perk-images/Styles/Domination/Electrocute/Electrocute.png";
+
+impl Env {
+    /// Data Dragon's unversioned rune icon at `/cdn/img/<icon>`.
+    async fn rune_icon(&self, icon: &str, body: &[u8]) {
+        Mock::given(method("GET"))
+            .and(path(format!("/cdn/img/{icon}")))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(body.to_vec()))
+            .mount(&self.server)
+            .await;
+    }
+}
+
+#[tokio::test]
+async fn a_rune_icon_is_fetched_once_from_the_unversioned_path_then_served_from_disk() {
+    let e = env().await;
+    e.publish(NEW, &DATA_FILES).await;
+    e.queues().await;
+    e.sync(false).await;
+    e.rune_icon(ELECTROCUTE, PNG).await;
+    e.rune_icon("perk-images/Styles/7200_Domination.png", PNG).await;
+
+    let uri = format!("/ddragon/{NEW}/img/{ELECTROCUTE}");
+    for _ in 0..2 {
+        let r = e.call("GET", &uri, None, None).await;
+        assert_eq!(r.status, StatusCode::OK);
+        assert_eq!(r.body, PNG);
+        assert_eq!(r.headers["content-type"], "image/png");
+        assert_eq!(r.headers["cache-control"], "public, max-age=604800, immutable");
+    }
+    assert_eq!(e.image_fetches().await, 1, "the second request came from disk");
+    let on_disk = e.state.ddragon.dir().join(NEW).join("img").join(ELECTROCUTE);
+    assert_eq!(std::fs::read(on_disk).unwrap(), PNG);
+
+    // A style's icon is listed too.
+    let r = e
+        .call(
+            "GET",
+            &format!("/ddragon/{NEW}/img/perk-images/Styles/7200_Domination.png"),
+            None,
+            None,
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn only_rune_icons_the_mirrored_patch_lists_are_fetched() {
+    let e = env().await;
+    e.publish(NEW, &DATA_FILES).await;
+    e.queues().await;
+    e.sync(false).await;
+    e.rune_icon(ELECTROCUTE, PNG).await;
+    e.rune_icon("perk-images/Styles/Domination/Nobody/Nobody.png", PNG)
+        .await;
+
+    for uri in [
+        format!("/ddragon/{NEW}/img/perk-images/Styles/Domination/Nobody/Nobody.png"), // not listed
+        format!("/ddragon/{OLD}/img/{ELECTROCUTE}"),                                   // patch not mirrored
+        format!("/ddragon/latest/img/{ELECTROCUTE}"),
+        format!("/ddragon/{NEW}/img/perk-images/..%2F..%2Frunesreforged.json"),
+        format!("/ddragon/{NEW}/img/perk-images/%2E%2E/%2E%2E/{NEW}/champion.json"),
+    ] {
+        let r = e.call("GET", &uri, None, None).await;
+        assert_eq!(r.status, StatusCode::NOT_FOUND, "{uri}");
+        assert!(r.headers.get("cache-control").is_none(), "{uri}");
+    }
+    assert_eq!(e.image_fetches().await, 0);
 }
 
 // ── POST /v1/admin/ddragon/sync ─────────────────────────────────────────────

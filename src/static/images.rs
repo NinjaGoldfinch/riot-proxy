@@ -6,6 +6,11 @@
 //!
 //! Layout: `DDRAGON_DIR/<version>/img/<kind>/<file>`, which is Data Dragon's
 //! own `/cdn/<version>/img/<kind>/<file>`.
+//!
+//! Rune icons (DEV-14) are the exception: Data Dragon keeps them unversioned at
+//! `/cdn/img/<icon>`, `icon` being runesReforged.json's `perk-images/…` path.
+//! They are kept per patch all the same, at `DDRAGON_DIR/<version>/img/<icon>`,
+//! and only an icon that patch's runesReforged.json lists is fetched.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -24,7 +29,12 @@ pub const IMAGE_KINDS: [(&str, &str); 4] = [
     ("spell", "summoner"),
 ];
 
+/// The first segment of every rune icon path in runesReforged.json.
+pub const RUNE_DIR: &str = "perk-images";
+
 pub(super) type Names = Mutex<HashMap<(String, &'static str), Arc<HashSet<String>>>>;
+/// Reads a data file's image names.
+type Parser = fn(&[u8]) -> HashSet<String>;
 pub(super) type Filling = tokio::sync::Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>;
 
 #[derive(Debug, thiserror::Error)]
@@ -61,6 +71,56 @@ fn safe_name(file: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.')
 }
 
+/// runesReforged.json: styles, each with slots of runes, all with an `icon`.
+#[derive(Deserialize)]
+struct RuneStyle {
+    icon: Option<String>,
+    #[serde(default)]
+    slots: Vec<RuneSlot>,
+}
+
+#[derive(Deserialize)]
+struct RuneSlot {
+    #[serde(default)]
+    runes: Vec<Rune>,
+}
+
+#[derive(Deserialize)]
+struct Rune {
+    icon: Option<String>,
+}
+
+/// A relative path under [`RUNE_DIR`] whose every segment is a plain name:
+/// `perk-images/Styles/Domination/Electrocute/Electrocute.png`.
+fn safe_icon(path: &str) -> bool {
+    let mut segments = path.split('/');
+    segments.next() == Some(RUNE_DIR)
+        && path.ends_with(".png")
+        && segments.clone().count() > 0
+        && segments.all(|s| {
+            !s.is_empty()
+                && !s.starts_with('.')
+                && s.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'.')
+        })
+}
+
+/// Every style and rune `icon` in runesReforged.json.
+pub fn parse_rune_icons(bytes: &[u8]) -> HashSet<String> {
+    let Ok(styles) = serde_json::from_slice::<Vec<RuneStyle>>(bytes) else {
+        return HashSet::new();
+    };
+    styles
+        .into_iter()
+        .flat_map(|style| {
+            let runes = style.slots.into_iter().flat_map(|s| s.runes).map(|r| r.icon);
+            std::iter::once(style.icon).chain(runes)
+        })
+        .flatten()
+        .filter(|i| safe_icon(i))
+        .collect()
+}
+
 /// Every `data.*.image.full` in a data file.
 pub fn parse_names(bytes: &[u8]) -> HashSet<String> {
     let Ok(file) = serde_json::from_slice::<DataFile>(bytes) else {
@@ -85,10 +145,36 @@ impl Mirror {
             return Err(ImageError::NotFound);
         }
         let path = self.dir().join(version).join("img").join(kind).join(file);
+        let url = self.cdn().urls().image(version, kind, file);
+        self.fill(version, (data_file, parse_names), file, path, &url)
+            .await
+    }
+
+    /// A rune or rune style icon, `icon` being its runesReforged.json path
+    /// (`perk-images/Styles/…`): from disk, or fetched once and kept.
+    pub async fn rune_image(&self, version: &str, icon: &str) -> Result<Vec<u8>, ImageError> {
+        if !is_version(version) || !safe_icon(icon) {
+            return Err(ImageError::NotFound);
+        }
+        let path = self.dir().join(version).join("img").join(icon);
+        let url = self.cdn().urls().rune_image(icon);
+        self.fill(version, ("runesReforged", parse_rune_icons), icon, path, &url)
+            .await
+    }
+
+    /// `path`'s bytes, or `url`'s once `listed` names `name` for a complete patch.
+    async fn fill(
+        &self,
+        version: &str,
+        listed: (&'static str, Parser),
+        name: &str,
+        path: PathBuf,
+        url: &str,
+    ) -> Result<Vec<u8>, ImageError> {
         if let Ok(bytes) = tokio::fs::read(&path).await {
             return Ok(bytes);
         }
-        if !self.is_complete(version).await || !self.image_names(version, data_file).await.contains(file) {
+        if !self.is_complete(version).await || !self.image_names(version, listed).await.contains(name) {
             return Err(ImageError::NotFound);
         }
 
@@ -103,8 +189,7 @@ impl Mirror {
             if let Ok(bytes) = tokio::fs::read(&path).await {
                 return Ok(bytes);
             }
-            let cdn = self.cdn();
-            let bytes = match cdn.image(&cdn.urls().image(version, kind, file)).await {
+            let bytes = match self.cdn().image(url).await {
                 Err(DdragonError::Status { status: 404, .. }) => return Err(ImageError::NotFound),
                 other => other?,
             };
@@ -120,7 +205,11 @@ impl Mirror {
     }
 
     /// The image names a patch's data file lists, parsed once per patch.
-    async fn image_names(&self, version: &str, data_file: &'static str) -> Arc<HashSet<String>> {
+    async fn image_names(
+        &self,
+        version: &str,
+        (data_file, parse): (&'static str, Parser),
+    ) -> Arc<HashSet<String>> {
         let key = (version.to_string(), data_file);
         if let Some(names) = self.image_names.lock().ok().and_then(|g| g.get(&key).cloned()) {
             return names;
@@ -128,7 +217,7 @@ impl Mirror {
         let names = Arc::new(
             self.read(data_file, Some(version))
                 .await
-                .map(|b| parse_names(&b))
+                .map(|b| parse(&b))
                 .unwrap_or_default(),
         );
         if let Ok(mut g) = self.image_names.lock() {
@@ -157,6 +246,39 @@ mod tests {
         got.sort();
         assert_eq!(got, ["1.png", "Aatrox.png"]);
         assert!(parse_names(b"not json").is_empty());
+    }
+
+    #[test]
+    fn rune_icons_come_from_styles_and_runes_and_must_stay_under_perk_images() {
+        let icons = parse_rune_icons(
+            br#"[{"id": 8100, "icon": "perk-images/Styles/7200_Domination.png", "slots": [
+                {"runes": [{"id": 8112, "icon": "perk-images/Styles/Domination/Electrocute/Electrocute.png"},
+                           {"id": 1, "icon": "perk-images/../../riot-proxy.db.png"},
+                           {"id": 2, "icon": "img/champion/Ahri.png"},
+                           {"id": 3}]}]}]"#,
+        );
+        let mut got: Vec<_> = icons.into_iter().collect();
+        got.sort();
+        assert_eq!(
+            got,
+            [
+                "perk-images/Styles/7200_Domination.png",
+                "perk-images/Styles/Domination/Electrocute/Electrocute.png"
+            ]
+        );
+        assert!(parse_rune_icons(b"{}").is_empty());
+        for bad in [
+            "perk-images",
+            "perk-images/",
+            "perk-images/a.png/",
+            "perk-images//a.png",
+            "perk-images/.a.png",
+            "perk-images/a b.png",
+            "perk-images\\a.png",
+            "/perk-images/a.png",
+        ] {
+            assert!(!safe_icon(bad), "{bad}");
+        }
     }
 
     #[test]

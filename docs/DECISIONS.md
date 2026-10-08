@@ -971,6 +971,15 @@ Accepted (owner request, task DEV-15). Amends ADR-040; design/04 §Schema.
 - **Every timeline fetched from Riot is archived**, through the API or a job, whatever `ARCHIVE_TIMELINES` says. The flag now only decides whether archive jobs (`archive:match`, poll, ladder crawls) also fetch timelines, which is how v1 used it. Timelines are still not fetched automatically.
 - **Unchanged:** a timeline is stored only once its match is archived (the `timelines → matches` foreign key, ADR-040). One fetched before its match is served but not stored, and is stored on the next fetch after the match is archived.
 
+## ADR-086 — Rune icons are mirrored; the showcase shows runes and puts the level on the portrait (2026-10-09)
+Accepted (owner request, task DEV-14). Design/07 §Data Dragon, design/11.
+- **Owner request** (with a screenshot of the scoreboard): "Doubled up level and no runes are present. Fix this in the showcase and anywhere else this might occur."
+- **Runes were missing because their icons were never mirrored.** ADR-076 served four kinds (`champion`, `profileicon`, `item`, `spell`), each listed by a data file's `image.full`. Rune icons are not listed that way. runesReforged.json gives each style and rune an `icon` path (`perk-images/Styles/Domination/Electrocute/Electrocute.png`), and Data Dragon serves it unversioned at `/cdn/img/<icon>`.
+- **Served at `/ddragon/{version}/img/perk-images/…` and kept per patch.** Keeping it per patch matches every other image, and the existing `ServeDir` serves it from disk with no new code. Riot's copy is unversioned, so a rune that is redrawn shows the new icon on old patches until their mirrored copies are pruned. That is acceptable for icons.
+- **Same guards as ADR-076.** Only a path the mirrored patch's runesReforged.json lists is fetched. Every segment must be a plain name (`[A-Za-z0-9_.-]`, not starting with `.`), and the first must be `perk-images`. A miss is fetched once; Riot's 404s and non-PNGs are not kept.
+- **What the showcase shows:** keystone over secondary style, beside the spells, in the scoreboard and on match cards, as in the client. The scoreboard reads match-v5 `perks.styles` by `description` (`primaryStyle` / `subStyle`). Match cards read the proxy's `perks` summary (`keystone`, `subStyle`). Champion builds now show the pair's icons next to the names.
+- **The level:** it was drawn once, as text beside the portrait. The fix draws it as a badge on the portrait's corner, as the client does. Match cards had no level at all and now get the same badge, from the summary's `champLevel`.
+
 ## ADR-087 — Dashboard crawl activity: the queue in claim order, and one view per crawl (2026-10-09)
 Accepted (owner request, task DEV-13). Design/06 §Activity views.
 - **Owner request:** "For the history for ladder crawls, and running events, allow it to be interactable and allow to see what is running currently and what is running next. Also show the status of it as well, where it is in the fetch and any other useful data."

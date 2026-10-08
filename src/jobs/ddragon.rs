@@ -89,6 +89,12 @@ impl CdnUrls {
     pub fn image(&self, version: &str, kind: &str, file: &str) -> String {
         format!("{}/cdn/{version}/img/{kind}/{file}", self.ddragon)
     }
+
+    /// `/cdn/img/<icon>`: a rune icon, unversioned, `icon` being a
+    /// runesReforged.json `icon` (`perk-images/Styles/…`).
+    pub fn rune_image(&self, icon: &str) -> String {
+        format!("{}/cdn/img/{icon}", self.ddragon)
+    }
 }
 
 /// The Data Dragon HTTP client: plain GETs, no key, no limiter.

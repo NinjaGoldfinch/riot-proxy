@@ -101,6 +101,8 @@
   .spells { display: flex; flex-direction: column; gap: 2px; }
   .items { display: grid; grid-template-columns: repeat(4, 22px); gap: 2px; }
   .lvl { font: 700 10px var(--mono); color: var(--accent); }
+  .portrait { position: relative; display: inline-flex; flex: none; }
+  .portrait .lvl { position: absolute; right: -3px; bottom: -3px; min-width: 15px; padding: 0 2px; box-sizing: border-box; border-radius: 4px; background: var(--sunk); border: 1px solid var(--line); color: var(--text); line-height: 12px; text-align: center; pointer-events: none; }
   article.match[data-href] { cursor: pointer; }
   article.match[data-href]:hover { outline: 1px solid var(--line); }
   .team-card { border-top: 3px solid var(--dim); }
@@ -242,6 +244,9 @@ function championIndex(doc) {
 
 /** A mirrored Data Dragon image (ADR-076), or null without a patch or file. */
 const imageUrl = (version, kind, file) => (version && file ? `/ddragon/${encodeURIComponent(version)}/img/${kind}/${encodeURIComponent(file)}` : null);
+
+/** A mirrored rune or rune style icon, `icon` being runesReforged.json's `perk-images/…` path. */
+const runeUrl = (version, icon) => (version && /^perk-images\//.test(icon ?? '') ? `/ddragon/${encodeURIComponent(version)}/img/${icon.split('/').map(encodeURIComponent).join('/')}` : null);
 
 /** lol-status-v4 incidents and maintenances, titled in `locale` (falling back to en_US, then the first). */
 function statusNotices(doc, locale = 'en_US') {
@@ -447,14 +452,26 @@ function tierRows(stats) {
   return { rows, all: { games, wins, winRate: games ? wins / games : null } };
 }
 
-/** Data Dragon's runesReforged.json as `{ id: name }`, for styles and runes alike. */
-function runeNames(doc) {
+/** Data Dragon's runesReforged.json as `{ id: { name, icon } }`, for styles and runes alike. */
+function runeIndex(doc) {
   const out = {};
   for (const style of Array.isArray(doc) ? doc : []) {
-    out[style.id] = style.name;
-    for (const slot of style.slots ?? []) for (const r of slot.runes ?? []) out[r.id] = r.name;
+    out[style.id] = { name: style.name, icon: style.icon };
+    for (const slot of style.slots ?? []) for (const r of slot.runes ?? []) out[r.id] = { name: r.name, icon: r.icon };
   }
   return out;
+}
+
+/** A player's keystone and secondary style, from Riot's match-v5 `perks` or the proxy's summary of it. */
+function runePair(p) {
+  const k = p?.perks;
+  if (!k) return { keystone: null, subStyle: null };
+  if (Array.isArray(k.styles)) {
+    const primary = k.styles.find((s) => s.description === 'primaryStyle') ?? k.styles[0];
+    const sub = k.styles.find((s) => s.description === 'subStyle') ?? k.styles[1];
+    return { keystone: primary?.selections?.[0]?.perk ?? null, subStyle: sub?.style ?? null };
+  }
+  return { keystone: k.keystone ?? null, subStyle: k.subStyle ?? null };
 }
 
 /** Data Dragon's item.json as `{ id: name }`. */
@@ -662,17 +679,20 @@ const MATCH_PAGE = 10;
 const MASTERY_SHOWN = 12;
 let queues = null; // queueId → description, once per session
 let spells = null; // summoner spell key → image file, once per session
+let runes = null; // rune and style id → { name, icon }, once per session
 // Bumped on every route, so a slow call for a view the user already left draws nothing.
 let viewSeq = 0;
 const pl = { id: null, profile: null, queue: 0, start: 0, matches: [], hasMore: false, mastery: null, masteryAll: false };
 
 async function loadLookups() {
-  const [q, s] = await Promise.all([
+  const [q, s, r] = await Promise.all([
     queues ? null : get('/v1/static/queues'),
     spells ? null : get('/v1/static/summoner'),
+    runes ? null : get('/v1/static/runes'),
   ]);
   if (q?.ok) queues = queueNames(q.json);
   if (s?.ok) spells = spellIndex(s.json);
+  if (r?.ok) runes = runeIndex(r.json);
 }
 
 // Riot's descriptions read "5v5 Ranked Solo games"; as a label the last word adds nothing.
@@ -685,6 +705,18 @@ const itemIcon = (id) => {
   const url = id ? imageUrl(version, 'item', `${id}.png`) : null;
   return url ? `<img class="icon xs" src="${esc(url)}" alt="item ${esc(id)}" loading="lazy">` : `<span class="icon xs"></span>`;
 };
+const runeIcon = (id) => {
+  const name = runes?.[id]?.name ?? (id ? `rune ${id}` : '');
+  const url = runeUrl(version, runes?.[id]?.icon);
+  return url ? `<img class="icon xs rune" src="${esc(url)}" alt="${esc(name)}" title="${esc(name)}" loading="lazy">` : `<span class="icon xs rune" title="${esc(name)}"></span>`;
+};
+// Keystone over secondary style, beside the spells, as the client shows them.
+const runeIcons = (p) => {
+  const { keystone, subStyle } = runePair(p);
+  return keystone || subStyle ? `<span class="spells runes">${runeIcon(keystone)}${runeIcon(subStyle)}</span>` : '';
+};
+// The champion's level sits on its portrait, as in the client's scoreboard.
+const portrait = (id, level, cls = '') => `<span class="portrait">${champLink(id, cls)}${level != null ? `<span class="lvl" title="champion level">${esc(level)}</span>` : ''}</span>`;
 const champLink = (id, cls = '') => `<a href="#/champion/${esc(id)}" title="${esc(champions[id]?.name ?? `#${id}`)}">${champIcon(id, cls)}</a>`;
 
 async function renderPlayer({ gameName, tagLine }, refresh = false) {
@@ -813,7 +845,7 @@ function matchCard(m) {
   const items = [p.item0, p.item1, p.item2, p.item3, p.item4, p.item5, p.item6];
   return `<article class="match ${o.kind}" data-match="${esc(m.matchId)}" data-href="${esc(matchHref(pl.region, m.matchId))}" title="open the scoreboard">
     <div class="meta"><b>${esc(o.label)}</b><span>${esc(queueName(m.queueId) || m.gameMode || '')}</span><span class="muted">${esc(ago(m.gameEndTimestamp ?? m.gameCreation))} · ${clock(secs)}</span></div>
-    <div class="pick">${champLink(p.championId)}<span class="spells">${spellIcon(p.summoner1Id)}${spellIcon(p.summoner2Id)}</span></div>
+    <div class="pick">${portrait(p.championId, p.champLevel)}<span class="spells">${spellIcon(p.summoner1Id)}${spellIcon(p.summoner2Id)}</span>${runeIcons(p)}</div>
     <div class="kda"><b>${esc(p.kills ?? 0)} / <span class="d">${esc(p.deaths ?? 0)}</span> / ${esc(p.assists ?? 0)}</b><small class="muted">${kda(p.kills, p.deaths, p.assists).toFixed(2)} KDA</small></div>
     <div class="cs hide-sm"><span>${cs} CS${secs ? ` <small class="muted">${(cs / (secs / 60)).toFixed(1)}/min</small>` : ''}</span><small class="muted">${thousands(p.goldEarned)} gold · ${thousands(p.totalDamageDealtToChampions)} dmg</small></div>
     <div class="items">${items.map(itemIcon).join('')}</div>
@@ -911,7 +943,7 @@ function renderScoreboard(teams, info) {
         const href = p.riotIdGameName ? `#/player/${encodeURIComponent(p.riotIdGameName)}/${encodeURIComponent(p.riotIdTagline ?? '')}` : '';
         const secs = durationSecs(info);
         return `<tr class="${p.me ? 'me' : ''}">
-          <td><span class="pick">${champLink(p.championId, 'sm')}<span class="lvl">${esc(p.champLevel ?? '')}</span><span class="spells">${spellIcon(p.summoner1Id)}${spellIcon(p.summoner2Id)}</span></span></td>
+          <td><span class="pick">${portrait(p.championId, p.champLevel, 'sm')}<span class="spells">${spellIcon(p.summoner1Id)}${spellIcon(p.summoner2Id)}</span>${runeIcons(p)}</span></td>
           <td class="name">${href ? `<a href="${esc(href)}">${name}</a>` : name}${p.teamPosition ? ` <small class="hide-sm">${esc(titleCase(p.teamPosition))}</small>` : ''}</td>
           <td class="n">${esc(p.kills ?? 0)}/${esc(p.deaths ?? 0)}/${esc(p.assists ?? 0)} <small class="muted">${kda(p.kills, p.deaths, p.assists).toFixed(1)}</small></td>
           <td class="n hide-sm">${p.cs}${secs ? ` <small class="muted">${(p.cs / (secs / 60)).toFixed(1)}</small>` : ''}</td>
@@ -1001,7 +1033,6 @@ function renderGold(tl, match) {
 }
 
 // ---------- champion view (DEV-08)
-let runes = null; // rune and style id → name, once per session
 let itemNames = null; // item id → name, once per session
 const ch = { id: null, role: '' };
 
@@ -1025,7 +1056,6 @@ async function renderChampion({ id }) {
   const [res] = await Promise.all([
     get(`/v1/lol/analytics/champions/${id}?${q}`),
     loadLookups(),
-    runes ? null : get('/v1/static/runes').then((r) => { if (r.ok) runes = runeNames(r.json); }),
     itemNames ? null : get('/v1/static/item').then((r) => { if (r.ok) itemNames = itemIndex(r.json); }),
   ]);
   if (seq !== viewSeq) return;
@@ -1047,7 +1077,7 @@ async function renderChampion({ id }) {
   const stat = (e) => `<span class="stat">${pct(e.winRate)}<small>${e.games.toLocaleString()} games</small></span>`;
   const items = (d.items ?? []).map((e) => `<li>${itemIcon(e.itemId)}<span>${esc(itemNames?.[e.itemId] ?? `item ${e.itemId}`)}</span>${stat(e)}</li>`).join('');
   const spellRows = (d.spells ?? []).map((e) => `<li><span class="spells-row">${spellIcon(e.spellA)}${spellIcon(e.spellB)}</span>${stat(e)}</li>`).join('');
-  const runeRows = (d.runes ?? []).map((e) => `<li><span>${esc(runes?.[e.keystoneId] ?? `rune ${e.keystoneId}`)} <small class="muted">+ ${esc(runes?.[e.subStyleId] ?? e.subStyleId)}</small></span>${stat(e)}</li>`).join('');
+  const runeRows = (d.runes ?? []).map((e) => `<li><span class="spells-row">${runeIcon(e.keystoneId)}${runeIcon(e.subStyleId)}</span><span>${esc(runes?.[e.keystoneId]?.name ?? `rune ${e.keystoneId}`)} <small class="muted">+ ${esc(runes?.[e.subStyleId]?.name ?? e.subStyleId)}</small></span>${stat(e)}</li>`).join('');
   const sub = (title, body) => `<h3 class="muted sub">${title}</h3>${body ? `<ol class="list">${body}</ol>` : '<p class="muted">–</p>'}`;
   $('#cBuild').innerHTML = `<header><h2>Builds</h2></header><div>${sources(OP.champ, OP.file)}</div>`
     + (items || spellRows || runeRows ? sub('Items', items) + sub('Summoner spells', spellRows) + sub('Runes', runeRows) : `<p class="empty">No builds yet.</p>`);
