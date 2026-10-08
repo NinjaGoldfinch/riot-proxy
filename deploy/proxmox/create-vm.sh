@@ -24,15 +24,20 @@ ip=dhcp
 gw=""
 ciuser=riot
 ssh_keys=""
+gen_key=0
+key_dir=/root/.ssh/riot-proxy
 image_dir=/var/tmp/riot-proxy-images
 start=1
 mode=run
 
 usage() {
   cat <<EOF
-usage: $0 --ssh-keys FILE [options]
+usage: $0 --ssh-keys FILE | --generate-key [options]
 
-  --ssh-keys FILE      public keys for the VM user (required)
+  --ssh-keys FILE      public keys for the VM user
+  --generate-key       make a new ed25519 keypair for this VM in --key-dir
+                       (with --ssh-keys, the VM accepts both)
+  --key-dir DIR        where --generate-key writes <name>-<vmid>[.pub] (default: $key_dir)
   --vmid N             VM id (default: the cluster's next free id)
   --name NAME          VM name (default: $name)
   --storage ID         disk + cloud-init drive storage (default: $storage)
@@ -55,6 +60,8 @@ die() { echo "create-vm: $*" >&2; exit 1; }
 while [ $# -gt 0 ]; do
   case "$1" in
     --ssh-keys) ssh_keys=$2; shift ;;
+    --generate-key) gen_key=1 ;;
+    --key-dir) key_dir=$2; shift ;;
     --vmid) vmid=$2; shift ;;
     --name) name=$2; shift ;;
     --storage) storage=$2; shift ;;
@@ -76,6 +83,7 @@ while [ $# -gt 0 ]; do
 done
 
 [[ $ciuser =~ ^[a-z_][a-z0-9_-]*$ ]] || die "--user must be a plain login name"
+[[ $name =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || die "--name must be a DNS name"
 
 b64() { base64 -w0 < "$here/files/$1"; }
 
@@ -119,8 +127,8 @@ if [ "$mode" = vendor ]; then
   exit 0
 fi
 
-[ -n "$ssh_keys" ] || { usage >&2; die "--ssh-keys is required"; }
-[ -r "$ssh_keys" ] || die "can't read $ssh_keys"
+[ -n "$ssh_keys" ] || [ "$gen_key" = 1 ] || { usage >&2; die "--ssh-keys or --generate-key is required"; }
+[ -z "$ssh_keys" ] || [ -r "$ssh_keys" ] || die "can't read $ssh_keys"
 if [ "$ip" = dhcp ]; then
   ipconfig="ip=dhcp"
 else
@@ -137,12 +145,29 @@ if [ "$mode" = run ]; then
   command -v qm >/dev/null || die "qm not found; this must run on a Proxmox VE host"
   pvesm status --content snippets 2>/dev/null | awk 'NR>1{print $1}' | grep -qx "$snippets" \
     || die "storage '$snippets' has no 'snippets' content type; add it (Datacenter → Storage → $snippets → Content) or pass --snippets"
+  [ "$gen_key" = 0 ] || command -v ssh-keygen >/dev/null || die "ssh-keygen not found; install openssh-client"
 fi
 
 [ -n "$vmid" ] || vmid=$(if [ "$mode" = dry ]; then echo 9000; else pvesh get /cluster/nextid; fi)
 [[ $vmid =~ ^[0-9]+$ ]] || die "--vmid must be a number"
 snippet="riot-proxy-dev-$vmid.yaml"
 image="$image_dir/$(basename "$IMAGE_URL")"
+
+# A fresh keypair per VM, named after it, so no two VMs share a login key.
+keys_file=$ssh_keys
+if [ "$gen_key" = 1 ]; then
+  key="$key_dir/$name-$vmid"
+  [ "$mode" = dry ] || [ ! -e "$key" ] || die "$key already exists; delete it (and $key.pub) or pass --key-dir"
+  run install -d -m 700 "$key_dir"
+  run ssh-keygen -q -t ed25519 -N '' -C "$ciuser@$name-$vmid" -f "$key"
+  if [ -n "$ssh_keys" ]; then
+    keys_file=$(mktemp)
+    trap 'rm -f "$keys_file"' EXIT
+    if [ "$mode" = run ]; then cat "$ssh_keys" "$key.pub" > "$keys_file"; fi
+  else
+    keys_file="$key.pub"
+  fi
+fi
 
 # Download (or refresh) the Debian cloud image and check it against Debian's SHA512SUMS.
 run mkdir -p "$image_dir"
@@ -168,7 +193,7 @@ run qm create "$vmid" --name "$name" --ostype l26 --cpu host --cores "$cores" --
 run qm set "$vmid" --scsi0 "$storage:0,import-from=$image,discard=on,ssd=1"
 run qm resize "$vmid" scsi0 "$disk"
 run qm set "$vmid" --ide2 "$storage:cloudinit" --boot order=scsi0
-run qm set "$vmid" --ciuser "$ciuser" --sshkeys "$ssh_keys" --ipconfig0 "$ipconfig" \
+run qm set "$vmid" --ciuser "$ciuser" --sshkeys "$keys_file" --ipconfig0 "$ipconfig" \
   --cicustom "vendor=$snippets:snippets/$snippet"
 state="created (not started)"
 if [ "$start" = 1 ]; then
@@ -176,11 +201,21 @@ if [ "$start" = 1 ]; then
   state="created and booting"
 fi
 
+login="ssh $ciuser@<vm>"
+if [ "$gen_key" = 1 ]; then
+  login="ssh -i ~/.ssh/$name-$vmid $ciuser@<vm>"
+  cat <<EOF
+create-vm: login key for VM $vmid: $key (public: $key.pub)
+  Copy it to your machine:  scp root@$(hostname):$key ~/.ssh/$name-$vmid
+  then delete it here if you like: rm $key
+EOF
+fi
+
 cat <<EOF
 create-vm: VM $vmid ($name) $state.
 Next:
   1. Find its address:   qm guest cmd $vmid network-get-interfaces   (once the agent is up, ~1-2 min)
-  2. Set RIOT_API_KEY:   ssh $ciuser@<vm>, then edit /opt/riot-proxy/.env
+  2. Set RIOT_API_KEY:   $login, then edit /opt/riot-proxy/.env
   3. Start it now:       sudo riot-proxy-update   (or wait; the timer runs every 2 minutes)
   4. Open http://<vm>:8080/docs. The admin key is in: docker compose -f /opt/riot-proxy/compose.yaml logs
 EOF

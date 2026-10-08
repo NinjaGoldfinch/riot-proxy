@@ -19,7 +19,15 @@ curl -fsSL https://github.com/NinjaGoldfinch/riot-proxy/archive/refs/heads/main.
 cd riot-proxy-main/deploy/proxmox
 ./create-vm.sh --ssh-keys ~/.ssh/my-laptop.pub            # DHCP, next free VM id
 # or: ./create-vm.sh --ssh-keys key.pub --vmid 210 --ip 192.168.68.50/22 --gw 192.168.68.1
+# or: ./create-vm.sh --generate-key                        # a new keypair just for this VM
 ```
+
+`--generate-key` writes an ed25519 keypair (no passphrase) to
+`/root/.ssh/riot-proxy/<name>-<vmid>` on the host, so every VM gets its own login key.
+Copy the private key to your machine and log in with `ssh -i`; the script prints both
+commands. Add `--ssh-keys` as well to let your usual key in too. It refuses to
+overwrite an existing key: on a rebuild, delete the old one first or the VM gets no
+new key. Each VM's SSH *host* keys are already unique; cloud-init makes them on first boot.
 
 `./create-vm.sh --help` lists the options: storage (`local-lvm`), bridge (`vmbr0`),
 2 cores, 2 GB RAM and a 16 GB disk by default. `--dry-run` prints the `qm` commands
@@ -73,6 +81,7 @@ Changes to these files reach a VM only when it is recreated (or by copying them 
 ```bash
 qm stop <vmid> && qm destroy <vmid> --purge     # deletes the VM and its data
 ./create-vm.sh --ssh-keys key.pub --vmid <vmid>
+# with --generate-key: rm /root/.ssh/riot-proxy/riot-proxy-dev-<vmid>{,.pub} first
 ```
 
 Keep `data/` first if you want the archive: `scp -r riot@<vm>:/opt/riot-proxy/data .`

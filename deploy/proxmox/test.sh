@@ -56,7 +56,21 @@ check "dry run starts the VM" grep -q '^qm start 123' "$tmp/dry"
 "$here/create-vm.sh" --dry-run --ssh-keys "$tmp/keys" --vmid 123 --no-start > "$tmp/dry2"
 check "--no-start leaves it stopped" bash -c "! grep -q '^qm start' '$tmp/dry2'"
 check "dhcp is the default" grep -q 'ipconfig0 ip=dhcp' "$tmp/dry2"
-check "--ssh-keys is required" bash -c "! '$here/create-vm.sh' --dry-run >/dev/null 2>&1"
+check "--ssh-keys or --generate-key is required" bash -c "! '$here/create-vm.sh' --dry-run >/dev/null 2>&1"
+check "a bad --name is refused" bash -c "! '$here/create-vm.sh' --dry-run --ssh-keys '$tmp/keys' --name '../x' >/dev/null 2>&1"
+
+# --- generated keys ----------------------------------------------------------
+"$here/create-vm.sh" --dry-run --generate-key --vmid 123 > "$tmp/gen"
+check "--generate-key makes an ed25519 key named after the VM" grep -q "^ssh-keygen -q -t ed25519 -N '' -C riot@riot-proxy-dev-123 -f /root/.ssh/riot-proxy/riot-proxy-dev-123" "$tmp/gen"
+check "--generate-key gives the VM only the new public key" grep -q 'sshkeys /root/.ssh/riot-proxy/riot-proxy-dev-123.pub ' "$tmp/gen"
+check "--generate-key says how to log in" grep -q 'ssh -i ~/.ssh/riot-proxy-dev-123 riot@<vm>' "$tmp/gen"
+"$here/create-vm.sh" --dry-run --generate-key --key-dir "$tmp/k" --name dev2 --vmid 124 > "$tmp/gen2"
+check "--key-dir and --name place the key" grep -qF -- "-C riot@dev2-124 -f $tmp/k/dev2-124 " "$tmp/gen2"
+"$here/create-vm.sh" --dry-run --generate-key --ssh-keys "$tmp/keys" --vmid 123 > "$tmp/gen3"
+check "--generate-key with --ssh-keys passes a combined file" bash -c "grep -q -- '--sshkeys /' '$tmp/gen3' && ! grep -q -- '--sshkeys .*\.pub ' '$tmp/gen3' && ! grep -q -- '--sshkeys $tmp/keys ' '$tmp/gen3'"
+check "plain --ssh-keys generates nothing" bash -c "! grep -q ssh-keygen '$tmp/dry'"
+mkdir -p "$tmp/real"
+check "the generated keys differ per VM" bash -c "ssh-keygen -q -t ed25519 -N '' -f '$tmp/real/a' && ssh-keygen -q -t ed25519 -N '' -f '$tmp/real/b' && ! cmp -s '$tmp/real/a.pub' '$tmp/real/b.pub'"
 check "a static --ip needs --gw" bash -c "! '$here/create-vm.sh' --dry-run --ssh-keys '$tmp/keys' --ip 10.0.0.2/24 >/dev/null 2>&1"
 
 # --- riot-proxy-update against a fake docker ---------------------------------
