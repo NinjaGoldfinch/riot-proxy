@@ -40,6 +40,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
       - run: cargo llvm-cov --all-features --workspace --summary-only
+      # The dev explorer page driven in jsdom (DEV-03, ADR-074).
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tests/dom/package-lock.json
+      - run: npm ci --no-audit --no-fund && npm test
+        working-directory: tests/dom
       - name: no leaked Riot keys
         run: '! grep -rE "RGAPI-[0-9a-f-]{20,}" tests/ src/ docs/'
 

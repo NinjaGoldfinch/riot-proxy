@@ -47,6 +47,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(revoke_cache))
         .routes(routes!(list_players, track_player))
         .routes(routes!(untrack_player))
+        .routes(routes!(player_archive))
+        .routes(routes!(player_archive_matches))
         .routes(routes!(purge_cache))
         .routes(routes!(stats))
         .routes(routes!(limits))
@@ -568,6 +570,221 @@ async fn untrack_player(
         Ok(true) => ok(&serde_json::json!({"ok": true, "puuid": puuid, "tracked": false})),
         Ok(false) => ApiError::not_found("No such player for the current key scope").into_response(),
         Err(e) => internal(&e, "could not untrack player"),
+    }
+}
+
+// ── One player's archive (DEV-03) ───────────────────────────────────────────
+
+/// Archived matches in one queue.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueCount {
+    queue_id: i64,
+    matches: i64,
+}
+
+/// What the archive holds for one player: exact counts from `match_facts`.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchiveTotals {
+    matches: i64,
+    /// Matches Riot flagged as remakes; counted in `matches`.
+    remakes: i64,
+    wins: i64,
+    /// Of `matches`, how many also have a stored timeline.
+    timelines: i64,
+    #[schema(required = true)]
+    oldest_game_end: Option<String>,
+    #[schema(required = true)]
+    newest_game_end: Option<String>,
+    /// Most matches first.
+    by_queue: Vec<QueueCount>,
+}
+
+/// `GET /v1/admin/players/{puuid}/archive`.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PlayerArchive {
+    puuid: String,
+    key_scope: String,
+    /// The player's row; null if they were never looked up or tracked under this key.
+    #[schema(required = true)]
+    player: Option<PlayerRecord>,
+    archive: ArchiveTotals,
+    /// This player's `archive:match` and `backfill:player` jobs by state. Uncapped;
+    /// `done` rows are kept for seven days.
+    jobs: std::collections::BTreeMap<String, StateCounts>,
+    /// The newest job of each of those kinds, if any.
+    latest_jobs: Vec<JobSummary>,
+}
+
+const PLAYER_JOB_KINDS: &[&str] = &[
+    crate::jobs::kinds::ARCHIVE_MATCH,
+    crate::jobs::kinds::BACKFILL_PLAYER,
+];
+
+fn puuid_path(path: Result<Path<String>, PathRejection>) -> Result<String, Box<Response>> {
+    let Path(puuid) = path.map_err(|e| Box::new(bad_path(&e).into_response()))?;
+    validate::puuid(&puuid).map_err(|e| Box::new(e.into_response()))?;
+    Ok(puuid)
+}
+
+#[utoipa::path(
+    get, path = "/v1/admin/players/{puuid}/archive", tag = "admin",
+    summary = "One player's archive and backfill",
+    description = "Exact counts of what the archive holds for one player under the current `keyScope` (every \
+                   archived match they played in, by queue, with the date range), their row's history-walk \
+                   state, and their `archive:match` / `backfill:player` jobs by state. Nothing is capped.",
+    params(("puuid" = String, Path, description = "Encrypted player UUID")),
+    responses((status = 200, description = "The player's archive", body = PlayerArchive), LocalErrors),
+)]
+async fn player_archive(
+    State(state): State<AppState>,
+    Extension(_c): Who,
+    path: Result<Path<String>, PathRejection>,
+) -> Response {
+    let puuid = match puuid_path(path) {
+        Ok(p) => p,
+        Err(r) => return *r,
+    };
+    let scope = scope_of(&state);
+    let (row, totals, jobs) = tokio::join!(
+        players::get(&state.db, &scope, &puuid),
+        crate::archive::player::summary(&state.db, &scope, &puuid),
+        state.jobs.for_puuid(&puuid, PLAYER_JOB_KINDS),
+    );
+    let (row, totals, (counts, latest)) = match (row, totals, jobs) {
+        (Ok(r), Ok(t), Ok(j)) => (r, t, j),
+        (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => {
+            return internal(&e, "could not read the player's archive");
+        }
+    };
+    let mut jobs = std::collections::BTreeMap::<String, StateCounts>::new();
+    for k in PLAYER_JOB_KINDS {
+        jobs.insert((*k).to_string(), StateCounts::default());
+    }
+    for (kind, st, n) in counts {
+        jobs.entry(kind).or_default().add(&st, n);
+    }
+    ok(&PlayerArchive {
+        player: row.map(|p| PlayerRecord::new(&scope, p)),
+        archive: ArchiveTotals {
+            matches: totals.matches,
+            remakes: totals.remakes,
+            wins: totals.wins,
+            timelines: totals.timelines,
+            oldest_game_end: totals.oldest_game_end_ms.and_then(iso_ms),
+            newest_game_end: totals.newest_game_end_ms.and_then(iso_ms),
+            by_queue: totals
+                .by_queue
+                .into_iter()
+                .map(|(queue_id, matches)| QueueCount { queue_id, matches })
+                .collect(),
+        },
+        jobs,
+        latest_jobs: latest.into_iter().map(JobSummary::from).collect(),
+        puuid,
+        key_scope: scope,
+    })
+}
+
+/// The player's line in one archived match.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchivedLine {
+    match_id: String,
+    queue_id: i64,
+    game_end_timestamp: i64,
+    /// Seconds.
+    #[schema(required = true)]
+    game_duration: Option<i64>,
+    /// Null until the match's facts have been re-extracted (V0005).
+    #[schema(required = true)]
+    remake: Option<bool>,
+    champion_id: i64,
+    #[schema(required = true)]
+    position: Option<String>,
+    win: bool,
+    #[schema(required = true)]
+    kills: Option<i64>,
+    #[schema(required = true)]
+    deaths: Option<i64>,
+    #[schema(required = true)]
+    assists: Option<i64>,
+    #[schema(required = true)]
+    cs: Option<i64>,
+}
+
+/// `GET /v1/admin/players/{puuid}/archive/matches`.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchivedPage {
+    puuid: String,
+    /// Every archived match for this player and filter, not just this page.
+    total: i64,
+    start: i64,
+    count: i64,
+    matches: Vec<ArchivedLine>,
+}
+
+#[utoipa::path(
+    get, path = "/v1/admin/players/{puuid}/archive/matches", tag = "admin",
+    summary = "One player's archived matches",
+    description = "Their line in every archived match, newest first, from `match_facts`: no Riot call, no quota. \
+                   `total` counts all of them for the filter.",
+    params(("puuid" = String, Path, description = "Encrypted player UUID"),
+           ("start" = Option<i64>, Query, description = "0–1000000, default 0"),
+           ("count" = Option<i64>, Query, description = "1–100, default 25"),
+           ("queue" = Option<i64>, Query, description = "Queue id, 0–5000")),
+    responses((status = 200, description = "The page", body = ArchivedPage), LocalErrors),
+)]
+async fn player_archive_matches(
+    State(state): State<AppState>,
+    Extension(_c): Who,
+    Query(query): Q,
+    path: Result<Path<String>, PathRejection>,
+) -> Response {
+    let puuid = match puuid_path(path) {
+        Ok(p) => p,
+        Err(r) => return *r,
+    };
+    let q = |k: &str| query.get(k).map(String::as_str);
+    let parsed = (|| {
+        let start = validate::int_query("start", q("start"), 0, 1_000_000)?.unwrap_or(0);
+        let count = validate::int_query("count", q("count"), 1, 100)?.unwrap_or(25);
+        let queue = validate::int_query("queue", q("queue"), 0, 5000)?;
+        Ok::<_, ApiError>((start, count, queue))
+    })();
+    let (start, count, queue) = match parsed {
+        Ok(p) => p,
+        Err(e) => return e.into_response(),
+    };
+    let scope = scope_of(&state);
+    match crate::archive::player::lines(&state.db, &scope, &puuid, queue, start, count).await {
+        Ok((total, rows)) => ok(&ArchivedPage {
+            puuid,
+            total,
+            start,
+            count,
+            matches: rows
+                .into_iter()
+                .map(|l| ArchivedLine {
+                    match_id: l.match_id,
+                    queue_id: l.queue_id,
+                    game_end_timestamp: l.game_end_ms,
+                    game_duration: l.game_duration,
+                    remake: l.remake,
+                    champion_id: l.champion_id,
+                    position: l.position,
+                    win: l.win,
+                    kills: l.kills,
+                    deaths: l.deaths,
+                    assists: l.assists,
+                    cs: l.cs,
+                })
+                .collect(),
+        }),
+        Err(e) => internal(&e, "could not list the player's archived matches"),
     }
 }
 

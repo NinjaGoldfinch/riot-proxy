@@ -367,6 +367,48 @@ impl Queue {
             .await
     }
 
+    /// Jobs of `kinds` whose payload names `puuid`, counted by `(kind, state)`,
+    /// and the newest of each kind (DEV-03). Uncapped; a scan of the queue,
+    /// which keeps `done` rows for seven days, so it is for admin views only.
+    pub async fn for_puuid(
+        &self,
+        puuid: &str,
+        kinds: &'static [&'static str],
+    ) -> Result<(Vec<(String, String, i64)>, Vec<JobRow>), DbError> {
+        let puuid = puuid.to_string();
+        self.db
+            .read(move |c| {
+                let marks = vec!["?"; kinds.len()].join(",");
+                let mut args: Vec<&dyn rusqlite::ToSql> = vec![&puuid];
+                args.extend(kinds.iter().map(|k| k as &dyn rusqlite::ToSql));
+                let mut s = c.prepare(&format!(
+                    "SELECT kind, state, count(*) FROM jobs
+                      WHERE json_extract(payload, '$.puuid') = ?1 AND kind IN ({marks})
+                      GROUP BY kind, state ORDER BY kind, state"
+                ))?;
+                let counts = s
+                    .query_map(args.as_slice(), |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                let mut latest = Vec::new();
+                for kind in kinds {
+                    let row = c
+                        .query_row(
+                            &format!(
+                                "SELECT {ROW_COLUMNS} FROM jobs
+                                  WHERE kind = ?1 AND json_extract(payload, '$.puuid') = ?2
+                                  ORDER BY id DESC LIMIT 1"
+                            ),
+                            rusqlite::params![kind, puuid],
+                            full_row,
+                        )
+                        .optional()?;
+                    latest.extend(row);
+                }
+                Ok((counts, latest))
+            })
+            .await
+    }
+
     /// Put a `failed` job back to `pending` now, with its attempts reset
     /// (design/06: "`/v1/admin/jobs` lists and retries failed rows").
     pub async fn retry(&self, id: &str) -> Result<JobRow, JobAction> {

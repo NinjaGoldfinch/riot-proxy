@@ -214,3 +214,67 @@ async fn recover_requeues_rows_a_dead_process_left_running() {
     let again = s.claim(i64::MAX).await.unwrap().unwrap();
     assert_eq!(again.attempts, 2, "the interrupted attempt still counts");
 }
+
+#[tokio::test]
+async fn for_puuid_counts_a_players_jobs_by_kind_and_state_uncapped() {
+    let (_d, db) = db();
+    let s = sched(&db);
+    let me = "PUUID_A";
+    for i in 0..600 {
+        let job = NewJob::new(
+            "archive:match",
+            100,
+            json!({"matchId": format!("KR_{i}"), "puuid": me}),
+        )
+        .dedupe(format!("KR_{i}"));
+        s.enqueue(job).await.unwrap();
+    }
+    s.enqueue(NewJob::new(
+        "archive:match",
+        100,
+        json!({"matchId": "KR_x", "puuid": "PUUID_B"}),
+    ))
+    .await
+    .unwrap();
+    s.enqueue(NewJob::new("archive:match", 100, json!({"matchId": "KR_y"})))
+        .await
+        .unwrap();
+    let walk = s
+        .enqueue(NewJob::new(
+            "backfill:player",
+            20_000,
+            json!({"puuid": me, "platform": "kr", "limit": 500}),
+        ))
+        .await
+        .unwrap();
+    s.enqueue(NewJob::new("names:backfill", 30_000, json!({"puuid": me})))
+        .await
+        .unwrap();
+    db.write(|c| {
+        c.execute(
+            "UPDATE jobs SET state = 'failed', error = 'boom'
+              WHERE id IN (SELECT id FROM jobs WHERE kind = 'archive:match' AND payload LIKE '%PUUID_A%' LIMIT 7)",
+            [],
+        )
+        .map_err(DbError::from)
+    })
+    .await
+    .unwrap();
+
+    let (counts, latest) = s
+        .queue()
+        .for_puuid(me, &["archive:match", "backfill:player"])
+        .await
+        .unwrap();
+    assert_eq!(
+        counts,
+        vec![
+            ("archive:match".to_string(), "failed".to_string(), 7),
+            ("archive:match".to_string(), "pending".to_string(), 593),
+            ("backfill:player".to_string(), "pending".to_string(), 1),
+        ]
+    );
+    assert_eq!(latest.len(), 2);
+    assert_eq!(latest[1].id, walk.id);
+    assert_eq!(latest[1].kind, "backfill:player");
+}

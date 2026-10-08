@@ -863,3 +863,16 @@ Accepted (owner, task DEV-02). Extends ADR-071; design/10 §Player tab.
 - **Backfill status is read from what exists**: the player row (`/v1/admin/tracked-players`) and the job queue (`/v1/admin/jobs`, by `payload.puuid`). No new endpoint. Job lists are capped at 500, so counts at the cap show `500+`.
 - **Testing a no-build page**: the pure helpers sit in one marked block that `tests/dev_ui.mjs` evaluates under `node --test`, which `cargo test` runs (skipped locally without node, required in CI). DOM wiring was checked with a throwaway jsdom smoke run. jsdom is not a project dependency.
 
+## ADR-074 — Per-player archive endpoints; the dev page reads exact counts (2026-10-08)
+Accepted (owner, task DEV-03). Supersedes ADR-073's "no new endpoint" and its capped job counts. The owner wants all backfilled data shown, not counts at a cap of 500.
+- **`GET /v1/admin/players/{puuid}/archive`** returns, for the current `keyScope`:
+  - the player's row, or null;
+  - exact archive totals from `match_facts` joined to `matches`: matches, remakes, wins, timelines, oldest and newest game end, and a count per queue;
+  - this player's `archive:match` and `backfill:player` jobs counted by state;
+  - the newest job of each kind.
+
+  Nothing is capped. Jobs are matched on `json_extract(payload, '$.puuid')`. That scans the job queue, which keeps `done` rows for seven days, so it is an admin read only: no expression index is added for it.
+- **`GET /v1/admin/players/{puuid}/archive/matches`** returns the player's line in each archived match: `start` 0–1 000 000, `count` 1–100 (default 25), optional `queue`. Newest first, with `total` for the filter. It is served from `match_facts` and makes no Riot call. It is admin-scoped like the rest of `/v1/admin`, because it reads the whole archive for a PUUID.
+- **The dev page** uses both: exact numbers in the History & backfill card, and an "Archive (all stored)" source for the match list.
+- **Page tests are committed.** `tests/dom/` is a private npm package whose only dependency is `jsdom`. It drives `src/ui/dev-ui.html` against a fake API in the `test` CI job (`just ui-test`). The page itself still has no build step and no dependency.
+
