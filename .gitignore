@@ -7,3 +7,4 @@
 /backups
 node_modules
 /.claude
+/tests/dom/screenshots/

@@ -29,7 +29,7 @@ docs/contract/  v1 openapi.json + endpoint list used for parity checks
 ```
 just dev        # cargo run -- serve with .env
 just test       # cargo test
-just ui-test    # the /dev page in jsdom (tests/dom, needs node)
+just ui-test    # /dev and /dev/showcase in jsdom, showcase layout in headless Chromium (tests/dom, needs node)
 just lint       # fmt + clippy
 just cov        # cargo llvm-cov
 just musl       # static build

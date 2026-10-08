@@ -45,14 +45,26 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: taiki-e/install-action@cargo-llvm-cov
       - run: cargo llvm-cov --all-features --workspace --summary-only
-      # The dev explorer page driven in jsdom (DEV-03, ADR-074).
+      # The dev explorer and showcase driven in jsdom (DEV-03, ADR-074), and the
+      # showcase's layout in headless Chromium (DEV-12, ADR-084).
       - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: tests/dom/package-lock.json
-      - run: npm ci --no-audit --no-fund && npm test
+      - run: npm ci --no-audit --no-fund
         working-directory: tests/dom
+      - run: npx playwright-core install --with-deps chromium-headless-shell
+        working-directory: tests/dom
+      - run: npm test
+        working-directory: tests/dom
+      - name: showcase screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: showcase-screenshots
+          path: tests/dom/screenshots/
+          if-no-files-found: ignore
       - name: no leaked Riot keys
         run: '! grep -rE "RGAPI-[0-9a-f-]{20,}" tests/ src/ docs/'
 

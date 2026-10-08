@@ -2,11 +2,12 @@
   "name": "riot-proxy-dom-tests",
   "private": true,
   "type": "module",
-  "description": "The dev explorer (src/ui/dev-ui.html, DEV-03) and the showcase (src/ui/showcase.html, DEV-06) driven in jsdom against a fake API",
+  "description": "The dev explorer (src/ui/dev-ui.html, DEV-03) and the showcase (src/ui/showcase.html, DEV-06) driven in jsdom against a fake API, and the showcase layout in headless Chromium (DEV-12)",
   "scripts": {
     "test": "node --test"
   },
   "devDependencies": {
-    "jsdom": "^25.0.1"
+    "jsdom": "^25.0.1",
+    "playwright-core": "1.64.0"
   }
 }
