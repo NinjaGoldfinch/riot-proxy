@@ -227,6 +227,10 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 - [x] SCH-01 rate-limit-aware job claims: one lane per limiter scope plus the job's main endpoint, claims skip a region only when its app limit is full (a capped endpoint blocks only jobs that use it), spread over free regions, rate-limited jobs yield their worker and re-queue without using an attempt (IMPLEMENTATION.md §Post-release — SCH) (#107, ADR-089)
 - [ ] SCH-02 elastic worker pool: base `JOB_CONCURRENCY` workers, extra workers spun up while all are busy up to `JOB_MAX_WORKERS`, idle extras exit, `JOB_MAX_PER_GROUP` caps the workers one crawl or one player can hold (IMPLEMENTATION.md §Post-release — SCH)
 
+## LAD — Master players past Riot's 10,000 cap (owner request 2026-10-09)
+- [ ] LAD-01 say when an apex league is cut off at Riot's cap: `apex_capped` on the crawl, a note on the crawl card and the showcase ladder (IMPLEMENTATION.md §Post-release — LAD)
+- [ ] LAD-02 find the Master players the cap leaves out: a `discover` stage that looks up the ranks of archived match participants not on the ladder (IMPLEMENTATION.md §Post-release — LAD)
+
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
 
