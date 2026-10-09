@@ -266,6 +266,10 @@ The site's backfill question (item 3) needs no task: the unbounded lookup backfi
 - [ ] BLD-02 aggregate set builds: `champion_builds` keyed by the first two finished items, with `champion_build_parts` for the 3rd–5th items, starter, boots, skill order, runes and spells (IMPLEMENTATION.md §Post-release — BLD)
 - [ ] BLD-03 `GET /v1/lol/analytics/champions/{championId}/builds` and the showcase's build tabs, with today's lists as the fallback (IMPLEMENTATION.md §Post-release — BLD)
 
+## MU — matchups worth reading (owner request 2026-10-09)
+- [ ] MU-01 show how much a matchup's win rate can be trusted: `winRateLow` (Wilson 95% lower bound), `sort=confidence`, small samples dimmed in the showcase (IMPLEMENTATION.md §Post-release — MU)
+- [ ] MU-02 win rate against what the two champions would be expected to do: `delta` from each champion's lane baseline, a *vs expected* column in the showcase; after DEV-28 (IMPLEMENTATION.md §Post-release — MU)
+
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
 
