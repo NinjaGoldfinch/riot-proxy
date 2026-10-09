@@ -1,9 +1,10 @@
 # The dev VM's stack (OPS-02). `riot-proxy-update` pulls and restarts it.
 # RIOT_PROXY_TAG (in .env) pins a build: `edge` follows main, `sha-<short>` or a
-# release version holds still.
+# release version holds still. RIOT_PROXY_IMAGE replaces the whole reference; the
+# updater sets it to riot-proxy:previous when it rolls a bad image back (ADR-115).
 services:
   riot-proxy:
-    image: ghcr.io/ninjagoldfinch/riot-proxy:${RIOT_PROXY_TAG:-edge}
+    image: ${RIOT_PROXY_IMAGE:-ghcr.io/ninjagoldfinch/riot-proxy:${RIOT_PROXY_TAG:-edge}}
     restart: unless-stopped
     env_file: .env
     ports: ["8080:8080"]

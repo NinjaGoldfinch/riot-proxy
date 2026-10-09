@@ -1,24 +1,97 @@
 #!/usr/bin/env bash
 # Pull the stack's image and recreate the container if it changed (OPS-02).
+# A new image must report `healthy` within RIOT_PROXY_HEALTH_TIMEOUT seconds, or the
+# container goes back to the image it replaced (riot-proxy:previous) and that image
+# is not tried again; a newer one is (INC-03, ADR-115).
 # Run by riot-proxy-update.timer every 2 minutes; safe to run by hand.
 set -euo pipefail
 
 dir=${RIOT_PROXY_DIR:-/opt/riot-proxy}
+timeout=${RIOT_PROXY_HEALTH_TIMEOUT:-120}
+poll=${RIOT_PROXY_HEALTH_POLL:-2}
+previous=riot-proxy:previous
 cd "$dir"
+
+say() { echo "riot-proxy-update: $*"; }
+# When stderr is the journal, <3> files the line at priority err (`journalctl -p err`).
+lvl=
+if [ -n "${JOURNAL_STREAM:-}" ] && [ "$(stat -L -c '%d:%i' /proc/self/fd/2 || true)" = "$JOURNAL_STREAM" ]; then lvl='<3>'; fi
+err() { echo "${lvl}riot-proxy-update: error: $*" >&2; }
 
 if ! grep -qE '^RIOT_API_KEY=.+' .env 2>/dev/null; then
   echo "riot-proxy-update: no RIOT_API_KEY in $dir/.env; not starting" >&2
   exit 0
 fi
+case $timeout in '' | *[!0-9]*) err "RIOT_PROXY_HEALTH_TIMEOUT must be whole seconds, not '$timeout'"; exit 2 ;; esac
 
-before=$(docker compose images -q riot-proxy 2>/dev/null || true)
+container() { docker compose ps -a -q riot-proxy 2>/dev/null | head -n 1 || true; }
+image_id() { docker image inspect --format '{{.Id}}' "$1" 2>/dev/null || true; }
+revision() {
+  local rev
+  rev=$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$1" 2>/dev/null || true)
+  echo "${rev:-unknown revision}"
+}
+# "<status> <health> <restarts>", e.g. "running healthy 0" or "restarting starting 3".
+state() {
+  docker inspect --format '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} {{.RestartCount}}' "$1" 2>/dev/null || true
+}
+
+# Wait for the service's container to report healthy. Gives up at the deadline, or
+# sooner if the healthcheck says unhealthy or the container keeps exiting.
+last_state=
+wait_healthy() {
+  local deadline=$((SECONDS + timeout)) cid status health restarts
+  while :; do
+    cid=$(container)
+    last_state=${cid:+$(state "$cid")}
+    read -r status health restarts <<< "${last_state:-missing none 0}"
+    case $health in
+      healthy) return 0 ;;
+      unhealthy) return 1 ;;
+    esac
+    case $status in exited | dead) return 1 ;; esac
+    [ "${restarts:-0}" -lt 2 ] || return 1
+    [ "$SECONDS" -lt "$deadline" ] || return 1
+    sleep "$poll"
+  done
+}
+
+ref=$(docker compose config --images)
+cid=$(container)
+current=
+[ -z "$cid" ] || current=$(docker inspect --format '{{.Image}}' "$cid" 2>/dev/null || true)
+# Keep what runs now, so a bad pull has something to go back to. A tagged image
+# isn't dangling, so `docker image prune -f` (without -a) leaves it alone.
+[ -z "$current" ] || docker image tag "$current" "$previous"
+
 docker compose pull --quiet
-docker compose up -d --remove-orphans
-after=$(docker compose images -q riot-proxy 2>/dev/null || true)
+new=$(image_id "$ref")
+rejected=$(cut -d' ' -f1 .rejected 2>/dev/null || true)
 
-if [ "$before" != "$after" ]; then
-  image=$(docker compose config --images)
-  rev=$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image" 2>/dev/null || true)
-  echo "riot-proxy-update: now running $image (${rev:-unknown revision})"
-  docker image prune -f >/dev/null
+if [ -n "$new" ] && [ "$new" = "$rejected" ]; then
+  exit 0 # the image we rolled back from: stay on what runs now
 fi
+if [ -n "$new" ] && [ "$new" = "$current" ]; then
+  docker compose up -d --remove-orphans # unchanged: starts a stopped stack, applies compose edits
+  exit 0
+fi
+
+docker compose up -d --remove-orphans
+new_rev=$(revision "$ref")
+started=$SECONDS
+if wait_healthy; then
+  say "now running $ref ($new_rev)"
+  rm -f .rejected
+  docker image prune -f >/dev/null
+  exit 0
+fi
+
+why="not healthy after $((SECONDS - started))s (status, health, restarts: ${last_state:-no container})"
+if [ -z "$current" ]; then
+  err "$ref ($new_rev) is $why; first install, nothing to roll back to, leaving it"
+  exit 1
+fi
+RIOT_PROXY_IMAGE=$previous docker compose up -d --remove-orphans
+echo "$new $new_rev" > .rejected
+err "rejected $ref ($new_rev): $why; rolled back to $previous ($(revision "$previous")); this image won't be retried, a newer one will"
+exit 1

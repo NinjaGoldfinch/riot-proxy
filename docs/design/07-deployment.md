@@ -165,7 +165,7 @@ The binary's own RSS is dominated by the SQLite page cache (`cache_size`, 64 MB 
 ## Observability
 
 - `/metrics` — Prometheus, **same metric names as v1** so `ops/grafana/riot-proxy-dashboard.json` and `ops/prometheus-alerts.yml` import unchanged. Add `jobs_pending{kind}`, `limiter_bulk_waiters`, `sqlite_wal_bytes`.
-- `/healthz` — process up. `/readyz` — SQLite writable and limiter restored.
+- `/healthz` — process up. `/readyz` — SQLite writable and limiter restored; it also reports the SQLite readers, total and idle, without failing on 0 idle (ADR-113).
 - Logs — `tracing` JSON to stdout; every request carries `request_id`, `consumer`, `x_cache`, `upstream_ms`.
 - `/dashboard` — same page, same `metrics` + `firehose` topics.
 

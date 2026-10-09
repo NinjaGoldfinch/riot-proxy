@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use rusqlite::{Connection, OpenFlags};
-use tokio::sync::{Semaphore, mpsc, oneshot};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 
 pub mod store;
 
@@ -69,8 +69,42 @@ pub struct Db {
 struct Inner {
     path: PathBuf,
     writer: mpsc::Sender<WriteJob>,
+    /// Idle read connections. A permit from `permits` entitles its holder to one.
     readers: Mutex<Vec<Connection>>,
-    permits: Semaphore,
+    permits: Arc<Semaphore>,
+    reader_count: usize,
+}
+
+impl Inner {
+    fn idle_readers(&self) -> std::sync::MutexGuard<'_, Vec<Connection>> {
+        self.readers.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// A reader connection on loan with the permit that pays for it. Dropping the loan
+/// puts the connection back and only then releases the permit, wherever that
+/// happens: at the end of the blocking closure, or with the closure if it never
+/// runs. So a cancelled [`Db::read`] cannot leave a permit without a connection
+/// (INC-01, ADR-113).
+struct ReaderLoan {
+    inner: Arc<Inner>,
+    conn: Option<Connection>,
+    _permit: OwnedSemaphorePermit,
+}
+
+impl Drop for ReaderLoan {
+    fn drop(&mut self) {
+        if let Some(conn) = self.conn.take() {
+            let mut idle = self.inner.idle_readers();
+            idle.push(conn);
+            set_readers_free(idle.len());
+        }
+        // `_permit` is released after this, once the connection is back.
+    }
+}
+
+fn set_readers_free(free: usize) {
+    metrics::gauge!(crate::metrics::SQLITE_READERS_FREE).set(free as f64);
 }
 
 impl std::fmt::Debug for Db {
@@ -111,12 +145,14 @@ impl Db {
             .spawn(move || writer_loop(writer, rx))
             .map_err(DbError::Spawn)?;
 
+        set_readers_free(readers);
         Ok(Self {
             inner: Arc::new(Inner {
                 path: path.to_path_buf(),
                 writer: tx,
                 readers: Mutex::new(pool),
-                permits: Semaphore::new(readers),
+                permits: Arc::new(Semaphore::new(readers)),
+                reader_count: readers,
             }),
         })
     }
@@ -133,6 +169,16 @@ impl Db {
 
     pub fn path(&self) -> &Path {
         &self.inner.path
+    }
+
+    /// Read connections in the pool, idle or not.
+    pub fn readers(&self) -> usize {
+        self.inner.reader_count
+    }
+
+    /// Read connections idle right now (`/readyz`, `sqlite_readers_free`).
+    pub fn readers_free(&self) -> usize {
+        self.inner.idle_readers().len()
     }
 
     /// Run `f` on the writer thread. Writes are serialised by construction, so
@@ -159,6 +205,8 @@ impl Db {
     /// Run `f` on a read-only pooled connection via `spawn_blocking`. Writes
     /// attempted here fail with `SQLITE_READONLY`; a panic inside `f` returns
     /// [`DbError::ReaderPanicked`] and the connection goes back to the pool.
+    /// Dropping the returned future (a sibling failing in `try_join!`, a client
+    /// going away) lets `f` finish, and the connection still goes back.
     pub async fn read<T, E, F>(&self, f: F) -> Result<T, E>
     where
         F: FnOnce(&Connection) -> Result<T, E> + Send + 'static,
@@ -166,32 +214,32 @@ impl Db {
         E: From<DbError> + Send + 'static,
     {
         // The semaphore is never closed, so acquire cannot fail in practice.
-        let _permit = self
-            .inner
-            .permits
-            .acquire()
+        let permit = Arc::clone(&self.inner.permits)
+            .acquire_owned()
             .await
             .map_err(|_| DbError::PoolEmpty)?;
-        let conn = self
-            .inner
-            .readers
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .pop();
+        let conn = {
+            let mut idle = self.inner.idle_readers();
+            let conn = idle.pop();
+            set_readers_free(idle.len());
+            conn
+        };
+        // Every permit holder finds a connection, so this cannot fail in practice.
         let conn = conn.ok_or(DbError::PoolEmpty)?;
-        let (conn, result) = tokio::task::spawn_blocking(move || {
-            // Catch here so the connection always goes back to the pool.
-            let result = std::panic::catch_unwind(AssertUnwindSafe(|| f(&conn)));
-            (conn, result)
+        let loan = ReaderLoan {
+            inner: Arc::clone(&self.inner),
+            conn: Some(conn),
+            _permit: permit,
+        };
+        tokio::task::spawn_blocking(move || {
+            let conn = loan.conn.as_ref().ok_or(DbError::PoolEmpty)?;
+            // Catch here so a panic is reported as an error, not a JoinError.
+            let result = std::panic::catch_unwind(AssertUnwindSafe(|| f(conn)));
+            drop(loan);
+            result.unwrap_or_else(|_| Err(DbError::ReaderPanicked.into()))
         })
         .await
-        .map_err(DbError::from)?;
-        self.inner
-            .readers
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(conn);
-        result.unwrap_or_else(|_| Err(DbError::ReaderPanicked.into()))
+        .map_err(DbError::from)?
     }
 
     /// [`optimize`] on the writer.
