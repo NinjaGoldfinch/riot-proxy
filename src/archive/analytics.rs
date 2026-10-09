@@ -313,12 +313,14 @@ pub struct PatchRow {
 }
 
 /// Every patch this ladder (or every ladder, without a platform) has stats
-/// for, newest first (ADR-094).
+/// for, newest first (ADR-094); with a champion, only the patches it was
+/// played on, and its games (ADR-100).
 pub async fn patches(
     db: &Db,
     key_scope: &str,
     platform: Option<&str>,
     queue: &str,
+    champion_id: Option<i64>,
     remakes: bool,
 ) -> Result<Vec<PatchRow>, DbError> {
     let (scope, platform, queue) = (
@@ -330,10 +332,11 @@ pub async fn patches(
         let mut stmt = c.prepare(&format!(
             "SELECT patch, sum(games), max(computed_at) FROM champion_stats
               WHERE key_scope = ?1 AND (?2 IS NULL OR platform = ?2) AND queue = ?3 AND (?4 OR remake = 0)
+                AND (?5 IS NULL OR champion_id = ?5)
               GROUP BY patch ORDER BY {PATCH_DESC}"
         ))?;
         let rows = stmt
-            .query_map(params![scope, platform, queue, remakes], |r| {
+            .query_map(params![scope, platform, queue, remakes, champion_id], |r| {
                 Ok(PatchRow {
                     patch: r.get(0)?,
                     games: r.get(1)?,

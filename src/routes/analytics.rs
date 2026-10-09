@@ -220,7 +220,8 @@ pub struct ChampionDetailResponse {
 pub struct AnalyticsPatchEntry {
     /// `major.minor`.
     patch: String,
-    /// Participant games, as `totalGames` counts them on the champions route.
+    /// Participant games, as `totalGames` counts them on the champions route;
+    /// with `championId`, that champion's games.
     games: i64,
     #[schema(required = true)]
     computed_at: Option<String>,
@@ -234,6 +235,9 @@ pub struct AnalyticsPatchesResponse {
     #[schema(required = true)]
     platform: Option<String>,
     queue: String,
+    /// The champion asked for, whose games each entry then counts; `null` for every champion.
+    #[schema(required = true)]
+    champion_id: Option<i64>,
     /// Newest first.
     patches: Vec<AnalyticsPatchEntry>,
 }
@@ -835,11 +839,13 @@ async fn champion_detail(
     get, path = "/v1/lol/analytics/patches", tag = "lol",
     summary = "Patches with analytics",
     description = "The patches the analytics tables hold for a ladder, newest first, with each one's games: what \
-        a client offers as `patch` choices on the other analytics routes (`all` sums them). Sends an `ETag`; a \
-        matching `If-None-Match` gets 304.",
+        a client offers as `patch` choices on the other analytics routes (`all` sums them). With `championId`, \
+        only the patches that champion was played on, each with its games. Sends an `ETag`; a matching \
+        `If-None-Match` gets 304.",
     params(
         ("platform" = Option<String>, Query, description = "Only this platform's ladder. Omitted sums every platform"),
         ("queue" = Option<String>, Query, description = "RANKED_SOLO_5x5 or RANKED_FLEX_SR; default the first of `LADDER_QUEUES`"),
+        ("championId" = Option<i64>, Query, description = "≥ 1: count only this champion's games"),
         ("remakes" = Option<String>, Query, description = "`exclude` (default) or `include`"),
     ),
     responses((status = 200, description = "The patches, newest first", body = AnalyticsPatchesResponse),
@@ -851,24 +857,35 @@ async fn patches(
     headers: HeaderMap,
     Query(query): Q,
 ) -> Response {
-    let checked =
-        ladder_query(&state, &query).and_then(|l| Ok((l, validate::remakes_query(q(&query, "remakes"))?)));
-    let (c, remakes) = match checked {
+    let checked = ladder_query(&state, &query).and_then(|l| {
+        let champion = validate::int_query("championId", q(&query, "championId"), 1, i64::MAX)?;
+        Ok((l, champion, validate::remakes_query(q(&query, "remakes"))?))
+    });
+    let (c, champion_id, remakes) = match checked {
         Ok(v) => v,
         Err(e) => return e.into_response(),
     };
     let scope = state.fetcher.key_scope().as_str().to_string();
-    let rows: Vec<PatchRow> =
-        match analytics::patches(&state.db, &scope, c.platform.as_deref(), &c.queue, remakes).await {
-            Ok(r) => r,
-            Err(e) => return internal(&e),
-        };
+    let rows: Vec<PatchRow> = match analytics::patches(
+        &state.db,
+        &scope,
+        c.platform.as_deref(),
+        &c.queue,
+        champion_id,
+        remakes,
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => return internal(&e),
+    };
     let tag = etag(&[
         some("patches"),
         newest(rows.iter().map(|r| r.computed_at)),
         some(rows.len()),
         c.platform.clone(),
         some(&c.queue),
+        champion_id.map(|id| id.to_string()),
         some(if remakes { "include" } else { "exclude" }),
     ]);
     respond(
@@ -877,6 +894,7 @@ async fn patches(
         &AnalyticsPatchesResponse {
             platform: c.platform,
             queue: c.queue,
+            champion_id,
             patches: rows
                 .into_iter()
                 .map(|r| AnalyticsPatchEntry {

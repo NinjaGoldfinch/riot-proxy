@@ -582,7 +582,7 @@ async fn every_patch_sums_and_the_patch_list_is_newest_first() {
     let list = |remakes| {
         let db = db.clone();
         async move {
-            patches(&db, "s", Some("kr"), "RANKED_SOLO_5x5", remakes)
+            patches(&db, "s", Some("kr"), "RANKED_SOLO_5x5", None, remakes)
                 .await
                 .unwrap()
                 .into_iter()
@@ -595,9 +595,38 @@ async fn every_patch_sums_and_the_patch_list_is_newest_first() {
     // M3, the remake, adds A and C.
     assert_eq!(list(true).await, [("14.18".into(), 6), ("14.9".into(), 1)]);
     assert!(
-        patches(&db, "s", Some("euw1"), "RANKED_SOLO_5x5", false)
+        patches(&db, "s", Some("euw1"), "RANKED_SOLO_5x5", None, false)
             .await
             .unwrap()
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn a_champions_patch_list_has_only_its_games() {
+    let (_d, db) = db();
+    db.write(|c| {
+        seed(c);
+        c.execute_batch("UPDATE matches SET patch = '14.9' WHERE match_id = 'KR_4'")?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    rebuild(&db, 0).await;
+    let list = |champion| {
+        let db = db.clone();
+        async move {
+            patches(&db, "s", Some("kr"), "RANKED_SOLO_5x5", champion, false)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|p| (p.patch, p.games))
+                .collect::<Vec<_>>()
+        }
+    };
+    // Champion 1: twice on 14.18 (M1, M2), once on 14.9 (M4); the ladder has 4 and 1.
+    assert_eq!(list(Some(1)).await, [("14.18".into(), 2), ("14.9".into(), 1)]);
+    assert_eq!(list(None).await, [("14.18".into(), 4), ("14.9".into(), 1)]);
+    // A champion nobody played has no patches.
+    assert!(list(Some(999)).await.is_empty());
 }

@@ -88,9 +88,14 @@ function detail(p, u, { noTimeline = false, noAnalytics = false }) {
     if (m[3]) return noTimeline ? [503, { error: { code: 'UPSTREAM_UNAVAILABLE', message: 'try later', requestId: 'r' } }] : [200, TIMELINE];
     return [200, MATCH];
   }
-  // The proxy's AnalyticsPatchesResponse (DEV-21): newest first.
-  if (p === '/v1/lol/analytics/patches') return [200, { platform: u.searchParams.get('platform'), queue: u.searchParams.get('queue'),
-    patches: noAnalytics ? [] : [{ patch: '16.19', games: 40, computedAt: '2026-10-08T00:00:00Z' }, { patch: '16.18', games: 1200, computedAt: '2026-10-08T00:00:00Z' }] }];
+  // The proxy's AnalyticsPatchesResponse (DEV-21): newest first. With a championId (DEV-25), that
+  // champion's games: 40 in all, as the detail's totalGames.
+  if (p === '/v1/lol/analytics/patches') {
+    const championId = u.searchParams.get('championId');
+    const games = championId ? [3, 37] : [40, 1200];
+    return [200, { platform: u.searchParams.get('platform'), queue: u.searchParams.get('queue'), championId: championId ? Number(championId) : null,
+      patches: noAnalytics ? [] : [{ patch: '16.19', games: games[0], computedAt: '2026-10-08T00:00:00Z' }, { patch: '16.18', games: games[1], computedAt: '2026-10-08T00:00:00Z' }] }];
+  }
   if ((m = p.match(/^\/v1\/lol\/analytics\/champions\/(\d+)(\/matchups)?$/))) {
     // 16.19 stands in for a patch too new to clear minGames: listed, but empty.
     if (noAnalytics || u.searchParams.get('patch') === '16.19') return [200, m[2] ? { ...MATCHUPS, matchups: [] } : { ...DETAIL, totalGames: 0, stats: [], items: [], spells: [], runes: [], matchups: [] }];

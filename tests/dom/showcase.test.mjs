@@ -427,7 +427,7 @@ test('without a platform the champion view sums every platform; without data it 
   assert.ok(p.calls.includes('/v1/lol/analytics/champions/1?queue=RANKED_SOLO_5x5&patch=all&limit=10'));
   assert.ok(p.text('#cMeta').startsWith('every platform'));
   const empty = await page({ hash: '#/champion/1', noAnalytics: true });
-  assert.ok(empty.text('#cTiers').includes('No analytics for Annie yet'));
+  assert.ok(empty.text('#cTiers').includes('No Annie games in the analytics yet'));
   assert.ok(empty.text('#cMatchups').includes('No lane matchups'));
   assert.deepEqual(empty.errors, []);
 });
@@ -444,9 +444,9 @@ test('every match and champion card names its calls', async () => {
 
 test('the champion view reads every patch by default; the patch and region pickers refetch', async () => {
   const p = await page({ hash: '#/champion/1' });
-  assert.ok(p.calls.includes('/v1/lol/analytics/patches?queue=RANKED_SOLO_5x5&platform=oc1'));
+  assert.ok(p.calls.includes('/v1/lol/analytics/patches?queue=RANKED_SOLO_5x5&platform=oc1&championId=1'));
   const opts = (sel) => [...p.$(sel).options].map((o) => [o.value, o.textContent]);
-  assert.deepEqual(opts('#cHead [data-patch]'), [['all', 'All patches · 1,240 games'], ['16.19', '16.19 · 40 games'], ['16.18', '16.18 · 1,200 games']]);
+  assert.deepEqual(opts('#cHead [data-patch]'), [['all', 'All patches · 40 games'], ['16.19', '16.19 · 3 games'], ['16.18', '16.18 · 37 games']], "the champion's games, not the ladder's");
   assert.deepEqual(opts('#cHead [data-region]'), [['', 'All regions'], ['oc1', 'Oceania'], ['kr', 'Korea']]);
   assert.equal(p.$('#cHead [data-region]').value, 'oc1', 'follows the platform picked above');
   const pick = async (sel, value) => { const el = p.$(sel); el.value = value; el.dispatchEvent(new p.w.Event('change', { bubbles: true })); await p.settle(); };
@@ -456,7 +456,7 @@ test('the champion view reads every patch by default; the patch and region picke
   assert.equal(p.$('#cHead [data-patch]').value, '16.18');
   assert.ok(p.text('#cMeta').includes('patch 16.18'));
   await pick('#cHead [data-region]', '');
-  assert.ok(p.calls.includes('/v1/lol/analytics/patches?queue=RANKED_SOLO_5x5'));
+  assert.ok(p.calls.includes('/v1/lol/analytics/patches?queue=RANKED_SOLO_5x5&championId=1'));
   assert.ok(p.calls.includes('/v1/lol/analytics/champions/1?queue=RANKED_SOLO_5x5&patch=16.18&limit=10'), 'the patch stays picked');
   assert.ok(p.text('#cMeta').startsWith('every platform'));
   assert.equal(p.$('#platform').value, 'oc1', 'the platform above is left alone');
@@ -474,7 +474,7 @@ test('a patch with too few games says so rather than "no analytics yet"', async 
   assert.ok(p.text('#cTiers').includes('Not enough Annie games on patch 16.19 yet'), p.text('#cTiers'));
   assert.ok(p.text('#cMatchups').includes('No lane matchups'));
   const empty = await page({ hash: '#/champion/1', noAnalytics: true });
-  assert.ok(empty.text('#cTiers').includes('No analytics for Annie yet'), 'nothing aggregated at all');
+  assert.ok(empty.text('#cTiers').includes('No Annie games in the analytics yet'), 'nothing aggregated at all');
   assert.deepEqual([...empty.$('#cHead [data-patch]').options].map((o) => o.value), ['all']);
   assert.deepEqual(p.errors, []);
 });
@@ -483,6 +483,8 @@ test('top champions read every patch by default and the patch picker refetches t
   const p = await page();
   assert.ok(p.calls.includes('/v1/lol/analytics/champions?platform=oc1&queue=RANKED_SOLO_5x5&patch=all&limit=500'));
   assert.ok(p.text('#topMeta').startsWith('all patches'));
+  assert.ok(p.calls.includes('/v1/lol/analytics/patches?queue=RANKED_SOLO_5x5&platform=oc1'), 'the ladder list, no champion');
+  assert.equal(p.$('#top [data-patch]').options[0].textContent, 'All patches · 1,240 games');
   const sel = p.$('#top [data-patch]');
   sel.value = '16.18';
   sel.dispatchEvent(new p.w.Event('change', { bubbles: true }));
