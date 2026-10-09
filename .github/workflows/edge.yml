@@ -4,11 +4,12 @@ name: edge
 # and `:sha-<short>`, so a dev box can follow `main` by pulling (OPS-02).
 # Release tags and `:2` stay with release.yml; `:edge` is never a release.
 # A pull request that touches this file builds and smoke-tests, and pushes nothing.
+# Each image's description lists the commits since the `:edge` before it (OPS-05, ADR-107).
 on:
   push:
     branches: [main]
   pull_request:
-    paths: [".github/workflows/edge.yml", "Dockerfile.release"]
+    paths: [".github/workflows/edge.yml", "Dockerfile.release", "scripts/image-description.sh"]
 
 concurrency:
   group: edge-${{ github.ref }}
@@ -30,6 +31,8 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - run: rustup toolchain install && rustup target add x86_64-unknown-linux-musl
       - run: sudo apt-get update && sudo apt-get install -y musl-tools
       - uses: Swatinem/rust-cache@v2
@@ -39,14 +42,36 @@ jobs:
           mkdir dist && cp target/x86_64-unknown-linux-musl/release/riot-proxy dist/riot-proxy-linux-amd64
           file dist/riot-proxy-linux-amd64 | grep -qE "static(ally|-pie) linked"
       - uses: docker/setup-buildx-action@v4
+      # The commits since the image `:edge` points at now (its `revision` label);
+      # on a pull request, since the base branch.
+      - id: desc
+        name: describe the image
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          from=$BASE
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            from=$(docker buildx imagetools inspect "$IMAGE:edge" --format '{{json .Image}}' 2>/dev/null \
+              | jq -r '(if has("config") then . else .["linux/amd64"] end).config.Labels["org.opencontainers.image.revision"] // empty' || true)
+            from=${from:-$BEFORE}
+          fi
+          text=$(scripts/image-description.sh "riot-proxy edge, main at ${GITHUB_SHA::7}" "$GITHUB_SHA" "$from")
+          echo "$text"
+          echo "text=$text" >> "$GITHUB_OUTPUT"
       - id: meta
         uses: docker/metadata-action@v6
+        env:
+          # GHCR reads a multi-manifest image's description from the index (ADR-107).
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
         with:
           images: ${{ env.IMAGE }}
           flavor: latest=false
           tags: |
             type=raw,value=edge
             type=sha,prefix=sha-
+          labels: org.opencontainers.image.description=${{ steps.desc.outputs.text }}
+          annotations: org.opencontainers.image.description=${{ steps.desc.outputs.text }}
       - name: the image serves and passes its own healthcheck
         run: |
           docker buildx build --load --platform linux/amd64 -f Dockerfile.release -t riot-proxy:edge .
@@ -61,12 +86,23 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - if: github.event_name == 'push'
+      # A pull request writes the image to an OCI tarball instead, so the check below runs there too.
+      - id: push
         uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile.release
           platforms: linux/amd64
-          push: true
+          push: ${{ github.event_name == 'push' }}
+          outputs: ${{ github.event_name != 'push' && format('type=oci,dest={0}/image.tar', runner.temp) || '' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+      - name: the image index carries the description
+        env:
+          WANT: ${{ steps.desc.outputs.text }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          src="$RUNNER_TEMP/image.tar"
+          [ "$GITHUB_EVENT_NAME" = push ] && src="$IMAGE@$DIGEST"
+          scripts/check-image-description.sh "$src" "$WANT"
