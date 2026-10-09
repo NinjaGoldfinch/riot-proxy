@@ -1132,3 +1132,12 @@ Accepted (owner request from ninjagoldfinch.lol, task SITE-01). Design 04 §Cach
 - **Stale-on-failure keeps its own fetch time.** A copy served because Riot could not answer was not read now, so reporting 0 would be wrong.
 - `X-Cache-Fetched-Age` is a v2 header; v1 has none to match, and v1 parity no longer binds new headers (ADR-065).
 
+## ADR-104 — The match page's champion filter reads the archive (2026-10-09)
+Accepted (owner request from ninjagoldfinch.lol, task SITE-02).
+- **Why the archive:** match-v5's id list has no champion filter. Filtering only the page Riot returned would show a few games out of twenty and call it the player's history. The archive's `match_facts` has the player's champion for every archived game, so `champion=` pages that, newest first (`game_end_ms`, then id), in the page's region. `hasMore` is exact (read `count + 1`).
+- **Recent games first.** A filtered page still reads Riot's newest 20 ids (`start=0`, with `queue`), whatever page is asked for, and fetches the ones not yet archived (the fetcher archives them). This costs no more than an unfiltered first page, and it puts games played since the last backfill into the filter. A recent match that can't be fetched is named in `warnings` ("may be missing from this page"), because it may or may not be this champion's game. `refresh=true` re-reads that id page, as it does for an unfiltered page.
+- **Saying how complete it is.** `archive: {complete}` is present only on a filtered page. `complete` is whether the player's backfill has stamped `doneAt` (it reached the start of their history). Until then, older games appear as the walk archives them. The first filtered lookup queues the backfill like an unfiltered first page (ADR-081).
+- **`type` is refused with `champion`** (`VALIDATION`). The archive keeps the queue id, and how Riot maps `type` to queue ids is not in our sources, so the proxy does not guess. `queue` works.
+- `champion` is 1–10 000, as `queue` is bounded: the range only refuses nonsense, and an id no game has returns an empty page. `champion` and `archive` are left out of an unfiltered page, so its shape is unchanged.
+- Showcase: clicking a champion-pool row filters the match history (design 11).
+

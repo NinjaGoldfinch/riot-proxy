@@ -137,6 +137,19 @@ expression: doc
         ],
         "type": "object"
       },
+      "ArchiveCoverage": {
+        "description": "How much of a player's history a champion-filtered page draws on (SITE-02).",
+        "properties": {
+          "complete": {
+            "description": "A backfill has walked the player's whole history (it stamped `doneAt`).\nUntil then the page holds only the games archived so far: their newest\ngames, and whatever earlier pages, tracking or a walk in progress stored.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "complete"
+        ],
+        "type": "object"
+      },
       "ArchiveTotals": {
         "description": "What the archive holds for one player: exact counts from `match_facts`.",
         "properties": {
@@ -1804,6 +1817,17 @@ expression: doc
       },
       "MatchPage": {
         "properties": {
+          "archive": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ArchiveCoverage",
+                "description": "With `champion` only: how much of the player's history the page draws on."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "backfill": {
             "oneOf": [
               {
@@ -1814,16 +1838,24 @@ expression: doc
               }
             ]
           },
+          "champion": {
+            "description": "Echoes the `champion` filter; absent without one.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "count": {
             "format": "int64",
             "type": "integer"
           },
           "hasMore": {
-            "description": "A full page came back, so there is probably another behind it.",
+            "description": "A full page came back, so there is probably another behind it. With\n`champion` it is exact: the archive holds another game behind this page.",
             "type": "boolean"
           },
           "matchIds": {
-            "description": "The id page as Riot returned it, including ids no summary could be built for.",
+            "description": "The id page as Riot returned it, including ids no summary could be built\nfor. With `champion`, the archive's ids for that champion instead.",
             "items": {
               "type": "string"
             },
@@ -8506,7 +8538,7 @@ expression: doc
     },
     "/v1/players/{puuid}/matches": {
       "get": {
-        "description": "The id page, then every match on it, fanned out concurrently. Archived matches come from one archive read at no quota cost. Each entry is the player's own line in the game; the full match stays one call away at `/v1/lol/matches/{region}/{matchId}`. A match that cannot be fetched is left out and named in `warnings`; a failed id lookup fails the page.",
+        "description": "The id page, then every match on it, fanned out concurrently. Archived matches come from one archive read at no quota cost. Each entry is the player's own line in the game; the full match stays one call away at `/v1/lol/matches/{region}/{matchId}`. A match that cannot be fetched is left out and named in `warnings`; a failed id lookup fails the page.\n\n**`champion`** filters by champion. Riot's id list cannot, so the page comes from this deployment's archive: Riot's newest 20 ids are read and archived first, then the archive is paged for that champion's games, newest first. Older games appear as the player's backfill archives them; `archive.complete` says whether it has reached the start of their history. `type` cannot be combined with `champion`.",
         "operationId": "match_page",
         "parameters": [
           {
@@ -8558,12 +8590,22 @@ expression: doc
             }
           },
           {
-            "description": "ranked, normal, tourney or tutorial",
+            "description": "ranked, normal, tourney or tutorial; not with `champion`",
             "in": "query",
             "name": "type",
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Champion id, 1–10000: only that champion's archived games",
+            "in": "query",
+            "name": "champion",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
             }
           },
           {

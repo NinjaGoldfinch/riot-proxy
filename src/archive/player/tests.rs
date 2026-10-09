@@ -118,3 +118,52 @@ async fn lines_page_newest_first_with_the_total_for_the_filter() {
         (true, Some(8), Some(6), Some(14), Some(206))
     );
 }
+
+/// The fixture as a game on `champion`, for the champion filter.
+async fn archive_on(db: &Db, region: &str, id: &str, queue: i64, end: i64, champion: i64) {
+    let mut m: Value = serde_json::from_slice(&variant(id, queue, end, false)).unwrap();
+    for p in m["info"]["participants"].as_array_mut().unwrap() {
+        if p["puuid"] == PUUID {
+            p["championId"] = champion.into();
+        }
+    }
+    let body = Bytes::from(serde_json::to_vec(&m).unwrap());
+    matches::put(db, id, region, SCOPE, body, 1).await.unwrap();
+}
+
+#[tokio::test]
+async fn champion_match_ids_page_one_champion_newest_first() {
+    let (_d, db) = db();
+    // Ahri (103) on every third game, Taliyah (163) otherwise; KR_05 is flex.
+    for i in 0..12 {
+        let champion = if i % 3 == 0 { 103 } else { 163 };
+        let queue = if i == 6 { 440 } else { 420 };
+        archive_on(
+            &db,
+            "asia",
+            &format!("KR_{i:02}"),
+            queue,
+            END - i * 1_000,
+            champion,
+        )
+        .await;
+    }
+    // Another region's game on Ahri is not on an asia page.
+    archive_on(&db, "europe", "EUW1_1", 420, END + 1_000, 103).await;
+
+    let ids = |start, count, queue| champion_match_ids(&db, SCOPE, PUUID, 103, "asia", queue, start, count);
+    assert_eq!(
+        ids(0, 10, None).await.unwrap(),
+        ["KR_00", "KR_03", "KR_06", "KR_09"]
+    );
+    assert_eq!(ids(1, 2, None).await.unwrap(), ["KR_03", "KR_06"]);
+    assert_eq!(ids(4, 2, None).await.unwrap(), Vec::<String>::new());
+    assert_eq!(ids(0, 10, Some(440)).await.unwrap(), ["KR_06"]);
+    assert_eq!(
+        champion_match_ids(&db, "other", PUUID, 103, "asia", None, 0, 10)
+            .await
+            .unwrap(),
+        Vec::<String>::new(),
+        "another key's archive"
+    );
+}

@@ -41,6 +41,10 @@ function players(p, u, { live = false, refreshWait = 0 }) {
   }
   if (p === `/v1/players/${PUUID}/matches`) {
     const start = Number(u.searchParams.get('start'));
+    const champion = Number(u.searchParams.get('champion'));
+    // SITE-02: a champion's page comes from the archive, which has not reached their first game.
+    if (champion) return [200, { puuid: PUUID, platform: 'oc1', region: 'sea', start, count: 10, hasMore: false, matchIdsAgeSeconds: 0, matchIdsFetchedAgeSeconds: 0, refreshed: false, refreshAvailableIn: 0, warnings: [],
+      champion, archive: { complete: false }, matchIds: ['OC1_700000', 'OC1_700001'], matches: [summary(0), summary(1)] }];
     const n = start === 0 ? 10 : 3;
     return [200, { puuid: PUUID, platform: 'oc1', region: 'sea', start, count: 10, hasMore: n === 10, matchIdsAgeSeconds: 0, refreshed: false, refreshAvailableIn: 0, warnings: [],
       matchIds: Array.from({ length: n }, (_, i) => `OC1_${700000 + start + i}`), matches: Array.from({ length: n }, (_, i) => summary(start + i)),

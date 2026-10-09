@@ -125,5 +125,40 @@ pub async fn lines(
     .await
 }
 
+/// The ids of the player's archived games on one champion, newest first, in
+/// `region` (match-v5's routing value, as `matches.region`): the match page's
+/// champion filter (SITE-02). At most `count` ids from `start`.
+#[allow(clippy::too_many_arguments)]
+pub async fn champion_match_ids(
+    db: &Db,
+    key_scope: &str,
+    puuid: &str,
+    champion_id: i64,
+    region: &str,
+    queue: Option<i64>,
+    start: i64,
+    count: i64,
+) -> Result<Vec<String>, DbError> {
+    let (scope, puuid, region) = (key_scope.to_string(), puuid.to_string(), region.to_string());
+    db.read(move |c| {
+        let mut s = c.prepare_cached(
+            "SELECT f.match_id
+               FROM match_facts f JOIN matches m ON m.match_id = f.match_id
+              WHERE f.key_scope = ?1 AND f.puuid = ?2 AND f.champion_id = ?3 AND m.region = ?4
+                AND (?5 IS NULL OR m.queue_id = ?5)
+              ORDER BY m.game_end_ms DESC, f.match_id DESC
+              LIMIT ?6 OFFSET ?7",
+        )?;
+        let ids = s
+            .query_map(
+                params![scope, puuid, champion_id, region, queue, count, start],
+                |r| r.get(0),
+            )?
+            .collect::<Result<_, _>>()?;
+        Ok(ids)
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests;

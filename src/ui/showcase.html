@@ -46,7 +46,8 @@
   th { color: var(--dim); font-weight: 500; font-size: 12px; }
   td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
   tbody tr[data-href] { cursor: pointer; }
-  tbody tr[data-href]:hover { background: var(--sunk); }
+  tbody tr[data-href]:hover, tbody tr[data-mchamp]:hover, tbody tr[data-mchamp].on { background: var(--sunk); }
+  tbody tr[data-mchamp] { cursor: pointer; }
   /* A name stays on one line; a long one ends in an ellipsis (the full name is the link's text). */
   td.name { max-width: 16em; overflow: hidden; text-overflow: ellipsis; }
   td.name small { color: var(--dim); }
@@ -729,7 +730,7 @@ let spells = null; // summoner spell key → image file, once per session
 let runes = null; // rune and style id → { name, icon }, once per session
 // Bumped on every route, so a slow call for a view the user already left draws nothing.
 let viewSeq = 0;
-const pl = { id: null, profile: null, queue: 0, start: 0, matches: [], hasMore: false, mastery: null, masteryAll: false };
+const pl = { id: null, profile: null, queue: 0, champion: 0, start: 0, matches: [], hasMore: false, mastery: null, masteryAll: false };
 
 async function loadLookups() {
   const [q, s, r] = await Promise.all([
@@ -774,7 +775,7 @@ async function renderPlayer({ gameName, tagLine }, refresh = false) {
     return;
   }
   if (!refresh) {
-    Object.assign(pl, { id: `${platform()}/${gameName}#${tagLine}`, profile: null, queue: 0, start: 0, matches: [], hasMore: false, mastery: null, masteryAll: false });
+    Object.assign(pl, { id: `${platform()}/${gameName}#${tagLine}`, profile: null, queue: 0, champion: 0, start: 0, matches: [], hasMore: false, mastery: null, masteryAll: false });
     $('#view').innerHTML = `<section class="card profile" id="pHead"><p class="muted">Looking up ${esc(gameName)} #${esc(tagLine)}…</p></section>`;
   }
   const q = new URLSearchParams({ platform: platform(), topMastery: '3' });
@@ -854,7 +855,9 @@ async function loadLive(seq) {
 function matchesHeader() {
   const tabs = [[0, 'All'], ...QUEUES.map(([, label, id]) => [id, label])]
     .map(([id, label]) => `<button data-mqueue="${id}" class="${id === pl.queue ? 'on' : ''}">${esc(label)}</button>`).join('');
-  return `<header><h2>Match history</h2><div class="tools">${tabs}</div></header><div>${sources(OP.matches, OP.queues, OP.file)}</div>`;
+  // SITE-02: a champion picked in the pool narrows the history to its games.
+  const only = pl.champion ? `<button data-mchamp="0" class="on" title="show every champion">${esc(champions[pl.champion]?.name ?? `#${pl.champion}`)} ✕</button>` : '';
+  return `<header><h2>Match history</h2><div class="tools">${only}${tabs}</div></header><div>${sources(OP.matches, OP.queues, OP.file)}</div>`;
 }
 
 async function loadMatches(seq, refresh = false, more = false) {
@@ -867,6 +870,7 @@ async function loadMatches(seq, refresh = false, more = false) {
   }
   const q = new URLSearchParams({ platform: platform(), start: String(pl.start), count: String(MATCH_PAGE) });
   if (pl.queue) q.set('queue', String(pl.queue));
+  if (pl.champion) q.set('champion', String(pl.champion));
   if (refresh) q.set('refresh', 'true');
   const res = await get(`/v1/players/${encodeURIComponent(p.puuid)}/matches?${q}`);
   if (seq !== viewSeq) return;
@@ -877,11 +881,13 @@ async function loadMatches(seq, refresh = false, more = false) {
   pl.region = res.json.region;
   const bf = res.json.backfill;
   const note = bf ? `<p class="muted">This lookup queued the player's history for archiving (${esc(bf.status)}); the champion pool fills in as it runs.</p>` : '';
+  // A filtered page comes from the archive, which may not reach back to the player's first game yet.
+  const partial = res.json.archive && !res.json.archive.complete ? `<p class="muted">Only games archived so far: older ones appear as the player's history is archived.</p>` : '';
   const warn = res.json.warnings?.length ? `<p class="err">${esc(res.json.warnings.length)} match${res.json.warnings.length === 1 ? '' : 'es'} could not be loaded.</p>` : '';
   el.innerHTML = matchesHeader() + (pl.matches.length
     ? `<div class="matches">${pl.matches.map(matchCard).join('')}</div>`
     : `<p class="empty">No ${pl.queue ? `${esc(queueName(pl.queue))} ` : ''}games found.</p>`)
-    + warn + note + (pl.hasMore ? `<div class="pager"><button data-more>Load ${MATCH_PAGE} more</button></div>` : '');
+    + partial + warn + note + (pl.hasMore ? `<div class="pager"><button data-more>Load ${MATCH_PAGE} more</button></div>` : '');
 }
 
 function matchCard(m) {
@@ -910,7 +916,7 @@ async function loadPool(seq) {
   if (!res.ok) { el.innerHTML = head + failure(res); return; }
   const rows = res.json.champions ?? [];
   el.innerHTML = head + (rows.length
-    ? `<table><thead><tr><th>Champion</th><th class="n">Games</th><th>Win rate</th><th class="n">KDA</th><th class="n hide-sm">CS/min</th></tr></thead><tbody>${rows.map((c) => `<tr>
+    ? `<table><thead><tr><th>Champion</th><th class="n">Games</th><th>Win rate</th><th class="n">KDA</th><th class="n hide-sm">CS/min</th></tr></thead><tbody>${rows.map((c) => `<tr data-mchamp="${esc(c.championId)}" class="${c.championId === pl.champion ? 'on' : ''}" title="show only these games in the match history">
       <td class="name">${champLink(c.championId, 'sm')} ${esc(champions[c.championId]?.name ?? c.championName ?? `#${c.championId}`)}</td>
       <td class="n">${esc(c.games)}</td>
       <td><span class="wr"><span class="bar"><i style="width:${(c.winRate ?? 0) * 100}%"></i></span>${pct(c.winRate)}</span></td>
@@ -1180,13 +1186,14 @@ function route() {
 document.addEventListener('click', (ev) => {
   // A link inside a clickable row or card goes where the link says.
   if (ev.target.closest('a')) return;
-  const t = ev.target.closest('button, [data-href]');
+  const t = ev.target.closest('button, [data-href], [data-mchamp]');
   if (!t) return;
   if (t.dataset.href) { location.hash = t.dataset.href; return; }
   if (t.dataset.tier) { state.tier = t.dataset.tier; loadLadder(); }
   if (t.dataset.queue) { state.queue = t.dataset.queue; loadLadder(); loadTop(); }
   if (t.dataset.page) { state.page += Number(t.dataset.page); renderLadder(); }
   if (t.dataset.mqueue) { pl.queue = Number(t.dataset.mqueue); loadMatches(viewSeq); loadPool(viewSeq); }
+  if (t.dataset.mchamp) { pl.champion = Number(t.dataset.mchamp); loadMatches(viewSeq); loadPool(viewSeq); }
   if ('more' in t.dataset) { t.disabled = true; loadMatches(viewSeq, false, true); }
   if ('mastery' in t.dataset) { pl.masteryAll = !pl.masteryAll; renderMastery(); }
   if (t.dataset.cqueue) { state.queue = t.dataset.cqueue; route(); }
