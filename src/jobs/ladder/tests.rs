@@ -3,6 +3,7 @@
 use super::store::{self, Ended, Stage};
 use super::*;
 use crate::jobs::scheduler::Queue;
+use crate::riot::ladder::RIOT_APEX_LIST_CAP;
 
 fn db() -> (tempfile::TempDir, Db) {
     let dir = tempfile::tempdir().unwrap();
@@ -253,6 +254,7 @@ fn stages_follow_v1s_order() {
         finished_at: None,
         counters: store::Counters::default(),
         legs_failed: 0,
+        apex_capped: Vec::new(),
     };
     let name = |s: Stage| match s {
         Stage::Phase(p) => p,
@@ -317,6 +319,7 @@ async fn collect_skips_players_walked_since_the_crawl_started_and_goes_best_firs
             queue: "RANKED_SOLO_5x5",
             entries: &entries,
             cursor: None,
+            apex_tier: Some("CHALLENGER"),
             now: crawl.started_at,
         },
     )
@@ -337,4 +340,108 @@ async fn collect_skips_players_walked_since_the_crawl_started_and_goes_best_firs
         .await
         .unwrap();
     assert_eq!(candidates, ["high", "old", "low"]);
+}
+
+/// `n` players of an apex `tier`, as `apex_leg` stores them.
+fn apex_entries(tier: &str, n: usize) -> Vec<store::Entry> {
+    (0..n)
+        .map(|i| store::Entry {
+            puuid: format!("{tier}-{i}"),
+            tier: tier.into(),
+            division: "I".into(),
+            league_points: 1000 - i64::try_from(i).unwrap(),
+            wins: 1,
+            losses: 1,
+            veteran: false,
+            inactive: false,
+            fresh_blood: false,
+            hot_streak: false,
+        })
+        .collect()
+}
+
+/// Store one apex league of `n` players (or a walk's page when `tier` is a
+/// paged tier) and read back the crawl's `apex_capped`.
+async fn capped_after(db: &Db, crawl_id: &str, tier: &str, n: usize) -> Vec<String> {
+    let entries = apex_entries(tier, n);
+    let apex = APEX_TIERS.contains(&tier);
+    store::write_page(
+        db,
+        store::Page {
+            key_scope: "s",
+            crawl_id,
+            platform: "kr",
+            queue: "RANKED_SOLO_5x5",
+            entries: &entries,
+            cursor: None,
+            apex_tier: apex.then_some(tier),
+            now: 1,
+        },
+    )
+    .await
+    .unwrap();
+    store::get(db, "s", crawl_id).await.unwrap().unwrap().apex_capped
+}
+
+#[tokio::test]
+async fn an_apex_league_at_riots_cap_marks_the_crawl_and_one_short_does_not() {
+    let cap = RIOT_APEX_LIST_CAP;
+    assert_eq!(cap, 10_000);
+    let (_d, db) = db();
+    let q = Queue::new(db.clone());
+    let one = start_crawl(&q, "s", "MASTER", &req("kr", "RANKED_SOLO_5x5", None))
+        .await
+        .unwrap()
+        .crawl_id;
+    assert!(
+        store::get(&db, "s", &one)
+            .await
+            .unwrap()
+            .unwrap()
+            .apex_capped
+            .is_empty()
+    );
+    // Challenger and Grandmaster at their real sizes, and Master one short.
+    assert!(capped_after(&db, &one, "CHALLENGER", 300).await.is_empty());
+    assert!(capped_after(&db, &one, "GRANDMASTER", 700).await.is_empty());
+    assert!(capped_after(&db, &one, "MASTER", cap - 1).await.is_empty());
+    // A walk's page is never a capped league, however long.
+    assert!(capped_after(&db, &one, "DIAMOND", cap).await.is_empty());
+
+    let two = start_crawl(&q, "s", "MASTER", &req("euw1", "RANKED_SOLO_5x5", None))
+        .await
+        .unwrap()
+        .crawl_id;
+    assert_eq!(capped_after(&db, &two, "MASTER", cap).await, ["MASTER"]);
+    // A retried leg marks it once, and one short later does not unmark it.
+    assert_eq!(capped_after(&db, &two, "MASTER", cap).await, ["MASTER"]);
+    assert_eq!(capped_after(&db, &two, "MASTER", cap - 1).await, ["MASTER"]);
+    // The other crawl is untouched.
+    assert!(
+        store::get(&db, "s", &one)
+            .await
+            .unwrap()
+            .unwrap()
+            .apex_capped
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn capped_tiers_are_kept_in_apex_order() {
+    let (_d, db) = db();
+    let q = Queue::new(db.clone());
+    let id = start_crawl(&q, "s", "MASTER", &req("kr", "RANKED_SOLO_5x5", None))
+        .await
+        .unwrap()
+        .crawl_id;
+    // Not a size Riot sends for Grandmaster; the rule is the same for every apex tier.
+    assert_eq!(
+        capped_after(&db, &id, "GRANDMASTER", RIOT_APEX_LIST_CAP).await,
+        ["GRANDMASTER"]
+    );
+    assert_eq!(
+        capped_after(&db, &id, "MASTER", RIOT_APEX_LIST_CAP).await,
+        ["MASTER", "GRANDMASTER"]
+    );
 }

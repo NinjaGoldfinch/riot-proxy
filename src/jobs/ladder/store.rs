@@ -11,6 +11,7 @@ use rusqlite::{OptionalExtension, Transaction, params};
 use serde::Serialize;
 
 use crate::db::{Db, DbError};
+use crate::riot::ladder::{APEX_TIERS, RIOT_APEX_LIST_CAP};
 
 /// What a crawl row says (v1 `LadderCrawl`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -26,6 +27,10 @@ pub struct Crawl {
     pub finished_at: Option<i64>,
     pub counters: Counters,
     pub legs_failed: i64,
+    /// Apex tiers whose league came back at Riot's cap
+    /// ([`RIOT_APEX_LIST_CAP`]), in [`APEX_TIERS`] order: the crawl may be
+    /// missing the bottom of those tiers (LAD-01).
+    pub apex_capped: Vec<String>,
 }
 
 /// v1's six crawl counters.
@@ -42,7 +47,7 @@ pub struct Counters {
 
 const COLUMNS: &str = "id, platform, queue, tier_floor, status, phase, started_at, finished_at, \
     pages_fetched, entries_seen, players_discovered, backfills_enqueued, match_ids_seen, \
-    matches_queued, legs_failed";
+    matches_queued, legs_failed, apex_capped";
 
 fn crawl_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Crawl> {
     Ok(Crawl {
@@ -63,7 +68,16 @@ fn crawl_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Crawl> {
             matches_queued: r.get(13)?,
         },
         legs_failed: r.get(14)?,
+        apex_capped: tiers_of(r.get(15)?),
     })
+}
+
+/// `apex_capped` as stored: a JSON list, NULL for none. A value this code
+/// did not write reads as none rather than failing the crawl's routes.
+fn tiers_of(stored: Option<String>) -> Vec<String> {
+    stored
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
 }
 
 /// A new crawl row, or `None` when one is already running for this ladder
@@ -181,13 +195,18 @@ pub struct Page<'a> {
     pub entries: &'a [Entry],
     /// A walk's leg and the page after this one; `None` for an apex league.
     pub cursor: Option<(&'a str, i64)>,
+    /// The tier of an apex league, which arrives whole; `None` for a walk's
+    /// page. A league of at least [`RIOT_APEX_LIST_CAP`] entries marks the
+    /// tier capped on the crawl.
+    pub apex_tier: Option<&'a str>,
     pub now: i64,
 }
 
 /// One page, in one transaction: the entries (`first_seen` set once,
 /// `last_seen` restamped, v1), every player as a known but untracked player,
-/// the crawl's counters, and the walk's cursor. A crash before the commit
-/// re-walks the page; after it, resumes on the next.
+/// the crawl's counters, the walk's cursor, and whether an apex league hit
+/// Riot's cap. A crash before the commit re-walks the page; after it, resumes
+/// on the next.
 pub async fn write_page(db: &Db, page: Page<'_>) -> Result<(), DbError> {
     let key_scope = page.key_scope.to_string();
     let crawl_id = page.crawl_id.to_string();
@@ -195,6 +214,10 @@ pub async fn write_page(db: &Db, page: Page<'_>) -> Result<(), DbError> {
     let queue = page.queue.to_string();
     let entries = page.entries.to_vec();
     let cursor = page.cursor.map(|(leg, next)| (leg.to_string(), next));
+    let capped = page
+        .apex_tier
+        .filter(|_| page.entries.len() >= RIOT_APEX_LIST_CAP)
+        .map(str::to_string);
     let now = page.now;
     db.write(move |c| {
         let tx = c.transaction()?;
@@ -255,10 +278,41 @@ pub async fn write_page(db: &Db, page: Page<'_>) -> Result<(), DbError> {
                 params![crawl_id, leg, next],
             )?;
         }
+        if let Some(tier) = capped {
+            mark_capped(&tx, &crawl_id, &tier)?;
+        }
         tx.commit()?;
         Ok(())
     })
     .await
+}
+
+/// Add `tier` to the crawl's `apex_capped`, once, keeping [`APEX_TIERS`]
+/// order. A tier stays marked: a retried leg that comes back one short is the
+/// ladder moving, not the cap lifting.
+fn mark_capped(tx: &Transaction<'_>, crawl_id: &str, tier: &str) -> Result<(), DbError> {
+    let stored: Option<Option<String>> = tx
+        .query_row(
+            "SELECT apex_capped FROM ladder_crawls WHERE id = ?1",
+            [crawl_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let Some(stored) = stored else {
+        return Ok(());
+    };
+    let mut tiers = tiers_of(stored);
+    if tiers.iter().any(|t| t == tier) {
+        return Ok(());
+    }
+    tiers.push(tier.to_string());
+    tiers.sort_by_key(|t| APEX_TIERS.iter().position(|a| a == t));
+    let json = serde_json::Value::from(tiers).to_string();
+    tx.execute(
+        "UPDATE ladder_crawls SET apex_capped = ?2 WHERE id = ?1",
+        params![crawl_id, json],
+    )?;
+    Ok(())
 }
 
 /// What ending a leg did to its crawl.

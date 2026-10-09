@@ -134,7 +134,7 @@ Every handler that hits Riot calls the fetcher with `FetchOptions::JOB` (`Priori
 | `backfill:player` | first lookup, tracking, admin | page 100 ids at a time up to `LOOKUP_BACKFILL_LIMIT`, enqueue archives |
 | `ddragon:sync` | hourly | versions.json → mirror new patch to `data/ddragon`, `patch.new` |
 | `ladder:crawl` | tick or admin | create crawl row, fan out `ladder:apex` × 3 + `ladder:walk` × (tier, division) |
-| `ladder:apex` / `ladder:walk` | per crawl | upsert `ladder_entries`; last one flips `phase → collect` |
+| `ladder:apex` / `ladder:walk` | per crawl | upsert `ladder_entries`; an apex league of `RIOT_APEX_LIST_CAP` or more entries adds its tier to the crawl's `apex_capped`; last one flips `phase → collect` |
 | `ladder:collect` | phase collect | 25 players per job → `crawl_match_ids`; last one flips `phase → archive` |
 | `ladder:archive` | phase archive | `filter_unarchived`, enqueue `archive:match`; ends the crawl `completed`, enqueues `aggregate:analytics` and `names:backfill` |
 | `names:backfill` | crawl end, daily, admin | Riot IDs for nameless players from their latest archived matches; no Riot calls (v1, ADR-055) |
@@ -159,6 +159,8 @@ stateDiagram-v2
 ```
 
 "Last job done" is detected with `crawl_legs`: one row per outstanding job, which the job deletes as it ends. Whoever deletes the last row moves the crawl on in the same write transaction, so there is no race (one writer), and a job re-run after a crash finds no row and changes nothing — which a bare counter would decrement twice (ADR-054). A crawl whose legs include one that gave up ends `failed` rather than moving on; `cancelled` stops it where it stands.
+
+**Riot's apex cap (LAD-01, ADR-097).** An apex league comes back whole, but never longer than `RIOT_APEX_LIST_CAP` (10,000) entries. That number is observed, not documented. On 2026-10-09, with the production key, `masterleagues` for RANKED_SOLO_5x5 listed exactly 10,000 players on kr, euw1 and na1, where dpm.lol counted about 30K, 22K and 12K. The list's lowest LP was 313 on kr, 412 on euw1 and 31 on na1, so the missing players are the bottom of Master. league-exp-v4 pages the same 10,000 (48 pages of 205, then 160), and `league.entriesByTier` refuses MASTER with a 400. When an apex leg stores a list at least that long, the same write transaction adds the tier to `ladder_crawls.apex_capped`, a JSON list in `APEX_TIERS` order (NULL for none). A tier stays marked once set. The crawl routes and the stats snapshot carry it as `apexCapped` (`[]` for none). The dashboard's crawl card shows `Master: top 10,000 only (Riot API limit)` next to the player count, and the showcase ladder shows the same note under a list that long (design 11). The `/dev` Ladder probe (LAD-03, design 10) re-checks the cap against Riot. LAD-02 is meant to find the players the cap leaves out.
 
 ## Realtime
 

@@ -14,7 +14,7 @@ const crawl = (id, status, phase, extra = {}) => ({
   id, platform: 'oc1', queue: 'RANKED_SOLO_5x5', tierFloor: 'MASTER', status, phase,
   startedAt: ago(3_600_000), finishedAt: status === 'running' ? null : ago(60_000),
   pagesFetched: 12, entriesSeen: 1982, playersDiscovered: 1982, backfillsEnqueued: 1982,
-  matchIdsSeen: 21137, matchesQueued: 0, pendingLegs: status === 'running' ? 30 : 0, ...extra,
+  matchIdsSeen: 21137, matchesQueued: 0, pendingLegs: status === 'running' ? 30 : 0, apexCapped: [], ...extra,
 });
 // Older finished runs behind DONE, enough that the history pages: one failed.
 const OLD = Array.from({ length: 11 }, (_, i) => crawl(`01K00000000000000000000LD${String(i).padStart(2, '0')}`, i === 3 ? 'failed' : 'completed', 'archive', {
@@ -42,8 +42,9 @@ const ACTIVITY = {
     failed: [collect(25, 'failed', { error: 'RIOT_UNAVAILABLE: match-v5 503 after 5 tries' })],
     downloads: { platform: 'oc1', ready: 120, delayed: 3, running: 2, failed: 1, recent: 60, etaSeconds: 1250 },
   },
+  // A kr-sized run: Riot's Master list came back at its 10,000 cap (LAD-01).
   [DONE]: {
-    crawl: crawl(DONE, 'completed', 'archive'),
+    crawl: crawl(DONE, 'completed', 'archive', { playersDiscovered: 11000, apexCapped: ['MASTER'] }),
     asOf: new Date().toISOString(),
     stages: [
       { name: 'enumerate', state: 'done', done: 3, total: 3, unit: 'legs', recent: 0, etaSeconds: null },

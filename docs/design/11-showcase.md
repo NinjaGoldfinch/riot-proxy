@@ -31,7 +31,7 @@ It is in the page bar (design/10 §Page bar) as **Showcase**, right after Dev ex
 
 | View (`#hash`) | Task | Calls | Renders |
 |---|---|---|---|
-| `#/` home | DEV-06 | `/v1/lol/league/apex/{platform}/{tier}/{queue}`, `/v1/riot/accounts/by-puuid/{puuid}` | ladder: Challenger, Grandmaster or Master × Solo/Duo or Flex, highest LP first, 25 a page, names for the visible page only (five calls at a time, cached for the session) |
+| `#/` home | DEV-06 | `/v1/lol/league/apex/{platform}/{tier}/{queue}`, `/v1/riot/accounts/by-puuid/{puuid}` | ladder: Challenger, Grandmaster or Master × Solo/Duo or Flex, highest LP first, 25 a page, names for the visible page only (five calls at a time, cached for the session). A league of 10,000 players or more (`RIOT_APEX_LIST_CAP`, LAD-01) gets the note `Master: top 10,000 only (Riot API limit)` under the list: Riot left out the rest of the tier |
 | | | `/v1/lol/status/{platform}` | a banner per maintenance or incident; nothing when there are none |
 | | | `/v1/lol/rotations/{platform}`, `/v1/static/champion` | free rotation as champion icons |
 | | | `/v1/lol/analytics/patches?queue&platform`, `/v1/lol/analytics/champions?platform&queue&patch&limit=500` | top 10 by win rate and by games, rows summed over tiers, for the ladder's queue. A patch picker (DEV-21) offers **All patches** (the default, `patch=all`) and each patch the ladder has analytics for, with its games; a picked patch the list lacks falls back to all. A patch with too few games says so instead of "no analytics yet" |

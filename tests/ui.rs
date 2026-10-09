@@ -313,6 +313,23 @@ fn showcase_is_self_contained() {
     assert!(html.contains("/ddragon/"));
 }
 
+/// The dashboard's crawl card and the showcase ladder print Riot's apex cap
+/// (LAD-01); their copies of it must be the server's.
+#[test]
+fn the_pages_apex_cap_is_the_servers() {
+    use riot_proxy::routes::ui::{DASHBOARD_HTML, SHOWCASE_HTML};
+    let line = format!(
+        "const APEX_LIST_CAP = {};",
+        riot_proxy::riot::ladder::RIOT_APEX_LIST_CAP
+    );
+    for (name, html) in [
+        ("dashboard.html", DASHBOARD_HTML),
+        ("showcase.html", SHOWCASE_HTML),
+    ] {
+        assert!(html.contains(&line), "{name} lacks {line:?}");
+    }
+}
+
 #[test]
 fn showcase_helpers_pass_their_node_tests() {
     node_test("tests/showcase.mjs");

@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 const html = readFileSync(new URL('../src/ui/showcase.html', import.meta.url), 'utf8');
 const block = html.match(/\/\/ -{10} pure helpers[^\n]*\n([\s\S]*?)\/\/ -{10} end pure helpers/);
 assert.ok(block, 'the pure helpers block is marked in showcase.html');
-const h = new Function(`${block[1]}; return { APEX, QUEUES, LADDER_PAGE, tierColour, winRate, pct, sortLadder, ladderPage, championIndex, imageUrl, statusNotices, byChampion, topChampions, parseRiotId, parseRoute, explorerLink, rankLabel, rankCards, queueNames, spellIndex, outcome, kda, durationSecs, clock, ago, masterySummary, liveGame, TIERS, SIDES, matchHref, matchTeams, goldDiff, goldScale, signedGold, tierRows, runeIndex, runePair, runeUrl, itemIndex, roleList, thousands, patchChoices, pickPatch, patchLabel };`)();
+const h = new Function(`${block[1]}; return { APEX, QUEUES, LADDER_PAGE, APEX_LIST_CAP, apexCapNote, tierColour, winRate, pct, sortLadder, ladderPage, championIndex, imageUrl, statusNotices, byChampion, topChampions, parseRiotId, parseRoute, explorerLink, rankLabel, rankCards, queueNames, spellIndex, outcome, kda, durationSecs, clock, ago, masterySummary, liveGame, TIERS, SIDES, matchHref, matchTeams, goldDiff, goldScale, signedGold, tierRows, runeIndex, runePair, runeUrl, itemIndex, roleList, thousands, patchChoices, pickPatch, patchLabel };`)();
 
 test('apex tiers and queues are the ones the apex route accepts', () => {
   assert.deepEqual(h.APEX, ['CHALLENGER', 'GRANDMASTER', 'MASTER']);
@@ -29,6 +29,14 @@ test('win rate and percentages', () => {
   assert.equal(h.winRate(0, 0), null);
   assert.equal(h.pct(0.5234), '52.3%');
   assert.equal(h.pct(null), '–');
+});
+
+test("a league at Riot's apex cap gets a note, one under it does not", () => {
+  assert.equal(h.APEX_LIST_CAP, 10000, 'RIOT_APEX_LIST_CAP in src/riot/ladder.rs');
+  assert.equal(h.apexCapNote('MASTER', 10000), 'Master: top 10,000 only (Riot API limit)');
+  assert.equal(h.apexCapNote('MASTER', 9999), '');
+  assert.equal(h.apexCapNote('CHALLENGER', 300), '');
+  assert.equal(h.apexCapNote('GRANDMASTER', 700), '');
 });
 
 test('the ladder sorts by LP, then wins, and numbers positions from 1', () => {
