@@ -119,7 +119,7 @@ sequenceDiagram
 
 ## Ladder tab (LAD-03)
 
-Re-runs, on demand, the checks that found Riot's 10,000-entry Master cap (IMPLEMENTATION.md §Post-release — LAD; ADR-094), so they don't have to be done by hand with the production key.
+Re-runs, on demand, the checks that found Riot's 10,000-entry Master cap (IMPLEMENTATION.md §Post-release — LAD; ADR-095), so they don't have to be done by hand with the production key.
 
 - **Endpoint:** `POST /v1/admin/ladder/probe {platform, queue?}` (admin; the queue defaults to the first `LADDER_QUEUES`). It asks Riot now, skipping the cache read, at interactive priority: the three apex leagues, league-exp MASTER/I ten pages at a time until an empty page (at most 100), and `entries/{queue}/MASTER/I?page=1`. About 55 calls on a capped shard (12 s on kr), a few on a small one. It stores nothing.
 - **Checks**, each `confirmed` (as on 2026-10-09), `not-seen` (doesn't apply on this shard), `changed` (Riot answers differently now) or `error`:

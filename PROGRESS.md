@@ -232,7 +232,7 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 ## LAD — Master players past Riot's 10,000 cap (owner request 2026-10-09)
 - [ ] LAD-01 say when an apex league is cut off at Riot's cap: `apex_capped` on the crawl, a note on the crawl card and the showcase ladder (IMPLEMENTATION.md §Post-release — LAD)
 - [ ] LAD-02 find the Master players the cap leaves out: a `discover` stage that looks up the ranks of archived match participants not on the ladder (IMPLEMENTATION.md §Post-release — LAD)
-- [x] LAD-03 re-run the cap checks from `/dev`: `POST /v1/admin/ladder/probe` checks `masterleagues` against `RIOT_APEX_LIST_CAP`, pages league-exp-v4 (`league.expEntries`, new in the registry) and compares the two, and checks that the paged route refuses MASTER. Each check is confirmed / not-seen / changed / error, shown on a new Ladder tab on `/dev` (#114, design/10, ADR-094)
+- [x] LAD-03 re-run the cap checks from `/dev`: `POST /v1/admin/ladder/probe` checks `masterleagues` against `RIOT_APEX_LIST_CAP`, pages league-exp-v4 (`league.expEntries`, new in the registry) and compares the two, and checks that the paged route refuses MASTER. Each check is confirmed / not-seen / changed / error, shown on a new Ladder tab on `/dev` (#114, design/10, ADR-095)
 
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
