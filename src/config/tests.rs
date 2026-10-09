@@ -56,7 +56,10 @@ fn defaults_match_v1_and_design_07() {
     assert_eq!(c.track_poll_rank_s, 600);
     assert_eq!(c.track_poll_match_s, 300);
     assert_eq!(c.ddragon_sync_s, 3600);
-    assert!(!c.archive_timelines);
+    assert!(
+        c.archive_timelines,
+        "archive jobs fetch timelines unless told not to (ADR-098)"
+    );
     assert_eq!(
         c.lookup_backfill_limit,
         u32::MAX,
@@ -229,13 +232,13 @@ fn coerces_numbers_and_booleans() {
         ("PORT", "9090"),
         ("STALE_WHILE_REVALIDATE", "false"),
         ("BULK_USAGE_CEILING", "0.5"),
-        ("ARCHIVE_TIMELINES", "1"),
+        ("ARCHIVE_TIMELINES", "0"),
         ("DOCS_UI", "FALSE"),
     ]));
     assert_eq!(c.port, 9090);
     assert!(!c.stale_while_revalidate);
     assert_eq!(c.bulk_usage_ceiling, 0.5);
-    assert!(c.archive_timelines);
+    assert!(!c.archive_timelines);
     assert!(!c.docs_ui);
 }
 

@@ -4,8 +4,8 @@
 //!
 //! `patch`, `queue_id` and `game_end_ms` are pulled out of the body on insert so
 //! analytics and stats never open the blob. Timelines go in their own table,
-//! only with `ARCHIVE_TIMELINES=true`, and only once their match is archived
-//! (the foreign key; v1 skipped a timeline that arrived first the same way).
+//! only once their match is archived (the foreign key; v1 skipped a timeline
+//! that arrived first the same way).
 //!
 //! Archiving a match also writes its `match_facts` in the same transaction
 //! (v1 `archiveMatch`), for the key scope whose PUUIDs the body carries.

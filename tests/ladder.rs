@@ -703,9 +703,10 @@ impl Env {
         }
     }
 
-    /// Every handler a crawl reaches, over one archiving fetcher.
-    fn all_handlers(&self) -> Registry {
-        let config = common::config(&[]);
+    /// Every handler a crawl reaches, over one archiving fetcher, configured
+    /// by `vars`.
+    fn all_handlers(&self, vars: &[(&str, &str)]) -> Registry {
+        let config = common::config(vars);
         let key = KeyScope::from_key(&config.riot_api_key);
         let archive = Arc::new(riot_proxy::archive::SqliteArchive::new(self.db.clone(), key));
         let fetcher = common::fetcher(
@@ -723,14 +724,14 @@ impl Env {
             tier_floor: "CHALLENGER".into(),
             backfill_limit: 100,
             lookup_backfill_limit: 500,
-            archive_timelines: false,
+            archive_timelines: config.archive_timelines,
         });
         let archiving = Arc::new(riot_proxy::jobs::archive::ArchiveContext {
             fetcher,
             queue,
             hub: self.hub.clone(),
             key_scope: self.scope.clone(),
-            archive_timelines: false,
+            archive_timelines: config.archive_timelines,
             lookup_backfill_limit: 500,
         });
         let names = Arc::new(riot_proxy::jobs::names::NamesBackfill {
@@ -772,8 +773,9 @@ impl Env {
     }
 
     /// Run until no job is pending or running.
-    async fn drain_jobs(&self, workers: usize) {
-        let running = Scheduler::with_queue(Queue::new(self.db.clone()), self.all_handlers()).start(workers);
+    async fn drain_jobs(&self, workers: usize, vars: &[(&str, &str)]) {
+        let running =
+            Scheduler::with_queue(Queue::new(self.db.clone()), self.all_handlers(vars)).start(workers);
         tokio::time::timeout(Duration::from_secs(60), async {
             loop {
                 let open = self
@@ -811,7 +813,7 @@ async fn a_crawl_runs_every_stage_and_fetches_each_match_once() {
     }
     let mut ladder = e.hub.subscribe(&Topic::named(LADDER));
     let id = e.start("CHALLENGER").await;
-    e.drain_jobs(6).await;
+    e.drain_jobs(6, &[("ARCHIVE_TIMELINES", "false")]).await;
 
     let crawl = e.crawl(&id).await;
     assert_eq!(
@@ -910,6 +912,46 @@ async fn a_crawl_runs_every_stage_and_fetches_each_match_once() {
         .await
         .unwrap();
     assert_eq!(name, "Player3#KR1");
+}
+
+/// Crawls archive timelines unless `ARCHIVE_TIMELINES=false` (ADR-098): one
+/// timeline request for each match the crawl archives, none for a match it
+/// found archived already.
+#[tokio::test]
+async fn a_crawl_archives_timelines_unless_turned_off() {
+    for (vars, fetched) in [(&[][..], 1), (&[("ARCHIVE_TIMELINES", "false")][..], 0)] {
+        let e = env().await;
+        e.ladder_of_thirty().await;
+        for k in 0..12 {
+            let timeline = json!({"metadata": {"matchId": match_id(k)}, "info": {"frames": []}});
+            Mock::given(method("GET"))
+                .and(path(format!("/lol/match/v5/matches/{}/timeline", match_id(k))))
+                .respond_with(ResponseTemplate::new(200).set_body_json(timeline))
+                .mount(&e.server)
+                .await;
+        }
+        riot_proxy::archive::matches::put(&e.db, &match_id(0), "asia", &e.scope, match_body(0).into(), 1)
+            .await
+            .unwrap();
+        let id = e.start("CHALLENGER").await;
+        e.drain_jobs(6, vars).await;
+
+        assert_eq!(e.crawl(&id).await.status, "completed", "{vars:?}");
+        for k in 0..12 {
+            let expected = if k == 0 { 0 } else { fetched };
+            assert_eq!(
+                e.fetches_of(&format!("/matches/{}/timeline", match_id(k))).await,
+                expected,
+                "{} {vars:?}",
+                match_id(k)
+            );
+        }
+        assert_eq!(
+            e.count("SELECT COUNT(*) FROM timelines").await,
+            i64::try_from(11 * fetched).unwrap(),
+            "{vars:?}"
+        );
+    }
 }
 
 #[tokio::test]

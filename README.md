@@ -102,7 +102,7 @@ Values come from CLI flags, then the environment, then `.env`, then the built-in
 | `CACHE_TTL_OVERRIDES` | — | e.g. `league=120,spectator=20` (seconds) |
 | `CACHE_L1_MAX_MB` | `128` | In-memory cache budget |
 | `BULK_USAGE_CEILING` | `0.80` | Share of each rate-limit bucket that background work may use |
-| `ARCHIVE_TIMELINES` | `false` | Archive jobs also fetch match timelines (large). Timelines fetched through the API are archived either way |
+| `ARCHIVE_TIMELINES` | `true` | Archive jobs (ladder crawls, polls, backfills) also fetch match timelines: one more request per match, and large. `false` turns that off. Timelines fetched through the API are archived either way |
 | `LADDER_CRAWL_S` / `LADDER_TIER_FLOOR` | `0` / `MASTER` | Scheduled ladder crawls (0 = on demand) and their depth |
 | `ADMIN_IP_ALLOWLIST` | — | IPs and CIDRs allowed to reach `/v1/admin/*` |
 | `TRUST_PROXY` | `false` | Take the client address from `X-Forwarded-For`. Turn on only behind a reverse proxy that sets it |

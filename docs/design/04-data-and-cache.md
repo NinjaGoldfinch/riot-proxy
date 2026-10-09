@@ -18,7 +18,7 @@ flowchart LR
         consumers["consumers<br/>keys · scopes · quotas"]
         players["players<br/>tracked + backfill state"]
         matches["matches<br/>zstd blob · immutable"]
-        timelines["timelines<br/>opt-in"]
+        timelines["timelines<br/>on by default"]
         facts["match_facts<br/>per participant"]
         analytics["champion_stats<br/>matchups · builds"]
         ladder["ladder_* <br/>crawls · entries"]
