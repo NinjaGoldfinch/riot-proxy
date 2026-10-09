@@ -194,7 +194,7 @@ CREATE TABLE player_ranks (                       -- every league.entriesByPuuid
   tier TEXT, division TEXT, league_points INTEGER, fetched_at INTEGER,
   PRIMARY KEY (key_scope, platform, queue, puuid)
 );                                                -- a lookup replaces the player's rows on that platform
-CREATE TABLE rank_lookups (                       -- when each player was last looked up, ranked or not (ADR-110)
+CREATE TABLE rank_lookups (                       -- when each player was last looked up, ranked or not (ADR-111)
   key_scope TEXT, platform TEXT, puuid TEXT, looked_up_at INTEGER,
   PRIMARY KEY (key_scope, platform, puuid)
 );

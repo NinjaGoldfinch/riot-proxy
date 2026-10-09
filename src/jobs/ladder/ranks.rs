@@ -1,4 +1,4 @@
-//! `ranks:lookup` (DEV-29, ADR-110): look up the ranks of the platform's
+//! `ranks:lookup` (DEV-29, ADR-111): look up the ranks of the platform's
 //! archived players that analytics count under `UNKNOWN`, so their games land
 //! in a tier. A completed crawl queues one per (platform, queue).
 //!

@@ -192,16 +192,16 @@ pub struct ProfileBody {
     platform: &'static str,
     region: &'static str,
     /// Riot's payload, verbatim, or `null` if that part failed; see `warnings`.
-    #[schema(value_type = Option<serde_json::Value>, required = true)]
+    #[schema(value_type = Option<crate::routes::riot_schemas::AccountDto>, required = true)]
     account: Option<Box<RawValue>>,
     /// Riot's payload, verbatim, or `null` if that part failed; see `warnings`.
-    #[schema(value_type = Option<serde_json::Value>, required = true)]
+    #[schema(value_type = Option<crate::routes::riot_schemas::SummonerDto>, required = true)]
     summoner: Option<Box<RawValue>>,
     /// Riot's payload, verbatim, or `null` if that part failed; see `warnings`.
-    #[schema(value_type = Option<serde_json::Value>, required = true)]
+    #[schema(value_type = Option<Vec<crate::routes::riot_schemas::LeagueEntryDto>>, required = true)]
     league: Option<Box<RawValue>>,
     /// Riot's payload, verbatim, or `null` if that part failed; see `warnings`.
-    #[schema(value_type = Option<serde_json::Value>, required = true)]
+    #[schema(value_type = Option<Vec<crate::routes::riot_schemas::ChampionMasteryDto>>, required = true)]
     mastery: Option<Box<RawValue>>,
     /// How long each part's content has been unchanged: a refetch that returns
     /// the same bytes does not reset it. `X-Cache-Age` is the stalest of these.
@@ -440,7 +440,9 @@ pub struct BackfillNotice {
     pub job_id: String,
     /// `queued`, or `already-queued` when another request got there first.
     pub status: String,
-    /// How far back the walk will go, in matches.
+    /// How far back the walk will go, in matches. `4294967295` (the default,
+    /// `LOOKUP_BACKFILL_LIMIT`) means the whole history: the walk stops where
+    /// Riot's id list ends (ADR-081).
     pub limit: u32,
 }
 
@@ -699,6 +701,7 @@ async fn match_page(
     .await;
     let mut fetched: HashMap<String, Result<FetchResult, FetchError>> = fetched.into_iter().collect();
 
+    let versions = state.ddragon.versions().await;
     let mut summaries = Vec::with_capacity(match_ids.len());
     for m in &match_ids {
         let body = if let Some(b) = archived.get(m) {
@@ -722,7 +725,13 @@ async fn match_page(
             }
         };
         match summary::summarise(&body, &puuid, m) {
-            Some(s) => summaries.push(s),
+            Some(mut s) => {
+                s.ddragon_version = s
+                    .game_version
+                    .as_deref()
+                    .and_then(|b| crate::r#static::ddragon_version_for(b, &versions));
+                summaries.push(s);
+            }
             None => warnings.push(format!("match {m} unavailable (no participant for this player)")),
         }
     }

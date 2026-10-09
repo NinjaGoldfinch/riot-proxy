@@ -80,7 +80,7 @@ pub struct LadderContext {
     /// `ARCHIVE_TIMELINES`, for the archive jobs the crawl queues.
     pub archive_timelines: bool,
     /// `RANK_LOOKUP_LIMIT`: players one `ranks:lookup` run looks up; 0 queues
-    /// none (ADR-110).
+    /// none (ADR-111).
     pub rank_lookup_limit: u32,
     /// `RANK_LOOKUP_RECHECK_S`: a player looked up this recently is left off.
     pub rank_lookup_recheck_s: u32,
@@ -795,7 +795,7 @@ impl LadderContext {
                     if crawl.status == "completed" {
                         let job = crate::jobs::analytics::aggregate_job(&crawl.platform, &crawl.queue);
                         enqueue_on(&tx, &job, now)?;
-                        // Then place the players it counts under UNKNOWN (ADR-110).
+                        // Then place the players it counts under UNKNOWN (ADR-111).
                         if rank_lookups {
                             enqueue_on(&tx, &ranks::job(&crawl.platform, &crawl.queue), now)?;
                         }

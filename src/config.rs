@@ -231,9 +231,9 @@ pub struct Config {
     pub ladder_platforms: Vec<Platform>,
     pub ladder_tier_floor: String,
     pub ladder_backfill_limit: u32,
-    /// Players a `ranks:lookup` run looks up at most; 0 turns it off (ADR-110).
+    /// Players a `ranks:lookup` run looks up at most; 0 turns it off (ADR-111).
     pub rank_lookup_limit: u32,
-    /// How long a lookup keeps a player off the next run's list (ADR-110).
+    /// How long a lookup keeps a player off the next run's list (ADR-111).
     pub rank_lookup_recheck_s: u32,
     pub facts_reextract_batch: u32,
     pub aggregate_min_games: u32,

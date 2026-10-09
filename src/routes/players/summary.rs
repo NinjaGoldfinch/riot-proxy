@@ -18,9 +18,15 @@ pub struct MatchSummary {
     pub queue_id: Option<Number>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub game_mode: Option<String>,
-    /// Which patch this was played on: the Data Dragon version to render it.
+    /// The game build the match was played on, as Riot reports it
+    /// (`16.20.824.8524`). Not a Data Dragon version: see `ddragonVersion`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub game_version: Option<String>,
+    /// The Data Dragon version for that build's patch (`16.20.1`): the newest
+    /// in Riot's version list with the same `major.minor`. Absent when the
+    /// mirror has no version list yet or the list lacks the patch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ddragon_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(value_type = Option<f64>)]
     pub game_creation: Option<Number>,
@@ -160,6 +166,7 @@ pub fn summarise(body: &[u8], puuid: &str, requested_id: &str) -> Option<MatchSu
         queue_id: num(&info["queueId"]),
         game_mode: string(&info["gameMode"]),
         game_version: string(&info["gameVersion"]),
+        ddragon_version: None,
         game_creation: num(&info["gameCreation"]),
         game_end_timestamp: num(&info["gameEndTimestamp"]),
         game_duration: num(&info["gameDuration"]),

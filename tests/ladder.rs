@@ -928,7 +928,7 @@ async fn a_crawl_runs_every_stage_and_fetches_each_match_once() {
     );
 
     // Every player of its matches is on the ladder: the rank lookup it queued
-    // found nobody to ask about (ADR-110).
+    // found nobody to ask about (ADR-111).
     assert_eq!(
         e.count("SELECT COUNT(*) FROM jobs WHERE kind = 'ranks:lookup' AND state = 'done'")
             .await,
@@ -1781,7 +1781,7 @@ async fn the_queue_view_lists_running_jobs_and_the_next_in_claim_order() {
     );
 }
 
-// ── Rank lookups for players off the ladder (DEV-29, ADR-110) ───────────────
+// ── Rank lookups for players off the ladder (DEV-29, ADR-111) ───────────────
 
 /// Match `k` with its last players swapped for `outsiders`, whom no ladder holds.
 fn match_with_outsiders(k: usize, outsiders: &[&str]) -> Vec<u8> {

@@ -747,6 +747,31 @@ async fn the_pool_is_grouped_from_the_archive_and_never_calls_riot() {
     assert_eq!(e.get(&pool("?platform=euw1")).await.json()["archivedGames"], 0);
 }
 
+/// SITE-03: each summary names the Data Dragon version of its build's patch
+/// once a version list is mirrored, and leaves it out before.
+#[tokio::test]
+async fn summaries_name_the_data_dragon_version_of_their_patch() {
+    let e = env(&[]).await;
+    let before = e.get(&page("&count=5")).await.json();
+    assert_eq!(before["matches"][0]["gameVersion"], "16.19.821.7343");
+    assert!(
+        before["matches"][0].get("ddragonVersion").is_none(),
+        "no version list yet"
+    );
+
+    let dir = e.state.ddragon.dir().join("16.20.1");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("versions.json"), r#"["16.20.1","16.19.2","16.19.1"]"#).unwrap();
+    let after = e.get(&page("&count=5")).await.json();
+    let versions: Vec<&Value> = after["matches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| &m["ddragonVersion"])
+        .collect();
+    assert!(versions.iter().all(|v| *v == "16.19.2"), "{versions:?}");
+}
+
 #[tokio::test]
 async fn the_pool_names_the_champions_the_mirror_knows() {
     let e = env(&[]).await;

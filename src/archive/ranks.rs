@@ -1,7 +1,7 @@
 //! Players' ranks from league-v4 lookups (V0010, ADR-105): every
 //! `league.entriesByPuuid` body the fetcher reads from Riot is recorded here,
 //! so analytics can place a participant the ladder does not hold. Plus the
-//! list `ranks:lookup` works through to place the rest (V0011, ADR-110).
+//! list `ranks:lookup` works through to place the rest (V0011, ADR-111).
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Deserialize;

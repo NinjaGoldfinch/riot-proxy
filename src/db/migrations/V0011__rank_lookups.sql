@@ -1,4 +1,4 @@
--- DEV-29 (ADR-110): looking up the ranks of archived players no ladder or
+-- DEV-29 (ADR-111): looking up the ranks of archived players no ladder or
 -- earlier lookup placed, so analytics stop counting them under UNKNOWN.
 
 -- When each player was last looked up on a platform, whoever asked, ranked or
