@@ -277,7 +277,7 @@ The site's backfill question (item 3) needs no task: the unbounded lookup backfi
 ## INC — the riot-proxy-dev outage of 2026-10-09 (ninjagoldfinch.lol report)
 - [x] INC-01 a cancelled read keeps its reader connection: the pool connection and its permit move into the blocking closure and go back together; `/readyz` and a gauge report free readers (#139, ADR-113)
 - [x] INC-02 `:edge` only moves forwards: a run whose commit is no longer the head of `main` pushes `:sha-<short>` only (#137, ADR-114)
-- [ ] INC-03 `riot-proxy-update` waits for the new container to turn healthy and otherwise rolls back to `riot-proxy:previous`, naming both revisions (IMPLEMENTATION.md §Post-release — INC)
+- [x] INC-03 `riot-proxy-update` waits for the new container to turn healthy and otherwise rolls back to `riot-proxy:previous`, naming both revisions (#138, ADR-115)
 
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.

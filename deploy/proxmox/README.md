@@ -65,6 +65,26 @@ journalctl -u riot-proxy-update -n 20          # "now running …:edge (<commit>
 sudo riot-proxy-update                         # pull now
 ```
 
+A new image has to pass its Docker healthcheck within 120 seconds (ADR-115). The
+image's check first runs 30 s after start, so a good update takes about that long.
+If the container doesn't report `healthy` in time, or keeps exiting, the updater
+puts it back on the image it replaced (tagged `riot-proxy:previous` before each
+pull), logs `error: rejected …:edge (<commit>): …; rolled back to riot-proxy:previous (<commit>)`,
+and notes the bad image in `/opt/riot-proxy/.rejected` so later runs leave it alone.
+The next image published is tried as usual. On a first install there is nothing
+to go back to, so a bad image is logged and left running. Old images are pruned
+only after a healthy update; `riot-proxy:previous` is kept.
+
+```bash
+journalctl -u riot-proxy-update -p err         # rollbacks only
+cat /opt/riot-proxy/.rejected                  # the image ID and commit it won't deploy again
+sudo rm /opt/riot-proxy/.rejected && sudo riot-proxy-update   # try that image again
+```
+
+While a rollback holds, update with `sudo riot-proxy-update`, not `docker compose up`:
+compose alone would start the rejected image again. To give the check longer, run
+`sudo systemctl edit riot-proxy-update` and add `[Service]` / `Environment=RIOT_PROXY_HEALTH_TIMEOUT=300`.
+
 To hold a version, set `RIOT_PROXY_TAG` in `/opt/riot-proxy/.env` to `sha-<short commit>`
 or a release such as `2.0.0-rc.3`, then run `sudo riot-proxy-update`. Set it back
 to `edge` to follow `main` again. To stop updates: `sudo systemctl disable --now riot-proxy-update.timer`.
@@ -80,7 +100,22 @@ Debian security updates install themselves (`unattended-upgrades`).
 | `/opt/riot-proxy/data/` | SQLite, backups, ddragon (the container's `/data`) |
 | `/usr/local/bin/riot-proxy-update` + `riot-proxy-update.{service,timer}` | `files/` |
 
-Changes to these files reach a VM only when it is recreated (or by copying them over by hand); the image updates itself.
+Changes to these files reach a VM only when it is recreated or they are copied in;
+the image updates itself.
+
+## Updating an existing VM
+
+To copy in the current `compose.yaml` and `riot-proxy-update` from `main` (here VM 102),
+on the Proxmox host as root (through the guest agent, no SSH needed):
+
+```bash
+qm guest exec 102 -- bash -c 'set -e; u=https://raw.githubusercontent.com/NinjaGoldfinch/riot-proxy/main/deploy/proxmox/files; curl -fsSL "$u/compose.yaml" -o /opt/riot-proxy/compose.yaml; curl -fsSL "$u/riot-proxy-update" -o /usr/local/bin/riot-proxy-update; chmod 755 /usr/local/bin/riot-proxy-update'
+qm guest exec 102 -- /usr/local/bin/riot-proxy-update
+```
+
+`exitcode` 0 in each reply means it worked. Copy `compose.yaml` first: the new
+updater's rollback needs its `RIOT_PROXY_IMAGE` line. The `.service` and `.timer`
+files haven't changed since OPS-02.
 
 ## Rebuild from scratch
 
@@ -95,4 +130,5 @@ Keep `data/` first if you want the archive: `scp -r riot@<vm>:/opt/riot-proxy/da
 ## Tests
 
 `deploy/proxmox/test.sh` (CI job `ops`): shellcheck, cloud-init schema, the
-embedded files, the dry-run `qm` commands, and `riot-proxy-update` against a fake `docker`.
+embedded files, the dry-run `qm` commands, and `riot-proxy-update` against a fake `docker`
+(healthy update, rollback, the rejected image left alone, first install).
