@@ -14,8 +14,10 @@ use futures_util::future::BoxFuture;
 
 use crate::cache::keys::KeyScope;
 use crate::clock::Clock;
-use crate::db::Db;
+use crate::db::{Db, DbError};
 use crate::fetcher::Archive;
+use crate::jobs::archive::queue_missing_half_on;
+use crate::jobs::{Queue, priority};
 use crate::riot::client::RiotRequest;
 
 /// The fetcher's [`Archive`] over SQLite. A failing archive never fails a
@@ -25,14 +27,56 @@ pub struct SqliteArchive {
     db: Db,
     /// Whose PUUIDs the fetched bodies carry, for `match_facts`.
     scope: KeyScope,
+    /// Where the other half of a stored match or timeline is queued (TL-01).
+    halves: Option<Halves>,
+}
+
+#[derive(Debug, Clone)]
+struct Halves {
+    queue: Queue,
+    /// `ARCHIVE_TIMELINES`: a stored match queues its timeline.
+    want_timeline: bool,
 }
 
 impl SqliteArchive {
-    /// Every fetched match and timeline is stored: both are immutable. A timeline
-    /// is stored once its match is (the foreign key). `ARCHIVE_TIMELINES` only
+    /// Every fetched match and timeline is stored: both are immutable, and a
+    /// timeline is stored even before its match (TL-01). `ARCHIVE_TIMELINES`
     /// decides whether archive jobs fetch timelines (ADR-085).
     pub fn new(db: Db, scope: KeyScope) -> Self {
-        Self { db, scope }
+        Self {
+            db,
+            scope,
+            halves: None,
+        }
+    }
+
+    /// Queue the other half of whatever is stored, at the top priority (TL-01,
+    /// ADR-118): a match's timeline when `want_timeline`, and a timeline's
+    /// match always. A job fetches it, so a page of matches costs the caller no
+    /// more of its rate limit than before.
+    #[must_use]
+    pub fn queue_missing_halves(mut self, queue: Queue, want_timeline: bool) -> Self {
+        self.halves = Some(Halves { queue, want_timeline });
+        self
+    }
+
+    async fn queue_missing_half(&self, match_id: String) {
+        let Some(Halves { queue, want_timeline }) = &self.halves else {
+            return;
+        };
+        let (want_timeline, now) = (*want_timeline, Clock::now().unix_ms);
+        let queued = self
+            .db
+            .write(move |c| {
+                queue_missing_half_on(c, &match_id, want_timeline, priority::INTERACTIVE, now)
+                    .map_err(DbError::from)
+            })
+            .await;
+        match queued {
+            Ok(true) => queue.wake(),
+            Ok(false) => {}
+            Err(e) => tracing::warn!(error = %e, "could not queue a match's missing half"),
+        }
     }
 }
 
@@ -86,16 +130,11 @@ impl Archive for SqliteArchive {
                 )
                 .await
                 .map(|_| ()),
-                Kind::Timeline => match matches::put_timeline(&self.db, &id, body).await {
-                    Ok(false) => {
-                        tracing::debug!(match_id = %id, "timeline not archived: its match is not archived yet");
-                        Ok(())
-                    }
-                    other => other.map(|_| ()),
-                },
+                Kind::Timeline => matches::put_timeline(&self.db, &id, body).await,
             };
-            if let Err(e) = result {
-                tracing::warn!(error = %e, match_id = %id, "archive write failed");
+            match result {
+                Ok(()) => self.queue_missing_half(id).await,
+                Err(e) => tracing::warn!(error = %e, match_id = %id, "archive write failed"),
             }
         })
     }

@@ -94,6 +94,8 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
     for key in policy.ineffective_overrides() {
         tracing::warn!(key = %key, "CACHE_TTL_OVERRIDES key matches no cacheable endpoint; ignored");
     }
+    // The archive queues what a stored match or timeline lacks (TL-01).
+    let queue = crate::jobs::Queue::new(db.clone());
     let fetcher = Fetcher::new(FetcherParts {
         client: match options.riot_base_url.as_ref().or(config.riot_base_url.as_ref()) {
             Some(url) => RiotClient::with_base_url(&config, url)?,
@@ -101,10 +103,10 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         },
         limiter: Arc::clone(&limiter),
         cache: Arc::clone(&cache),
-        archive: Arc::new(SqliteArchive::new(
-            db.clone(),
-            KeyScope::from_key(&config.riot_api_key),
-        )),
+        archive: Arc::new(
+            SqliteArchive::new(db.clone(), KeyScope::from_key(&config.riot_api_key))
+                .queue_missing_halves(queue.clone(), config.archive_timelines),
+        ),
         scope: KeyScope::from_key(&config.riot_api_key),
         policy,
         interactive_budget: Duration::from_millis(config.client_wait_budget_ms),
@@ -144,7 +146,6 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         mirror: Arc::clone(&mirror),
         hub: hub.clone(),
     });
-    let queue = crate::jobs::Queue::new(db.clone());
     let scope = KeyScope::from_key(&config.riot_api_key).as_str().to_string();
     let poll = Arc::new(crate::jobs::poll::PollContext {
         fetcher: fetcher.clone(),
@@ -215,6 +216,11 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         Ok(0) => {}
         Ok(n) => tracing::info!(jobs = n, "gave queued jobs their rate-limit lane"),
         Err(e) => tracing::warn!(error = %e, "could not give queued jobs their rate-limit lane"),
+    }
+    match crate::jobs::archive::queue_missing_halves(&queue, config.archive_timelines).await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(matches = n, "queued the missing halves of archived matches"),
+        Err(e) => tracing::warn!(error = %e, "could not queue the missing halves of archived matches"),
     }
     // Facts an older version derived are swept once, in the background.
     match crate::jobs::analytics::reextract_if_stale(&queue).await {

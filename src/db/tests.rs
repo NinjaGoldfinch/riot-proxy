@@ -205,32 +205,73 @@ async fn a_v1_database_upgrades_to_v2_and_keeps_its_data() {
         })
         .await
         .expect("read");
-    assert_eq!((name.as_str(), versions), ("old", 12));
+    assert_eq!((name.as_str(), versions), ("old", 13));
 }
 
 /// match_facts is a pure derivation of matches: deleting a match cascades (design 04).
-/// A timeline references its match without cascade, so it must go first.
+/// A timeline has no foreign key to its match (TL-01): it may be stored first,
+/// and outlives a deleted match.
 #[tokio::test]
 async fn archive_foreign_keys_behave_as_designed() {
     let (_dir, db) = open_temp(1);
-    let deleted = db
+    let left = db
         .write(|c| {
             c.execute_batch(
-                "INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size, archived_at)
+                "INSERT INTO timelines (match_id, body_zstd) VALUES ('EUW1_1', x'00');
+                 INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size, archived_at)
                    VALUES ('EUW1_1', 'europe', '14.18', 420, 1, x'00', 1, 1);
                  INSERT INTO match_facts (match_id, key_scope, puuid, team_id, champion_id, win, facts_version)
-                   VALUES ('EUW1_1', 'abcd1234', 'P1', 100, 1, 1, 1), ('EUW1_1', 'abcd1234', 'P2', 200, 2, 0, 1);
-                 INSERT INTO timelines (match_id, body_zstd) VALUES ('EUW1_1', x'00');",
+                   VALUES ('EUW1_1', 'abcd1234', 'P1', 100, 1, 1, 1), ('EUW1_1', 'abcd1234', 'P2', 200, 2, 0, 1);",
             )?;
-            let blocked = c.execute("DELETE FROM matches WHERE match_id = 'EUW1_1'", []).is_err();
-            c.execute("DELETE FROM timelines WHERE match_id = 'EUW1_1'", [])?;
             c.execute("DELETE FROM matches WHERE match_id = 'EUW1_1'", [])?;
-            let facts: i64 = c.query_row("SELECT COUNT(*) FROM match_facts", [], |r| r.get(0))?;
-            Ok::<_, DbError>((blocked, facts))
+            let count = |table: &str| {
+                c.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get::<_, i64>(0))
+            };
+            Ok::<_, DbError>((count("match_facts")?, count("timelines")?))
         })
         .await
         .expect("write");
-    assert_eq!(deleted, (true, 0));
+    assert_eq!(left, (0, 1));
+}
+
+/// V0013 rebuilds `timelines` without its foreign key and keeps every row.
+#[tokio::test]
+async fn timelines_survive_the_rebuild_without_their_foreign_key() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("riot-proxy.db");
+    {
+        let mut conn = Connection::open(&path).expect("open");
+        conn.execute_batch("PRAGMA foreign_keys = ON;").expect("pragma");
+        embedded::migrations::runner()
+            .set_target(refinery::Target::Version(12))
+            .run(&mut conn)
+            .expect("migrate to V0012");
+        conn.execute_batch(
+            "INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size, archived_at)
+               VALUES ('EUW1_1', 'europe', '14.18', 420, 1, x'00', 1, 1);
+             INSERT INTO timelines (match_id, body_zstd) VALUES ('EUW1_1', x'0102');",
+        )
+        .expect("seed");
+    }
+    let db = Db::open(&path, 1).expect("upgrade");
+    let (row, fks): (Vec<u8>, i64) = db
+        .read(|c| {
+            Ok::<_, DbError>((
+                c.query_row(
+                    "SELECT body_zstd FROM timelines WHERE match_id = 'EUW1_1'",
+                    [],
+                    |r| r.get(0),
+                )?,
+                c.query_row(
+                    "SELECT COUNT(*) FROM pragma_foreign_key_list('timelines')",
+                    [],
+                    |r| r.get(0),
+                )?,
+            ))
+        })
+        .await
+        .expect("read");
+    assert_eq!((row, fks), (vec![1, 2], 0));
 }
 
 #[tokio::test]
@@ -335,11 +376,11 @@ async fn migrations_apply_once_across_reopens() {
         })
         .await
         .expect("insert");
-    assert_eq!(history(first.clone()).await.expect("history"), 12);
+    assert_eq!(history(first.clone()).await.expect("history"), 13);
     drop(first);
 
     let second = Db::open(&path, 1).expect("second open");
-    assert_eq!(history(second.clone()).await.expect("history"), 12, "no re-run");
+    assert_eq!(history(second.clone()).await.expect("history"), 13, "no re-run");
     let name: Option<String> = second
         .read(|c| {
             Ok::<_, DbError>(

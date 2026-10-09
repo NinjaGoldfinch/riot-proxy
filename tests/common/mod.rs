@@ -36,10 +36,13 @@ pub fn app_with(env: &[(&str, &str)], upstream: &str) -> (tempfile::TempDir, App
         riot_proxy::jobs::ddragon::Cdn::new(&config, riot_proxy::jobs::ddragon::CdnUrls::mock(upstream))
             .expect("cdn");
     let limiter = std::sync::Arc::new(riot_proxy::riot::limiter::Limiter::new(0.8));
+    // As `serve` builds it: the archive queues what a stored match lacks (TL-01).
+    let jobs = riot_proxy::jobs::Queue::new(db.clone());
     let archive = riot_proxy::archive::SqliteArchive::new(
         db.clone(),
         riot_proxy::cache::keys::KeyScope::from_key(&config.riot_api_key),
-    );
+    )
+    .queue_missing_halves(jobs.clone(), config.archive_timelines);
     let fetcher = fetcher(
         &config,
         upstream,
@@ -69,7 +72,7 @@ pub fn app_with(env: &[(&str, &str)], upstream: &str) -> (tempfile::TempDir, App
         fetcher,
         limiter_restored: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
         refresh: std::sync::Arc::new(riot_proxy::routes::players::RefreshWindows::new()),
-        jobs: riot_proxy::jobs::Queue::new(db.clone()),
+        jobs,
         activity: riot_proxy::jobs::activity::Activity::new(),
         hub,
         ddragon: mirror,

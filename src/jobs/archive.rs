@@ -113,6 +113,106 @@ pub fn depth_priority(depth: i64) -> i64 {
     priority::ARCHIVE_DEPTH + depth.max(0) / 10
 }
 
+/// TL-01 (ADR-118): queue the half of an archived match the archive lacks, as
+/// an `archive:match` that asks for the timeline. Its match is fetched when
+/// missing; its timeline when missing and `want_timeline` (`ARCHIVE_TIMELINES`).
+/// A pending duplicate (a walk's job, say) is lifted to `priority` and made to
+/// ask for the timeline too. Runs inside the caller's write; returns whether
+/// anything was queued or lifted, so the caller knows to wake a worker.
+pub fn queue_missing_half_on(
+    conn: &rusqlite::Connection,
+    match_id: &str,
+    want_timeline: bool,
+    priority: i64,
+    now_ms: i64,
+) -> rusqlite::Result<bool> {
+    let has = |table: &str| {
+        conn.query_row(
+            &format!("SELECT EXISTS (SELECT 1 FROM {table} WHERE match_id = ?1)"),
+            [match_id],
+            |r| r.get::<_, bool>(0),
+        )
+    };
+    let missing = !has("matches")? || (want_timeline && !has("timelines")?);
+    if !missing {
+        return Ok(false);
+    }
+    let payload = ArchiveMatch {
+        match_id: match_id.to_string(),
+        puuid: None,
+        fetch_timeline: Some(true),
+    };
+    let job = NewJob::new(
+        kinds::ARCHIVE_MATCH,
+        priority,
+        serde_json::to_value(payload).unwrap_or_else(|_| json!({})),
+    )
+    .dedupe(match_id);
+    let out = crate::jobs::enqueue_or_promote_on(conn, &job, now_ms)?;
+    if !out.created {
+        conn.execute(
+            "UPDATE jobs SET payload = json_set(payload, '$.fetchTimeline', json('true'))
+              WHERE id = ?1 AND state = 'pending'",
+            [&out.id],
+        )?;
+    }
+    Ok(true)
+}
+
+/// TL-01's catch-up, run at boot: queue every archived match without its
+/// timeline (when `want_timeline`) and every archived timeline without its
+/// match, at `priority::ARCHIVE_DEPTH`. A match whose finished `archive:match`
+/// already asked for its timeline is skipped, so a timeline Riot won't serve
+/// is not asked for on every restart: a `done` row goes after seven days and
+/// it is tried again then; a `failed` one stays. Returns how many were queued
+/// or lifted.
+pub async fn queue_missing_halves(queue: &Queue, want_timeline: bool) -> Result<usize, crate::db::DbError> {
+    let now = Clock::now().unix_ms;
+    let n = queue
+        .db()
+        .write(move |c| {
+            let tx = c.transaction()?;
+            let ids: Vec<String> = {
+                let without_timeline = if want_timeline {
+                    "SELECT match_id FROM matches m
+                      WHERE NOT EXISTS (SELECT 1 FROM timelines t WHERE t.match_id = m.match_id)
+                     UNION "
+                } else {
+                    ""
+                };
+                let mut s = tx.prepare(&format!(
+                    "{without_timeline}
+                     SELECT match_id FROM timelines t
+                      WHERE NOT EXISTS (SELECT 1 FROM matches m WHERE m.match_id = t.match_id)
+                     EXCEPT
+                     SELECT dedupe_key FROM jobs
+                      WHERE kind = '{kind}' AND state IN ('done', 'failed')
+                        AND json_extract(payload, '$.fetchTimeline') = 1",
+                    kind = kinds::ARCHIVE_MATCH,
+                ))?;
+                let rows = s.query_map([], |r| r.get(0))?;
+                rows.collect::<Result<_, _>>()?
+            };
+            let mut n = 0;
+            for id in &ids {
+                n += usize::from(queue_missing_half_on(
+                    &tx,
+                    id,
+                    want_timeline,
+                    priority::ARCHIVE_DEPTH,
+                    now,
+                )?);
+            }
+            tx.commit()?;
+            Ok::<_, crate::db::DbError>(n)
+        })
+        .await?;
+    if n > 0 {
+        queue.wake_all();
+    }
+    Ok(n)
+}
+
 /// Queue a history walk for a player, deduped per player while pending or
 /// running (v1 `enqueueBackfill`), and count it by reason and outcome.
 pub async fn enqueue_backfill(queue: &Queue, walk: &BackfillPlayer) -> Result<Enqueued, crate::db::DbError> {
