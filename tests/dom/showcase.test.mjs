@@ -200,14 +200,14 @@ test('match cards: result, queue name, KDA, CS per minute, level, spells, runes 
     '/ddragon/16.19.1/img/champion/Annie.png',
     '/ddragon/16.19.1/img/spell/SummonerFlash.png', '/ddragon/16.19.1/img/spell/SummonerDot.png',
     '/ddragon/16.19.1/img/perk-images/Styles/Precision/Conqueror/Conqueror.png', '/ddragon/16.19.1/img/perk-images/Styles/7200_Domination.png',
-    '/ddragon/16.19.1/img/item/1001.png', '/ddragon/16.19.1/img/item/3340.png',
-  ], 'empty item slots (0) have no image');
+    '/ddragon/16.19.1/img/item/1001.png', '/ddragon/16.19.1/img/item/3340.png', '/ddragon/16.19.1/img/item/3006.png',
+  ], 'empty item slots (0) have no image; the role quest slot comes last');
   assert.deepEqual([...cards[0].querySelectorAll('.runes img')].map((i) => i.getAttribute('title')), ['Conqueror', 'Domination']);
   const lvl = cards[0].querySelectorAll('.lvl');
   assert.equal(lvl.length, 1, 'the level once, on the portrait');
   assert.equal(lvl[0].parentElement.className, 'portrait');
   assert.equal(lvl[0].textContent, '16');
-  assert.equal(cards[0].querySelectorAll('.items > *').length, 7);
+  assert.equal(cards[0].querySelectorAll('.items > *').length, 8, 'item0–6 and roleBoundItem');
   assert.ok(p.text('#pMatches').includes('queued the player\'s history for archiving (queued)'));
 });
 
