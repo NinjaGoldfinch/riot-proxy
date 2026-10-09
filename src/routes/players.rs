@@ -452,12 +452,20 @@ pub struct MatchPage {
     region: &'static str,
     start: i64,
     count: i64,
-    /// The id page as Riot returned it, including ids no summary could be built for.
+    /// The id page as Riot returned it, including ids no summary could be built
+    /// for. With `champion`, the archive's ids for that champion instead.
     match_ids: Vec<String>,
     /// One summary per id that resolved: the requesting player's line in each game.
     matches: Vec<MatchSummary>,
-    /// A full page came back, so there is probably another behind it.
+    /// A full page came back, so there is probably another behind it. With
+    /// `champion` it is exact: the archive holds another game behind this page.
     has_more: bool,
+    /// Echoes the `champion` filter; absent without one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    champion: Option<i64>,
+    /// With `champion` only: how much of the player's history the page draws on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    archive: Option<ArchiveCoverage>,
     /// How long the id list has been unchanged: a refetch that returns the
     /// same ids does not reset it.
     match_ids_age_seconds: u64,
@@ -469,6 +477,21 @@ pub struct MatchPage {
     refresh_available_in: u64,
     warnings: Vec<String>,
 }
+
+/// How much of a player's history a champion-filtered page draws on (SITE-02).
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchiveCoverage {
+    /// A backfill has walked the player's whole history (it stamped `doneAt`).
+    /// Until then the page holds only the games archived so far: their newest
+    /// games, and whatever earlier pages, tracking or a walk in progress stored.
+    complete: bool,
+}
+
+/// With `champion`, Riot's newest ids read first, so games played since the
+/// archive last saw the player are in it before it is filtered. Riot's default
+/// page size, and the most one unfiltered page can fetch.
+const RECENT_IDS: i64 = 20;
 
 /// v1 `maybeBackfill` (#44): the first page of a lookup records the player
 /// and, unless a completed walk already accounts for their history, queues one
@@ -534,13 +557,19 @@ async fn maybe_backfill(
     description = "The id page, then every match on it, fanned out concurrently. Archived matches come from \
                    one archive read at no quota cost. Each entry is the player's own line in the game; the \
                    full match stays one call away at `/v1/lol/matches/{region}/{matchId}`. A match that \
-                   cannot be fetched is left out and named in `warnings`; a failed id lookup fails the page.",
+                   cannot be fetched is left out and named in `warnings`; a failed id lookup fails the page.\n\n\
+                   **`champion`** filters by champion. Riot's id list cannot, so the page comes from this \
+                   deployment's archive: Riot's newest 20 ids are read and archived first, then the archive \
+                   is paged for that champion's games, newest first. Older games appear as the player's \
+                   backfill archives them; `archive.complete` says whether it has reached the start of their \
+                   history. `type` cannot be combined with `champion`.",
     params(("puuid" = String, Path, description = "Encrypted player UUID"),
            ("platform" = String, Query, description = "Platform routing value, e.g. `oc1`. Required"),
            ("start" = Option<i64>, Query, description = "0–10000, default 0"),
            ("count" = Option<i64>, Query, description = "1–20, default 10: every id is its own upstream call"),
            ("queue" = Option<i64>, Query, description = "Queue id, 0–5000"),
-           ("type" = Option<String>, Query, description = "ranked, normal, tourney or tutorial"),
+           ("type" = Option<String>, Query, description = "ranked, normal, tourney or tutorial; not with `champion`"),
+           ("champion" = Option<i64>, Query, description = "Champion id, 1–10000: only that champion's archived games"),
            ("refresh" = Option<bool>, Query, description = "Re-read the id list; once a minute per player")),
     responses((status = 200, description = "The page", body = MatchPage), UpstreamErrors),
 )]
@@ -566,9 +595,19 @@ async fn match_page(
             &["ranked", "normal", "tourney", "tutorial"],
         )?;
         let refresh = validate::bool_query("refresh", q(&query, "refresh"))?.unwrap_or(false);
-        Ok::<_, ApiError>((platform, start, count, queue, kind, refresh))
+        let champion = validate::int_query("champion", q(&query, "champion"), 1, 10_000)?;
+        // The archive keeps the queue id; how Riot maps `type` to queues is
+        // not in our sources, so the two don't combine.
+        if champion.is_some() && kind.is_some() {
+            return Err(validate::invalid(
+                "querystring",
+                "type",
+                "must not be set with champion",
+            ));
+        }
+        Ok::<_, ApiError>((platform, start, count, queue, kind, refresh, champion))
     })();
-    let (platform, start, count, queue, kind, refresh) = match parsed {
+    let (platform, start, count, queue, kind, refresh, champion) = match parsed {
         Ok(p) => p,
         Err(e) => return e.into_response(),
     };
@@ -577,6 +616,12 @@ async fn match_page(
 
     // The id page cannot fail softly: no ids, no matches. It is also the only
     // part a refresh re-reads; the matches behind it are immutable (v1).
+    // With a champion, it is Riot's newest page whatever page is asked for.
+    let (riot_start, riot_count) = if champion.is_some() {
+        (0, RECENT_IDS)
+    } else {
+        (start, count)
+    };
     let id = "match.idsByPuuid";
     let target = Endpoint::by_id(id).and_then(|e| e.target_for_region(region));
     let ids_req = request(
@@ -584,8 +629,8 @@ async fn match_page(
         target,
         &[&puuid],
         &[
-            ("start", Some(start.to_string())),
-            ("count", Some(count.to_string())),
+            ("start", Some(riot_start.to_string())),
+            ("count", Some(riot_count.to_string())),
             ("queue", queue.map(|n| n.to_string())),
             ("type", kind.map(str::to_string)),
         ],
@@ -594,8 +639,39 @@ async fn match_page(
         Ok(r) => r,
         Err(e) => return respond(Err(e)),
     };
-    let match_ids: Vec<String> = serde_json::from_slice(&ids.body).unwrap_or_default();
+    let riot_ids: Vec<String> = serde_json::from_slice(&ids.body).unwrap_or_default();
     let backfill = maybe_backfill(&state, &puuid, platform, start).await;
+    let mut tally = Tally::default();
+    tally.add(&ids);
+    let mut warnings = Vec::new();
+
+    let (match_ids, has_more, archive) = match champion {
+        None => {
+            let full = i64::try_from(riot_ids.len()).is_ok_and(|n| n == count);
+            (riot_ids, full, None)
+        }
+        Some(champion) => {
+            let filtered = champion_page(
+                &state,
+                &puuid,
+                region,
+                ChampionAsk {
+                    champion,
+                    queue,
+                    start,
+                    count,
+                },
+                &riot_ids,
+                &mut tally,
+                &mut warnings,
+            )
+            .await;
+            match filtered {
+                Ok(page) => page,
+                Err(e) => return e.into_response(),
+            }
+        }
+    };
 
     // The whole page from the archive in one read, then fan out over the rest
     // (v1 #54). A degraded archive reads as "nothing archived".
@@ -623,9 +699,6 @@ async fn match_page(
     .await;
     let mut fetched: HashMap<String, Result<FetchResult, FetchError>> = fetched.into_iter().collect();
 
-    let mut tally = Tally::default();
-    tally.add(&ids);
-    let mut warnings = Vec::new();
     let mut summaries = Vec::with_capacity(match_ids.len());
     for m in &match_ids {
         let body = if let Some(b) = archived.get(m) {
@@ -660,7 +733,9 @@ async fn match_page(
         region: region.as_str(),
         start,
         count,
-        has_more: i64::try_from(match_ids.len()).is_ok_and(|n| n == count),
+        has_more,
+        champion,
+        archive,
         match_ids,
         matches: summaries,
         match_ids_age_seconds: secs(ids.cache_age),
@@ -672,6 +747,81 @@ async fn match_page(
         warnings,
     };
     document(&body, tally)
+}
+
+struct ChampionAsk {
+    champion: i64,
+    queue: Option<i64>,
+    start: i64,
+    count: i64,
+}
+
+/// The champion filter (SITE-02): archive Riot's newest ids that aren't yet,
+/// then page the archive for the champion. Returns the page's ids, whether
+/// another game is behind them, and how complete the archive is.
+async fn champion_page(
+    state: &AppState,
+    puuid: &str,
+    region: crate::riot::routing::Region,
+    ask: ChampionAsk,
+    recent: &[String],
+    tally: &mut Tally,
+    warnings: &mut Vec<String>,
+) -> Result<(Vec<String>, bool, Option<ArchiveCoverage>), ApiError> {
+    let missing = matches::filter_unarchived(&state.db, recent)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "archive check failed; fetching every recent id");
+            recent.to_vec()
+        });
+    // The fetcher archives each match it reads (immutable endpoint).
+    let fetched = join_all(missing.iter().map(|m| async move {
+        let id = "match.byId";
+        let target = Endpoint::by_id(id).and_then(|e| e.target_for_region(region));
+        (m, fetch(state, request(id, target, &[m], &[]), false).await)
+    }))
+    .await;
+    for (m, r) in fetched {
+        match r {
+            Ok(r) => tally.add(&r),
+            // It may not be this champion's game; say so rather than guess.
+            Err(e) => warnings.push(format!(
+                "recent match {m} not archived ({}: {}); it may be missing from this page",
+                e.api.code.as_str(),
+                e.api.message
+            )),
+        }
+    }
+
+    let scope = state.fetcher.key_scope().as_str();
+    let mut page = crate::archive::player::champion_match_ids(
+        &state.db,
+        scope,
+        puuid,
+        ask.champion,
+        region.as_str(),
+        ask.queue,
+        ask.start,
+        ask.count + 1,
+    )
+    .await
+    .map_err(|e| {
+        tracing::warn!(error = %e, "champion page read failed");
+        ApiError::internal()
+    })?;
+    let has_more = i64::try_from(page.len()).is_ok_and(|n| n > ask.count);
+    page.truncate(usize::try_from(ask.count).unwrap_or(0));
+
+    let complete = match crate::players::get(&state.db, scope, puuid).await {
+        Ok(p) => p
+            .and_then(|p| crate::jobs::archive::BackfillState::parse(p.backfill_state.as_deref()))
+            .is_some_and(|s| s.done_at.is_some()),
+        Err(e) => {
+            tracing::warn!(error = %e, "could not read the player's backfill state");
+            false
+        }
+    };
+    Ok((page, has_more, Some(ArchiveCoverage { complete })))
 }
 
 // ── Champion pool ───────────────────────────────────────────────────────────

@@ -228,6 +228,20 @@ test('the queue tabs filter match history and the champion pool together', async
   assert.deepEqual(p.errors, []);
 });
 
+test('a champion in the pool filters the match history to its archived games', async () => {
+  const p = await playerPage();
+  await p.click('#pPool tr[data-mchamp="2"]');
+  assert.ok(p.calls.includes(`/v1/players/${PUUID}/matches?platform=oc1&start=0&count=10&champion=2`));
+  assert.equal(p.w.document.querySelectorAll('#pMatches .match').length, 2);
+  assert.ok(p.text('#pMatches').includes('Olaf ✕'));
+  assert.ok(p.text('#pMatches').includes('Only games archived so far'));
+  assert.ok(p.$('#pPool tr[data-mchamp="2"]').classList.contains('on'));
+  await p.click('#pMatches [data-mchamp="0"]');
+  assert.equal(p.$('#pMatches [data-mchamp="0"]'), null);
+  assert.equal(p.w.document.querySelectorAll('#pMatches .match').length, 10);
+  assert.deepEqual(p.errors, []);
+});
+
 test('champion pool and mastery', async () => {
   const p = await playerPage();
   const pool = [...p.w.document.querySelectorAll('#pPool tbody tr')].map((r) => r.textContent.replace(/\s+/g, ' ').trim());

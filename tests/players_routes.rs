@@ -430,6 +430,130 @@ async fn the_fan_out_is_capped_at_twenty() {
     );
 }
 
+// ── Champion filter (SITE-02) ───────────────────────────────────────────────
+
+/// In the fixture, the player is on 134 in the two newest games, then 143,
+/// 516 and 105.
+const ON_134: [&str; 2] = [MATCH_IDS[0], MATCH_IDS[1]];
+
+#[tokio::test]
+async fn a_champion_page_reads_riots_newest_ids_then_pages_the_archive() {
+    let e = env(&[]).await;
+    let r = e.get(&page("&champion=134")).await;
+    assert_eq!(r.status, StatusCode::OK);
+    let b = r.json();
+    assert_eq!(b["matchIds"], json!(ON_134));
+    let picked: Vec<&Value> = b["matches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| &m["player"]["championId"])
+        .collect();
+    assert_eq!(picked, [&json!(134), &json!(134)]);
+    assert_eq!(
+        (b["champion"].clone(), b["hasMore"].clone(), b["archive"].clone()),
+        (json!(134), json!(false), json!({"complete": false})),
+        "the backfill this lookup queued hasn't run"
+    );
+    // Riot's newest page, whatever page was asked for, and each match once.
+    let ids = e
+        .server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|q| q.url.path().ends_with("/ids"))
+        .unwrap();
+    assert_eq!(ids.url.query(), Some("start=0&count=20"));
+    assert_eq!(e.calls_to("/matches/KR_").await, 5, "every recent match archived");
+
+    // Paging is the archive's, and exact.
+    let first = e.get(&page("&champion=134&count=1")).await.json();
+    assert_eq!(
+        (first["matchIds"].clone(), first["hasMore"].clone()),
+        (json!([ON_134[0]]), json!(true))
+    );
+    let second = e.get(&page("&champion=134&count=1&start=1")).await.json();
+    assert_eq!(
+        (second["matchIds"].clone(), second["hasMore"].clone()),
+        (json!([ON_134[1]]), json!(false))
+    );
+    assert_eq!(e.calls_to("/matches/KR_").await, 5, "nothing fetched twice");
+
+    // `queue` narrows it further: 516 was played in queue 1750.
+    let q = e.get(&page("&champion=516&queue=420")).await.json();
+    assert_eq!(q["matchIds"], json!([]));
+    let q = e.get(&page("&champion=516")).await.json();
+    assert_eq!(q["matchIds"], json!([MATCH_IDS[3]]));
+}
+
+#[tokio::test]
+async fn an_unfiltered_page_has_no_champion_or_archive_fields() {
+    let e = env(&[]).await;
+    let b = e.get(&page("&count=5")).await.json();
+    assert!(b.get("champion").is_none() && b.get("archive").is_none(), "{b}");
+}
+
+#[tokio::test]
+async fn a_champion_page_is_complete_once_a_backfill_has_reached_the_start() {
+    let e = env(&[]).await;
+    e.get(&page("&count=5")).await;
+    let scope = e.state.fetcher.key_scope().as_str().to_string();
+    let done = serde_json::to_string(&riot_proxy::jobs::archive::BackfillState {
+        done_at: Some(1),
+        ..Default::default()
+    })
+    .unwrap();
+    e.state
+        .db
+        .write(move |c| {
+            c.execute(
+                "UPDATE players SET backfill_state = ?1 WHERE key_scope = ?2 AND puuid = ?3",
+                [done, scope, PUUID.to_string()],
+            )
+            .map_err(riot_proxy::db::DbError::from)
+        })
+        .await
+        .unwrap();
+    let b = e.get(&page("&champion=134")).await.json();
+    assert_eq!(b["archive"], json!({"complete": true}));
+    assert_eq!(b["backfill"], Value::Null, "nothing left to queue");
+}
+
+#[tokio::test]
+async fn a_recent_match_that_cannot_be_archived_is_named() {
+    let e = env(&[MATCH_IDS[2]]).await;
+    let b = e.get(&page("&champion=134")).await.json();
+    assert_eq!(b["matchIds"], json!(ON_134));
+    let w = b["warnings"].as_array().unwrap();
+    assert_eq!(w.len(), 1);
+    assert!(
+        w[0].as_str()
+            .unwrap()
+            .starts_with(&format!("recent match {} not archived", MATCH_IDS[2])),
+        "{w:?}"
+    );
+}
+
+#[tokio::test]
+async fn champion_is_validated_and_does_not_combine_with_type() {
+    let e = env(&[]).await;
+    for (q, message) in [
+        ("&champion=0", "querystring/champion must be >= 1"),
+        ("&champion=10001", "querystring/champion must be <= 10000"),
+        ("&champion=x", "querystring/champion must be integer"),
+        (
+            "&champion=134&type=ranked",
+            "querystring/type must not be set with champion",
+        ),
+    ] {
+        let r = e.get(&page(q)).await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{q}");
+        assert_eq!(r.json()["error"]["message"], message, "{q}");
+    }
+    assert!(e.calls().await.is_empty(), "refused before any Riot call");
+}
+
 // ── Manual refresh ──────────────────────────────────────────────────────────
 
 #[tokio::test]
