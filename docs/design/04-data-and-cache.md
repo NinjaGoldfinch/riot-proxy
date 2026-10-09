@@ -172,6 +172,19 @@ CREATE TABLE champion_matchups (                  -- no tier; one row per (lane,
 CREATE TABLE champion_items  (… champion_id, role, item_id, remake, games, wins, computed_at);
 CREATE TABLE champion_runes  (… champion_id, role, keystone_id, sub_style_id, remake, games, wins, computed_at);
 CREATE TABLE champion_spells (… champion_id, role, spell_a, spell_b, remake, games, wins, computed_at);  -- spell_a <= spell_b
+CREATE TABLE champion_builds (                    -- V0014 (ADR-120): set builds, from match_builds
+  key_scope, platform, queue, patch, champion_id, role, remake,
+  core,                                           -- JSON: the first two finished items, "[a,b]"
+  games, wins, computed_at,
+  PRIMARY KEY (key_scope, platform, queue, patch, champion_id, role, remake, core)
+);
+CREATE TABLE champion_build_parts (               -- what a build's players chose besides its core
+  key_scope, platform, queue, patch, champion_id, role, remake, core,
+  part,                                           -- item3 | item4 | item5 | starter | boots | skill_order | runes | spells
+  value,                                          -- item id; starter JSON; "QWE"; "keystone:subStyle"; "a:b", a <= b
+  games, wins, computed_at,
+  PRIMARY KEY (key_scope, platform, queue, patch, champion_id, role, remake, core, part, value)
+);
 
 -- Ladder ──────────────────────────────────────────────────────────────────── (v1's shape, ADR-054)
 CREATE TABLE ladder_crawls (                      -- the run log

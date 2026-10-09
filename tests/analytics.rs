@@ -224,6 +224,8 @@ async fn the_recompute_feeds_v1s_routes_and_remakes_are_opt_in() {
             .keys()
             .collect::<Vec<_>>(),
         [
+            "champion_build_parts",
+            "champion_builds",
             "champion_items",
             "champion_matchups",
             "champion_runes",

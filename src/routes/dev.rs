@@ -52,6 +52,8 @@ pub const WIPED: &[&str] = &[
     "players",
     "champion_stats",
     "champion_bans",
+    "champion_builds",
+    "champion_build_parts",
     "champion_matchups",
     "champion_items",
     "champion_runes",
