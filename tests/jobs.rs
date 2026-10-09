@@ -261,3 +261,94 @@ async fn enqueue_wakes_an_idle_worker_at_once() {
     );
     workers.shutdown(Duration::from_secs(1)).await;
 }
+
+/// Starts, then waits for `release` before recording that it got to the end.
+struct Gated {
+    started: Arc<AtomicUsize>,
+    finished: Arc<AtomicUsize>,
+    release: Arc<Notify>,
+}
+
+impl Handler for Gated {
+    fn run<'a>(&'a self, _job: &'a Job) -> BoxFuture<'a, Result<(), JobError>> {
+        Box::pin(async move {
+            self.started.fetch_add(1, Ordering::SeqCst);
+            self.release.notified().await;
+            self.finished.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+    }
+}
+
+/// DEV-22: a halt aborts what is running, claims nothing while held, and the
+/// workers pick the queue up again once it is dropped.
+#[tokio::test]
+async fn a_halt_stops_running_jobs_and_holds_claims_until_dropped() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open(&dir.path().join("riot-proxy.db"), 2).unwrap();
+    let (started, finished) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let release = Arc::new(Notify::new());
+    let s = Scheduler::new(
+        db.clone(),
+        Registry::new().with(
+            "backfill:player",
+            Gated {
+                started: Arc::clone(&started),
+                finished: Arc::clone(&finished),
+                release: Arc::clone(&release),
+            },
+        ),
+    );
+    for p in ["P1", "P2"] {
+        s.enqueue(NewJob::new("backfill:player", 20_000, json!({})).dedupe(p))
+            .await
+            .unwrap();
+    }
+    let workers = s.start(4);
+    until("both jobs to start", async || started.load(Ordering::SeqCst) == 2).await;
+
+    let halt = s.queue().halt(Duration::from_secs(5)).await;
+    assert_eq!((halt.stopped, halt.settled), (2, true));
+    release.notify_waiters();
+    s.enqueue(NewJob::new("backfill:player", 20_000, json!({})).dedupe("P3"))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(
+        finished.load(Ordering::SeqCst),
+        0,
+        "aborted jobs never reach their end"
+    );
+    assert_eq!(
+        started.load(Ordering::SeqCst),
+        2,
+        "nothing is claimed while halted"
+    );
+    assert_eq!(
+        states(&db).await,
+        HashMap::from([("running".to_string(), 2), ("pending".to_string(), 1)]),
+        "an aborted job records no outcome"
+    );
+
+    drop(halt);
+    until("the queued job to be claimed again", async || {
+        started.load(Ordering::SeqCst) == 3
+    })
+    .await;
+    release.notify_waiters();
+    until("it to finish", async || finished.load(Ordering::SeqCst) == 1).await;
+    workers.shutdown(Duration::from_secs(1)).await;
+}
+
+/// A halt with nothing running returns at once and changes nothing.
+#[tokio::test]
+async fn an_idle_halt_settles_at_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open(&dir.path().join("riot-proxy.db"), 2).unwrap();
+    let s = Scheduler::new(db, Registry::new());
+    let workers = s.start(2);
+    let halt = s.queue().halt(Duration::from_secs(5)).await;
+    assert_eq!((halt.stopped, halt.settled), (0, true));
+    drop(halt);
+    workers.shutdown(Duration::from_secs(1)).await;
+}

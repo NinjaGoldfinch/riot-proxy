@@ -5,6 +5,10 @@
 //! The routes stay out of the OpenAPI document, so the explorer's forms never
 //! offer them.
 //!
+//! The workers are stopped first (DEV-22): no claims, every running job
+//! aborted, so nothing writes into the emptied tables afterwards. They resume
+//! on the empty queue once the wipe is done.
+//!
 //! What goes: the archive, facts, analytics, ladder crawls, both cache tiers,
 //! every job row and the metrics history. What stays: consumers (the keys this
 //! page signs in with) and `limiter_state`, which mirrors Riot's live counts for
@@ -24,6 +28,9 @@ use crate::clock::Clock;
 use crate::db::DbError;
 use crate::http::body::Body;
 use crate::http::{ApiError, ErrorCode};
+
+/// How long the reset waits for aborted jobs to hand their workers back.
+pub const HALT_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// The word the `POST` body must carry.
 pub const CONFIRM: &str = "reset";
@@ -70,7 +77,7 @@ struct Preview {
     tables: Vec<TableRows>,
     /// In-memory (L1) cache entries.
     l1_entries: u64,
-    /// Jobs running now; they may still write a row or two after a reset.
+    /// Jobs running now; a reset stops them before it deletes anything.
     running_jobs: i64,
     kept: &'static [&'static str],
 }
@@ -82,6 +89,10 @@ struct Done {
     /// Rows deleted, per table.
     tables: Vec<TableRows>,
     l1_entries: usize,
+    /// Running jobs the reset stopped before the wipe.
+    stopped_jobs: usize,
+    /// Job rows marked running when they were deleted: the stopped jobs, plus
+    /// any with no worker here (another process's, or a dead one's).
     running_jobs: i64,
     took_ms: i64,
 }
@@ -167,9 +178,18 @@ async fn reset(State(state): State<AppState>, bytes: Bytes) -> Response {
         return e.into_response();
     }
     let started = Clock::now().unix_ms;
-    // L1 first, so nothing read between the two steps comes from a dropped row.
+    // Workers first, so no job writes into the tables once they are empty.
+    // Held until the wipe is done; dropping it lets them claim again.
+    let halt = state.jobs.halt(HALT_WAIT).await;
+    if !halt.settled {
+        tracing::warn!("dev reset: a job did not stop within {HALT_WAIT:?}; wiping anyway");
+    }
+    // L1 next, so nothing read between the two steps comes from a dropped row.
     let l1_entries = state.fetcher.cache().l1.invalidate_where(|_| true).await.len();
-    let (deleted, running_jobs) = match state.db.write(|c| Ok::<_, DbError>(wipe(c)?)).await {
+    let wiped = state.db.write(|c| Ok::<_, DbError>(wipe(c)?)).await;
+    let stopped_jobs = halt.stopped;
+    drop(halt);
+    let (deleted, running_jobs) = match wiped {
         Ok(v) => v,
         Err(e) => return internal(&e, "dev reset failed"),
     };
@@ -181,6 +201,7 @@ async fn reset(State(state): State<AppState>, bytes: Bytes) -> Response {
     tracing::warn!(
         rows,
         l1_entries,
+        stopped_jobs,
         running_jobs,
         "dev reset: all fetched data deleted"
     );
@@ -190,6 +211,7 @@ async fn reset(State(state): State<AppState>, bytes: Bytes) -> Response {
             ok: true,
             tables,
             l1_entries,
+            stopped_jobs,
             running_jobs,
             took_ms: Clock::now().unix_ms - started,
         },
