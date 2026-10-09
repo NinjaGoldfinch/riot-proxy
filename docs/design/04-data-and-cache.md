@@ -56,7 +56,9 @@ Connection policy:
 - **Reader pool** of `n_cores` connections for the HTTP path. WAL means they see a consistent snapshot without blocking.
 - `spawn_blocking` at the boundary; no SQLite call inside an async fn.
 
-The daily `maintenance` job runs `VACUUM INTO 'backups/riot-proxy-YYYY-MM-DD.db'` and `PRAGMA wal_checkpoint(TRUNCATE)` — that **is** the backup strategy, replacing `pg-backup` + cron. Keep 14, delete older. (Daily, as design/06, design/07 and the plan have it; ADR-057.)
+The daily `maintenance` job runs `VACUUM INTO 'backups/riot-proxy-YYYY-MM-DD.db'`, `PRAGMA optimize` and `PRAGMA wal_checkpoint(TRUNCATE)` — that **is** the backup strategy, replacing `pg-backup` + cron. Keep 14, delete older. (Daily, as design/06, design/07 and the plan have it; ADR-057.)
+
+**Planner statistics.** The writer runs `PRAGMA optimize = 0x10002` when it opens, before each analytics rebuild and in the daily `maintenance`. It runs `ANALYZE` on each table never analysed or grown about tenfold since, within SQLite's own time limit (under a second for a 2-million-row `match_facts`). Readers load the new statistics on their next read. Queries are still written to plan well without statistics, because a new database has none (ADR-101, ADR-102).
 
 ## Schema (v2 DDL)
 
