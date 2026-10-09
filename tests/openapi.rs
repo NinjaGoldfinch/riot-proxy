@@ -147,3 +147,61 @@ fn compare_script_reports_missing_operations_by_method_and_path() {
     assert!(!out.contains("/v1/admin/c"), "prefix filter applies: {out}");
     assert!(out.contains("1 missing, 1 added"), "{out}");
 }
+
+/// SITE-04: every response declares the headers it sends, by reference to one
+/// definition each, so generated clients can type them.
+#[test]
+fn responses_declare_the_headers_they_send() {
+    let doc: serde_json::Value = serde_json::from_str(&docs::spec().to_json().unwrap()).unwrap();
+    let defined = doc["components"]["headers"].as_object().unwrap();
+    for name in [
+        "X-Request-Id",
+        "X-Cache",
+        "X-Cache-Age",
+        "X-Cache-Fetched-Age",
+        "X-RateLimit-Limit",
+        "X-RateLimit-Remaining",
+        "X-RateLimit-Reset",
+        "Retry-After",
+    ] {
+        assert!(defined[name]["description"].is_string(), "{name}");
+    }
+    let mut checked = 0;
+    for (path, item) in doc["paths"].as_object().unwrap() {
+        for (method, op) in item.as_object().unwrap() {
+            let tags: Vec<&str> = op["tags"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|t| t.as_str().unwrap())
+                .collect();
+            let read = tags
+                .iter()
+                .any(|t| ["players", "riot", "lol", "static"].contains(t));
+            for (status, res) in op["responses"].as_object().unwrap() {
+                let at = format!("{method} {path} {status}");
+                let has = |h: &str| res["headers"].get(h).is_some();
+                assert!(has("X-Request-Id"), "{at}");
+                for (h, r) in res["headers"].as_object().unwrap() {
+                    assert_eq!(r["$ref"], format!("#/components/headers/{h}"), "{at}");
+                }
+                if matches!(status.as_str(), "429" | "503") {
+                    assert!(has("Retry-After"), "{at}");
+                }
+                if read && status.as_str() != "401" && status.as_str() != "403" {
+                    assert!(has("X-RateLimit-Remaining"), "{at}");
+                }
+                if read && status.starts_with('2') && !path.starts_with("/v1/lol/analytics") {
+                    assert!(has("X-Cache") && has("X-Cache-Age"), "{at}");
+                    checked += 1;
+                }
+            }
+        }
+    }
+    assert!(checked >= 20, "only {checked} cached responses found");
+    let pool = &doc["paths"]["/v1/players/{puuid}/champions"]["get"]["responses"]["200"]["headers"];
+    assert!(
+        pool.get("X-Cache-Fetched-Age").is_none(),
+        "the pool is never read from Riot"
+    );
+}

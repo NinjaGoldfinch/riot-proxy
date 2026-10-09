@@ -11,7 +11,11 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use utoipa::openapi::OpenApi as Document;
 use utoipa::openapi::extensions::Extensions;
+use utoipa::openapi::header::Header;
+use utoipa::openapi::path::Operation;
+use utoipa::openapi::schema::{ObjectBuilder, Type};
 use utoipa::openapi::security::{ApiKey, ApiKeyValue, HttpAuthScheme, HttpBuilder, SecurityScheme};
+use utoipa::openapi::{Ref, RefOr};
 use utoipa::{Modify, OpenApi};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_scalar::{Scalar, Servable};
@@ -39,6 +43,13 @@ and archived.
 | `X-Cache-Fetched-Age` | Seconds since the proxy last read it from Riot, changed or not. Not sent for `ARCHIVE` |
 | `X-RateLimit-Limit` / `-Remaining` / `-Reset` | Your consumer quota |
 | `X-Request-Id` | Quote this when reporting a problem |
+| `Retry-After` | On `QUOTA_EXCEEDED` (429) and `RATE_LIMITED` (503): seconds to wait |
+
+Each response in this document declares the headers it sends.
+
+### Images
+
+`/v1/static/*` serves Data Dragon's JSON. Its images are mirrored too, at `/ddragon/<version>/img/<kind>/<file>`: Data Dragon's own `/cdn/<version>/img/<kind>/<file>` layout, for `champion`, `profileicon`, `item` and `spell` (summoner spells). Rune icons are at `/ddragon/<version>/img/<icon>`, `icon` being `runesReforged.json`'s `perk-images/…` path. `<version>` must be a patch the mirror holds (`/v1/static/versions`), and the file one that patch's data lists. An image is fetched from Riot's CDN on first request, then served from disk. `/ddragon` needs no key. CommunityDragon assets are not mirrored.
 ";
 
 #[derive(OpenApi)]
@@ -124,9 +135,127 @@ pub fn api_router(auth: Option<AppState>) -> OpenApiRouter<AppState> {
         .merge(admin)
 }
 
-/// Final touches: the crate version and v1's tag groups.
+/// The response headers (SITE-04): name, schema, description.
+const HEADERS: [(&str, Type, &str); 8] = [
+    (
+        "X-Request-Id",
+        Type::String,
+        "This request's id; quote it when reporting a problem.",
+    ),
+    (
+        "X-Cache",
+        Type::String,
+        "Where the body came from: `HIT`, `MISS`, `STALE`, `HIT-NEG` (a cached 404), \
+         `ARCHIVE` (the match archive) or `BYPASS` (`?refresh=true`).",
+    ),
+    (
+        "X-Cache-Age",
+        Type::Integer,
+        "Seconds the content has been unchanged, not since the last fetch.",
+    ),
+    (
+        "X-Cache-Fetched-Age",
+        Type::Integer,
+        "Seconds since the proxy last read it from Riot, changed or not. Not sent for `ARCHIVE`.",
+    ),
+    (
+        "X-RateLimit-Limit",
+        Type::Integer,
+        "Your consumer quota per minute.",
+    ),
+    (
+        "X-RateLimit-Remaining",
+        Type::Integer,
+        "Requests left in the current minute.",
+    ),
+    (
+        "X-RateLimit-Reset",
+        Type::Integer,
+        "Seconds until a request slot frees up.",
+    ),
+    (
+        "Retry-After",
+        Type::Integer,
+        "Seconds to wait before trying again.",
+    ),
+];
+
+/// Read routes, behind the consumer key and quota.
+const READ_TAGS: [&str; 4] = ["players", "riot", "lol", "static"];
+
+/// Which headers `path`'s `op` sends on `status`, as the handlers and middleware
+/// set them. Every response carries `X-Request-Id` (the outermost layer); a
+/// keyed route meters every request it authenticated; `Retry-After` comes with
+/// the two rate-limit errors.
+fn headers_for(path: &str, op: &Operation, status: &str) -> Vec<&'static str> {
+    let tagged = |tags: &[&str]| op.tags.iter().flatten().any(|t| tags.contains(&t.as_str()));
+    let mut out = vec!["X-Request-Id"];
+    if tagged(&[READ_TAGS.as_slice(), &["admin"]].concat()) && !matches!(status, "401" | "403") {
+        out.extend(["X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"]);
+    }
+    if matches!(status, "429" | "503") {
+        out.push("Retry-After");
+    }
+    // The analytics routes revalidate with `ETag` instead of a cache tier.
+    let cached = tagged(&READ_TAGS) && !path.starts_with("/v1/lol/analytics");
+    let ok = status.starts_with('2');
+    if cached && ok {
+        out.extend(["X-Cache", "X-Cache-Age"]);
+        // Static files and the archive-built champion pool are never read from Riot.
+        if !tagged(&["static"]) && !path.ends_with("/champions") {
+            out.push("X-Cache-Fetched-Age");
+        }
+    }
+    // A cached 404 says so (`HIT-NEG`).
+    if cached && status == "404" && tagged(&["riot", "lol"]) {
+        out.push("X-Cache");
+    }
+    out
+}
+
+/// Declare [`HEADERS`] once under `components.headers` and reference them
+/// from every response that sends them, so generated clients type them.
+fn declare_headers(doc: &mut Document) {
+    let components = doc.components.get_or_insert_with(Default::default);
+    for (name, kind, description) in HEADERS {
+        let schema = ObjectBuilder::new().schema_type(kind).build();
+        let mut header = Header::new(schema);
+        header.description = Some(description.to_string());
+        components.headers.insert(name.to_string(), RefOr::T(header));
+    }
+    for (path, item) in &mut doc.paths.paths {
+        let ops = [
+            &mut item.get,
+            &mut item.put,
+            &mut item.post,
+            &mut item.delete,
+            &mut item.patch,
+        ];
+        for op in ops.into_iter().flatten() {
+            let wanted: Vec<(String, Vec<&str>)> = op
+                .responses
+                .responses
+                .keys()
+                .map(|status| (status.clone(), headers_for(path, op, status)))
+                .collect();
+            for (status, names) in wanted {
+                if let Some(RefOr::T(res)) = op.responses.responses.get_mut(&status) {
+                    for name in names {
+                        res.headers.insert(
+                            name.to_string(),
+                            RefOr::Ref(Ref::new(format!("#/components/headers/{name}"))),
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Final touches: the crate version, v1's tag groups and the response headers.
 pub fn finish(mut doc: Document) -> Document {
     doc.info.version = env!("CARGO_PKG_VERSION").to_string();
+    declare_headers(&mut doc);
     let groups = serde_json::json!([
         {"name": "Player data", "tags": ["players", "riot", "lol"]},
         {"name": "Static data", "tags": ["static"]},

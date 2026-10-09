@@ -440,7 +440,9 @@ pub struct BackfillNotice {
     pub job_id: String,
     /// `queued`, or `already-queued` when another request got there first.
     pub status: String,
-    /// How far back the walk will go, in matches.
+    /// How far back the walk will go, in matches. `4294967295` (the default,
+    /// `LOOKUP_BACKFILL_LIMIT`) means the whole history: the walk stops where
+    /// Riot's id list ends (ADR-081).
     pub limit: u32,
 }
 

@@ -259,7 +259,7 @@ The site's backfill question (item 3) needs no task: the unbounded lookup backfi
 - [x] SITE-01 report when each part was last fetched from Riot: `cache.fetched_at` (V0009) beside `content_at`, `fetchedAgeSeconds` on the profile, `matchIdsFetchedAgeSeconds` on the match page, `X-Cache-Fetched-Age` on passthroughs and composites (none from the archive) (#125, design/04, ADR-103)
 - [x] SITE-02 `champion` filter on the match page: Riot's newest 20 ids archived first, then the archive paged for that champion (`archive::player::champion_match_ids`), exact `hasMore`, `archive.complete` from the backfill's `doneAt`, `type` refused with it; the showcase's pool rows filter the history (#126, design/11, ADR-104)
 - [x] SITE-03 `gameVersion` described as the game build, plus `ddragonVersion`: the newest Data Dragon version in the mirrored `versions.json` with the build's `major.minor` (`Mirror::versions`, `static::ddragon_version_for`), absent when there is none (#131, ADR-108)
-- [ ] SITE-04 declare response headers in the OpenAPI document; document the image mirror and the backfill limit (IMPLEMENTATION.md §Post-release — SITE)
+- [x] SITE-04 declare response headers in the OpenAPI document (one `components.headers` entry each, referenced from every response that sends it); an Images section on `/ddragon`; `BackfillNotice.limit` explains `4294967295` (#PR, ADR-109)
 - [ ] SITE-05 partial schemas for Riot's account, summoner, league and mastery payloads (IMPLEMENTATION.md §Post-release — SITE)
 - [x] SITE-06 `roleBoundItem` in `PlayerSummary`, next to `item6`: the role quest slot (a bot laner's boots, another role's quest reward), verbatim, absent when Riot didn't send it; the showcase shows it after the inventory (#130, design/11, ADR-106)
 
