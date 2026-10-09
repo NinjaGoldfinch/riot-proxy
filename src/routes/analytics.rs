@@ -1,6 +1,6 @@
 //! `/v1/lol/analytics/*` (plan P7-04; v1 `routes/lol.ts`): champion stats,
-//! lane matchups and the champion detail composite, read from the analytics
-//! tables (`archive::analytics`). Never calls Riot.
+//! lane matchups, the champion detail composite and set builds (BLD-03),
+//! read from the analytics tables (`archive::analytics`). Never calls Riot.
 //!
 //! As v1: the newest aggregated patch by default, `Cache-Control: private,
 //! max-age=300`, and a weak `ETag` from the rows' `computed_at`, the canonical
@@ -23,7 +23,7 @@ use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
 use crate::app::AppState;
-use crate::archive::analytics::{self, Facet, FacetRow, PatchRow, Read, StatRow};
+use crate::archive::analytics::{self, BuildPartRow, BuildRow, Facet, FacetRow, PatchRow, Read, StatRow};
 use crate::clock::iso_ms;
 use crate::db::DbError;
 use crate::http::{ApiError, validate};
@@ -47,6 +47,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(champions))
         .routes(routes!(champion_detail))
         .routes(routes!(champion_matchups))
+        .routes(routes!(champion_builds))
         .routes(routes!(patches))
 }
 
@@ -212,6 +213,106 @@ pub struct ChampionDetailResponse {
     items: Vec<ChampionItemEntry>,
     runes: Vec<ChampionRuneEntry>,
     spells: Vec<ChampionSpellEntry>,
+}
+
+/// One choice at one step of a set build: an item (BLD-03).
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildItemOption {
+    item_id: i64,
+    games: i64,
+    #[serde(serialize_with = "js_number")]
+    win_rate: f64,
+}
+
+/// A starter: the items bought before 60 s, trinkets left out, sorted.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildStarterOption {
+    items: Vec<i64>,
+    games: i64,
+    #[serde(serialize_with = "js_number")]
+    win_rate: f64,
+}
+
+/// A skill order: Q, W and E in the order they were maxed, `"QWE"`.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildSkillOrderOption {
+    order: String,
+    games: i64,
+    #[serde(serialize_with = "js_number")]
+    win_rate: f64,
+}
+
+/// A keystone and secondary tree.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildRuneOption {
+    keystone_id: i64,
+    sub_style_id: i64,
+    games: i64,
+    #[serde(serialize_with = "js_number")]
+    win_rate: f64,
+}
+
+/// A summoner spell pair, `spellA <= spellB`.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildSpellOption {
+    spell_a: i64,
+    spell_b: i64,
+    games: i64,
+    #[serde(serialize_with = "js_number")]
+    win_rate: f64,
+}
+
+/// One set build (BLD-03): its two core items, then what its players chose
+/// at each later step, at most three options each, most played first.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ChampionBuildEntry {
+    /// The first two finished items, in purchase order.
+    core: Vec<i64>,
+    games: i64,
+    wins: i64,
+    #[serde(serialize_with = "js_number")]
+    win_rate: f64,
+    /// The build's share of the champion's games that had a build (`totalGames`).
+    #[serde(serialize_with = "js_number")]
+    pick_rate: f64,
+    /// The 3rd, 4th and 5th finished items: three lists, each possibly empty.
+    next: Vec<Vec<BuildItemOption>>,
+    starter: Vec<BuildStarterOption>,
+    boots: Vec<BuildItemOption>,
+    skill_order: Vec<BuildSkillOrderOption>,
+    runes: Vec<BuildRuneOption>,
+    spells: Vec<BuildSpellOption>,
+}
+
+/// A champion's set builds in one role (BLD-03).
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ChampionBuildsResponse {
+    champion_id: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    champion_name: Option<String>,
+    /// `null` when the request named no platform: every platform summed.
+    #[schema(required = true)]
+    platform: Option<String>,
+    queue: String,
+    #[schema(required = true)]
+    patch: Option<String>,
+    /// The role asked for, else the champion's most-played role in the slice;
+    /// `null` when it has no games.
+    #[schema(required = true)]
+    role: Option<String>,
+    #[schema(required = true)]
+    computed_at: Option<String>,
+    /// The champion's games in this role that had a build: `pickRate`'s denominator.
+    total_games: i64,
+    /// Most played first.
+    builds: Vec<ChampionBuildEntry>,
 }
 
 /// One aggregated patch (ADR-094).
@@ -833,6 +934,202 @@ async fn champion_detail(
                     wins: r.wins,
                     win_rate: rate(r.wins, r.games),
                 })
+                .collect(),
+        },
+    )
+}
+
+/// Options shown per step of a set build (BLD-03).
+const BUILD_OPTIONS: usize = 3;
+
+/// `build_parts`' rows for one core, as the route's entry. Parts arrive most
+/// played first within each part; a value that doesn't parse is skipped.
+fn build_entry(b: &BuildRow, parts: &[BuildPartRow], total: i64) -> ChampionBuildEntry {
+    let of = |part: &'static str| {
+        parts
+            .iter()
+            .filter(move |p| p.core == b.core && p.part == part)
+            .take(BUILD_OPTIONS)
+    };
+    let pair = |v: &str| {
+        let (a, z) = v.split_once(':')?;
+        Some((a.parse::<i64>().ok()?, z.parse::<i64>().ok()?))
+    };
+    let items = |part: &'static str| {
+        of(part)
+            .filter_map(|p| {
+                Some(BuildItemOption {
+                    item_id: p.value.parse().ok()?,
+                    games: p.games,
+                    win_rate: rate(p.wins, p.games),
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+    ChampionBuildEntry {
+        core: b.core.to_vec(),
+        games: b.games,
+        wins: b.wins,
+        win_rate: rate(b.wins, b.games),
+        pick_rate: rate(b.games, total),
+        next: vec![items("item3"), items("item4"), items("item5")],
+        starter: of("starter")
+            .filter_map(|p| {
+                Some(BuildStarterOption {
+                    items: serde_json::from_str(&p.value).ok()?,
+                    games: p.games,
+                    win_rate: rate(p.wins, p.games),
+                })
+            })
+            .collect(),
+        boots: items("boots"),
+        skill_order: of("skill_order")
+            .map(|p| BuildSkillOrderOption {
+                order: p.value.clone(),
+                games: p.games,
+                win_rate: rate(p.wins, p.games),
+            })
+            .collect(),
+        runes: of("runes")
+            .filter_map(|p| {
+                let (keystone_id, sub_style_id) = pair(&p.value)?;
+                Some(BuildRuneOption {
+                    keystone_id,
+                    sub_style_id,
+                    games: p.games,
+                    win_rate: rate(p.wins, p.games),
+                })
+            })
+            .collect(),
+        spells: of("spells")
+            .filter_map(|p| {
+                let (spell_a, spell_b) = pair(&p.value)?;
+                Some(BuildSpellOption {
+                    spell_a,
+                    spell_b,
+                    games: p.games,
+                    win_rate: rate(p.wins, p.games),
+                })
+            })
+            .collect(),
+    }
+}
+
+#[utoipa::path(
+    get, path = "/v1/lol/analytics/champions/{championId}/builds", tag = "lol",
+    summary = "Champion set builds",
+    description = "The item paths players take on this champion: each build is the first two finished items, with \
+        the most common 3rd, 4th and 5th items, starter, boots, skill order, runes and spells of the players who \
+        built it (at most three each). Worked out from archived match timelines, so matches archived without one \
+        aren't counted, nor are players who finished fewer than two items. Without `role`, the champion's \
+        most-played role in the slice, named in `role`. Sends an `ETag`; a matching `If-None-Match` gets 304. A \
+        champion nobody has builds for yet still returns 200 with an empty `builds`.",
+    params(
+        ("championId" = i64, Path, description = "Champion id, ≥ 1"),
+        ("platform" = Option<String>, Query, description = "Only this platform's ladder. Omitted sums every platform"),
+        ("queue" = Option<String>, Query, description = "RANKED_SOLO_5x5 or RANKED_FLEX_SR"),
+        ("patch" = Option<String>, Query, description = "`major.minor`, or `all` to sum every aggregated patch; default the newest aggregated patch"),
+        ("role" = Option<String>, Query, description = "TOP, JUNGLE, MIDDLE, BOTTOM, UTILITY or empty; default the champion's most-played role"),
+        ("minGames" = Option<i64>, Query, description = "≥ 0, games a build needs; default `AGGREGATE_MIN_GAMES`"),
+        ("limit" = Option<i64>, Query, description = "1–10 builds, default 3"),
+        ("remakes" = Option<String>, Query, description = "`exclude` (default) or `include`"),
+    ),
+    responses((status = 200, description = "The champion's builds, most played first", body = ChampionBuildsResponse),
+        (status = 304, description = "Not modified"), LocalErrors),
+)]
+async fn champion_builds(
+    State(state): State<AppState>,
+    Extension(_c): Who,
+    headers: HeaderMap,
+    path: Result<Path<String>, PathRejection>,
+    Query(query): Q,
+) -> Response {
+    let Path(raw) = match path {
+        Ok(p) => p,
+        Err(e) => return bad_path(&e).into_response(),
+    };
+    let checked = champion_id(&raw)
+        .and_then(|id| Ok((id, common(&state, &query, false, &TEAM_POSITIONS, (1, 10, 3))?)));
+    let (id, c) = match checked {
+        Ok(v) => v,
+        Err(e) => return e.into_response(),
+    };
+    let min_games = c.min_games.unwrap_or(i64::from(state.config.aggregate_min_games));
+    let patch = match patch_or_latest(&state, &c).await {
+        Ok(p) => p,
+        Err(e) => return internal(&e),
+    };
+    let mut role = c.role.clone();
+    let mut builds = vec![];
+    let mut parts = vec![];
+    let (mut total_games, mut computed) = (0, None);
+    if let Some(p) = &patch {
+        let base = Read {
+            champion_id: Some(id),
+            min_games,
+            ..c.read(&state, p)
+        };
+        // Builds differ by role, so they are never summed across roles.
+        if role.is_none() {
+            role = match analytics::top_role(&state.db, base.clone()).await {
+                Ok(r) => r,
+                Err(e) => return internal(&e),
+            };
+        }
+        if role.is_some() {
+            let read = Read {
+                role: role.clone(),
+                ..base
+            };
+            let got = tokio::try_join!(
+                analytics::builds(&state.db, read.clone()),
+                analytics::build_totals(&state.db, read.clone()),
+            );
+            (builds, (total_games, computed)) = match got {
+                Ok(g) => g,
+                Err(e) => return internal(&e),
+            };
+            if !builds.is_empty() {
+                parts = match analytics::build_parts(&state.db, read, builds.iter().map(|b| b.core).collect())
+                    .await
+                {
+                    Ok(p) => p,
+                    Err(e) => return internal(&e),
+                };
+            }
+        }
+    }
+    let names = state.ddragon.champion_names(&[id]).await;
+    let computed_at = computed.and_then(iso_ms);
+    let tag = etag(&[
+        some("builds"),
+        computed_at.clone(),
+        state.ddragon.current_version().await,
+        c.platform.clone(),
+        some(&c.queue),
+        patch.clone(),
+        some(id),
+        c.role.clone(),
+        role.clone(),
+        some(min_games),
+        some(c.limit),
+        c.remakes_part(),
+    ]);
+    respond(
+        &headers,
+        &tag,
+        &ChampionBuildsResponse {
+            champion_id: id,
+            champion_name: names.get(&id).cloned(),
+            platform: c.platform,
+            queue: c.queue,
+            patch,
+            role,
+            computed_at,
+            total_games,
+            builds: builds
+                .iter()
+                .map(|b| build_entry(b, &parts, total_games))
                 .collect(),
         },
     )

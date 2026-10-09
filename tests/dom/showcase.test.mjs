@@ -414,10 +414,12 @@ test('a missing timeline costs only the graph; an unknown match says so', async 
   assert.deepEqual(gone.errors, []);
 });
 
-test('the champion view: rates by tier, builds with names, and the calls it makes', async () => {
+test('the champion view: rates by tier and the calls it makes', async () => {
   const p = await page({ hash: '#/champion/1' });
   assert.ok(p.calls.includes('/v1/lol/analytics/champions/1?queue=RANKED_SOLO_5x5&patch=all&limit=10&platform=oc1'));
   assert.ok(p.calls.includes('/v1/lol/analytics/champions/1/matchups?queue=RANKED_SOLO_5x5&patch=all&limit=200&platform=oc1'));
+  // No role: the route picks the champion's most-played one (BLD-03).
+  assert.ok(p.calls.includes('/v1/lol/analytics/champions/1/builds?queue=RANKED_SOLO_5x5&patch=all&platform=oc1'));
   assert.ok(p.text('#cHead').includes('Annie') && p.text('#cHead').includes('the Dark Child'));
   assert.ok(p.text('#cMeta').includes('all patches · 60 games'));
   const tiers = [...p.w.document.querySelectorAll('#cTiers tbody tr')].map((r) => r.cells[0].textContent);
@@ -425,14 +427,65 @@ test('the champion view: rates by tier, builds with names, and the calls it make
   assert.ok(p.text('#cTiers').includes('55.0% win over 60 games'), 'summed over tiers');
   const gold = p.w.document.querySelectorAll('#cTiers tbody tr')[1].textContent.replace(/\s+/g, ' ');
   for (const bit of ['30', '50.0%', '5.0%', '1.0%', '2.50', '6.1', '402']) assert.ok(gold.includes(bit), bit);
-  const build = p.text('#cBuild');
-  assert.ok(build.includes('Trinity Force') && build.includes('66.7%'));
-  assert.ok(build.includes('Conqueror') && build.includes('+ Domination'));
-  assert.deepEqual([...p.w.document.querySelectorAll('#cBuild .spells-row img')].map((i) => i.getAttribute('src')), [
-    '/ddragon/16.19.1/img/spell/SummonerFlash.png', '/ddragon/16.19.1/img/spell/SummonerDot.png',
-    '/ddragon/16.19.1/img/perk-images/Styles/Precision/Conqueror/Conqueror.png', '/ddragon/16.19.1/img/perk-images/Styles/7200_Domination.png',
-  ]);
   assert.deepEqual(p.errors, []);
+});
+
+const srcs = (p, sel) => [...p.w.document.querySelectorAll(sel)].map((i) => i.getAttribute('src').replace('/ddragon/16.19.1/img/', ''));
+
+test('set builds: a tab per build, labelled by its core items, with its two rows', async () => {
+  const p = await page({ hash: '#/champion/1' });
+  const tabs = [...p.w.document.querySelectorAll('#cBuild [data-build]')];
+  assert.equal(tabs.length, 2);
+  assert.ok(tabs[0].classList.contains('on') && !tabs[1].classList.contains('on'));
+  assert.deepEqual(srcs(p, '#cBuild [data-build="0"] img'), ['item/3078.png', 'item/3153.png']);
+  assert.ok(tabs[0].textContent.includes('60.0%') && tabs[0].textContent.includes('20 games'));
+  assert.equal(tabs[0].title, 'Trinity Force › Blade of The Ruined King');
+  assert.ok(p.text('#cBuild header').includes('Middle · 50.0% of 40 games with a build'));
+  const [one, path] = p.w.document.querySelectorAll('#cBuild .brow');
+  // Row 1: keystone + secondary tree, spells, skill order, starter, boots.
+  assert.deepEqual(srcs(p, '#cBuild .brow:not(.path) img'), [
+    'perk-images/Styles/Precision/Conqueror/Conqueror.png', 'perk-images/Styles/7200_Domination.png',
+    'spell/SummonerFlash.png', 'spell/SummonerDot.png', 'item/1055.png', 'item/2003.png', 'item/3047.png',
+  ]);
+  assert.ok(one.textContent.includes('Q › E › W'));
+  assert.equal(one.querySelector('[title="Plated Steelcaps"] img').getAttribute('alt'), 'item 3047');
+  // Row 2: the core, then the 3rd, 4th and 5th steps, each stacking its options.
+  assert.deepEqual(srcs(p, '#cBuild .brow.path img'), ['item/3078.png', 'item/3153.png', 'item/6672.png', 'item/3031.png', 'item/3031.png']);
+  const steps = [...path.querySelectorAll('.step')].map((x) => x.querySelectorAll('.opt').length);
+  assert.deepEqual(steps, [2, 1, 0]);
+  assert.ok(path.querySelector('.step .opt').textContent.includes('62.5%'));
+  assert.equal(path.querySelectorAll('.sep').length, 4);
+  assert.deepEqual([...p.w.document.querySelectorAll('#cBuild .src')].map((a) => a.textContent), ['GET /v1/lol/analytics/champions/{championId}/builds', 'GET /v1/static/{file}']);
+  assert.deepEqual(p.errors, []);
+});
+
+test('set builds: a tab switches the build, and empty parts show a dash', async () => {
+  const p = await page({ hash: '#/champion/1' });
+  await p.click('#cBuild [data-build="1"]');
+  assert.ok(p.$('#cBuild [data-build="1"]').classList.contains('on'));
+  assert.ok(!p.$('#cBuild [data-build="0"]').classList.contains('on'));
+  assert.deepEqual(srcs(p, '#cBuild .brow.path img'), ['item/3153.png', 'item/3078.png']);
+  const one = p.$('#cBuild .brow').textContent;
+  assert.ok(one.includes('Q › W › E'));
+  assert.equal(p.w.document.querySelectorAll('#cBuild .brow:not(.path) .muted').length, 4, 'runes, spells, starter and boots');
+  assert.ok(p.text('#cBuild header').includes('25.0% of 40 games'));
+  assert.deepEqual(p.errors, []);
+});
+
+test('without set builds the Builds card shows the item, rune and spell lists', async () => {
+  for (const opts of [{ noBuilds: true }, { buildsFail: true }]) {
+    const p = await page({ hash: '#/champion/1', ...opts });
+    assert.equal(p.w.document.querySelectorAll('#cBuild [data-build]').length, 0, JSON.stringify(opts));
+    const build = p.text('#cBuild');
+    assert.ok(build.includes('Trinity Force') && build.includes('66.7%'));
+    assert.ok(build.includes('Conqueror') && build.includes('+ Domination'));
+    assert.deepEqual(srcs(p, '#cBuild .spells-row img'), [
+      'spell/SummonerFlash.png', 'spell/SummonerDot.png',
+      'perk-images/Styles/Precision/Conqueror/Conqueror.png', 'perk-images/Styles/7200_Domination.png',
+    ]);
+    assert.ok(p.text('#cTiers').includes('55.0% win over 60 games'), 'the rest of the page still renders');
+    assert.deepEqual(p.errors, []);
+  }
 });
 
 test('matchups: most games first, filtered by lane', async () => {
@@ -472,6 +525,10 @@ test('every match and champion card names its calls', async () => {
   const c = await page({ hash: '#/champion/1' });
   assert.deepEqual(chips(c, '#cTiers'), ['GET /v1/lol/analytics/champions/{championId}']);
   assert.deepEqual(chips(c, '#cMatchups'), ['GET /v1/lol/analytics/champions/{championId}/matchups']);
+  assert.deepEqual(chips(c, '#cHead'), ['GET /v1/lol/analytics/champions/{championId}', 'GET /v1/lol/analytics/champions/{championId}/builds', 'GET /v1/lol/analytics/patches', 'GET /v1/static/{file}']);
+  // The fallback lists come from the detail; the builds call is named because it came back empty.
+  const f = await page({ hash: '#/champion/1', noBuilds: true });
+  assert.deepEqual(chips(f, '#cBuild'), ['GET /v1/lol/analytics/champions/{championId}/builds', 'GET /v1/lol/analytics/champions/{championId}', 'GET /v1/static/{file}']);
 });
 
 test('the champion view reads every patch by default; the patch and region pickers refetch', async () => {

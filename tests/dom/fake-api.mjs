@@ -67,6 +67,12 @@ function players(p, u, { live = false, refreshWait = 0 }) {
 const BOOTS = { 1001: 'Boots', 3006: "Berserker's Greaves", 3009: 'Boots of Swiftness', 3020: "Sorcerer's Shoes", 3047: 'Plated Steelcaps', 3111: "Mercury's Treads", 3158: 'Ionian Boots of Lucidity', 3170: 'Swiftmarch' };
 const ITEMS = { data: {
   3078: { name: 'Trinity Force', tags: ['Health', 'Damage', 'AttackSpeed', 'CooldownReduction', 'OnHit', 'NonbootsMovement', 'AbilityHaste'] },
+  // Finished items and a starter for the set builds (BLD-03).
+  3153: { name: 'Blade of The Ruined King', tags: ['Health', 'Damage', 'AttackSpeed', 'LifeSteal', 'Slow', 'OnHit'] },
+  6672: { name: 'Kraken Slayer', tags: ['Damage', 'AttackSpeed', 'OnHit'] },
+  3031: { name: 'Infinity Edge', tags: ['CriticalStrike', 'Damage'] },
+  1055: { name: "Doran's Blade", tags: ['Health', 'Damage', 'LifeSteal', 'Lane'] },
+  2003: { name: 'Health Potion', tags: ['Consumable', 'Active', 'Lane'] },
   3340: { name: 'Stealth Ward', tags: ['Active', 'Jungle', 'Lane', 'Trinket', 'Vision'] },
   ...Object.fromEntries(Object.entries(BOOTS).map(([id, name]) => [id, { name, tags: ['Boots'] }])),
 } };
@@ -94,7 +100,18 @@ const MATCHUPS = { championId: 1, championName: 'Annie', queue: 'RANKED_SOLO_5x5
   { opponentId: 3, opponentName: 'Galio', role: 'MIDDLE', games: 9, wins: 3, winRate: 0.333 },
   { opponentId: 2, opponentName: 'Olaf', role: 'TOP', games: 2, wins: 2, winRate: 1 },
 ] };
-function detail(p, u, { noTimeline = false, noAnalytics = false }) {
+// The proxy's ChampionBuildsResponse (BLD-03): two builds in the most-played role, the second
+// with nothing past its core.
+const BUILDS = { championId: 1, championName: 'Annie', platform: 'oc1', queue: 'RANKED_SOLO_5x5', patch: 'all', role: 'MIDDLE', computedAt: '2026-10-08T00:00:00Z', totalGames: 40, builds: [
+  { core: [3078, 3153], games: 20, wins: 12, winRate: 0.6, pickRate: 0.5,
+    next: [[{ itemId: 6672, games: 8, winRate: 0.625 }, { itemId: 3031, games: 5, winRate: 0.4 }], [{ itemId: 3031, games: 4, winRate: 0.5 }], []],
+    starter: [{ items: [1055, 2003], games: 18, winRate: 0.611 }], boots: [{ itemId: 3047, games: 15, winRate: 0.6 }],
+    skillOrder: [{ order: 'QEW', games: 16, winRate: 0.625 }], runes: [{ keystoneId: 8010, subStyleId: 8100, games: 18, winRate: 0.6 }],
+    spells: [{ spellA: 4, spellB: 14, games: 20, winRate: 0.6 }] },
+  { core: [3153, 3078], games: 10, wins: 4, winRate: 0.4, pickRate: 0.25, next: [[], [], []], starter: [], boots: [],
+    skillOrder: [{ order: 'QWE', games: 10, winRate: 0.4 }], runes: [], spells: [] },
+] };
+function detail(p, u, { noTimeline = false, noAnalytics = false, noBuilds = false, buildsFail = false }) {
   let m;
   if ((m = p.match(/^\/v1\/lol\/matches\/([a-z]+)\/([A-Z0-9]+_\d+)(\/timeline)?$/))) {
     if (m[2] === 'OC1_1') return [404, { error: { code: 'NOT_FOUND', message: 'no match', requestId: 'r' } }];
@@ -108,6 +125,10 @@ function detail(p, u, { noTimeline = false, noAnalytics = false }) {
     const games = championId ? [3, 57] : [40, 1200];
     return [200, { platform: u.searchParams.get('platform'), queue: u.searchParams.get('queue'), championId: championId ? Number(championId) : null,
       patches: noAnalytics ? [] : [{ patch: '16.19', games: games[0], computedAt: '2026-10-08T00:00:00Z' }, { patch: '16.18', games: games[1], computedAt: '2026-10-08T00:00:00Z' }] }];
+  }
+  if (p.match(/^\/v1\/lol\/analytics\/champions\/\d+\/builds$/)) {
+    if (buildsFail) return [503, { error: { code: 'INTERNAL', message: 'try later', requestId: 'r' } }];
+    return [200, noAnalytics || noBuilds || u.searchParams.get('patch') === '16.19' ? { ...BUILDS, totalGames: 0, builds: [] } : BUILDS];
   }
   if ((m = p.match(/^\/v1\/lol\/analytics\/champions\/(\d+)(\/matchups)?$/))) {
     // 16.19 stands in for a patch too new to clear minGames: listed, but empty.
@@ -144,4 +165,4 @@ function api(calls, url, { status = {}, unauthorized = false, ...opts } = {}) {
   return [404, { error: { code: 'NOT_FOUND', message: p } }];
 }
 
-export { root, html, LADDER, CHAMPS, RUNES, PUUID, BOOTS, MATCH, TIMELINE, DETAIL, MATCHUPS, api };
+export { root, html, LADDER, CHAMPS, RUNES, PUUID, BOOTS, MATCH, TIMELINE, DETAIL, MATCHUPS, BUILDS, api };

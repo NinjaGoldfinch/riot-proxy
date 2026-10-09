@@ -797,3 +797,164 @@ async fn a_recompute_refreshes_planner_statistics_first() {
         .unwrap();
     assert_eq!(analysed, ["ladder_entries", "match_facts"]);
 }
+
+impl Env {
+    /// Build facts (BLD-01's `match_builds`) for three players of the ranked
+    /// game, as `builds:extract` would write them; the harness mirrors no
+    /// item.json, so the recompute's extraction step leaves them alone.
+    async fn seed_builds(&self) {
+        let players = serde_json::from_slice::<Value>(RANKED).unwrap()["info"]["participants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| {
+                (
+                    p["championId"].as_i64().unwrap(),
+                    p["puuid"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        let rows = [
+            // 134 (MIDDLE, win): a full build.
+            (
+                134,
+                "[1056,2003,2003]",
+                Some(3020),
+                "[6655,3157,3089,4645]",
+                Some("QEW"),
+            ),
+            // 157 (MIDDLE, loss): another champion's build.
+            (157, "[1055,2003]", Some(3006), "[6672,3031,3036]", Some("QEW")),
+            // 126 (TOP, win): one finished item, so no build.
+            (126, "[1054]", None, "[6692]", None),
+        ]
+        .map(|(champ, starter, boots, items, order)| (players[&champ].clone(), starter, boots, items, order));
+        let scope = self.scope.clone();
+        self.state
+            .db
+            .write(move |c| {
+                for (puuid, starter, boots, items, order) in rows {
+                    c.execute(
+                        "INSERT INTO match_builds (match_id, key_scope, puuid, starter, boots, items, skills,
+                           skill_order, builds_version) VALUES ('KR_8393343196', ?1, ?2, ?3, ?4, ?5, '', ?6, 1)",
+                        rusqlite::params![scope, puuid, starter, boots, items, order],
+                    )?;
+                }
+                Ok::<_, DbError>(())
+            })
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn the_builds_route_reads_set_builds_in_the_most_played_role() {
+    let e = env().await;
+    // Before any recompute: 200, no patch, no role, no builds.
+    assert_eq!(
+        e.get("/v1/lol/analytics/champions/134/builds").await.json(),
+        json!({"championId": 134, "platform": null, "queue": "RANKED_SOLO_5x5", "patch": null, "role": null,
+               "computedAt": null, "totalGames": 0, "builds": []})
+    );
+    e.seed().await;
+    e.seed_builds().await;
+    e.aggregate().await;
+
+    // No role: 134's most-played role, MIDDLE, named in the response.
+    let r = e.get("/v1/lol/analytics/champions/134/builds").await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.headers["cache-control"], "private, max-age=300");
+    let body = r.json();
+    assert_eq!(body["role"], "MIDDLE");
+    assert!(body["computedAt"].is_string());
+    insta::assert_json_snapshot!("analytics_champion_builds", redact(body));
+
+    // A matching If-None-Match: 304 with the validator.
+    let tag = r.headers["etag"].to_str().unwrap().to_string();
+    let again = e
+        .call(
+            "GET",
+            "/v1/lol/analytics/champions/134/builds",
+            &e.reader,
+            Some(&tag),
+            None,
+        )
+        .await;
+    assert_eq!(again.status, StatusCode::NOT_MODIFIED);
+    assert_eq!(again.headers["etag"].to_str().unwrap(), tag);
+    // Another role has its own (empty) builds, and its own validator.
+    let top = e.get("/v1/lol/analytics/champions/134/builds?role=TOP").await;
+    assert_eq!(
+        (
+            &top.json()["role"],
+            &top.json()["builds"],
+            &top.json()["totalGames"]
+        ),
+        (&json!("TOP"), &json!([]), &json!(0))
+    );
+    assert_ne!(top.headers["etag"].to_str().unwrap(), tag);
+
+    // With the remake, 134 has one MIDDLE game and one roleless one: the lane wins the tie.
+    assert_eq!(
+        e.get("/v1/lol/analytics/champions/134/builds?remakes=include")
+            .await
+            .json()["role"],
+        "MIDDLE"
+    );
+    // minGames counts a build's games; every patch sums.
+    assert_eq!(
+        e.get("/v1/lol/analytics/champions/134/builds?minGames=2")
+            .await
+            .json()["builds"],
+        json!([])
+    );
+    assert_eq!(
+        e.get("/v1/lol/analytics/champions/134/builds?patch=all")
+            .await
+            .json()["builds"][0]["core"],
+        json!([6655, 3157])
+    );
+    // A player with one finished item is in no build; a champion nobody played has no role.
+    let one = e.get("/v1/lol/analytics/champions/126/builds").await.json();
+    assert_eq!((&one["role"], &one["builds"]), (&json!("TOP"), &json!([])));
+    let nobody = e.get("/v1/lol/analytics/champions/999/builds").await.json();
+    assert_eq!((&nobody["role"], &nobody["builds"]), (&Value::Null, &json!([])));
+
+    // Validation as the detail route, with builds' own limit.
+    for (uri, message) in [
+        (
+            "/v1/lol/analytics/champions/0/builds",
+            "params/championId must be >= 1",
+        ),
+        (
+            "/v1/lol/analytics/champions/abc/builds",
+            "params/championId must be integer",
+        ),
+        (
+            "/v1/lol/analytics/champions/134/builds?limit=11",
+            "querystring/limit must be <= 10",
+        ),
+        (
+            "/v1/lol/analytics/champions/134/builds?limit=0",
+            "querystring/limit must be >= 1",
+        ),
+        (
+            "/v1/lol/analytics/champions/134/builds?role=SUPPORT",
+            "querystring/role must be equal to one of the allowed values",
+        ),
+        (
+            "/v1/lol/analytics/champions/134/builds?patch=16",
+            "querystring/patch must NOT have fewer than 3 characters",
+        ),
+        (
+            "/v1/lol/analytics/champions/134/builds?remakes=yes",
+            "querystring/remakes must be equal to one of the allowed values",
+        ),
+    ] {
+        assert_eq!(
+            error(&e.get(uri).await),
+            (StatusCode::BAD_REQUEST, message.into()),
+            "{uri}"
+        );
+    }
+}
