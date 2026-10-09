@@ -66,23 +66,37 @@ function players(p, u, { live = false, refreshWait = 0 }) {
 // Data Dragon 16.19.1 item.json, cut to the trinket and the boots the fixtures use, with their tags.
 const BOOTS = { 1001: 'Boots', 3006: "Berserker's Greaves", 3009: 'Boots of Swiftness', 3020: "Sorcerer's Shoes", 3047: 'Plated Steelcaps', 3111: "Mercury's Treads", 3158: 'Ionian Boots of Lucidity', 3170: 'Swiftmarch' };
 const ITEMS = { data: {
-  3078: { name: 'Trinity Force', tags: ['Health', 'Damage', 'AttackSpeed', 'CooldownReduction', 'OnHit', 'NonbootsMovement', 'AbilityHaste'] },
+  3078: { name: 'Trinity Force', gold: { total: 3333, purchasable: true }, from: ['3057', '3044', '3051'], tags: ['Health', 'Damage', 'AttackSpeed', 'CooldownReduction', 'OnHit', 'NonbootsMovement', 'AbilityHaste'] },
   // Finished items and a starter for the set builds (BLD-03).
-  3153: { name: 'Blade of The Ruined King', tags: ['Health', 'Damage', 'AttackSpeed', 'LifeSteal', 'Slow', 'OnHit'] },
-  6672: { name: 'Kraken Slayer', tags: ['Damage', 'AttackSpeed', 'OnHit'] },
-  3031: { name: 'Infinity Edge', tags: ['CriticalStrike', 'Damage'] },
-  1055: { name: "Doran's Blade", tags: ['Health', 'Damage', 'LifeSteal', 'Lane'] },
-  2003: { name: 'Health Potion', tags: ['Consumable', 'Active', 'Lane'] },
-  3340: { name: 'Stealth Ward', tags: ['Active', 'Jungle', 'Lane', 'Trinket', 'Vision'] },
-  ...Object.fromEntries(Object.entries(BOOTS).map(([id, name]) => [id, { name, tags: ['Boots'] }])),
+  3153: { name: 'Blade of The Ruined King', gold: { total: 3200, purchasable: true }, tags: ['Health', 'Damage', 'AttackSpeed', 'LifeSteal', 'Slow', 'OnHit'] },
+  6672: { name: 'Kraken Slayer', gold: { total: 3100, purchasable: true }, tags: ['Damage', 'AttackSpeed', 'OnHit'] },
+  3031: { name: 'Infinity Edge', gold: { total: 3450, purchasable: true }, tags: ['CriticalStrike', 'Damage'] },
+  1055: { name: "Doran's Blade", gold: { total: 450, purchasable: true }, tags: ['Health', 'Damage', 'LifeSteal', 'Lane'] },
+  2003: { name: 'Health Potion', gold: { total: 50, purchasable: true }, tags: ['Consumable', 'Active', 'Lane'] },
+  3340: { name: 'Stealth Ward', gold: { total: 0, purchasable: true }, tags: ['Active', 'Jungle', 'Lane', 'Trinket', 'Vision'] },
+  ...Object.fromEntries(Object.entries(BOOTS).map(([id, name]) => [id, { name, gold: { total: id === '1001' ? 300 : 1100, purchasable: true }, into: id === '1001' ? ['3047'] : [], tags: ['Boots'] }])),
 } };
 const MATCH = JSON.parse(readFileSync(new URL('tests/fixtures/replay/cold-lookup/06-match.byId.body', root), 'utf8'));
 const team = (id) => MATCH.info.participants.find((x) => x.participantId === id).teamId;
+// A build's events in Riot's EventsTimeLineDto shapes (BLD-04). Participant 1 (blue side's first): starter with a trinket,
+// boots, two finished items in one visit, a third, and an undone fourth; Q maxed first, then W. Participant 3: one item
+// and three level-ups. Participant 0 is not a player. Nobody else has events.
+const up = (participantId, skillSlot, timestamp, levelUpType = 'NORMAL') => ({ type: 'SKILL_LEVEL_UP', participantId, skillSlot, levelUpType, timestamp });
+const buy = (participantId, itemId, timestamp) => ({ type: 'ITEM_PURCHASED', participantId, itemId, timestamp });
+const EVENTS = [
+  buy(0, 3865, 0), buy(1, 1055, 5000), buy(1, 2003, 6000), buy(1, 3340, 7000), buy(1, 3047, 300000),
+  buy(1, 3078, 600000), buy(1, 3153, 610000), buy(1, 6672, 900000), buy(1, 3031, 901000),
+  { type: 'ITEM_UNDO', participantId: 1, beforeId: 3031, afterId: 0, goldGain: 3450, timestamp: 902000 },
+  ...[1, 2, 3, 1, 1, 4, 1, 2, 1, 2, 4, 2, 2, 3, 3].map((slot, i) => up(1, slot, 70000 + i * 60000)),
+  up(1, 2, 75000, 'EVOLVE'),
+  buy(3, 3153, 400000), up(3, 3, 80000), up(3, 1, 140000), up(3, 3, 200000),
+].sort((a, b) => a.timestamp - b.timestamp);
 const TIMELINE = { metadata: { matchId: MATCH.metadata.matchId }, info: { frameInterval: 60000, frames: Array.from({ length: 21 }, (_, m) => ({
   timestamp: m * 60000 + (m ? 37 : 0),
   // each blue player gains 20 gold a minute on red up to minute 10, then loses 60: +1,000 at 10, −4,000 at 20
   participantFrames: Object.fromEntries(MATCH.info.participants.map((x) => [String(x.participantId), { participantId: x.participantId, totalGold: 500 + m * 400 + (team(x.participantId) === 100 ? 20 * (m <= 10 ? m : 20 - 3 * m) : 0) }])),
-})) } };
+  events: EVENTS.filter((e) => Math.floor(e.timestamp / 60000) === m),
+})), participants: MATCH.info.participants.map((x) => ({ participantId: x.participantId, puuid: x.puuid })) } };
 const DETAIL = { championId: 1, championName: 'Annie', queue: 'RANKED_SOLO_5x5', platform: 'oc1', tier: null, role: null, patch: '16.19', computedAt: '2026-10-08T00:00:00Z', totalGames: 60,
   sectionsComputedAt: { stats: null, matchups: null, items: null, runes: null, spells: null },
   stats: [
@@ -111,12 +125,14 @@ const BUILDS = { championId: 1, championName: 'Annie', platform: 'oc1', queue: '
   { core: [3153, 3078], games: 10, wins: 4, winRate: 0.4, pickRate: 0.25, next: [[], [], []], starter: [], boots: [],
     skillOrder: [{ order: 'QWE', games: 10, winRate: 0.4 }], runes: [], spells: [] },
 ] };
-function detail(p, u, { noTimeline = false, noAnalytics = false, noBuilds = false, buildsFail = false }) {
+// `meIn: n` makes participant n the fake profile's player (PUUID), in the match and its timeline alike.
+const mine = (doc, n) => JSON.parse(JSON.stringify(doc).replaceAll(MATCH.info.participants[n - 1].puuid, PUUID));
+function detail(p, u, { noTimeline = false, noAnalytics = false, noBuilds = false, buildsFail = false, meIn = 0 }) {
   let m;
   if ((m = p.match(/^\/v1\/lol\/matches\/([a-z]+)\/([A-Z0-9]+_\d+)(\/timeline)?$/))) {
     if (m[2] === 'OC1_1') return [404, { error: { code: 'NOT_FOUND', message: 'no match', requestId: 'r' } }];
-    if (m[3]) return noTimeline ? [503, { error: { code: 'UPSTREAM_UNAVAILABLE', message: 'try later', requestId: 'r' } }] : [200, TIMELINE];
-    return [200, MATCH];
+    if (m[3]) return noTimeline ? [503, { error: { code: 'UPSTREAM_UNAVAILABLE', message: 'try later', requestId: 'r' } }] : [200, meIn ? mine(TIMELINE, meIn) : TIMELINE];
+    return [200, meIn ? mine(MATCH, meIn) : MATCH];
   }
   // The proxy's AnalyticsPatchesResponse (DEV-21): newest first. With a championId (DEV-25), that
   // champion's games: 60 in all, as the detail's totalGames.
@@ -147,7 +163,7 @@ function api(calls, url, { status = {}, unauthorized = false, ...opts } = {}) {
   if (p === '/v1/static/champion') return [200, CHAMPS];
   if (p === '/v1/static/summoner') return [200, { data: { SummonerFlash: { key: '4', image: { full: 'SummonerFlash.png' } }, SummonerDot: { key: '14', image: { full: 'SummonerDot.png' } } } }];
   if (p === '/v1/static/runes') return [200, RUNES];
-  if (p === '/v1/static/item') return [200, ITEMS];
+  if (p === '/v1/static/item') return opts.noItems ? [503, { error: { code: 'UPSTREAM_UNAVAILABLE', message: 'try later', requestId: 'r' } }] : [200, ITEMS];
   if (p === '/v1/static/queues') return [200, [{ queueId: 420, map: "Summoner's Rift", description: '5v5 Ranked Solo games', notes: null }, { queueId: 440, map: "Summoner's Rift", description: '5v5 Ranked Flex games', notes: null }]];
   if (unauthorized) return [401, { error: { code: 'UNAUTHORIZED', message: 'missing key', requestId: 'r' } }];
   const pl = players(p, u, opts) ?? detail(p, u, opts);

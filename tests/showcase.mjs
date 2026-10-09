@@ -1,4 +1,4 @@
-// Unit tests for the showcase's pure helpers (DEV-06, DEV-07, DEV-08). They live in one marked
+// Unit tests for the showcase's pure helpers (DEV-06, DEV-07, DEV-08, BLD-04). They live in one marked
 // block of src/ui/showcase.html, which has no build step, so this test cuts that
 // block out and evaluates it. Run by `cargo test` (tests/ui.rs) when node is on PATH:
 //   node --test tests/showcase.mjs
@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 const html = readFileSync(new URL('../src/ui/showcase.html', import.meta.url), 'utf8');
 const block = html.match(/\/\/ -{10} pure helpers[^\n]*\n([\s\S]*?)\/\/ -{10} end pure helpers/);
 assert.ok(block, 'the pure helpers block is marked in showcase.html');
-const h = new Function(`${block[1]}; return { APEX, QUEUES, LADDER_PAGE, APEX_LIST_CAP, apexCapNote, tierColour, winRate, pct, sortLadder, ladderPage, championIndex, imageUrl, statusNotices, byChampion, topChampions, parseRiotId, parseRoute, explorerLink, rankLabel, rankCards, queueNames, spellIndex, outcome, kda, durationSecs, clock, ago, masterySummary, liveGame, TIERS, SIDES, matchHref, matchTeams, goldDiff, goldScale, signedGold, tierRows, runeIndex, runePair, runeUrl, itemIndex, bootsIndex, itemSlots, roleList, thousands, patchChoices, pickPatch, patchLabel };`)();
+const h = new Function(`${block[1]}; return { APEX, QUEUES, LADDER_PAGE, APEX_LIST_CAP, apexCapNote, tierColour, winRate, pct, sortLadder, ladderPage, championIndex, imageUrl, statusNotices, byChampion, topChampions, parseRiotId, parseRoute, explorerLink, rankLabel, rankCards, queueNames, spellIndex, outcome, kda, durationSecs, clock, ago, masterySummary, liveGame, TIERS, SIDES, matchHref, matchTeams, goldDiff, goldScale, signedGold, tierRows, runeIndex, runePair, runeUrl, itemIndex, bootsIndex, itemSlots, roleList, thousands, patchChoices, pickPatch, patchLabel, BUILD_STARTER_MS, SHOP_VISIT_GAP_MS, itemCatalog, playerBuild, shopVisits };`)();
 
 test('apex tiers and queues are the ones the apex route accepts', () => {
   assert.deepEqual(h.APEX, ['CHALLENGER', 'GRANDMASTER', 'MASTER']);
@@ -331,4 +331,101 @@ test('the patch picker offers every patch first, then each patch, and falls back
   assert.equal(h.pickPatch('all', []), 'all');
   assert.equal(h.patchLabel('all'), 'all patches');
   assert.equal(h.patchLabel('16.19'), 'patch 16.19');
+});
+
+// ---------- one player's build (BLD-04): the same rules as src/archive/builds.rs, held to one golden file
+const BLD = (f) => JSON.parse(readFileSync(new URL(`fixtures/builds/${f}`, import.meta.url), 'utf8'));
+const CATALOG = h.itemCatalog(BLD('item-16.19.1.json'));
+
+test("item.json's rules: finished items, boots, trinkets and what each is built from", () => {
+  const is = (id) => CATALOG.get(id);
+  assert.equal(is(3078).finished, true, 'Trinity Force');
+  assert.equal(is(1036).finished, false, 'Long Sword builds into things');
+  assert.equal(is(2003).finished, false, 'a potion is a consumable');
+  assert.equal(is(1055).finished, false, "Doran's Blade is under 1500 gold");
+  assert.deepEqual([is(3006).finished, is(3006).bootsTag], [false, true], "Berserker's Greaves are boots, not finished");
+  assert.deepEqual([is(3172).bootsTag, is(3172).from], [false, [3006]], 'Gunmetal Greaves have no Boots tag');
+  assert.equal(is(3340).trinket, true, 'Stealth Ward');
+  const doc = { data: { 1: { gold: { total: 2000, purchasable: true }, tags: [] }, 2: { gold: { total: 2000, purchasable: false } }, x: { gold: { total: 9999, purchasable: true } } } };
+  const c = h.itemCatalog(doc);
+  assert.deepEqual([...c.keys()], [1, 2], 'an id that is not a number is left out');
+  assert.deepEqual([c.get(1).finished, c.get(2).finished], [true, false], 'an item no one can buy is not finished');
+  assert.equal(h.itemCatalog(null).size, 0);
+});
+
+/** A timeline of one player (participantId 1, puuid P) with these events, Riot's TimelineDto shape. */
+const timeline = (events, participants = [{ participantId: 1, puuid: 'P' }]) => ({ metadata: {}, info: { participants, frames: [{ timestamp: 0, events }] } });
+const bought = (itemId, timestamp, participantId = 1) => ({ type: 'ITEM_PURCHASED', itemId, participantId, timestamp });
+const ids = (b) => b.purchases.map((p) => p.itemId);
+
+test('purchase order: an undo removes the latest earlier purchase of that item; sales change nothing', () => {
+  const b = h.playerBuild(timeline([
+    bought(1036, 70000), bought(1036, 80000),
+    { type: 'ITEM_UNDO', participantId: 1, timestamp: 81000, beforeId: 1036, afterId: 0, goldGain: 350 },
+    bought(3078, 900000),
+    { type: 'ITEM_SOLD', participantId: 1, itemId: 3078, timestamp: 950000 },
+    { type: 'ITEM_UNDO', participantId: 1, timestamp: 951000, beforeId: 0, afterId: 3078, goldGain: -2333 },
+    { type: 'ITEM_DESTROYED', participantId: 1, itemId: 1036, timestamp: 900000 },
+  ]), 'P', CATALOG);
+  assert.deepEqual(b.purchases, [{ itemId: 1036, t: 70000 }, { itemId: 3078, t: 900000 }], 'the second Long Sword was undone; the sold Trinity Force stays');
+  assert.deepEqual(b.items, [{ itemId: 3078, t: 900000 }]);
+});
+
+test("participantId 0 isn't a player, and only NORMAL level-ups count", () => {
+  const b = h.playerBuild(timeline([
+    bought(3865, 0, 0), bought(1055, 5000),
+    { type: 'SKILL_LEVEL_UP', participantId: 1, skillSlot: 1, levelUpType: 'NORMAL', timestamp: 1000 },
+    { type: 'SKILL_LEVEL_UP', participantId: 1, skillSlot: 2, levelUpType: 'EVOLVE', timestamp: 2000 },
+    { type: 'SKILL_LEVEL_UP', participantId: 1, skillSlot: 3, levelUpType: 'NORMAL', timestamp: 3000 },
+  ], [{ participantId: 0, puuid: 'P' }, { participantId: 1, puuid: 'P' }]), 'P', CATALOG);
+  assert.deepEqual(ids(b), [1055], 'not the 3865 bought by participantId 0');
+  assert.deepEqual(b.levelUps, [{ slot: 1, t: 1000 }, { slot: 3, t: 3000 }]);
+  assert.equal(b.skills, 'QE');
+  assert.equal(b.skillOrder, 'QEW', 'W never levelled ranks last');
+});
+
+test('the starter is cut at 60 s: two potions kept, the trinket dropped; a tag-less boots upgrade is boots', () => {
+  assert.equal(h.BUILD_STARTER_MS, 60000);
+  const b = h.playerBuild(timeline([bought(2003, 7000), bought(3340, 8000), bought(1055, 9000), bought(2003, 10000), bought(1001, 61000), bought(3172, 700000)]), 'P', CATALOG);
+  assert.deepEqual(b.starter, [1055, 2003, 2003]);
+  assert.equal(b.boots, 3172, 'Gunmetal Greaves, built from tagged boots; base Boots are not a choice');
+});
+
+test('skill order ranks by points, a tie going to the skill that got there first', () => {
+  const up = (skillSlot, timestamp) => ({ type: 'SKILL_LEVEL_UP', participantId: 1, skillSlot, levelUpType: 'NORMAL', timestamp });
+  const b = h.playerBuild(timeline([up(2, 1), up(1, 2), up(1, 3), up(2, 4), up(4, 5), up(3, 6)]), 'P', CATALOG);
+  assert.equal(b.skillOrder, 'QWE', 'Q and W both 2: Q reached 2 first');
+  assert.equal(b.skills, 'WQQWRE');
+});
+
+test('without item.json, purchases and skills are still worked out; starter, boots and items are null', () => {
+  const b = h.playerBuild(timeline([bought(1055, 5000), { type: 'SKILL_LEVEL_UP', participantId: 1, skillSlot: 1, levelUpType: 'NORMAL', timestamp: 1 }]), 'P', null);
+  assert.deepEqual([ids(b), b.skills, b.starter, b.boots, b.items], [[1055], 'Q', null, null, null]);
+});
+
+test('a strange timeline or an unknown player gives an empty build, never an error', () => {
+  const empty = { purchases: [], starter: [], boots: null, items: [], skills: '', skillOrder: null, levelUps: [] };
+  for (const t of [null, {}, { info: null }, { info: { participants: 'x', frames: 7 } }, { info: { participants: [{ participantId: 1, puuid: 'P' }], frames: [null, { events: [null, 3, {}] }] } }]) {
+    assert.deepEqual(h.playerBuild(t, 'P', CATALOG), empty, JSON.stringify(t));
+  }
+  assert.deepEqual(h.playerBuild(timeline([bought(1055, 1)]), 'someone else', CATALOG), empty);
+});
+
+test('the golden file: every player of OC1_711969250, as builds:extract works it out', () => {
+  const tl = BLD('OC1_711969250.timeline.json');
+  const expected = BLD('OC1_711969250.expected.json');
+  assert.equal(Object.keys(expected).length, 10);
+  for (const [puuid, want] of Object.entries(expected)) {
+    const b = h.playerBuild(tl, puuid, CATALOG);
+    assert.deepEqual({ starter: b.starter, boots: b.boots, items: b.items.map((x) => x.itemId), skills: b.skills, skillOrder: b.skillOrder }, want, puuid);
+  }
+});
+
+test('shop visits: purchases under 30 s apart are one visit', () => {
+  assert.equal(h.SHOP_VISIT_GAP_MS, 30000);
+  const p = (itemId, t) => ({ itemId, t });
+  assert.deepEqual(h.shopVisits([p(1055, 5000), p(2003, 6000), p(3340, 34999), p(1036, 65000), p(3078, 900000)]), [
+    { t: 5000, items: [1055, 2003, 3340] }, { t: 65000, items: [1036] }, { t: 900000, items: [3078] },
+  ]);
+  assert.deepEqual(h.shopVisits([]), []);
 });

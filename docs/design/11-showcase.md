@@ -43,7 +43,8 @@ It is in the page bar (design/10 §Page bar) as **Showcase**, right after Dev ex
 | | | `/v1/lol/mastery/by-puuid/{platform}/{puuid}` | every mastered champion and the point total, 12 shown until **Show all** (the profile carries only the top few) |
 | | | `/v1/lol/spectator/active/{platform}/{puuid}` | live-game banner: queue, time played, both teams' champions; nothing on a 404 (not in a game) |
 | `#/match/{region}/{matchId}` | DEV-08 | `/v1/lol/matches/{region}/{matchId}`, `…/timeline`, `/v1/static/item` | opened from a match card, on the region its match page named. Header (queue, date, duration, patch); a scoreboard per side (or per Arena subteam, by placement) with totals, bans, objectives, and per player champion with its level on the portrait, spells, keystone over secondary style, Riot ID (links to the player), KDA, CS, damage bar, gold, vision, items (in the match card's order); the player who opened it highlighted |
-| | | | gold-difference graph: blue side's `totalGold` minus red side's per timeline frame, sided by the match's `participantId` → `teamId`; one diverging line around 0, blue above and red below (validated for the dark surface), direct labels, a crosshair readout on hover or keyboard focus, and a table view. Only for two sides, 100 and 200; a failed timeline costs only the graph |
+| | | | gold-difference graph: blue side's `totalGold` minus red side's per timeline frame, sided by the match's `participantId` → `teamId`; one diverging line around 0, blue above and red below (validated for the dark surface), direct labels, a crosshair readout on hover or keyboard focus, and a table view. Only for two sides, 100 and 200; a failed timeline costs only the graph and the build card |
+| | BLD-04 | `…/timeline`, `/v1/static/item` | the **Build** card, between the gold graph and the teams: one player's build, worked out in the page from the timeline it already fetched (see [Builds — notes for a frontend](#builds--notes-for-a-frontend)). The ten champions as tabs, blue side then red; it opens on the player who opened the match, else blue side's first. Rows: starter, boots, skill order, finished items with their times; the skill grid; the shop visits |
 | `#/champion/{id}` | DEV-08, DEV-21, DEV-25 | `/v1/lol/analytics/patches?queue[&platform]&championId`, `/v1/lol/analytics/champions/{championId}?queue&patch&limit=10[&platform]`, `/v1/static/runes`, `/v1/static/item` | header with Solo/Duo · Flex tabs (shared with the ladder), a region picker (**All regions** or a platform; it starts on the platform picked above and leaves that one alone) and the patch picker (shared with home, **All patches** by default), which lists the patches this champion was played on with its own games (DEV-25), so a picked patch it lacks falls back to all; rates by tier, highest first and `UNKNOWN` (players no ladder crawl or rank lookup placed, ADR-105) last (games, win rate, pick and ban rate, KDA, CS/min, gold/min) with games and wins summed over tiers; builds: items by name, spell pairs, keystone + secondary style by icon and name, the fallback when there are no set builds |
 | | BLD-03 | `/v1/lol/analytics/champions/{championId}/builds?queue&patch[&platform]` | set builds (ADR-121): no `role`, so the route picks the champion's most-played role, named in the card's header with the build's share of the games that had a build. Up to 3 tabs, each labelled with its two core item icons, win rate and games. A tab has two plain rows: (1) keystone + secondary tree, spells, skill order `Q › W › E`, starter, boots, each the most played; (2) the path `item1 › item2 › 3rd › 4th › 5th`, each later step stacking its options with win rate and games. A part nobody chose shows `–`. With no builds (no timelines archived for the slice) or a failed call, the card shows the detail's three lists |
 | | | `/v1/lol/analytics/champions/{championId}/matchups?queue&patch&limit=200[&platform]` | every lane matchup, most games first, with lane tabs (the detail carries only the top few). No platform picked: every platform summed, as the route does |
@@ -59,7 +60,7 @@ flowchart LR
     H[Home: status · ladder · rotation · top champions]
     P[Player: profile · ranks · live · matches · pool · mastery]
     C[Champion: tiers · builds · matchups]
-    M[Match: scoreboard · gold graph]
+    M[Match: scoreboard · gold graph · build]
     D[[API calls drawer · source chips → /dev#explorer]]
     H & P & C & M --> D
   end
@@ -76,6 +77,33 @@ flowchart LR
   H -- "champion icon" --> C
   P -- "match card" --> M
 ```
+
+## Builds — notes for a frontend
+
+The showcase is what ninjagoldfinch.lol copies, so this is how its two build views are put together (BLD-03, BLD-04; ADR-117, ADR-121, ADR-122). Both use the definitions in IMPLEMENTATION.md §Post-release — BLD. The server's version is `src/archive/builds.rs` and the page's is `playerBuild` in `showcase.html`; both are held to `tests/fixtures/builds/*.expected.json`.
+
+**One player's build on the match page (BLD-04).** No route serves it: the page works it out from the two documents it already has.
+
+| Piece | From | How |
+|---|---|---|
+| the player | the timeline's `info.participants` | puuid → `participantId`; events with `participantId: 0` are not a player's |
+| purchase order | `ITEM_PURCHASED`, `ITEM_UNDO` | in time order; an undo with `afterId: 0` removes the latest earlier purchase of `beforeId`. Sales and their undos are ignored: a build is what was bought |
+| starter | purchase order, item.json | everything bought before 60 s except a trinket, sorted |
+| boots | purchase order, item.json | the first item tagged `Boots` other than base Boots (1001), or built from one (Gunmetal Greaves has no tag) |
+| finished items | purchase order, item.json | purchasable, builds into nothing, ≥ 1500 gold, not Boots, Consumable or Trinket; the first six, each with its time |
+| skill order | `SKILL_LEVEL_UP`, `levelUpType: NORMAL` only | Q, W and E by points at the end, a tie to the skill that got there first |
+| skill grid | the same level-ups | rows Q W E R, columns 1–18: the n-th level-up marks column n |
+| shop visits | purchase order | purchases less than 30 s apart are one visit (`SHOP_VISIT_GAP_MS`). This is a display choice, not Riot's: the timeline has no event for the shop opening |
+
+Layout: a card with the ten champions' portraits as tabs in its header, 28 px, or 22 px under 600 px so they stay on one line. Then three plain rows: (1) starter, boots, skill order `Q › W › E` and the finished items, each with its `mm:ss` underneath; (2) the skill grid, scrolling sideways on a phone; (3) the shop visits, each `mm:ss` then its items.
+
+Failure cases:
+- **The timeline fails:** the card shows the error, as the gold graph does. The tabs and the rest of the page still render.
+- **No item.json:** row 1 says item data is unavailable, since starter, boots and finished items can't be told apart without it. The grid and the shop visits still show, with every purchase.
+- **A player with no events** (a remake, say): "No build for this player."
+- **A timeline that doesn't parse:** an empty build, never an error.
+
+**Set builds on the champion page (BLD-03).** These come from the server, `GET /v1/lol/analytics/champions/{championId}/builds`, aggregated over archived timelines. Send no `role` and the route picks the champion's most-played one and names it. Show up to 3 tabs, each labelled with its two core items. If `builds` is empty or the call fails, fall back to the detail route's per-item, rune and spell lists.
 
 ## The coverage rule
 
