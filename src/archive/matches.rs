@@ -166,6 +166,24 @@ pub async fn get_many(
     db: &Db,
     match_ids: &[String],
 ) -> Result<std::collections::HashMap<String, Bytes>, ArchiveError> {
+    bodies(db, "matches", match_ids).await
+}
+
+/// The archived timelines among `match_ids`, by id, as [`get_many`] reads
+/// match bodies (`builds:extract`, BLD-01).
+pub async fn get_timelines(
+    db: &Db,
+    match_ids: &[String],
+) -> Result<std::collections::HashMap<String, Bytes>, ArchiveError> {
+    bodies(db, "timelines", match_ids).await
+}
+
+/// `match_id, body_zstd` rows of `table` (`matches` or `timelines`), decompressed.
+async fn bodies(
+    db: &Db,
+    table: &'static str,
+    match_ids: &[String],
+) -> Result<std::collections::HashMap<String, Bytes>, ArchiveError> {
     if match_ids.is_empty() {
         return Ok(std::collections::HashMap::new());
     }
@@ -175,7 +193,7 @@ pub async fn get_many(
         for chunk in ids.chunks(FILTER_CHUNK) {
             let marks = vec!["?"; chunk.len()].join(",");
             let mut stmt = conn.prepare(&format!(
-                "SELECT match_id, body_zstd FROM matches WHERE match_id IN ({marks})"
+                "SELECT match_id, body_zstd FROM {table} WHERE match_id IN ({marks})"
             ))?;
             let rows = stmt.query_map(params_from_iter(chunk), |r| {
                 Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))
