@@ -153,15 +153,20 @@ test('the job queue panel is folded and lists what is running and what the worke
   const p = await page();
   try {
     assert.equal(p.$('#queueFold').open, false);
-    assert.ok(p.calls.includes('/v1/admin/jobs/queue?limit=15'));
-    assert.match(p.text('#queueMeta'), /^2 running · 2 ready · 3 waiting out a backoff · next due in 1m \d+s$/);
+    assert.ok(p.calls.includes('/v1/admin/jobs/queue?limit=100'));
+    assert.match(p.text('#queueMeta'), /^3 running · 5 ready · 3 waiting out a backoff · next due in 1m \d+s$/);
     const rows = (sel) => [...p.w.document.querySelectorAll(`${sel} li`)].map((li) => [...li.children].map((c) => c.textContent));
-    assert.deepEqual(rows('#queueRunning').map((r) => r.slice(0, 2)), [
-      ['ladder:collect', 'match ids for players 1,250–1,274 · oc1'],
-      ['archive:match', 'match OC1_700001'],
+    assert.deepEqual(rows('#queueRunning'), [
+      ['ladder:collect', 'match ids for 2 batches · players 825–1,274 · oc1', 'oldest started 3m ago'],
+      ['archive:match', 'match OC1_700001', 'started just now'],
     ]);
-    assert.deepEqual(rows('#queueNext'), [['archive:match', 'match OC1_700002', 'ready'], ['ladder:collect', 'match ids for players 1,275–1,299 · oc1', 'ready']]);
+    assert.deepEqual(rows('#queueNext'), [
+      ['archive:match', 'match OC1_700002', 'ready'],
+      ['ladder:collect', 'match ids for 3 batches · players 1,275–1,616 · oc1', 'ready · try 2'],
+      ['ladder:collect', 'match ids for players 25–49 · kr', 'ready'],
+    ]);
     assert.equal(p.$('#queueNext li').title, 'archive:match · priority 100', 'priority in the tooltip');
+    assert.equal(p.$('#queueNext li[data-count="3"]').title, 'ladder:collect · priority 20,003');
   } finally { p.close(); }
 });
 

@@ -1591,8 +1591,8 @@
         return due > 1000 ? `due in ${fmtDuration(due / 1000)}` : 'ready';
       }
 
-      /** `withKind`: the queue mixes kinds, so it shows them; a crawl's own list does not. */
-      function jobList(jobs, empty, withKind = false) {
+      /** A crawl's own jobs, one row each; the queue panel groups its own (groupList). */
+      function jobList(jobs, empty) {
         if (!jobs.length) return `<p class="meta">${empty}</p>`;
         return (
           '<ul class="jobs">' +
@@ -1602,13 +1602,80 @@
               // line is what the job does; a failure's error gets a line of its own.
               (j) =>
                 `<li class="${j.error ? 'fail' : ''}" title="${esc(`${j.kind} · priority ${fmt(j.priority)}`)}">` +
-                (withKind ? `<span class="kind">${esc(j.kind)}</span>` : '') +
                 `<span class="what">${esc(jobLabel(j))}</span>` +
                 (j.error
                   ? `<span class="dim">try ${j.attempts}</span><span class="err" title="${esc(j.error)}">${esc(j.error)}</span>`
                   : `<span class="dim">${esc(jobWhen(j))}${j.attempts > 1 ? ` · try ${j.attempts}` : ''}</span>`) +
                 '</li>',
             )
+            .join('') +
+          '</ul>'
+        );
+      }
+
+      /**
+       * The queue panel's lists, one row per kind and platform in the order
+       * each first appears: a crawl queues thousands of alike jobs, and a row
+       * each says nothing a count does not.
+       */
+      function groupJobs(jobs) {
+        const groups = new Map();
+        for (const j of jobs) {
+          const k = `${j.kind}\u0000${(j.payload && j.payload.platform) || ''}`;
+          if (!groups.has(k)) groups.set(k, []);
+          groups.get(k).push(j);
+        }
+        return [...groups.values()];
+      }
+
+      /** A group of alike jobs as a person would name it; one job keeps its own name. */
+      function groupLabel(js) {
+        if (js.length === 1) return jobLabel(js[0]);
+        const p = js[0].payload || {};
+        const n = fmt(js.length);
+        switch (js[0].kind) {
+          case 'ladder:collect': {
+            const from = Math.min(...js.map((j) => j.payload.offset));
+            const to = Math.max(...js.map((j) => j.payload.offset + (j.payload.puuids || []).length - 1));
+            return `match ids for ${n} batches · players ${fmt(from)}–${fmt(to)} · ${p.platform}`;
+          }
+          case 'archive:match':
+            return `${n} matches · ${js[0].payload.matchId} …`;
+          case 'backfill:player':
+            return `history of ${n} players · ${p.platform}`;
+          default:
+            return `${n} jobs · ${jobLabel(js[0])} …`;
+        }
+      }
+
+      /** Running: the oldest claim. Pending: ready, or when the first comes due. */
+      function groupWhen(js) {
+        if (js.length === 1) return jobWhen(js[0]);
+        if (js[0].state === 'running') {
+          return 'oldest started ' + relTime(js.reduce((a, j) => (j.claimedAt < a ? j.claimedAt : a), js[0].claimedAt));
+        }
+        return js.every((j) => jobWhen(j) === 'ready') ? 'ready' : jobWhen(js[0]);
+      }
+
+      function groupList(jobs, empty) {
+        if (!jobs.length) return `<p class="meta">${empty}</p>`;
+        return (
+          '<ul class="jobs">' +
+          groupJobs(jobs)
+            .map((js) => {
+              const pr = js.map((j) => j.priority);
+              const lo = Math.min(...pr);
+              const hi = Math.max(...pr);
+              const tip = `${js[0].kind} · priority ${fmt(lo)}${hi > lo ? `–${fmt(hi)}` : ''}`;
+              const tries = Math.max(...js.map((j) => j.attempts || 0));
+              return (
+                `<li title="${esc(tip)}"${js.length > 1 ? ` data-count="${js.length}"` : ''}>` +
+                `<span class="kind">${esc(js[0].kind)}</span>` +
+                `<span class="what">${esc(groupLabel(js))}</span>` +
+                `<span class="dim">${esc(groupWhen(js))}${tries > 1 ? ` · try ${tries}` : ''}</span>` +
+                '</li>'
+              );
+            })
             .join('') +
           '</ul>'
         );
@@ -1740,17 +1807,20 @@
         }
       }
 
+      /** Grouped, the next 100 jobs fit in a few rows. */
+      const QUEUE_ROWS = 100;
+
       function renderQueue(q) {
         const wait = q.nextDelayedAt ? (new Date(q.nextDelayedAt) - Date.now()) / 1000 : null;
         const due = wait == null ? '' : ` · next due ${wait > 1 ? 'in ' + fmtDuration(wait) : 'now'}`;
         $('queueMeta').textContent =
           `${fmt(q.running.length)} running · ${fmt(q.ready)} ready · ${fmt(q.delayed)} waiting out a backoff${due}`;
-        $('queueRunning').innerHTML = jobList(q.running, 'Nothing running.', true);
-        $('queueNext').innerHTML = jobList(q.next, 'Nothing ready.', true);
+        $('queueRunning').innerHTML = groupList(q.running, 'Nothing running.');
+        $('queueNext').innerHTML = groupList(q.next, 'Nothing ready.');
       }
 
       async function fetchQueue() {
-        const res = await adminFetch('/v1/admin/jobs/queue?limit=15');
+        const res = await adminFetch(`/v1/admin/jobs/queue?limit=${QUEUE_ROWS}`);
         if (!res || !res.ok) return;
         renderQueue(await res.json());
       }

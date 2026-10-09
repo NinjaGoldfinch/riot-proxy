@@ -54,10 +54,21 @@ const ACTIVITY = {
     downloads: { platform: 'oc1', ready: 0, delayed: 0, running: 0, failed: 0, recent: 0, etaSeconds: null },
   },
 };
+// Alike jobs (kind and platform) share a row in the panel, wherever they sit in the list.
 const QUEUE = {
-  running: [collect(1250, 'running'), job('archive:match', 'running', { matchId: 'OC1_700001' }, { priority: 100 })],
-  next: [job('archive:match', 'pending', { matchId: 'OC1_700002' }, { priority: 100 }), collect(1275, 'pending')],
-  ready: 2, delayed: 3, nextDelayedAt: soon(90_000),
+  running: [
+    collect(1250, 'running'),
+    job('archive:match', 'running', { matchId: 'OC1_700001' }, { priority: 100 }),
+    collect(825, 'running', { claimedAt: ago(180_000) }),
+  ],
+  next: [
+    job('archive:match', 'pending', { matchId: 'OC1_700002' }, { priority: 100 }),
+    collect(1275, 'pending'),
+    collect(1600, 'pending', { payload: { crawlId: RUNNING, platform: 'oc1', queue: 'RANKED_SOLO_5x5', offset: 1600, puuids: Array(17).fill('p') } }),
+    collect(1375, 'pending', { attempts: 2 }),
+    collect(25, 'pending', { payload: { crawlId: RUNNING, platform: 'kr', queue: 'RANKED_SOLO_5x5', offset: 25, puuids: Array(25).fill('p') } }),
+  ],
+  ready: 5, delayed: 3, nextDelayedAt: soon(90_000),
 };
 
 // `GET /v1/admin/ladder/options`, trimmed to two platforms.
