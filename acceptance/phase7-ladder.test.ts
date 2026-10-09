@@ -293,6 +293,8 @@ describe.skipIf(!enabled)('Phase 7 — the ladder crawl, live', () => {
       // Every table the job is now responsible for reports a count, even if
       // the count is zero. A missing key is a step that never ran.
       expect(Object.keys(runs.rows).sort()).toEqual([
+        'champion_build_parts',
+        'champion_builds',
         'champion_items',
         'champion_matchups',
         'champion_runes',
