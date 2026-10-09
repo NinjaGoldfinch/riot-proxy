@@ -401,10 +401,10 @@ test('the champion view: rates by tier, builds with names, and the calls it make
   assert.ok(p.calls.includes('/v1/lol/analytics/champions/1?queue=RANKED_SOLO_5x5&patch=all&limit=10&platform=oc1'));
   assert.ok(p.calls.includes('/v1/lol/analytics/champions/1/matchups?queue=RANKED_SOLO_5x5&patch=all&limit=200&platform=oc1'));
   assert.ok(p.text('#cHead').includes('Annie') && p.text('#cHead').includes('the Dark Child'));
-  assert.ok(p.text('#cMeta').includes('all patches · 40 games'));
+  assert.ok(p.text('#cMeta').includes('all patches · 60 games'));
   const tiers = [...p.w.document.querySelectorAll('#cTiers tbody tr')].map((r) => r.cells[0].textContent);
-  assert.deepEqual(tiers, ['CHALLENGER', 'GOLD'], 'highest tier first');
-  assert.ok(p.text('#cTiers').includes('55.0% win over 40 games'), 'summed over tiers');
+  assert.deepEqual(tiers, ['CHALLENGER', 'GOLD', 'UNKNOWN'], 'highest tier first, UNKNOWN last');
+  assert.ok(p.text('#cTiers').includes('55.0% win over 60 games'), 'summed over tiers');
   const gold = p.w.document.querySelectorAll('#cTiers tbody tr')[1].textContent.replace(/\s+/g, ' ');
   for (const bit of ['30', '50.0%', '5.0%', '1.0%', '2.50', '6.1', '402']) assert.ok(gold.includes(bit), bit);
   const build = p.text('#cBuild');
@@ -460,7 +460,7 @@ test('the champion view reads every patch by default; the patch and region picke
   const p = await page({ hash: '#/champion/1' });
   assert.ok(p.calls.includes('/v1/lol/analytics/patches?queue=RANKED_SOLO_5x5&platform=oc1&championId=1'));
   const opts = (sel) => [...p.$(sel).options].map((o) => [o.value, o.textContent]);
-  assert.deepEqual(opts('#cHead [data-patch]'), [['all', 'All patches · 40 games'], ['16.19', '16.19 · 3 games'], ['16.18', '16.18 · 37 games']], "the champion's games, not the ladder's");
+  assert.deepEqual(opts('#cHead [data-patch]'), [['all', 'All patches · 60 games'], ['16.19', '16.19 · 3 games'], ['16.18', '16.18 · 57 games']], "the champion's games, not the ladder's");
   assert.deepEqual(opts('#cHead [data-region]'), [['', 'All regions'], ['oc1', 'Oceania'], ['kr', 'Korea']]);
   assert.equal(p.$('#cHead [data-region]').value, 'oc1', 'follows the platform picked above');
   const pick = async (sel, value) => { const el = p.$(sel); el.value = value; el.dispatchEvent(new p.w.Event('change', { bubbles: true })); await p.settle(); };

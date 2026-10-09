@@ -798,3 +798,52 @@ async fn the_players_routes_need_a_read_key() {
     let r = common::get(e.router.clone(), &page("")).await;
     assert_eq!(r.status, StatusCode::UNAUTHORIZED);
 }
+
+// ── Analytics from a lookup (ADR-105) ───────────────────────────────────────
+
+/// A profile lookup records the player's rank, and a rebuild then counts their
+/// archived games at that tier, though no ladder crawl has seen them; the
+/// other nine players of each game count under UNKNOWN.
+#[tokio::test]
+async fn a_looked_up_players_games_count_in_analytics_at_their_rank() {
+    use riot_proxy::archive::analytics::{Scope, rebuild_champions};
+
+    let e = env(&[]).await;
+    assert_eq!(e.get(PROFILE).await.status, StatusCode::OK);
+    assert_eq!(e.get(&page("&count=5")).await.status, StatusCode::OK);
+    let scope = e.state.fetcher.key_scope().as_str().to_string();
+    let tiers = e
+        .state
+        .db
+        .write(move |c| {
+            let ranks: Vec<String> = c
+                .prepare(
+                    "SELECT platform || ' ' || queue || ' ' || tier || ' ' || division || ' ' || league_points
+                       FROM player_ranks WHERE puuid = ?1",
+                )?
+                .query_map([PUUID], |r| r.get(0))?
+                .collect::<Result<_, _>>()?;
+            assert_eq!(ranks, ["kr RANKED_SOLO_5x5 CHALLENGER I 2178"]);
+            let s = Scope {
+                key_scope: scope,
+                platform: "kr".into(),
+                queue: "RANKED_SOLO_5x5".into(),
+                queue_id: 420,
+                patches: None,
+                now: 1,
+            };
+            rebuild_champions(c, &s)?;
+            let tiers: Vec<(String, i64)> = c
+                .prepare("SELECT tier, sum(games) FROM champion_stats GROUP BY tier ORDER BY tier")?
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<Result<_, _>>()?;
+            Ok::<_, riot_proxy::db::DbError>(tiers)
+        })
+        .await
+        .unwrap();
+    // Three of the five games are solo queue (420); the other two are not.
+    assert_eq!(
+        tiers,
+        [("CHALLENGER".to_string(), 3), ("UNKNOWN".to_string(), 27)]
+    );
+}

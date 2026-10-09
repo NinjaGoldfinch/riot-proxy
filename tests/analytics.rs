@@ -294,6 +294,11 @@ async fn the_recompute_feeds_v1s_routes_and_remakes_are_opt_in() {
         e.get("/v1/lol/analytics/champions?tier=IRON").await.json()["champions"],
         json!([])
     );
+    // UNKNOWN, players no ladder or lookup placed, is a tier a read can ask for (ADR-105).
+    assert_eq!(
+        e.get("/v1/lol/analytics/champions?tier=UNKNOWN").await.status,
+        StatusCode::OK
+    );
     assert_eq!(
         e.get("/v1/lol/analytics/champions?minGames=2").await.json()["champions"],
         json!([])

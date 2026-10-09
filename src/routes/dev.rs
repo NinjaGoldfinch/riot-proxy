@@ -44,6 +44,7 @@ pub const WIPED: &[&str] = &[
     "crawl_match_ids",
     "ladder_entries",
     "ladder_crawls",
+    "player_ranks",
     "matches",
     "players",
     "champion_stats",

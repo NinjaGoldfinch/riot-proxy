@@ -142,6 +142,8 @@ CREATE INDEX facts_champ  ON match_facts(champion_id);
 -- Analytics (recomputed; safe to TRUNCATE) ── v1's shape, ADR-056 ───────────
 -- Every table is keyed by (key_scope, platform, queue, …, patch) and carries
 -- remake (0/1) as a key, so a read excludes remakes (default) or sums both.
+-- Every participant of the platform's archived matches counts (ADR-105), at
+-- the newer of its ladder_entries and player_ranks tier, else 'UNKNOWN'.
 CREATE TABLE analytics_slices (                   -- distinct matches per tier: pick/ban-rate denominator
   key_scope, platform, queue, tier, patch, remake, matches, computed_at,
   PRIMARY KEY (key_scope, platform, queue, tier, patch, remake)
@@ -187,6 +189,11 @@ CREATE TABLE crawl_match_ids (                    -- the "collect" set
   crawl_id TEXT REFERENCES ladder_crawls(id) ON DELETE CASCADE,
   match_id TEXT, PRIMARY KEY (crawl_id, match_id)
 );
+CREATE TABLE player_ranks (                       -- every league.entriesByPuuid read from Riot (ADR-105)
+  key_scope TEXT, platform TEXT, queue TEXT, puuid TEXT,   -- queue: league-v4 queueType
+  tier TEXT, division TEXT, league_points INTEGER, fetched_at INTEGER,
+  PRIMARY KEY (key_scope, platform, queue, puuid)
+);                                                -- a lookup replaces the player's rows on that platform
 
 -- Operational ───────────────────────────────────────────────────────────────
 CREATE TABLE cache (                              -- L2, expensive tiers only
