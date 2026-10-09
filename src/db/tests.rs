@@ -511,3 +511,62 @@ async fn one_running_crawl_per_ladder_and_its_state_cascades() {
         .expect("write");
     assert_eq!((second_live, after_finish, legs), (false, true, 0));
 }
+
+/// `jobs` rows and the `sqlite_stat1` row count for `jobs_lane_claim`.
+fn add_jobs(c: &Connection, from: usize, to: usize) -> rusqlite::Result<()> {
+    for i in from..to {
+        c.execute(
+            "INSERT INTO jobs (id, kind, priority, payload, state, run_after) VALUES (?1, 'poll:live', 1, '{}', 'pending', 0)",
+            [format!("j{i}")],
+        )?;
+    }
+    Ok(())
+}
+
+fn analysed_rows(c: &Connection) -> rusqlite::Result<Option<i64>> {
+    c.query_row(
+        "SELECT CAST(stat AS INTEGER) FROM sqlite_stat1 WHERE tbl = 'jobs' AND idx = 'jobs_lane_claim'",
+        [],
+        |r| r.get(0),
+    )
+    .optional()
+}
+
+#[tokio::test]
+async fn opening_analyses_tables_that_have_rows_but_no_statistics() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("riot-proxy.db");
+    let db = Db::open(&path, 1).expect("open");
+    db.write(|c| {
+        add_jobs(c, 0, 200)?;
+        // Opened empty, so nothing to analyse in `jobs` yet.
+        assert_eq!(analysed_rows(c)?, None);
+        Ok::<_, DbError>(())
+    })
+    .await
+    .expect("seed");
+    drop(db);
+    let db = Db::open(&path, 1).expect("reopen");
+    // ADR-102: the reopen analysed `jobs`, and a reader sees it.
+    let rows = db
+        .read(|c| Ok::<_, DbError>(analysed_rows(c)?))
+        .await
+        .expect("read");
+    assert_eq!(rows, Some(200));
+}
+
+#[tokio::test]
+async fn optimize_reanalyses_a_table_that_grew_tenfold() {
+    let (_dir, db) = open_temp(1);
+    let rows = |from, to| {
+        db.write(move |c| {
+            add_jobs(c, from, to)?;
+            optimize(c)?;
+            Ok::<_, DbError>(analysed_rows(c)?)
+        })
+    };
+    assert_eq!(rows(0, 100).await.expect("first"), Some(100));
+    // Doubling is within SQLite's margin: the statistics stand.
+    assert_eq!(rows(100, 200).await.expect("double"), Some(100));
+    assert_eq!(rows(200, 1_000).await.expect("tenfold"), Some(1_000));
+}

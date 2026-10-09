@@ -98,6 +98,7 @@ impl Db {
         apply_pragmas(&writer, WRITER_PRAGMAS)?;
         apply_pragmas(&writer, CONNECTION_PRAGMAS)?;
         migrate(&mut writer)?;
+        optimize(&writer)?;
 
         let readers = readers.max(1);
         let pool = (0..readers)
@@ -192,6 +193,21 @@ impl Db {
             .push(conn);
         result.unwrap_or_else(|_| Err(DbError::ReaderPanicked.into()))
     }
+
+    /// [`optimize`] on the writer.
+    pub async fn optimize(&self) -> Result<(), DbError> {
+        self.write(|c| optimize(c)).await
+    }
+}
+
+/// Bring the query planner's statistics up to date (ADR-102): `ANALYZE` each
+/// table that was never analysed or has grown about tenfold since, within the
+/// time limit SQLite sets itself. Run on the writer at open, before each
+/// analytics rebuild and by the daily `maintenance`. Readers load the new
+/// statistics on their next read.
+pub fn optimize(conn: &Connection) -> Result<(), DbError> {
+    conn.execute_batch("PRAGMA optimize = 0x10002")?;
+    Ok(())
 }
 
 fn open_reader(path: &Path) -> Result<Connection, DbError> {

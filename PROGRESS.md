@@ -229,6 +229,7 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 - [x] DEV-24 the showcase and the `/dev` explorer revalidate every call (`cache: 'no-cache'`), so a recompute shows at once instead of after the analytics routes' `max-age=300` (#119, design/10, design/11, ADR-099)
 - [x] DEV-25 the champion page's patch picker counts that champion's games: `GET /v1/lol/analytics/patches` takes `championId` and then lists only the patches it was played on, with its games (#120, design/11, ADR-100)
 - [x] DEV-26 the matchups rebuild reads each laned fact once (lane head count from a window), so SQLite no longer loops over the whole ladder for every fact: an oc1 recompute's matchups step took 43.8 s (#121, ADR-101)
+- [x] DEV-27 the writer keeps the planner's statistics fresh: `PRAGMA optimize` at open, before each analytics rebuild and in the daily maintenance (#123, design/04, design/06, ADR-102)
 
 ## SCH — scheduler fairness and an elastic pool (owner requests 2026-10-08/09)
 - [x] SCH-01 rate-limit-aware job claims: one lane per limiter scope plus the job's main endpoint, claims skip a region only when its app limit is full (a capped endpoint blocks only jobs that use it), spread over free regions, rate-limited jobs yield their worker and re-queue without using an attempt (IMPLEMENTATION.md §Post-release — SCH) (#107, ADR-089)
@@ -258,6 +259,11 @@ The site's backfill question (item 3) needs no task: the unbounded lookup backfi
 - [ ] SITE-03 `gameVersion` described as the game build, plus `ddragonVersion` (IMPLEMENTATION.md §Post-release — SITE)
 - [ ] SITE-04 declare response headers in the OpenAPI document; document the image mirror and the backfill limit (IMPLEMENTATION.md §Post-release — SITE)
 - [ ] SITE-05 partial schemas for Riot's account, summoner, league and mastery payloads (IMPLEMENTATION.md §Post-release — SITE)
+
+## BLD — set builds on the champion page (owner request 2026-10-09)
+- [ ] BLD-01 per-player build facts from the timeline: `match_builds` (purchase order minus undos, finished items, boots, starter, skill order) filled by `builds:extract` before each recompute (IMPLEMENTATION.md §Post-release — BLD)
+- [ ] BLD-02 aggregate set builds: `champion_builds` keyed by the first two finished items, with `champion_build_parts` for the 3rd–5th items, starter, boots, skill order, runes and spells (IMPLEMENTATION.md §Post-release — BLD)
+- [ ] BLD-03 `GET /v1/lol/analytics/champions/{championId}/builds` and the showcase's build tabs, with today's lists as the fallback (IMPLEMENTATION.md §Post-release — BLD)
 
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
