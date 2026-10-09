@@ -282,7 +282,7 @@ The site's backfill question (item 3) needs no task: the unbounded lookup backfi
 - [x] INC-03 `riot-proxy-update` waits for the new container to turn healthy and otherwise rolls back to `riot-proxy:previous`, naming both revisions (#138, ADR-115)
 
 ## TL — a match and its timeline archived together (owner request 2026-10-10)
-- [ ] TL-01 whatever stores a match queues its timeline, and a timeline its match, as a priority-0 `archive:match`; timelines no longer need their match first (V0013); a boot catch-up queues the archive's missing halves (ADR-118)
+- [x] TL-01 whatever stores a match queues its timeline, and a timeline its match, as a priority-0 `archive:match`; timelines no longer need their match first (V0013); a boot catch-up queues the archive's missing halves (#144, ADR-118)
 
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
