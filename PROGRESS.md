@@ -251,6 +251,14 @@ Baseline before THR-06a (one kr crawl to MASTER on the dev VM): not yet recorded
 - [ ] LAD-02 find the Master players the cap leaves out: a `discover` stage that looks up the ranks of archived match participants not on the ladder (IMPLEMENTATION.md §Post-release — LAD)
 - [x] LAD-03 re-run the cap checks from `/dev`: `POST /v1/admin/ladder/probe` checks `masterleagues` against `RIOT_APEX_LIST_CAP`, pages league-exp-v4 (`league.expEntries`, new in the registry) and compares the two, and checks that the paged route refuses MASTER. Each check is confirmed / not-seen / changed / error, shown on a new Ladder tab on `/dev` (#114, design/10, ADR-095)
 
+## SITE — requests from ninjagoldfinch.lol (owner request 2026-10-09)
+The site's backfill question (item 3) needs no task: the unbounded lookup backfill stays (ADR-081, owner confirmed 2026-10-09); SITE-04 documents it.
+- [ ] SITE-01 report when each part was last fetched from Riot: `fetchedAgeSeconds` on the profile, `matchIdsFetchedAgeSeconds` on the match page, `X-Cache-Fetched-Age` (IMPLEMENTATION.md §Post-release — SITE)
+- [ ] SITE-02 `champion` filter on the match page, from the archive, with `archive.complete` (IMPLEMENTATION.md §Post-release — SITE)
+- [ ] SITE-03 `gameVersion` described as the game build, plus `ddragonVersion` (IMPLEMENTATION.md §Post-release — SITE)
+- [ ] SITE-04 declare response headers in the OpenAPI document; document the image mirror and the backfill limit (IMPLEMENTATION.md §Post-release — SITE)
+- [ ] SITE-05 partial schemas for Riot's account, summoner, league and mastery payloads (IMPLEMENTATION.md §Post-release — SITE)
+
 ## BLD — set builds on the champion page (owner request 2026-10-09)
 - [ ] BLD-01 per-player build facts from the timeline: `match_builds` (purchase order minus undos, finished items, boots, starter, skill order) filled by `builds:extract` before each recompute (IMPLEMENTATION.md §Post-release — BLD)
 - [ ] BLD-02 aggregate set builds: `champion_builds` keyed by the first two finished items, with `champion_build_parts` for the 3rd–5th items, starter, boots, skill order, runes and spells (IMPLEMENTATION.md §Post-release — BLD)
