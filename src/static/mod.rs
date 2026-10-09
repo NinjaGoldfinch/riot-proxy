@@ -69,6 +69,24 @@ pub fn compare_versions(a: &str, b: &str) -> Ordering {
         .unwrap_or(Ordering::Equal)
 }
 
+/// The Data Dragon version for a match's game build (SITE-03): the newest of
+/// `versions` (Riot's `versions.json`, newest first) with the build's
+/// `major.minor`, as the archive derives `matches.patch`. `16.20.824.8524` →
+/// `16.20.1`. `None` for a malformed build or a patch the list lacks.
+pub fn ddragon_version_for(build: &str, versions: &[String]) -> Option<String> {
+    let mut parts = build.split('.');
+    let (major, minor) = (parts.next()?, parts.next()?);
+    if major.is_empty() || minor.is_empty() || !is_version(major) || !is_version(minor) {
+        return None;
+    }
+    let prefix = format!("{major}.{minor}.");
+    versions
+        .iter()
+        .filter(|v| v.starts_with(&prefix) && is_version(v))
+        .max_by(|a, b| compare_versions(a, b))
+        .cloned()
+}
+
 /// The data file a `/v1/static/{file}` name refers to, if any.
 pub fn resolve_file(name: &str) -> Option<&'static str> {
     DATA_FILES.iter().find(|f| **f == name).copied().or_else(|| {
@@ -89,6 +107,8 @@ pub struct Mirror {
     cdn: Cdn,
     current: RwLock<Option<String>>,
     champions: Mutex<Option<ChampionNames>>,
+    /// Riot's version list as the current patch mirrored it, parsed once.
+    versions: Mutex<Option<(String, Arc<Vec<String>>)>>,
     /// The image file names each (patch, kind) allows (`images`).
     image_names: images::Names,
     /// One fill per image path at a time (`images`).
@@ -104,6 +124,7 @@ impl Mirror {
             cdn,
             current: RwLock::new(None),
             champions: Mutex::new(None),
+            versions: Mutex::new(None),
             image_names: Mutex::default(),
             filling: tokio::sync::Mutex::default(),
             syncing: tokio::sync::Mutex::new(()),
@@ -183,6 +204,29 @@ impl Mirror {
             return None;
         }
         tokio::fs::read(self.path(&version, file)).await.ok()
+    }
+
+    /// Riot's version list from the current patch's `versions.json`, newest
+    /// first; empty before the first sync.
+    pub async fn versions(&self) -> Arc<Vec<String>> {
+        let Some(current) = self.current_version().await else {
+            return Arc::default();
+        };
+        if let Some((v, list)) = self.versions.lock().ok().and_then(|g| g.clone())
+            && v == current
+        {
+            return list;
+        }
+        let list: Arc<Vec<String>> = Arc::new(
+            self.read(VERSIONS_FILE, Some(&current))
+                .await
+                .and_then(|b| serde_json::from_slice(&b).ok())
+                .unwrap_or_default(),
+        );
+        if let Ok(mut g) = self.versions.lock() {
+            *g = Some((current, Arc::clone(&list)));
+        }
+        list
     }
 
     /// An un-versioned file's bytes, or `None` when it never synced.

@@ -699,6 +699,7 @@ async fn match_page(
     .await;
     let mut fetched: HashMap<String, Result<FetchResult, FetchError>> = fetched.into_iter().collect();
 
+    let versions = state.ddragon.versions().await;
     let mut summaries = Vec::with_capacity(match_ids.len());
     for m in &match_ids {
         let body = if let Some(b) = archived.get(m) {
@@ -722,7 +723,13 @@ async fn match_page(
             }
         };
         match summary::summarise(&body, &puuid, m) {
-            Some(s) => summaries.push(s),
+            Some(mut s) => {
+                s.ddragon_version = s
+                    .game_version
+                    .as_deref()
+                    .and_then(|b| crate::r#static::ddragon_version_for(b, &versions));
+                summaries.push(s);
+            }
             None => warnings.push(format!("match {m} unavailable (no participant for this player)")),
         }
     }
