@@ -270,7 +270,7 @@ The site's backfill question (item 3) needs no task: the unbounded lookup backfi
 ## BLD — set builds on the champion page (owner request 2026-10-09)
 - [x] BLD-01 per-player build facts from the timeline: `match_builds` (purchase order minus undos, finished items, boots, starter, skill order) filled by `builds:extract` before each recompute (#142, ADR-117)
 - [x] BLD-02 aggregate set builds: `champion_builds` keyed by the first two finished items, with `champion_build_parts` for the 3rd–5th items, starter, boots, skill order, runes and spells; only players with 2+ finished items count; `analytics::builds` / `build_parts` read them (#145, ADR-120)
-- [ ] BLD-03 `GET /v1/lol/analytics/champions/{championId}/builds` and the showcase's build tabs, with today's lists as the fallback (IMPLEMENTATION.md §Post-release — BLD)
+- [x] BLD-03 `GET /v1/lol/analytics/champions/{championId}/builds` (the most-played role without `role`, 3 options a step) and the showcase's build tabs, with today's lists as the fallback (#146, design/11, ADR-121)
 - [ ] BLD-04 one player's build on the match page (starter, boots, finished items with times, skill grid, shop visits), worked out in the browser from the timeline; design/11 gets notes for a frontend (IMPLEMENTATION.md §Post-release — BLD)
 
 ## MU — matchups worth reading (owner request 2026-10-09)
