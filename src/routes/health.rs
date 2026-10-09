@@ -46,7 +46,8 @@ async fn healthz() -> Json<Health> {
 
 /// v1 returned `{ok, redis, postgres, keyScope}`. v2 has one store, so `sqlite` replaces
 /// the two backend booleans, and `limiter` says the checkpoint was restored
-/// (design/07). `keyScope` is v1's (ADR-011).
+/// (design/07). `keyScope` is v1's (ADR-011). `sqliteReaders`/`sqliteReadersFree`
+/// show the read pool, so a leak shows before reads fail (ADR-113).
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Ready {
@@ -54,6 +55,11 @@ pub struct Ready {
     pub sqlite: bool,
     pub limiter: bool,
     pub key_scope: String,
+    /// SQLite read connections in the pool.
+    pub sqlite_readers: usize,
+    /// Of those, how many are idle now. Informational: 0 under load is normal and
+    /// doesn't make the probe fail.
+    pub sqlite_readers_free: usize,
 }
 
 /// Readiness: the writer thread is alive and can take SQLite's write lock, and the
@@ -65,7 +71,8 @@ pub struct Ready {
     tag = "ops",
     summary = "Readiness",
     description = "SQLite can take a write and the limiter checkpoint is restored. **The 503 carries the \
-                   same body as the 200**, so the booleans name what is not ready.",
+                   same body as the 200**, so the booleans name what is not ready. `sqliteReadersFree` \
+                   counts the idle read connections; it doesn't affect `ok`.",
     security(()),
     responses(
         (status = 200, description = "Ready", body = Ready),
@@ -92,6 +99,8 @@ async fn readyz(State(state): State<AppState>) -> (StatusCode, Json<Ready>) {
             sqlite,
             limiter,
             key_scope: KeyScope::from_key(&state.config.riot_api_key).to_string(),
+            sqlite_readers: state.db.readers(),
+            sqlite_readers_free: state.db.readers_free(),
         }),
     )
 }

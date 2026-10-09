@@ -53,7 +53,7 @@ PRAGMA wal_autocheckpoint = 1000;
 Connection policy:
 
 - **One writer connection** on a dedicated thread. All `INSERT/UPDATE/DELETE` go through an `mpsc` channel of closures — serialised by construction, so there is never a `SQLITE_BUSY` on write.
-- **Reader pool** of `n_cores` connections for the HTTP path. WAL means they see a consistent snapshot without blocking.
+- **Reader pool** of `n_cores` connections for the HTTP path. WAL means they see a consistent snapshot without blocking. A read borrows a connection with its semaphore permit and hands both back from inside the blocking closure, connection first, so a caller that stops waiting (`try_join!`, a client gone) can't leave a permit without a connection. `/readyz` and `sqlite_readers_free` show the idle count (ADR-113).
 - `spawn_blocking` at the boundary; no SQLite call inside an async fn.
 
 The daily `maintenance` job runs `VACUUM INTO 'backups/riot-proxy-YYYY-MM-DD.db'`, `PRAGMA optimize` and `PRAGMA wal_checkpoint(TRUNCATE)` — that **is** the backup strategy, replacing `pg-backup` + cron. Keep 14, delete older. (Daily, as design/06, design/07 and the plan have it; ADR-057.)
