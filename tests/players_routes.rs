@@ -6,6 +6,7 @@
 mod common;
 
 use std::path::Path;
+use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -471,6 +472,115 @@ async fn a_match_page_refresh_rereads_only_the_id_list() {
     assert_eq!(
         e.get(&format!("{PROFILE}&refresh=true")).await.json()["refreshed"],
         true
+    );
+}
+
+// ── Fetch age (SITE-01) ─────────────────────────────────────────────────────
+
+const PARTS: [&str; 4] = ["account", "summoner", "league", "mastery"];
+
+/// ninjagoldfinch.lol's report: a refresh that changes nothing resets each
+/// part's fetch age, while its content age keeps counting.
+#[tokio::test]
+async fn a_refresh_that_changes_nothing_resets_only_the_fetch_age() {
+    let e = env(&[]).await;
+    let profile = format!("/v1/players/{PUUID}/profile?platform=kr");
+    e.get(&profile).await;
+    tokio::time::sleep(Duration::from_millis(1600)).await;
+
+    // From cache: both ages have grown.
+    let cached = e.get(&profile).await;
+    let b = cached.json();
+    for part in PARTS {
+        assert_eq!(
+            (
+                b["ageSeconds"][part].clone(),
+                b["fetchedAgeSeconds"][part].clone()
+            ),
+            (json!(2), json!(2)),
+            "{part}"
+        );
+    }
+    assert_eq!(cached.headers["x-cache-fetched-age"], "2");
+
+    // Riot answers with the same bytes: the content is still 2 s old, but it
+    // was read just now.
+    let r = e.get(&format!("{profile}&refresh=true")).await;
+    let b = r.json();
+    assert_eq!(b["refreshed"], true);
+    for part in PARTS {
+        assert_eq!(
+            (
+                b["ageSeconds"][part].clone(),
+                b["fetchedAgeSeconds"][part].clone()
+            ),
+            (json!(2), json!(0)),
+            "{part}"
+        );
+    }
+    assert_eq!(x_cache(&r), ("MISS", "2"));
+    assert_eq!(r.headers["x-cache-fetched-age"], "0");
+}
+
+#[tokio::test]
+async fn a_failed_part_has_no_fetch_age() {
+    let e = env(&["/league/"]).await;
+    let b = e.get(PROFILE).await.json();
+    assert_eq!(b["fetchedAgeSeconds"]["league"], Value::Null);
+    assert_eq!(b["fetchedAgeSeconds"]["summoner"], json!(0));
+}
+
+#[tokio::test]
+async fn the_match_page_says_when_its_id_list_was_read() {
+    let e = env(&[]).await;
+    let first = e.get(&page("&count=5")).await;
+    let b = first.json();
+    assert_eq!(
+        (
+            b["matchIdsAgeSeconds"].clone(),
+            b["matchIdsFetchedAgeSeconds"].clone()
+        ),
+        (json!(0), json!(0))
+    );
+    assert_eq!(first.headers["x-cache-fetched-age"], "0");
+    tokio::time::sleep(Duration::from_millis(1600)).await;
+
+    let r = e.get(&page("&count=5&refresh=true")).await;
+    let b = r.json();
+    assert_eq!(
+        (
+            b["matchIdsAgeSeconds"].clone(),
+            b["matchIdsFetchedAgeSeconds"].clone()
+        ),
+        (json!(2), json!(0)),
+        "the same ids, read again"
+    );
+    // Every match now comes from the archive, so the id list alone sets it.
+    assert_eq!(r.headers["x-cache-fetched-age"], "0");
+}
+
+#[tokio::test]
+async fn a_passthrough_sends_the_fetch_age_except_from_the_archive() {
+    let e = env(&[]).await;
+    let summoner = format!("/v1/lol/summoners/by-puuid/kr/{PUUID}");
+    assert_eq!(e.get(&summoner).await.headers["x-cache-fetched-age"], "0");
+    tokio::time::sleep(Duration::from_millis(1600)).await;
+    let hit = e.get(&summoner).await;
+    assert_eq!(
+        (
+            x_cache(&hit).0,
+            hit.headers["x-cache-fetched-age"].to_str().unwrap()
+        ),
+        ("HIT", "2")
+    );
+
+    let m = format!("/v1/lol/matches/asia/{}", MATCH_IDS[0]);
+    assert_eq!(e.get(&m).await.headers["x-cache-fetched-age"], "0");
+    let archived = e.get(&m).await;
+    assert_eq!(x_cache(&archived).0, "ARCHIVE");
+    assert!(
+        !archived.headers.contains_key("x-cache-fetched-age"),
+        "an archived match is never fetched again"
     );
 }
 

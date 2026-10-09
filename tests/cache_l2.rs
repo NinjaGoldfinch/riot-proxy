@@ -110,6 +110,7 @@ async fn warm_skips_and_sweep_deletes_expired_rows() {
         body: Bytes::from_static(b"{}"),
         status: 200,
         content_at: now - 10_000,
+        fetched_at: now - 5_000,
         soft_expires: now - 5_000,
         hard_expires: hard,
     };
@@ -225,4 +226,48 @@ async fn without_l2_nothing_is_persisted() {
         .unwrap();
     cache.shutdown().await;
     assert!(matches!(cache.get("k").await, Lookup::Fresh(_)));
+}
+
+/// SITE-01: the fetch time survives a restart apart from the content time, and
+/// a row written before V0009 (no fetch time) warms with its content time.
+#[tokio::test]
+async fn fetched_at_round_trips_and_defaults_to_content_at() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open(&dir.path().join("riot-proxy.db"), 1).unwrap();
+    let now = Clock::now().unix_ms;
+    let row = Row {
+        key: "refetched".into(),
+        body: Bytes::from_static(b"{}"),
+        status: 200,
+        content_at: now - 60_000,
+        fetched_at: now - 1_000,
+        soft_expires: now + 60_000,
+        hard_expires: now + 120_000,
+    };
+    l2::put_rows(&db, vec![row]).await.unwrap();
+    db.write(move |c| {
+        Ok::<_, riot_proxy::db::DbError>(c.execute(
+            "INSERT INTO cache (key, body, status, content_at, soft_expires, hard_expires)
+             VALUES ('old', x'7b7d', 200, ?1, ?2, ?3)",
+            [now - 30_000, now + 60_000, now + 120_000],
+        )?)
+    })
+    .await
+    .unwrap();
+
+    let warmed = l1();
+    assert_eq!(l2::warm(&db, &warmed).await.unwrap(), 2);
+    let near = |d: Duration, secs: u64| d.abs_diff(Duration::from_secs(secs)) < Duration::from_millis(500);
+    let at = tokio::time::Instant::now();
+    match warmed.get("refetched").await {
+        Lookup::Fresh(e) => {
+            assert!(near(e.age(at), 60), "content age {:?}", e.age(at));
+            assert!(near(e.fetch_age(at), 1), "fetch age {:?}", e.fetch_age(at));
+        }
+        other => panic!("{other:?}"),
+    }
+    match warmed.get("old").await {
+        Lookup::Fresh(e) => assert!(near(e.fetch_age(at), 30), "{:?}", e.fetch_age(at)),
+        other => panic!("{other:?}"),
+    }
 }

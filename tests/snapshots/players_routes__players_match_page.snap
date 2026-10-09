@@ -18,6 +18,7 @@ expression: body
     "KR_8393207026"
   ],
   "matchIdsAgeSeconds": 0,
+  "matchIdsFetchedAgeSeconds": 0,
   "matches": [
     {
       "endOfGameResult": "GameComplete",
