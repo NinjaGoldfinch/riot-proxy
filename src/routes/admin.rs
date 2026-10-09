@@ -37,6 +37,8 @@ use crate::riot::routing::{Platform, Region};
 use crate::routes::passthrough::{JSON, LocalErrors, PassthroughResponses, UpstreamErrors, respond};
 use crate::routes::riot::bad_path;
 
+mod ladder_probe;
+
 type Q = Query<HashMap<String, String>>;
 type Who = Extension<Arc<crate::http::auth::Consumer>>;
 
@@ -65,6 +67,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(queue_ddragon_sync))
         .routes(routes!(start_ladder_crawl))
         .routes(routes!(ladder_options))
+        .routes(routes!(ladder_probe::ladder_probe))
         .routes(routes!(list_ladder_crawls))
         .routes(routes!(cancel_ladder_crawl, crawl_activity))
         .routes(routes!(queue_names_backfill))

@@ -11,6 +11,13 @@ pub const PAGED_TIERS: [&str; 7] = [
 ];
 /// Tiers served whole by their own league endpoint, ascending.
 pub const APEX_TIERS: [&str; 3] = ["MASTER", "GRANDMASTER", "CHALLENGER"];
+/// Most entries Riot returns for one apex league, observed, not documented:
+/// `masterleagues` answered exactly 10,000 on kr, euw1 and na1 with the
+/// production key on 2026-10-09, while dpm.lol counted about 30K, 22K and 12K
+/// Master players there, and league-exp-v4 paged the same 10,000
+/// (IMPLEMENTATION.md §Post-release — LAD). The `/dev` Ladder probe (LAD-03)
+/// re-checks it against Riot.
+pub const RIOT_APEX_LIST_CAP: usize = 10_000;
 /// Divisions within a tier. Apex tiers report `I` for everyone.
 pub const DIVISIONS: [&str; 4] = ["I", "II", "III", "IV"];
 /// match-v5 queue ids of the two ranked ladders (v1 `QUEUE_IDS`).

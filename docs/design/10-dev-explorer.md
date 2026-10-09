@@ -94,6 +94,7 @@ sequenceDiagram
 | `player` | `/v1/players/by-riot-id/{gameName}/{tagLine}/profile`, `/v1/players/{puuid}/matches`, `/v1/static/queues`, `/v1/lol/matches/{region}/{matchId}`, `/v1/admin/players/{puuid}/archive`, `/v1/admin/players/{puuid}/archive/matches` | profile card, ranks, top mastery, history and backfill card, recent or archived matches (DEV-02/03, below) |
 | `live` | `/v1/ws` | topic picker, newest-first frame log (500 max), ping |
 | `history` | — | last 50 requests (`localStorage`, without bodies); re-open or replay |
+| `ladder` | `POST /v1/admin/ladder/probe` | Riot's apex list cap checked on one ladder: summary, three verdicts, apex lists, league-exp overlap (LAD-03, below) |
 | `reset` | `GET /dev/reset`, `POST /dev/reset` | rows per fetched table, then a wipe of all of them (DEV-09, below) |
 
 ## Player tab (DEV-02)
@@ -115,6 +116,17 @@ sequenceDiagram
 - **Source: Riot (live) or Archive (all stored)** (DEV-03). The archive source reads `GET /v1/admin/players/{puuid}/archive/matches`: one call per page (`count` up to 100), newest first, with `total`, so the pager shows "page X of Y", First and Last. It filters by queue only, and makes no Riot calls. Its rows render in the same table and scoreboard as live ones.
 - **Every response window has ×**, and Esc closes the newest open thing on the current tab.
 - The pure helpers sit in one marked block that `tests/dev_ui.mjs` unit-tests with `node --test`, run from `cargo test`. `tests/dom/` drives the whole page in jsdom against a fake API (`just ui-test`; CI job `test`).
+
+## Ladder tab (LAD-03)
+
+Re-runs, on demand, the checks that found Riot's 10,000-entry Master cap (IMPLEMENTATION.md §Post-release — LAD; ADR-094), so they don't have to be done by hand with the production key.
+
+- **Endpoint:** `POST /v1/admin/ladder/probe {platform, queue?}` (admin; the queue defaults to the first `LADDER_QUEUES`). It asks Riot now, skipping the cache read, at interactive priority: the three apex leagues, league-exp MASTER/I ten pages at a time until an empty page (at most 100), and `entries/{queue}/MASTER/I?page=1`. About 55 calls on a capped shard (12 s on kr), a few on a small one. It stores nothing.
+- **Checks**, each `confirmed` (as on 2026-10-09), `not-seen` (doesn't apply on this shard), `changed` (Riot answers differently now) or `error`:
+  - `master-capped`: `masterleagues` lists exactly `RIOT_APEX_LIST_CAP`. Fewer is `not-seen`; more is `changed`.
+  - `exp-same-list`: league-exp's pages have at most 10 players `masterleagues` lacks (the ladder moves while it is paged). More, or still going at the page limit, is `changed`.
+  - `paged-refuses-apex`: the paged route refuses MASTER. Riot's 400 reaches the probe as `UPSTREAM_ERROR`, so any refusal counts; a 200 is `changed`.
+- **UI:** platform and queue (remembered in `rp.dev.probe`), and **Run checks**. Opening the tab makes no call. The result shows the summary (red when a check is `changed` or `error`), a row per check with Riot's numbers, the apex lists with players, lowest LP and "at the cap", and the league-exp overlap. `raw` opens the response window. The tab sits before Reset, which stays last.
 
 ## Reset tab (DEV-09)
 
