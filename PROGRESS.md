@@ -228,6 +228,7 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 - [x] DEV-23 timelines on by default: `ARCHIVE_TIMELINES` defaults to `true`, so ladder crawls, polls and backfills fetch each archived match's timeline; `false` turns it off (#118, design/04, design/07, ADR-098)
 - [x] DEV-24 the showcase and the `/dev` explorer revalidate every call (`cache: 'no-cache'`), so a recompute shows at once instead of after the analytics routes' `max-age=300` (#119, design/10, design/11, ADR-099)
 - [x] DEV-25 the champion page's patch picker counts that champion's games: `GET /v1/lol/analytics/patches` takes `championId` and then lists only the patches it was played on, with its games (#120, design/11, ADR-100)
+- [x] DEV-26 the matchups rebuild reads each laned fact once (lane head count from a window), so SQLite no longer loops over the whole ladder for every fact: an oc1 recompute's matchups step took 43.8 s (#121, ADR-101)
 - [x] DEV-27 the writer keeps the planner's statistics fresh: `PRAGMA optimize` at open, before each analytics rebuild and in the daily maintenance (#123, design/04, design/06, ADR-102)
 
 ## SCH — scheduler fairness and an elastic pool (owner requests 2026-10-08/09)
@@ -250,6 +251,14 @@ Baseline before THR-06a (one kr crawl to MASTER on the dev VM): not yet recorded
 - [x] LAD-01 say when an apex league is cut off at Riot's cap: `apex_capped` on the crawl (V0008, set in the apex leg's write transaction for a list of `RIOT_APEX_LIST_CAP` or more), `apexCapped` on the crawl routes and the stats snapshot, "Master: top 10,000 only (Riot API limit)" next to the player count on the dashboard crawl card and under the showcase ladder (#117, design/06, design/11, ADR-097)
 - [ ] LAD-02 find the Master players the cap leaves out: a `discover` stage that looks up the ranks of archived match participants not on the ladder (IMPLEMENTATION.md §Post-release — LAD)
 - [x] LAD-03 re-run the cap checks from `/dev`: `POST /v1/admin/ladder/probe` checks `masterleagues` against `RIOT_APEX_LIST_CAP`, pages league-exp-v4 (`league.expEntries`, new in the registry) and compares the two, and checks that the paged route refuses MASTER. Each check is confirmed / not-seen / changed / error, shown on a new Ladder tab on `/dev` (#114, design/10, ADR-095)
+
+## SITE — requests from ninjagoldfinch.lol (owner request 2026-10-09)
+The site's backfill question (item 3) needs no task: the unbounded lookup backfill stays (ADR-081, owner confirmed 2026-10-09); SITE-04 documents it.
+- [ ] SITE-01 report when each part was last fetched from Riot: `fetchedAgeSeconds` on the profile, `matchIdsFetchedAgeSeconds` on the match page, `X-Cache-Fetched-Age` (IMPLEMENTATION.md §Post-release — SITE)
+- [ ] SITE-02 `champion` filter on the match page, from the archive, with `archive.complete` (IMPLEMENTATION.md §Post-release — SITE)
+- [ ] SITE-03 `gameVersion` described as the game build, plus `ddragonVersion` (IMPLEMENTATION.md §Post-release — SITE)
+- [ ] SITE-04 declare response headers in the OpenAPI document; document the image mirror and the backfill limit (IMPLEMENTATION.md §Post-release — SITE)
+- [ ] SITE-05 partial schemas for Riot's account, summoner, league and mastery payloads (IMPLEMENTATION.md §Post-release — SITE)
 
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.

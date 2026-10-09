@@ -151,35 +151,34 @@ pub fn rebuild_champions(c: &mut Connection, s: &Scope) -> Result<Written, DbErr
 /// Lane matchups (v1): two players of opposite teams in the same lane, each
 /// lane held by exactly one player per team, mirror lanes excluded. Recorded
 /// from the side of the player the ladder holds.
+///
+/// Each laned fact is read once, with its lane's head count from a window,
+/// and that set is joined to itself (ADR-101). The earlier shape (two
+/// `match_facts`, `matches` and a grouped lane count joined twice) let SQLite,
+/// which has no `ANALYZE` statistics, loop over the whole ladder for every
+/// fact: 44 s for a 16,600-game ladder.
+const MATCHUPS: &str = "WITH lane AS (
+       SELECT f.match_id, f.puuid, f.team_id, f.position, f.champion_id, f.win, m.patch,
+         coalesce(m.remake, 0) AS remake,
+         count(*) OVER (PARTITION BY f.match_id, f.team_id, f.position) AS n
+         FROM match_facts f JOIN matches m ON m.match_id = f.match_id
+        WHERE f.key_scope = ?1 AND f.position IS NOT NULL AND m.queue_id = ?4 AND m.patch IS NOT NULL
+          AND (?5 IS NULL OR m.patch IN (SELECT value FROM json_each(?5)))
+     )
+     INSERT INTO champion_matchups (key_scope, platform, queue, patch, champion_id, role, opponent_id,
+       remake, games, wins, computed_at)
+     SELECT ?1, ?2, ?3, a.patch, a.champion_id, a.position, b.champion_id, a.remake, count(*), sum(a.win), ?6
+       FROM lane a
+       JOIN lane b ON b.match_id = a.match_id AND b.position = a.position AND b.team_id <> a.team_id
+       JOIN ladder_entries le ON le.key_scope = ?1 AND le.platform = ?2 AND le.queue = ?3
+         AND le.puuid = a.puuid
+      WHERE a.n = 1 AND b.n = 1 AND a.champion_id <> b.champion_id
+      GROUP BY a.patch, a.position, a.champion_id, b.champion_id, a.remake";
+
 pub fn rebuild_matchups(c: &mut Connection, s: &Scope) -> Result<Written, DbError> {
     let tx = c.transaction()?;
     s.clear(&tx, "champion_matchups")?;
-    let n = s.insert(
-        &tx,
-        "WITH lanes AS (
-           SELECT f.match_id, f.team_id, f.position, count(*) AS n
-             FROM match_facts f JOIN matches m ON m.match_id = f.match_id
-            WHERE f.key_scope = ?1 AND f.position IS NOT NULL AND m.queue_id = ?4 AND m.patch IS NOT NULL
-              AND (?5 IS NULL OR m.patch IN (SELECT value FROM json_each(?5)))
-            GROUP BY f.match_id, f.team_id, f.position
-         )
-         INSERT INTO champion_matchups (key_scope, platform, queue, patch, champion_id, role, opponent_id,
-           remake, games, wins, computed_at)
-         SELECT ?1, ?2, ?3, m.patch, a.champion_id, a.position, b.champion_id, coalesce(m.remake, 0),
-           count(*), sum(a.win), ?6
-           FROM match_facts a
-           JOIN match_facts b ON b.match_id = a.match_id AND b.key_scope = a.key_scope
-             AND b.position = a.position AND b.team_id <> a.team_id
-           JOIN matches m ON m.match_id = a.match_id
-           JOIN ladder_entries le ON le.key_scope = a.key_scope AND le.platform = ?2 AND le.queue = ?3
-             AND le.puuid = a.puuid
-           JOIN lanes la ON la.match_id = a.match_id AND la.team_id = a.team_id AND la.position = a.position
-           JOIN lanes lb ON lb.match_id = b.match_id AND lb.team_id = b.team_id AND lb.position = b.position
-          WHERE a.key_scope = ?1 AND la.n = 1 AND lb.n = 1 AND a.champion_id <> b.champion_id
-            AND m.queue_id = ?4 AND m.patch IS NOT NULL
-            AND (?5 IS NULL OR m.patch IN (SELECT value FROM json_each(?5)))
-          GROUP BY m.patch, a.position, a.champion_id, b.champion_id, coalesce(m.remake, 0)",
-    )?;
+    let n = s.insert(&tx, MATCHUPS)?;
     tx.commit()?;
     Ok(vec![("champion_matchups", n)])
 }
