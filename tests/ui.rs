@@ -330,6 +330,25 @@ fn the_pages_apex_cap_is_the_servers() {
     }
 }
 
+/// The match page's build card (BLD-04) works its builds out with the same
+/// starter cut-off as `builds:extract`, and the coverage block says the
+/// timeline feeds it.
+#[test]
+fn the_pages_build_rules_are_the_servers() {
+    let html = riot_proxy::routes::ui::SHOWCASE_HTML;
+    let line = html
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("const BUILD_STARTER_MS = "))
+        .expect("showcase.html declares BUILD_STARTER_MS");
+    let page: i64 = line.trim_end_matches(';').replace('_', "").parse().unwrap();
+    assert_eq!(page, riot_proxy::archive::builds::BUILD_STARTER_MS);
+    let (shown, _) = coverage();
+    let timeline = shown["GET /v1/lol/matches/{region}/{matchId}/timeline"]
+        .as_str()
+        .unwrap();
+    assert!(timeline.contains("build card"), "{timeline}");
+}
+
 #[test]
 fn showcase_helpers_pass_their_node_tests() {
     node_test("tests/showcase.mjs");

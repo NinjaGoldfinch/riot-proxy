@@ -150,6 +150,15 @@
   .card .tools.builds button { display: inline-flex; align-items: center; gap: 4px; }
   .card .tools.builds .stat { font-variant-numeric: tabular-nums; }
   .card .tools.builds .stat small { margin-left: 4px; color: var(--dim); }
+  /* One player's build on the match page (BLD-04): champion portraits as tabs, then three rows. */
+  .card .tools.bplayers { flex-wrap: nowrap; gap: 2px; }
+  .card .tools.bplayers button { padding: 2px; line-height: 0; }
+  .brow .timed-row { display: inline-flex; gap: 8px; }
+  .brow .timed { display: inline-flex; flex-direction: column; align-items: center; gap: 2px; font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  table.skillgrid { width: auto; }
+  table.skillgrid th, table.skillgrid td { padding: 3px 5px; text-align: center; font-size: 11px; font-variant-numeric: tabular-nums; }
+  table.skillgrid td.on { color: var(--accent); font-weight: 700; }
+  ol.list.visits li { gap: 10px; }
   .brow { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 6px 14px; padding: 8px 0; border-bottom: 1px solid var(--line); }
   .brow .bgroup { display: flex; flex-direction: column; gap: 2px; }
   .brow .bgroup > small { color: var(--dim); }
@@ -203,7 +212,7 @@
     "GET /v1/lol/spectator/active/{platform}/{puuid}": "player: live-game banner",
     "GET /v1/static/queues": "player: queue names on match cards and the live game",
     "GET /v1/lol/matches/{region}/{matchId}": "match detail: scoreboard, bans, objectives",
-    "GET /v1/lol/matches/{region}/{matchId}/timeline": "match detail: gold-difference graph",
+    "GET /v1/lol/matches/{region}/{matchId}/timeline": "match detail: gold-difference graph, and each player's build card (purchases, skill grid, shop visits)",
     "GET /v1/lol/analytics/champions/{championId}": "champion: rates by tier, items, spells, runes",
     "GET /v1/lol/analytics/champions/{championId}/matchups": "champion: every lane matchup (the detail carries only the top few)",
     "GET /v1/lol/analytics/champions/{championId}/builds": "champion: set build tabs (the detail's item, rune and spell lists are the fallback)",
@@ -540,6 +549,123 @@ const pickPatch = (picked, patches) => (picked !== 'all' && (patches ?? []).some
 
 const patchLabel = (p) => (p === 'all' ? 'all patches' : `patch ${p}`);
 
+// One player's build on the match page (BLD-04), worked out from the timeline the page already
+// fetches. The rules are BLD's (IMPLEMENTATION.md §Post-release — BLD), the same as
+// src/archive/builds.rs, and both are held to tests/fixtures/builds/*.expected.json.
+/** Purchases before this many ms into the game are the starter. */
+const BUILD_STARTER_MS = 60_000;
+/** A finished item costs at least this much in total. */
+const FINISHED_MIN_GOLD = 1500;
+/** Base Boots, which aren't a player's boots choice. */
+const BASE_BOOTS = 1001;
+/** At most this many finished items are kept: an inventory's six slots. */
+const ITEMS_KEPT = 6;
+/** Level-ups kept in `skills`, as `"QWEQQRQ…"`. */
+const SKILLS_KEPT = 15;
+/** `SKILL_LEVEL_UP.skillSlot` 1–4. */
+const SKILL_KEYS = ['Q', 'W', 'E', 'R'];
+/**
+ * Purchases less than this far apart are one shop visit. A display choice, not Riot's: the
+ * timeline has no event for opening or closing the shop.
+ */
+const SHOP_VISIT_GAP_MS = 30_000;
+
+/**
+ * Data Dragon's item.json as a build reads it: `Map(id → { finished, bootsTag, trinket, from })`.
+ * Finished: purchasable, builds into nothing, at least 1500 gold, and not tagged Boots,
+ * Consumable or Trinket. An entry whose id isn't a number is left out.
+ */
+function itemCatalog(doc) {
+  const out = new Map();
+  for (const [key, e] of Object.entries(doc?.data ?? {})) {
+    if (!/^-?\d+$/.test(key) || !e || typeof e !== 'object') continue;
+    const tags = Array.isArray(e.tags) ? e.tags : [];
+    const tagged = (t) => tags.includes(t);
+    const gold = e.gold ?? {};
+    out.set(Number(key), {
+      finished: gold.purchasable === true && !(e.into ?? []).length && (gold.total ?? 0) >= FINISHED_MIN_GOLD
+        && !tagged('Boots') && !tagged('Consumable') && !tagged('Trinket'),
+      bootsTag: tagged('Boots'),
+      trinket: tagged('Trinket'),
+      from: (Array.isArray(e.from) ? e.from : []).filter((f) => /^-?\d+$/.test(f)).map(Number),
+    });
+  }
+  return out;
+}
+
+/**
+ * Boots: tagged Boots other than base Boots, or built from such an item. The second rule
+ * catches upgrades with no Boots tag, such as Gunmetal Greaves (3172).
+ */
+function isBoots(catalog, id) {
+  const tagged = (x) => x !== BASE_BOOTS && Boolean(catalog.get(x)?.bootsTag);
+  return tagged(id) || (catalog.get(id)?.from ?? []).some(tagged);
+}
+
+/** Q, W and E ranked by points at the end, a tie going to the one that reached its count first. */
+function skillOrder(slots) {
+  if (!slots.length) return null;
+  const points = [0, 0, 0];
+  const reached = [Infinity, Infinity, Infinity];
+  slots.forEach((s, k) => { if (s < 3) { points[s] += 1; reached[s] = k; } });
+  return [0, 1, 2].sort((a, b) => points[b] - points[a] || reached[a] - reached[b]).map((s) => SKILL_KEYS[s]).join('');
+}
+
+/**
+ * One player's build from a match-v5 timeline: `{ purchases, starter, boots, items, skills,
+ * skillOrder, levelUps }`, times in ms. The player is found through the timeline's own
+ * `info.participants` (puuid → participantId); events of `participantId: 0` are not a player's.
+ * Purchases are ITEM_PURCHASED in time order minus undone purchases (an ITEM_UNDO with
+ * `afterId: 0` removes the latest earlier purchase of `beforeId`); sales and their undos are
+ * ignored. Only NORMAL level-ups count. Without a catalogue, `starter`, `boots` and `items` are
+ * `null`; with one, an item it doesn't know is dropped from them, not guessed. Never throws: a
+ * strange timeline gives an empty build.
+ */
+function playerBuild(timeline, puuid, catalog) {
+  const info = timeline?.info;
+  const parts = Array.isArray(info?.participants) ? info.participants : [];
+  const pid = puuid ? parts.find((p) => p?.puuid === puuid && Number.isInteger(p.participantId) && p.participantId !== 0)?.participantId : null;
+  const frames = Array.isArray(info?.frames) ? info.frames : [];
+  const events = !pid ? [] : frames
+    .flatMap((f) => (Array.isArray(f?.events) ? f.events : []))
+    .filter((e) => e?.participantId === pid)
+    .sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
+  const purchases = [];
+  for (const e of events) {
+    const t = e.timestamp ?? 0;
+    if (e.type === 'ITEM_PURCHASED' && Number.isInteger(e.itemId)) purchases.push({ itemId: e.itemId, t });
+    if (e.type === 'ITEM_UNDO' && e.afterId === 0 && e.beforeId) {
+      for (let k = purchases.length - 1; k >= 0; k--) {
+        if (purchases[k].itemId === e.beforeId && purchases[k].t <= t) { purchases.splice(k, 1); break; }
+      }
+    }
+  }
+  const levelUps = events
+    .filter((e) => e.type === 'SKILL_LEVEL_UP' && e.levelUpType === 'NORMAL' && e.skillSlot >= 1 && e.skillSlot <= 4)
+    .map((e) => ({ slot: e.skillSlot, t: e.timestamp ?? 0 }));
+  const slots = levelUps.map((l) => l.slot - 1);
+  const known = catalog ? purchases.filter((p) => catalog.has(p.itemId)) : [];
+  return {
+    purchases,
+    starter: catalog ? known.filter((p) => p.t < BUILD_STARTER_MS && !catalog.get(p.itemId).trinket).map((p) => p.itemId).sort((a, b) => a - b) : null,
+    boots: catalog ? (known.find((p) => isBoots(catalog, p.itemId))?.itemId ?? null) : null,
+    items: catalog ? known.filter((p) => catalog.get(p.itemId).finished).slice(0, ITEMS_KEPT) : null,
+    skills: slots.slice(0, SKILLS_KEPT).map((s) => SKILL_KEYS[s]).join(''),
+    skillOrder: skillOrder(slots),
+    levelUps,
+  };
+}
+
+/** Purchases grouped into shop visits: each next purchase less than SHOP_VISIT_GAP_MS after the last joins it. */
+function shopVisits(purchases) {
+  const out = [];
+  for (const p of purchases ?? []) {
+    const last = out[out.length - 1];
+    if (last && p.t - last.last < SHOP_VISIT_GAP_MS) { last.items.push(p.itemId); last.last = p.t; } else out.push({ t: p.t, items: [p.itemId], last: p.t });
+  }
+  return out.map(({ t, items }) => ({ t, items }));
+}
+
 // ---------- end pure helpers
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -765,6 +891,7 @@ let spells = null; // summoner spell key → image file, once per session
 let runes = null; // rune and style id → { name, icon }, once per session
 let itemNames = null; // item id → name, once per session
 let boots = null; // ids of the items Data Dragon tags "Boots", once per session
+let catalog = null; // item.json as a build reads it (BLD-04), once per session
 // Bumped on every route, so a slow call for a view the user already left draws nothing.
 let viewSeq = 0;
 const pl = { id: null, profile: null, queue: 0, champion: 0, start: 0, matches: [], hasMore: false, mastery: null, masteryAll: false };
@@ -779,7 +906,7 @@ async function loadLookups() {
   if (q?.ok) queues = queueNames(q.json);
   if (s?.ok) spells = spellIndex(s.json);
   if (r?.ok) runes = runeIndex(r.json);
-  if (i?.ok) [itemNames, boots] = [itemIndex(i.json), bootsIndex(i.json)];
+  if (i?.ok) [itemNames, boots, catalog] = [itemIndex(i.json), bootsIndex(i.json), itemCatalog(i.json)];
 }
 
 // Riot's descriptions read "5v5 Ranked Solo games"; as a label the last word adds nothing.
@@ -1012,6 +1139,7 @@ async function renderMatch({ region, matchId }) {
   const mine = teams.flatMap((t) => t.players).find((p) => p.me);
   $('#view').innerHTML = `<section class="card" id="mHead"></section>
     <section class="card" id="mGold"></section>
+    <section class="card" id="mBuild"></section>
     <div id="mTeams"></div>`;
   $('#mHead').innerHTML = `<header><h2>${esc(queueName(info.queueId) || info.gameMode || 'Match')}</h2>
       ${mine ? `<span class="muted">${esc(outcome(mine).label)} as ${esc(champions[mine.championId]?.name ?? mine.championName ?? '')}</span>` : ''}
@@ -1019,7 +1147,51 @@ async function renderMatch({ region, matchId }) {
     <div class="muted">${esc(new Date(info.gameCreation ?? 0).toLocaleString())} · ${clock(durationSecs(info))} · patch ${esc(String(info.gameVersion ?? '').split('.').slice(0, 2).join('.'))} · ${esc(m.metadata?.matchId ?? matchId)}</div>
     <div>${sources(OP.match, OP.timeline, OP.queues, OP.file)}</div>`;
   renderGold(tl, m);
+  // The viewed player's build, else the first player on blue side.
+  Object.assign(mb, { tl, teams, puuid: (mine ?? teams[0]?.players[0])?.puuid ?? null });
+  renderBuild();
   renderScoreboard(teams, info);
+}
+
+/** The match on screen, for the Build card's tabs. */
+const mb = { tl: null, teams: [], puuid: null };
+
+/**
+ * One player's build (BLD-04), worked out here from the timeline (playerBuild): the ten
+ * champions as tabs, then (1) starter, boots, skill order and finished items with their times,
+ * (2) the skill grid, (3) the shop visits.
+ */
+function renderBuild() {
+  const el = $('#mBuild');
+  const { tl, teams } = mb;
+  // Phones get the smaller portraits, so ten stay on one line.
+  const size = window.matchMedia?.('(max-width: 600px)').matches ? 'xs' : 'sm';
+  const tabs = teams.flatMap((t) => t.players).map((p) => `<button data-bplayer="${esc(p.puuid ?? '')}" class="${p.puuid === mb.puuid ? 'on' : ''}" title="${esc(champions[p.championId]?.name ?? p.championName ?? '')}${p.riotIdGameName ? ` · ${esc(p.riotIdGameName)}` : ''}">${champIcon(p.championId, size)}</button>`).join('');
+  const head = `<header><h2>Build</h2><div class="tools bplayers">${tabs}</div></header><div>${sources(OP.timeline, OP.file)}</div>`;
+  if (!tl.ok) { el.innerHTML = head + failure(tl); return; }
+  const b = playerBuild(tl.json, mb.puuid, catalog);
+  if (!b.purchases.length && !b.levelUps.length) { el.innerHTML = head + '<p class="empty">No build for this player.</p>'; return; }
+  const at = (ms) => clock(ms / 1000);
+  const group = (label, body) => `<span class="bgroup"><small>${label}</small>${body || '<span class="muted">–</span>'}</span>`;
+  const items = catalog
+    ? `<div class="brow">${[
+      group('Starter', b.starter.length ? `<span class="spells-row">${b.starter.map(namedItem).join('')}</span>` : ''),
+      group('Boots', b.boots ? namedItem(b.boots) : ''),
+      group('Skills', b.skillOrder ? esc([...b.skillOrder].join(' › ')) : ''),
+      group('Items', b.items.length ? `<span class="timed-row">${b.items.map((x) => `<span class="timed">${namedItem(x.itemId)}${at(x.t)}</span>`).join('')}</span>` : ''),
+    ].join('')}</div>`
+    : '<p class="muted note">Item data is unavailable, so the starter, boots and finished items can\'t be told apart.</p>';
+  const levels = Array.from({ length: 18 }, (_, i) => i + 1);
+  const grid = `<h3 class="muted sub">Skills</h3><div class="scroll"><table class="skillgrid"><thead><tr><th></th>${levels.map((l) => `<th>${l}</th>`).join('')}</tr></thead><tbody>
+    ${SKILL_KEYS.map((k, i) => `<tr><th>${k}</th>${levels.map((l) => {
+      const up = b.levelUps[l - 1];
+      return up?.slot === i + 1 ? `<td class="on" title="${k} at ${at(up.t)}">${l}</td>` : '<td></td>';
+    }).join('')}</tr>`).join('')}</tbody></table></div>`;
+  const visits = shopVisits(b.purchases);
+  const shop = `<h3 class="muted sub">Shop visits</h3>${visits.length
+    ? `<ol class="list visits">${visits.map((v) => `<li><span class="muted">${at(v.t)}</span><span class="spells-row">${v.items.map(namedItem).join('')}</span></li>`).join('')}</ol>`
+    : '<p class="muted">–</p>'}`;
+  el.innerHTML = head + items + grid + shop;
 }
 
 function renderScoreboard(teams, info) {
@@ -1272,6 +1444,7 @@ document.addEventListener('click', (ev) => {
   if (t.dataset.cqueue) { state.queue = t.dataset.cqueue; route(); }
   if (t.dataset.role !== undefined) { ch.role = t.dataset.role; renderMatchups(); }
   if (t.dataset.build !== undefined) { ch.tab = Number(t.dataset.build); renderBuilds(); }
+  if (t.dataset.bplayer) { mb.puuid = t.dataset.bplayer; renderBuild(); }
   if ('refresh' in t.dataset) { const { view, args } = parseRoute(location.hash); if (view === 'player') renderPlayer(args, true); }
 });
 // The analytics pickers (DEV-21): the patch is shared by the home and champion views.

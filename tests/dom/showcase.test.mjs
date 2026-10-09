@@ -405,13 +405,83 @@ test('the gold graph: one line around zero, both direct labels, a crosshair read
   assert.ok(p.$('#gTip').hidden);
 });
 
-test('a missing timeline costs only the graph; an unknown match says so', async () => {
+test('a missing timeline costs only the graph and the build card; an unknown match says so', async () => {
   const p = await matchPage({ noTimeline: true });
   assert.ok(p.text('#mGold').includes('503'));
+  assert.ok(p.text('#mBuild').includes('503'));
+  assert.equal(p.w.document.querySelectorAll('#mBuild [data-bplayer]').length, 10, 'the tabs still name the players');
   assert.equal(p.w.document.querySelectorAll('#mTeams .team-card').length, 2);
+  assert.deepEqual(p.errors, []);
   const gone = await page({ hash: '#/match/sea/OC1_1' });
   assert.ok(gone.text('#mHead').includes('No match OC1_1 in sea'));
   assert.deepEqual(gone.errors, []);
+});
+
+// ---------- one player's build (BLD-04)
+const buildSrcs = (p, sel) => [...p.w.document.querySelectorAll(sel)].map((i) => i.getAttribute('src').replace('/ddragon/16.19.1/img/item/', '').replace('.png', ''));
+const gridRow = (p, key) => [...p.w.document.querySelectorAll('#mBuild table.skillgrid tbody tr')].find((r) => r.cells[0].textContent === key);
+const marked = (p, key) => [...gridRow(p, key).querySelectorAll('td.on')].map((c) => Number(c.textContent));
+
+test('the build card sits between the gold graph and the teams, with every champion as a tab', async () => {
+  const p = await matchPage();
+  assert.deepEqual([...p.w.document.querySelectorAll('#view > section, #view > div')].map((e) => e.id), ['mHead', 'mGold', 'mBuild', 'mTeams']);
+  const tabs = [...p.w.document.querySelectorAll('#mBuild [data-bplayer]')];
+  const byTeam = [...MATCH.info.participants].sort((a, b) => a.teamId - b.teamId);
+  assert.deepEqual(tabs.map((b) => b.dataset.bplayer), byTeam.map((x) => x.puuid), 'blue side, then red');
+  assert.ok(tabs[0].classList.contains('on'), 'nobody viewed it: blue side\'s first player');
+  assert.deepEqual([...p.w.document.querySelectorAll('#mBuild .src')].map((a) => a.textContent), ['GET /v1/lol/matches/{region}/{matchId}/timeline', 'GET /v1/static/{file}']);
+  assert.deepEqual(p.errors, []);
+});
+
+test("the build card: starter, boots, skill order, finished items with times, the skill grid and shop visits", async () => {
+  const p = await matchPage();
+  const row = p.$('#mBuild .brow');
+  const group = (label) => [...row.querySelectorAll('.bgroup')].find((g) => g.querySelector('small').textContent === label);
+  assert.deepEqual(buildSrcs(p, '#mBuild .brow .bgroup:nth-child(1) img'), ['1055', '2003'], 'the trinket is not a starter');
+  assert.equal(group('Boots').querySelector('[title]').title, 'Plated Steelcaps');
+  assert.ok(group('Skills').textContent.includes('Q › W › E'));
+  assert.deepEqual([...group('Items').querySelectorAll('.timed')].map((x) => [x.querySelector('img').getAttribute('alt'), x.textContent]),
+    [['item 3078', '10:00'], ['item 3153', '10:10'], ['item 6672', '15:00']], 'the undone Infinity Edge is gone');
+  // The grid: one mark per normal level-up, in its column; the EVOLVE is not one.
+  assert.deepEqual(marked(p, 'Q'), [1, 4, 5, 7, 9]);
+  assert.deepEqual(marked(p, 'W'), [2, 8, 10, 12, 13]);
+  assert.deepEqual(marked(p, 'E'), [3, 14, 15]);
+  assert.deepEqual(marked(p, 'R'), [6, 11]);
+  assert.equal(p.w.document.querySelectorAll('#mBuild table.skillgrid thead th').length, 19, 'levels 1–18');
+  const visits = [...p.w.document.querySelectorAll('#mBuild ol.visits li')].map((li) => [li.querySelector('.muted').textContent, buildSrcs(p, `#mBuild ol.visits li:nth-child(${[...li.parentNode.children].indexOf(li) + 1}) img`)]);
+  assert.deepEqual(visits, [['0:05', ['1055', '2003', '3340']], ['5:00', ['3047']], ['10:00', ['3078', '3153']], ['15:00', ['6672']]]);
+  assert.deepEqual(p.errors, []);
+});
+
+test("a portrait tab switches player; a player with no events has no build", async () => {
+  const p = await matchPage();
+  const third = MATCH.info.participants[2].puuid;
+  await p.click(`#mBuild [data-bplayer="${third}"]`);
+  assert.ok(p.$(`#mBuild [data-bplayer="${third}"]`).classList.contains('on'));
+  assert.equal(p.w.document.querySelectorAll('#mBuild [data-bplayer].on').length, 1);
+  assert.ok(p.text('#mBuild .brow').includes('E › Q › W'));
+  assert.deepEqual(marked(p, 'E'), [1, 3]);
+  assert.deepEqual(marked(p, 'Q'), [2]);
+  assert.deepEqual([...p.w.document.querySelectorAll('#mBuild .timed')].map((x) => x.textContent), ['6:40']);
+  await p.click(`#mBuild [data-bplayer="${MATCH.info.participants[9].puuid}"]`);
+  assert.ok(p.text('#mBuild').includes('No build for this player.'));
+  assert.deepEqual(p.errors, []);
+});
+
+test('the build card opens on the viewed player when they are in the match', async () => {
+  const p = await page({ hash: '#/player/Faker/KR1', meIn: 3 });
+  await p.click('#pMatches article.match');
+  assert.ok(p.$(`#mBuild [data-bplayer="${PUUID}"]`).classList.contains('on'));
+  assert.ok(p.text('#mBuild .brow').includes('E › Q › W'));
+});
+
+test("without item.json the card says so, and the skill grid and shop visits still show", async () => {
+  const p = await matchPage({ noItems: true });
+  assert.ok(p.text('#mBuild').includes('Item data is unavailable'));
+  assert.equal(p.w.document.querySelectorAll('#mBuild .brow').length, 0);
+  assert.deepEqual(marked(p, 'Q'), [1, 4, 5, 7, 9]);
+  assert.equal(p.w.document.querySelectorAll('#mBuild ol.visits li').length, 4);
+  assert.deepEqual(p.errors, []);
 });
 
 test('the champion view: rates by tier and the calls it makes', async () => {
