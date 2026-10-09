@@ -49,6 +49,7 @@ pub const LIMITER_INTERACTIVE_WAITERS: &str = "limiter_interactive_waiters";
 pub const LIMITER_BULK_WAITERS: &str = "limiter_bulk_waiters";
 pub const EVENTS_PUBLISHED_TOTAL: &str = "events_published_total";
 pub const JOBS_PENDING: &str = "jobs_pending";
+pub const SQLITE_READERS_FREE: &str = "sqlite_readers_free";
 
 const UPSTREAM_LATENCY_BUCKETS: &[f64] = &[0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0];
 const RL_WAIT_BUCKETS: &[f64] = &[0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0];
@@ -251,6 +252,13 @@ pub const CATALOGUE: &[MetricDef] = &[
         Kind::Gauge,
         &["kind"],
         "Jobs waiting to run, by kind (sampled every 15 s)",
+        &[],
+    ),
+    def(
+        SQLITE_READERS_FREE,
+        Kind::Gauge,
+        &[],
+        "SQLite read connections idle in the pool",
         &[],
     ),
 ];
