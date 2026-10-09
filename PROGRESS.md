@@ -201,7 +201,7 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 - [x] OPS-02 Proxmox dev VM (#80; `deploy/proxmox/`, CI job `ops`, ADR-070)
 - [x] OPS-03 `create-vm.sh --generate-key`: a unique login keypair per VM (#82, ADR-072)
 - [x] OPS-04 faster CI: `build-musl` packages its own binary, the source `Dockerfile` builds in a cached `docker` job, caches saved from `main` only (#93, ADR-079)
-- [ ] OPS-05 each image's GHCR description lists the commits since the image before it (`:edge` and releases); release notes list the PRs (ADR-106)
+- [ ] OPS-05 each image's GHCR description lists the commits since the image before it (`:edge` and releases); release notes list the PRs (ADR-107)
 
 ## DEV — dev explorer (owner request 2026-10-05)
 - [x] DEV-01 dev explorer at `/dev` (#81; replaces v1's dev UI, forms from the OpenAPI document, never in production, design/10, ADR-071)
@@ -261,6 +261,7 @@ The site's backfill question (item 3) needs no task: the unbounded lookup backfi
 - [ ] SITE-03 `gameVersion` described as the game build, plus `ddragonVersion` (IMPLEMENTATION.md §Post-release — SITE)
 - [ ] SITE-04 declare response headers in the OpenAPI document; document the image mirror and the backfill limit (IMPLEMENTATION.md §Post-release — SITE)
 - [ ] SITE-05 partial schemas for Riot's account, summoner, league and mastery payloads (IMPLEMENTATION.md §Post-release — SITE)
+- [x] SITE-06 `roleBoundItem` in `PlayerSummary`, next to `item6`: the role quest slot (a bot laner's boots, another role's quest reward), verbatim, absent when Riot didn't send it; the showcase shows it after the inventory (#130, design/11, ADR-106)
 
 ## BLD — set builds on the champion page (owner request 2026-10-09)
 - [ ] BLD-01 per-player build facts from the timeline: `match_builds` (purchase order minus undos, finished items, boots, starter, skill order) filled by `builds:extract` before each recompute (IMPLEMENTATION.md §Post-release — BLD)

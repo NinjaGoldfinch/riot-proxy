@@ -6,7 +6,7 @@ name: release
 # (`v2.0.0-rc.0`) makes a pre-release and does not move `:2`.
 # A pull request that touches this file runs the builds and publishes nothing.
 # See ADR-063. The image's description lists the commits since the previous
-# `v*` tag, and the release notes list its pull requests (OPS-05, ADR-106).
+# `v*` tag, and the release notes list its pull requests (OPS-05, ADR-107).
 on:
   push:
     tags: ["v*"]
@@ -113,7 +113,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v6
         env:
-          # GHCR reads a multi-arch image's description from the index (ADR-106).
+          # GHCR reads a multi-arch image's description from the index (ADR-107).
           DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
         with:
           images: ${{ env.IMAGE }}

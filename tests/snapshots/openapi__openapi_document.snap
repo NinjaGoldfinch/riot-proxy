@@ -2525,6 +2525,14 @@ expression: doc
               "null"
             ]
           },
+          "roleBoundItem": {
+            "description": "Item in the role quest slot, outside the inventory: a bot laner's boots,\nor another role's quest reward. `0` when the slot is empty, as Riot's\nitem fields. Absent when Riot didn't send it (games from before role\nquests). Summaries are built from the archived raw match on every read,\nso games archived before this field was added carry it too.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
           "summoner1Id": {
             "format": "double",
             "type": [

@@ -4,7 +4,7 @@ name: edge
 # and `:sha-<short>`, so a dev box can follow `main` by pulling (OPS-02).
 # Release tags and `:2` stay with release.yml; `:edge` is never a release.
 # A pull request that touches this file builds and smoke-tests, and pushes nothing.
-# Each image's description lists the commits since the `:edge` before it (OPS-05, ADR-106).
+# Each image's description lists the commits since the `:edge` before it (OPS-05, ADR-107).
 on:
   push:
     branches: [main]
@@ -62,7 +62,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v6
         env:
-          # GHCR reads a multi-manifest image's description from the index (ADR-106).
+          # GHCR reads a multi-manifest image's description from the index (ADR-107).
           DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
         with:
           images: ${{ env.IMAGE }}

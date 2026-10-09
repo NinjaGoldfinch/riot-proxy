@@ -1166,7 +1166,14 @@ Accepted (owner request, task DEV-28). Amends ADR-056's participant rule; design
 - **Effect on planned work:** THR-02 (b) planned to stamp only ladder players into `match_tiers`, "which keeps today's rule that they are left out of analytics". That rule is gone. THR-02 should stamp every participant with this ADR's tier (ladder, else `player_ranks`, else `UNKNOWN`). THR-05 (d) and (e) re-stamp tiers that LAD-02's discover learns, and they need the same change.
 - **Tests:** unit tests on `player_ranks` (replace per platform, unranked queues dropped, odd bodies ignored). The hand-computed fixture now counts D under UNKNOWN (slices, stats, bans, spells, and D's side of a lane). A newer lookup beats the ladder entry and an older one doesn't; another queue's or platform's rank doesn't apply; another platform's match doesn't count. The facts plan reaches both tables by `puuid`. An integration test: a profile lookup records a Challenger's rank, and a rebuild counts their three solo games at CHALLENGER and the other 27 participants under UNKNOWN. A jsdom test puts UNKNOWN last on the champion page.
 
-## ADR-106 — Each image says what changed (2026-10-09)
+## ADR-106 — The match summary carries the role quest slot (2026-10-09)
+Accepted (owner request from ninjagoldfinch.lol, task SITE-06).
+- **What Riot sends:** since role quests, each match-v5 participant has `roleBoundItem`, an item held outside `item0`–`item6`. A bot laner who completes the quest has their boots moved there; other roles get their quest reward there. Riot's published `ParticipantDto` doesn't list it. It is in every recorded fixture (`tests/fixtures/matches/ranked-solo.json`: both BOTTOM players 3008, the other roles quest rewards) and in the site's live example (`OC1_712351051`, Ezreal 3158).
+- **Copied like the other item fields:** verbatim, next to `item6`, `0` for an empty slot because Riot sends `0`, and omitted when Riot didn't send it (a game from before role quests). That is the summary's existing rule (absent means absent), so "not recorded" and "empty" stay different without a `null`.
+- **No re-projection needed.** The archive stores the raw match. Summaries are built from it on every read (`summary::summarise`), so every archived game gets the field.
+- Showcase: the match card and the scoreboard show the role item after the inventory. On the card it fills the eighth cell of the 4 × 2 item grid.
+
+## ADR-107 — Each image says what changed (2026-10-09)
 Accepted (owner request, task OPS-05). Amends ADR-063 and ADR-069.
 - **Owner report:** every package version on GHCR showed "No description provided". The owner asked for a description of what changed in each image.
 - **Cause:** metadata-action already set the `org.opencontainers.image.description` label (to the repository's description). But build-push-action adds a provenance attestation, so even the amd64-only `:edge` is pushed as an OCI image index. For an index, GHCR reads the description only from the index's annotations, and we set none.

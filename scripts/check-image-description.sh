@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# OPS-05 (ADR-106). Fails unless an image's index carries the description GHCR
+# OPS-05 (ADR-107). Fails unless an image's index carries the description GHCR
 # shows, as an `org.opencontainers.image.description` annotation.
 #
 #   scripts/check-image-description.sh <image-ref | oci-tarball> <want>

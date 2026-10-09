@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# OPS-05 (ADR-106). Prints the one-line description GHCR shows on an image's
+# OPS-05 (ADR-107). Prints the one-line description GHCR shows on an image's
 # package page: what the image is, then the commits it adds over the image
 # before it, newest first. edge.yml and release.yml put it in the image's
 # `org.opencontainers.image.description` label and annotations.
