@@ -1181,3 +1181,11 @@ Accepted (owner request, task OPS-05). Amends ADR-063 and ADR-069.
 - **512 characters:** GHCR's documented limit for the description. The list stops before the limit and ends "and N more". A release's notes now also carry GitHub's generated list of pull requests (`gh release create --generate-notes`), which has the full list.
 - **Where it goes:** the label, plus annotations at the manifest and index levels (`DOCKER_METADATA_ANNOTATIONS_LEVELS=manifest,index`).
 - **Tests:** `scripts/image-description.test.sh` (CI job `ops`) runs the script against a throwaway git repo: tag and commit ranges, the fallbacks, and a long list that stays within 512 bytes and counts what it leaves out. It also tests `scripts/check-image-description.sh` against hand-made OCI tarballs. Both workflows run that check after the build. A pull request writes an OCI tarball and checks that, and a push checks the pushed index in the registry. So a missing description fails the run.
+
+## ADR-108 — A match summary names its Data Dragon version (2026-10-09)
+Accepted (owner request from ninjagoldfinch.lol, task SITE-03).
+- **The description was wrong.** `MatchSummary.gameVersion` said "the Data Dragon version to render it", but it is Riot's game build (`16.20.824.8524`), copied verbatim. A consumer that used it as a Data Dragon version built CDN URLs that don't exist. The description now says what it is.
+- **`ddragonVersion` is added beside it**: the newest version in the mirrored `versions.json` (Riot's list, from the current patch's sync) whose `major.minor` is the build's: `16.20.824.8524` → `16.20.1`, and the newest of `16.19.1`/`16.19.2` when a patch had two releases. `major.minor` is how the archive already derives `matches.patch`. It is omitted when nothing is mirrored yet, when the build is malformed, or when Riot's list doesn't have the patch: the proxy doesn't guess a version.
+- The list is read once per current patch and kept in memory (`Mirror::versions`), as the champion names are. The match page sets the field after summarising.
+- Only the current patch's images are mirrored (`/ddragon`), so an older `ddragonVersion` points at Riot's CDN, not at the mirror. The showcase keeps rendering with the current patch's images.
+

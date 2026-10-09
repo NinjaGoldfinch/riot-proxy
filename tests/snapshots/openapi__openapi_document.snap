@@ -1928,6 +1928,13 @@ expression: doc
       },
       "MatchSummary": {
         "properties": {
+          "ddragonVersion": {
+            "description": "The Data Dragon version for that build's patch (`16.20.1`): the newest\nin Riot's version list with the same `major.minor`. Absent when the\nmirror has no version list yet or the list lacks the patch.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "endOfGameResult": {
             "type": [
               "string",
@@ -1962,7 +1969,7 @@ expression: doc
             ]
           },
           "gameVersion": {
-            "description": "Which patch this was played on: the Data Dragon version to render it.",
+            "description": "The game build the match was played on, as Riot reports it\n(`16.20.824.8524`). Not a Data Dragon version: see `ddragonVersion`.",
             "type": [
               "string",
               "null"

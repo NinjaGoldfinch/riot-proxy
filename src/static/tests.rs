@@ -187,3 +187,61 @@ async fn no_mirror_means_no_names() {
             .is_empty()
     );
 }
+
+/// SITE-03: a match's game build → the Data Dragon version of its patch.
+#[test]
+fn a_game_build_maps_to_its_patchs_newest_data_dragon_version() {
+    let versions: Vec<String> = ["16.20.1", "16.19.2", "16.19.1", "16.2.1", "lolpatch_7.20"]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+    assert_eq!(
+        ddragon_version_for("16.20.824.8524", &versions).as_deref(),
+        Some("16.20.1")
+    );
+    assert_eq!(
+        ddragon_version_for("16.19.821.7343", &versions).as_deref(),
+        Some("16.19.2"),
+        "a patch with two releases gets the newest"
+    );
+    assert_eq!(
+        ddragon_version_for("16.2.700.1", &versions).as_deref(),
+        Some("16.2.1"),
+        "16.2 is not a prefix match for 16.20"
+    );
+    assert_eq!(
+        ddragon_version_for("16.21.900.1", &versions),
+        None,
+        "not in the list yet"
+    );
+    for bad in ["", "16", "16.", ".19.1", "x.19.1", "16.x.1"] {
+        assert_eq!(ddragon_version_for(bad, &versions), None, "{bad:?}");
+    }
+    assert_eq!(ddragon_version_for("16.20.824.8524", &[]), None);
+}
+
+#[tokio::test]
+async fn versions_are_the_current_patchs_list_and_follow_a_new_patch() {
+    let dir = tempfile::tempdir().unwrap();
+    let m = mirror(dir.path());
+    assert!(m.versions().await.is_empty(), "nothing mirrored yet");
+    patch(
+        dir.path(),
+        "16.19.1",
+        &[("versions", r#"["16.19.1","16.18.1"]"#)],
+        false,
+    );
+    assert_eq!(*m.versions().await, ["16.19.1", "16.18.1"]);
+    patch(
+        dir.path(),
+        "16.20.1",
+        &[("versions", r#"["16.20.1","16.19.1"]"#)],
+        false,
+    );
+    m.set_current("16.20.1");
+    assert_eq!(
+        *m.versions().await,
+        ["16.20.1", "16.19.1"],
+        "re-read for the new patch"
+    );
+}
