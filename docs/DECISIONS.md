@@ -1223,6 +1223,14 @@ Accepted (owner request, task DEV-30). design/11 §Views.
 - **Not done:** a separate trinket column as in the game client. That would keep the hole between the last item and the trinket, which is what the owner disliked.
 - **Tests:** jsdom: the match card's fixture has a hole (`item1`–`item3` empty, `item4` set) and its cells are four images then four empty boxes; every scoreboard row of the recorded ranked game, three of which have holes, shows its filled slots in order and the empty boxes last.
 
+## ADR-116 — The showcase puts the trinket and the boots in fixed cells (2026-10-09)
+Accepted (owner request, task DEV-31). Amends ADR-106 (showcase) and ADR-112; design/11 §Views.
+- **Owner report:** with the slots closed up (ADR-112), the trinket and boots landed in a different cell on every card, and every card showed a role quest item. They asked for the trinket in cell 4, the boots in cell 8, and the role quest item for ADC only.
+- **The grid:** eight cells, 4 × 2, on the match card and the scoreboard (which share `itemSlots`). The inventory (`item0`–`item5`, boots taken out) fills cells 1–3 then 5–7, closed up as before. Cell 4 is `item6`, which match-v5 reserves for the trinket. Cell 8 is the boots: for a `teamPosition` of `BOTTOM` with a `roleBoundItem`, that item (the quest moves a bot laner's boots there, ADR-106); otherwise the first inventory item Data Dragon's item.json tags `Boots`. No boots, or no trinket (Arena), leaves the cell an empty box. Six items with no boots still fit: they take cells 1–3 and 5–7.
+- **Other roles' `roleBoundItem` is not shown.** The API still returns it verbatim; only the display drops it.
+- **item.json is now a session lookup** with queues, spells and runes (one `/v1/static/item` per session, the same call the champion page already made). If it fails, the boots stay in the inventory and cell 8 is empty, so nothing is hidden.
+- **Tests:** node: `bootsIndex` reads the `Boots` tag; `itemSlots` for a bot laner with and without the quest done, another role's reward dropped, no boots, a full inventory, no item.json, no trinket. jsdom: a bot laner's and a top laner's match cards, and every scoreboard row of the recorded ranked game (boots in several slots, one row with none, sold-item holes) against the rule, with three rows spelled out.
+
 ## ADR-114 — `:edge` only moves forwards (2026-10-09)
 Accepted (outage report, task INC-02). Amends ADR-069; deploy/proxmox/README.md.
 - **What happened:** GitHub created the `edge` push run for #132 (`514336d`) 19 minutes after the commit, after the runs for #133 and #134 had published `:edge`. It then published `:edge` from a tree two commits behind `main`. The dev VM pulled it and the container exited on every start, because the database already had #134's migration. `concurrency` with `cancel-in-progress` cancels only a run that is still in progress, so it couldn't stop a run that started after the newer ones had finished.

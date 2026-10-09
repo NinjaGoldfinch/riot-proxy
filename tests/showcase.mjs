@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 const html = readFileSync(new URL('../src/ui/showcase.html', import.meta.url), 'utf8');
 const block = html.match(/\/\/ -{10} pure helpers[^\n]*\n([\s\S]*?)\/\/ -{10} end pure helpers/);
 assert.ok(block, 'the pure helpers block is marked in showcase.html');
-const h = new Function(`${block[1]}; return { APEX, QUEUES, LADDER_PAGE, APEX_LIST_CAP, apexCapNote, tierColour, winRate, pct, sortLadder, ladderPage, championIndex, imageUrl, statusNotices, byChampion, topChampions, parseRiotId, parseRoute, explorerLink, rankLabel, rankCards, queueNames, spellIndex, outcome, kda, durationSecs, clock, ago, masterySummary, liveGame, TIERS, SIDES, matchHref, matchTeams, goldDiff, goldScale, signedGold, tierRows, runeIndex, runePair, runeUrl, itemIndex, roleList, thousands, patchChoices, pickPatch, patchLabel };`)();
+const h = new Function(`${block[1]}; return { APEX, QUEUES, LADDER_PAGE, APEX_LIST_CAP, apexCapNote, tierColour, winRate, pct, sortLadder, ladderPage, championIndex, imageUrl, statusNotices, byChampion, topChampions, parseRiotId, parseRoute, explorerLink, rankLabel, rankCards, queueNames, spellIndex, outcome, kda, durationSecs, clock, ago, masterySummary, liveGame, TIERS, SIDES, matchHref, matchTeams, goldDiff, goldScale, signedGold, tierRows, runeIndex, runePair, runeUrl, itemIndex, bootsIndex, itemSlots, roleList, thousands, patchChoices, pickPatch, patchLabel };`)();
 
 test('apex tiers and queues are the ones the apex route accepts', () => {
   assert.deepEqual(h.APEX, ['CHALLENGER', 'GRANDMASTER', 'MASTER']);
@@ -271,6 +271,22 @@ test('runesReforged.json and item.json are indexed by id', () => {
   });
   assert.deepEqual(h.runeIndex(null), {});
   assert.deepEqual(h.itemIndex({ data: { 3078: { name: 'Trinity Force' } } }), { 3078: 'Trinity Force' });
+});
+
+test('the item grid: inventory closed up, the trinket in cell 4, boots in cell 8 (DEV-31)', () => {
+  // Data Dragon item.json tags boots "Boots"; Stealth Ward is a trinket, Trinity Force neither.
+  const boots = h.bootsIndex({ data: { 3006: { name: "Berserker's Greaves", tags: ['Boots', 'AttackSpeed'] }, 3047: { name: 'Plated Steelcaps', tags: ['Boots'] }, 3078: { name: 'Trinity Force', tags: ['Damage'] }, 3340: { name: 'Stealth Ward', tags: ['Trinket'] }, 1: { name: 'untagged' } } });
+  assert.deepEqual([...boots].sort(), [3006, 3047]);
+  assert.deepEqual([...h.bootsIndex(null)], []);
+  const p = { item0: 3078, item1: 0, item2: 3047, item3: 0, item4: 6672, item5: 0, item6: 3340, roleBoundItem: 3006 };
+  assert.deepEqual(h.itemSlots({ ...p, teamPosition: 'BOTTOM' }, boots), [3078, 3047, 6672, 3340, 0, 0, 0, 3006], 'a bot laner\'s role quest boots go to cell 8');
+  assert.deepEqual(h.itemSlots({ ...p, teamPosition: 'BOTTOM', roleBoundItem: 0 }, boots), [3078, 6672, 0, 3340, 0, 0, 0, 3047], 'quest not done: their inventory boots go there');
+  assert.deepEqual(h.itemSlots({ ...p, teamPosition: 'JUNGLE', roleBoundItem: 1209 }, boots), [3078, 6672, 0, 3340, 0, 0, 0, 3047], 'other roles\' quest rewards are not shown');
+  assert.deepEqual(h.itemSlots({ ...p, teamPosition: 'JUNGLE', item2: 0 }, boots), [3078, 6672, 0, 3340, 0, 0, 0, 0], 'no boots: cell 8 is empty');
+  const full = { item0: 1, item1: 2, item2: 3, item3: 4, item4: 5, item5: 6, item6: 3340 };
+  assert.deepEqual(h.itemSlots(full, boots), [1, 2, 3, 3340, 4, 5, 6, 0], 'six items fill cells 1–3 and 5–7');
+  assert.deepEqual(h.itemSlots({ ...full, item2: 3047 }, null), [1, 2, 3047, 3340, 4, 5, 6, 0], 'without item.json the boots stay in the inventory');
+  assert.deepEqual(h.itemSlots({ ...p, teamPosition: '', item6: 0, roleBoundItem: undefined }, boots), [3078, 6672, 0, 0, 0, 0, 0, 3047], 'no trinket (Arena): cell 4 empty');
 });
 
 test('keystone and secondary style from match-v5 perks or the proxy\'s summary', () => {

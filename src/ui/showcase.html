@@ -492,6 +492,23 @@ function runePair(p) {
 function itemIndex(doc) {
   return Object.fromEntries(Object.entries(doc?.data ?? {}).map(([id, it]) => [Number(id), it.name]));
 }
+/** The ids of the items Data Dragon's item.json tags "Boots". */
+function bootsIndex(doc) {
+  return new Set(Object.entries(doc?.data ?? {}).filter(([, it]) => it.tags?.includes('Boots')).map(([id]) => Number(id)));
+}
+
+// Every build in the same 4 × 2 shape (DEV-31): the inventory (item0–5) in cells 1–3 and 5–7, closed up so a sold or
+// unbought item leaves no hole (DEV-30), the trinket (item6) in cell 4 and the boots in cell 8. A bot laner who finished
+// the role quest has their boots in the role quest slot (`roleBoundItem`, SITE-06); other roles' quest rewards are not
+// shown. `boots` is bootsIndex's set; without it the boots stay in the inventory and cell 8 is empty.
+function itemSlots(p, boots) {
+  const inv = [p.item0, p.item1, p.item2, p.item3, p.item4, p.item5].filter(Boolean);
+  let shoes = p.teamPosition === 'BOTTOM' && p.roleBoundItem ? p.roleBoundItem : 0;
+  const at = shoes ? -1 : inv.findIndex((id) => boots?.has(id));
+  if (at >= 0) shoes = inv.splice(at, 1)[0];
+  const [a = 0, b = 0, c = 0, d = 0, e = 0, f = 0] = inv;
+  return [a, b, c, p.item6 ?? 0, d, e, f, shoes];
+}
 
 /** The lanes a matchup list covers, in Riot's teamPosition order. */
 const ROLES = ['TOP', 'JUNGLE', 'MIDDLE', 'BOTTOM', 'UTILITY'];
@@ -731,19 +748,23 @@ const MASTERY_SHOWN = 12;
 let queues = null; // queueId → description, once per session
 let spells = null; // summoner spell key → image file, once per session
 let runes = null; // rune and style id → { name, icon }, once per session
+let itemNames = null; // item id → name, once per session
+let boots = null; // ids of the items Data Dragon tags "Boots", once per session
 // Bumped on every route, so a slow call for a view the user already left draws nothing.
 let viewSeq = 0;
 const pl = { id: null, profile: null, queue: 0, champion: 0, start: 0, matches: [], hasMore: false, mastery: null, masteryAll: false };
 
 async function loadLookups() {
-  const [q, s, r] = await Promise.all([
+  const [q, s, r, i] = await Promise.all([
     queues ? null : get('/v1/static/queues'),
     spells ? null : get('/v1/static/summoner'),
     runes ? null : get('/v1/static/runes'),
+    itemNames ? null : get('/v1/static/item'),
   ]);
   if (q?.ok) queues = queueNames(q.json);
   if (s?.ok) spells = spellIndex(s.json);
   if (r?.ok) runes = runeIndex(r.json);
+  if (i?.ok) [itemNames, boots] = [itemIndex(i.json), bootsIndex(i.json)];
 }
 
 // Riot's descriptions read "5v5 Ranked Solo games"; as a label the last word adds nothing.
@@ -751,13 +772,6 @@ const queueName = (id) => (id == null ? '' : queues?.[id]?.replace(/\s+games$/i,
 const spellIcon = (id) => {
   const url = imageUrl(version, 'spell', spells?.[id]);
   return url ? `<img class="icon xs" src="${esc(url)}" alt="spell ${esc(id)}" loading="lazy">` : `<span class="icon xs"></span>`;
-};
-// The inventory (item0–5), the trinket (item6), then the role quest slot (`roleBoundItem`, SITE-06: a bot laner's
-// boots or a quest reward) when Riot sent one. Riot reports the slot each item sat in, so a sold or unbought item
-// leaves a hole; the filled slots go first, in that order, and the empty boxes last, so a build has no gaps (DEV-30).
-const itemSlots = (p) => {
-  const slots = [p.item0, p.item1, p.item2, p.item3, p.item4, p.item5, p.item6, ...(p.roleBoundItem != null ? [p.roleBoundItem] : [])];
-  return [...slots.filter(Boolean), ...slots.filter((id) => !id)];
 };
 const itemIcon = (id) => {
   const url = id ? imageUrl(version, 'item', `${id}.png`) : null;
@@ -905,7 +919,7 @@ function matchCard(m) {
   const o = outcome(p);
   const secs = durationSecs(m);
   const cs = (p.totalMinionsKilled ?? 0) + (p.neutralMinionsKilled ?? 0);
-  const items = itemSlots(p);
+  const items = itemSlots(p, boots);
   return `<article class="match ${o.kind}" data-match="${esc(m.matchId)}" data-href="${esc(matchHref(pl.region, m.matchId))}" title="open the scoreboard">
     <div class="meta"><b>${esc(o.label)}</b><span>${esc(queueName(m.queueId) || m.gameMode || '')}</span><span class="muted">${esc(ago(m.gameEndTimestamp ?? m.gameCreation))} · ${clock(secs)}</span></div>
     <div class="pick">${portrait(p.championId, p.champLevel)}<span class="spells">${spellIcon(p.summoner1Id)}${spellIcon(p.summoner2Id)}</span>${runeIcons(p)}</div>
@@ -1014,7 +1028,7 @@ function renderScoreboard(teams, info) {
           <td><span class="wr"><span class="bar dmg hide-sm"><i style="width:${((p.totalDamageDealtToChampions ?? 0) / maxDmg) * 100}%"></i></span>${(p.totalDamageDealtToChampions ?? 0).toLocaleString()}</span></td>
           <td class="n hide-sm">${(p.goldEarned ?? 0).toLocaleString()}</td>
           <td class="n hide-sm">${esc(p.visionScore ?? 0)}</td>
-          <td class="hide-sm"><span class="items row">${itemSlots(p).map(itemIcon).join('')}</span></td></tr>`;
+          <td class="hide-sm"><span class="items row">${itemSlots(p, boots).map(itemIcon).join('')}</span></td></tr>`;
       }).join('')}</tbody></table></div></section>`;
   }).join('');
 }
@@ -1097,7 +1111,6 @@ function renderGold(tl, match) {
 }
 
 // ---------- champion view (DEV-08)
-let itemNames = null; // item id → name, once per session
 const ch = { id: null, role: '' };
 /** The champion view's platform: the one picked on the page, else the one picked above; '' is every platform. */
 const champRegion = () => state.region ?? platform();
@@ -1129,7 +1142,6 @@ async function renderChampion({ id }) {
   const [res] = await Promise.all([
     get(`/v1/lol/analytics/champions/${id}?${q}`),
     loadLookups(),
-    itemNames ? null : get('/v1/static/item').then((r) => { if (r.ok) itemNames = itemIndex(r.json); }),
   ]);
   if (seq !== viewSeq) return;
   loadMatchups(seq);
