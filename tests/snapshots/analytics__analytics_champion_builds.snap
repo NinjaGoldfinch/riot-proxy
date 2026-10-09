@@ -1,0 +1,84 @@
+---
+source: tests/analytics.rs
+assertion_line: 870
+expression: redact(body)
+---
+{
+  "builds": [
+    {
+      "boots": [
+        {
+          "games": 1,
+          "itemId": 3020,
+          "winRate": 1
+        }
+      ],
+      "core": [
+        6655,
+        3157
+      ],
+      "games": 1,
+      "next": [
+        [
+          {
+            "games": 1,
+            "itemId": 3089,
+            "winRate": 1
+          }
+        ],
+        [
+          {
+            "games": 1,
+            "itemId": 4645,
+            "winRate": 1
+          }
+        ],
+        []
+      ],
+      "pickRate": 1,
+      "runes": [
+        {
+          "games": 1,
+          "keystoneId": 8229,
+          "subStyleId": 8000,
+          "winRate": 1
+        }
+      ],
+      "skillOrder": [
+        {
+          "games": 1,
+          "order": "QEW",
+          "winRate": 1
+        }
+      ],
+      "spells": [
+        {
+          "games": 1,
+          "spellA": 4,
+          "spellB": 12,
+          "winRate": 1
+        }
+      ],
+      "starter": [
+        {
+          "games": 1,
+          "items": [
+            1056,
+            2003,
+            2003
+          ],
+          "winRate": 1
+        }
+      ],
+      "winRate": 1,
+      "wins": 1
+    }
+  ],
+  "championId": 134,
+  "computedAt": "<iso>",
+  "patch": "16.19",
+  "platform": null,
+  "queue": "RANKED_SOLO_5x5",
+  "role": "MIDDLE",
+  "totalGames": 1
+}

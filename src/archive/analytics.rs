@@ -720,6 +720,60 @@ pub async fn builds(db: &Db, r: Read) -> Result<Vec<BuildRow>, DbError> {
     .await
 }
 
+/// One champion's games with a set build in the slice, every core summed,
+/// and the newest recompute time of those rows: `pickRate`'s denominator.
+pub async fn build_totals(db: &Db, r: Read) -> Result<(i64, Option<i64>), DbError> {
+    db.read(move |c| {
+        Ok(c.query_row(
+            &format!(
+                "SELECT coalesce(sum(games), 0), max(computed_at) FROM champion_builds WHERE {}",
+                read_where(false, true, true)
+            ),
+            params![
+                r.key_scope,
+                r.platform,
+                r.queue,
+                r.patch,
+                None::<String>,
+                r.role,
+                r.champion_id,
+                r.remakes
+            ],
+            |x| Ok((x.get(0)?, x.get(1)?)),
+        )?)
+    })
+    .await
+}
+
+/// The role one champion was played in most in the slice, every tier summed
+/// (`champion_stats`); `None` when it has no games. A tie goes to a lane
+/// over the roleless rows, then to the role that sorts first.
+pub async fn top_role(db: &Db, r: Read) -> Result<Option<String>, DbError> {
+    db.read(move |c| {
+        use rusqlite::OptionalExtension;
+        Ok(c.query_row(
+            &format!(
+                "SELECT role FROM champion_stats WHERE {}
+                  GROUP BY role ORDER BY sum(games) DESC, role = '', role LIMIT 1",
+                read_where(false, false, true)
+            ),
+            params![
+                r.key_scope,
+                r.platform,
+                r.queue,
+                r.patch,
+                None::<String>,
+                None::<String>,
+                r.champion_id,
+                r.remakes
+            ],
+            |x| x.get(0),
+        )
+        .optional()?)
+    })
+    .await
+}
+
 /// What the players of one set build chose besides its core: `part` is
 /// `item3`–`item5`, `starter`, `boots`, `skill_order`, `runes` or `spells`,
 /// and `value` is as stored in `champion_build_parts`.
