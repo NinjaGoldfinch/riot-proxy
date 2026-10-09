@@ -263,7 +263,8 @@ pub struct Read {
     /// `None`: every platform summed (ADR-065).
     pub platform: Option<String>,
     pub queue: String,
-    pub patch: String,
+    /// `None`: every patch summed (`?patch=all`, ADR-094).
+    pub patch: Option<String>,
     pub tier: Option<String>,
     /// `None`: every role summed; `Some("")` is the roleless rows.
     pub role: Option<String>,
@@ -302,12 +303,57 @@ pub async fn latest_patch(
     .await
 }
 
-/// The filter a read uses: `?1`–`?4` scope/platform (NULL: all)/queue/patch and `?8`
+/// One aggregated patch: its games (participant rows, as `totalGames`) and
+/// recompute time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PatchRow {
+    pub patch: String,
+    pub games: i64,
+    pub computed_at: i64,
+}
+
+/// Every patch this ladder (or every ladder, without a platform) has stats
+/// for, newest first (ADR-094).
+pub async fn patches(
+    db: &Db,
+    key_scope: &str,
+    platform: Option<&str>,
+    queue: &str,
+    remakes: bool,
+) -> Result<Vec<PatchRow>, DbError> {
+    let (scope, platform, queue) = (
+        key_scope.to_string(),
+        platform.map(str::to_string),
+        queue.to_string(),
+    );
+    db.read(move |c| {
+        let mut stmt = c.prepare(&format!(
+            "SELECT patch, sum(games), max(computed_at) FROM champion_stats
+              WHERE key_scope = ?1 AND (?2 IS NULL OR platform = ?2) AND queue = ?3 AND (?4 OR remake = 0)
+              GROUP BY patch ORDER BY {PATCH_DESC}"
+        ))?;
+        let rows = stmt
+            .query_map(params![scope, platform, queue, remakes], |r| {
+                Ok(PatchRow {
+                    patch: r.get(0)?,
+                    games: r.get(1)?,
+                    computed_at: r.get(2)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    })
+    .await
+}
+
+/// The filter a read uses: `?1`–`?4` scope/platform/queue/patch (NULL platform
+/// or patch: all) and `?8`
 /// whether remakes count always; `?5` tier, `?6` role and `?7` champion for
 /// the tables that have those columns. Unused numbers are bound but unread.
 fn read_where(tier: bool, role: bool, champion: bool) -> String {
     let mut w = String::from(
-        "key_scope = ?1 AND (?2 IS NULL OR platform = ?2) AND queue = ?3 AND patch = ?4 AND (?8 OR remake = 0)",
+        "key_scope = ?1 AND (?2 IS NULL OR platform = ?2) AND queue = ?3 AND (?4 IS NULL OR patch = ?4)
+           AND (?8 OR remake = 0)",
     );
     if tier {
         w.push_str(" AND (?5 IS NULL OR tier = ?5)");
@@ -321,7 +367,8 @@ fn read_where(tier: bool, role: bool, champion: bool) -> String {
     w
 }
 
-/// One champion at one tier, its roles summed unless a role is asked for.
+/// One champion at one tier, its roles summed unless a role is asked for;
+/// every patch summed when the read names none (`patch` is then `"all"`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatRow {
     pub champion_id: i64,
@@ -346,11 +393,11 @@ pub struct StatRow {
 pub async fn stats(db: &Db, r: Read) -> Result<Vec<StatRow>, DbError> {
     db.read(move |c| {
         let mut stmt = c.prepare(&format!(
-            "SELECT champion_id, tier, patch, sum(games), sum(wins), sum(matches_picked), sum(stated_games),
+            "SELECT champion_id, tier, coalesce(?4, 'all'), sum(games), sum(wins), sum(matches_picked), sum(stated_games),
                     sum(kills), sum(deaths), sum(assists), sum(cs), sum(gold), sum(damage), sum(vision),
                     sum(duration_s), max(computed_at)
                FROM champion_stats WHERE {}
-              GROUP BY champion_id, tier, patch HAVING sum(games) >= ?9
+              GROUP BY champion_id, tier HAVING sum(games) >= ?9
               ORDER BY sum(games) DESC, champion_id, tier LIMIT ?10",
             read_where(true, true, true)
         ))?;

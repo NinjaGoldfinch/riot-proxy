@@ -486,7 +486,7 @@ impl Stats {
                     key_scope: self.key_scope.clone(),
                     platform: Some(platform),
                     queue,
-                    patch: p,
+                    patch: Some(p),
                     tier: None,
                     role: None,
                     champion_id: None,

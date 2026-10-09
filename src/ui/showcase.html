@@ -32,6 +32,7 @@
   .card h2 { margin: 0; font-size: 15px; }
   .card .tools { margin-left: auto; display: flex; gap: 4px; flex-wrap: wrap; }
   .card .tools button { font-size: 12px; padding: 2px 9px; }
+  .card .tools select { font-size: 12px; padding: 2px 6px; }
   .src { font: 11px var(--mono); color: var(--dim); border: 1px dashed var(--line); border-radius: 4px; padding: 1px 6px; display: inline-block; margin: 2px 4px 0 0; max-width: calc(100% - 4px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: top; }
   .src:hover { color: var(--accent); border-color: var(--accent); }
   .muted { color: var(--dim); }
@@ -188,7 +189,8 @@
     "GET /v1/lol/matches/{region}/{matchId}": "match detail: scoreboard, bans, objectives",
     "GET /v1/lol/matches/{region}/{matchId}/timeline": "match detail: gold-difference graph",
     "GET /v1/lol/analytics/champions/{championId}": "champion: rates by tier, items, spells, runes",
-    "GET /v1/lol/analytics/champions/{championId}/matchups": "champion: every lane matchup (the detail carries only the top few)"
+    "GET /v1/lol/analytics/champions/{championId}/matchups": "champion: every lane matchup (the detail carries only the top few)",
+    "GET /v1/lol/analytics/patches": "home top champions and champion: the patch picker"
   },
   "notShowcased": {
     "GET /v1/lol/league/entries/by-puuid/{platform}/{puuid}": "the profile composite carries the same league-v4 entries, which the rank cards use",
@@ -482,6 +484,18 @@ function itemIndex(doc) {
 /** The lanes a matchup list covers, in Riot's teamPosition order. */
 const ROLES = ['TOP', 'JUNGLE', 'MIDDLE', 'BOTTOM', 'UTILITY'];
 const roleList = (matchups) => ROLES.filter((r) => (matchups ?? []).some((m) => m.role === r));
+/** The patch picker (DEV-21): every patch summed first, then each patch the ladder has analytics for, newest first. */
+function patchChoices(patches) {
+  const list = patches ?? [];
+  const total = list.reduce((n, p) => n + (p.games ?? 0), 0);
+  return [['all', `All patches · ${total.toLocaleString()} games`], ...list.map((p) => [p.patch, `${p.patch} · ${(p.games ?? 0).toLocaleString()} games`])];
+}
+
+/** The patch to read: the one picked while the list still has it, else every patch. */
+const pickPatch = (picked, patches) => (picked !== 'all' && (patches ?? []).some((p) => p.patch === picked) ? picked : 'all');
+
+const patchLabel = (p) => (p === 'all' ? 'all patches' : `patch ${p}`);
+
 // ---------- end pure helpers
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -497,7 +511,9 @@ let version = null;
 let champions = {};
 const names = new Map(); // puuid → account, for the session
 const calls = [];
-const state = { tier: 'CHALLENGER', queue: 'RANKED_SOLO_5x5', page: 0, ladder: null, ladderFor: '' };
+// patch: the analytics patch, `all` or a `major.minor` (DEV-21). region: the champion view's
+// platform, '' for every platform; null follows the platform picked above.
+const state = { tier: 'CHALLENGER', queue: 'RANKED_SOLO_5x5', page: 0, ladder: null, ladderFor: '', patch: 'all', region: null };
 
 /** One GET through the proxy, logged in the calls drawer. */
 async function get(path) {
@@ -649,20 +665,37 @@ async function loadRotation() {
     : `<p class="empty">No rotation published.</p>`);
 }
 
+/** The patches a ladder has analytics for; [] when the call fails, so the page still reads every patch. */
+async function patchList(platformId) {
+  const q = new URLSearchParams({ queue: state.queue });
+  if (platformId) q.set('platform', platformId);
+  const res = await get(`/v1/lol/analytics/patches?${q}`);
+  return res.ok ? res.json?.patches ?? [] : [];
+}
+
+const patchSelect = (patches) => `<select data-patch aria-label="patch">${patchChoices(patches).map(([v, l]) => `<option value="${esc(v)}" ${v === state.patch ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
+
 async function loadTop() {
   const el = $('#top');
-  const head = `<header><h2>Top champions</h2><span class="muted" id="topMeta"></span></header><div>${sources('GET /v1/lol/analytics/champions')}</div>`;
-  const q = new URLSearchParams({ platform: platform(), queue: state.queue, limit: '500' });
+  const patches = await patchList(platform());
+  state.patch = pickPatch(state.patch, patches);
+  const head = `<header><h2>Top champions</h2><span class="muted" id="topMeta"></span><div class="tools">${patchSelect(patches)}</div></header><div>${sources('GET /v1/lol/analytics/champions', 'GET /v1/lol/analytics/patches')}</div>`;
+  const q = new URLSearchParams({ platform: platform(), queue: state.queue, patch: state.patch, limit: '500' });
   const res = await get(`/v1/lol/analytics/champions?${q}`);
   if (!res.ok) { el.innerHTML = head + failure(res); return; }
   const top = topChampions(res.json?.champions);
-  if (!top.played.length) { el.innerHTML = head + `<p class="empty">No analytics yet: they fill in when a ladder crawl for this platform completes.</p>`; return; }
+  if (!top.played.length) {
+    el.innerHTML = head + (patches.length
+      ? `<p class="empty">No champion has enough games on ${esc(patchLabel(state.patch))} yet.</p>`
+      : `<p class="empty">No analytics yet: they fill in when a ladder crawl for this platform completes.</p>`);
+    return;
+  }
   const list = (rows, stat) => `<ol>${rows.map((c) => `<li><a href="#/champion/${c.championId}">${champIcon(c.championId, 'sm')}</a><a href="#/champion/${c.championId}">${esc(champions[c.championId]?.name ?? c.championName ?? `#${c.championId}`)}</a><span class="stat">${stat(c)}</span></li>`).join('')}</ol>`;
   el.innerHTML = head + `<div class="cols top">
     <div><h3 class="muted" style="font-size:12px;margin:8px 0 2px">Highest win rate</h3>${list(top.winRate, (c) => `${pct(c.winRate)}<small>${c.games} games</small>`)}</div>
     <div><h3 class="muted" style="font-size:12px;margin:8px 0 2px">Most played</h3>${list(top.played, (c) => `${c.games}<small>${pct(c.winRate)} win</small>`)}</div>
   </div>`;
-  $('#topMeta', el).textContent = `patch ${res.json.patch ?? '–'} · ${QUEUES.find(([q]) => q === state.queue)?.[1]}`;
+  $('#topMeta', el).textContent = `${patchLabel(state.patch)} · ${QUEUES.find(([q]) => q === state.queue)?.[1]}`;
 }
 
 // ---------- player (DEV-07)
@@ -901,6 +934,7 @@ Object.assign(OP, {
   timeline: 'GET /v1/lol/matches/{region}/{matchId}/timeline',
   champ: 'GET /v1/lol/analytics/champions/{championId}',
   matchups: 'GET /v1/lol/analytics/champions/{championId}/matchups',
+  patches: 'GET /v1/lol/analytics/patches',
 });
 const OBJECTIVES = [['tower', 'Towers'], ['inhibitor', 'Inhibitors'], ['dragon', 'Dragons'], ['riftHerald', 'Heralds'], ['baron', 'Barons']];
 
@@ -1035,6 +1069,9 @@ function renderGold(tl, match) {
 // ---------- champion view (DEV-08)
 let itemNames = null; // item id → name, once per session
 const ch = { id: null, role: '' };
+/** The champion view's platform: the one picked on the page, else the one picked above; '' is every platform. */
+const champRegion = () => state.region ?? platform();
+const regionSelect = () => `<select data-region aria-label="region"><option value="">All regions</option>${(cfg?.platforms ?? []).map((p) => `<option value="${esc(p.value)}" ${p.value === champRegion() ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}</select>`;
 
 async function renderChampion({ id }) {
   const seq = ++viewSeq;
@@ -1044,15 +1081,20 @@ async function renderChampion({ id }) {
   const tabs = QUEUES.map(([q, l]) => `<button data-cqueue="${q}" class="${q === state.queue ? 'on' : ''}">${l}</button>`).join('');
   $('#view').innerHTML = `<section class="card" id="cHead"><div class="who">${champIcon(id)}
       <div><h2>${esc(name)}</h2><div class="muted">${esc(c?.title ?? '')}</div><div id="cMeta" class="muted"></div></div>
-      <div class="tools">${tabs}</div></div>
-      <div>${sources(OP.champ, OP.file)}</div></section>
+      <div class="tools">${tabs}${regionSelect()}<span id="cPatch"></span></div></div>
+      <div>${sources(OP.champ, OP.patches, OP.file)}</div></section>
     <div class="grid">
       <div><section class="card" id="cTiers"><header><h2>By tier</h2></header><p class="muted">loading…</p></section>
         <section class="card" id="cMatchups"><header><h2>Matchups</h2></header><p class="muted">loading…</p></section></div>
       <div><section class="card" id="cBuild"><header><h2>Builds</h2></header><p class="muted">loading…</p></section></div>
     </div>`;
-  const q = new URLSearchParams({ queue: state.queue, limit: '10' });
-  if (platform()) q.set('platform', platform());
+  const region = champRegion();
+  const patches = await patchList(region);
+  if (seq !== viewSeq) return;
+  state.patch = pickPatch(state.patch, patches);
+  $('#cPatch').innerHTML = patchSelect(patches);
+  const q = new URLSearchParams({ queue: state.queue, patch: state.patch, limit: '10' });
+  if (region) q.set('platform', region);
   const [res] = await Promise.all([
     get(`/v1/lol/analytics/champions/${id}?${q}`),
     loadLookups(),
@@ -1062,9 +1104,11 @@ async function renderChampion({ id }) {
   loadMatchups(seq);
   if (!res.ok) { $('#cTiers').innerHTML = `<header><h2>By tier</h2></header>${failure(res)}`; $('#cBuild').innerHTML = `<header><h2>Builds</h2></header>`; return; }
   const d = res.json;
-  $('#cMeta').textContent = `${platform() || 'every platform'} · ${QUEUES.find(([q2]) => q2 === d.queue)?.[1] ?? d.queue} · patch ${d.patch ?? '–'} · ${(d.totalGames ?? 0).toLocaleString()} games`;
+  $('#cMeta').textContent = `${region || 'every platform'} · ${QUEUES.find(([q2]) => q2 === d.queue)?.[1] ?? d.queue} · ${patchLabel(state.patch)} · ${(d.totalGames ?? 0).toLocaleString()} games`;
   const { rows, all } = tierRows(d.stats);
-  const none = `<p class="empty">No analytics for ${esc(name)} yet: they fill in when a ladder crawl${platform() ? ' for this platform' : ''} completes.</p>`;
+  const none = patches.length
+    ? `<p class="empty">Not enough ${esc(name)} games on ${esc(patchLabel(state.patch))}${region ? '' : ' in any region'} yet.</p>`
+    : `<p class="empty">No analytics for ${esc(name)} yet: they fill in when a ladder crawl${region ? ' for this platform' : ''} completes.</p>`;
   const num = (v, f) => (v == null ? '–' : f(v));
   $('#cTiers').innerHTML = `<header><h2>By tier</h2>${rows.length ? `<span class="muted">${pct(all.winRate)} win over ${all.games.toLocaleString()} games</span>` : ''}</header><div>${sources(OP.champ)}</div>` + (rows.length
     ? `<div class="scroll"><table><thead><tr><th>Tier</th><th class="n">Games</th><th>Win rate</th><th class="n">Pick</th><th class="n">Ban</th><th class="n hide-sm">KDA</th><th class="n hide-sm">CS/min</th><th class="n hide-sm">Gold/min</th></tr></thead><tbody>${rows.map((r) => `<tr>
@@ -1080,13 +1124,13 @@ async function renderChampion({ id }) {
   const runeRows = (d.runes ?? []).map((e) => `<li><span class="spells-row">${runeIcon(e.keystoneId)}${runeIcon(e.subStyleId)}</span><span>${esc(runes?.[e.keystoneId]?.name ?? `rune ${e.keystoneId}`)} <small class="muted">+ ${esc(runes?.[e.subStyleId]?.name ?? e.subStyleId)}</small></span>${stat(e)}</li>`).join('');
   const sub = (title, body) => `<h3 class="muted sub">${title}</h3>${body ? `<ol class="list">${body}</ol>` : '<p class="muted">–</p>'}`;
   $('#cBuild').innerHTML = `<header><h2>Builds</h2></header><div>${sources(OP.champ, OP.file)}</div>`
-    + (items || spellRows || runeRows ? sub('Items', items) + sub('Summoner spells', spellRows) + sub('Runes', runeRows) : `<p class="empty">No builds yet.</p>`);
+    + (items || spellRows || runeRows ? sub('Items', items) + sub('Summoner spells', spellRows) + sub('Runes', runeRows) : `<p class="empty">No builds ${state.patch === 'all' ? 'yet' : `on ${esc(patchLabel(state.patch))}`}.</p>`);
 }
 
 async function loadMatchups(seq) {
   const el = $('#cMatchups');
-  const q = new URLSearchParams({ queue: state.queue, limit: '200' });
-  if (platform()) q.set('platform', platform());
+  const q = new URLSearchParams({ queue: state.queue, patch: state.patch, limit: '200' });
+  if (champRegion()) q.set('platform', champRegion());
   const res = await get(`/v1/lol/analytics/champions/${ch.id}/matchups?${q}`);
   if (seq !== viewSeq) return;
   const head = (tabs = '') => `<header><h2>Matchups</h2><div class="tools">${tabs}</div></header><div>${sources(OP.matchups)}</div>`;
@@ -1107,7 +1151,7 @@ function renderMatchups() {
       <td class="name">${champLink(m.opponentId, 'sm')} ${esc(champions[m.opponentId]?.name ?? m.opponentName ?? `#${m.opponentId}`)}</td>
       <td>${esc(titleCase(m.role))}</td><td class="n">${m.games.toLocaleString()}</td>
       <td><span class="wr"><span class="bar"><i style="width:${(m.winRate ?? 0) * 100}%"></i></span>${pct(m.winRate)}</span></td></tr>`).join('')}</tbody></table></div>`
-    : `<p class="empty">No lane matchups archived yet.</p>`);
+    : `<p class="empty">No lane matchups ${state.patch === 'all' ? 'archived yet' : `on ${esc(patchLabel(state.patch))}`}.</p>`);
 }
 
 function route() {
@@ -1133,6 +1177,12 @@ document.addEventListener('click', (ev) => {
   if (t.dataset.cqueue) { state.queue = t.dataset.cqueue; route(); }
   if (t.dataset.role !== undefined) { ch.role = t.dataset.role; renderMatchups(); }
   if ('refresh' in t.dataset) { const { view, args } = parseRoute(location.hash); if (view === 'player') renderPlayer(args, true); }
+});
+// The analytics pickers (DEV-21): the patch is shared by the home and champion views.
+document.addEventListener('change', (ev) => {
+  const t = ev.target;
+  if ('patch' in t.dataset) { state.patch = t.value; if (parseRoute(location.hash).view === 'champion') route(); else loadTop(); }
+  if ('region' in t.dataset) { state.region = t.value; route(); }
 });
 // An image the mirror cannot serve (an item retired since that game, say) becomes the
 // same empty box, with a champion's initials where it has them.
@@ -1160,7 +1210,7 @@ async function boot() {
   $('#key').hidden = cfg.authDisabled;
   const saved = store.get('rp.showcase.platform', '');
   $('#platform').innerHTML = `<option value="">platform…</option>${cfg.platforms.map((p) => `<option value="${esc(p.value)}" ${p.value === saved ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}`;
-  $('#platform').onchange = () => { store.set('rp.showcase.platform', platform()); state.ladderFor = ''; route(); };
+  $('#platform').onchange = () => { store.set('rp.showcase.platform', platform()); state.ladderFor = ''; state.region = null; route(); };
   const [v, c] = await Promise.all([get('/v1/static/versions'), get('/v1/static/champion')]);
   version = v.json?.current ?? null;
   $('#patch').textContent = version ? `patch ${version}` : 'no patch mirrored';

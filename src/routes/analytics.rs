@@ -23,7 +23,7 @@ use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
 use crate::app::AppState;
-use crate::archive::analytics::{self, Facet, FacetRow, Read, StatRow};
+use crate::archive::analytics::{self, Facet, FacetRow, PatchRow, Read, StatRow};
 use crate::clock::iso_ms;
 use crate::db::DbError;
 use crate::http::{ApiError, validate};
@@ -47,6 +47,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(champions))
         .routes(routes!(champion_detail))
         .routes(routes!(champion_matchups))
+        .routes(routes!(patches))
 }
 
 /// One champion at one tier (v1 `ChampionStatEntry`).
@@ -213,12 +214,40 @@ pub struct ChampionDetailResponse {
     spells: Vec<ChampionSpellEntry>,
 }
 
+/// One aggregated patch (ADR-094).
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalyticsPatchEntry {
+    /// `major.minor`.
+    patch: String,
+    /// Participant games, as `totalGames` counts them on the champions route.
+    games: i64,
+    #[schema(required = true)]
+    computed_at: Option<String>,
+}
+
+/// The patches a ladder has analytics for (ADR-094).
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalyticsPatchesResponse {
+    /// `null` when the request named no platform: every platform summed.
+    #[schema(required = true)]
+    platform: Option<String>,
+    queue: String,
+    /// Newest first.
+    patches: Vec<AnalyticsPatchEntry>,
+}
+
+/// `?patch=all`: every aggregated patch summed (ADR-094).
+const ALL_PATCHES: &str = "all";
+
 /// What every analytics query names, validated in v1's property order.
 struct Common {
     /// `None`: every platform (ADR-065).
     platform: Option<String>,
     queue: String,
     tier: Option<String>,
+    /// A `major.minor`, or [`ALL_PATCHES`].
     patch: Option<String>,
     role: Option<String>,
     /// As the caller sent it (the ETag's `query.minGames`).
@@ -240,21 +269,46 @@ fn common(
     roles: &[&'static str],
     limit: (i64, i64, i64),
 ) -> Result<Common, ApiError> {
-    let platform = validate::query_platform(q(query, "platform"))?;
-    let queue = validate::query_one_of("queue", q(query, "queue"), &RANKED_QUEUES)?;
+    let ladder = ladder_query(state, query)?;
     let tiers: Vec<&'static str> = crate::riot::ladder::tiers().collect();
     let tier = if tier {
         validate::query_one_of("tier", q(query, "tier"), &tiers)?
     } else {
         None
     };
-    let patch = validate::patch_query(q(query, "patch"))?;
+    // `all` sums every patch (ADR-094); anything else is a `major.minor`.
+    let patch = match q(query, "patch") {
+        Some(ALL_PATCHES) => Some(ALL_PATCHES),
+        raw => validate::patch_query(raw)?,
+    };
     let role = validate::query_one_of("role", q(query, "role"), roles)?;
     let min_games = validate::int_query("minGames", q(query, "minGames"), 0, i64::MAX)?;
     let (min, max, default) = limit;
     let limit = validate::int_query("limit", q(query, "limit"), min, max)?.unwrap_or(default);
     let remakes = validate::remakes_query(q(query, "remakes"))?;
     Ok(Common {
+        platform: ladder.platform,
+        queue: ladder.queue,
+        tier: tier.map(str::to_string),
+        patch: patch.map(str::to_string),
+        role: role.map(str::to_string),
+        min_games,
+        limit,
+        remakes,
+    })
+}
+
+/// The ladder a query names: platform (`None`: every platform) and queue
+/// (default the first of `LADDER_QUEUES`), validated in that order (v1).
+struct LadderQuery {
+    platform: Option<String>,
+    queue: String,
+}
+
+fn ladder_query(state: &AppState, query: &HashMap<String, String>) -> Result<LadderQuery, ApiError> {
+    let platform = validate::query_platform(q(query, "platform"))?;
+    let queue = validate::query_one_of("queue", q(query, "queue"), &RANKED_QUEUES)?;
+    Ok(LadderQuery {
         platform: platform.map(|p| p.as_str().to_string()),
         queue: queue.map_or_else(
             || {
@@ -267,12 +321,6 @@ fn common(
             },
             str::to_string,
         ),
-        tier: tier.map(str::to_string),
-        patch: patch.map(str::to_string),
-        role: role.map(str::to_string),
-        min_games,
-        limit,
-        remakes,
     })
 }
 
@@ -419,7 +467,7 @@ impl Common {
             key_scope: state.fetcher.key_scope().as_str().to_string(),
             platform: self.platform.clone(),
             queue: self.queue.clone(),
-            patch: patch.to_string(),
+            patch: (patch != ALL_PATCHES).then(|| patch.to_string()),
             tier: self.tier.clone(),
             role: self.role.clone(),
             champion_id: None,
@@ -444,7 +492,7 @@ impl Common {
         ("platform" = Option<String>, Query, description = "Only this platform's ladder. Omitted sums every platform"),
         ("queue" = Option<String>, Query, description = "RANKED_SOLO_5x5 or RANKED_FLEX_SR; default the first of `LADDER_QUEUES`"),
         ("tier" = Option<String>, Query, description = "IRON … CHALLENGER; default every tier"),
-        ("patch" = Option<String>, Query, description = "`major.minor`; default the newest aggregated patch"),
+        ("patch" = Option<String>, Query, description = "`major.minor`, or `all` to sum every aggregated patch; default the newest aggregated patch"),
         ("role" = Option<String>, Query, description = "TOP, JUNGLE, MIDDLE, BOTTOM, UTILITY or empty; default every role summed"),
         ("minGames" = Option<i64>, Query, description = "≥ 0; default `AGGREGATE_MIN_GAMES`"),
         ("limit" = Option<i64>, Query, description = "1–500, default 200"),
@@ -531,7 +579,7 @@ async fn champions(
         ("championId" = i64, Path, description = "Champion id, ≥ 1"),
         ("platform" = Option<String>, Query, description = "Only this platform's ladder. Omitted sums every platform"),
         ("queue" = Option<String>, Query, description = "RANKED_SOLO_5x5 or RANKED_FLEX_SR"),
-        ("patch" = Option<String>, Query, description = "`major.minor`; default the newest aggregated patch"),
+        ("patch" = Option<String>, Query, description = "`major.minor`, or `all` to sum every aggregated patch; default the newest aggregated patch"),
         ("role" = Option<String>, Query, description = "TOP, JUNGLE, MIDDLE, BOTTOM or UTILITY; default every lane"),
         ("minGames" = Option<i64>, Query, description = "≥ 0; no default"),
         ("limit" = Option<i64>, Query, description = "1–200, default 50"),
@@ -620,7 +668,7 @@ async fn champion_matchups(
         ("platform" = Option<String>, Query, description = "Only this platform's ladder. Omitted sums every platform"),
         ("queue" = Option<String>, Query, description = "RANKED_SOLO_5x5 or RANKED_FLEX_SR"),
         ("tier" = Option<String>, Query, description = "IRON … CHALLENGER; applies to `stats`"),
-        ("patch" = Option<String>, Query, description = "`major.minor`; default the newest aggregated patch"),
+        ("patch" = Option<String>, Query, description = "`major.minor`, or `all` to sum every aggregated patch; default the newest aggregated patch"),
         ("role" = Option<String>, Query, description = "TOP, JUNGLE, MIDDLE, BOTTOM, UTILITY or empty"),
         ("minGames" = Option<i64>, Query, description = "≥ 0; default `AGGREGATE_MIN_GAMES`"),
         ("limit" = Option<i64>, Query, description = "1–50, default 10, per section"),
@@ -777,6 +825,64 @@ async fn champion_detail(
                     games: r.games,
                     wins: r.wins,
                     win_rate: rate(r.wins, r.games),
+                })
+                .collect(),
+        },
+    )
+}
+
+#[utoipa::path(
+    get, path = "/v1/lol/analytics/patches", tag = "lol",
+    summary = "Patches with analytics",
+    description = "The patches the analytics tables hold for a ladder, newest first, with each one's games: what \
+        a client offers as `patch` choices on the other analytics routes (`all` sums them). Sends an `ETag`; a \
+        matching `If-None-Match` gets 304.",
+    params(
+        ("platform" = Option<String>, Query, description = "Only this platform's ladder. Omitted sums every platform"),
+        ("queue" = Option<String>, Query, description = "RANKED_SOLO_5x5 or RANKED_FLEX_SR; default the first of `LADDER_QUEUES`"),
+        ("remakes" = Option<String>, Query, description = "`exclude` (default) or `include`"),
+    ),
+    responses((status = 200, description = "The patches, newest first", body = AnalyticsPatchesResponse),
+        (status = 304, description = "Not modified"), LocalErrors),
+)]
+async fn patches(
+    State(state): State<AppState>,
+    Extension(_c): Who,
+    headers: HeaderMap,
+    Query(query): Q,
+) -> Response {
+    let checked =
+        ladder_query(&state, &query).and_then(|l| Ok((l, validate::remakes_query(q(&query, "remakes"))?)));
+    let (c, remakes) = match checked {
+        Ok(v) => v,
+        Err(e) => return e.into_response(),
+    };
+    let scope = state.fetcher.key_scope().as_str().to_string();
+    let rows: Vec<PatchRow> =
+        match analytics::patches(&state.db, &scope, c.platform.as_deref(), &c.queue, remakes).await {
+            Ok(r) => r,
+            Err(e) => return internal(&e),
+        };
+    let tag = etag(&[
+        some("patches"),
+        newest(rows.iter().map(|r| r.computed_at)),
+        some(rows.len()),
+        c.platform.clone(),
+        some(&c.queue),
+        some(if remakes { "include" } else { "exclude" }),
+    ]);
+    respond(
+        &headers,
+        &tag,
+        &AnalyticsPatchesResponse {
+            platform: c.platform,
+            queue: c.queue,
+            patches: rows
+                .into_iter()
+                .map(|r| AnalyticsPatchEntry {
+                    patch: r.patch,
+                    games: r.games,
+                    computed_at: iso_ms(r.computed_at),
                 })
                 .collect(),
         },
