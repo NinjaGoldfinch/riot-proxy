@@ -228,7 +228,7 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 - [x] DEV-23 timelines on by default: `ARCHIVE_TIMELINES` defaults to `true`, so ladder crawls, polls and backfills fetch each archived match's timeline; `false` turns it off (#118, design/04, design/07, ADR-098)
 - [x] DEV-24 the showcase and the `/dev` explorer revalidate every call (`cache: 'no-cache'`), so a recompute shows at once instead of after the analytics routes' `max-age=300` (#119, design/10, design/11, ADR-099)
 - [x] DEV-25 the champion page's patch picker counts that champion's games: `GET /v1/lol/analytics/patches` takes `championId` and then lists only the patches it was played on, with its games (#120, design/11, ADR-100)
-- [x] DEV-27 the writer keeps the planner's statistics fresh: `PRAGMA optimize` at open, before each analytics rebuild and in the daily maintenance (#PR, design/04, design/06, ADR-102)
+- [x] DEV-27 the writer keeps the planner's statistics fresh: `PRAGMA optimize` at open, before each analytics rebuild and in the daily maintenance (#123, design/04, design/06, ADR-102)
 
 ## SCH — scheduler fairness and an elastic pool (owner requests 2026-10-08/09)
 - [x] SCH-01 rate-limit-aware job claims: one lane per limiter scope plus the job's main endpoint, claims skip a region only when its app limit is full (a capped endpoint blocks only jobs that use it), spread over free regions, rate-limited jobs yield their worker and re-queue without using an attempt (IMPLEMENTATION.md §Post-release — SCH) (#107, ADR-089)
