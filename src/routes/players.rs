@@ -192,16 +192,16 @@ pub struct ProfileBody {
     platform: &'static str,
     region: &'static str,
     /// Riot's payload, verbatim, or `null` if that part failed; see `warnings`.
-    #[schema(value_type = Option<serde_json::Value>, required = true)]
+    #[schema(value_type = Option<crate::routes::riot_schemas::AccountDto>, required = true)]
     account: Option<Box<RawValue>>,
     /// Riot's payload, verbatim, or `null` if that part failed; see `warnings`.
-    #[schema(value_type = Option<serde_json::Value>, required = true)]
+    #[schema(value_type = Option<crate::routes::riot_schemas::SummonerDto>, required = true)]
     summoner: Option<Box<RawValue>>,
     /// Riot's payload, verbatim, or `null` if that part failed; see `warnings`.
-    #[schema(value_type = Option<serde_json::Value>, required = true)]
+    #[schema(value_type = Option<Vec<crate::routes::riot_schemas::LeagueEntryDto>>, required = true)]
     league: Option<Box<RawValue>>,
     /// Riot's payload, verbatim, or `null` if that part failed; see `warnings`.
-    #[schema(value_type = Option<serde_json::Value>, required = true)]
+    #[schema(value_type = Option<Vec<crate::routes::riot_schemas::ChampionMasteryDto>>, required = true)]
     mastery: Option<Box<RawValue>>,
     /// How long each part's content has been unchanged: a refetch that returns
     /// the same bytes does not reset it. `X-Cache-Age` is the stalest of these.

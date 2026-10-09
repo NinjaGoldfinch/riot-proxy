@@ -1196,3 +1196,11 @@ Accepted (owner request from ninjagoldfinch.lol, task SITE-04).
 - **Images:** the API description gains an Images section. It says that `/ddragon/<version>/img/<kind>/<file>` mirrors champion, profile icon, item and summoner spell images and rune icons for mirrored patches, needs no key, and fetches from Riot's CDN on first request. ninjagoldfinch.lol had read the docs as "no images".
 - **Backfill limit:** `BackfillNotice.limit` says that `4294967295` means the whole history (ADR-081, kept unbounded by the owner on 2026-10-09).
 
+## ADR-110 — Partial schemas for Riot's payloads (2026-10-09)
+Accepted (owner request from ninjagoldfinch.lol, task SITE-05).
+- **Source:** Riot's developer portal, read 2026-10-09 (`developer.riotgames.com/api-details/<api>`): account-v1 `AccountDto`, summoner-v4 `SummonerDTO`, league-v4 `LeagueEntryDTO` and `MiniSeriesDTO`, champion-mastery-v4 `ChampionMasteryDto`, `NextSeasonMilestonesDto` and `RewardConfigDto`. Names, fields, types (`int` → int32, `long` → int64) and descriptions are the portal's. They are Rust structs in `routes::riot_schemas` that exist only for the document: nothing is validated or reshaped, and the body stays Riot's bytes.
+- **Required means the portal and every recording agree.** A field is required only if the portal doesn't call it optional and every recorded body has it. `AccountDto.gameName`/`tagLine` are optional because the portal says they may be missing.
+- **Where portal and recordings differ:** `LeagueEntryDTO.leagueId` and `miniSeries`, and `ChampionMasteryDto.chestGranted`, are on the portal but in no recorded body; they are declared optional. `NextSeasonMilestonesDto.totalGamesRequires` is in the recordings but not on the portal, so it isn't declared; JSON Schema allows the extra property.
+- **Where they apply:** `ProfileBody`'s four parts, and the 200 of the passthrough routes that return those DTOs: the four account routes, summoner by PUUID, both league-entries routes and mastery. The apex league routes (`LeagueListDTO`) and the match routes stay untyped for now.
+- A test checks every recorded account, summoner, league and mastery body against the schema its route and the profile give it.
+

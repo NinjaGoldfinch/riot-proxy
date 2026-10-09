@@ -205,3 +205,105 @@ fn responses_declare_the_headers_they_send() {
         "the pool is never read from Riot"
     );
 }
+
+/// Whether `v` fits `schema`: required fields present, property types right,
+/// `$ref`s and arrays followed. Extra properties are allowed, as Riot adds them.
+fn conforms(doc: &serde_json::Value, schema: &serde_json::Value, v: &serde_json::Value, at: &str) {
+    if let Some(r) = schema["$ref"].as_str() {
+        let name = r.trim_start_matches("#/components/schemas/");
+        return conforms(doc, &doc["components"]["schemas"][name], v, at);
+    }
+    let types: Vec<&str> = match &schema["type"] {
+        serde_json::Value::String(t) => vec![t.as_str()],
+        serde_json::Value::Array(ts) => ts.iter().filter_map(|t| t.as_str()).collect(),
+        _ => vec![],
+    };
+    let fits = |t: &str| match t {
+        "string" => v.is_string(),
+        "integer" => v.is_i64() || v.is_u64(),
+        "number" => v.is_number(),
+        "boolean" => v.is_boolean(),
+        "object" => v.is_object(),
+        "array" => v.is_array(),
+        "null" => v.is_null(),
+        _ => true,
+    };
+    assert!(
+        types.is_empty() || types.iter().any(|t| fits(t)),
+        "{at}: {v} is not {types:?}"
+    );
+    if let Some(items) = v.as_array() {
+        for (i, item) in items.iter().enumerate() {
+            conforms(doc, &schema["items"], item, &format!("{at}[{i}]"));
+        }
+    }
+    if let Some(obj) = v.as_object() {
+        for req in schema["required"].as_array().into_iter().flatten() {
+            assert!(obj.contains_key(req.as_str().unwrap()), "{at}: missing {req}");
+        }
+        for (k, val) in obj {
+            if let Some(prop) = schema["properties"].get(k) {
+                conforms(doc, prop, val, &format!("{at}.{k}"));
+            }
+        }
+    }
+}
+
+/// SITE-05: the recorded Riot bodies fit the schemas the document gives them,
+/// on the passthrough routes and as the profile's parts.
+#[test]
+fn recorded_riot_bodies_fit_their_schemas() {
+    let doc: serde_json::Value = serde_json::from_str(&docs::spec().to_json().unwrap()).unwrap();
+    let fixture = |name: &str| -> serde_json::Value {
+        let path = format!(
+            "{}/tests/fixtures/replay/cold-lookup/{name}",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+    };
+    let ok = |path: &str| {
+        doc["paths"][path]["get"]["responses"]["200"]["content"]["application/json"]["schema"].clone()
+    };
+    for (route, part, body) in [
+        (
+            "/v1/riot/accounts/by-puuid/{puuid}",
+            "account",
+            "01-account.byRiotId.body",
+        ),
+        (
+            "/v1/lol/summoners/by-puuid/{platform}/{puuid}",
+            "summoner",
+            "02-summoner.byPuuid.body",
+        ),
+        (
+            "/v1/lol/league/entries/by-puuid/{platform}/{puuid}",
+            "league",
+            "03-league.entriesByPuuid.body",
+        ),
+        (
+            "/v1/lol/mastery/by-puuid/{platform}/{puuid}",
+            "mastery",
+            "04-mastery.topByPuuid.body",
+        ),
+    ] {
+        let body = fixture(body);
+        let schema = ok(route);
+        assert!(!schema.is_null(), "{route} has no body schema");
+        conforms(&doc, &schema, &body, route);
+        conforms(
+            &doc,
+            &doc["components"]["schemas"]["ProfileBody"]["properties"][part],
+            &body,
+            part,
+        );
+    }
+    // Every other account and league route shares a schema with one checked above.
+    assert_eq!(
+        ok("/v1/riot/accounts/by-riot-id/{region}/{gameName}/{tagLine}")["$ref"],
+        "#/components/schemas/AccountDto"
+    );
+    assert_eq!(
+        ok("/v1/lol/league/entries/{platform}/{queue}/{tier}/{division}")["items"]["$ref"],
+        "#/components/schemas/LeagueEntryDTO"
+    );
+}

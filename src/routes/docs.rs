@@ -10,10 +10,11 @@ use axum::http::header;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use utoipa::openapi::OpenApi as Document;
+use utoipa::openapi::content::Content;
 use utoipa::openapi::extensions::Extensions;
 use utoipa::openapi::header::Header;
 use utoipa::openapi::path::Operation;
-use utoipa::openapi::schema::{ObjectBuilder, Type};
+use utoipa::openapi::schema::{ArrayBuilder, ObjectBuilder, Schema, Type};
 use utoipa::openapi::security::{ApiKey, ApiKeyValue, HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::openapi::{Ref, RefOr};
 use utoipa::{Modify, OpenApi};
@@ -252,10 +253,74 @@ fn declare_headers(doc: &mut Document) {
     }
 }
 
-/// Final touches: the crate version, v1's tag groups and the response headers.
+/// Passthrough routes whose 200 is one of Riot's documented DTOs (SITE-05):
+/// path, schema name, and whether Riot returns a list of them.
+const RIOT_BODIES: [(&str, &str, bool); 8] = [
+    ("/v1/riot/accounts/by-puuid/{puuid}", "AccountDto", false),
+    ("/v1/riot/accounts/by-puuid/{region}/{puuid}", "AccountDto", false),
+    (
+        "/v1/riot/accounts/by-riot-id/{gameName}/{tagLine}",
+        "AccountDto",
+        false,
+    ),
+    (
+        "/v1/riot/accounts/by-riot-id/{region}/{gameName}/{tagLine}",
+        "AccountDto",
+        false,
+    ),
+    (
+        "/v1/lol/summoners/by-puuid/{platform}/{puuid}",
+        "SummonerDTO",
+        false,
+    ),
+    (
+        "/v1/lol/league/entries/by-puuid/{platform}/{puuid}",
+        "LeagueEntryDTO",
+        true,
+    ),
+    (
+        "/v1/lol/league/entries/{platform}/{queue}/{tier}/{division}",
+        "LeagueEntryDTO",
+        true,
+    ),
+    (
+        "/v1/lol/mastery/by-puuid/{platform}/{puuid}",
+        "ChampionMasteryDto",
+        true,
+    ),
+];
+
+/// Give those routes' 200 its schema. The body is still Riot's, verbatim.
+fn type_riot_bodies(doc: &mut Document) {
+    for (path, name, list) in RIOT_BODIES {
+        let Some(op) = doc.paths.paths.get_mut(path).and_then(|i| i.get.as_mut()) else {
+            continue;
+        };
+        let Some(RefOr::T(ok)) = op.responses.responses.get_mut("200") else {
+            continue;
+        };
+        let one = RefOr::Ref(Ref::from_schema_name(name));
+        let schema: RefOr<Schema> = if list {
+            ArrayBuilder::new().items(one).build().into()
+        } else {
+            one
+        };
+        let content = ok
+            .content
+            .entry("application/json".to_string())
+            .or_insert_with(|| RefOr::T(Content::default()));
+        if let RefOr::T(c) = content {
+            c.schema = Some(schema);
+        }
+    }
+}
+
+/// Final touches: the crate version, v1's tag groups, the response headers
+/// and Riot's body schemas.
 pub fn finish(mut doc: Document) -> Document {
     doc.info.version = env!("CARGO_PKG_VERSION").to_string();
     declare_headers(&mut doc);
+    type_riot_bodies(&mut doc);
     let groups = serde_json::json!([
         {"name": "Player data", "tags": ["players", "riot", "lol"]},
         {"name": "Static data", "tags": ["static"]},

@@ -9,6 +9,7 @@ pub mod lol;
 pub mod passthrough;
 pub mod players;
 pub mod riot;
+pub mod riot_schemas;
 pub mod statics;
 pub mod ui;
 pub mod ws;
