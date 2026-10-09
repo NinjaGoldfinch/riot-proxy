@@ -274,7 +274,9 @@ fn common(
     limit: (i64, i64, i64),
 ) -> Result<Common, ApiError> {
     let ladder = ladder_query(state, query)?;
-    let tiers: Vec<&'static str> = crate::riot::ladder::tiers().collect();
+    let tiers: Vec<&'static str> = crate::riot::ladder::tiers()
+        .chain([analytics::UNKNOWN_TIER])
+        .collect();
     let tier = if tier {
         validate::query_one_of("tier", q(query, "tier"), &tiers)?
     } else {
@@ -489,13 +491,14 @@ impl Common {
 #[utoipa::path(
     get, path = "/v1/lol/analytics/champions", tag = "lol",
     summary = "Champion pick and win rates by tier",
-    description = "Aggregated from the match archive, with each participant placed at the tier the latest ladder \
-        crawl found them at. Recomputed per (platform, queue) when a crawl completes. Sends an `ETag`; a matching \
+    description = "Aggregated from every archived match on the platform. Each participant is placed at the tier the \
+        ladder crawl or the latest league lookup of that player found them at, whichever is newer, and under \
+        `UNKNOWN` when neither has. Recomputed per (platform, queue) when a crawl completes. Sends an `ETag`; a matching \
         `If-None-Match` gets 304. Games Riot flagged as remakes are left out unless `remakes=include`.",
     params(
         ("platform" = Option<String>, Query, description = "Only this platform's ladder. Omitted sums every platform"),
         ("queue" = Option<String>, Query, description = "RANKED_SOLO_5x5 or RANKED_FLEX_SR; default the first of `LADDER_QUEUES`"),
-        ("tier" = Option<String>, Query, description = "IRON … CHALLENGER; default every tier"),
+        ("tier" = Option<String>, Query, description = "IRON … CHALLENGER, or UNKNOWN; default every tier"),
         ("patch" = Option<String>, Query, description = "`major.minor`, or `all` to sum every aggregated patch; default the newest aggregated patch"),
         ("role" = Option<String>, Query, description = "TOP, JUNGLE, MIDDLE, BOTTOM, UTILITY or empty; default every role summed"),
         ("minGames" = Option<i64>, Query, description = "≥ 0; default `AGGREGATE_MIN_GAMES`"),
@@ -577,8 +580,8 @@ async fn champions(
     description = "Sends an `ETag`; a matching `If-None-Match` gets 304. Every lane matchup this champion has archived \
         data for. No tier dimension: sample sizes die fast enough per (champion, opponent, role) alone, and the two \
         laners can sit in different tiers anyway. Mirror lanes are excluded — their win rate is 50% by construction. \
-        A matchup is recorded from the tracked ladder player's side, so the opposite champion's view of the same lane \
-        only exists when that player is tracked too, and the two directions can disagree.",
+        Every archived lane is recorded from both sides, so the opposite champion's view of the same lane mirrors \
+        this one.",
     params(
         ("championId" = i64, Path, description = "Champion id, ≥ 1"),
         ("platform" = Option<String>, Query, description = "Only this platform's ladder. Omitted sums every platform"),
@@ -671,7 +674,7 @@ async fn champion_matchups(
         ("championId" = i64, Path, description = "Champion id, ≥ 1"),
         ("platform" = Option<String>, Query, description = "Only this platform's ladder. Omitted sums every platform"),
         ("queue" = Option<String>, Query, description = "RANKED_SOLO_5x5 or RANKED_FLEX_SR"),
-        ("tier" = Option<String>, Query, description = "IRON … CHALLENGER; applies to `stats`"),
+        ("tier" = Option<String>, Query, description = "IRON … CHALLENGER, or UNKNOWN; applies to `stats`"),
         ("patch" = Option<String>, Query, description = "`major.minor`, or `all` to sum every aggregated patch; default the newest aggregated patch"),
         ("role" = Option<String>, Query, description = "TOP, JUNGLE, MIDDLE, BOTTOM, UTILITY or empty"),
         ("minGames" = Option<i64>, Query, description = "≥ 0; default `AGGREGATE_MIN_GAMES`"),

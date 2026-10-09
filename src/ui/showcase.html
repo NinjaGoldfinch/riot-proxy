@@ -455,9 +455,12 @@ function goldScale(points) {
 /** `+2.3k`, `−800`, `0`. */
 const signedGold = (n) => (n === 0 ? '0' : `${n > 0 ? '+' : '−'}${Math.abs(n) >= 1000 ? `${(Math.abs(n) / 1000).toFixed(1)}k` : Math.abs(n)}`);
 
+/** Where a tier sorts: highest first, and UNKNOWN (players no ladder or lookup placed, ADR-105) last. */
+const tierOrder = (tier) => (TIERS.includes(tier) ? TIERS.indexOf(tier) : TIERS.length);
+
 /** Analytics stat rows, highest tier first, and the rows summed over tiers (pickRate is per tier, so not summed). */
 function tierRows(stats) {
-  const rows = [...(stats ?? [])].sort((a, b) => TIERS.indexOf(a.tier) - TIERS.indexOf(b.tier));
+  const rows = [...(stats ?? [])].sort((a, b) => tierOrder(a.tier) - tierOrder(b.tier));
   const games = rows.reduce((n, r) => n + r.games, 0);
   const wins = rows.reduce((n, r) => n + r.wins, 0);
   return { rows, all: { games, wins, winRate: games ? wins / games : null } };

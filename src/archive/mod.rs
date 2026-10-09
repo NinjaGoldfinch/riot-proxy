@@ -6,6 +6,7 @@ pub mod facts;
 pub mod matches;
 pub mod player;
 pub mod pool;
+pub mod ranks;
 
 use bytes::Bytes;
 use futures_util::future::BoxFuture;
@@ -94,6 +95,24 @@ impl Archive for SqliteArchive {
             };
             if let Err(e) = result {
                 tracing::warn!(error = %e, match_id = %id, "archive write failed");
+            }
+        })
+    }
+
+    /// League entries: the player's ranks, for analytics (ADR-105).
+    fn observe(&self, req: &RiotRequest, body: Bytes) -> BoxFuture<'_, ()> {
+        let Some(puuid) = req
+            .params
+            .first()
+            .filter(|_| req.endpoint.id == "league.entriesByPuuid")
+        else {
+            return Box::pin(async {});
+        };
+        let (puuid, platform) = (puuid.clone(), req.target.scope());
+        Box::pin(async move {
+            let now = Clock::now().unix_ms;
+            if let Err(e) = ranks::record(&self.db, self.scope.as_str(), platform, &puuid, &body, now).await {
+                tracing::warn!(error = %e, "player rank write failed");
             }
         })
     }

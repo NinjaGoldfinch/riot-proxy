@@ -155,6 +155,7 @@ stateDiagram-v2
         one match.byId per match,
         however many of its ten
         players the ladder holds
+        (all ten count, ADR-105)
     end note
 ```
 

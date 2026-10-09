@@ -2,7 +2,8 @@
 //! A hand-computed fixture (plan P7-04 acceptance): five matches, worked out
 //! on paper below, rebuilt and read back.
 //!
-//! Ladder: A and B are MASTER, C is DIAMOND; D is not on the ladder.
+//! Ladder: A and B are MASTER, C is DIAMOND; D is not on the ladder, so D
+//! counts under UNKNOWN (ADR-105).
 //! - M1 14.18 solo, 1800 s: A (champ 1, MIDDLE, win) vs C (champ 2, MIDDLE);
 //!   D (champ 3, TOP, team 100) has no lane opponent. Bans: 10 by both teams,
 //!   11 by team 200.
@@ -293,22 +294,29 @@ async fn the_rebuild_matches_the_hand_computed_fixture() {
     assert_eq!(
         written,
         [
-            ("champion_stats", 5),
+            ("champion_stats", 6),
             ("champion_matchups", 4),
             ("champion_items", 3),
             ("champion_runes", 3),
-            ("champion_spells", 4),
+            ("champion_spells", 5),
         ]
     );
 
-    // Slices: MASTER has A in KR_1/KR_2 and the remake KR_3; DIAMOND has C in KR_1 and KR_3.
+    // Slices: MASTER has A in KR_1/KR_2 and the remake KR_3; DIAMOND has C in
+    // KR_1 and KR_3; UNKNOWN has D in KR_1.
     assert_eq!(
         text_rows(
             &db,
             "SELECT tier || ' ' || remake || ' ' || matches FROM analytics_slices ORDER BY tier, remake"
         )
         .await,
-        ["DIAMOND 0 1", "DIAMOND 1 1", "MASTER 0 2", "MASTER 1 1"]
+        [
+            "DIAMOND 0 1",
+            "DIAMOND 1 1",
+            "MASTER 0 2",
+            "MASTER 1 1",
+            "UNKNOWN 0 1"
+        ]
     );
 
     // Champion 1 at MASTER (A): KR_1 win + KR_2 loss; the remake apart.
@@ -328,7 +336,7 @@ async fn the_rebuild_matches_the_hand_computed_fixture() {
             vec![1, 1, 1, 1, 0, 0, 0, 0, 10, 500, 1000, 1, 0, 77],
         ]
     );
-    // B (MASTER) and C (DIAMOND) on champion 2; D is not on the ladder.
+    // B (MASTER) and C (DIAMOND) on champion 2; D, not on the ladder, under UNKNOWN.
     assert_eq!(
         text_rows(
             &db,
@@ -342,22 +350,31 @@ async fn the_rebuild_matches_the_hand_computed_fixture() {
             "MASTER 1 MIDDLE 0 2/1",
             "MASTER 1 MIDDLE 1 1/1",
             "MASTER 2 MIDDLE 0 1/1",
+            "UNKNOWN 3 TOP 0 1/0",
         ]
     );
 
     // Bans: 10 in KR_1 once although both teams banned it; 11 in KR_1 and KR_2.
+    // KR_1's bans count under UNKNOWN too, D's tier.
     assert_eq!(
         text_rows(
             &db,
             "SELECT tier || ' ' || champion_id || ' ' || bans FROM champion_bans ORDER BY tier, champion_id"
         )
         .await,
-        ["DIAMOND 10 1", "DIAMOND 11 1", "MASTER 10 1", "MASTER 11 2"]
+        [
+            "DIAMOND 10 1",
+            "DIAMOND 11 1",
+            "MASTER 10 1",
+            "MASTER 11 2",
+            "UNKNOWN 10 1",
+            "UNKNOWN 11 1"
+        ]
     );
 
-    // Matchups from the ladder player's side: 1 v 2 is A's (KR_1 win, KR_2
-    // loss); 2 v 1 is C's KR_1 loss and B's KR_2 win. D's lane has no
-    // opponent. The remake apart.
+    // Matchups from both sides: 1 v 2 is A's (KR_1 win, KR_2 loss); 2 v 1 is
+    // C's KR_1 loss and B's KR_2 win. D's lane has no opponent. The remake
+    // apart.
     assert_eq!(
         text_rows(&db, "SELECT champion_id || ' v ' || opponent_id || ' ' || role || ' ' || remake || ' ' || games || '/' || wins
                           FROM champion_matchups ORDER BY champion_id, remake").await,
@@ -380,7 +397,7 @@ async fn the_rebuild_matches_the_hand_computed_fixture() {
                           FROM champion_runes ORDER BY champion_id, remake").await,
         ["1 8112/8300 0 2/1", "1 8112/8300 1 1/1", "2 8010/8400 0 2/1"]
     );
-    // Spells: [4,14] and [14,4] are one pair.
+    // Spells: [4,14] and [14,4] are one pair; D's [4,12] counts too.
     assert_eq!(
         text_rows(
             &db,
@@ -388,7 +405,13 @@ async fn the_rebuild_matches_the_hand_computed_fixture() {
                           FROM champion_spells ORDER BY champion_id, remake"
         )
         .await,
-        ["1 4+14 0 2", "1 4+14 1 1", "2 4+14 0 2", "2 4+14 1 1"]
+        [
+            "1 4+14 0 2",
+            "1 4+14 1 1",
+            "2 4+14 0 2",
+            "2 4+14 1 1",
+            "3 4+12 0 1"
+        ]
     );
 }
 
@@ -431,7 +454,8 @@ async fn reads_leave_remakes_out_unless_asked_and_sum_roles() {
         [
             (1, "MASTER".into(), 2),
             (2, "DIAMOND".into(), 1),
-            (2, "MASTER".into(), 1)
+            (2, "MASTER".into(), 1),
+            (3, "UNKNOWN".into(), 1)
         ]
     );
     assert_eq!(
@@ -439,12 +463,16 @@ async fn reads_leave_remakes_out_unless_asked_and_sum_roles() {
         [
             (1, "MASTER".into(), 3),
             (2, "DIAMOND".into(), 2),
-            (2, "MASTER".into(), 1)
+            (2, "MASTER".into(), 1),
+            (3, "UNKNOWN".into(), 1)
         ]
     );
     let mut sl = slices(&db, read(true)).await.unwrap();
     sl.sort();
-    assert_eq!(sl, [("DIAMOND".into(), 2), ("MASTER".into(), 3)]);
+    assert_eq!(
+        sl,
+        [("DIAMOND".into(), 2), ("MASTER".into(), 3), ("UNKNOWN".into(), 1)]
+    );
     // minGames and tier.
     let r = Read {
         tier: Some("MASTER".into()),
@@ -590,10 +618,10 @@ async fn every_patch_sums_and_the_patch_list_is_newest_first() {
                 .collect::<Vec<_>>()
         }
     };
-    // 14.18 above 14.9 (numeric); its games are A, B and C in M1 and M2.
-    assert_eq!(list(false).await, [("14.18".into(), 4), ("14.9".into(), 1)]);
+    // 14.18 above 14.9 (numeric); its games are A, B, C and D in M1 and M2.
+    assert_eq!(list(false).await, [("14.18".into(), 5), ("14.9".into(), 1)]);
     // M3, the remake, adds A and C.
-    assert_eq!(list(true).await, [("14.18".into(), 6), ("14.9".into(), 1)]);
+    assert_eq!(list(true).await, [("14.18".into(), 7), ("14.9".into(), 1)]);
     assert!(
         patches(&db, "s", Some("euw1"), "RANKED_SOLO_5x5", None, false)
             .await
@@ -624,9 +652,9 @@ async fn a_champions_patch_list_has_only_its_games() {
                 .collect::<Vec<_>>()
         }
     };
-    // Champion 1: twice on 14.18 (M1, M2), once on 14.9 (M4); the ladder has 4 and 1.
+    // Champion 1: twice on 14.18 (M1, M2), once on 14.9 (M4); every champion has 5 and 1.
     assert_eq!(list(Some(1)).await, [("14.18".into(), 2), ("14.9".into(), 1)]);
-    assert_eq!(list(None).await, [("14.18".into(), 4), ("14.9".into(), 1)]);
+    assert_eq!(list(None).await, [("14.18".into(), 5), ("14.9".into(), 1)]);
     // A champion nobody played has no patches.
     assert!(list(Some(999)).await.is_empty());
 }
@@ -656,7 +684,8 @@ async fn a_lane_two_players_of_a_team_share_has_no_matchup() {
     .unwrap();
     rebuild(&db, 1).await;
     // The fixture's four rows, untouched by KR_6's shared MIDDLE (C's side
-    // too: its opponent lane has two players), plus E's TOP game against D.
+    // too: its opponent lane has two players), plus E's TOP game against D
+    // and D's against E.
     assert_eq!(
         text_rows(&db, "SELECT champion_id || ' v ' || opponent_id || ' ' || role || ' ' || remake || ' ' || games || '/' || wins
                           FROM champion_matchups ORDER BY champion_id, remake").await,
@@ -665,45 +694,108 @@ async fn a_lane_two_players_of_a_team_share_has_no_matchup() {
             "1 v 2 MIDDLE 1 1/1",
             "2 v 1 MIDDLE 0 2/1",
             "2 v 1 MIDDLE 1 1/0",
-            "5 v 6 TOP 0 1/1"
+            "5 v 6 TOP 0 1/1",
+            "6 v 5 TOP 0 1/0"
         ]
     );
 }
 
 /// The database has no `ANALYZE` statistics, so the plan is SQLite's guess and
-/// the same for any table size (ADR-101). It must reach the ladder by the
-/// player and a lane's opponent by the match: before, it walked every ladder
-/// player for each fact, which took 44 s on a 16,600-game ladder.
+/// the same for any table size (ADR-101). It must reach a lane's opponent by
+/// the match: before, it walked every ladder player for each fact, which took
+/// 44 s on a 16,600-game ladder.
 #[tokio::test]
-async fn the_matchups_plan_reaches_ladder_and_opponent_by_key() {
+async fn the_matchups_plan_reaches_the_opponent_by_key() {
+    let plan = plan_of(MATCHUPS.to_string()).await;
+    assert!(step(&plan, "b").contains("match_id=?"), "{plan:#?}");
+}
+
+/// The facts reach each player's ladder entry and lookup by key, not by
+/// walking either table per fact (ADR-105).
+#[tokio::test]
+async fn the_facts_plan_reaches_ladder_and_lookup_by_key() {
+    let plan = plan_of(format!("SELECT {TIER} {}", ladder_facts(""))).await;
+    assert!(step(&plan, "le").contains("puuid=?"), "{plan:#?}");
+    assert!(step(&plan, "pr").contains("puuid=?"), "{plan:#?}");
+}
+
+/// `EXPLAIN QUERY PLAN` of `sql` over the fixture, bound as a rebuild binds it.
+async fn plan_of(sql: String) -> Vec<String> {
     let (_d, db) = db();
-    let plan = db
-        .write(|c| {
-            seed(c);
-            let s = scope(c, 0);
-            let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {MATCHUPS}"))?;
-            let plan = stmt
-                .query_map(
-                    params![
-                        s.key_scope,
-                        s.platform,
-                        s.queue,
-                        s.queue_id,
-                        s.patches_json(),
-                        s.now
-                    ],
-                    |r| r.get::<_, String>(3),
-                )?
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok::<_, DbError>(plan)
-        })
-        .await
-        .unwrap();
-    let step = |alias: &str| {
-        plan.iter()
-            .find(|l| l.starts_with(&format!("SEARCH {alias} ")) || l.starts_with(&format!("SCAN {alias}")))
-            .unwrap_or_else(|| panic!("no step for {alias} in {plan:#?}"))
-    };
-    assert!(step("le").contains("puuid=?"), "{plan:#?}");
-    assert!(step("b").contains("match_id=?"), "{plan:#?}");
+    db.write(move |c| {
+        seed(c);
+        let s = scope(c, 0);
+        let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
+        let n = stmt.parameter_count();
+        let binds: Vec<rusqlite::types::Value> = [
+            s.key_scope.clone().into(),
+            s.platform.clone().into(),
+            s.queue.clone().into(),
+            s.queue_id.into(),
+            s.patches_json().map_or(rusqlite::types::Value::Null, Into::into),
+            s.now.into(),
+        ]
+        .into_iter()
+        .take(n)
+        .collect();
+        let plan = stmt
+            .query_map(rusqlite::params_from_iter(binds), |r| r.get::<_, String>(3))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok::<_, DbError>(plan)
+    })
+    .await
+    .unwrap()
+}
+
+fn step<'a>(plan: &'a [String], alias: &str) -> &'a str {
+    plan.iter()
+        .find(|l| l.starts_with(&format!("SEARCH {alias} ")) || l.starts_with(&format!("SCAN {alias}")))
+        .unwrap_or_else(|| panic!("no step for {alias} in {plan:#?}"))
+}
+
+/// A participant the ladder does not hold counts at the tier their last
+/// league lookup returned; a lookup newer than the ladder entry wins, an older
+/// one doesn't; another queue's lookup doesn't apply; another platform's
+/// matches don't count (ADR-105).
+#[tokio::test]
+async fn lookups_place_players_and_only_the_platforms_matches_count() {
+    let (_d, db) = db();
+    db.write(|c| {
+        seed(c);
+        c.execute_batch(
+            "INSERT INTO player_ranks (key_scope, platform, queue, puuid, tier, division, league_points, fetched_at)
+               VALUES ('s', 'kr', 'RANKED_SOLO_5x5', 'C', 'EMERALD', 'I', 10, 5),
+                      ('s', 'kr', 'RANKED_SOLO_5x5', 'B', 'GOLD', 'I', 0, 0),
+                      ('s', 'kr', 'RANKED_FLEX_SR', 'D', 'IRON', 'IV', 0, 5),
+                      ('s', 'euw1', 'RANKED_SOLO_5x5', 'D', 'IRON', 'IV', 0, 5);
+             INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size,
+               archived_at, game_duration, remake, facts_version)
+               VALUES ('EUW1_1', 'europe', '14.18', 420, 1, x'00', 1, 1, 1500, 0, 3);
+             INSERT INTO match_facts (match_id, key_scope, puuid, team_id, position, champion_id, win, facts_version)
+               VALUES ('EUW1_1', 's', 'A', 100, 'MIDDLE', 1, 1, 3);",
+        )?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    rebuild(&db, 1).await;
+    // C's lookup (5) is newer than C's ladder entry (1): EMERALD. B's (0) is
+    // older: still MASTER. D's flex and euw1 ranks don't apply: UNKNOWN. A's
+    // EUW1_1 game is not kr's.
+    assert_eq!(
+        text_rows(
+            &db,
+            "SELECT tier || ' ' || champion_id || ' ' || role || ' ' || remake || ' ' || games || '/' || wins
+                          FROM champion_stats ORDER BY tier, champion_id, remake"
+        )
+        .await,
+        [
+            "EMERALD 2 MIDDLE 0 1/0",
+            "EMERALD 2 MIDDLE 1 1/0",
+            "MASTER 1 MIDDLE 0 2/1",
+            "MASTER 1 MIDDLE 1 1/1",
+            "MASTER 2 MIDDLE 0 1/1",
+            "UNKNOWN 3 TOP 0 1/0",
+        ]
+    );
 }

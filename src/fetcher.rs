@@ -3,7 +3,7 @@
 //!
 //! ```text
 //! archive (immutable) → L1 (HIT / HIT-NEG / STALE + bulk refresh) → single-flight
-//!   → limiter → client → observe → cache write → archive write
+//!   → limiter → client → observe → cache write → archive write (or rank record)
 //! ```
 //!
 //! The upstream leg owns v1's retry policy (ADR-017, ADR-021): 5xx and network
@@ -156,6 +156,11 @@ pub trait Archive: Send + Sync + 'static {
     fn get(&self, req: &RiotRequest) -> futures_util::future::BoxFuture<'_, Option<Bytes>>;
     /// Store a freshly fetched immutable body. Failures are the archive's to log.
     fn put(&self, req: &RiotRequest, body: Bytes) -> futures_util::future::BoxFuture<'_, ()>;
+    /// Read what the archive keeps from a freshly fetched mutable body (the
+    /// players' ranks in league entries, ADR-105); most bodies it ignores.
+    fn observe(&self, _req: &RiotRequest, _body: Bytes) -> futures_util::future::BoxFuture<'_, ()> {
+        Box::pin(async {})
+    }
 }
 
 #[derive(Debug, Default)]
@@ -498,6 +503,8 @@ async fn upstream(
                 let ttls = inner.policy.ttls(endpoint);
                 if endpoint.immutable {
                     inner.archive.put(&req, res.body.clone()).await;
+                } else {
+                    inner.archive.observe(&req, res.body.clone()).await;
                 }
                 let fetched_at = Instant::now();
                 let content_at = match inner.cache.put(&key, endpoint, res.body.clone(), &ttls).await {

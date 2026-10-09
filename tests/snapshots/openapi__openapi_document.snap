@@ -6414,7 +6414,7 @@ expression: doc
     },
     "/v1/lol/analytics/champions": {
       "get": {
-        "description": "Aggregated from the match archive, with each participant placed at the tier the latest ladder crawl found them at. Recomputed per (platform, queue) when a crawl completes. Sends an `ETag`; a matching `If-None-Match` gets 304. Games Riot flagged as remakes are left out unless `remakes=include`.",
+        "description": "Aggregated from every archived match on the platform. Each participant is placed at the tier the ladder crawl or the latest league lookup of that player found them at, whichever is newer, and under `UNKNOWN` when neither has. Recomputed per (platform, queue) when a crawl completes. Sends an `ETag`; a matching `If-None-Match` gets 304. Games Riot flagged as remakes are left out unless `remakes=include`.",
         "operationId": "champions",
         "parameters": [
           {
@@ -6436,7 +6436,7 @@ expression: doc
             }
           },
           {
-            "description": "IRON … CHALLENGER; default every tier",
+            "description": "IRON … CHALLENGER, or UNKNOWN; default every tier",
             "in": "query",
             "name": "tier",
             "required": false,
@@ -6597,7 +6597,7 @@ expression: doc
             }
           },
           {
-            "description": "IRON … CHALLENGER; applies to `stats`",
+            "description": "IRON … CHALLENGER, or UNKNOWN; applies to `stats`",
             "in": "query",
             "name": "tier",
             "required": false,
@@ -6726,7 +6726,7 @@ expression: doc
     },
     "/v1/lol/analytics/champions/{championId}/matchups": {
       "get": {
-        "description": "Sends an `ETag`; a matching `If-None-Match` gets 304. Every lane matchup this champion has archived data for. No tier dimension: sample sizes die fast enough per (champion, opponent, role) alone, and the two laners can sit in different tiers anyway. Mirror lanes are excluded — their win rate is 50% by construction. A matchup is recorded from the tracked ladder player's side, so the opposite champion's view of the same lane only exists when that player is tracked too, and the two directions can disagree.",
+        "description": "Sends an `ETag`; a matching `If-None-Match` gets 304. Every lane matchup this champion has archived data for. No tier dimension: sample sizes die fast enough per (champion, opponent, role) alone, and the two laners can sit in different tiers anyway. Mirror lanes are excluded — their win rate is 50% by construction. Every archived lane is recorded from both sides, so the opposite champion's view of the same lane mirrors this one.",
         "operationId": "champion_matchups",
         "parameters": [
           {

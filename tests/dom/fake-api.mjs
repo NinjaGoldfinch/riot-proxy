@@ -70,10 +70,12 @@ const TIMELINE = { metadata: { matchId: MATCH.metadata.matchId }, info: { frameI
   // each blue player gains 20 gold a minute on red up to minute 10, then loses 60: +1,000 at 10, −4,000 at 20
   participantFrames: Object.fromEntries(MATCH.info.participants.map((x) => [String(x.participantId), { participantId: x.participantId, totalGold: 500 + m * 400 + (team(x.participantId) === 100 ? 20 * (m <= 10 ? m : 20 - 3 * m) : 0) }])),
 })) } };
-const DETAIL = { championId: 1, championName: 'Annie', queue: 'RANKED_SOLO_5x5', platform: 'oc1', tier: null, role: null, patch: '16.19', computedAt: '2026-10-08T00:00:00Z', totalGames: 40,
+const DETAIL = { championId: 1, championName: 'Annie', queue: 'RANKED_SOLO_5x5', platform: 'oc1', tier: null, role: null, patch: '16.19', computedAt: '2026-10-08T00:00:00Z', totalGames: 60,
   sectionsComputedAt: { stats: null, matchups: null, items: null, runes: null, spells: null },
   stats: [
     { championId: 1, championName: 'Annie', tier: 'GOLD', patch: '16.19', games: 30, wins: 15, winRate: 0.5, share: 0.75, pickRate: 0.05, banRate: 0.01, avgKda: 2.5, csPerMin: 6.1, goldPerMin: 402.4, avgDamage: 20000, avgVision: 20 },
+    // Players no ladder or lookup placed (ADR-105): listed first here, shown last.
+    { championId: 1, championName: 'Annie', tier: 'UNKNOWN', patch: '16.19', games: 20, wins: 11, winRate: 0.55, share: 0.5, pickRate: 0.03, banRate: 0.01 },
     { championId: 1, championName: 'Annie', tier: 'CHALLENGER', patch: '16.19', games: 10, wins: 7, winRate: 0.7, share: 0.25, pickRate: 0.02, banRate: null },
   ],
   items: [{ itemId: 3078, games: 12, wins: 8, winRate: 0.667 }],
@@ -93,10 +95,10 @@ function detail(p, u, { noTimeline = false, noAnalytics = false }) {
     return [200, MATCH];
   }
   // The proxy's AnalyticsPatchesResponse (DEV-21): newest first. With a championId (DEV-25), that
-  // champion's games: 40 in all, as the detail's totalGames.
+  // champion's games: 60 in all, as the detail's totalGames.
   if (p === '/v1/lol/analytics/patches') {
     const championId = u.searchParams.get('championId');
-    const games = championId ? [3, 37] : [40, 1200];
+    const games = championId ? [3, 57] : [40, 1200];
     return [200, { platform: u.searchParams.get('platform'), queue: u.searchParams.get('queue'), championId: championId ? Number(championId) : null,
       patches: noAnalytics ? [] : [{ patch: '16.19', games: games[0], computedAt: '2026-10-08T00:00:00Z' }, { patch: '16.18', games: games[1], computedAt: '2026-10-08T00:00:00Z' }] }];
   }

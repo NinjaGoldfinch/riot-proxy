@@ -1,9 +1,11 @@
 //! The analytics tables (V0005, ADR-056; v1 `db/analytics.ts`): rebuilt from
 //! `match_facts` per ladder (platform, queue) and read by `/v1/lol/analytics/*`.
 //!
-//! Each participant counts at the tier the ladder holds them at
-//! (`ladder_entries`); participants the ladder does not hold are left out, and
-//! a match with players in several tiers counts in each (v1). Every table is
+//! Every participant of the platform's archived matches counts (ADR-105): at
+//! the tier the ladder holds them at (`ladder_entries`) or a league lookup
+//! last returned (`player_ranks`), whichever is newer, and under
+//! [`UNKNOWN_TIER`] when neither has them. A match with players in several
+//! tiers counts in each (v1). Every table is
 //! rebuilt wholesale for the newest `AGGREGATE_PATCH_LIMIT` patches (0: all)
 //! and keeps older patches' rows. Every row carries `remake`, so a read can
 //! leave remakes out (the default) or add them back.
@@ -83,17 +85,32 @@ impl Scope {
     }
 }
 
-/// Facts of this ladder's archived matches, each joined to its player's tier,
-/// plus any further `join`. Binds `?1` key scope, `?2` platform, `?3` queue,
-/// `?4` queue id, `?5` patches.
+/// The tier of a participant neither the ladder nor a league lookup has
+/// placed (ADR-105). Not one of Riot's tiers.
+pub const UNKNOWN_TIER: &str = "UNKNOWN";
+
+/// A fact's tier in [`ladder_facts`]: the newer of the ladder's and the last
+/// league lookup's, else [`UNKNOWN_TIER`].
+const TIER: &str = "CASE WHEN pr.tier IS NOT NULL AND (le.tier IS NULL OR pr.fetched_at > le.updated_at)
+       THEN pr.tier ELSE coalesce(le.tier, 'UNKNOWN') END";
+
+/// The platform's matches only: a match id starts with its platform (`OC1_…`).
+/// Binds `?2` platform.
+const ON_PLATFORM: &str = "substr(m.match_id, 1, length(?2) + 1) = upper(?2) || '_'";
+
+/// Facts of the platform's archived matches in this queue, each with its
+/// player's [`TIER`], plus any further `join`. Binds `?1` key scope, `?2`
+/// platform, `?3` queue, `?4` queue id, `?5` patches.
 fn ladder_facts(join: &str) -> String {
     format!(
         "FROM match_facts f
          JOIN matches m ON m.match_id = f.match_id
-         JOIN ladder_entries le ON le.key_scope = f.key_scope AND le.platform = ?2
+         LEFT JOIN ladder_entries le ON le.key_scope = f.key_scope AND le.platform = ?2
            AND le.queue = ?3 AND le.puuid = f.puuid
+         LEFT JOIN player_ranks pr ON pr.key_scope = f.key_scope AND pr.platform = ?2
+           AND pr.queue = ?3 AND pr.puuid = f.puuid
          {join}
-        WHERE f.key_scope = ?1 AND m.queue_id = ?4 AND m.patch IS NOT NULL
+        WHERE f.key_scope = ?1 AND m.queue_id = ?4 AND m.patch IS NOT NULL AND {ON_PLATFORM}
           AND (?5 IS NULL OR m.patch IN (SELECT value FROM json_each(?5)))"
     )
 }
@@ -112,9 +129,9 @@ pub fn rebuild_champions(c: &mut Connection, s: &Scope) -> Result<Written, DbErr
         &tx,
         &format!(
             "INSERT INTO analytics_slices (key_scope, platform, queue, tier, patch, remake, matches, computed_at)
-             SELECT ?1, ?2, ?3, le.tier, m.patch, coalesce(m.remake, 0), count(DISTINCT m.match_id), ?6
+             SELECT ?1, ?2, ?3, {TIER}, m.patch, coalesce(m.remake, 0), count(DISTINCT m.match_id), ?6
              {facts}
-             GROUP BY le.tier, m.patch, coalesce(m.remake, 0)"
+             GROUP BY {TIER}, m.patch, coalesce(m.remake, 0)"
         ),
     )?;
     let stats = s.insert(
@@ -123,14 +140,14 @@ pub fn rebuild_champions(c: &mut Connection, s: &Scope) -> Result<Written, DbErr
             "INSERT INTO champion_stats (key_scope, platform, queue, tier, patch, champion_id, role, remake,
                games, wins, matches_picked, stated_games, kills, deaths, assists, cs, gold, damage, vision,
                duration_s, computed_at)
-             SELECT ?1, ?2, ?3, le.tier, m.patch, f.champion_id, coalesce(f.position, ''), coalesce(m.remake, 0),
+             SELECT ?1, ?2, ?3, {TIER}, m.patch, f.champion_id, coalesce(f.position, ''), coalesce(m.remake, 0),
                count(*), sum(f.win), count(DISTINCT m.match_id), count(f.kills),
                coalesce(sum(f.kills), 0), coalesce(sum(f.deaths), 0), coalesce(sum(f.assists), 0),
                coalesce(sum(f.cs), 0), coalesce(sum(f.gold), 0), coalesce(sum(f.damage), 0),
                coalesce(sum(f.vision), 0),
                coalesce(sum(m.game_duration) FILTER (WHERE f.kills IS NOT NULL), 0), ?6
              {facts}
-             GROUP BY le.tier, m.patch, f.champion_id, coalesce(f.position, ''), coalesce(m.remake, 0)"
+             GROUP BY {TIER}, m.patch, f.champion_id, coalesce(f.position, ''), coalesce(m.remake, 0)"
         ),
     )?;
     // A ban counts once per match, in every tier the match had a player in (v1).
@@ -139,9 +156,9 @@ pub fn rebuild_champions(c: &mut Connection, s: &Scope) -> Result<Written, DbErr
         &tx,
         &format!(
             "INSERT INTO champion_bans (key_scope, platform, queue, tier, patch, champion_id, remake, bans, computed_at)
-             SELECT ?1, ?2, ?3, le.tier, m.patch, b.champion_id, coalesce(m.remake, 0), count(DISTINCT b.match_id), ?6
+             SELECT ?1, ?2, ?3, {TIER}, m.patch, b.champion_id, coalesce(m.remake, 0), count(DISTINCT b.match_id), ?6
              {facts}
-             GROUP BY le.tier, m.patch, b.champion_id, coalesce(m.remake, 0)"
+             GROUP BY {TIER}, m.patch, b.champion_id, coalesce(m.remake, 0)"
         ),
     )?;
     tx.commit()?;
@@ -150,7 +167,7 @@ pub fn rebuild_champions(c: &mut Connection, s: &Scope) -> Result<Written, DbErr
 
 /// Lane matchups (v1): two players of opposite teams in the same lane, each
 /// lane held by exactly one player per team, mirror lanes excluded. Recorded
-/// from the side of the player the ladder holds.
+/// from both sides, since every participant counts (ADR-105).
 ///
 /// Each laned fact is read once, with its lane's head count from a window,
 /// and that set is joined to itself (ADR-101). The earlier shape (two
@@ -163,6 +180,7 @@ const MATCHUPS: &str = "WITH lane AS (
          count(*) OVER (PARTITION BY f.match_id, f.team_id, f.position) AS n
          FROM match_facts f JOIN matches m ON m.match_id = f.match_id
         WHERE f.key_scope = ?1 AND f.position IS NOT NULL AND m.queue_id = ?4 AND m.patch IS NOT NULL
+          AND substr(m.match_id, 1, length(?2) + 1) = upper(?2) || '_'
           AND (?5 IS NULL OR m.patch IN (SELECT value FROM json_each(?5)))
      )
      INSERT INTO champion_matchups (key_scope, platform, queue, patch, champion_id, role, opponent_id,
@@ -170,8 +188,6 @@ const MATCHUPS: &str = "WITH lane AS (
      SELECT ?1, ?2, ?3, a.patch, a.champion_id, a.position, b.champion_id, a.remake, count(*), sum(a.win), ?6
        FROM lane a
        JOIN lane b ON b.match_id = a.match_id AND b.position = a.position AND b.team_id <> a.team_id
-       JOIN ladder_entries le ON le.key_scope = ?1 AND le.platform = ?2 AND le.queue = ?3
-         AND le.puuid = a.puuid
       WHERE a.n = 1 AND b.n = 1 AND a.champion_id <> b.champion_id
       GROUP BY a.patch, a.position, a.champion_id, b.champion_id, a.remake";
 
