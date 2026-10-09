@@ -532,7 +532,9 @@ async function get(path) {
   const c = { path, status: 0, ms: 0, cache: '' };
   let json;
   try {
-    const r = await fetch(path, { headers });
+    // Revalidate every call: the analytics routes send `max-age=300`, and a recompute
+    // would otherwise stay hidden behind the browser's copy for five minutes (DEV-24).
+    const r = await fetch(path, { headers, cache: 'no-cache' });
     c.status = r.status;
     c.cache = r.headers.get('x-cache') ?? '';
     const text = await r.text();

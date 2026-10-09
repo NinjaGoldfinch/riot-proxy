@@ -71,12 +71,14 @@ function api(calls, url, opts = {}) {
 async function page({ hash = 'player' } = {}) {
   const calls = [];
   const sent = [];
+  const modes = []; // [url, init.cache] per fetch
   const prompts = [];
   const errors = [];
   const dom = new JSDOM(html.replace('<script type="module">', '<script>(async()=>{').replace(/<\/script>\s*<\/body>/, '})()</script></body>'), {
     url: `http://localhost/dev#${hash}`, runScripts: 'dangerously', pretendToBeVisual: true,
     beforeParse(w) {
       w.fetch = async (url, opts) => {
+        modes.push([String(url), opts?.cache]);
         if (opts?.body != null) sent.push({ url, method: opts.method, body: opts.body });
         const body = JSON.stringify(api(calls, url, opts));
         return { status: 200, statusText: 'OK', headers: new Map([['x-cache', 'HIT'], ['content-type', 'application/json']]), text: async () => body, json: async () => JSON.parse(body) };
@@ -102,7 +104,7 @@ async function page({ hash = 'player' } = {}) {
   const esc = async () => { w.document.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await settle(); };
   const rows = () => w.document.querySelectorAll('#plMatches tr.match').length;
   const text = (sel) => $(sel)?.textContent ?? '';
-  return { w, $, calls, sent, prompts, errors, settle, choose, click, esc, rows, text };
+  return { w, $, calls, sent, modes, prompts, errors, settle, choose, click, esc, rows, text };
 }
 
 test('live matches page by 10, 25 and 50 under the API cap of 20 per call', async () => {
@@ -125,6 +127,13 @@ test('live matches page by 10, 25 and 50 under the API cap of 20 per call', asyn
   assert.ok(p.calls.at(-1).includes('queue=420'));
   assert.ok(p.text('#plMatches').includes('page 1'), 'a filter goes back to page 1');
   assert.deepEqual(p.errors, []);
+});
+
+test('explorer calls revalidate instead of reading the browser cache', async () => {
+  const p = await page();
+  const api = p.modes.filter(([url]) => url.startsWith('/v1/'));
+  assert.ok(api.length > 0);
+  assert.deepEqual(api.filter(([, cache]) => cache !== 'no-cache'), []);
 });
 
 test('the archive source pages through everything stored, with a total and no Riot calls', async () => {
