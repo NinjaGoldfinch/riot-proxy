@@ -5,12 +5,17 @@ name: release
 # `sha256sums` and the image digest. A tag with a pre-release suffix
 # (`v2.0.0-rc.0`) makes a pre-release and does not move `:2`.
 # A pull request that touches this file runs the builds and publishes nothing.
-# See ADR-063.
+# See ADR-063. The image's description lists the commits since the previous
+# `v*` tag, and the release notes list its pull requests (OPS-05, ADR-106).
 on:
   push:
     tags: ["v*"]
   pull_request:
-    paths: [".github/workflows/release.yml", "Dockerfile.release"]
+    paths:
+      - .github/workflows/release.yml
+      - Dockerfile.release
+      - scripts/image-description.sh
+      - scripts/check-image-description.sh
 
 env:
   CARGO_TERM_COLOR: always
@@ -87,6 +92,8 @@ jobs:
       digest: ${{ steps.push.outputs.digest }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@v8
         with:
           pattern: riot-proxy-linux-*
@@ -94,8 +101,20 @@ jobs:
           merge-multiple: true
       - run: chmod +x dist/*
       - uses: docker/setup-buildx-action@v4
+      - id: desc
+        name: describe the image
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          from=$(git describe --tags --abbrev=0 --match 'v*' "$GITHUB_SHA^" 2>/dev/null || true)
+          text=$(scripts/image-description.sh "riot-proxy $VERSION" "$GITHUB_SHA" "$from")
+          echo "$text"
+          echo "text=$text" >> "$GITHUB_OUTPUT"
       - id: meta
         uses: docker/metadata-action@v6
+        env:
+          # GHCR reads a multi-arch image's description from the index (ADR-106).
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
         with:
           images: ${{ env.IMAGE }}
           flavor: latest=false
@@ -103,12 +122,15 @@ jobs:
           tags: |
             type=semver,pattern={{version}},value=v${{ needs.version.outputs.version }}
             type=semver,pattern={{major}},value=v${{ needs.version.outputs.version }}
+          labels: org.opencontainers.image.description=${{ steps.desc.outputs.text }}
+          annotations: org.opencontainers.image.description=${{ steps.desc.outputs.text }}
       - if: github.event_name == 'push'
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # A pull request writes the image to an OCI tarball instead, so the check below runs there too.
       - id: push
         uses: docker/build-push-action@v7
         with:
@@ -116,8 +138,18 @@ jobs:
           file: Dockerfile.release
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name == 'push' }}
+          outputs: ${{ github.event_name != 'push' && format('type=oci,dest={0}/image.tar', runner.temp) || '' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+      - name: the image index carries the description
+        env:
+          WANT: ${{ steps.desc.outputs.text }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          src="$RUNNER_TEMP/image.tar"
+          [ "$GITHUB_EVENT_NAME" = push ] && src="$IMAGE@$DIGEST"
+          scripts/check-image-description.sh "$src" "$WANT"
       - name: the amd64 image serves and passes its own healthcheck
         run: |
           docker buildx build --load --platform linux/amd64 -f Dockerfile.release -t riot-proxy:release .
@@ -156,4 +188,4 @@ jobs:
           Binaries are static (Linux, musl) or native (macOS); check them against \`sha256sums\`.
           NOTES
           gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
-            --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag $prerelease
+            --title "$GITHUB_REF_NAME" --notes-file notes.md --generate-notes --verify-tag $prerelease
