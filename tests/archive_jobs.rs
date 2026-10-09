@@ -400,3 +400,101 @@ async fn a_completed_walk_stops_further_lookup_backfills() {
     let later = common::get(router, &uri).await.json();
     assert_eq!(later["backfill"], Value::Null, "the history is accounted for");
 }
+
+// ── TL-01: the boot catch-up ────────────────────────────────────────────────
+
+impl Env {
+    /// Pending `archive:match` jobs: (match id, priority, fetchTimeline).
+    async fn pending(&self) -> Vec<(String, i64, Option<bool>)> {
+        self.db
+            .read(|c| {
+                let mut s = c.prepare(
+                    "SELECT dedupe_key, priority, json_extract(payload, '$.fetchTimeline') FROM jobs
+                      WHERE kind = 'archive:match' AND state = 'pending' ORDER BY dedupe_key",
+                )?;
+                let r = s.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+                r.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
+            })
+            .await
+            .unwrap()
+    }
+
+    /// A finished `archive:match` on record for `id`.
+    async fn finished(&self, id: &'static str, payload: Value) {
+        let queue = Queue::new(self.db.clone());
+        let job = queue
+            .enqueue(riot_proxy::jobs::NewJob::new("archive:match", 100, payload).dedupe(id))
+            .await
+            .unwrap();
+        self.db
+            .write(move |c| {
+                c.execute("UPDATE jobs SET state = 'done' WHERE id = ?1", [job.id])
+                    .map_err(DbError::from)
+            })
+            .await
+            .unwrap();
+    }
+}
+
+/// Six archived ids, one per case the catch-up tells apart.
+async fn seed_halves(e: &Env) {
+    use riot_proxy::archive::matches;
+    let timeline = || bytes::Bytes::from_static(b"{}");
+    for id in ["KR_1", "KR_2", "KR_4", "KR_5", "KR_6"] {
+        matches::put(&e.db, id, "asia", &e.scope, MATCH.to_vec().into(), 1)
+            .await
+            .unwrap();
+    }
+    matches::put_timeline(&e.db, "KR_2", timeline()).await.unwrap(); // whole
+    matches::put_timeline(&e.db, "KR_3", timeline()).await.unwrap(); // no match
+    // KR_4's timeline was asked for and Riot didn't serve it.
+    e.finished("KR_4", json!({"matchId": "KR_4", "fetchTimeline": true}))
+        .await;
+    // KR_5 was archived by a job that didn't ask for its timeline.
+    e.finished("KR_5", json!({"matchId": "KR_5", "fetchTimeline": false}))
+        .await;
+    // KR_6 is still queued by a walk, deep in its history.
+    Queue::new(e.db.clone())
+        .enqueue(
+            riot_proxy::jobs::NewJob::new("archive:match", 128, json!({"matchId": "KR_6", "puuid": P}))
+                .dedupe("KR_6"),
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn the_catch_up_queues_every_missing_half_once() {
+    use riot_proxy::jobs::archive::queue_missing_halves;
+    let e = env().await;
+    seed_halves(&e).await;
+    let queue = Queue::new(e.db.clone());
+
+    assert_eq!(queue_missing_halves(&queue, true).await.unwrap(), 4);
+    let want = [
+        ("KR_1".to_string(), 100, Some(true)),
+        ("KR_3".to_string(), 100, Some(true)),
+        ("KR_5".to_string(), 100, Some(true)),
+        ("KR_6".to_string(), 100, Some(true)),
+    ];
+    assert_eq!(e.pending().await, want, "KR_6 lifted, not queued twice");
+
+    queue_missing_halves(&queue, true).await.unwrap();
+    assert_eq!(e.pending().await, want, "a second boot adds nothing");
+}
+
+#[tokio::test]
+async fn with_archive_timelines_off_the_catch_up_queues_only_missing_matches() {
+    use riot_proxy::jobs::archive::queue_missing_halves;
+    let e = env().await;
+    seed_halves(&e).await;
+    let queue = Queue::new(e.db.clone());
+    assert_eq!(queue_missing_halves(&queue, false).await.unwrap(), 1);
+    assert_eq!(
+        e.pending().await,
+        [
+            ("KR_3".to_string(), 100, Some(true)),
+            ("KR_6".to_string(), 128, None),
+        ]
+    );
+}

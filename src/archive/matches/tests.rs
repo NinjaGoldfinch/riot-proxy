@@ -141,25 +141,27 @@ async fn filter_unarchived_keeps_order_and_spans_chunks() {
     assert_eq!(left, expected);
 }
 
+/// TL-01: a timeline that arrives before its match is kept, and so is the
+/// match after it; storing either again changes nothing.
 #[tokio::test]
-async fn timelines_need_their_match_first() {
+async fn a_timeline_is_stored_before_its_match() {
     let (_dir, db) = db();
     let timeline = Bytes::from_static(br#"{"info":{"frames":[]}}"#);
-    assert!(
-        !put_timeline(&db, MATCH_ID, timeline.clone()).await.unwrap(),
-        "no parent yet"
-    );
-    assert_eq!(get_timeline(&db, MATCH_ID).await.unwrap(), None);
+    put_timeline(&db, MATCH_ID, timeline.clone()).await.unwrap();
+    assert_eq!(get_timeline(&db, MATCH_ID).await.unwrap(), Some(timeline.clone()));
+    assert_eq!(get(&db, MATCH_ID).await.unwrap(), None, "no match yet");
 
     put(&db, MATCH_ID, "asia", SCOPE, Bytes::from_static(MATCH), 1)
         .await
         .unwrap();
-    assert!(put_timeline(&db, MATCH_ID, timeline.clone()).await.unwrap());
-    assert!(
-        put_timeline(&db, MATCH_ID, timeline.clone()).await.unwrap(),
-        "idempotent"
-    );
+    put_timeline(&db, MATCH_ID, timeline.clone()).await.unwrap();
     assert_eq!(get_timeline(&db, MATCH_ID).await.unwrap(), Some(timeline));
+    assert_eq!(
+        get(&db, MATCH_ID).await.unwrap().as_deref(),
+        Some(MATCH),
+        "the match is stored after its timeline"
+    );
+    assert_eq!(stats(&db).await.unwrap().timelines, 1, "idempotent");
 }
 
 async fn facts_rows(db: &Db) -> Vec<(String, String, i64)> {

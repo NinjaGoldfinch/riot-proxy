@@ -315,6 +315,31 @@ fn page(query: &str) -> String {
     format!("/v1/players/{PUUID}/matches?platform=kr{query}")
 }
 
+/// TL-01: every match the page archives queues its timeline at the top
+/// priority, without fetching it on the page's time.
+#[tokio::test]
+async fn every_match_the_page_archives_queues_its_timeline() {
+    let e = env(&[]).await;
+    assert_eq!(e.get(&page("&count=5")).await.status, StatusCode::OK);
+    let queued: Vec<(String, i64, bool)> = e
+        .state
+        .db
+        .read(|c| {
+            let mut s = c.prepare(
+                "SELECT dedupe_key, priority, json_extract(payload, '$.fetchTimeline') FROM jobs
+                  WHERE kind = 'archive:match' AND state = 'pending' ORDER BY dedupe_key DESC",
+            )?;
+            let rows = s.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(riot_proxy::db::DbError::from)
+        })
+        .await
+        .unwrap();
+    let want: Vec<(String, i64, bool)> = MATCH_IDS.iter().map(|m| (m.to_string(), 0, true)).collect();
+    assert_eq!(queued, want);
+    assert_eq!(e.calls_to("/timeline").await, 0);
+}
+
 #[tokio::test]
 async fn hydrates_every_id_on_the_page_then_serves_it_from_the_archive() {
     let e = env(&[]).await;
