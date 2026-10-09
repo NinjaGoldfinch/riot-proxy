@@ -38,7 +38,7 @@ pub struct MatchSummary {
 
 /// Declares the numeric fields once: name in Riot's JSON, field here.
 macro_rules! player_summary {
-    ($($num:ident: $key:literal),* $(,)?) => {
+    ($($(#[$doc:meta])* $num:ident: $key:literal),* $(,)?) => {
         #[derive(Debug, Clone, Default, PartialEq, Serialize, utoipa::ToSchema)]
         #[serde(rename_all = "camelCase")]
         pub struct PlayerSummary {
@@ -63,6 +63,7 @@ macro_rules! player_summary {
             #[serde(skip_serializing_if = "Option::is_none")]
             pub team_position: Option<String>,
             $(
+                $(#[$doc])*
                 #[serde(skip_serializing_if = "Option::is_none")]
                 #[schema(value_type = Option<f64>)]
                 pub $num: Option<Number>,
@@ -106,6 +107,12 @@ player_summary! {
     item4: "item4",
     item5: "item5",
     item6: "item6",
+    /// Item in the role quest slot, outside the inventory: a bot laner's boots,
+    /// or another role's quest reward. `0` when the slot is empty, as Riot's
+    /// item fields. Absent when Riot didn't send it (games from before role
+    /// quests). Summaries are built from the archived raw match on every read,
+    /// so games archived before this field was added carry it too.
+    role_bound_item: "roleBoundItem",
 }
 
 /// Riot's `perks` blob is ~40 lines to convey three icon ids.

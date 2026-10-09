@@ -752,6 +752,8 @@ const spellIcon = (id) => {
   const url = imageUrl(version, 'spell', spells?.[id]);
   return url ? `<img class="icon xs" src="${esc(url)}" alt="spell ${esc(id)}" loading="lazy">` : `<span class="icon xs"></span>`;
 };
+// item0–6, then the role quest slot (`roleBoundItem`, SITE-06: a bot laner's boots or a quest reward) when Riot sent one.
+const itemSlots = (p) => [p.item0, p.item1, p.item2, p.item3, p.item4, p.item5, p.item6, ...(p.roleBoundItem != null ? [p.roleBoundItem] : [])];
 const itemIcon = (id) => {
   const url = id ? imageUrl(version, 'item', `${id}.png`) : null;
   return url ? `<img class="icon xs" src="${esc(url)}" alt="item ${esc(id)}" loading="lazy">` : `<span class="icon xs"></span>`;
@@ -898,7 +900,7 @@ function matchCard(m) {
   const o = outcome(p);
   const secs = durationSecs(m);
   const cs = (p.totalMinionsKilled ?? 0) + (p.neutralMinionsKilled ?? 0);
-  const items = [p.item0, p.item1, p.item2, p.item3, p.item4, p.item5, p.item6];
+  const items = itemSlots(p);
   return `<article class="match ${o.kind}" data-match="${esc(m.matchId)}" data-href="${esc(matchHref(pl.region, m.matchId))}" title="open the scoreboard">
     <div class="meta"><b>${esc(o.label)}</b><span>${esc(queueName(m.queueId) || m.gameMode || '')}</span><span class="muted">${esc(ago(m.gameEndTimestamp ?? m.gameCreation))} · ${clock(secs)}</span></div>
     <div class="pick">${portrait(p.championId, p.champLevel)}<span class="spells">${spellIcon(p.summoner1Id)}${spellIcon(p.summoner2Id)}</span>${runeIcons(p)}</div>
@@ -1007,7 +1009,7 @@ function renderScoreboard(teams, info) {
           <td><span class="wr"><span class="bar dmg hide-sm"><i style="width:${((p.totalDamageDealtToChampions ?? 0) / maxDmg) * 100}%"></i></span>${(p.totalDamageDealtToChampions ?? 0).toLocaleString()}</span></td>
           <td class="n hide-sm">${(p.goldEarned ?? 0).toLocaleString()}</td>
           <td class="n hide-sm">${esc(p.visionScore ?? 0)}</td>
-          <td class="hide-sm"><span class="items row">${[p.item0, p.item1, p.item2, p.item3, p.item4, p.item5, p.item6].map(itemIcon).join('')}</span></td></tr>`;
+          <td class="hide-sm"><span class="items row">${itemSlots(p).map(itemIcon).join('')}</span></td></tr>`;
       }).join('')}</tbody></table></div></section>`;
   }).join('');
 }

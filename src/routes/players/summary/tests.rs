@@ -19,6 +19,7 @@ fn full_match(info: Value, participant: Value) -> Value {
         "totalMinionsKilled": 42, "neutralMinionsKilled": 128, "goldEarned": 13240, "visionScore": 31,
         "totalDamageDealtToChampions": 21903, "totalDamageTaken": 30112,
         "item0": 3142, "item1": 6693, "item2": 3814, "item3": 3071, "item4": 3111, "item5": 0, "item6": 3364,
+        "roleBoundItem": 1209,
     });
     let more = json!({
         "summoner1Id": 11, "summoner2Id": 4, "riotIdGameName": "Someone", "riotIdTagline": "OCE",
@@ -80,6 +81,7 @@ fn keeps_the_requesting_players_line_and_nothing_else() {
             "kills": 8, "deaths": 3, "assists": 11, "totalMinionsKilled": 42, "neutralMinionsKilled": 128,
             "goldEarned": 13240, "visionScore": 31, "totalDamageDealtToChampions": 21903,
             "item0": 3142, "item1": 6693, "item2": 3814, "item3": 3071, "item4": 3111, "item5": 0, "item6": 3364,
+            "roleBoundItem": 1209,
             "summoner1Id": 11, "summoner2Id": 4,
             "perks": {"keystone": 8010, "primaryStyle": 8000, "subStyle": 8300}
         }
@@ -92,6 +94,7 @@ fn keeps_the_requesting_players_line_and_nothing_else() {
         "\"player\"",
         "\"puuid\"",
         "\"item6\"",
+        "\"roleBoundItem\"",
         "\"summoner1Id\"",
         "\"perks\"",
     ]
@@ -164,4 +167,33 @@ fn leaves_perks_out_rather_than_guessing() {
     let no_runes = full_match(json!({}), json!({"perks": {"statPerks": {}}}));
     let s = summary(&no_runes, PUUID, "OC1_1234567890").unwrap();
     assert!(s["player"].get("perks").is_none());
+}
+
+/// SITE-06: a bot laner's boots sit in the role quest slot, outside item0–6.
+/// The recorded ranked game: Lucian (BOTTOM) has 3008 there, Braum (UTILITY)
+/// a quest reward; an empty slot stays 0, as Riot sends it.
+#[test]
+fn copies_the_role_bound_item_as_riot_sends_it() {
+    let ranked: Value = serde_json::from_slice(include_bytes!(
+        "../../../../tests/fixtures/matches/ranked-solo.json"
+    ))
+    .unwrap();
+    let by_champion = |name: &str| {
+        let p = ranked["info"]["participants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["championName"] == name)
+            .unwrap();
+        let s = summary(&ranked, p["puuid"].as_str().unwrap(), "KR_8393343196").unwrap();
+        s["player"]["roleBoundItem"].clone()
+    };
+    assert_eq!(by_champion("Lucian"), json!(3008));
+    assert_eq!(by_champion("Braum"), json!(2055));
+
+    let empty = full_match(json!({}), json!({"roleBoundItem": 0}));
+    assert_eq!(
+        summary(&empty, PUUID, "OC1_1").unwrap()["player"]["roleBoundItem"],
+        json!(0)
+    );
 }
