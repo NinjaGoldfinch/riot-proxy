@@ -1197,7 +1197,7 @@ expression: doc
             "type": "string"
           },
           "outcome": {
-            "description": "`done`, `retry later: …`, `failed: …` or `aborted` (shutdown).",
+            "description": "`done`, `retry later: …`, `failed: …`, `yielded: …` (SCH-01) or `aborted` (shutdown).",
             "type": "string"
           },
           "startedAt": {
