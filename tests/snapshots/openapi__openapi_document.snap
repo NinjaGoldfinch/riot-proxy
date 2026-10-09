@@ -1147,6 +1147,77 @@ expression: doc
         ],
         "type": "object"
       },
+      "Event": {
+        "description": "One thing a job did.",
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "kind": {
+            "description": "`job` (claimed, finished), `step` (a handler's progress), `riot` (a\ncall and how it was answered), `wait` (rate limiter, backoff) or `error`.",
+            "type": "string"
+          },
+          "ms": {
+            "description": "How long it took, where that means something.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "seq": {
+            "description": "Increases by one per event within a trace; `?after=` reads past it.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "seq",
+          "at",
+          "kind",
+          "text",
+          "ms"
+        ],
+        "type": "object"
+      },
+      "FinishedView": {
+        "description": "A job that finished in this process, newest first.",
+        "properties": {
+          "finishedAt": {
+            "type": "string"
+          },
+          "jobId": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "outcome": {
+            "description": "`done`, `retry later: …`, `failed: …`, `yielded: …` (SCH-01) or `aborted` (shutdown).",
+            "type": "string"
+          },
+          "startedAt": {
+            "type": "string"
+          },
+          "worker": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "jobId",
+          "kind",
+          "worker",
+          "startedAt",
+          "finishedAt",
+          "outcome"
+        ],
+        "type": "object"
+      },
       "Flows": {
         "properties": {
           "backfillsQueued": {
@@ -1262,6 +1333,30 @@ expression: doc
           "active",
           "pending",
           "failed"
+        ],
+        "type": "object"
+      },
+      "JobActivity": {
+        "description": "What each worker is doing (DEV-19).",
+        "properties": {
+          "finished": {
+            "description": "Jobs that finished in this process since it started, newest first.",
+            "items": {
+              "$ref": "#/components/schemas/FinishedView"
+            },
+            "type": "array"
+          },
+          "workers": {
+            "description": "This process's workers, in order, each with its job's latest step. Empty in a process that\nruns no workers (`ROLE=api`): the record is kept in memory where the jobs run.",
+            "items": {
+              "$ref": "#/components/schemas/WorkerView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "workers",
+          "finished"
         ],
         "type": "object"
       },
@@ -1415,6 +1510,38 @@ expression: doc
           "finishedAt",
           "error",
           "payload"
+        ],
+        "type": "object"
+      },
+      "JobTrace": {
+        "description": "One job: its row and what its latest run did (DEV-19).",
+        "properties": {
+          "job": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/JobSummary",
+                "description": "The queue row; `null` once it is gone (done rows are kept seven days)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "trace": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TraceView",
+                "description": "The latest run in this process, from event `after` on; `null` when no worker here has run it\nsince the process started, or its trace aged out."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "job",
+          "trace"
         ],
         "type": "object"
       },
@@ -2902,6 +3029,85 @@ expression: doc
         ],
         "type": "object"
       },
+      "TraceView": {
+        "description": "One job's trace, from event `after` on.",
+        "properties": {
+          "attempt": {
+            "description": "Which attempt this trace is of.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "dropped": {
+            "description": "Events dropped from the front (only the last [`EVENTS_PER_JOB`] are kept).",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "events": {
+            "description": "Events after `after`, oldest first.",
+            "items": {
+              "$ref": "#/components/schemas/Event"
+            },
+            "type": "array"
+          },
+          "finishedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": "string"
+          },
+          "nextSeq": {
+            "description": "The `seq` the next event will get; pass it back as `after`.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "now": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "nowSince": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "outcome": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "startedAt": {
+            "type": "string"
+          },
+          "worker": {
+            "description": "1-based.",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "worker",
+          "attempt",
+          "startedAt",
+          "finishedAt",
+          "outcome",
+          "now",
+          "nowSince",
+          "events",
+          "nextSeq",
+          "dropped"
+        ],
+        "type": "object"
+      },
       "TrackPlayer": {
         "description": "`POST /v1/admin/tracked-players` body: a PUUID, or a Riot ID to resolve.",
         "properties": {
@@ -3030,6 +3236,62 @@ expression: doc
         },
         "required": [
           "alive"
+        ],
+        "type": "object"
+      },
+      "WorkerView": {
+        "description": "A worker and its job, for the overview.",
+        "properties": {
+          "events": {
+            "description": "Events the job has logged so far.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "jobId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "now": {
+            "description": "The job's latest step.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "nowSince": {
+            "description": "When the job got to that step.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "since": {
+            "description": "When the worker took the job, or went idle.",
+            "type": "string"
+          },
+          "worker": {
+            "description": "1-based.",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "worker",
+          "jobId",
+          "kind",
+          "since",
+          "now",
+          "nowSince",
+          "events"
         ],
         "type": "object"
       },
@@ -4206,6 +4468,90 @@ expression: doc
         ]
       }
     },
+    "/v1/admin/jobs/activity": {
+      "get": {
+        "description": "Every worker of this process with the job it runs and that job's latest step (a Riot call, a rate-limit wait, a page of a walk, …), and the jobs that finished here lately. Kept in memory by the process that runs the workers, for the last 200 jobs (DEV-19).",
+        "operationId": "job_activity",
+        "parameters": [
+          {
+            "description": "1–200 jobs in `finished`, default 50",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobActivity"
+                }
+              }
+            },
+            "description": "The workers"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          }
+        },
+        "summary": "What each worker is doing",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/v1/admin/jobs/queue": {
       "get": {
         "description": "The running jobs and the next ones a worker would claim, in the claim order (design/06 §Claiming), with how many are ready and how many wait out a backoff.",
@@ -4440,6 +4786,99 @@ expression: doc
           }
         },
         "summary": "Cancel a pending job",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/admin/jobs/{id}/activity": {
+      "get": {
+        "description": "The job's row and the trace of its latest run: when it was claimed and by which worker, each step, each Riot call with how it was answered and how long it took, rate-limit waits and backoffs, and how it ended. Pass `after` (the last `nextSeq`) to get only new events (DEV-19).",
+        "operationId": "job_trace",
+        "parameters": [
+          {
+            "description": "Job id (a ULID)",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only events with `seq` ≥ this, default 0",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobTrace"
+                }
+              }
+            },
+            "description": "The job"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          }
+        },
+        "summary": "What a job is doing",
         "tags": [
           "admin"
         ]

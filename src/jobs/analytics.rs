@@ -22,6 +22,7 @@ use crate::archive::matches;
 use crate::clock::Clock;
 use crate::db::{Db, DbError};
 use crate::events::{self, Event};
+use crate::jobs::activity;
 use crate::jobs::scheduler::{Enqueued, Handler, Job, JobError, NewJob, Queue};
 use crate::jobs::{kinds, priority};
 use crate::ws::Hub;
@@ -241,6 +242,10 @@ impl AnalyticsContext {
         ];
         let mut tables = BTreeMap::new();
         for (name, step) in steps {
+            activity::step(format!(
+                "rebuilding {name} for {} {}",
+                ladder.platform, ladder.queue
+            ));
             let started = Instant::now();
             let (key_scope, l, limit) = (self.key_scope.clone(), ladder.clone(), self.patch_limit);
             let written = self

@@ -193,6 +193,7 @@ src/
 │       └── priority.rs  interactive vs bulk, ceiling
 ├── jobs/
 │   ├── scheduler.rs     ticks, durable table, claim loop, priority heap
+│   ├── activity.rs      in-memory trace of what each worker's job is doing (DEV-19)
 │   ├── poll.rs          live / rank / matches
 │   ├── archive.rs       archive:match, backfill:player
 │   ├── ladder.rs        crawl → apex/walk → collect → archive

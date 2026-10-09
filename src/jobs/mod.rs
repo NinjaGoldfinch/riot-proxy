@@ -1,6 +1,7 @@
 //! Background work (docs/design/06): the durable queue and its workers, and the
 //! ticks that feed it, and the handlers by kind.
 
+pub mod activity;
 pub mod analytics;
 pub mod archive;
 pub mod ddragon;

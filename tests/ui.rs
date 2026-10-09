@@ -155,7 +155,13 @@ async fn dev_ui_is_off_in_production_and_by_flag() {
         vec![("DEV_UI", "false")],
     ] {
         let (_d, router) = app(&env);
-        for p in ["/dev", "/dev/showcase", "/dev/config.json", "/dev/openapi.json"] {
+        for p in [
+            "/dev",
+            "/dev/showcase",
+            "/dev/jobs",
+            "/dev/config.json",
+            "/dev/openapi.json",
+        ] {
             assert_eq!(
                 common::get(router.clone(), p).await.status,
                 StatusCode::NOT_FOUND,
@@ -220,6 +226,7 @@ async fn pages_share_a_bar_with_the_pages_that_exist() {
     for (path, here) in [
         ("/dev", "Dev explorer"),
         ("/dev/showcase", "Showcase"),
+        ("/dev/jobs", "Jobs"),
         ("/dashboard", "Dashboard"),
     ] {
         let html = String::from_utf8(common::get(router.clone(), path).await.body).unwrap();
@@ -236,7 +243,14 @@ async fn pages_share_a_bar_with_the_pages_that_exist() {
             .collect();
         assert_eq!(
             hrefs,
-            ["/dashboard", "/dev", "/dev/showcase", "/docs", "/metrics"],
+            [
+                "/dashboard",
+                "/dev",
+                "/dev/showcase",
+                "/dev/jobs",
+                "/docs",
+                "/metrics"
+            ],
             "{path}"
         );
         assert_eq!(bar.matches("aria-current").count(), 1, "{path}");
@@ -392,4 +406,32 @@ fn showcased_routes_are_called_by_the_page() {
 fn showcase_chips_link_to_the_explorer() {
     let html = riot_proxy::routes::ui::SHOWCASE_HTML;
     assert!(html.contains("/dev#explorer?op="));
+}
+
+/// `/dev/jobs` (DEV-19): served without a key beside the explorer, one file
+/// reading only the admin job routes and the explorer's config.
+#[tokio::test]
+async fn jobs_page_is_served_and_self_contained() {
+    let (_d, router) = app(&[]);
+    let r = common::get(router, "/dev/jobs").await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.headers["cache-control"], "no-store");
+    let config = common::config(&[]);
+    assert_eq!(
+        String::from_utf8(r.body).unwrap(),
+        riot_proxy::routes::ui::render(riot_proxy::routes::ui::JOBS_HTML, &config, "/dev/jobs")
+    );
+    let html = riot_proxy::routes::ui::JOBS_HTML;
+    for needle in ["http://", "https://", "<script src", "<link "] {
+        assert!(!html.contains(needle), "jobs.html contains {needle:?}");
+    }
+    for route in [
+        "/dev/config.json",
+        "/v1/admin/jobs/activity",
+        "/v1/admin/jobs/queue",
+        "/v1/admin/jobs/stats",
+        "/activity?after=",
+    ] {
+        assert!(html.contains(route), "jobs.html reads {route}");
+    }
 }

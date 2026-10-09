@@ -70,6 +70,7 @@ pub fn app_with(env: &[(&str, &str)], upstream: &str) -> (tempfile::TempDir, App
         limiter_restored: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
         refresh: std::sync::Arc::new(riot_proxy::routes::players::RefreshWindows::new()),
         jobs: riot_proxy::jobs::Queue::new(db.clone()),
+        activity: riot_proxy::jobs::activity::Activity::new(),
         hub,
         ddragon: mirror,
         stats,

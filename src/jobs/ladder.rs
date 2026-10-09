@@ -25,6 +25,7 @@ use crate::db::{Db, DbError};
 use crate::events::{self, Event};
 use crate::fetcher::{FetchError, FetchOptions, Fetcher};
 use crate::http::{ApiError, ErrorCode};
+use crate::jobs::activity;
 use crate::jobs::kinds;
 use crate::jobs::scheduler::{Handler, Job, JobError, MAX_ATTEMPTS, NewJob, Queue, enqueue_on};
 use crate::riot::endpoints::Endpoint;
@@ -420,6 +421,7 @@ impl LadderContext {
         let platform = Platform::parse(&leg.platform).map_err(|e| JobError::Fail(e.message))?;
         let id = apex_endpoint(&leg.tier)
             .ok_or_else(|| JobError::Fail(format!("'{}' is not an apex tier", leg.tier)))?;
+        activity::step(format!("{} league on {}", leg.tier, leg.platform));
         let body = self
             .get(id, platform, &[&leg.queue], &[])
             .await
@@ -471,6 +473,7 @@ impl LadderContext {
                 tracing::info!(crawl = %leg.crawl_id, leg = %name, page, "ladder walk stopping; crawl is not running");
                 return Ok(());
             }
+            activity::step(format!("{} {division} page {page} on {}", leg.tier, leg.platform));
             let body = self
                 .get(
                     "league.entriesByTier",
@@ -483,6 +486,7 @@ impl LadderContext {
             let raw: Vec<RiotEntry> =
                 serde_json::from_slice(&body).map_err(|e| JobError::Retry(format!("league page: {e}")))?;
             if raw.is_empty() {
+                activity::step(format!("page {page} is empty: the walk is done"));
                 return Ok(());
             }
             let entries: Vec<Entry> = raw.into_iter().filter_map(|e| to_entry(e, &leg.tier)).collect();
@@ -565,7 +569,13 @@ impl LadderContext {
             .ok_or_else(|| JobError::Fail(format!("'{}' is not a ranked queue", batch.queue)))?;
         let mut new_ids = 0;
         let mut outcome = Ok(());
+        let players = batch.puuids.len();
         for (done, puuid) in batch.puuids.iter().enumerate() {
+            activity::step(format!(
+                "player {} of {players} (offset {}): {new_ids} new match ids so far",
+                done + 1,
+                batch.offset
+            ));
             // Per player: a player is one or two requests (v1).
             if self.running(&batch.crawl_id).await?.is_none() {
                 tracing::info!(crawl = %batch.crawl_id, "ladder collect stopping; crawl is not running");
@@ -693,6 +703,7 @@ impl LadderContext {
                 tracing::info!(crawl = %leg.crawl_id, seen, "ladder archive stopping; crawl is not running");
                 return Ok(());
             }
+            activity::step(format!("{seen} match ids read, {queued} queued to archive"));
             let batch = store::peek_match_ids(self.db(), &leg.crawl_id, ARCHIVE_BATCH)
                 .await
                 .map_err(|e| store_err(&e))?;

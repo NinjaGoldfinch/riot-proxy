@@ -104,6 +104,17 @@ On `/dashboard` the Ladder tab shows each running crawl as a card: stage bars an
 
 The tab's folded Analytics recompute panel has a **Recompute now** button. It picks a platform and queue from `GET /v1/admin/ladder/options`, as the crawl form does, and calls `POST /v1/admin/analytics/recompute`. The button only queues the job. A recompute asked for this way (the button or the route) is queued at priority 0, ahead of every queued job, and a rebuild already queued for the ladder (a crawl's end, the tick) is moved up to 0 rather than queued twice. The next free worker runs it; no running job is interrupted. It rebuilds from the matches archived so far and makes no Riot call, so it does not wait for a crawl's downloads. The run then appears in the panel's table. The crawl-end and tick rebuilds stay at maintenance priority (DEV-18, ADR-090).
 
+### Live activity
+
+What a running job is doing is kept in memory by the process that runs the workers (DEV-19, ADR-092), in `jobs::activity`. It is not stored.
+
+- **Traces.** A worker that claims a job opens a trace (worker, attempt, start). While the handler runs, the job is its task's *current job* (a tokio task-local), so code anywhere below it can report without being passed anything: `activity::step` (a handler's progress, e.g. `GOLD II page 12 on na1` or `player 7 of 25`), `activity::event` (logged only) and `activity::now` (the "now" line only, for what is momentary). Outside a job all three do nothing. The fetcher reports each call: one line per fetch with its `X-Cache` outcome or error code and how long it took, a rate-limit wait of 20 ms or more, and each failed Riot answer, 429 backoff or 5xx retry. The single-flight upstream leg runs on its own task and inherits the caller's job. The trace closes with the outcome (`done`, `retry later: …`, `failed: …`, `yielded: …` when SCH-01 gives the worker back, or `aborted` at shutdown).
+- **Bounds.** At most 200 events per trace (older ones are dropped and counted) and the 200 most recent finished traces. A new attempt replaces the old trace.
+- **Reads.** `GET /v1/admin/jobs/activity?limit=` lists every worker with its job and latest step, and the jobs that finished in this process. `GET /v1/admin/jobs/{id}/activity?after=` returns the job's row and its trace from event `after` on (`nextSeq` is the cursor). It 404s only when there is neither a row nor a trace.
+- **Scope.** Single process. A `ROLE=api` process has no workers, so it shows none. A cross-process view is a later task, like SCH-01's limiter coordination.
+
+`/dev/jobs` (design/10 §Jobs page) is the page over these reads.
+
 ### Bulk limiter priority
 
 Every handler that hits Riot calls the fetcher with `FetchOptions::JOB` (`Priority::Bulk`), so the interactive-first and ceiling guarantees in [05](05-rate-limiter.md) apply automatically. A job waits at most `JOB_YIELD_BUDGET_MS` for a token and then yields its worker (§Claiming), so `JOB_CONCURRENCY` bounds how many jobs run, not how many sit parked in `acquire`.

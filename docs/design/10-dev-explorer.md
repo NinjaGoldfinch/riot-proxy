@@ -26,7 +26,7 @@ flowchart TD
   B -- no --> C{DEV_UI set?}
   C -- "false" --> OFF
   C -- "unset / true" --> ON[dev_ui = true]
-  ON --> R["routes::ui::router mounts<br/>/dev · /dev/showcase · /dev/config.json · /dev/openapi.json<br/>routes::dev::router mounts /dev/reset (admin)"]
+  ON --> R["routes::ui::router mounts<br/>/dev · /dev/showcase · /dev/jobs · /dev/config.json · /dev/openapi.json<br/>routes::dev::router mounts /dev/reset (admin)"]
   OFF --> N["no /dev routes →<br/>fallback 404 envelope"]
 ```
 
@@ -130,13 +130,27 @@ Deletes every piece of fetched data so the proxy starts from empty, without a re
 
 ## Page bar (DEV-10)
 
-`/dev`, `/dev/showcase` and `/dashboard` share one bar across the top: **riot-proxy · Dashboard · Dev explorer · Showcase · API docs · Metrics**, with the version and environment on the right.
+`/dev`, `/dev/showcase`, `/dev/jobs` and `/dashboard` share one bar across the top: **riot-proxy · Dashboard · Dev explorer · Showcase · Jobs · API docs · Metrics**, with the version and environment on the right.
 
 - It is built once at startup by `routes::ui::pagebar` and injected at the `<!-- pagebar -->` marker in each page. Both pages stay single files with no shared asset, and the bar comes from one place.
-- **It lists only pages this config serves** (`routes::ui::pages`): Dashboard under `DASHBOARD_UI`, Dev explorer and Showcase (design/11) under `dev_ui`, API docs under `DOCS_UI`, and `/metrics` always. In production the dashboard's bar never links to `/dev`.
+- **It lists only pages this config serves** (`routes::ui::pages`): Dashboard under `DASHBOARD_UI`, Dev explorer, Showcase (design/11) and Jobs under `dev_ui`, API docs under `DOCS_UI`, and `/metrics` always. In production the dashboard's bar never links to `/dev`.
 - The current page is marked `aria-current="page"`. The bar sticks to the top while the page scrolls.
 - It is a `div role="navigation"` with its own `rp-bar` class, so the pages' own `nav` rules don't restyle it. The dev page's old header links and version badge are gone, since the bar replaces them.
 - `/docs` (Scalar) is third-party HTML, so it gets no bar.
+
+## Jobs page (DEV-19)
+
+`/dev/jobs` shows what every worker is doing, what is queued, and one tab per job that follows it live. It is gated with the rest of `/dev*` and is its own single file, `src/ui/jobs.html`. It is listed in the page bar as **Jobs**.
+
+| Part | Calls | Renders |
+|---|---|---|
+| Overview tab | `GET /v1/admin/jobs/activity?limit=30`, `/v1/admin/jobs/queue?limit=50`, `/v1/admin/jobs?state=failed&limit=20`, `/v1/admin/jobs/stats` (every 5th poll) | a card per worker (its job, how long it has run, its "now" line and for how long, its event count; idle workers say for how long); the next 50 jobs in claim order with ready/backoff counts; running/pending/failed per kind; jobs that finished in this process with outcome and duration; failed jobs with their error |
+| A job's tab | `GET /v1/admin/jobs/{id}/activity?after=<nextSeq>` | state, priority, attempts, dedupe key, times, error and worker; the payload; the "now" line; the timeline (offset from the start, kind, text, duration), appended as events arrive, with a follow toggle; **Retry now** for a failed job and **Cancel** for a pending one, each after a `confirm()` |
+
+- **Opening a tab:** click (or Enter on) any worker card or job row. Tabs close with × or Esc. They are kept in `localStorage` (`rp.jobs.tabs`), and `#job/<id>` links to one.
+- **Polling:** once a second while **live** is ticked, for the tab in view only. A job's tab asks only for events after the last one it has. When the attempt changes it starts a new timeline.
+- **Key:** it shares the dashboard's stored key (`rp.dashboard.key`) and reads `authDisabled` from `/dev/config.json`.
+- **What it cannot show:** a job run by another process, or a run whose trace has aged out (design/06 §Live activity). The tab then shows the row and says so.
 
 ## Safety
 

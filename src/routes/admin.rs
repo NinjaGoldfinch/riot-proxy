@@ -57,6 +57,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(list_jobs))
         .routes(routes!(job_stats))
         .routes(routes!(job_queue))
+        .routes(routes!(job_activity))
+        .routes(routes!(job_trace))
         .routes(routes!(retry_job))
         .routes(routes!(cancel_job))
         .routes(routes!(queue_backfill))
@@ -1730,6 +1732,88 @@ async fn job_queue(State(state): State<AppState>, Extension(_c): Who, Query(q): 
         }),
         Err(e) => internal(&e, "could not read the job queue"),
     }
+}
+
+/// What each worker is doing (DEV-19).
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct JobActivity {
+    /// This process's workers, in order, each with its job's latest step. Empty in a process that
+    /// runs no workers (`ROLE=api`): the record is kept in memory where the jobs run.
+    workers: Vec<crate::jobs::activity::WorkerView>,
+    /// Jobs that finished in this process since it started, newest first.
+    finished: Vec<crate::jobs::activity::FinishedView>,
+}
+
+#[utoipa::path(
+    get, path = "/v1/admin/jobs/activity", tag = "admin",
+    summary = "What each worker is doing",
+    description = "Every worker of this process with the job it runs and that job's latest step (a Riot call, a \
+        rate-limit wait, a page of a walk, …), and the jobs that finished here lately. Kept in memory by the \
+        process that runs the workers, for the last 200 jobs (DEV-19).",
+    params(("limit" = Option<i64>, Query, description = "1–200 jobs in `finished`, default 50")),
+    responses((status = 200, description = "The workers", body = JobActivity), LocalErrors),
+)]
+async fn job_activity(State(state): State<AppState>, Extension(_c): Who, Query(q): Q) -> Response {
+    let limit = match validate::int_query("limit", q.get("limit").map(String::as_str), 1, 200) {
+        Ok(l) => usize::try_from(l.unwrap_or(50)).unwrap_or(50),
+        Err(e) => return e.into_response(),
+    };
+    ok(&JobActivity {
+        workers: state.activity.workers(),
+        finished: state.activity.finished_jobs(limit),
+    })
+}
+
+/// One job: its row and what its latest run did (DEV-19).
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct JobTrace {
+    /// The queue row; `null` once it is gone (done rows are kept seven days).
+    #[schema(required = true)]
+    job: Option<JobSummary>,
+    /// The latest run in this process, from event `after` on; `null` when no worker here has run it
+    /// since the process started, or its trace aged out.
+    #[schema(required = true)]
+    trace: Option<crate::jobs::activity::TraceView>,
+}
+
+#[utoipa::path(
+    get, path = "/v1/admin/jobs/{id}/activity", tag = "admin",
+    summary = "What a job is doing",
+    description = "The job's row and the trace of its latest run: when it was claimed and by which worker, each \
+        step, each Riot call with how it was answered and how long it took, rate-limit waits and backoffs, and how \
+        it ended. Pass `after` (the last `nextSeq`) to get only new events (DEV-19).",
+    params(("id" = String, Path, description = "Job id (a ULID)"),
+           ("after" = Option<i64>, Query, description = "Only events with `seq` ≥ this, default 0")),
+    responses((status = 200, description = "The job", body = JobTrace), LocalErrors),
+)]
+async fn job_trace(
+    State(state): State<AppState>,
+    Extension(_c): Who,
+    path: Result<Path<String>, PathRejection>,
+    Query(q): Q,
+) -> Response {
+    let Path(id) = match path {
+        Ok(p) => p,
+        Err(e) => return bad_path(&e).into_response(),
+    };
+    if let Err(e) = validate::consumer_id(&id) {
+        return e.into_response();
+    }
+    let after = match validate::int_query("after", q.get("after").map(String::as_str), 0, i64::MAX) {
+        Ok(a) => u64::try_from(a.unwrap_or(0)).unwrap_or(0),
+        Err(e) => return e.into_response(),
+    };
+    let job = match state.jobs.get(&id).await {
+        Ok(row) => row.map(JobSummary::from),
+        Err(e) => return internal(&e, "could not read the job"),
+    };
+    let trace = state.activity.trace(&id, after);
+    if job.is_none() && trace.is_none() {
+        return ApiError::not_found("No such job").into_response();
+    }
+    ok(&JobTrace { job, trace })
 }
 
 /// One stage of a crawl and how far through it is.

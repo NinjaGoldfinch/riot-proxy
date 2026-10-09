@@ -51,6 +51,8 @@ pub struct AppState {
     pub refresh: Arc<crate::routes::players::RefreshWindows>,
     /// The durable job queue (lookups and admin routes enqueue backfills).
     pub jobs: crate::jobs::Queue,
+    /// What this process's workers are doing (DEV-19); empty without workers.
+    pub activity: crate::jobs::activity::Activity,
     /// The realtime hub `/v1/ws` sockets and job events share.
     pub hub: crate::ws::Hub,
     /// The Data Dragon mirror `/v1/static/*` and champion names read.
