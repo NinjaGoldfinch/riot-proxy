@@ -11,6 +11,11 @@
 //! - M3 14.18 solo, 200 s, a remake: A (champ 1, MIDDLE, win, no K/D/A) vs C (champ 2).
 //! - M4 14.17 solo: A on champ 1, an older patch.
 //! - M5 14.18 flex: A on champ 1, another queue.
+//!
+//! Build facts (`match_builds`, BLD-02): A's core is 6655 › 3157 in M1, M2
+//! and M3, and 3157 › 6655 in M4; B's in M2 is 3157 › 4645, with six items
+//! and no starter or boots; C has one finished item in M1, so counts in no
+//! build, and a row under another key scope that doesn't join; D has none.
 
 use super::*;
 
@@ -228,6 +233,19 @@ fn seed(c: &Connection) {
             .unwrap();
         }
     }
+    c.execute_batch(
+        "INSERT INTO match_builds (match_id, key_scope, puuid, starter, boots, items, skills, skill_order,
+           builds_version) VALUES
+           ('KR_1', 's', 'A', '[1056,2003]', 3020, '[6655,3157,3089,3135]', 'QEWQQRQEQ', 'QEW', 1),
+           ('KR_1', 's', 'C', '[1056,2003]', 3020, '[3157]', 'QWEQQRQ', 'QWE', 1),
+           ('KR_1', 'other', 'C', '[1056]', NULL, '[3157,3089]', 'Q', 'QWE', 1),
+           ('KR_2', 's', 'A', '[1056,2003]', 3047, '[6655,3157]', 'QWEQQRQ', 'QWE', 1),
+           ('KR_2', 's', 'B', '[]', NULL, '[3157,4645,3089,3135,3003,3916]', 'QWEQQRQ', 'QWE', 1),
+           ('KR_3', 's', 'A', '[1056]', NULL, '[6655,3157]', '', NULL, 1),
+           ('KR_4', 's', 'A', '[]', NULL, '[3157,6655]', '', NULL, 1),
+           ('KR_5', 's', 'A', '[1056,2003]', 3020, '[6655,3157]', 'QWE', 'QWE', 1);",
+    )
+    .unwrap();
 }
 
 fn scope(c: &Connection, patch_limit: u32) -> Scope {
@@ -299,6 +317,8 @@ async fn the_rebuild_matches_the_hand_computed_fixture() {
             ("champion_items", 3),
             ("champion_runes", 3),
             ("champion_spells", 5),
+            ("champion_builds", 3),
+            ("champion_build_parts", 18),
         ]
     );
 
@@ -798,4 +818,218 @@ async fn lookups_place_players_and_only_the_platforms_matches_count() {
             "UNKNOWN 3 TOP 0 1/0",
         ]
     );
+}
+
+/// Set builds (BLD-02) on the newest patch, worked out from the build facts
+/// in the module comment.
+#[tokio::test]
+async fn set_builds_match_the_hand_computed_fixture() {
+    let (_d, db) = db();
+    db.write(|c| {
+        seed(c);
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    rebuild(&db, 1).await;
+    // A's 6655 › 3157 in KR_1 (win) and KR_2, the remake KR_3 apart; B's
+    // 3157 › 4645. C's single item counts nowhere, and C's row under another
+    // key scope doesn't join. KR_4 (14.17) and KR_5 (flex) are out of scope.
+    assert_eq!(
+        text_rows(
+            &db,
+            "SELECT champion_id || ' ' || role || ' ' || remake || ' ' || core || ' ' || games || '/' || wins
+                     || ' ' || computed_at
+               FROM champion_builds ORDER BY champion_id, remake"
+        )
+        .await,
+        [
+            "1 MIDDLE 0 [6655,3157] 2/1 77",
+            "1 MIDDLE 1 [6655,3157] 1/1 77",
+            "2 MIDDLE 0 [3157,4645] 1/1 77",
+        ]
+    );
+    // Only KR_1's A has a 3rd and 4th item; boots and skill order split A's
+    // two games; KR_1's [4,14] and KR_2's [14,4] are one spell pair. The
+    // remake has no boots or skill order. B's empty starter and missing boots
+    // count nowhere, nor does its 6th item.
+    assert_eq!(
+        text_rows(
+            &db,
+            "SELECT champion_id || ' ' || remake || ' ' || core || ' ' || part || ' ' || value || ' '
+                     || games || '/' || wins
+               FROM champion_build_parts ORDER BY champion_id, remake, part, value"
+        )
+        .await,
+        [
+            "1 0 [6655,3157] boots 3020 1/1",
+            "1 0 [6655,3157] boots 3047 1/0",
+            "1 0 [6655,3157] item3 3089 1/1",
+            "1 0 [6655,3157] item4 3135 1/1",
+            "1 0 [6655,3157] runes 8112:8300 2/1",
+            "1 0 [6655,3157] skill_order QEW 1/1",
+            "1 0 [6655,3157] skill_order QWE 1/0",
+            "1 0 [6655,3157] spells 4:14 2/1",
+            "1 0 [6655,3157] starter [1056,2003] 2/1",
+            "1 1 [6655,3157] runes 8112:8300 1/1",
+            "1 1 [6655,3157] spells 4:14 1/1",
+            "1 1 [6655,3157] starter [1056] 1/1",
+            "2 0 [3157,4645] item3 3089 1/1",
+            "2 0 [3157,4645] item4 3135 1/1",
+            "2 0 [3157,4645] item5 3003 1/1",
+            "2 0 [3157,4645] runes 8010:8400 1/1",
+            "2 0 [3157,4645] skill_order QWE 1/1",
+            "2 0 [3157,4645] spells 4:14 1/1",
+        ]
+    );
+    // A rebuild replaces the rows rather than adding to them.
+    rebuild(&db, 1).await;
+    assert_eq!(
+        rows(&db, "SELECT sum(games) FROM champion_builds").await,
+        [vec![4]]
+    );
+}
+
+#[tokio::test]
+async fn build_reads_sum_patches_and_roles_and_leave_remakes_out() {
+    let (_d, db) = db();
+    db.write(|c| {
+        seed(c);
+        // A plays KR_2 in TOP, so A's 6655 › 3157 has a row per role.
+        c.execute_batch("UPDATE match_facts SET position = 'TOP' WHERE match_id = 'KR_2' AND puuid = 'A'")?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    rebuild(&db, 0).await;
+    let read = |patch: Option<&str>, role: Option<&str>, remakes: bool| Read {
+        key_scope: "s".into(),
+        platform: Some("kr".into()),
+        queue: "RANKED_SOLO_5x5".into(),
+        patch: patch.map(str::to_string),
+        tier: None,
+        role: role.map(str::to_string),
+        champion_id: Some(1),
+        min_games: 0,
+        limit: 10,
+        remakes,
+    };
+    let list = |r: Read| {
+        let db = db.clone();
+        async move {
+            builds(&db, r)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|b| (b.core, b.games, b.wins))
+                .collect::<Vec<_>>()
+        }
+    };
+    // Every patch: KR_4's 3157 › 6655 (14.17) is a build of its own; roles summed.
+    assert_eq!(
+        list(read(None, None, false)).await,
+        [([6655, 3157], 2, 1), ([3157, 6655], 1, 1)]
+    );
+    assert_eq!(
+        list(read(Some("14.18"), None, false)).await,
+        [([6655, 3157], 2, 1)]
+    );
+    assert_eq!(
+        list(read(Some("14.18"), Some("TOP"), false)).await,
+        [([6655, 3157], 1, 0)]
+    );
+    // The remake KR_3 added back.
+    assert_eq!(
+        list(read(Some("14.18"), None, true)).await,
+        [([6655, 3157], 3, 2)]
+    );
+    // minGames and limit.
+    assert_eq!(
+        list(Read {
+            min_games: 2,
+            ..read(None, None, false)
+        })
+        .await,
+        [([6655, 3157], 2, 1)]
+    );
+    assert_eq!(
+        list(Read {
+            limit: 1,
+            ..read(None, None, false)
+        })
+        .await,
+        [([6655, 3157], 2, 1)]
+    );
+    assert!(
+        list(Read {
+            champion_id: Some(999),
+            ..read(None, None, false)
+        })
+        .await
+        .is_empty()
+    );
+
+    let parts = |r: Read, cores: Vec<[i64; 2]>| {
+        let db = db.clone();
+        async move {
+            build_parts(&db, r, cores)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|p| format!("{:?} {} {} {}/{}", p.core, p.part, p.value, p.games, p.wins))
+                .collect::<Vec<_>>()
+        }
+    };
+    // Both roles' rows summed; most played first within a part.
+    assert_eq!(
+        parts(read(None, None, false), vec![[6655, 3157]]).await,
+        [
+            "[6655, 3157] boots 3020 1/1",
+            "[6655, 3157] boots 3047 1/0",
+            "[6655, 3157] item3 3089 1/1",
+            "[6655, 3157] item4 3135 1/1",
+            "[6655, 3157] runes 8112:8300 2/1",
+            "[6655, 3157] skill_order QEW 1/1",
+            "[6655, 3157] skill_order QWE 1/0",
+            "[6655, 3157] spells 4:14 2/1",
+            "[6655, 3157] starter [1056,2003] 2/1",
+        ]
+    );
+    // With remakes, KR_3's starter comes second; two cores at once.
+    let both = parts(read(None, None, true), vec![[6655, 3157], [3157, 6655]]).await;
+    assert!(
+        both.contains(&"[3157, 6655] spells 4:14 1/1".to_string()),
+        "{both:#?}"
+    );
+    let starters: Vec<_> = both
+        .iter()
+        .filter(|p| p.starts_with("[6655, 3157] starter"))
+        .collect();
+    assert_eq!(
+        starters,
+        [
+            "[6655, 3157] starter [1056,2003] 2/1",
+            "[6655, 3157] starter [1056] 1/1"
+        ]
+    );
+    // One role; a core nobody built has no parts.
+    assert_eq!(
+        parts(read(None, Some("TOP"), false), vec![[6655, 3157]]).await,
+        [
+            "[6655, 3157] boots 3047 1/0",
+            "[6655, 3157] runes 8112:8300 1/0",
+            "[6655, 3157] skill_order QWE 1/0",
+            "[6655, 3157] spells 4:14 1/0",
+            "[6655, 3157] starter [1056,2003] 1/0",
+        ]
+    );
+    assert!(parts(read(None, None, false), vec![[1, 2]]).await.is_empty());
+}
+
+/// The set-build players reach their build row by key, not by walking
+/// `match_builds` per fact.
+#[tokio::test]
+async fn the_set_builds_plan_reaches_the_build_by_key() {
+    let plan = plan_of(format!("{} SELECT * FROM p", set_build_players())).await;
+    assert!(step(&plan, "b").contains("match_id=?"), "{plan:#?}");
 }

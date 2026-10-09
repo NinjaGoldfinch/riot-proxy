@@ -199,7 +199,8 @@ pub fn rebuild_matchups(c: &mut Connection, s: &Scope) -> Result<Written, DbErro
     Ok(vec![("champion_matchups", n)])
 }
 
-/// Items, runes and spells, a transaction each (v1's builds step).
+/// Items, runes and spells, a transaction each (v1's builds step), then set
+/// builds and their parts in one more (BLD-02).
 pub fn rebuild_builds(c: &mut Connection, s: &Scope) -> Result<Written, DbError> {
     let mut out = vec![];
     // Items: slots 0–5, empty slots skipped, a player's duplicate item once.
@@ -266,7 +267,74 @@ pub fn rebuild_builds(c: &mut Connection, s: &Scope) -> Result<Written, DbError>
     )?;
     tx.commit()?;
     out.push(("champion_spells", n));
+
+    let tx = c.transaction()?;
+    for t in ["champion_builds", "champion_build_parts"] {
+        s.clear(&tx, t)?;
+    }
+    let players = set_build_players();
+    let n = s.insert(
+        &tx,
+        &format!(
+            "{players}
+             INSERT INTO champion_builds (key_scope, platform, queue, patch, champion_id, role, remake, core,
+               games, wins, computed_at)
+             SELECT ?1, ?2, ?3, patch, champion_id, role, remake, core, count(*), sum(win), ?6
+               FROM p GROUP BY patch, champion_id, role, remake, core"
+        ),
+    )?;
+    out.push(("champion_builds", n));
+    let n = s.insert(
+        &tx,
+        &format!(
+            "{players},
+             k (part) AS (VALUES ('item3'), ('item4'), ('item5'), ('starter'), ('boots'), ('skill_order'),
+               ('runes'), ('spells')),
+             v AS (
+               SELECT p.patch, p.champion_id, p.role, p.remake, p.core, p.win, k.part,
+                 CASE k.part
+                   WHEN 'item3' THEN CAST(json_extract(p.items, '$[2]') AS TEXT)
+                   WHEN 'item4' THEN CAST(json_extract(p.items, '$[3]') AS TEXT)
+                   WHEN 'item5' THEN CAST(json_extract(p.items, '$[4]') AS TEXT)
+                   WHEN 'starter' THEN nullif(p.starter, '[]')
+                   WHEN 'boots' THEN CAST(p.boots AS TEXT)
+                   WHEN 'skill_order' THEN nullif(p.skill_order, '')
+                   WHEN 'runes' THEN json_extract(p.runes, '$.keystone') || ':' || json_extract(p.runes, '$.subStyle')
+                   WHEN 'spells' THEN
+                     min(json_extract(p.summoners, '$[0]'), json_extract(p.summoners, '$[1]')) || ':'
+                       || max(json_extract(p.summoners, '$[0]'), json_extract(p.summoners, '$[1]'))
+                 END AS value
+                 FROM p CROSS JOIN k
+             )
+             INSERT INTO champion_build_parts (key_scope, platform, queue, patch, champion_id, role, remake, core,
+               part, value, games, wins, computed_at)
+             SELECT ?1, ?2, ?3, patch, champion_id, role, remake, core, part, value, count(*), sum(win), ?6
+               FROM v WHERE value IS NOT NULL
+              GROUP BY patch, champion_id, role, remake, core, part, value"
+        ),
+    )?;
+    tx.commit()?;
+    out.push(("champion_build_parts", n));
     Ok(out)
+}
+
+/// Set builds (BLD-02, ADR-120): `p`, the facts of the players whose
+/// `match_builds` row has two or more finished items, each with its `core`,
+/// the first two as `"[a,b]"`. A player with fewer counts in no build and no
+/// part. Binds as [`ladder_facts`]; begins a `WITH`.
+fn set_build_players() -> String {
+    let facts = ladder_facts(
+        "JOIN match_builds b ON b.match_id = f.match_id AND b.key_scope = f.key_scope AND b.puuid = f.puuid",
+    );
+    format!(
+        "WITH p AS (
+           SELECT m.patch, f.champion_id, coalesce(f.position, '') AS role, coalesce(m.remake, 0) AS remake, f.win,
+             json_array(json_extract(b.items, '$[0]'), json_extract(b.items, '$[1]')) AS core,
+             b.items, b.starter, b.boots, b.skill_order, f.runes, f.summoners
+           {facts}
+             AND json_array_length(b.items) >= 2
+         )"
+    )
 }
 
 // ── Reads ───────────────────────────────────────────────────────────────────
@@ -594,6 +662,111 @@ pub async fn facet(db: &Db, facet: Facet, r: Read) -> Result<Vec<FacetRow>, DbEr
                         games: x.get(at)?,
                         wins: x.get(at + 1)?,
                         computed_at: x.get(at + 2)?,
+                    })
+                },
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    })
+    .await
+}
+
+/// One set build of a champion (BLD-02): its first two finished items.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuildRow {
+    pub core: [i64; 2],
+    pub games: i64,
+    pub wins: i64,
+    pub computed_at: i64,
+}
+
+/// One champion's set builds, roles summed unless a role is asked for, most
+/// played first.
+pub async fn builds(db: &Db, r: Read) -> Result<Vec<BuildRow>, DbError> {
+    db.read(move |c| {
+        let mut stmt = c.prepare(&format!(
+            "SELECT json_extract(core, '$[0]'), json_extract(core, '$[1]'), sum(games), sum(wins), max(computed_at)
+               FROM champion_builds WHERE {}
+              GROUP BY core HAVING sum(games) >= ?9
+              ORDER BY sum(games) DESC, core LIMIT ?10",
+            read_where(false, true, true)
+        ))?;
+        let rows = stmt
+            .query_map(
+                params![
+                    r.key_scope,
+                    r.platform,
+                    r.queue,
+                    r.patch,
+                    None::<String>,
+                    r.role,
+                    r.champion_id,
+                    r.remakes,
+                    r.min_games,
+                    r.limit
+                ],
+                |x| {
+                    Ok(BuildRow {
+                        core: [x.get(0)?, x.get(1)?],
+                        games: x.get(2)?,
+                        wins: x.get(3)?,
+                        computed_at: x.get(4)?,
+                    })
+                },
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    })
+    .await
+}
+
+/// What the players of one set build chose besides its core: `part` is
+/// `item3`–`item5`, `starter`, `boots`, `skill_order`, `runes` or `spells`,
+/// and `value` is as stored in `champion_build_parts`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuildPartRow {
+    pub core: [i64; 2],
+    pub part: String,
+    pub value: String,
+    pub games: i64,
+    pub wins: i64,
+}
+
+/// The parts of one champion's `cores`, summed as [`builds`] sums them; by
+/// core and part, then most played first.
+pub async fn build_parts(db: &Db, r: Read, cores: Vec<[i64; 2]>) -> Result<Vec<BuildPartRow>, DbError> {
+    // A core is stored as `json_array`'s text, which is what `json_each`
+    // gives back for each inner array.
+    let cores = serde_json::to_string(&cores).unwrap_or_else(|_| "[]".into());
+    db.read(move |c| {
+        let mut stmt = c.prepare(&format!(
+            "SELECT json_extract(core, '$[0]'), json_extract(core, '$[1]'), part, value, sum(games), sum(wins)
+               FROM champion_build_parts WHERE {}
+                AND core IN (SELECT j.value FROM json_each(?9) j)
+              GROUP BY core, part, value
+              ORDER BY core, part, sum(games) DESC, value",
+            read_where(false, true, true)
+        ))?;
+        let rows = stmt
+            .query_map(
+                params![
+                    r.key_scope,
+                    r.platform,
+                    r.queue,
+                    r.patch,
+                    None::<String>,
+                    r.role,
+                    r.champion_id,
+                    r.remakes,
+                    cores
+                ],
+                |x| {
+                    Ok(BuildPartRow {
+                        core: [x.get(0)?, x.get(1)?],
+                        part: x.get(2)?,
+                        value: x.get(3)?,
+                        games: x.get(4)?,
+                        wins: x.get(5)?,
                     })
                 },
             )?
