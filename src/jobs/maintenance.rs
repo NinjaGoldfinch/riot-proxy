@@ -8,7 +8,9 @@
 //! 2. **Trim** `done` jobs older than 7 days (design/06) and `metrics_history`
 //!    older than 24 hours (1440 points at 60 s, design/04).
 //! 3. **Sweep** expired L2 cache rows.
-//! 4. **Checkpoint** the WAL with `PRAGMA wal_checkpoint(TRUNCATE)`.
+//! 4. **Optimize:** `PRAGMA optimize` refreshes the planner's statistics
+//!    where they are missing or stale (ADR-102).
+//! 5. **Checkpoint** the WAL with `PRAGMA wal_checkpoint(TRUNCATE)`.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -159,6 +161,7 @@ impl Maintenance {
         report.jobs_deleted = jobs;
         report.history_deleted = history;
         report.cache_swept = crate::cache::l2::sweep(&self.db).await.map_err(|e| fail(&e))?;
+        self.db.optimize().await.map_err(|e| fail(&e))?;
 
         let (busy, log, moved): (i64, i64, i64) = self
             .db

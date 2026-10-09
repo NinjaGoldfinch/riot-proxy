@@ -767,3 +767,25 @@ async fn patch_all_sums_every_patch_and_the_patch_list_offers_them() {
         )
     );
 }
+
+#[tokio::test]
+async fn a_recompute_refreshes_planner_statistics_first() {
+    let e = env().await;
+    e.seed().await;
+    e.aggregate().await;
+    // ADR-102: the archive grew from nothing since the open, so the rebuild
+    // ran with statistics for it.
+    let analysed: Vec<String> = e
+        .state
+        .db
+        .read(|c| {
+            let mut stmt = c.prepare(
+                "SELECT DISTINCT tbl FROM sqlite_stat1 WHERE tbl IN ('match_facts', 'ladder_entries') ORDER BY tbl",
+            )?;
+            let rows = stmt.query_map([], |r| r.get(0))?.collect::<Result<Vec<String>, _>>()?;
+            Ok::<_, DbError>(rows)
+        })
+        .await
+        .unwrap();
+    assert_eq!(analysed, ["ladder_entries", "match_facts"]);
+}

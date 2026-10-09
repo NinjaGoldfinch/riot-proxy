@@ -190,6 +190,11 @@ impl AnalyticsContext {
         let queue_id = crate::riot::ladder::queue_id(&ladder.queue)
             .ok_or_else(|| JobError::Fail(format!("'{}' is not a ranked queue", ladder.queue)))?;
         let started = Instant::now();
+        // A crawl can grow the archive tenfold between rebuilds; fresh
+        // statistics keep the rebuild's joins on their keys (ADR-102).
+        if let Err(e) = self.db().optimize().await {
+            tracing::warn!(error = %e, "could not refresh the planner statistics");
+        }
         let mut steps = BTreeMap::new();
         let result = self.rebuild(&ladder, i64::from(queue_id), &mut steps).await;
         let status = if result.is_ok() { "completed" } else { "failed" };

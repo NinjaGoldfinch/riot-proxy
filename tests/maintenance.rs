@@ -140,3 +140,21 @@ async fn vacuum_into_never_overwrites() {
             .contains("already exists")
     );
 }
+
+#[tokio::test]
+async fn the_daily_run_refreshes_planner_statistics() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    seed(&db).await;
+    let m = Maintenance {
+        db: db.clone(),
+        backup_dir: dir.path().join("backups"),
+    };
+    m.run_once(NOW).await.unwrap();
+    // ADR-102: `jobs` gained rows since the open, so it has statistics now.
+    let analysed = ids(
+        &dir.path().join("riot-proxy.db"),
+        "SELECT DISTINCT tbl FROM sqlite_stat1 WHERE tbl = 'jobs'",
+    );
+    assert_eq!(analysed, ["jobs"]);
+}

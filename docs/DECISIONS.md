@@ -1123,6 +1123,18 @@ Accepted (owner report, task DEV-26). No design change: the rows written are the
 - **Not forcing the order.** A `CROSS JOIN` that put `ladder_entries` before the opponent only moved the bad loop to the lane count (9.8 s). Running `ANALYZE` alone also fixes it (0.19 s), but stats taken while the tables were small can still mislead the planner. DEV-27 adds `PRAGMA optimize` on top, but this statement doesn't depend on it.
 - **Tests:** the plan, which without statistics is the same for any table size, reaches `ladder_entries` by `puuid` and the opponent by `match_id` (the old statement fails this). A lane two players of one team share gives no matchup on either side. The hand-computed fixture is unchanged.
 
+## ADR-102 — The writer keeps the planner's statistics fresh (2026-10-09)
+Accepted (owner request, task DEV-27). Design/04 §SQLite configuration, design/06 §Job catalogue.
+- **Owner request:** after the 43.8 s matchups step (DEV-26, ADR-101), run `PRAGMA optimize` as well as rewriting the query.
+- **The problem:** nothing ran `ANALYZE`, so SQLite planned every query without statistics. It treats any `column = ?` on an index as selective, even `match_facts.key_scope`, which nearly every row shares. Queries were made to plan well without statistics one at a time (`+run_after` in the job claim, design/06; ADR-101).
+- **`PRAGMA optimize = 0x10002` on the writer**, as SQLite recommends for long-lived connections: `0x10000` checks every table, not only those this connection has queried, and `0x02` runs `ANALYZE` on each table never analysed or grown about tenfold since. SQLite 3.46+ caps its own analysis time. In a trial, 2 million `match_facts` rows never analysed took 0.86 s, and most runs find nothing to do. It runs:
+  - **when the database opens**, after migrations and before the readers open;
+  - **before each analytics rebuild** (`aggregate:analytics`), because a crawl can grow the archive tenfold between rebuilds, and the rebuild runs the heaviest joins. A failure is logged and the rebuild goes on;
+  - **in the daily `maintenance`**, after the sweep and before the WAL checkpoint, so the new `sqlite_stat1` rows are checkpointed too.
+- **Readers** are not optimised themselves. `ANALYZE` changes the schema cookie, so each reader reloads the schema and the new statistics on its next read (checked).
+- **Statistics don't replace query shape.** A new database has none, and statistics taken while tables were small can still mislead the planner until a table grows tenfold. So ADR-101's rewrite stays, and a query should still plan well without statistics.
+- **Tests:** reopening a database whose `jobs` has rows but no statistics analyses it, and a reader sees them. `optimize` leaves statistics alone when a table doubles and refreshes them when it grows tenfold. The daily maintenance and an analytics recompute each leave statistics for the tables that gained rows. Each test fails with its `optimize` call removed.
+
 ## ADR-103 — Report when a part was last read from Riot, not only how old its content is (2026-10-09)
 Accepted (owner request from ninjagoldfinch.lol, task SITE-01). Design 04 §Cache tiers.
 - **Problem:** `ageSeconds` / `X-Cache-Age` is the content's age (design 04, v1): a byte-identical refetch keeps `content_at`. The site wanted "Updated 4 minutes ago", and parts that rarely change (the Riot ID) reported ages that only grow, even right after `refresh=true`.
