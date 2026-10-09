@@ -7,7 +7,8 @@
 //! routes' admin-only refresh, any consumer may ask, because it is metered.
 //!
 //! The composite `X-Cache` is `MISS` if any part went upstream and `HIT`
-//! otherwise; `X-Cache-Age` is the stalest part's age (v1 `summarise`).
+//! otherwise; `X-Cache-Age` is the stalest part's age (v1 `summarise`), and
+//! `X-Cache-Fetched-Age` the oldest part's last read from Riot (SITE-01).
 
 mod refresh;
 mod summary;
@@ -67,14 +68,19 @@ fn secs(d: Duration) -> u64 {
 struct Tally {
     upstream: bool,
     age: u64,
+    /// `None` while every part counted came from the archive.
+    fetched_age: Option<u64>,
 }
 
 impl Tally {
-    fn add(&mut self, x_cache: XCache, age: Duration) {
+    fn add(&mut self, r: &FetchResult) {
         // v1 only knew HIT and MISS: a part that went upstream (a miss or a won
         // refresh) makes the document a MISS; everything else reads as a hit.
-        self.upstream |= matches!(x_cache, XCache::Miss | XCache::Bypass);
-        self.age = self.age.max(secs(age));
+        self.upstream |= matches!(r.x_cache, XCache::Miss | XCache::Bypass);
+        self.age = self.age.max(secs(r.cache_age));
+        if let Some(f) = r.fetched_age {
+            self.fetched_age = Some(self.fetched_age.unwrap_or(0).max(secs(f)));
+        }
     }
 
     fn x_cache(self) -> &'static str {
@@ -83,15 +89,18 @@ impl Tally {
 }
 
 /// Serialise the proxy's own document with the composite's cache headers.
-fn document<T: Serialize>(body: &T, x_cache: &'static str, age: u64) -> Response {
+fn document<T: Serialize>(body: &T, tally: Tally) -> Response {
     let bytes = match serde_json::to_vec(body) {
         Ok(b) => b,
         Err(_) => return ApiError::internal().into_response(),
     };
     let mut res = (StatusCode::OK, [(header::CONTENT_TYPE, JSON)], bytes).into_response();
     let h = res.headers_mut();
-    h.insert("x-cache", HeaderValue::from_static(x_cache));
-    h.insert("x-cache-age", HeaderValue::from(age));
+    h.insert("x-cache", HeaderValue::from_static(tally.x_cache()));
+    h.insert("x-cache-age", HeaderValue::from(tally.age));
+    if let Some(f) = tally.fetched_age {
+        h.insert("x-cache-fetched-age", HeaderValue::from(f));
+    }
     res
 }
 
@@ -161,7 +170,7 @@ fn now_ms() -> i64 {
 
 // ── Profile ─────────────────────────────────────────────────────────────────
 
-/// Per part, how long its content has been unchanged; `null` for a failed part.
+/// Per part, in seconds; `null` for a failed part.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct PartAges {
     #[schema(required = true)]
@@ -194,8 +203,12 @@ pub struct ProfileBody {
     /// Riot's payload, verbatim, or `null` if that part failed; see `warnings`.
     #[schema(value_type = Option<serde_json::Value>, required = true)]
     mastery: Option<Box<RawValue>>,
-    /// `X-Cache-Age` is the stalest of these.
+    /// How long each part's content has been unchanged: a refetch that returns
+    /// the same bytes does not reset it. `X-Cache-Age` is the stalest of these.
     age_seconds: PartAges,
+    /// How long ago each part was last read from Riot, whether or not it
+    /// changed. `X-Cache-Fetched-Age` is the stalest of these.
+    fetched_age_seconds: PartAges,
     /// Whether this request won the refresh window and went upstream.
     refreshed: bool,
     /// Seconds until another `?refresh=true` is allowed for this player; 0 when now.
@@ -281,8 +294,9 @@ async fn compose_profile(
     let mut warnings = Vec::new();
     let mut tally = Tally::default();
     let age = |o: &Result<FetchResult, FetchError>| o.as_ref().ok().map(|r| secs(r.cache_age));
+    let fetched = |o: &Result<FetchResult, FetchError>| o.as_ref().ok().and_then(|r| r.fetched_age).map(secs);
     for r in [&account, &summoner, &league, &mastery].into_iter().flatten() {
-        tally.add(r.x_cache, r.cache_age);
+        tally.add(r);
     }
     let body = ProfileBody {
         puuid: puuid.to_string(),
@@ -297,6 +311,12 @@ async fn compose_profile(
             summoner: age(&summoner),
             league: age(&league),
             mastery: age(&mastery),
+        },
+        fetched_age_seconds: PartAges {
+            account: fetched(&account),
+            summoner: fetched(&summoner),
+            league: fetched(&league),
+            mastery: fetched(&mastery),
         },
         refreshed: window.refreshed,
         refresh_available_in: window.available_in,
@@ -326,7 +346,7 @@ async fn compose_profile(
         tracing::warn!(error = %e, "could not record player identity");
     }
 
-    document(&body, tally.x_cache(), tally.age)
+    document(&body, tally)
 }
 
 #[utoipa::path(
@@ -438,8 +458,11 @@ pub struct MatchPage {
     matches: Vec<MatchSummary>,
     /// A full page came back, so there is probably another behind it.
     has_more: bool,
-    /// How long the id list has been unchanged.
+    /// How long the id list has been unchanged: a refetch that returns the
+    /// same ids does not reset it.
     match_ids_age_seconds: u64,
+    /// How long ago the id list was last read from Riot, whether or not it changed.
+    match_ids_fetched_age_seconds: u64,
     #[schema(required = true)]
     backfill: Option<BackfillNotice>,
     refreshed: bool,
@@ -601,7 +624,7 @@ async fn match_page(
     let mut fetched: HashMap<String, Result<FetchResult, FetchError>> = fetched.into_iter().collect();
 
     let mut tally = Tally::default();
-    tally.add(ids.x_cache, ids.cache_age);
+    tally.add(&ids);
     let mut warnings = Vec::new();
     let mut summaries = Vec::with_capacity(match_ids.len());
     for m in &match_ids {
@@ -610,7 +633,7 @@ async fn match_page(
         } else {
             match fetched.remove(m) {
                 Some(Ok(r)) => {
-                    tally.add(r.x_cache, r.cache_age);
+                    tally.add(&r);
                     r.body
                 }
                 Some(Err(e)) => {
@@ -641,12 +664,14 @@ async fn match_page(
         match_ids,
         matches: summaries,
         match_ids_age_seconds: secs(ids.cache_age),
+        // The id list is never archived, so it always has a fetch time.
+        match_ids_fetched_age_seconds: ids.fetched_age.map_or(0, secs),
         backfill,
         refreshed: window.refreshed,
         refresh_available_in: window.available_in,
         warnings,
     };
-    document(&body, tally.x_cache(), tally.age)
+    document(&body, tally)
 }
 
 // ── Champion pool ───────────────────────────────────────────────────────────
@@ -848,7 +873,12 @@ async fn champions(
         };
         l1.put(&key, bytes.into(), &ttls).await;
     }
-    document(&body, "MISS", 0)
+    // Built from the archive, not read from Riot: no fetch age to report.
+    let built = Tally {
+        upstream: true,
+        ..Tally::default()
+    };
+    document(&body, built)
 }
 
 #[cfg(test)]

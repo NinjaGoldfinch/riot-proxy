@@ -76,6 +76,10 @@ pub struct FetchResult {
     pub x_cache: XCache,
     /// Age of the content, not of the fetch (`X-Cache-Age`).
     pub cache_age: Duration,
+    /// Time since Riot last answered for this key, whether or not the bytes
+    /// changed (`X-Cache-Fetched-Age`, SITE-01). `None` from the archive:
+    /// immutable data is never fetched again.
+    pub fetched_age: Option<Duration>,
 }
 
 /// A failed fetch. `x_cache` is set when the answer itself came from cache
@@ -171,6 +175,8 @@ impl Archive for NoArchive {
 struct Fetched {
     body: Bytes,
     content_at: Instant,
+    /// The cached copy's own fetch time when `stale`.
+    fetched_at: Instant,
     /// Upstream failed and this is the cached copy.
     stale: bool,
 }
@@ -291,6 +297,7 @@ impl Fetcher {
                     body,
                     x_cache: XCache::Archive,
                     cache_age: Duration::ZERO,
+                    fetched_age: None,
                 });
             }
 
@@ -341,10 +348,12 @@ impl Fetcher {
             (false, true) => XCache::Bypass,
             (false, false) => XCache::Miss,
         };
+        let now = Instant::now();
         Ok(FetchResult {
             body: fetched.body,
             x_cache,
-            cache_age: Instant::now().saturating_duration_since(fetched.content_at),
+            cache_age: now.saturating_duration_since(fetched.content_at),
+            fetched_age: Some(now.saturating_duration_since(fetched.fetched_at)),
         })
     }
 
@@ -370,6 +379,7 @@ fn served(entry: &CacheEntry, x_cache: XCache, now: Instant) -> FetchResult {
         body: entry.body.clone(),
         x_cache,
         cache_age: entry.age(now),
+        fetched_age: Some(entry.fetch_age(now)),
     }
 }
 
@@ -392,6 +402,7 @@ async fn cached_copy(inner: &Inner, key: &str) -> Option<Fetched> {
         Lookup::Fresh(e) | Lookup::Stale(e) if !e.is_negative() => Some(Fetched {
             body: e.body.clone(),
             content_at: e.content_at,
+            fetched_at: e.fetched_at,
             stale: true,
         }),
         _ => None,
@@ -488,13 +499,15 @@ async fn upstream(
                 if endpoint.immutable {
                     inner.archive.put(&req, res.body.clone()).await;
                 }
+                let fetched_at = Instant::now();
                 let content_at = match inner.cache.put(&key, endpoint, res.body.clone(), &ttls).await {
                     Some(entry) => entry.content_at,
-                    None => Instant::now(),
+                    None => fetched_at,
                 };
                 return Ok(Fetched {
                     body: res.body,
                     content_at,
+                    fetched_at,
                     stale: false,
                 });
             }

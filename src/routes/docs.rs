@@ -36,6 +36,7 @@ and archived.
 |---|---|
 | `X-Cache` | `HIT`, `MISS`, `STALE`, `HIT-NEG` (a cached 404), `ARCHIVE` (from the match archive), `BYPASS` (`?refresh=true`) |
 | `X-Cache-Age` | Age of the **content** in seconds, not of the last fetch |
+| `X-Cache-Fetched-Age` | Seconds since the proxy last read it from Riot, changed or not. Not sent for `ARCHIVE` |
 | `X-RateLimit-Limit` / `-Remaining` / `-Reset` | Your consumer quota |
 | `X-Request-Id` | Quote this when reporting a problem |
 ";
