@@ -434,6 +434,10 @@
       .totals .bad b {
         color: var(--bad);
       }
+      /* An apex tier Riot cut off at its cap (LAD-01): the count is short, not wrong. */
+      .totals .capped {
+        color: var(--warn);
+      }
       /* ── folds ──────────────────────────────────────────────────────────── */
       /* A panel or a crawl's detail that stays shut until asked for. Its
          summary carries the one line worth reading while it is shut. */
@@ -1714,6 +1718,25 @@
         return 'archive hand-off';
       }
 
+      /**
+       * Riot lists at most this many players in one apex league
+       * (`RIOT_APEX_LIST_CAP` in src/riot/ladder.rs). A tier in a crawl's
+       * `apexCapped` came back at it, so the crawl holds only that tier's top
+       * players (LAD-01).
+       */
+      const APEX_LIST_CAP = 10000;
+      const tierName = (t) => t.charAt(0) + t.slice(1).toLowerCase();
+      function cappedNotes(c) {
+        return (c.apexCapped || [])
+          .map(
+            (t) =>
+              `<span class="capped" title="Riot's ${esc(tierName(t))} league lists only its top ` +
+              `${fmt(APEX_LIST_CAP)} players; the rest of the tier is not on this crawl">` +
+              `${esc(tierName(t))}: top ${fmt(APEX_LIST_CAP)} only (Riot API limit)</span>`,
+          )
+          .join('');
+      }
+
       function renderActivity(a) {
         const c = a.crawl;
         const d = a.downloads;
@@ -1733,6 +1756,7 @@
         // What the crawl has produced, in the order it produces it.
         const totals =
           `<p class="totals"><span><b>${fmt(c.playersDiscovered)}</b> players</span>` +
+          cappedNotes(c) +
           `<span><b>${fmt(c.matchIdsSeen)}</b> match ids</span>` +
           `<span><b>${fmt(c.matchesQueued)}</b> matches queued</span>` +
           (a.failed.length ? `<span class="bad"><b>${fmt(a.failed.length)}</b> failed</span>` : '') +

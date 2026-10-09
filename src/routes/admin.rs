@@ -1586,6 +1586,10 @@ pub struct LadderCrawlSummary {
     /// Legs of the current stage still outstanding — apex leagues and (tier, division) walks,
     /// then match-id batches, then the archive hand-off. 0 for a finished run.
     pending_legs: i64,
+    /// Apex tiers whose league Riot returned at its cap of 10,000 entries, e.g. `["MASTER"]`:
+    /// Riot lists only the top of those tiers, so the crawl is missing their lowest players.
+    /// `[]` when none.
+    apex_capped: Vec<String>,
 }
 
 impl LadderCrawlSummary {
@@ -1606,6 +1610,7 @@ impl LadderCrawlSummary {
             status: c.status,
             phase: c.phase,
             pending_legs,
+            apex_capped: c.apex_capped,
         }
     }
 }

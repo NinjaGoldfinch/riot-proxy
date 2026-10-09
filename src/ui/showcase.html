@@ -56,6 +56,7 @@
   .flag { font: 600 10px var(--mono); margin-left: 6px; padding: 0 5px; border-radius: 3px; border: 1px solid var(--line); color: var(--dim); text-transform: uppercase; vertical-align: 1px; }
   .flag.hot { color: #ff9b5e; border-color: #6b3a1f; background: #2a1810; }
   .tier { font: 700 11px var(--mono); padding: 1px 7px; border-radius: 4px; color: #0b0e13; }
+  .cap-note { margin: 8px 0 0; font-size: 12px; color: var(--warn); text-align: right; }
   .pager { display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 10px; font-size: 12px; color: var(--dim); }
   .icons { display: flex; flex-wrap: wrap; gap: 8px; }
   .champ { display: inline-flex; flex-direction: column; align-items: center; width: 64px; font-size: 11px; color: var(--text); text-align: center; }
@@ -217,6 +218,8 @@ const TIERS = ['CHALLENGER', 'GRANDMASTER', 'MASTER', 'DIAMOND', 'EMERALD', 'PLA
 const SIDES = { 100: 'Blue side', 200: 'Red side' };
 const TIER_COLOURS = { IRON: '#8c8580', BRONZE: '#b0764a', SILVER: '#9fb2c0', GOLD: '#e0b44c', PLATINUM: '#4fb3a9', EMERALD: '#3dbb6d', DIAMOND: '#6f8ff0', MASTER: '#b765d8', GRANDMASTER: '#e0525a', CHALLENGER: '#f2c94c' };
 const LADDER_PAGE = 25;
+/** Most players Riot lists in one apex league: observed, not documented (`RIOT_APEX_LIST_CAP` in src/riot/ladder.rs, LAD-01). */
+const APEX_LIST_CAP = 10000;
 
 const tierColour = (tier) => TIER_COLOURS[String(tier).toUpperCase()] ?? '#7d8794';
 const winRate = (wins, losses) => (wins + losses > 0 ? wins / (wins + losses) : null);
@@ -228,6 +231,11 @@ function sortLadder(entries) {
   return [...(entries ?? [])]
     .sort((a, b) => b.leaguePoints - a.leaguePoints || b.wins - a.wins)
     .map((e, i) => ({ ...e, position: i + 1 }));
+}
+
+/** The note under a league Riot cut off at its cap, e.g. `Master: top 10,000 only (Riot API limit)`; '' below the cap. */
+function apexCapNote(tier, players) {
+  return players >= APEX_LIST_CAP ? `${titleCase(tier)}: top ${APEX_LIST_CAP.toLocaleString('en-US')} only (Riot API limit)` : '';
 }
 
 /** One page of a sorted ladder, and how many pages there are. */
@@ -628,6 +636,8 @@ function renderLadder() {
       <td><span class="wr"><span class="bar"><i style="width:${(wr ?? 0) * 100}%"></i></span>${pct(wr)}</span></td></tr>`;
   }).join('')}</tbody></table>
   <div class="pager"><button data-page="-1" ${page === 0 ? 'disabled' : ''}>Prev</button><span>page ${page + 1} of ${pages} · ${state.ladder.length} players</span><button data-page="1" ${page >= pages - 1 ? 'disabled' : ''}>Next</button></div>`;
+  const capped = apexCapNote(state.tier, state.ladder.length);
+  if (capped) el.insertAdjacentHTML('beforeend', `<p class="cap-note" title="Riot's league endpoint lists only the top of this tier; the players below it are missing here">${esc(capped)}</p>`);
   fillNames(rows);
 }
 

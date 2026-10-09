@@ -114,7 +114,8 @@ function api(calls, url, { status = {}, unauthorized = false, ...opts } = {}) {
   const pl = players(p, u, opts) ?? detail(p, u, opts);
   if (pl) return pl;
   if (p.startsWith('/v1/lol/status/')) return [200, { id: 'OC1', name: 'Oceania', locales: ['en_US'], maintenances: [], incidents: [], ...status }];
-  if (p.startsWith('/v1/lol/league/apex/')) return [200, { tier: p.split('/')[6], queue: p.split('/')[7], name: 'L', leagueId: 'x', entries: Array.from({ length: LADDER }, (_, i) => entry(i)) }];
+  // `opts.apexSizes` sets a tier's list length, e.g. `{ MASTER: 10000 }` for a league at Riot's cap.
+  if (p.startsWith('/v1/lol/league/apex/')) return [200, { tier: p.split('/')[6], queue: p.split('/')[7], name: 'L', leagueId: 'x', entries: Array.from({ length: opts.apexSizes?.[p.split('/')[6]] ?? LADDER }, (_, i) => entry(i)) }];
   if (p.startsWith('/v1/riot/accounts/by-puuid/')) { const id = p.split('/').pop(); return [200, { puuid: id, gameName: `Player ${id}`, tagLine: 'OCE' }]; }
   if (p.startsWith('/v1/lol/rotations/')) return [200, { freeChampionIds: [1, 2], freeChampionIdsForNewPlayers: [1], maxNewPlayerLevel: 10 }];
   if (p === '/v1/lol/analytics/champions') return [200, { platform: 'oc1', queue: u.searchParams.get('queue'), tier: null, patch: '16.19', role: null, computedAt: null, totalGames: 30, champions: [

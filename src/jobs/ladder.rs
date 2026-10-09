@@ -433,7 +433,7 @@ impl LadderContext {
             .into_iter()
             .filter_map(|e| to_entry(e, &leg.tier))
             .collect();
-        self.record(leg, &entries, None).await
+        self.record(leg, &entries, None, Some(&leg.tier)).await
     }
 
     /// One (tier, division), page by page until an empty one: a short page is
@@ -490,18 +490,21 @@ impl LadderContext {
                 return Ok(());
             }
             let entries: Vec<Entry> = raw.into_iter().filter_map(|e| to_entry(e, &leg.tier)).collect();
-            self.record(leg, &entries, Some((&name, page + 1))).await?;
+            self.record(leg, &entries, Some((&name, page + 1)), None).await?;
             page += 1;
             walked += 1;
         }
     }
 
     /// Store a page and count it (v1 `countPage` + counters + `recordPlayers`).
+    /// `apex_tier` is set for a whole apex league, which may mark the tier
+    /// capped (LAD-01).
     async fn record(
         &self,
         leg: &LegJob,
         entries: &[Entry],
         cursor: Option<(&str, i64)>,
+        apex_tier: Option<&str>,
     ) -> Result<(), JobError> {
         store::write_page(
             self.db(),
@@ -512,6 +515,7 @@ impl LadderContext {
                 queue: &leg.queue,
                 entries,
                 cursor,
+                apex_tier,
                 now: Clock::now().unix_ms,
             },
         )

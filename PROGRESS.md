@@ -200,7 +200,7 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 - [x] OPS-01 `:edge` image on every push to `main` (#79, ADR-069)
 - [x] OPS-02 Proxmox dev VM (#80; `deploy/proxmox/`, CI job `ops`, ADR-070)
 - [x] OPS-03 `create-vm.sh --generate-key`: a unique login keypair per VM (#82, ADR-072)
-- [ ] OPS-04 faster CI: `build-musl` packages its own binary, the source `Dockerfile` builds in a cached `docker` job, caches saved from `main` only (#93, ADR-079)
+- [x] OPS-04 faster CI: `build-musl` packages its own binary, the source `Dockerfile` builds in a cached `docker` job, caches saved from `main` only (#93, ADR-079)
 
 ## DEV — dev explorer (owner request 2026-10-05)
 - [x] DEV-01 dev explorer at `/dev` (#81; replaces v1's dev UI, forms from the OpenAPI document, never in production, design/10, ADR-071)
@@ -243,7 +243,7 @@ Baseline before THR-06a (one kr crawl to MASTER on the dev VM): not yet recorded
 - [ ] THR-06d zstd dictionary for match bodies, if an offline trial shows a quarter or more saved (IMPLEMENTATION.md §Post-release — THR)
 
 ## LAD — Master players past Riot's 10,000 cap (owner request 2026-10-09)
-- [ ] LAD-01 say when an apex league is cut off at Riot's cap: `apex_capped` on the crawl, a note on the crawl card and the showcase ladder (IMPLEMENTATION.md §Post-release — LAD)
+- [x] LAD-01 say when an apex league is cut off at Riot's cap: `apex_capped` on the crawl (V0008, set in the apex leg's write transaction for a list of `RIOT_APEX_LIST_CAP` or more), `apexCapped` on the crawl routes and the stats snapshot, "Master: top 10,000 only (Riot API limit)" next to the player count on the dashboard crawl card and under the showcase ladder (#PR, design/06, design/11, ADR-097)
 - [ ] LAD-02 find the Master players the cap leaves out: a `discover` stage that looks up the ranks of archived match participants not on the ladder (IMPLEMENTATION.md §Post-release — LAD)
 - [x] LAD-03 re-run the cap checks from `/dev`: `POST /v1/admin/ladder/probe` checks `masterleagues` against `RIOT_APEX_LIST_CAP`, pages league-exp-v4 (`league.expEntries`, new in the registry) and compares the two, and checks that the paged route refuses MASTER. Each check is confirmed / not-seen / changed / error, shown on a new Ladder tab on `/dev` (#114, design/10, ADR-095)
 
