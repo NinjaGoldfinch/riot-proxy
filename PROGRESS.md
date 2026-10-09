@@ -269,6 +269,7 @@ The site's backfill question (item 3) needs no task: the unbounded lookup backfi
 - [ ] BLD-01 per-player build facts from the timeline: `match_builds` (purchase order minus undos, finished items, boots, starter, skill order) filled by `builds:extract` before each recompute (IMPLEMENTATION.md §Post-release — BLD)
 - [ ] BLD-02 aggregate set builds: `champion_builds` keyed by the first two finished items, with `champion_build_parts` for the 3rd–5th items, starter, boots, skill order, runes and spells (IMPLEMENTATION.md §Post-release — BLD)
 - [ ] BLD-03 `GET /v1/lol/analytics/champions/{championId}/builds` and the showcase's build tabs, with today's lists as the fallback (IMPLEMENTATION.md §Post-release — BLD)
+- [ ] BLD-04 one player's build on the match page (starter, boots, finished items with times, skill grid, shop visits), worked out in the browser from the timeline; design/11 gets notes for a frontend (IMPLEMENTATION.md §Post-release — BLD)
 
 ## MU — matchups worth reading (owner request 2026-10-09)
 - [ ] MU-01 show how much a matchup's win rate can be trusted: `winRateLow` (Wilson 95% lower bound), `sort=confidence`, small samples dimmed in the showcase (IMPLEMENTATION.md §Post-release — MU)
