@@ -435,6 +435,86 @@ async fn a_panicking_read_returns_its_connection() {
     db.read(|c| Ok::<_, DbError>(pragma(c, "journal_mode")?))
         .await
         .expect("pool intact");
+    assert_eq!(db.readers_free(), 1);
+}
+
+/// Wait (up to 2 s) until `want` readers are idle, then assert it.
+async fn wait_for_idle_readers(db: &Db, want: usize) {
+    for _ in 0..200 {
+        if db.readers_free() == want {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(db.readers_free(), want, "idle readers");
+}
+
+/// INC-01 (ADR-113): a `read` future dropped while its closure runs, as `try_join!`
+/// does to a sibling and axum does when the client goes away, must not lose the
+/// connection. Before the fix, two of these on a two-reader pool made every later
+/// read fail with `PoolEmpty`.
+#[tokio::test]
+async fn a_cancelled_read_returns_its_connection() {
+    let (_dir, db) = open_temp(2);
+    let finished = Arc::new(AtomicUsize::new(0));
+    for _ in 0..5 {
+        let done = Arc::clone(&finished);
+        let slow = db.read(move |c| {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            done.fetch_add(1, Ordering::SeqCst);
+            Ok::<_, DbError>(pragma(c, "journal_mode")?)
+        });
+        let res = tokio::time::timeout(std::time::Duration::from_millis(10), slow).await;
+        assert!(
+            res.is_err(),
+            "the read should still be running when it is dropped"
+        );
+    }
+    // The first two were dropped mid-query; their closures still run to the end and
+    // hand the connections back. The other three were dropped while waiting for a
+    // reader, so theirs never ran.
+    wait_for_idle_readers(&db, 2).await;
+    assert_eq!(finished.load(Ordering::SeqCst), 2);
+    // Both readers at once, so a lost connection can't hide behind the other one.
+    let (a, b) = tokio::join!(
+        db.read(|c| Ok::<_, DbError>(pragma(c, "journal_mode")?)),
+        db.read(|c| Ok::<_, DbError>(pragma(c, "journal_mode")?)),
+    );
+    assert_eq!(a.expect("first reader"), "wal");
+    assert_eq!(b.expect("second reader"), "wal");
+}
+
+/// Many reads cancelled together, with more waiting on the semaphore than there are
+/// connections: whichever are dropped, the pool ends full and serves every reader.
+#[tokio::test]
+async fn many_cancelled_reads_leave_the_pool_full() {
+    let (_dir, db) = open_temp(2);
+    let reads: Vec<_> = (0..20)
+        .map(|_| {
+            let db = db.clone();
+            tokio::spawn(async move {
+                db.read(|_| {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                    Ok::<_, DbError>(())
+                })
+                .await
+            })
+        })
+        .collect();
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    for r in &reads {
+        r.abort();
+    }
+    for r in reads {
+        let _ = r.await;
+    }
+    // Aborted tasks may leave closures running on the blocking pool.
+    wait_for_idle_readers(&db, 2).await;
+    let all = futures_util::future::join_all(
+        (0..10).map(|_| db.read(|c| Ok::<_, DbError>(pragma(c, "journal_mode")?))),
+    )
+    .await;
+    assert!(all.iter().all(|r| matches!(r, Ok(m) if m == "wal")), "{all:?}");
 }
 
 #[tokio::test]

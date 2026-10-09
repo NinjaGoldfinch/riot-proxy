@@ -28,7 +28,7 @@ async fn readyz_is_200_when_sqlite_is_writable() {
     assert_eq!(res.status, StatusCode::OK);
     assert_eq!(
         res.json(),
-        serde_json::json!({"ok": true, "sqlite": true, "limiter": true, "keyScope": key_scope()})
+        serde_json::json!({"ok": true, "sqlite": true, "limiter": true, "keyScope": key_scope(), "sqliteReaders": 2, "sqliteReadersFree": 2})
     );
 }
 
@@ -44,7 +44,7 @@ async fn readyz_is_503_with_the_same_body_when_sqlite_is_not_writable() {
     assert_eq!(res.status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(
         res.json(),
-        serde_json::json!({"ok": false, "sqlite": false, "limiter": true, "keyScope": key_scope()})
+        serde_json::json!({"ok": false, "sqlite": false, "limiter": true, "keyScope": key_scope(), "sqliteReaders": 2, "sqliteReadersFree": 2})
     );
     blocker.execute_batch("ROLLBACK;").unwrap();
 }
@@ -103,6 +103,34 @@ async fn metrics_is_mounted() {
 }
 
 #[tokio::test]
+async fn readyz_counts_a_busy_reader_and_stays_ready() {
+    let (_dir, state, router) = app();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let db = state.db.clone();
+    let busy = tokio::spawn(async move {
+        db.read(move |_| {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            Ok::<_, riot_proxy::db::DbError>(())
+        })
+        .await
+    });
+    tokio::task::spawn_blocking(move || started_rx.recv().unwrap())
+        .await
+        .unwrap();
+
+    let res = get(router, "/readyz").await;
+    assert_eq!(res.status, StatusCode::OK);
+    assert_eq!(res.json()["sqliteReaders"], 2);
+    assert_eq!(res.json()["sqliteReadersFree"], 1);
+
+    release_tx.send(()).unwrap();
+    busy.await.unwrap().unwrap();
+    assert_eq!(state.db.readers_free(), 2);
+}
+
+#[tokio::test]
 async fn readyz_is_503_until_the_limiter_is_restored() {
     let (_dir, state, router) = app();
     state
@@ -112,6 +140,6 @@ async fn readyz_is_503_until_the_limiter_is_restored() {
     assert_eq!(res.status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(
         res.json(),
-        serde_json::json!({"ok": false, "sqlite": true, "limiter": false, "keyScope": key_scope()})
+        serde_json::json!({"ok": false, "sqlite": true, "limiter": false, "keyScope": key_scope(), "sqliteReaders": 2, "sqliteReadersFree": 2})
     );
 }
