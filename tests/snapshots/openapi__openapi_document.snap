@@ -1830,7 +1830,13 @@ expression: doc
             "type": "array"
           },
           "matchIdsAgeSeconds": {
-            "description": "How long the id list has been unchanged.",
+            "description": "How long the id list has been unchanged: a refetch that returns the\nsame ids does not reset it.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "matchIdsFetchedAgeSeconds": {
+            "description": "How long ago the id list was last read from Riot, whether or not it changed.",
             "format": "int64",
             "minimum": 0,
             "type": "integer"
@@ -1880,6 +1886,7 @@ expression: doc
           "matches",
           "hasMore",
           "matchIdsAgeSeconds",
+          "matchIdsFetchedAgeSeconds",
           "backfill",
           "refreshed",
           "refreshAvailableIn",
@@ -2024,7 +2031,7 @@ expression: doc
         "type": "object"
       },
       "PartAges": {
-        "description": "Per part, how long its content has been unchanged; `null` for a failed part.",
+        "description": "Per part, in seconds; `null` for a failed part.",
         "properties": {
           "account": {
             "format": "int64",
@@ -2589,7 +2596,11 @@ expression: doc
           },
           "ageSeconds": {
             "$ref": "#/components/schemas/PartAges",
-            "description": "`X-Cache-Age` is the stalest of these."
+            "description": "How long each part's content has been unchanged: a refetch that returns\nthe same bytes does not reset it. `X-Cache-Age` is the stalest of these."
+          },
+          "fetchedAgeSeconds": {
+            "$ref": "#/components/schemas/PartAges",
+            "description": "How long ago each part was last read from Riot, whether or not it\nchanged. `X-Cache-Fetched-Age` is the stalest of these."
           },
           "league": {
             "description": "Riot's payload, verbatim, or `null` if that part failed; see `warnings`."
@@ -2636,6 +2647,7 @@ expression: doc
           "league",
           "mastery",
           "ageSeconds",
+          "fetchedAgeSeconds",
           "refreshed",
           "refreshAvailableIn",
           "warnings"
@@ -3421,7 +3433,7 @@ expression: doc
     }
   },
   "info": {
-    "description": "A self-hosted proxy between [Riot's public API](https://developer.riotgames.com/) and everything downstream of it. It holds one Riot key, spends it carefully, and gives its consumers their own keys and quotas.\n\n- **Rate limits:** read from Riot's own response headers. Requests a user is waiting on go ahead of background work.\n- **Caching and archive:** repeated reads are served from cache; matches are immutable and archived.\n- **One error envelope:** `{\"error\":{\"code\",\"message\",\"requestId\",\"retryAfter?\"}}`.\n\n### Response headers\n\n| Header | Meaning |\n|---|---|\n| `X-Cache` | `HIT`, `MISS`, `STALE`, `HIT-NEG` (a cached 404), `ARCHIVE` (from the match archive), `BYPASS` (`?refresh=true`) |\n| `X-Cache-Age` | Age of the **content** in seconds, not of the last fetch |\n| `X-RateLimit-Limit` / `-Remaining` / `-Reset` | Your consumer quota |\n| `X-Request-Id` | Quote this when reporting a problem |\n",
+    "description": "A self-hosted proxy between [Riot's public API](https://developer.riotgames.com/) and everything downstream of it. It holds one Riot key, spends it carefully, and gives its consumers their own keys and quotas.\n\n- **Rate limits:** read from Riot's own response headers. Requests a user is waiting on go ahead of background work.\n- **Caching and archive:** repeated reads are served from cache; matches are immutable and archived.\n- **One error envelope:** `{\"error\":{\"code\",\"message\",\"requestId\",\"retryAfter?\"}}`.\n\n### Response headers\n\n| Header | Meaning |\n|---|---|\n| `X-Cache` | `HIT`, `MISS`, `STALE`, `HIT-NEG` (a cached 404), `ARCHIVE` (from the match archive), `BYPASS` (`?refresh=true`) |\n| `X-Cache-Age` | Age of the **content** in seconds, not of the last fetch |\n| `X-Cache-Fetched-Age` | Seconds since the proxy last read it from Riot, changed or not. Not sent for `ARCHIVE` |\n| `X-RateLimit-Limit` / `-Remaining` / `-Reset` | Your consumer quota |\n| `X-Request-Id` | Quote this when reporting a problem |\n",
     "license": {
       "identifier": "MIT",
       "name": "MIT"

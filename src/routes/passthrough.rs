@@ -135,6 +135,14 @@ pub fn respond(outcome: Result<FetchResult, FetchError>) -> Response {
                 "x-cache-age",
                 HeaderValue::from(u64::try_from(age).unwrap_or(u64::MAX)),
             );
+            // When Riot last answered, changed or not (SITE-01); none from the archive.
+            if let Some(f) = r.fetched_age {
+                let f = (f.as_millis() + 500) / 1000;
+                h.insert(
+                    "x-cache-fetched-age",
+                    HeaderValue::from(u64::try_from(f).unwrap_or(u64::MAX)),
+                );
+            }
             res
         }
         Err(e) => {

@@ -254,11 +254,16 @@ Baseline before THR-06a (one kr crawl to MASTER on the dev VM): not yet recorded
 
 ## SITE — requests from ninjagoldfinch.lol (owner request 2026-10-09)
 The site's backfill question (item 3) needs no task: the unbounded lookup backfill stays (ADR-081, owner confirmed 2026-10-09); SITE-04 documents it.
-- [ ] SITE-01 report when each part was last fetched from Riot: `fetchedAgeSeconds` on the profile, `matchIdsFetchedAgeSeconds` on the match page, `X-Cache-Fetched-Age` (IMPLEMENTATION.md §Post-release — SITE)
+- [x] SITE-01 report when each part was last fetched from Riot: `cache.fetched_at` (V0009) beside `content_at`, `fetchedAgeSeconds` on the profile, `matchIdsFetchedAgeSeconds` on the match page, `X-Cache-Fetched-Age` on passthroughs and composites (none from the archive) (#125, design/04, ADR-103)
 - [ ] SITE-02 `champion` filter on the match page, from the archive, with `archive.complete` (IMPLEMENTATION.md §Post-release — SITE)
 - [ ] SITE-03 `gameVersion` described as the game build, plus `ddragonVersion` (IMPLEMENTATION.md §Post-release — SITE)
 - [ ] SITE-04 declare response headers in the OpenAPI document; document the image mirror and the backfill limit (IMPLEMENTATION.md §Post-release — SITE)
 - [ ] SITE-05 partial schemas for Riot's account, summoner, league and mastery payloads (IMPLEMENTATION.md §Post-release — SITE)
+
+## BLD — set builds on the champion page (owner request 2026-10-09)
+- [ ] BLD-01 per-player build facts from the timeline: `match_builds` (purchase order minus undos, finished items, boots, starter, skill order) filled by `builds:extract` before each recompute (IMPLEMENTATION.md §Post-release — BLD)
+- [ ] BLD-02 aggregate set builds: `champion_builds` keyed by the first two finished items, with `champion_build_parts` for the 3rd–5th items, starter, boots, skill order, runes and spells (IMPLEMENTATION.md §Post-release — BLD)
+- [ ] BLD-03 `GET /v1/lol/analytics/champions/{championId}/builds` and the showcase's build tabs, with today's lists as the fallback (IMPLEMENTATION.md §Post-release — BLD)
 
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.

@@ -1134,3 +1134,13 @@ Accepted (owner request, task DEV-27). Design/04 §SQLite configuration, design/
 - **Readers** are not optimised themselves. `ANALYZE` changes the schema cookie, so each reader reloads the schema and the new statistics on its next read (checked).
 - **Statistics don't replace query shape.** A new database has none, and statistics taken while tables were small can still mislead the planner until a table grows tenfold. So ADR-101's rewrite stays, and a query should still plan well without statistics.
 - **Tests:** reopening a database whose `jobs` has rows but no statistics analyses it, and a reader sees them. `optimize` leaves statistics alone when a table doubles and refreshes them when it grows tenfold. The daily maintenance and an analytics recompute each leave statistics for the tables that gained rows. Each test fails with its `optimize` call removed.
+
+## ADR-103 — Report when a part was last read from Riot, not only how old its content is (2026-10-09)
+Accepted (owner request from ninjagoldfinch.lol, task SITE-01). Design 04 §Cache tiers.
+- **Problem:** `ageSeconds` / `X-Cache-Age` is the content's age (design 04, v1): a byte-identical refetch keeps `content_at`. The site wanted "Updated 4 minutes ago", and parts that rarely change (the Riot ID) reported ages that only grow, even right after `refresh=true`.
+- **Both ages, side by side.** Every cache entry also keeps `fetched_at`, set by every write whether or not the bytes changed. L2 stores it in `cache.fetched_at` (V0009, nullable); a row written before the migration warms with `content_at`, the best it has. `X-Cache-Age` and `ageSeconds` don't change.
+- **Surface:** `ProfileBody.fetchedAgeSeconds` (`PartAges`' shape, `null` for a failed part), `MatchPage.matchIdsFetchedAgeSeconds`, and a new response header `X-Cache-Fetched-Age` on the passthrough routes and the composites. A composite sends its oldest part's read, as `X-Cache-Age` sends its stalest content.
+- **Archive reads send no fetch age.** A match or timeline from the archive is never fetched again, so there is no read to date. A composite whose every part is archived (the champion pool, built from the archive) leaves the header out.
+- **Stale-on-failure keeps its own fetch time.** A copy served because Riot could not answer was not read now, so reporting 0 would be wrong.
+- `X-Cache-Fetched-Age` is a v2 header; v1 has none to match, and v1 parity no longer binds new headers (ADR-065).
+
