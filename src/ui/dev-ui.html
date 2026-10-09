@@ -234,7 +234,8 @@ async function call(method, path, body = null, { record = true } = {}) {
   const res = { method, path, body, at: Date.now(), headers: [], status: 0, statusText: '', text: '', json: undefined, sent: { ...headers } };
   if (res.sent.Authorization) res.sent.Authorization = 'Bearer ••••';
   try {
-    const r = await fetch(path, { method, headers, body: body ?? undefined });
+    // Revalidate: the explorer shows what the proxy answers now, not the browser's copy (DEV-24).
+    const r = await fetch(path, { method, headers, body: body ?? undefined, cache: 'no-cache' });
     res.text = await r.text();
     res.status = r.status;
     res.statusText = r.statusText;

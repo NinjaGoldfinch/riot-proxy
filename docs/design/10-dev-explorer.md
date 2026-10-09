@@ -74,7 +74,7 @@ sequenceDiagram
   alt method != GET
     UI->>Dev: confirm("POST /v1/admin/cache/purge?")
   end
-  UI->>P: fetch(url, Bearer key, X-Request-Id?)
+  UI->>P: fetch(url, Bearer key, X-Request-Id?, cache: no-cache)
   P->>P: auth · quota · cache / archive
   opt cache MISS
     P->>R: limited upstream call
@@ -84,6 +84,8 @@ sequenceDiagram
   UI->>UI: time it, measure bytes, push to history (localStorage)
   UI-->>Dev: viewer: chips for key headers, full header table, Pretty/Raw body, error envelope highlighted
 ```
+
+The explorer sends every request with `cache: 'no-cache'` (DEV-24, ADR-099), so the viewer shows what the proxy answers now. Without it, the browser would answer an analytics call (`max-age=300`) from its own copy.
 
 ## Page map
 

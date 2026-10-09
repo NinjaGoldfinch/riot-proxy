@@ -11,12 +11,14 @@ import { html, LADDER, PUUID, MATCH, RUNES, api } from './fake-api.mjs';
 
 async function page({ platform = 'oc1', hash = '', ...opts } = {}) {
   const calls = [];
+  const modes = []; // [url, init.cache] per fetch
   const errors = [];
   const dom = new JSDOM(html.replace('<script type="module">', '<script>(async()=>{').replace(/<\/script>\s*<\/body>/, '})()</script></body>'), {
     url: `http://localhost/dev/showcase${hash}`, runScripts: 'dangerously', pretendToBeVisual: true,
     beforeParse(w) {
       if (platform) w.localStorage.setItem('rp.showcase.platform', JSON.stringify(platform));
-      w.fetch = async (url) => {
+      w.fetch = async (url, init) => {
+        modes.push([String(url), init?.cache]);
         const [status, body] = api(calls, url, opts);
         const text = JSON.stringify(body);
         return { status, headers: new Map([['x-cache', 'HIT']]), text: async () => text, json: async () => JSON.parse(text) };
@@ -32,7 +34,7 @@ async function page({ platform = 'oc1', hash = '', ...opts } = {}) {
   const click = async (sel) => { $(sel).click(); await settle(); };
   const text = (sel) => $(sel)?.textContent ?? '';
   const rows = () => [...w.document.querySelectorAll('#ladder tbody tr')];
-  return { w, $, calls, errors, settle, click, text, rows };
+  return { w, $, calls, modes, errors, settle, click, text, rows };
 }
 
 test('without a platform the page asks for one and calls nothing platform-scoped', async () => {
@@ -115,6 +117,13 @@ test('rotation and top champions use the local icon mirror and champion names', 
   assert.ok(top.includes('50.0%'), 'Annie summed over two tiers: 10 / 20');
   assert.ok(top.includes('80.0%'), 'Olaf');
   assert.ok(p.text('#topMeta').startsWith('all patches'));
+});
+
+test('every API call revalidates, so a recompute shows without waiting out max-age', async () => {
+  const p = await page();
+  const api = p.modes.filter(([url]) => url.startsWith('/v1/'));
+  assert.ok(api.some(([url]) => url.startsWith('/v1/lol/analytics/champions')), 'top champions called');
+  assert.deepEqual(api.filter(([, cache]) => cache !== 'no-cache'), []);
 });
 
 test('every card names its calls, and the chips open the dev explorer', async () => {
