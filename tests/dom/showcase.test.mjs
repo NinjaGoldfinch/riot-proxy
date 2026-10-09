@@ -200,14 +200,15 @@ test('match cards: result, queue name, KDA, CS per minute, level, spells, runes 
     '/ddragon/16.19.1/img/champion/Annie.png',
     '/ddragon/16.19.1/img/spell/SummonerFlash.png', '/ddragon/16.19.1/img/spell/SummonerDot.png',
     '/ddragon/16.19.1/img/perk-images/Styles/Precision/Conqueror/Conqueror.png', '/ddragon/16.19.1/img/perk-images/Styles/7200_Domination.png',
-    '/ddragon/16.19.1/img/item/1001.png', '/ddragon/16.19.1/img/item/3340.png', '/ddragon/16.19.1/img/item/3006.png',
-  ], 'empty item slots (0) have no image; the role quest slot comes last');
+    '/ddragon/16.19.1/img/item/1001.png', '/ddragon/16.19.1/img/item/3047.png', '/ddragon/16.19.1/img/item/3340.png', '/ddragon/16.19.1/img/item/3006.png',
+  ], 'empty item slots (0) have no image; the trinket, then the role quest slot, after the inventory');
   assert.deepEqual([...cards[0].querySelectorAll('.runes img')].map((i) => i.getAttribute('title')), ['Conqueror', 'Domination']);
   const lvl = cards[0].querySelectorAll('.lvl');
   assert.equal(lvl.length, 1, 'the level once, on the portrait');
   assert.equal(lvl[0].parentElement.className, 'portrait');
   assert.equal(lvl[0].textContent, '16');
-  assert.equal(cards[0].querySelectorAll('.items > *').length, 8, 'item0–6 and roleBoundItem');
+  assert.deepEqual([...cards[0].querySelectorAll('.items > *')].map((e) => e.tagName), ['IMG', 'IMG', 'IMG', 'IMG', 'SPAN', 'SPAN', 'SPAN', 'SPAN'],
+    'item0–6 and roleBoundItem, filled slots first: item1–3 and item5 are empty boxes at the end, not holes in the build');
   assert.ok(p.text('#pMatches').includes('queued the player\'s history for archiving (queued)'));
 });
 
@@ -360,6 +361,10 @@ test('the scoreboard: two sides, totals, bans, objectives, every player line', a
     const sub = x.perks.styles.find((s) => s.description === 'subStyle');
     const want = [RUNES.flatMap((s) => s.slots[0].runes).find((r) => r.id === primary.selections[0].perk), RUNES.find((s) => s.id === sub.style)];
     assert.deepEqual(runes.map((r) => r.getAttribute('src')), want.map((r) => `/ddragon/16.19.1/img/${r.icon}`), `row ${i}`);
+    // The recorded game has sold-item holes (rows 1, 2, 6): the filled slots close up, the empty boxes go last.
+    const slots = [x.item0, x.item1, x.item2, x.item3, x.item4, x.item5, x.item6, x.roleBoundItem];
+    const cells = [...row.querySelectorAll('.items.row > *')];
+    assert.deepEqual(cells.map((c) => c.getAttribute('src')), [...slots.filter(Boolean).map((id) => `/ddragon/16.19.1/img/item/${id}.png`), ...slots.filter((id) => !id).map(() => null)], `row ${i}: items`);
   }
   assert.ok(p.text('#mHead').includes('5v5 Ranked Solo'), 'queue name from queues.json, without "games"');
   assert.ok(p.text('#mHead').includes('patch 16.19'));
