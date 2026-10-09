@@ -752,8 +752,13 @@ const spellIcon = (id) => {
   const url = imageUrl(version, 'spell', spells?.[id]);
   return url ? `<img class="icon xs" src="${esc(url)}" alt="spell ${esc(id)}" loading="lazy">` : `<span class="icon xs"></span>`;
 };
-// item0–6, then the role quest slot (`roleBoundItem`, SITE-06: a bot laner's boots or a quest reward) when Riot sent one.
-const itemSlots = (p) => [p.item0, p.item1, p.item2, p.item3, p.item4, p.item5, p.item6, ...(p.roleBoundItem != null ? [p.roleBoundItem] : [])];
+// The inventory (item0–5), the trinket (item6), then the role quest slot (`roleBoundItem`, SITE-06: a bot laner's
+// boots or a quest reward) when Riot sent one. Riot reports the slot each item sat in, so a sold or unbought item
+// leaves a hole; the filled slots go first, in that order, and the empty boxes last, so a build has no gaps (DEV-30).
+const itemSlots = (p) => {
+  const slots = [p.item0, p.item1, p.item2, p.item3, p.item4, p.item5, p.item6, ...(p.roleBoundItem != null ? [p.roleBoundItem] : [])];
+  return [...slots.filter(Boolean), ...slots.filter((id) => !id)];
+};
 const itemIcon = (id) => {
   const url = id ? imageUrl(version, 'item', `${id}.png`) : null;
   return url ? `<img class="icon xs" src="${esc(url)}" alt="item ${esc(id)}" loading="lazy">` : `<span class="icon xs"></span>`;

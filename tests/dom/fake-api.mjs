@@ -27,7 +27,7 @@ const RUNES = [
 // with Riot's league-v4 LeagueEntryDTO, champion-mastery-v4 ChampionMasteryDto and
 // spectator-v5 CurrentGameInfo inside.
 const PUUID = 'PUUID-ME';
-const line = (i) => ({ puuid: PUUID, championId: 1 + (i % 2), championName: i % 2 ? 'Olaf' : 'Annie', kills: 5, deaths: 2, assists: 9, champLevel: 16, totalMinionsKilled: 180, neutralMinionsKilled: 6, goldEarned: 12000, totalDamageDealtToChampions: 21000, summoner1Id: 4, summoner2Id: 14, perks: { keystone: 8010, primaryStyle: 8000, subStyle: 8100 }, item0: 1001, item1: 0, item6: 3340, roleBoundItem: 3006, teamId: 100, win: i % 3 !== 1, gameEndedInEarlySurrender: i === 2 });
+const line = (i) => ({ puuid: PUUID, championId: 1 + (i % 2), championName: i % 2 ? 'Olaf' : 'Annie', kills: 5, deaths: 2, assists: 9, champLevel: 16, totalMinionsKilled: 180, neutralMinionsKilled: 6, goldEarned: 12000, totalDamageDealtToChampions: 21000, summoner1Id: 4, summoner2Id: 14, perks: { keystone: 8010, primaryStyle: 8000, subStyle: 8100 }, item0: 1001, item1: 0, item4: 3047, item6: 3340, roleBoundItem: 3006, teamId: 100, win: i % 3 !== 1, gameEndedInEarlySurrender: i === 2 });
 const summary = (i) => ({ matchId: `OC1_${700000 + i}`, queueId: 420, gameMode: 'CLASSIC', gameCreation: Date.now() - 3600000, gameEndTimestamp: Date.now() - 1800000, gameDuration: 1865, gameVersion: '16.19.1', player: line(i) });
 function players(p, u, { live = false, refreshWait = 0 }) {
   const by = p.match(/^\/v1\/players\/by-riot-id\/([^/]+)\/([^/]+)\/profile$/);
