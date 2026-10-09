@@ -274,6 +274,11 @@ The site's backfill question (item 3) needs no task: the unbounded lookup backfi
 - [ ] MU-01 show how much a matchup's win rate can be trusted: `winRateLow` (Wilson 95% lower bound), `sort=confidence`, small samples dimmed in the showcase (IMPLEMENTATION.md §Post-release — MU)
 - [ ] MU-02 win rate against what the two champions would be expected to do: `delta` from each champion's lane baseline, a *vs expected* column in the showcase; after DEV-28 (IMPLEMENTATION.md §Post-release — MU)
 
+## INC — the riot-proxy-dev outage of 2026-10-09 (ninjagoldfinch.lol report)
+- [ ] INC-01 a cancelled read keeps its reader connection: the pool connection and its permit move into the blocking closure and go back together; `/readyz` and a gauge report free readers (IMPLEMENTATION.md §Post-release — INC)
+- [ ] INC-02 `:edge` only moves forwards: a run whose commit is no longer the head of `main` pushes `:sha-<short>` only (IMPLEMENTATION.md §Post-release — INC)
+- [ ] INC-03 `riot-proxy-update` waits for the new container to turn healthy and otherwise rolls back to `riot-proxy:previous`, naming both revisions (IMPLEMENTATION.md §Post-release — INC)
+
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
 
