@@ -625,3 +625,117 @@ async fn without_a_platform_the_routes_sum_every_platform() {
         0
     );
 }
+
+#[tokio::test]
+async fn patch_all_sums_every_patch_and_the_patch_list_offers_them() {
+    let e = env().await;
+    e.seed().await;
+    e.aggregate().await;
+    // The same aggregates again on 16.18, as if an older patch had been archived too.
+    e.state
+        .db
+        .write(|c| {
+            for table in [
+                "champion_stats",
+                "champion_bans",
+                "analytics_slices",
+                "champion_matchups",
+                "champion_items",
+                "champion_runes",
+                "champion_spells",
+            ] {
+                c.execute_batch(&format!(
+                    "CREATE TEMP TABLE copy AS SELECT * FROM {table} WHERE patch = '16.19';
+                     UPDATE copy SET patch = '16.18';
+                     INSERT INTO {table} SELECT * FROM copy;
+                     DROP TABLE copy;"
+                ))?;
+            }
+            Ok::<_, DbError>(())
+        })
+        .await
+        .unwrap();
+
+    let newest = e.get("/v1/lol/analytics/champions").await.json();
+    let all = e.get("/v1/lol/analytics/champions?patch=all").await.json();
+    assert_eq!(
+        (&newest["patch"], &all["patch"]),
+        (&json!("16.19"), &json!("all"))
+    );
+    assert_eq!(
+        (&newest["totalGames"], &all["totalGames"]),
+        (&json!(10), &json!(20))
+    );
+    let first = &all["champions"][0];
+    assert_eq!(first["patch"], "all");
+    assert_eq!(
+        first["games"],
+        newest["champions"][0]["games"].as_i64().unwrap() * 2
+    );
+    // Matches per tier are summed too, so a rate over both patches stays put.
+    assert_eq!(first["pickRate"], newest["champions"][0]["pickRate"]);
+
+    let id = first["championId"].as_i64().unwrap();
+    let d = e
+        .get(&format!("/v1/lol/analytics/champions/{id}?patch=all"))
+        .await
+        .json();
+    let d1 = e.get(&format!("/v1/lol/analytics/champions/{id}")).await.json();
+    assert_eq!(
+        (&d["patch"], &d["stats"][0]["patch"]),
+        (&json!("all"), &json!("all"))
+    );
+    assert_eq!(d["totalGames"], d1["totalGames"].as_i64().unwrap() * 2);
+    assert_eq!(
+        d["items"][0]["games"],
+        d1["items"][0]["games"].as_i64().unwrap() * 2
+    );
+    let m = e
+        .get(&format!("/v1/lol/analytics/champions/{id}/matchups?patch=all"))
+        .await
+        .json();
+    assert_eq!(m["patch"], "all");
+    assert_eq!(m["matchups"][0]["games"], 2);
+
+    // The patch list: newest first, games as totalGames counts them.
+    let r = e.get("/v1/lol/analytics/patches?platform=kr").await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.headers["cache-control"], "private, max-age=300");
+    let body = redact(r.json());
+    assert_eq!(
+        body,
+        json!({"platform": "kr", "queue": "RANKED_SOLO_5x5", "patches": [
+            {"patch": "16.19", "games": 10, "computedAt": "<iso>"},
+            {"patch": "16.18", "games": 10, "computedAt": "<iso>"}]})
+    );
+    let tag = r.headers["etag"].to_str().unwrap().to_string();
+    let again = e
+        .call(
+            "GET",
+            "/v1/lol/analytics/patches?platform=kr",
+            &e.reader,
+            Some(&tag),
+            None,
+        )
+        .await;
+    assert_eq!(again.status, StatusCode::NOT_MODIFIED);
+    // The remake adds its players back in.
+    let with = e.get("/v1/lol/analytics/patches?remakes=include").await.json();
+    assert_eq!(with["platform"], Value::Null);
+    assert!(with["patches"][0]["games"].as_i64().unwrap() > 10, "{with}");
+    assert_eq!(
+        e.get("/v1/lol/analytics/patches?platform=na1").await.json()["patches"],
+        json!([])
+    );
+    assert_eq!(
+        error(&e.get("/v1/lol/analytics/patches?queue=NORMAL").await).0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        error(&e.get("/v1/lol/analytics/champions?patch=every").await),
+        (
+            StatusCode::BAD_REQUEST,
+            "querystring/patch must match pattern \"^[0-9]+\\.[0-9]+$\"".into()
+        )
+    );
+}

@@ -229,8 +229,7 @@ fn every_v1_lol_operation_is_documented() {
     let missing: Vec<String> = ops(&v1).difference(&ops(&ours)).cloned().collect();
     // The analytics routes arrived with P7-04 (ADR-056).
     assert_eq!(missing, Vec::<String>::new());
-    assert!(
-        ops(&ours).difference(&ops(&v1)).next().is_none(),
-        "nothing undocumented in v1"
-    );
+    // Nothing v1 lacked, but the v2 additions named here (ADR-094).
+    let added: Vec<String> = ops(&ours).difference(&ops(&v1)).cloned().collect();
+    assert_eq!(added, ["GET /v1/lol/analytics/patches"]);
 }

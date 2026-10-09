@@ -81,15 +81,19 @@ const MATCHUPS = { championId: 1, championName: 'Annie', queue: 'RANKED_SOLO_5x5
   { opponentId: 3, opponentName: 'Galio', role: 'MIDDLE', games: 9, wins: 3, winRate: 0.333 },
   { opponentId: 2, opponentName: 'Olaf', role: 'TOP', games: 2, wins: 2, winRate: 1 },
 ] };
-function detail(p, { noTimeline = false, noAnalytics = false }) {
+function detail(p, u, { noTimeline = false, noAnalytics = false }) {
   let m;
   if ((m = p.match(/^\/v1\/lol\/matches\/([a-z]+)\/([A-Z0-9]+_\d+)(\/timeline)?$/))) {
     if (m[2] === 'OC1_1') return [404, { error: { code: 'NOT_FOUND', message: 'no match', requestId: 'r' } }];
     if (m[3]) return noTimeline ? [503, { error: { code: 'UPSTREAM_UNAVAILABLE', message: 'try later', requestId: 'r' } }] : [200, TIMELINE];
     return [200, MATCH];
   }
+  // The proxy's AnalyticsPatchesResponse (DEV-21): newest first.
+  if (p === '/v1/lol/analytics/patches') return [200, { platform: u.searchParams.get('platform'), queue: u.searchParams.get('queue'),
+    patches: noAnalytics ? [] : [{ patch: '16.19', games: 40, computedAt: '2026-10-08T00:00:00Z' }, { patch: '16.18', games: 1200, computedAt: '2026-10-08T00:00:00Z' }] }];
   if ((m = p.match(/^\/v1\/lol\/analytics\/champions\/(\d+)(\/matchups)?$/))) {
-    if (noAnalytics) return [200, m[2] ? { ...MATCHUPS, matchups: [] } : { ...DETAIL, totalGames: 0, stats: [], items: [], spells: [], runes: [], matchups: [] }];
+    // 16.19 stands in for a patch too new to clear minGames: listed, but empty.
+    if (noAnalytics || u.searchParams.get('patch') === '16.19') return [200, m[2] ? { ...MATCHUPS, matchups: [] } : { ...DETAIL, totalGames: 0, stats: [], items: [], spells: [], runes: [], matchups: [] }];
     return [200, m[2] ? MATCHUPS : DETAIL];
   }
   return null;
@@ -107,7 +111,7 @@ function api(calls, url, { status = {}, unauthorized = false, ...opts } = {}) {
   if (p === '/v1/static/item') return [200, { data: { 3078: { name: 'Trinity Force' } } }];
   if (p === '/v1/static/queues') return [200, [{ queueId: 420, map: "Summoner's Rift", description: '5v5 Ranked Solo games', notes: null }, { queueId: 440, map: "Summoner's Rift", description: '5v5 Ranked Flex games', notes: null }]];
   if (unauthorized) return [401, { error: { code: 'UNAUTHORIZED', message: 'missing key', requestId: 'r' } }];
-  const pl = players(p, u, opts) ?? detail(p, opts);
+  const pl = players(p, u, opts) ?? detail(p, u, opts);
   if (pl) return pl;
   if (p.startsWith('/v1/lol/status/')) return [200, { id: 'OC1', name: 'Oceania', locales: ['en_US'], maintenances: [], incidents: [], ...status }];
   if (p.startsWith('/v1/lol/league/apex/')) return [200, { tier: p.split('/')[6], queue: p.split('/')[7], name: 'L', leagueId: 'x', entries: Array.from({ length: LADDER }, (_, i) => entry(i)) }];

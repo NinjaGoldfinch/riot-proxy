@@ -70,7 +70,7 @@ test('tier and queue toggles refetch the league; the queue also drives top champ
   assert.ok(p.text('#ladder .tier').includes('MASTER'));
   await p.click('#ladder [data-queue="RANKED_FLEX_SR"]');
   assert.ok(p.calls.includes('/v1/lol/league/apex/oc1/MASTER/RANKED_FLEX_SR'));
-  assert.ok(p.calls.includes('/v1/lol/analytics/champions?platform=oc1&queue=RANKED_FLEX_SR&limit=500'));
+  assert.ok(p.calls.includes('/v1/lol/analytics/champions?platform=oc1&queue=RANKED_FLEX_SR&patch=all&limit=500'));
   assert.deepEqual(p.errors, []);
 });
 
@@ -100,7 +100,7 @@ test('rotation and top champions use the local icon mirror and champion names', 
   assert.ok(top.includes('Highest win rate') && top.includes('Most played'));
   assert.ok(top.includes('50.0%'), 'Annie summed over two tiers: 10 / 20');
   assert.ok(top.includes('80.0%'), 'Olaf');
-  assert.ok(top.includes('patch 16.19'));
+  assert.ok(p.text('#topMeta').startsWith('all patches'));
 });
 
 test('every card names its calls, and the chips open the dev explorer', async () => {
@@ -108,7 +108,7 @@ test('every card names its calls, and the chips open the dev explorer', async ()
   const chips = (sel) => [...p.w.document.querySelectorAll(`${sel} .src`)].map((a) => a.textContent);
   assert.deepEqual(chips('#ladder'), ['GET /v1/lol/league/apex/{platform}/{tier}/{queue}', 'GET /v1/riot/accounts/by-puuid/{puuid}']);
   assert.deepEqual(chips('#rotation'), ['GET /v1/lol/rotations/{platform}', 'GET /v1/static/{file}']);
-  assert.deepEqual(chips('#top'), ['GET /v1/lol/analytics/champions']);
+  assert.deepEqual(chips('#top'), ['GET /v1/lol/analytics/champions', 'GET /v1/lol/analytics/patches']);
   assert.equal(p.$('#top .src').getAttribute('href'), '/dev#explorer?op=GET%20%2Fv1%2Flol%2Fanalytics%2Fchampions');
   assert.ok(p.text('#calls summary').match(/API calls \(\d+\)/));
   assert.ok(p.text('#calls').includes('/v1/lol/rotations/oc1'));
@@ -361,10 +361,10 @@ test('a missing timeline costs only the graph; an unknown match says so', async 
 
 test('the champion view: rates by tier, builds with names, and the calls it makes', async () => {
   const p = await page({ hash: '#/champion/1' });
-  assert.ok(p.calls.includes('/v1/lol/analytics/champions/1?queue=RANKED_SOLO_5x5&limit=10&platform=oc1'));
-  assert.ok(p.calls.includes('/v1/lol/analytics/champions/1/matchups?queue=RANKED_SOLO_5x5&limit=200&platform=oc1'));
+  assert.ok(p.calls.includes('/v1/lol/analytics/champions/1?queue=RANKED_SOLO_5x5&patch=all&limit=10&platform=oc1'));
+  assert.ok(p.calls.includes('/v1/lol/analytics/champions/1/matchups?queue=RANKED_SOLO_5x5&patch=all&limit=200&platform=oc1'));
   assert.ok(p.text('#cHead').includes('Annie') && p.text('#cHead').includes('the Dark Child'));
-  assert.ok(p.text('#cMeta').includes('patch 16.19 · 40 games'));
+  assert.ok(p.text('#cMeta').includes('all patches · 40 games'));
   const tiers = [...p.w.document.querySelectorAll('#cTiers tbody tr')].map((r) => r.cells[0].textContent);
   assert.deepEqual(tiers, ['CHALLENGER', 'GOLD'], 'highest tier first');
   assert.ok(p.text('#cTiers').includes('55.0% win over 40 games'), 'summed over tiers');
@@ -394,14 +394,14 @@ test('matchups: most games first, filtered by lane', async () => {
 test('the champion queue tabs refetch both calls for the other queue', async () => {
   const p = await page({ hash: '#/champion/1' });
   await p.click('#cHead [data-cqueue="RANKED_FLEX_SR"]');
-  assert.ok(p.calls.includes('/v1/lol/analytics/champions/1?queue=RANKED_FLEX_SR&limit=10&platform=oc1'));
-  assert.ok(p.calls.includes('/v1/lol/analytics/champions/1/matchups?queue=RANKED_FLEX_SR&limit=200&platform=oc1'));
+  assert.ok(p.calls.includes('/v1/lol/analytics/champions/1?queue=RANKED_FLEX_SR&patch=all&limit=10&platform=oc1'));
+  assert.ok(p.calls.includes('/v1/lol/analytics/champions/1/matchups?queue=RANKED_FLEX_SR&patch=all&limit=200&platform=oc1'));
   assert.ok(p.$('#cHead [data-cqueue="RANKED_FLEX_SR"]').classList.contains('on'));
 });
 
 test('without a platform the champion view sums every platform; without data it says so', async () => {
   const p = await page({ hash: '#/champion/1', platform: '' });
-  assert.ok(p.calls.includes('/v1/lol/analytics/champions/1?queue=RANKED_SOLO_5x5&limit=10'));
+  assert.ok(p.calls.includes('/v1/lol/analytics/champions/1?queue=RANKED_SOLO_5x5&patch=all&limit=10'));
   assert.ok(p.text('#cMeta').startsWith('every platform'));
   const empty = await page({ hash: '#/champion/1', noAnalytics: true });
   assert.ok(empty.text('#cTiers').includes('No analytics for Annie yet'));
@@ -417,4 +417,55 @@ test('every match and champion card names its calls', async () => {
   const c = await page({ hash: '#/champion/1' });
   assert.deepEqual(chips(c, '#cTiers'), ['GET /v1/lol/analytics/champions/{championId}']);
   assert.deepEqual(chips(c, '#cMatchups'), ['GET /v1/lol/analytics/champions/{championId}/matchups']);
+});
+
+test('the champion view reads every patch by default; the patch and region pickers refetch', async () => {
+  const p = await page({ hash: '#/champion/1' });
+  assert.ok(p.calls.includes('/v1/lol/analytics/patches?queue=RANKED_SOLO_5x5&platform=oc1'));
+  const opts = (sel) => [...p.$(sel).options].map((o) => [o.value, o.textContent]);
+  assert.deepEqual(opts('#cHead [data-patch]'), [['all', 'All patches · 1,240 games'], ['16.19', '16.19 · 40 games'], ['16.18', '16.18 · 1,200 games']]);
+  assert.deepEqual(opts('#cHead [data-region]'), [['', 'All regions'], ['oc1', 'Oceania'], ['kr', 'Korea']]);
+  assert.equal(p.$('#cHead [data-region]').value, 'oc1', 'follows the platform picked above');
+  const pick = async (sel, value) => { const el = p.$(sel); el.value = value; el.dispatchEvent(new p.w.Event('change', { bubbles: true })); await p.settle(); };
+  await pick('#cHead [data-patch]', '16.18');
+  assert.ok(p.calls.includes('/v1/lol/analytics/champions/1?queue=RANKED_SOLO_5x5&patch=16.18&limit=10&platform=oc1'));
+  assert.ok(p.calls.includes('/v1/lol/analytics/champions/1/matchups?queue=RANKED_SOLO_5x5&patch=16.18&limit=200&platform=oc1'));
+  assert.equal(p.$('#cHead [data-patch]').value, '16.18');
+  assert.ok(p.text('#cMeta').includes('patch 16.18'));
+  await pick('#cHead [data-region]', '');
+  assert.ok(p.calls.includes('/v1/lol/analytics/patches?queue=RANKED_SOLO_5x5'));
+  assert.ok(p.calls.includes('/v1/lol/analytics/champions/1?queue=RANKED_SOLO_5x5&patch=16.18&limit=10'), 'the patch stays picked');
+  assert.ok(p.text('#cMeta').startsWith('every platform'));
+  assert.equal(p.$('#platform').value, 'oc1', 'the platform above is left alone');
+  await pick('#cHead [data-region]', 'kr');
+  assert.ok(p.calls.includes('/v1/lol/analytics/champions/1?queue=RANKED_SOLO_5x5&patch=16.18&limit=10&platform=kr'));
+  assert.deepEqual(p.errors, []);
+});
+
+test('a patch with too few games says so rather than "no analytics yet"', async () => {
+  const p = await page({ hash: '#/champion/1' });
+  const sel = p.$('#cHead [data-patch]');
+  sel.value = '16.19';
+  sel.dispatchEvent(new p.w.Event('change', { bubbles: true }));
+  await p.settle();
+  assert.ok(p.text('#cTiers').includes('Not enough Annie games on patch 16.19 yet'), p.text('#cTiers'));
+  assert.ok(p.text('#cMatchups').includes('No lane matchups'));
+  const empty = await page({ hash: '#/champion/1', noAnalytics: true });
+  assert.ok(empty.text('#cTiers').includes('No analytics for Annie yet'), 'nothing aggregated at all');
+  assert.deepEqual([...empty.$('#cHead [data-patch]').options].map((o) => o.value), ['all']);
+  assert.deepEqual(p.errors, []);
+});
+
+test('top champions read every patch by default and the patch picker refetches them', async () => {
+  const p = await page();
+  assert.ok(p.calls.includes('/v1/lol/analytics/champions?platform=oc1&queue=RANKED_SOLO_5x5&patch=all&limit=500'));
+  assert.ok(p.text('#topMeta').startsWith('all patches'));
+  const sel = p.$('#top [data-patch]');
+  sel.value = '16.18';
+  sel.dispatchEvent(new p.w.Event('change', { bubbles: true }));
+  await p.settle();
+  assert.ok(p.calls.includes('/v1/lol/analytics/champions?platform=oc1&queue=RANKED_SOLO_5x5&patch=16.18&limit=500'));
+  assert.ok(p.text('#topMeta').startsWith('patch 16.18'));
+  assert.equal(p.$('#top [data-patch]').value, '16.18');
+  assert.deepEqual(p.errors, []);
 });

@@ -406,7 +406,7 @@ async fn reads_leave_remakes_out_unless_asked_and_sum_roles() {
         key_scope: "s".into(),
         platform: Some("kr".into()),
         queue: "RANKED_SOLO_5x5".into(),
-        patch: "14.18".into(),
+        patch: Some("14.18".into()),
         tier: None,
         role: None,
         champion_id: None,
@@ -536,5 +536,68 @@ async fn a_patch_limit_keeps_older_patches_rows_and_patches_sort_numerically() {
         .await,
         [vec![2]],
         "the rebuilt patch is replaced, not added to"
+    );
+}
+
+#[tokio::test]
+async fn every_patch_sums_and_the_patch_list_is_newest_first() {
+    let (_d, db) = db();
+    db.write(|c| {
+        seed(c);
+        c.execute_batch("UPDATE matches SET patch = '14.9' WHERE match_id = 'KR_4'")?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    rebuild(&db, 0).await;
+    let read = |patch: Option<&str>| Read {
+        key_scope: "s".into(),
+        platform: Some("kr".into()),
+        queue: "RANKED_SOLO_5x5".into(),
+        patch: patch.map(str::to_string),
+        tier: None,
+        role: None,
+        champion_id: Some(1),
+        min_games: 0,
+        limit: 500,
+        remakes: false,
+    };
+    let games = |rows: Vec<StatRow>| {
+        rows.iter()
+            .map(|r| (r.tier.clone(), r.patch.clone(), r.games))
+            .collect::<Vec<_>>()
+    };
+    // M1 and M2 on 14.18, M4 on 14.9: one row, labelled "all".
+    assert_eq!(
+        games(stats(&db, read(None)).await.unwrap()),
+        [("MASTER".into(), "all".into(), 3)]
+    );
+    assert_eq!(
+        games(stats(&db, read(Some("14.18"))).await.unwrap()),
+        [("MASTER".into(), "14.18".into(), 2)]
+    );
+    let slices_all = slices(&db, read(None)).await.unwrap();
+    assert!(slices_all.contains(&("MASTER".into(), 3)), "{slices_all:?}");
+
+    let list = |remakes| {
+        let db = db.clone();
+        async move {
+            patches(&db, "s", Some("kr"), "RANKED_SOLO_5x5", remakes)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|p| (p.patch, p.games))
+                .collect::<Vec<_>>()
+        }
+    };
+    // 14.18 above 14.9 (numeric); its games are A, B and C in M1 and M2.
+    assert_eq!(list(false).await, [("14.18".into(), 4), ("14.9".into(), 1)]);
+    // M3, the remake, adds A and C.
+    assert_eq!(list(true).await, [("14.18".into(), 6), ("14.9".into(), 1)]);
+    assert!(
+        patches(&db, "s", Some("euw1"), "RANKED_SOLO_5x5", false)
+            .await
+            .unwrap()
+            .is_empty()
     );
 }

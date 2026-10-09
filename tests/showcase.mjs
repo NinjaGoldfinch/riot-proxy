@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 const html = readFileSync(new URL('../src/ui/showcase.html', import.meta.url), 'utf8');
 const block = html.match(/\/\/ -{10} pure helpers[^\n]*\n([\s\S]*?)\/\/ -{10} end pure helpers/);
 assert.ok(block, 'the pure helpers block is marked in showcase.html');
-const h = new Function(`${block[1]}; return { APEX, QUEUES, LADDER_PAGE, tierColour, winRate, pct, sortLadder, ladderPage, championIndex, imageUrl, statusNotices, byChampion, topChampions, parseRiotId, parseRoute, explorerLink, rankLabel, rankCards, queueNames, spellIndex, outcome, kda, durationSecs, clock, ago, masterySummary, liveGame, TIERS, SIDES, matchHref, matchTeams, goldDiff, goldScale, signedGold, tierRows, runeIndex, runePair, runeUrl, itemIndex, roleList, thousands };`)();
+const h = new Function(`${block[1]}; return { APEX, QUEUES, LADDER_PAGE, tierColour, winRate, pct, sortLadder, ladderPage, championIndex, imageUrl, statusNotices, byChampion, topChampions, parseRiotId, parseRoute, explorerLink, rankLabel, rankCards, queueNames, spellIndex, outcome, kda, durationSecs, clock, ago, masterySummary, liveGame, TIERS, SIDES, matchHref, matchTeams, goldDiff, goldScale, signedGold, tierRows, runeIndex, runePair, runeUrl, itemIndex, roleList, thousands, patchChoices, pickPatch, patchLabel };`)();
 
 test('apex tiers and queues are the ones the apex route accepts', () => {
   assert.deepEqual(h.APEX, ['CHALLENGER', 'GRANDMASTER', 'MASTER']);
@@ -296,4 +296,15 @@ test('thousands shorten to one decimal from 1,000', () => {
   assert.equal(h.thousands(21345), '21.3k');
   assert.equal(h.thousands(999), '999');
   assert.equal(h.thousands(undefined), '0');
+});
+
+test('the patch picker offers every patch first, then each patch, and falls back to every patch', () => {
+  const list = [{ patch: '16.19', games: 10 }, { patch: '16.18', games: 1406 }];
+  assert.deepEqual(h.patchChoices(list), [['all', 'All patches · 1,416 games'], ['16.19', '16.19 · 10 games'], ['16.18', '16.18 · 1,406 games']]);
+  assert.deepEqual(h.patchChoices(undefined), [['all', 'All patches · 0 games']]);
+  assert.equal(h.pickPatch('16.18', list), '16.18');
+  assert.equal(h.pickPatch('16.17', list), 'all', 'a patch this ladder lacks');
+  assert.equal(h.pickPatch('all', []), 'all');
+  assert.equal(h.patchLabel('all'), 'all patches');
+  assert.equal(h.patchLabel('16.19'), 'patch 16.19');
 });

@@ -52,6 +52,60 @@ expression: doc
         ],
         "type": "object"
       },
+      "AnalyticsPatchEntry": {
+        "description": "One aggregated patch (ADR-094).",
+        "properties": {
+          "computedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "games": {
+            "description": "Participant games, as `totalGames` counts them on the champions route.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "patch": {
+            "description": "`major.minor`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "patch",
+          "games",
+          "computedAt"
+        ],
+        "type": "object"
+      },
+      "AnalyticsPatchesResponse": {
+        "description": "The patches a ladder has analytics for (ADR-094).",
+        "properties": {
+          "patches": {
+            "description": "Newest first.",
+            "items": {
+              "$ref": "#/components/schemas/AnalyticsPatchEntry"
+            },
+            "type": "array"
+          },
+          "platform": {
+            "description": "`null` when the request named no platform: every platform summed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "queue": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "platform",
+          "queue",
+          "patches"
+        ],
+        "type": "object"
+      },
       "AnalyticsSection": {
         "properties": {
           "lastRuns": {
@@ -6230,7 +6284,7 @@ expression: doc
             }
           },
           {
-            "description": "`major.minor`; default the newest aggregated patch",
+            "description": "`major.minor`, or `all` to sum every aggregated patch; default the newest aggregated patch",
             "in": "query",
             "name": "patch",
             "required": false,
@@ -6391,7 +6445,7 @@ expression: doc
             }
           },
           {
-            "description": "`major.minor`; default the newest aggregated patch",
+            "description": "`major.minor`, or `all` to sum every aggregated patch; default the newest aggregated patch",
             "in": "query",
             "name": "patch",
             "required": false,
@@ -6543,7 +6597,7 @@ expression: doc
             }
           },
           {
-            "description": "`major.minor`; default the newest aggregated patch",
+            "description": "`major.minor`, or `all` to sum every aggregated patch; default the newest aggregated patch",
             "in": "query",
             "name": "patch",
             "required": false,
@@ -6656,6 +6710,110 @@ expression: doc
           }
         },
         "summary": "A champion's lane matchups",
+        "tags": [
+          "lol"
+        ]
+      }
+    },
+    "/v1/lol/analytics/patches": {
+      "get": {
+        "description": "The patches the analytics tables hold for a ladder, newest first, with each one's games: what a client offers as `patch` choices on the other analytics routes (`all` sums them). Sends an `ETag`; a matching `If-None-Match` gets 304.",
+        "operationId": "patches",
+        "parameters": [
+          {
+            "description": "Only this platform's ladder. Omitted sums every platform",
+            "in": "query",
+            "name": "platform",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "RANKED_SOLO_5x5 or RANKED_FLEX_SR; default the first of `LADDER_QUEUES`",
+            "in": "query",
+            "name": "queue",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`exclude` (default) or `include`",
+            "in": "query",
+            "name": "remakes",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalyticsPatchesResponse"
+                }
+              }
+            },
+            "description": "The patches, newest first"
+          },
+          "304": {
+            "description": "Not modified"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`)."
+          }
+        },
+        "summary": "Patches with analytics",
         "tags": [
           "lol"
         ]
