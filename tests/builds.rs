@@ -73,11 +73,9 @@ impl Env {
         matches::put(&self.state.db, MATCH_ID, "sea", OWNER, MATCH.to_vec().into(), 1)
             .await
             .unwrap();
-        assert!(
-            matches::put_timeline(&self.state.db, MATCH_ID, TIMELINE.to_vec().into())
-                .await
-                .unwrap()
-        );
+        matches::put_timeline(&self.state.db, MATCH_ID, TIMELINE.to_vec().into())
+            .await
+            .unwrap();
     }
 
     /// Patch 16.19.1 fully mirrored: its item.json, then versions.json last.

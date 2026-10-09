@@ -4,8 +4,8 @@
 //!
 //! `patch`, `queue_id` and `game_end_ms` are pulled out of the body on insert so
 //! analytics and stats never open the blob. Timelines go in their own table,
-//! only once their match is archived (the foreign key; v1 skipped a timeline
-//! that arrived first the same way).
+//! with no foreign key to their match, so one fetched first is kept (TL-01;
+//! v1, and v2 until then, dropped it).
 //!
 //! Archiving a match also writes its `match_facts` in the same transaction
 //! (v1 `archiveMatch`), for the key scope whose PUUIDs the body carries.
@@ -282,19 +282,19 @@ pub async fn get_timeline(db: &Db, match_id: &str) -> Result<Option<Bytes>, Arch
     .await
 }
 
-/// Archive a timeline. Returns `false`, storing nothing, when its match is not
-/// archived yet: the row would have no parent.
-pub async fn put_timeline(db: &Db, match_id: &str, body: Bytes) -> Result<bool, ArchiveError> {
+/// Archive a timeline, whether or not its match is archived yet (TL-01): a
+/// client that asks for a match and its timeline at once often gets the
+/// timeline first. [`crate::archive::SqliteArchive`] queues the missing match.
+pub async fn put_timeline(db: &Db, match_id: &str, body: Bytes) -> Result<(), ArchiveError> {
     let blob = compress(body).await?;
     let id = match_id.to_string();
     db.write(move |conn| {
-        let n = conn.execute(
-            "INSERT INTO timelines (match_id, body_zstd)
-             SELECT ?1, ?2 WHERE EXISTS (SELECT 1 FROM matches WHERE match_id = ?1)
+        conn.execute(
+            "INSERT INTO timelines (match_id, body_zstd) VALUES (?1, ?2)
              ON CONFLICT (match_id) DO UPDATE SET body_zstd = excluded.body_zstd",
             rusqlite::params![id, blob],
         )?;
-        Ok::<_, ArchiveError>(n > 0)
+        Ok::<_, ArchiveError>(())
     })
     .await
 }

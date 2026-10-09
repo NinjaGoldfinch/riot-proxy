@@ -116,5 +116,5 @@ pub fn handlers(
 
 pub use scheduler::{
     Enqueued, Handler, Job, JobAction, JobError, JobRow, NewJob, Queue, Registry, Scheduler, Workers,
-    enqueue_on,
+    enqueue_on, enqueue_or_promote_on,
 };

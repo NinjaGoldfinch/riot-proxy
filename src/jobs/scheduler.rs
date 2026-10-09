@@ -253,6 +253,21 @@ pub fn enqueue_on(conn: &Connection, job: &NewJob, now_ms: i64) -> rusqlite::Res
     })
 }
 
+/// [`enqueue_on`], or, when a pending duplicate holds the dedupe key, lift that
+/// row to `job`'s priority and make it ready now (never lower or later than it
+/// was). A running duplicate is left alone. The caller wakes a worker.
+pub fn enqueue_or_promote_on(conn: &Connection, job: &NewJob, now_ms: i64) -> rusqlite::Result<Enqueued> {
+    let out = enqueue_on(conn, job, now_ms)?;
+    if !out.created {
+        conn.execute(
+            "UPDATE jobs SET priority = MIN(priority, ?2), run_after = MIN(run_after, ?3)
+              WHERE id = ?1 AND state = 'pending'",
+            params![out.id, job.priority, job.run_after.unwrap_or(now_ms)],
+        )?;
+    }
+    Ok(out)
+}
+
 /// Enqueueing, shareable with handlers that fan out (they hold a `Queue` while
 /// the [`Scheduler`] holds them). Cheap to clone.
 #[derive(Debug, Clone)]
@@ -406,14 +421,7 @@ impl Queue {
             .db
             .write(move |c| {
                 let tx = c.transaction()?;
-                let out = enqueue_on(&tx, &job, now)?;
-                if !out.created {
-                    tx.execute(
-                        "UPDATE jobs SET priority = MIN(priority, ?2), run_after = MIN(run_after, ?3)
-                          WHERE id = ?1 AND state = 'pending'",
-                        params![out.id, job.priority, job.run_after.unwrap_or(now)],
-                    )?;
-                }
+                let out = enqueue_or_promote_on(&tx, &job, now)?;
                 tx.commit()?;
                 Ok::<_, DbError>(out)
             })

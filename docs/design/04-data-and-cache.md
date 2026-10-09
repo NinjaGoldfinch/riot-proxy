@@ -107,8 +107,8 @@ CREATE TABLE matches (
 CREATE INDEX matches_patch_queue ON matches(patch, queue_id);
 CREATE INDEX matches_end        ON matches(game_end_ms);
 
-CREATE TABLE timelines (                          -- every fetched timeline whose match is archived
-  match_id  TEXT PRIMARY KEY REFERENCES matches(match_id),
+CREATE TABLE timelines (                          -- every fetched timeline, before its match if need be
+  match_id  TEXT PRIMARY KEY,                     -- no FK since V0013 (TL-01, ADR-118)
   body_zstd BLOB NOT NULL
 );
 
@@ -263,6 +263,8 @@ Migrations are embedded in the binary (`sqlx::migrate!("./src/db/migrations")` o
 | **L2** | account, summoner, ladder pages, mastery | soft/hard as v1 | yes (SQLite `cache`) |
 | **L1** | everything above plus league, spectator, rotations, status, match-id lists | soft/hard as v1 | no — rebuilt from L2 on boot or from Riot on first miss |
 | **Negative** | spectator 404 (30 s), account 404 (300 s) | fixed | no |
+
+**A match and its timeline are archived together** (TL-01, ADR-118). Whatever stores one, a read or a job, queues an `archive:match` for the other in the next write: a stored match queues its timeline (unless `ARCHIVE_TIMELINES=false`), and a stored timeline queues its match. The job runs at priority 0, so it is next once the lane has bulk room, and it costs the caller nothing: the caller's request makes one Riot call, and the other half goes through the bulk ceiling (05). If a walk already queued that match, its job is moved up to 0 and asked to fetch the timeline, not queued twice. At boot, every archived match without a timeline and every timeline without its match is queued at 100. A match is skipped if its finished job already asked for the timeline, so one Riot won't serve is not requested again on every restart; it is retried once a `done` row is pruned after seven days (`failed` rows are kept).
 
 L2 membership is a per-endpoint flag in `riot/endpoints.rs` (`persist: true`). The rule: persist it if `TTL ≥ 1 h` **or** it costs more than one upstream call to rebuild. Anything with a TTL under a few minutes is cheaper to refetch than to write.
 
