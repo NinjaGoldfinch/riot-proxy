@@ -630,3 +630,80 @@ async fn a_champions_patch_list_has_only_its_games() {
     // A champion nobody played has no patches.
     assert!(list(Some(999)).await.is_empty());
 }
+
+#[tokio::test]
+async fn a_lane_two_players_of_a_team_share_has_no_matchup() {
+    let (_d, db) = db();
+    db.write(|c| {
+        seed(c);
+        // KR_6: A and B both MIDDLE for team 100 against C; A's TOP game
+        // against D is a lane like any other.
+        c.execute_batch(
+            "INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size,
+               archived_at, game_duration, remake, facts_version)
+               VALUES ('KR_6', 'asia', '14.18', 420, 1, x'00', 1, 1, 1500, 0, 3);
+             INSERT INTO match_facts (match_id, key_scope, puuid, team_id, position, champion_id, win, facts_version)
+               VALUES ('KR_6', 's', 'A', 100, 'MIDDLE', 1, 1, 3), ('KR_6', 's', 'B', 100, 'MIDDLE', 4, 1, 3),
+                      ('KR_6', 's', 'C', 200, 'MIDDLE', 2, 0, 3), ('KR_6', 's', 'E', 100, 'TOP', 5, 1, 3),
+                      ('KR_6', 's', 'D', 200, 'TOP', 6, 0, 3);
+             INSERT INTO ladder_entries (key_scope, platform, queue, puuid, tier, division, league_points,
+               wins, losses, first_seen_crawl_id, last_seen_crawl_id, updated_at)
+               VALUES ('s', 'kr', 'RANKED_SOLO_5x5', 'E', 'MASTER', 'I', 10, 1, 1, 'c', 'c', 1);",
+        )?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    rebuild(&db, 1).await;
+    // The fixture's four rows, untouched by KR_6's shared MIDDLE (C's side
+    // too: its opponent lane has two players), plus E's TOP game against D.
+    assert_eq!(
+        text_rows(&db, "SELECT champion_id || ' v ' || opponent_id || ' ' || role || ' ' || remake || ' ' || games || '/' || wins
+                          FROM champion_matchups ORDER BY champion_id, remake").await,
+        [
+            "1 v 2 MIDDLE 0 2/1",
+            "1 v 2 MIDDLE 1 1/1",
+            "2 v 1 MIDDLE 0 2/1",
+            "2 v 1 MIDDLE 1 1/0",
+            "5 v 6 TOP 0 1/1"
+        ]
+    );
+}
+
+/// The database has no `ANALYZE` statistics, so the plan is SQLite's guess and
+/// the same for any table size (ADR-101). It must reach the ladder by the
+/// player and a lane's opponent by the match: before, it walked every ladder
+/// player for each fact, which took 44 s on a 16,600-game ladder.
+#[tokio::test]
+async fn the_matchups_plan_reaches_ladder_and_opponent_by_key() {
+    let (_d, db) = db();
+    let plan = db
+        .write(|c| {
+            seed(c);
+            let s = scope(c, 0);
+            let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {MATCHUPS}"))?;
+            let plan = stmt
+                .query_map(
+                    params![
+                        s.key_scope,
+                        s.platform,
+                        s.queue,
+                        s.queue_id,
+                        s.patches_json(),
+                        s.now
+                    ],
+                    |r| r.get::<_, String>(3),
+                )?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok::<_, DbError>(plan)
+        })
+        .await
+        .unwrap();
+    let step = |alias: &str| {
+        plan.iter()
+            .find(|l| l.starts_with(&format!("SEARCH {alias} ")) || l.starts_with(&format!("SCAN {alias}")))
+            .unwrap_or_else(|| panic!("no step for {alias} in {plan:#?}"))
+    };
+    assert!(step("le").contains("puuid=?"), "{plan:#?}");
+    assert!(step("b").contains("match_id=?"), "{plan:#?}");
+}
