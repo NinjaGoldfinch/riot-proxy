@@ -451,6 +451,39 @@ async fn the_static_routes_are_documented_under_the_static_tag() {
     );
 }
 
+/// SITE-07: both image routes are in the document, keyless, under `static`,
+/// with `kind` the handler's own list.
+#[tokio::test]
+async fn the_image_routes_are_documented_without_a_key() {
+    let doc = serde_json::to_value(riot_proxy::routes::docs::spec()).unwrap();
+    for p in [
+        "/ddragon/{version}/img/{kind}/{file}",
+        "/ddragon/{version}/img/perk-images/{icon}",
+    ] {
+        let op = &doc["paths"][p]["get"];
+        assert_eq!(op["tags"], json!(["static"]), "{p}");
+        assert_eq!(op["security"], json!([{}]), "{p}");
+        let ok = &op["responses"]["200"];
+        assert_eq!(
+            ok["content"]["image/png"]["schema"]["$ref"], "#/components/schemas/Png",
+            "{p}"
+        );
+        assert!(ok["headers"]["Cache-Control"].is_object(), "{p}");
+        for status in ["304", "404", "502"] {
+            assert!(
+                op["responses"][status]["content"].is_null(),
+                "{p} {status} has no body"
+            );
+        }
+    }
+    let kinds: Vec<&str> = riot_proxy::r#static::images::IMAGE_KINDS
+        .iter()
+        .map(|(k, _)| *k)
+        .collect();
+    assert_eq!(doc["components"]["schemas"]["ImageKind"]["enum"], json!(kinds));
+    assert_eq!(doc["components"]["schemas"]["Png"]["format"], "binary");
+}
+
 // ── /ddragon/* ──────────────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -526,7 +559,7 @@ async fn an_image_is_fetched_once_then_served_from_disk_without_a_key() {
         assert_eq!(r.status, StatusCode::OK);
         assert_eq!(r.body, PNG);
         assert_eq!(r.headers["content-type"], "image/png");
-        assert_eq!(r.headers["cache-control"], "public, max-age=604800, immutable");
+        assert_eq!(r.headers["cache-control"], "public, max-age=31536000, immutable");
     }
     assert_eq!(e.image_fetches().await, 1, "the second request came from disk");
     let on_disk = e.state.ddragon.dir().join(NEW).join("img/champion/Ahri.png");
@@ -574,7 +607,7 @@ async fn only_images_the_mirrored_patch_lists_are_fetched() {
         format!("/ddragon/{NEW}/img/champion/Nobody.png"), // not in champion.json
         format!("/ddragon/{NEW}/img/splash/Ahri.png"),     // not a served kind
         format!("/ddragon/{NEW}/img/item/Ahri.png"),       // listed under another kind
-        format!("/ddragon/{OLD}/img/champion/Ahri.png"),   // patch not mirrored
+        format!("/ddragon/{OLD}/img/champion/Ahri.png"),   // older patch whose data Riot doesn't serve here
         "/ddragon/latest/img/champion/Ahri.png".to_string(),
         format!("/ddragon/{NEW}/img/champion/..%2Fchampion.json"),
         format!("/ddragon/{NEW}/img/champion/%2E%2E%2F..%2Friot-proxy.db"),
@@ -647,7 +680,7 @@ async fn a_rune_icon_is_fetched_once_from_the_unversioned_path_then_served_from_
         assert_eq!(r.status, StatusCode::OK);
         assert_eq!(r.body, PNG);
         assert_eq!(r.headers["content-type"], "image/png");
-        assert_eq!(r.headers["cache-control"], "public, max-age=604800, immutable");
+        assert_eq!(r.headers["cache-control"], "public, max-age=31536000, immutable");
     }
     assert_eq!(e.image_fetches().await, 1, "the second request came from disk");
     let on_disk = e.state.ddragon.dir().join(NEW).join("img").join(ELECTROCUTE);
@@ -677,7 +710,7 @@ async fn only_rune_icons_the_mirrored_patch_lists_are_fetched() {
 
     for uri in [
         format!("/ddragon/{NEW}/img/perk-images/Styles/Domination/Nobody/Nobody.png"), // not listed
-        format!("/ddragon/{OLD}/img/{ELECTROCUTE}"),                                   // patch not mirrored
+        format!("/ddragon/{OLD}/img/{ELECTROCUTE}"), // older patch whose data Riot doesn't serve here
         format!("/ddragon/latest/img/{ELECTROCUTE}"),
         format!("/ddragon/{NEW}/img/perk-images/..%2F..%2Frunesreforged.json"),
         format!("/ddragon/{NEW}/img/perk-images/%2E%2E/%2E%2E/{NEW}/champion.json"),
@@ -687,6 +720,208 @@ async fn only_rune_icons_the_mirrored_patch_lists_are_fetched() {
         assert!(r.headers.get("cache-control").is_none(), "{uri}");
     }
     assert_eq!(e.image_fetches().await, 0);
+}
+
+// ── older patches, on demand (SITE-07) ──────────────────────────────────────
+
+impl Env {
+    /// Riot serves `version`'s `file` data, answering `status`.
+    async fn data_file(&self, version: &str, file: &str, status: u16) {
+        Mock::given(method("GET"))
+            .and(path(data_path(version, file)))
+            .respond_with(ResponseTemplate::new(status).set_body_json(data_body(version, file)))
+            .mount(&self.server)
+            .await;
+    }
+
+    async fn fetches_of(&self, p: &str) -> usize {
+        self.requested().await.iter().filter(|r| *r == p).count()
+    }
+}
+
+#[tokio::test]
+async fn an_older_patch_in_riots_list_is_filled_on_demand() {
+    let e = env().await;
+    e.publish(NEW, &DATA_FILES).await;
+    e.queues().await;
+    e.sync(false).await;
+    e.data_file(OLD, "champion", 200).await;
+    e.image(OLD, "champion", "Ahri.png", PNG).await;
+    e.image(OLD, "champion", "Garen.png", PNG).await;
+
+    for file in ["Ahri.png", "Garen.png", "Ahri.png"] {
+        let r = e
+            .call("GET", &format!("/ddragon/{OLD}/img/champion/{file}"), None, None)
+            .await;
+        assert_eq!(r.status, StatusCode::OK, "{file}");
+        assert_eq!(r.body, PNG);
+        assert_eq!(r.headers["cache-control"], "public, max-age=31536000, immutable");
+    }
+    // One data file, once; each image once.
+    assert_eq!(e.fetches_of(&data_path(OLD, "champion")).await, 1);
+    assert_eq!(e.image_fetches().await, 2);
+    assert_eq!(e.on_disk(OLD, "champion"), Some(data_body(OLD, "champion")));
+    // Only that file: the older patch is not mirrored, and the current one stays current.
+    assert_eq!(e.on_disk(OLD, "item"), None);
+    assert_eq!(e.on_disk(OLD, "versions"), None);
+    assert_eq!(e.state.ddragon.current_version().await.as_deref(), Some(NEW));
+    // Its data still decides what may be fetched.
+    e.image(OLD, "champion", "Nobody.png", PNG).await;
+    let r = e
+        .call(
+            "GET",
+            &format!("/ddragon/{OLD}/img/champion/Nobody.png"),
+            None,
+            None,
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    assert_eq!(e.image_fetches().await, 2);
+}
+
+#[tokio::test]
+async fn concurrent_first_requests_for_an_older_patch_fetch_its_data_once() {
+    let e = env().await;
+    e.publish(NEW, &DATA_FILES).await;
+    e.queues().await;
+    e.sync(false).await;
+    e.data_file(OLD, "runesReforged", 200).await;
+    e.rune_icon(ELECTROCUTE, PNG).await;
+
+    let uri = format!("/ddragon/{OLD}/img/{ELECTROCUTE}");
+    let calls = (0..8).map(|_| e.call("GET", &uri, None, None));
+    for r in futures_util::future::join_all(calls).await {
+        assert_eq!(r.status, StatusCode::OK);
+    }
+    assert_eq!(e.fetches_of(&data_path(OLD, "runesReforged")).await, 1);
+    assert_eq!(e.image_fetches().await, 1);
+}
+
+#[tokio::test]
+async fn a_version_riot_does_not_list_costs_no_fetch() {
+    let e = env().await;
+    e.publish(NEW, &DATA_FILES).await;
+    e.queues().await;
+    e.sync(false).await;
+    let before = e.requested().await.len();
+    for uri in [
+        "/ddragon/99.1.1/img/champion/Ahri.png".to_string(),
+        format!("/ddragon/99.1.1/img/{ELECTROCUTE}"),
+    ] {
+        assert_eq!(
+            e.call("GET", &uri, None, None).await.status,
+            StatusCode::NOT_FOUND,
+            "{uri}"
+        );
+    }
+    assert_eq!(e.requested().await.len(), before);
+}
+
+#[tokio::test]
+async fn before_the_first_sync_no_version_is_fetched() {
+    let e = env().await;
+    e.publish(NEW, &DATA_FILES).await;
+    let r = e
+        .call(
+            "GET",
+            &format!("/ddragon/{NEW}/img/champion/Ahri.png"),
+            None,
+            None,
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    assert!(e.requested().await.is_empty());
+}
+
+#[tokio::test]
+async fn a_data_file_riot_lacks_is_asked_for_once() {
+    let e = env().await;
+    e.publish(NEW, &DATA_FILES).await;
+    e.queues().await;
+    e.sync(false).await;
+    // OLD's champion.json is unmocked: wiremock answers 404.
+    for _ in 0..3 {
+        let r = e
+            .call(
+                "GET",
+                &format!("/ddragon/{OLD}/img/champion/Ahri.png"),
+                None,
+                None,
+            )
+            .await;
+        assert_eq!(r.status, StatusCode::NOT_FOUND);
+    }
+    assert_eq!(e.fetches_of(&data_path(OLD, "champion")).await, 1);
+    assert_eq!(e.image_fetches().await, 0);
+}
+
+#[tokio::test]
+async fn a_data_file_riot_fails_to_serve_is_a_502_and_tried_again() {
+    let e = env().await;
+    e.publish(NEW, &DATA_FILES).await;
+    e.queues().await;
+    e.sync(false).await;
+    e.data_file(OLD, "champion", 500).await;
+    let uri = format!("/ddragon/{OLD}/img/champion/Ahri.png");
+    for _ in 0..2 {
+        let r = e.call("GET", &uri, None, None).await;
+        assert_eq!(r.status, StatusCode::BAD_GATEWAY);
+        assert!(r.body.is_empty());
+        assert!(r.headers.get("cache-control").is_none());
+    }
+    assert_eq!(
+        e.fetches_of(&data_path(OLD, "champion")).await,
+        2,
+        "a failure isn't remembered"
+    );
+    assert_eq!(e.on_disk(OLD, "champion"), None);
+}
+
+#[tokio::test]
+async fn a_rune_icon_path_may_be_percent_encoded() {
+    let e = env().await;
+    e.publish(NEW, &DATA_FILES).await;
+    e.queues().await;
+    e.sync(false).await;
+    e.rune_icon(ELECTROCUTE, PNG).await;
+
+    // As a generated client sends `icon`: its slashes encoded. First filled, then from disk.
+    let uri = format!("/ddragon/{NEW}/img/perk-images/Styles%2FDomination%2FElectrocute%2FElectrocute.png");
+    for _ in 0..2 {
+        let r = e.call("GET", &uri, None, None).await;
+        assert_eq!(r.status, StatusCode::OK);
+        assert_eq!(r.body, PNG);
+    }
+    assert_eq!(e.image_fetches().await, 1);
+    // And the plain path finds the same file.
+    let r = e
+        .call("GET", &format!("/ddragon/{NEW}/img/{ELECTROCUTE}"), None, None)
+        .await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(e.image_fetches().await, 1);
+}
+
+#[tokio::test]
+async fn an_image_on_disk_revalidates() {
+    let e = env().await;
+    e.publish(NEW, &DATA_FILES).await;
+    e.queues().await;
+    e.sync(false).await;
+    e.image(NEW, "champion", "Ahri.png", PNG).await;
+    let uri = format!("/ddragon/{NEW}/img/champion/Ahri.png");
+    e.call("GET", &uri, None, None).await;
+    // From disk now, with its date.
+    let r = e.call("GET", &uri, None, None).await;
+    assert_eq!(r.status, StatusCode::OK);
+    let modified = r.headers["last-modified"].to_str().unwrap().to_string();
+
+    let req = Request::builder()
+        .uri(&uri)
+        .header("if-modified-since", &modified)
+        .body(Body::empty())
+        .unwrap();
+    let r = common::send(e.router.clone(), req).await;
+    assert_eq!(r.status, StatusCode::NOT_MODIFIED);
 }
 
 // ── POST /v1/admin/ddragon/sync ─────────────────────────────────────────────

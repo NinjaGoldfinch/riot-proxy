@@ -10,6 +10,9 @@
 //! `DDRAGON_DIR/meta/queues.json` for the one un-versioned file. A patch
 //! directory counts as mirrored once its `versions.json` exists: the sync
 //! writes it last, so a sync that died half way is retried, not served.
+//! An older patch's directory may hold only the data files its images needed
+//! (`images`, SITE-07): it has no `versions.json`, so it never counts as
+//! mirrored or current.
 
 pub mod champions;
 pub mod images;
@@ -111,8 +114,10 @@ pub struct Mirror {
     versions: Mutex<Option<(String, Arc<Vec<String>>)>>,
     /// The image file names each (patch, kind) allows (`images`).
     image_names: images::Names,
-    /// One fill per image path at a time (`images`).
+    /// One fill per image or data file path at a time (`images`).
     filling: images::Filling,
+    /// Older patches' data files Riot answered 404 for (`images`).
+    missing: images::Missing,
     /// One sync at a time: the tick and an admin `force` can overlap.
     pub(crate) syncing: tokio::sync::Mutex<()>,
 }
@@ -127,6 +132,7 @@ impl Mirror {
             versions: Mutex::new(None),
             image_names: Mutex::default(),
             filling: tokio::sync::Mutex::default(),
+            missing: Mutex::default(),
             syncing: tokio::sync::Mutex::new(()),
         }
     }

@@ -5,6 +5,18 @@ expression: doc
 {
   "components": {
     "headers": {
+      "Cache-Control": {
+        "description": "`public, max-age=31536000, immutable`: the bytes at this path never change.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "Last-Modified": {
+        "description": "When the copy on disk was written, for `If-Modified-Since`. Not sent by the response that first fetched it.",
+        "schema": {
+          "type": "string"
+        }
+      },
       "Retry-After": {
         "description": "Seconds to wait before trying again.",
         "schema": {
@@ -1562,6 +1574,16 @@ expression: doc
         ],
         "type": "object"
       },
+      "ImageKind": {
+        "description": "The image kinds `/ddragon` serves, as the OpenAPI document names them:\nData Dragon's own directory names, `spell` being summoner spells. The\nhandler matches the path segment against `IMAGE_KINDS`; a test keeps the\ntwo lists the same.",
+        "enum": [
+          "champion",
+          "profileicon",
+          "item",
+          "spell"
+        ],
+        "type": "string"
+      },
       "JobActivity": {
         "description": "What each worker is doing (DEV-19).",
         "properties": {
@@ -2876,6 +2898,11 @@ expression: doc
         },
         "type": "object"
       },
+      "Png": {
+        "description": "A PNG's bytes, for the OpenAPI document.",
+        "format": "binary",
+        "type": "string"
+      },
       "ProbeBody": {
         "description": "`POST /v1/admin/ladder/probe` body.",
         "properties": {
@@ -3856,7 +3883,7 @@ expression: doc
     }
   },
   "info": {
-    "description": "A self-hosted proxy between [Riot's public API](https://developer.riotgames.com/) and everything downstream of it. It holds one Riot key, spends it carefully, and gives its consumers their own keys and quotas.\n\n- **Rate limits:** read from Riot's own response headers. Requests a user is waiting on go ahead of background work.\n- **Caching and archive:** repeated reads are served from cache; matches are immutable and archived.\n- **One error envelope:** `{\"error\":{\"code\",\"message\",\"requestId\",\"retryAfter?\"}}`.\n\n### Response headers\n\n| Header | Meaning |\n|---|---|\n| `X-Cache` | `HIT`, `MISS`, `STALE`, `HIT-NEG` (a cached 404), `ARCHIVE` (from the match archive), `BYPASS` (`?refresh=true`) |\n| `X-Cache-Age` | Age of the **content** in seconds, not of the last fetch |\n| `X-Cache-Fetched-Age` | Seconds since the proxy last read it from Riot, changed or not. Not sent for `ARCHIVE` |\n| `X-RateLimit-Limit` / `-Remaining` / `-Reset` | Your consumer quota |\n| `X-Request-Id` | Quote this when reporting a problem |\n| `Retry-After` | On `QUOTA_EXCEEDED` (429) and `RATE_LIMITED` (503): seconds to wait |\n\nEach response in this document declares the headers it sends.\n\n### Images\n\n`/v1/static/*` serves Data Dragon's JSON. Its images are mirrored too, at `/ddragon/<version>/img/<kind>/<file>`: Data Dragon's own `/cdn/<version>/img/<kind>/<file>` layout, for `champion`, `profileicon`, `item` and `spell` (summoner spells). Rune icons are at `/ddragon/<version>/img/<icon>`, `icon` being `runesReforged.json`'s `perk-images/…` path. `<version>` must be a patch the mirror holds (`/v1/static/versions`), and the file one that patch's data lists. An image is fetched from Riot's CDN on first request, then served from disk. `/ddragon` needs no key. CommunityDragon assets are not mirrored.\n",
+    "description": "A self-hosted proxy between [Riot's public API](https://developer.riotgames.com/) and everything downstream of it. It holds one Riot key, spends it carefully, and gives its consumers their own keys and quotas.\n\n- **Rate limits:** read from Riot's own response headers. Requests a user is waiting on go ahead of background work.\n- **Caching and archive:** repeated reads are served from cache; matches are immutable and archived.\n- **One error envelope:** `{\"error\":{\"code\",\"message\",\"requestId\",\"retryAfter?\"}}`.\n\n### Response headers\n\n| Header | Meaning |\n|---|---|\n| `X-Cache` | `HIT`, `MISS`, `STALE`, `HIT-NEG` (a cached 404), `ARCHIVE` (from the match archive), `BYPASS` (`?refresh=true`) |\n| `X-Cache-Age` | Age of the **content** in seconds, not of the last fetch |\n| `X-Cache-Fetched-Age` | Seconds since the proxy last read it from Riot, changed or not. Not sent for `ARCHIVE` |\n| `X-RateLimit-Limit` / `-Remaining` / `-Reset` | Your consumer quota |\n| `X-Request-Id` | Quote this when reporting a problem |\n| `Retry-After` | On `QUOTA_EXCEEDED` (429) and `RATE_LIMITED` (503): seconds to wait |\n\nEach response in this document declares the headers it sends.\n\n### Images\n\n`/v1/static/*` serves Data Dragon's JSON. Its images are mirrored too, at `/ddragon/<version>/img/<kind>/<file>`: Data Dragon's own `/cdn/<version>/img/<kind>/<file>` layout, for `champion`, `profileicon`, `item` and `spell` (summoner spells). Rune icons are at `/ddragon/<version>/img/<icon>`, `icon` being `runesReforged.json`'s `perk-images/…` path. Both are declared under **Static data**. `<version>` may be any version in Riot's list (`/v1/static/versions`), so a match can use its own patch's icons (`ddragonVersion`); for a patch the mirror hasn't synced, the data file that lists the image is fetched first. The file must be one that version's data lists. An image is fetched from Riot's CDN on first request, then served from disk; the bytes never change, and are sent `immutable` for a year. `/ddragon` needs no key, and its errors have an empty body. CommunityDragon assets are not mirrored.\n",
     "license": {
       "identifier": "MIT",
       "name": "MIT"
@@ -3866,6 +3893,182 @@ expression: doc
   },
   "openapi": "3.1.0",
   "paths": {
+    "/ddragon/{version}/img/perk-images/{icon}": {
+      "get": {
+        "description": "No key. The image is Data Dragon's own, fetched from Riot's CDN on its first request and served from disk after that.\n\n**Versions.** Any version in Riot's version list (`/v1/static/versions`) works, not only the current one, so a match can draw its own patch's icons (`ddragonVersion` on the match page). For a version the mirror hasn't synced, the one data file that lists the image (that patch's `item.json` for an item) is fetched first and kept. A version Riot doesn't list is a 404 with no fetch.\n\n**Immutable.** The bytes at a given version and path never change once served, so they are sent with `Cache-Control: public, max-age=31536000, immutable`. A response that isn't a 200 has no `Cache-Control`.\n\n**What can be fetched.** Only a file the version's own data lists, so a request can't make the proxy fetch anything else. Concurrent first requests for one file share one fetch, and a data file Riot has no copy of isn't asked for twice.\n\n**Errors** have an empty body, not the JSON error envelope.",
+        "operationId": "ddragon_rune_image",
+        "parameters": [
+          {
+            "description": "A Data Dragon version from Riot's list, e.g. `16.19.1`.",
+            "example": "16.19.1",
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9]+(\\.[0-9]+)*$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "runesReforged.json's `icon` without its leading `perk-images/`, e.g. `Styles/Domination/Electrocute/Electrocute.png`. It spans several path segments: send its slashes as they are, or percent-encoded (`%2F`, as a generated client does). Both are served.",
+            "example": "Styles/Domination/Electrocute/Electrocute.png",
+            "in": "path",
+            "name": "icon",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/png": {
+                "schema": {
+                  "$ref": "#/components/schemas/Png"
+                }
+              }
+            },
+            "description": "The PNG.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              },
+              "Last-Modified": {
+                "$ref": "#/components/headers/Last-Modified"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified since `If-Modified-Since`, for a copy already on disk.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "404": {
+            "description": "Not a version Riot lists, not an icon that version's runesReforged.json lists, or an icon Riot doesn't have. Empty body.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "502": {
+            "description": "Riot's CDN failed on the first fetch (unreachable, an error status, or not a PNG). Nothing was kept, so the next request tries again. Empty body.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          }
+        },
+        "security": [
+          {}
+        ],
+        "summary": "A rune or rune style icon",
+        "tags": [
+          "static"
+        ]
+      }
+    },
+    "/ddragon/{version}/img/{kind}/{file}": {
+      "get": {
+        "description": "No key. The image is Data Dragon's own, fetched from Riot's CDN on its first request and served from disk after that.\n\n**Versions.** Any version in Riot's version list (`/v1/static/versions`) works, not only the current one, so a match can draw its own patch's icons (`ddragonVersion` on the match page). For a version the mirror hasn't synced, the one data file that lists the image (that patch's `item.json` for an item) is fetched first and kept. A version Riot doesn't list is a 404 with no fetch.\n\n**Immutable.** The bytes at a given version and path never change once served, so they are sent with `Cache-Control: public, max-age=31536000, immutable`. A response that isn't a 200 has no `Cache-Control`.\n\n**What can be fetched.** Only a file the version's own data lists, so a request can't make the proxy fetch anything else. Concurrent first requests for one file share one fetch, and a data file Riot has no copy of isn't asked for twice.\n\n**Errors** have an empty body, not the JSON error envelope.",
+        "operationId": "ddragon_image",
+        "parameters": [
+          {
+            "description": "A Data Dragon version from Riot's list, e.g. `16.19.1`.",
+            "example": "16.19.1",
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9]+(\\.[0-9]+)*$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Data Dragon's image directory: `spell` is summoner spells.",
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ImageKind"
+            }
+          },
+          {
+            "description": "The image's file name as that version's data lists it: `image.full` in champion.json, item.json, summoner.json or profileicon.json.",
+            "example": "3078.png",
+            "in": "path",
+            "name": "file",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9_.]+\\.png$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/png": {
+                "schema": {
+                  "$ref": "#/components/schemas/Png"
+                }
+              }
+            },
+            "description": "The PNG.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              },
+              "Last-Modified": {
+                "$ref": "#/components/headers/Last-Modified"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified since `If-Modified-Since`, for a copy already on disk.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "404": {
+            "description": "Not a version Riot lists, not a kind served, not a file that version's data lists, or a file Riot doesn't have. Empty body.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "502": {
+            "description": "Riot's CDN failed on the first fetch (unreachable, an error status, or not a PNG). Nothing was kept, so the next request tries again. Empty body.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          }
+        },
+        "security": [
+          {}
+        ],
+        "summary": "A champion, item, summoner spell or profile icon image",
+        "tags": [
+          "static"
+        ]
+      }
+    },
     "/healthz": {
       "get": {
         "description": "Answers as long as the process is up. It touches nothing, so a 200 says only that the process is serving; use `/readyz` to decide whether to send traffic.",

@@ -11,6 +11,13 @@
 //! `/cdn/img/<icon>`, `icon` being runesReforged.json's `perk-images/…` path.
 //! They are kept per patch all the same, at `DDRAGON_DIR/<version>/img/<icon>`,
 //! and only an icon that patch's runesReforged.json lists is fetched.
+//!
+//! Any patch in Riot's version list works, not only the ones the sync mirrored
+//! (SITE-07): a match's icons are its own patch's. For a patch whose data file
+//! isn't on disk, that one file (`item.json` for an item) is fetched first,
+//! once, and kept, so the listing check reads it as it reads a mirrored
+//! patch's. A version Riot doesn't list costs no fetch; a data file Riot has
+//! no copy of is remembered and not asked for again.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -36,6 +43,8 @@ pub(super) type Names = Mutex<HashMap<(String, &'static str), Arc<HashSet<String
 /// Reads a data file's image names.
 type Parser = fn(&[u8]) -> HashSet<String>;
 pub(super) type Filling = tokio::sync::Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>;
+/// `(version, data file)` pairs Riot answered 404 for.
+pub(super) type Missing = Mutex<HashSet<(String, &'static str)>>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ImageError {
@@ -162,7 +171,7 @@ impl Mirror {
             .await
     }
 
-    /// `path`'s bytes, or `url`'s once `listed` names `name` for a complete patch.
+    /// `path`'s bytes, or `url`'s once `version`'s `listed` data file names `name`.
     async fn fill(
         &self,
         version: &str,
@@ -174,33 +183,83 @@ impl Mirror {
         if let Ok(bytes) = tokio::fs::read(&path).await {
             return Ok(bytes);
         }
-        if !self.is_complete(version).await || !self.image_names(version, listed).await.contains(name) {
+        if !self.data_file(version, listed.0).await?
+            || !self.image_names(version, listed).await.contains(name)
+        {
             return Err(ImageError::NotFound);
         }
+        self.once(&path, async {
+            match self.cdn().image(url).await {
+                Err(DdragonError::Status { status: 404, .. }) => Err(ImageError::NotFound),
+                other => Ok(other?),
+            }
+        })
+        .await
+    }
 
-        // One fetch per path: a page asking for the same icon ten times at
-        // once must not cost ten downloads.
+    /// Whether `version`'s `data_file` is on disk, fetching it first for a
+    /// patch in Riot's version list that hasn't got it (SITE-07). `false` for
+    /// a version Riot doesn't list, or a file Riot has no copy of.
+    async fn data_file(&self, version: &str, data_file: &'static str) -> Result<bool, ImageError> {
+        let path = self.path(version, data_file);
+        if tokio::fs::try_exists(&path).await.unwrap_or(false) {
+            return Ok(true);
+        }
+        let key = (version.to_string(), data_file);
+        if self.missing.lock().is_ok_and(|m| m.contains(&key))
+            || !self.versions().await.iter().any(|v| v == version)
+        {
+            return Ok(false);
+        }
+        let fetched = self
+            .once(&path, async {
+                match self.cdn().data(version, data_file).await {
+                    Err(DdragonError::Status { status: 404, .. }) => Err(ImageError::NotFound),
+                    other => Ok(other?),
+                }
+            })
+            .await;
+        match fetched {
+            Ok(_) => {
+                tracing::info!(%version, file = data_file, "Data Dragon file fetched for an older patch's images");
+                Ok(true)
+            }
+            Err(ImageError::NotFound) => {
+                if let Ok(mut m) = self.missing.lock() {
+                    m.insert(key);
+                }
+                Ok(false)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// `path`'s bytes, or `fetch`'s written there, one fetch per path at a
+    /// time: a page asking for the same icon ten times at once must not cost
+    /// ten downloads.
+    async fn once(
+        &self,
+        path: &PathBuf,
+        fetch: impl Future<Output = Result<Vec<u8>, ImageError>>,
+    ) -> Result<Vec<u8>, ImageError> {
         let gate = {
             let mut filling = self.filling.lock().await;
             Arc::clone(filling.entry(path.clone()).or_default())
         };
         let filled = async {
             let _one = gate.lock().await;
-            if let Ok(bytes) = tokio::fs::read(&path).await {
+            if let Ok(bytes) = tokio::fs::read(path).await {
                 return Ok(bytes);
             }
-            let bytes = match self.cdn().image(url).await {
-                Err(DdragonError::Status { status: 404, .. }) => return Err(ImageError::NotFound),
-                other => other?,
-            };
+            let bytes = fetch.await?;
             if let Some(dir) = path.parent() {
                 tokio::fs::create_dir_all(dir).await.map_err(DdragonError::from)?;
             }
-            write_atomic(&path, &bytes).await.map_err(DdragonError::from)?;
+            write_atomic(path, &bytes).await.map_err(DdragonError::from)?;
             Ok(bytes)
         }
         .await;
-        self.filling.lock().await.remove(&path);
+        self.filling.lock().await.remove(path);
         filled
     }
 
@@ -214,12 +273,11 @@ impl Mirror {
         if let Some(names) = self.image_names.lock().ok().and_then(|g| g.get(&key).cloned()) {
             return names;
         }
-        let names = Arc::new(
-            self.read(data_file, Some(version))
-                .await
-                .map(|b| parse(&b))
-                .unwrap_or_default(),
-        );
+        let Some(bytes) = self.read(data_file, Some(version)).await else {
+            // Not on disk: nothing to remember, so a later fetch is read.
+            return Arc::default();
+        };
+        let names = Arc::new(parse(&bytes));
         if let Ok(mut g) = self.image_names.lock() {
             g.insert(key, Arc::clone(&names));
         }

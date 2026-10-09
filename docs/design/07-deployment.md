@@ -58,7 +58,7 @@ That replaces `docker-compose.yml` **and** `docker-compose.prod.yml` from v1. De
 
 Built in P8-03 and removed before 2.0.0 (ADR-067). The proxy is never the public edge: it serves plain HTTP to services on the same host or a private network. Where HTTPS is needed, put Caddy (or nginx) in front of `:8080`; the v1 `Caddyfile` works unchanged.
 
-Data Dragon is served from `$DATA_DIR/ddragon` by `tower-http::ServeDir` with `Cache-Control: public, max-age=604800, immutable` — the same headers the v1 Caddyfile set.
+Data Dragon is served from `$DATA_DIR/ddragon` by `tower-http::ServeDir` with `Cache-Control: public, max-age=31536000, immutable` (a year since SITE-07, ADR-119; the v1 Caddyfile set a week).
 
 Images are mirrored on first request (DEV-05, ADR-076). `GET /ddragon/<version>/img/<kind>/<file>` is served from `$DATA_DIR/ddragon/<version>/img/<kind>/` when the file is there. On a miss it is fetched once from Data Dragon's `/cdn/<version>/img/<kind>/<file>`, written to disk and served.
 - `kind` is `champion`, `profileicon`, `item` or `spell`.

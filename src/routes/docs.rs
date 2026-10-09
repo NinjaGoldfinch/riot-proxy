@@ -50,7 +50,7 @@ Each response in this document declares the headers it sends.
 
 ### Images
 
-`/v1/static/*` serves Data Dragon's JSON. Its images are mirrored too, at `/ddragon/<version>/img/<kind>/<file>`: Data Dragon's own `/cdn/<version>/img/<kind>/<file>` layout, for `champion`, `profileicon`, `item` and `spell` (summoner spells). Rune icons are at `/ddragon/<version>/img/<icon>`, `icon` being `runesReforged.json`'s `perk-images/…` path. `<version>` must be a patch the mirror holds (`/v1/static/versions`), and the file one that patch's data lists. An image is fetched from Riot's CDN on first request, then served from disk. `/ddragon` needs no key. CommunityDragon assets are not mirrored.
+`/v1/static/*` serves Data Dragon's JSON. Its images are mirrored too, at `/ddragon/<version>/img/<kind>/<file>`: Data Dragon's own `/cdn/<version>/img/<kind>/<file>` layout, for `champion`, `profileicon`, `item` and `spell` (summoner spells). Rune icons are at `/ddragon/<version>/img/<icon>`, `icon` being `runesReforged.json`'s `perk-images/…` path. Both are declared under **Static data**. `<version>` may be any version in Riot's list (`/v1/static/versions`), so a match can use its own patch's icons (`ddragonVersion`); for a patch the mirror hasn't synced, the data file that lists the image is fetched first. The file must be one that version's data lists. An image is fetched from Riot's CDN on first request, then served from disk; the bytes never change, and are sent `immutable` for a year. `/ddragon` needs no key, and its errors have an empty body. CommunityDragon assets are not mirrored.
 ";
 
 #[derive(OpenApi)]
@@ -74,8 +74,12 @@ Each response in this document declares the headers it sends.
     ),
     security(("bearerAuth" = [])),
     modifiers(&SecuritySchemes),
-    paths(crate::telemetry::render_metrics),
-    components(schemas(crate::http::error::ErrorResponse)),
+    paths(
+        crate::telemetry::render_metrics,
+        crate::routes::statics::ddragon_image,
+        crate::routes::statics::ddragon_rune_image,
+    ),
+    components(schemas(crate::http::error::ErrorResponse, crate::routes::statics::ImageKind)),
 )]
 struct ApiDoc;
 
@@ -137,7 +141,7 @@ pub fn api_router(auth: Option<AppState>) -> OpenApiRouter<AppState> {
 }
 
 /// The response headers (SITE-04): name, schema, description.
-const HEADERS: [(&str, Type, &str); 8] = [
+const HEADERS: [(&str, Type, &str); 10] = [
     (
         "X-Request-Id",
         Type::String,
@@ -179,6 +183,17 @@ const HEADERS: [(&str, Type, &str); 8] = [
         Type::Integer,
         "Seconds to wait before trying again.",
     ),
+    (
+        "Cache-Control",
+        Type::String,
+        "`public, max-age=31536000, immutable`: the bytes at this path never change.",
+    ),
+    (
+        "Last-Modified",
+        Type::String,
+        "When the copy on disk was written, for `If-Modified-Since`. Not sent by the response that first \
+         fetched it.",
+    ),
 ];
 
 /// Read routes, behind the consumer key and quota.
@@ -191,6 +206,14 @@ const READ_TAGS: [&str; 4] = ["players", "riot", "lol", "static"];
 fn headers_for(path: &str, op: &Operation, status: &str) -> Vec<&'static str> {
     let tagged = |tags: &[&str]| op.tags.iter().flatten().any(|t| tags.contains(&t.as_str()));
     let mut out = vec!["X-Request-Id"];
+    // The image mirror is outside the keyed API (SITE-07): no quota and no
+    // cache tier, but an immutable file and its date.
+    if path.starts_with("/ddragon/") {
+        if status == "200" {
+            out.extend(["Cache-Control", "Last-Modified"]);
+        }
+        return out;
+    }
     if tagged(&[READ_TAGS.as_slice(), &["admin"]].concat()) && !matches!(status, "401" | "403") {
         out.extend(["X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"]);
     }

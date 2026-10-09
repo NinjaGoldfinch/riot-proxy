@@ -172,6 +172,12 @@ impl Cdn {
         Ok(bytes.to_vec())
     }
 
+    /// One patch's data file (`item`, `runesReforged`, …) in the configured
+    /// locale, checked to be JSON.
+    pub async fn data(&self, version: &str, file: &str) -> Result<Vec<u8>, DdragonError> {
+        self.get(&self.urls.data(version, &self.locale, file)).await
+    }
+
     /// Riot's patch list, newest first, as bytes and parsed.
     pub async fn versions(&self) -> Result<(Vec<u8>, Vec<String>), DdragonError> {
         let url = self.urls.versions();
