@@ -19,7 +19,8 @@
 //!   `pending` on boot ([`Scheduler::recover`]), so the work resumes.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::future::BoxFuture;
@@ -258,6 +259,82 @@ pub fn enqueue_on(conn: &Connection, job: &NewJob, now_ms: i64) -> rusqlite::Res
 pub struct Queue {
     db: Db,
     notify: Arc<Notify>,
+    control: Arc<Control>,
+}
+
+/// Holding the workers still and stopping what they run (DEV-22), for the dev
+/// reset, which must not wipe the queue under a running job. Shared by every
+/// clone of the queue, so the route and the workers see the same state.
+#[derive(Debug, Default)]
+struct Control {
+    /// Live [`Halt`]s. While any is held, no worker claims.
+    halts: AtomicUsize,
+    /// Workers between deciding to claim and recording the outcome.
+    busy: AtomicUsize,
+    /// Running handler tasks, by run.
+    running: Mutex<HashMap<u64, tokio::task::AbortHandle>>,
+    next_run: AtomicU64,
+    /// Rung when `busy` drops.
+    settled: Notify,
+}
+
+impl Control {
+    fn halted(&self) -> bool {
+        self.halts.load(Ordering::SeqCst) > 0
+    }
+
+    fn running(&self) -> std::sync::MutexGuard<'_, HashMap<u64, tokio::task::AbortHandle>> {
+        self.running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Track a handler task; it is aborted at once if a halt is on (one may
+    /// have started between the claim and here).
+    fn track(&self, task: &tokio::task::JoinHandle<Result<(), JobError>>) -> u64 {
+        let run = self.next_run.fetch_add(1, Ordering::SeqCst);
+        self.running().insert(run, task.abort_handle());
+        if self.halted() {
+            task.abort();
+        }
+        run
+    }
+
+    fn untrack(&self, run: u64) {
+        self.running().remove(&run);
+    }
+
+    fn enter(&self) -> bool {
+        self.busy.fetch_add(1, Ordering::SeqCst);
+        if self.halted() {
+            self.leave();
+            return false;
+        }
+        true
+    }
+
+    fn leave(&self) {
+        self.busy.fetch_sub(1, Ordering::SeqCst);
+        self.settled.notify_waiters();
+    }
+}
+
+/// Workers held still: nothing is claimed until it is dropped. Made by
+/// [`Queue::halt`].
+#[derive(Debug)]
+pub struct Halt {
+    queue: Queue,
+    /// Handler tasks aborted.
+    pub stopped: usize,
+    /// Every worker came back within the wait.
+    pub settled: bool,
+}
+
+impl Drop for Halt {
+    fn drop(&mut self) {
+        self.queue.control.halts.fetch_sub(1, Ordering::SeqCst);
+        self.queue.wake_all();
+    }
 }
 
 impl Queue {
@@ -265,6 +342,43 @@ impl Queue {
         Self {
             db,
             notify: Arc::new(Notify::new()),
+            control: Arc::new(Control::default()),
+        }
+    }
+
+    /// Stop the workers: no more claims, every running handler aborted, then
+    /// wait up to `wait` for the workers to come back (DEV-22). An aborted
+    /// job records no outcome; its row stays `running` for the caller to
+    /// delete, or for [`Scheduler::recover`] at the next boot. Claims resume
+    /// when the returned [`Halt`] is dropped. A worker in another process
+    /// (`ROLE=worker`) is not reached.
+    pub async fn halt(&self, wait: Duration) -> Halt {
+        let c = &self.control;
+        c.halts.fetch_add(1, Ordering::SeqCst);
+        let stopped = {
+            let running = c.running();
+            for task in running.values() {
+                task.abort();
+            }
+            running.len()
+        };
+        let settled = tokio::time::timeout(wait, async {
+            loop {
+                let settled = c.settled.notified();
+                tokio::pin!(settled);
+                settled.as_mut().enable();
+                if c.busy.load(Ordering::SeqCst) == 0 {
+                    return;
+                }
+                settled.await;
+            }
+        })
+        .await
+        .is_ok();
+        Halt {
+            queue: self.clone(),
+            stopped,
+            settled,
         }
     }
 
@@ -899,11 +1013,16 @@ impl Scheduler {
                 let mut task = AbortOnDrop(tokio::spawn(activity::within(Some(current), async move {
                     handler.run(&j).await
                 })));
-                match (&mut task.0).await {
+                let control = &self.queue.control;
+                let run = control.track(&task.0);
+                let out = (&mut task.0).await;
+                control.untrack(run);
+                match out {
                     Ok(r) => r,
                     Err(e) if e.is_panic() => Err(JobError::Retry("handler panicked".into())),
                     Err(_) => {
-                        // aborted at shutdown: `recover` re-queues it
+                        // Aborted at shutdown (`recover` re-queues it) or by a
+                        // halt (the dev reset deletes it).
                         self.activity.finished(&job.id, "aborted");
                         return;
                     }
@@ -938,8 +1057,30 @@ impl Scheduler {
             let (me, mut stopped) = (self.clone(), stopped.clone());
             set.spawn(async move {
                 while !*stopped.borrow() {
-                    match me.claim(Clock::now().unix_ms).await {
-                        Ok(Some(job)) => me.run(job, worker).await,
+                    let control = Arc::clone(&me.queue.control);
+                    if !control.enter() {
+                        // Halted: wait for the halt to end (it wakes everyone).
+                        let woken = me.notify.notified();
+                        tokio::pin!(woken);
+                        woken.as_mut().enable();
+                        if control.halted() {
+                            tokio::select! {
+                                () = woken => {}
+                                () = tokio::time::sleep(IDLE_POLL) => {}
+                                _ = stopped.changed() => {}
+                            }
+                        }
+                        continue;
+                    }
+                    let claimed = me.claim(Clock::now().unix_ms).await;
+                    if let Ok(Some(job)) = claimed {
+                        me.run(job, worker).await;
+                        control.leave();
+                        continue;
+                    }
+                    control.leave();
+                    match claimed {
+                        Ok(Some(_)) => {}
                         Ok(None) => {
                             // Armed before the sleep is worked out, so an
                             // enqueue meanwhile still wakes this worker.

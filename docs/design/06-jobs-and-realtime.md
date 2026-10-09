@@ -31,6 +31,10 @@ flowchart LR
     run --> ev[events] --> ws[WebSocket hub]
 ```
 
+### Halting (DEV-22)
+
+`Queue::halt(wait)` holds every worker in this process still: no claims while any `Halt` is alive, every running handler task aborted, then a wait (bounded by `wait`) until each worker is back in its loop. An aborted handler records no outcome, so its row stays `running`. The dev reset (design/10) deletes it. Without a reset, `recover` re-queues it at the next boot. Dropping the `Halt` wakes every worker. Workers count themselves busy before checking the halt and abort a handler that started after one, so a job claimed during the halt never runs to the end. Only the dev reset uses it. Workers in another process (`ROLE=worker`) are not reached.
+
 ### Claiming
 
 SQLite's single-writer rule makes the claim atomic without `SELECT … FOR UPDATE SKIP LOCKED`. It is one `UPDATE … RETURNING` (`claim_sql`), and since SCH-01 (ADR-089) it is rate-limit aware:

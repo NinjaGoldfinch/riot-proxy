@@ -190,7 +190,7 @@
   <section class="tab" id="tab-reset">
     <div class="card">
       <h3>Reset all fetched data <button id="rsRefresh">refresh counts</button></h3>
-      <p>Deletes every player, archived match, timeline, fact, analytics result, ladder crawl, cache entry (memory and disk), job and metrics point.
+      <p>Stops every running job first, then deletes every player, archived match, timeline, fact, analytics result, ladder crawl, cache entry (memory and disk), job and metrics point.
         It keeps API keys and the rate-limiter checkpoint, so this key still works and the proxy stays inside Riot's limits. There is no undo.</p>
       <div id="rsCounts" class="muted">counting…</div>
       <div class="row" style="margin-top:10px">
@@ -957,7 +957,7 @@ async function refreshReset() {
   const t = resetTable(p.tables, 'rows');
   $('#rsCounts').innerHTML = `${t.html}
     <p class="muted">${p.l1Entries.toLocaleString()} in-memory cache entries · kept: <span class="mono">${(p.kept ?? []).map(esc).join(', ')}</span> <button data-raw="preview">raw</button></p>
-    ${p.runningJobs ? `<div class="warnbox">${p.runningJobs} job${p.runningJobs === 1 ? ' is' : 's are'} running. A running job can still write a row or two after the reset. Refresh the counts afterwards and reset again if needed.</div>` : ''}`;
+    ${p.runningJobs ? `<div class="warnbox">${p.runningJobs} job${p.runningJobs === 1 ? ' is' : 's are'} running. The reset stops ${p.runningJobs === 1 ? 'it' : 'them'} before it deletes anything; workers then carry on with new work.</div>` : ''}`;
 }
 
 $('#rsRefresh').onclick = refreshReset;
@@ -972,7 +972,7 @@ $('#rsGo').onclick = async () => {
   $('#rsMsg').textContent = '';
   if (r.status === 200 && r.json?.ok) {
     const t = resetTable(r.json.tables, 'deleted');
-    $('#rsDone').innerHTML = `<div class="card"><h3><span class="ok">Reset done</span> <span class="muted">${t.total.toLocaleString()} rows · ${r.json.l1Entries.toLocaleString()} memory entries · ${r.json.tookMs} ms</span><button data-raw="reset">raw</button></h3>${t.html}</div>`;
+    $('#rsDone').innerHTML = `<div class="card"><h3><span class="ok">Reset done</span> <span class="muted">${t.total.toLocaleString()} rows · ${r.json.l1Entries.toLocaleString()} memory entries · ${r.json.stoppedJobs ?? 0} running job${r.json.stoppedJobs === 1 ? '' : 's'} stopped · ${r.json.tookMs} ms</span><button data-raw="reset">raw</button></h3>${t.html}</div>`;
     // The player tab showed rows that are gone now.
     $('#plOut').innerHTML = $('#plMatches').innerHTML = '';
     pl.matchCache.clear();

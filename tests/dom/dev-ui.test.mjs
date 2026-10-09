@@ -63,7 +63,7 @@ function api(calls, url, opts = {}) {
   if (p === '/v1/admin/ladder/probe') return PROBE;
   if (p === '/dev/reset') {
     const tables = [{ name: 'matches', rows: m === 'POST' ? 112 : 0 }, { name: 'players', rows: 1 }, { name: 'jobs', rows: 2050 }];
-    return m === 'POST' ? { ok: true, tables, l1Entries: 4, runningJobs: 1, tookMs: 3 } : { tables, l1Entries: 4, runningJobs: 1, kept: ['consumers', 'limiter_state'] };
+    return m === 'POST' ? { ok: true, tables, l1Entries: 4, stoppedJobs: 1, runningJobs: 1, tookMs: 3 } : { tables, l1Entries: 4, runningJobs: 1, kept: ['consumers', 'limiter_state'] };
   }
   return { ok: true };
 }
@@ -200,7 +200,7 @@ test('the reset tab previews counts and posts only after the word is typed', asy
   assert.ok(p.calls.includes('GET /dev/reset'), 'opening the tab previews the counts');
   assert.match(p.text('#rsCounts'), /jobs\s*2,050/);
   assert.doesNotMatch(p.text('#rsCounts'), /matches/, 'empty tables are not listed');
-  assert.match(p.text('#rsCounts'), /1 job is running/);
+  assert.match(p.text('#rsCounts'), /1 job is running\. The reset stops it before it deletes anything/);
   assert.equal(p.$('#rsGo').disabled, true);
 
   const type = async (v) => { p.$('#rsWord').value = v; p.$('#rsWord').dispatchEvent(new p.w.Event('input')); await p.settle(); };
@@ -213,6 +213,7 @@ test('the reset tab previews counts and posts only after the word is typed', asy
   assert.deepEqual(p.sent, [{ url: '/dev/reset', method: 'POST', body: '{"confirm":"reset"}' }]);
   assert.match(p.text('#rsDone'), /Reset done/);
   assert.match(p.text('#rsDone'), /2,163 rows/);
+  assert.match(p.text('#rsDone'), /1 running job stopped/);
   assert.equal(p.$('#rsWord').value, '', 'disarmed after a reset');
   assert.equal(p.$('#rsGo').disabled, true);
   assert.equal(p.calls.filter((c) => c === 'GET /dev/reset').length, 2, 'counts refresh afterwards');
