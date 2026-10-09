@@ -230,6 +230,18 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 - [x] SCH-01 rate-limit-aware job claims: one lane per limiter scope plus the job's main endpoint, claims skip a region only when its app limit is full (a capped endpoint blocks only jobs that use it), spread over free regions, rate-limited jobs yield their worker and re-queue without using an attempt (IMPLEMENTATION.md §Post-release — SCH) (#107, ADR-089)
 - [ ] SCH-02 elastic worker pool: base `JOB_CONCURRENCY` workers, extra workers spun up while all are busy up to `JOB_MAX_WORKERS`, idle extras exit, `JOB_MAX_PER_GROUP` caps the workers one crawl or one player can hold (IMPLEMENTATION.md §Post-release — SCH)
 
+## THR — crawl and analytics throughput (owner plan 2026-10-09)
+Baseline before THR-06a (one kr crawl to MASTER on the dev VM): not yet recorded.
+- [ ] THR-06a idle bulk ceiling: `BULK_IDLE_CEILING` replaces `BULK_USAGE_CEILING` for a scope with no interactive request in `BULK_IDLE_AFTER_S` (IMPLEMENTATION.md §Post-release — THR)
+- [ ] THR-01 batch fetching: `archive:batch` fetches a crawl's ids `ARCHIVE_BATCH_CONCURRENCY` at a time, so the limiter paces them, not the worker count (IMPLEMENTATION.md §Post-release — THR)
+- [ ] THR-02 stored tiers: `match_tiers` stamped when a ranked match is archived, `tiers:backfill`, analytics join it in place of `ladder_entries` (IMPLEMENTATION.md §Post-release — THR)
+- [ ] THR-03 incremental analytics: `aggregate:delta` adds uncounted matches in short transactions; the rebuild stays as a repair tool (IMPLEMENTATION.md §Post-release — THR)
+- [ ] THR-04 collect cursor: skip players whose wins + losses are unchanged, `startTime` for the rest (IMPLEMENTATION.md §Post-release — THR)
+- [ ] THR-05 wider coverage: LAD-02's discover ordered by match count, run alongside archive, tiers stamped for discovered players (IMPLEMENTATION.md §Post-release — THR)
+- [ ] THR-06b timeline sampling for crawl matches (IMPLEMENTATION.md §Post-release — THR)
+- [ ] THR-06c several matches per write transaction, if measured writer wait justifies it (IMPLEMENTATION.md §Post-release — THR)
+- [ ] THR-06d zstd dictionary for match bodies, if an offline trial shows a quarter or more saved (IMPLEMENTATION.md §Post-release — THR)
+
 ## LAD — Master players past Riot's 10,000 cap (owner request 2026-10-09)
 - [ ] LAD-01 say when an apex league is cut off at Riot's cap: `apex_capped` on the crawl, a note on the crawl card and the showcase ladder (IMPLEMENTATION.md §Post-release — LAD)
 - [ ] LAD-02 find the Master players the cap leaves out: a `discover` stage that looks up the ranks of archived match participants not on the ladder (IMPLEMENTATION.md §Post-release — LAD)
