@@ -658,6 +658,7 @@ mod tests {
             ("maintenance", "maintenance"),
             ("aggregate:analytics", "maintenance"),
             ("facts:reextract", "maintenance"),
+            ("builds:extract", "maintenance"),
             ("names:backfill", "maintenance"),
         ] {
             assert_eq!(queue_of(kind), queue, "{kind}");

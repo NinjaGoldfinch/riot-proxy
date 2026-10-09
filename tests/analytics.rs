@@ -76,6 +76,7 @@ impl Env {
             key_scope: self.scope.clone(),
             patch_limit: 4,
             reextract_batch: 1,
+            mirror: std::sync::Arc::clone(&self.state.ddragon),
         }
     }
 

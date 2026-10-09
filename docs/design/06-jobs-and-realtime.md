@@ -83,7 +83,7 @@ RETURNING *;
 | 100–9 999 | `archive:match` ordered by depth in a player's history, in blocks of ten (v1 #31) | `priority = 100 + depth_block` — global, not per player, so anyone's newest ten beat anyone's hundredth |
 | 10 000 | polls | |
 | 20 000 | `backfill:player`, `ladder:*` | |
-| 30 000 | `aggregate:analytics`, `facts:reextract`, `maintenance` | |
+| 30 000 | `aggregate:analytics`, `facts:reextract`, `builds:extract`, `maintenance` | |
 
 Every enqueue sets a priority explicitly; there is no "unprioritised outranks prioritised" surprise because there is no separate `wait` list.
 
@@ -140,7 +140,8 @@ Every handler that hits Riot calls the fetcher with `FetchOptions::JOB` (`Priori
 | `ranks:lookup` | crawl completed | plan up to `RANK_LOOKUP_LIMIT` archived players the ladder doesn't hold and nobody looked up within `RANK_LOOKUP_RECHECK_S`, most games first, then one `league.entriesByPuuid` each, 25 a turn; an empty list enqueues `aggregate:analytics` (ADR-111) |
 | `names:backfill` | crawl end, daily, admin | Riot IDs for nameless players from their latest archived matches; no Riot calls (v1, ADR-055) |
 | `facts:reextract` | admin / boot when stale | re-derive facts, bans and `remake` for matches below `FACTS_VERSION`, in batches of `FACTS_REEXTRACT_BATCH`; no Riot calls |
-| `aggregate:analytics` | crawl end, tick, admin | rebuild the analytics tables (v1's shape, ADR-056) for the last `AGGREGATE_PATCH_LIMIT` patches; `analytics.updated` |
+| `builds:extract` | run inline by `aggregate:analytics` | derive `match_builds` from every archived timeline whose match has facts and no rows at `BUILDS_VERSION`, 25 timelines a batch, with the newest mirrored `item.json`; does nothing without one; no Riot calls (ADR-117) |
+| `aggregate:analytics` | crawl end, tick, admin | run `builds:extract`, then rebuild the analytics tables (v1's shape, ADR-056) for the last `AGGREGATE_PATCH_LIMIT` patches; `analytics.updated` |
 | `maintenance` | daily | trim `jobs`/`metrics_history`, sweep L2, `PRAGMA optimize`, WAL checkpoint, `VACUUM INTO` backup |
 
 The three-phase crawl is preserved exactly — it is the reason a ten-participant match is fetched once, and it is a design property, not a queue property.

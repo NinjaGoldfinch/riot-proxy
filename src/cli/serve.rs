@@ -189,6 +189,7 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         key_scope: scope.clone(),
         patch_limit: config.aggregate_patch_limit,
         reextract_batch: config.facts_reextract_batch,
+        mirror: Arc::clone(&mirror),
     });
     let activity = crate::jobs::activity::Activity::new();
     let scheduler = crate::jobs::Scheduler::with_queue(

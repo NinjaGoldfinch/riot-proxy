@@ -6,6 +6,8 @@
 //! step its own transaction (v1), and announces `analytics.updated`.
 //! `facts:reextract` re-derives the facts of every match below the current
 //! `FACTS_VERSION`, a batch at a time, from the stored bodies; no Riot call.
+//! `builds:extract` derives `match_builds` from the archived timelines the
+//! same way (BLD-01); `aggregate:analytics` runs it before its rebuild.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -17,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::archive::analytics::{self, Scope};
+use crate::archive::builds::{self, BUILDS_VERSION, BuildFact, ItemCatalog};
 use crate::archive::facts::FACTS_VERSION;
 use crate::archive::matches;
 use crate::clock::Clock;
@@ -25,11 +28,17 @@ use crate::events::{self, Event};
 use crate::jobs::activity;
 use crate::jobs::scheduler::{Enqueued, Handler, Job, JobError, NewJob, Queue};
 use crate::jobs::{kinds, priority};
+use crate::r#static::Mirror;
 use crate::ws::Hub;
 
 /// v1's pause between re-extraction batches, so a sweep of a large archive
 /// leaves the writer free for everything else.
 const REEXTRACT_PACE: Duration = Duration::from_millis(50);
+
+/// Timelines per `builds:extract` batch. A timeline is about 0.8 MB once
+/// decompressed, so a batch holds about 20 MB where a facts batch of 500
+/// match bodies holds about 40 MB.
+const BUILDS_BATCH: i64 = 25;
 
 /// `aggregate:analytics`'s payload (v1).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -71,6 +80,11 @@ pub async fn enqueue_aggregate_now(queue: &Queue, platform: &str, ladder: &str) 
 /// One sweep at a time (v1).
 pub fn reextract_job() -> NewJob {
     NewJob::new(kinds::FACTS_REEXTRACT, priority::MAINTENANCE, json!({})).dedupe(kinds::FACTS_REEXTRACT)
+}
+
+/// One `builds:extract` at a time (BLD-01).
+pub fn builds_job() -> NewJob {
+    NewJob::new(kinds::BUILDS_EXTRACT, priority::MAINTENANCE, json!({})).dedupe(kinds::BUILDS_EXTRACT)
 }
 
 /// Matches whose facts an older `FACTS_VERSION` derived.
@@ -171,6 +185,8 @@ pub struct AnalyticsContext {
     pub patch_limit: u32,
     /// `FACTS_REEXTRACT_BATCH`.
     pub reextract_batch: u32,
+    /// Where `builds:extract` reads the newest mirrored `item.json`.
+    pub mirror: Arc<Mirror>,
 }
 
 fn store(e: &dyn std::fmt::Display) -> JobError {
@@ -194,6 +210,13 @@ impl AnalyticsContext {
         // statistics keep the rebuild's joins on their keys (ADR-102).
         if let Err(e) = self.db().optimize().await {
             tracing::warn!(error = %e, "could not refresh the planner statistics");
+        }
+        // Set builds are read from `match_builds`, so timelines archived since
+        // the last run are derived first. A failure leaves the rows as they
+        // were and doesn't hold up the rest of the rebuild.
+        activity::step("extracting builds".to_string());
+        if let Err(e) = self.extract_builds().await {
+            tracing::warn!(error = ?e, "could not extract builds");
         }
         let mut steps = BTreeMap::new();
         let result = self.rebuild(&ladder, i64::from(queue_id), &mut steps).await;
@@ -375,10 +398,103 @@ impl AnalyticsContext {
         tracing::info!(matches = done, "facts re-extracted");
         Ok(())
     }
+
+    /// `builds:extract` (BLD-01): derive `match_builds` for every archived
+    /// timeline whose match has facts and no rows at the current
+    /// `BUILDS_VERSION`, a batch at a time, with the newest mirrored
+    /// `item.json`. Without a mirror it logs and does nothing. Returns the
+    /// matches it read.
+    ///
+    /// It walks the timelines in id order: a timeline that gives no rows (one
+    /// that no longer parses) isn't selected again in this sweep, and is
+    /// tried again by the next one.
+    pub async fn extract_builds(&self) -> Result<i64, JobError> {
+        let Some(bytes) = self.mirror.read("item", None).await else {
+            tracing::info!("no item.json mirrored yet; builds not extracted");
+            return Ok(0);
+        };
+        let catalog = match ItemCatalog::from_item_json(&bytes) {
+            Ok(c) if !c.is_empty() => Arc::new(c),
+            Ok(_) => {
+                tracing::warn!("the mirrored item.json lists no items; builds not extracted");
+                return Ok(0);
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "the mirrored item.json doesn't parse; builds not extracted");
+                return Ok(0);
+            }
+        };
+        let mut after = String::new();
+        let mut done = 0i64;
+        loop {
+            let from = after.clone();
+            let todo: Vec<(String, String)> = self
+                .db()
+                .read(move |c| {
+                    // The rows stay with the key scope whose PUUIDs the match holds.
+                    let mut stmt = c.prepare(
+                        "SELECT t.match_id,
+                                (SELECT f.key_scope FROM match_facts f WHERE f.match_id = t.match_id LIMIT 1)
+                           FROM timelines t
+                          WHERE t.match_id > ?1
+                            AND EXISTS (SELECT 1 FROM match_facts f WHERE f.match_id = t.match_id)
+                            AND NOT EXISTS (SELECT 1 FROM match_builds b
+                                             WHERE b.match_id = t.match_id AND b.builds_version = ?2)
+                          ORDER BY t.match_id LIMIT ?3",
+                    )?;
+                    let rows = stmt
+                        .query_map(params![from, BUILDS_VERSION, BUILDS_BATCH], |r| {
+                            Ok((r.get(0)?, r.get(1)?))
+                        })?
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Ok::<_, DbError>(rows)
+                })
+                .await
+                .map_err(|e| store(&e))?;
+            let Some((last, _)) = todo.last() else {
+                break;
+            };
+            after.clone_from(last);
+            let ids: Vec<String> = todo.iter().map(|(id, _)| id.clone()).collect();
+            let bodies = matches::get_timelines(self.db(), &ids)
+                .await
+                .map_err(|e| store(&e))?;
+            let cat = Arc::clone(&catalog);
+            let derived: Vec<(String, String, Vec<BuildFact>)> = tokio::task::spawn_blocking(move || {
+                todo.into_iter()
+                    .map(|(id, scope)| {
+                        let rows = bodies
+                            .get(&id)
+                            .map(|b| builds::extract(b, &cat))
+                            .unwrap_or_default();
+                        (id, scope, rows)
+                    })
+                    .collect()
+            })
+            .await
+            .map_err(|e| store(&e))?;
+            done += i64::try_from(derived.len()).unwrap_or(0);
+            self.db()
+                .write(move |c| {
+                    let tx = c.transaction()?;
+                    for (id, scope, rows) in &derived {
+                        builds::write(&tx, id, scope, rows)?;
+                    }
+                    tx.commit()?;
+                    Ok::<_, DbError>(())
+                })
+                .await
+                .map_err(|e| store(&e))?;
+            tokio::time::sleep(REEXTRACT_PACE).await;
+        }
+        tracing::info!(matches = done, "builds extracted");
+        Ok(done)
+    }
 }
 
 pub struct AggregateHandler(pub Arc<AnalyticsContext>);
 pub struct ReextractHandler(pub Arc<AnalyticsContext>);
+pub struct BuildsHandler(pub Arc<AnalyticsContext>);
 
 impl Handler for AggregateHandler {
     fn run<'a>(&'a self, job: &'a Job) -> BoxFuture<'a, Result<(), JobError>> {
@@ -389,5 +505,11 @@ impl Handler for AggregateHandler {
 impl Handler for ReextractHandler {
     fn run<'a>(&'a self, job: &'a Job) -> BoxFuture<'a, Result<(), JobError>> {
         Box::pin(self.0.reextract(job))
+    }
+}
+
+impl Handler for BuildsHandler {
+    fn run<'a>(&'a self, _job: &'a Job) -> BoxFuture<'a, Result<(), JobError>> {
+        Box::pin(async { self.0.extract_builds().await.map(|_| ()) })
     }
 }

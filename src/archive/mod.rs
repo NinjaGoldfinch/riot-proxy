@@ -2,6 +2,7 @@
 //! their facts; analytics follow in P7.
 
 pub mod analytics;
+pub mod builds;
 pub mod facts;
 pub mod matches;
 pub mod player;

@@ -136,6 +136,18 @@ CREATE TABLE match_bans (                         -- info.teams[].bans, -1 left 
   team_id INTEGER, pick_turn INTEGER, champion_id INTEGER,
   PRIMARY KEY (match_id, team_id, pick_turn)
 );
+CREATE TABLE match_builds (                       -- V0012 (ADR-117): from the timeline + item.json
+  match_id TEXT NOT NULL REFERENCES matches(match_id) ON DELETE CASCADE,
+  key_scope TEXT NOT NULL,                        -- the scope that owns the match's facts
+  puuid TEXT NOT NULL,
+  starter TEXT NOT NULL,                          -- JSON: bought before 60 s, no trinket, sorted
+  boots INTEGER,                                  -- first boots bought, tier 2 or an upgrade
+  items TEXT NOT NULL,                            -- JSON: finished items in purchase order, ≤ 6
+  skills TEXT NOT NULL,                           -- first 15 level-ups, "QWEQQRQ…"
+  skill_order TEXT,                               -- Q, W, E in max order, "QWE"
+  builds_version INTEGER NOT NULL,                -- builds:extract rewrites rows below BUILDS_VERSION
+  PRIMARY KEY (match_id, key_scope, puuid)
+);
 CREATE INDEX facts_player ON match_facts(key_scope, puuid, match_id);
 CREATE INDEX facts_champ  ON match_facts(champion_id);
 

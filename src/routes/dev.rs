@@ -39,6 +39,7 @@ pub const CONFIRM: &str = "reset";
 pub const WIPED: &[&str] = &[
     "timelines",
     "match_bans",
+    "match_builds",
     "match_facts",
     "crawl_legs",
     "crawl_match_ids",

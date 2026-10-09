@@ -1,0 +1,145 @@
+{
+  "bld-fixture-puuid-01": {
+    "starter": [
+      1054,
+      2003
+    ],
+    "boots": 3158,
+    "items": [
+      3078,
+      3146,
+      3157
+    ],
+    "skills": "EQWWWRWEWEREEQQ",
+    "skillOrder": "WEQ"
+  },
+  "bld-fixture-puuid-02": {
+    "starter": [
+      1101
+    ],
+    "boots": 3158,
+    "items": [
+      3152,
+      3157
+    ],
+    "skills": "EQWWWRWEWEREEQQ",
+    "skillOrder": "WEQ"
+  },
+  "bld-fixture-puuid-03": {
+    "starter": [
+      1056,
+      2003,
+      2003
+    ],
+    "boots": 3020,
+    "items": [
+      2503,
+      6653,
+      3157
+    ],
+    "skills": "WEQWWRWEWEREEQQ",
+    "skillOrder": "WEQ"
+  },
+  "bld-fixture-puuid-04": {
+    "starter": [
+      1055,
+      2003
+    ],
+    "boots": 3009,
+    "items": [
+      6697,
+      6676,
+      3031,
+      3094
+    ],
+    "skills": "WQEQQRQWQWRWWEE",
+    "skillOrder": "QWE"
+  },
+  "bld-fixture-puuid-05": {
+    "starter": [
+      2003,
+      2003
+    ],
+    "boots": 3020,
+    "items": [
+      4646,
+      3118,
+      6655
+    ],
+    "skills": "QEEWEREQEQRQQW",
+    "skillOrder": "EQW"
+  },
+  "bld-fixture-puuid-06": {
+    "starter": [
+      1054,
+      2003
+    ],
+    "boots": 3047,
+    "items": [
+      3068,
+      3075,
+      3110
+    ],
+    "skills": "EQWEEREQEQRQQWW",
+    "skillOrder": "EQW"
+  },
+  "bld-fixture-puuid-07": {
+    "starter": [
+      1103
+    ],
+    "boots": 3111,
+    "items": [
+      6676,
+      6673,
+      3036,
+      3031
+    ],
+    "skills": "QWQEQRQEQEREEWW",
+    "skillOrder": "QEW"
+  },
+  "bld-fixture-puuid-08": {
+    "starter": [
+      1056,
+      2003,
+      2003
+    ],
+    "boots": 3020,
+    "items": [
+      6655,
+      4646,
+      3157,
+      3089
+    ],
+    "skills": "QWEQQRQWQWWRWEE",
+    "skillOrder": "QWE"
+  },
+  "bld-fixture-puuid-09": {
+    "starter": [
+      1086,
+      2003,
+      2003
+    ],
+    "boots": 3006,
+    "items": [
+      3153,
+      6673,
+      3036,
+      6333
+    ],
+    "skills": "QEWQQRQEQEREEWW",
+    "skillOrder": "QEW"
+  },
+  "bld-fixture-puuid-10": {
+    "starter": [
+      2003,
+      2003
+    ],
+    "boots": 3111,
+    "items": [
+      3179,
+      6610
+    ],
+    "skills": "EQWQQRQEQEREEW",
+    "skillOrder": "QEW"
+  }
+}

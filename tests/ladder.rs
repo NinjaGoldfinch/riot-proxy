@@ -775,6 +775,15 @@ impl Env {
                         key_scope: self.scope.clone(),
                         patch_limit: 4,
                         reextract_batch: 500,
+                        // No mirror: a crawl's rebuild extracts no builds.
+                        mirror: Arc::new(riot_proxy::r#static::Mirror::new(
+                            std::path::PathBuf::from("/nonexistent/riot-proxy-ladder-ddragon"),
+                            riot_proxy::jobs::ddragon::Cdn::new(
+                                &config,
+                                riot_proxy::jobs::ddragon::CdnUrls::mock(&self.server.uri()),
+                            )
+                            .expect("cdn"),
+                        )),
                     },
                 )),
             )

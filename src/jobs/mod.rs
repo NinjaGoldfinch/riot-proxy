@@ -30,6 +30,7 @@ pub mod kinds {
     pub const NAMES_BACKFILL: &str = "names:backfill";
     pub const AGGREGATE_ANALYTICS: &str = "aggregate:analytics";
     pub const FACTS_REEXTRACT: &str = "facts:reextract";
+    pub const BUILDS_EXTRACT: &str = "builds:extract";
     pub const MAINTENANCE: &str = "maintenance";
 }
 
@@ -42,7 +43,7 @@ pub mod priority {
     pub const POLL: i64 = 10_000;
     /// `backfill:player`, `ladder:*`.
     pub const BACKFILL: i64 = 20_000;
-    /// `aggregate:analytics`, `facts:reextract`, `maintenance`, `ddragon:sync`.
+    /// `aggregate:analytics`, `facts:reextract`, `builds:extract`, `maintenance`, `ddragon:sync`.
     pub const MAINTENANCE: i64 = 30_000;
 }
 
@@ -102,6 +103,10 @@ pub fn handlers(
         .with(
             kinds::FACTS_REEXTRACT,
             analytics::ReextractHandler(Arc::clone(analytics)),
+        )
+        .with(
+            kinds::BUILDS_EXTRACT,
+            analytics::BuildsHandler(Arc::clone(analytics)),
         )
         .with(
             kinds::MAINTENANCE,
