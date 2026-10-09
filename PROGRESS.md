@@ -225,13 +225,14 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 - [x] DEV-20 dashboard job queue groups alike jobs: one row per kind and platform with its count (a collect row gives the player range), up next reads the next 100 ready jobs (#112, design/06, ADR-093)
 - [x] DEV-21 analytics over every patch: `patch=all` sums every aggregated patch on the three analytics routes, `GET /v1/lol/analytics/patches` lists a ladder's patches with their games, and the showcase reads every patch by default with a patch picker (Top champions, champion page) and a region picker (champion page); the API default stays the newest patch (#113, design/11, ADR-094)
 - [x] DEV-22 the dev reset stops running jobs first: `Queue::halt` holds the workers and aborts what they run, the reset wipes (jobs included) and lets them go; the response adds `stoppedJobs` (#115, design/06, design/10, ADR-096)
+- [x] DEV-23 timelines on by default: `ARCHIVE_TIMELINES` defaults to `true`, so ladder crawls, polls and backfills fetch each archived match's timeline; `false` turns it off (#PR, design/04, design/07, ADR-098)
 
 ## SCH — scheduler fairness and an elastic pool (owner requests 2026-10-08/09)
 - [x] SCH-01 rate-limit-aware job claims: one lane per limiter scope plus the job's main endpoint, claims skip a region only when its app limit is full (a capped endpoint blocks only jobs that use it), spread over free regions, rate-limited jobs yield their worker and re-queue without using an attempt (IMPLEMENTATION.md §Post-release — SCH) (#107, ADR-089)
 - [ ] SCH-02 elastic worker pool: base `JOB_CONCURRENCY` workers, extra workers spun up while all are busy up to `JOB_MAX_WORKERS`, idle extras exit, `JOB_MAX_PER_GROUP` caps the workers one crawl or one player can hold (IMPLEMENTATION.md §Post-release — SCH)
 
 ## THR — crawl and analytics throughput (owner plan 2026-10-09)
-Baseline before THR-06a (one kr crawl to MASTER on the dev VM): not yet recorded.
+Baseline before THR-06a (one kr crawl to MASTER on the dev VM): not yet recorded. Since DEV-23 a crawl fetches timelines by default (ADR-098); record which setting the baseline used.
 - [ ] THR-06a idle bulk ceiling: `BULK_IDLE_CEILING` replaces `BULK_USAGE_CEILING` for a scope with no interactive request in `BULK_IDLE_AFTER_S` (IMPLEMENTATION.md §Post-release — THR)
 - [ ] THR-01 batch fetching: `archive:batch` fetches a crawl's ids `ARCHIVE_BATCH_CONCURRENCY` at a time, so the limiter paces them, not the worker count (IMPLEMENTATION.md §Post-release — THR)
 - [ ] THR-02 stored tiers: `match_tiers` stamped when a ranked match is archived, `tiers:backfill`, analytics join it in place of `ladder_entries` (IMPLEMENTATION.md §Post-release — THR)

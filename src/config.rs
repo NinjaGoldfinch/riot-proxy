@@ -470,7 +470,7 @@ impl Config {
             track_poll_rank_s: v.int("TRACK_POLL_RANK_S", 600, 30, u32::MAX),
             track_poll_match_s: v.int("TRACK_POLL_MATCH_S", 300, 30, u32::MAX),
             ddragon_sync_s: v.int("DDRAGON_SYNC_S", 3600, 60, u32::MAX),
-            archive_timelines: v.bool("ARCHIVE_TIMELINES", false),
+            archive_timelines: v.bool("ARCHIVE_TIMELINES", true),
             lookup_backfill_limit: v.int("LOOKUP_BACKFILL_LIMIT", u32::MAX, 0, u32::MAX),
             track_catchup_limit: v.int("TRACK_CATCHUP_LIMIT", 500, 0, 10_000),
             ladder_crawl_s: v.int("LADDER_CRAWL_S", 0, 0, 604_800),
