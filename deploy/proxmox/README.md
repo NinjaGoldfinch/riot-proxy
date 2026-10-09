@@ -3,7 +3,10 @@
 A Debian 13 VM running riot-proxy in Docker that follows `main`: every push to
 `main` publishes `ghcr.io/ninjagoldfinch/riot-proxy:edge` (`.github/workflows/edge.yml`),
 and a timer in the VM pulls it every 2 minutes and restarts the container if it
-changed. Plain HTTP on your LAN, `ENV=development`, real Riot API. See ADR-069 and ADR-070.
+changed. `:edge` only moves forwards: a workflow run for a commit that is no
+longer the head of `main` (GitHub sometimes starts one late) pushes only its
+`:sha-<short>` tag. Plain HTTP on your LAN, `ENV=development`, real Riot API.
+See ADR-069, ADR-070 and ADR-114.
 
 Needs Proxmox VE 8 or later (`qm set --scsi0 …,import-from=`).
 
@@ -52,7 +55,9 @@ Set only the variables you need in `.env`. Don't copy a laptop `.env` that sets
 ## Updating
 
 Nothing to do: push to `main`, wait for the `edge` workflow (a few minutes), and
-the VM picks it up within 2 minutes. To check or force it:
+the VM picks it up within 2 minutes. When several commits land close together,
+`:edge` ends on the newest; a run whose commit is no longer the head logs
+"`:edge` stays" and pushes `:sha-<short>` only. To check or force it:
 
 ```bash
 systemctl list-timers riot-proxy-update.timer
