@@ -55,7 +55,7 @@ sudo riot-proxy-update                         # start now instead of waiting fo
 docker compose -f /opt/riot-proxy/compose.yaml logs | grep -i "admin key"   # the bootstrap admin key, shown once
 ```
 
-Open `http://<vm>:8080/dev`, `/docs` or `/dashboard`. [deploy/proxmox/README.md](deploy/proxmox/README.md) covers the options (`./create-vm.sh --help`, `--dry-run`, `--generate-key`), how to pin a version, and how to rebuild the VM.
+Open `http://<vm>:8080/dev`, `/docs` or `/dashboard`. [deploy/proxmox/README.md](deploy/proxmox/README.md) covers the options (`./create-vm.sh --help`, `--dry-run`, `--generate-key`), how to pin a version, what happens when a new image fails its healthcheck (it is rolled back), how to copy updated files into an existing VM, and how to rebuild the VM.
 
 ## First run
 

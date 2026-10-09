@@ -108,44 +108,112 @@ check "the generated keys differ per VM" bash -c "ssh-keygen -q -t ed25519 -N ''
 check "a static --ip needs --gw" bash -c "! '$here/create-vm.sh' --dry-run --ssh-keys '$tmp/keys' --ip 10.0.0.2/24 >/dev/null 2>&1"
 
 # --- riot-proxy-update against a fake docker ---------------------------------
-mkdir -p "$tmp/bin" "$tmp/stack"
+# The fake keeps its images in $tmp/d: `ref` is the image the stack's tag points at,
+# `registry` what a pull fetches, `previous` the riot-proxy:previous tag, `running`
+# the container's image (absent: no container). `health.<id>` lists the container's
+# "<status> <health> <restarts>", one line per inspect, the last one sticking
+# (default "running healthy 0"). Image `sha256:x` has revision `rev-x`.
+mkdir -p "$tmp/bin" "$tmp/stack" "$tmp/d"
 cat > "$tmp/bin/docker" <<'FAKE'
 #!/usr/bin/env bash
-# Fake docker: logs each call; `compose images -q` reports the image id in $STATE.
-echo "$*" >> "$FAKE_LOG"
+echo "$*${RIOT_PROXY_IMAGE:+ [RIOT_PROXY_IMAGE=$RIOT_PROXY_IMAGE]}" >> "$FAKE_LOG"
+d=$FAKE_STATE
+resolve() {
+  case $1 in
+    riot-proxy:previous) cat "$d/previous" 2>/dev/null ;;
+    ghcr.io/*) cat "$d/ref" 2>/dev/null ;;
+    sha256:*) echo "$1" ;;
+  esac
+}
 case "$*" in
-  "compose images -q riot-proxy") cat "$STATE" ;;
-  "compose pull --quiet") [ -f "$STATE.next" ] && mv "$STATE.next" "$STATE.pulled" ;;
-  "compose up -d --remove-orphans") [ -f "$STATE.pulled" ] && mv "$STATE.pulled" "$STATE" ;;
-  "compose config --images") echo ghcr.io/ninjagoldfinch/riot-proxy:edge ;;
-  "image inspect"*) echo abc1234 ;;
+  "compose ps -a -q riot-proxy") [ ! -f "$d/running" ] || echo cid1 ;;
+  "inspect --format {{.Image}} cid1") cat "$d/running" ;;
+  "inspect --format {{.State.Status}}"*" cid1")
+    f="$d/health.$(cat "$d/running")"
+    if [ -f "$f" ]; then head -n 1 "$f"; [ "$(wc -l < "$f")" -le 1 ] || sed -i 1d "$f"; else echo "running healthy 0"; fi ;;
+  "image tag "*" riot-proxy:previous") echo "$3" > "$d/previous" ;;
+  "compose pull --quiet") [ ! -f "$d/registry" ] || cp "$d/registry" "$d/ref" ;;
+  "compose config --images") echo "${RIOT_PROXY_IMAGE:-ghcr.io/ninjagoldfinch/riot-proxy:edge}" ;;
+  "image inspect --format {{.Id}} "*) id=$(resolve "${*: -1}"); [ -n "$id" ] || exit 1; echo "$id" ;;
+  "image inspect --format "*) id=$(resolve "${*: -1}"); [ -n "$id" ] || exit 1; echo "rev-${id#sha256:}" ;;
+  "compose up -d --remove-orphans")
+    id=$(resolve "${RIOT_PROXY_IMAGE:-ghcr.io/ninjagoldfinch/riot-proxy:edge}"); [ -z "$id" ] || echo "$id" > "$d/running" ;;
 esac
 exit 0
 FAKE
 chmod +x "$tmp/bin/docker"
-update() { PATH="$tmp/bin:$PATH" RIOT_PROXY_DIR="$tmp/stack" FAKE_LOG="$tmp/log" STATE="$tmp/state" "$here/files/riot-proxy-update"; }
+# update [timeout]: runs the updater with fresh $tmp/log, $tmp/out and $tmp/err; sets $rc.
+# journal=<dev:inode of $tmp/err> makes stderr look like systemd's journal stream.
+update() {
+  : > "$tmp/log"; rc=0
+  PATH="$tmp/bin:$PATH" RIOT_PROXY_DIR="$tmp/stack" FAKE_LOG="$tmp/log" FAKE_STATE="$tmp/d" \
+    RIOT_PROXY_HEALTH_TIMEOUT="${1:-1}" RIOT_PROXY_HEALTH_POLL=0.1 JOURNAL_STREAM="${journal:-}" \
+    "$here/files/riot-proxy-update" > "$tmp/out" 2> "$tmp/err" || rc=$?
+}
+running() { [ "$(cat "$tmp/d/running" 2>/dev/null)" = "$1" ]; }
+inspects() { grep -c '^inspect --format {{.State' "$tmp/log" || true; }
+export tmp; export -f running
+publish() { echo "sha256:$1" > "$tmp/d/registry"; }
 
-: > "$tmp/log"; echo old > "$tmp/state"
+for f in ref registry running; do echo sha256:old > "$tmp/d/$f"; done
 cp "$here/files/env.example" "$tmp/stack/.env"
-update 2> "$tmp/err"
+update
 check "without a key it does nothing" test ! -s "$tmp/log"
 check "without a key it says why" grep -q 'no RIOT_API_KEY' "$tmp/err"
 
 sed -i 's/^RIOT_API_KEY=$/RIOT_API_KEY=test-key-not-real/' "$tmp/stack/.env"
-update > "$tmp/out"
-check "with a key it pulls and ups" grep -qx 'compose up -d --remove-orphans' "$tmp/log"
-check "an unchanged image is not reported or pruned" bash -c "! grep -q 'now running' '$tmp/out' && ! grep -q 'image prune' '$tmp/log'"
+update
+check "with a key it pulls and ups" bash -c "[ $rc = 0 ] && grep -qx 'compose pull --quiet' '$tmp/log' && grep -qx 'compose up -d --remove-orphans' '$tmp/log'"
+check "an unchanged image is not waited for, reported or pruned" bash -c "[ $(inspects) = 0 ] && [ ! -s '$tmp/out' ] && [ ! -s '$tmp/err' ] && ! grep -q 'image prune' '$tmp/log'"
+check "the running image is tagged riot-proxy:previous before the pull" bash -c "[ \$(grep -n 'image tag sha256:old riot-proxy:previous' '$tmp/log' | cut -d: -f1) -lt \$(grep -n 'compose pull' '$tmp/log' | cut -d: -f1) ]"
 
-: > "$tmp/log"; echo new > "$tmp/state.next"
-update > "$tmp/out"
-check "a new image is reported with its revision" grep -qx 'riot-proxy-update: now running ghcr.io/ninjagoldfinch/riot-proxy:edge (abc1234)' "$tmp/out"
-check "a new image prunes the old one" grep -q '^image prune -f' "$tmp/log"
+publish good; printf 'running starting 0\nrunning healthy 0\n' > "$tmp/d/health.sha256:good"
+update
+check "a healthy new image is reported with its revision" grep -qx 'riot-proxy-update: now running ghcr.io/ninjagoldfinch/riot-proxy:edge (rev-good)' "$tmp/out"
+check "it waits until the healthcheck says healthy" bash -c "[ $rc = 0 ] && [ $(inspects) = 2 ] && running sha256:good"
+check "a healthy new image prunes, and the replaced one stays as :previous" bash -c "grep -qx 'image prune -f' '$tmp/log' && [ \"\$(cat '$tmp/d/previous')\" = sha256:old ]"
+
+publish bad; echo 'running starting 0' > "$tmp/d/health.sha256:bad"
+update
+check "an image that never turns healthy fails the run" test "$rc" = 1
+check "it is rolled back to :previous" bash -c "running sha256:good && grep -qx 'compose up -d --remove-orphans \[RIOT_PROXY_IMAGE=riot-proxy:previous\]' '$tmp/log'"
+check "the error names the rejected and the restored revision" grep -q '^riot-proxy-update: error: rejected ghcr.io/ninjagoldfinch/riot-proxy:edge (rev-bad): not healthy after [0-9]*s (status, health, restarts: running starting 0); rolled back to riot-proxy:previous (rev-good)' "$tmp/err"
+check "on a terminal the error has no priority prefix" grep -q '^riot-proxy-update: error:' "$tmp/err"
+check "a rolled-back image is recorded and nothing is pruned" bash -c "grep -q '^sha256:bad rev-bad$' '$tmp/stack/.rejected' && ! grep -q 'image prune' '$tmp/log'"
+
+update 5
+check "the next run doesn't redeploy the rejected image" bash -c "[ $rc = 0 ] && ! grep -q 'compose up' '$tmp/log' && running sha256:good"
+check "and stays quiet" bash -c "[ ! -s '$tmp/out' ] && [ ! -s '$tmp/err' ] && [ \"\$(cat '$tmp/d/previous')\" = sha256:good ]"
+
+publish crash; echo 'restarting starting 2' > "$tmp/d/health.sha256:crash"
+update 30
+check "a crash-looping image is rolled back without waiting for the deadline" bash -c "[ $rc = 1 ] && [ $(inspects) = 1 ] && running sha256:good && grep -q 'rejected .* (rev-crash): .*restarting starting 2.*rolled back to riot-proxy:previous (rev-good)' '$tmp/err'"
+
+publish sick; echo 'running unhealthy 0' > "$tmp/d/health.sha256:sick"
+journal=$(stat -c '%d:%i' "$tmp/err") update 30
+check "when stderr is the journal the error is filed at priority err" grep -q '^<3>riot-proxy-update: error: rejected' "$tmp/err"
+check "an unhealthy image is rolled back at once" bash -c "[ $rc = 1 ] && [ $(inspects) = 1 ] && running sha256:good && grep -q '^sha256:sick ' '$tmp/stack/.rejected'"
+
+publish fixed
+update
+check "a newer image after a rejection is deployed" bash -c "[ $rc = 0 ] && grep -q 'now running .* (rev-fixed)' '$tmp/out' && running sha256:fixed"
+check "and clears the rejection" test ! -e "$tmp/stack/.rejected"
+
+rm "$tmp/d/running" "$tmp/d/previous" "$tmp/d/ref"; publish bad
+update
+check "a first install that isn't healthy has nothing to roll back to" bash -c "[ $rc = 1 ] && grep -q 'error: ghcr.io/ninjagoldfinch/riot-proxy:edge (rev-bad) is not healthy .*nothing to roll back to' '$tmp/err'"
+check "and leaves the new container alone" bash -c "running sha256:bad && ! grep -q 'RIOT_PROXY_IMAGE\|image tag\|image prune' '$tmp/log' && [ ! -e '$tmp/stack/.rejected' ]"
+
+rm "$tmp/d/running"; publish good
+update
+check "a healthy first install is reported" bash -c "[ $rc = 0 ] && grep -q 'now running .* (rev-good)' '$tmp/out' && ! grep -q 'image tag' '$tmp/log'"
 
 # --- compose file ------------------------------------------------------------
 if docker compose version >/dev/null 2>&1; then
   cp "$here/files/compose.yaml" "$tmp/stack/"
   check "compose follows :edge by default" bash -c "cd '$tmp/stack' && sed -i '/^RIOT_PROXY_TAG/d' .env && docker compose config --images | grep -qx ghcr.io/ninjagoldfinch/riot-proxy:edge"
   check "RIOT_PROXY_TAG pins the image" bash -c "cd '$tmp/stack' && echo RIOT_PROXY_TAG=sha-abc1234 >> .env && docker compose config --images | grep -qx ghcr.io/ninjagoldfinch/riot-proxy:sha-abc1234"
+  check "RIOT_PROXY_IMAGE (the updater's rollback) replaces the image" bash -c "cd '$tmp/stack' && RIOT_PROXY_IMAGE=riot-proxy:previous docker compose config --images | grep -qx riot-proxy:previous"
 else
   echo "skip compose config (docker compose not installed)"
 fi
