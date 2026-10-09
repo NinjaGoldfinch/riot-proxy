@@ -776,6 +776,13 @@ expression: doc
       "ChampionDetailResponse": {
         "description": "v1 `ChampionDetailResponse`.",
         "properties": {
+          "byTier": {
+            "description": "A row per tier, most played first: every tier's, or only the named\n`tier`'s. `minGames` applies to each row.",
+            "items": {
+              "$ref": "#/components/schemas/ChampionStatEntry"
+            },
+            "type": "array"
+          },
           "championId": {
             "format": "int64",
             "type": "integer"
@@ -843,6 +850,7 @@ expression: doc
             "type": "array"
           },
           "stats": {
+            "description": "One row summed over every tier, or the named `tier`'s row; empty when\nthe champion has fewer than `minGames` games in the slice.",
             "items": {
               "$ref": "#/components/schemas/ChampionStatEntry"
             },
@@ -855,6 +863,7 @@ expression: doc
             ]
           },
           "totalGames": {
+            "description": "The games of `stats`.",
             "format": "int64",
             "type": "integer"
           }
@@ -870,6 +879,7 @@ expression: doc
           "sectionsComputedAt",
           "totalGames",
           "stats",
+          "byTier",
           "matchups",
           "items",
           "runes",
@@ -1145,7 +1155,7 @@ expression: doc
         "type": "object"
       },
       "ChampionStatEntry": {
-        "description": "One champion at one tier (v1 `ChampionStatEntry`).",
+        "description": "One champion at one tier, or summed over every tier (v1 `ChampionStatEntry`).\nThe averages are the row's sums over its games, so on a summed row every\ngame weighs the same, whatever its tier.",
         "properties": {
           "avgDamage": {
             "format": "double",
@@ -1169,6 +1179,7 @@ expression: doc
             ]
           },
           "banRate": {
+            "description": "Matches it was banned in over the same matches as `pickRate`.",
             "format": "double",
             "type": [
               "number",
@@ -1207,7 +1218,7 @@ expression: doc
             "type": "string"
           },
           "pickRate": {
-            "description": "Matches picked over the tier's matches, capped at 1. Absent without a slice.",
+            "description": "Matches picked over the slice's matches that had a player at the\nrow's tier, capped at 1; on a row summed over every tier, over every\nmatch in the slice, each counted once. Absent when there are none.",
             "format": "double",
             "type": [
               "number",
@@ -1220,7 +1231,11 @@ expression: doc
             "type": "number"
           },
           "tier": {
-            "type": "string"
+            "description": "The row's tier; `null` on a row summed over every tier, which the\nroutes return when the request names no `tier`.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "winRate": {
             "format": "double",
@@ -9717,7 +9732,7 @@ expression: doc
     },
     "/v1/lol/analytics/champions": {
       "get": {
-        "description": "Aggregated from every archived match on the platform. Each participant is placed at the tier the ladder crawl or the latest league lookup of that player found them at, whichever is newer, and under `UNKNOWN` when neither has. Recomputed per (platform, queue) when a crawl completes. Sends an `ETag`; a matching `If-None-Match` gets 304. Games Riot flagged as remakes are left out unless `remakes=include`.",
+        "description": "Aggregated from every archived match on the platform. Each participant is placed at the tier the ladder crawl or the latest league lookup of that player found them at, whichever is newer, and under `UNKNOWN` when neither has. Without `tier`, one row per champion summed over every tier (`tier: null`): pick and ban rates over every match in the slice (platform, queue, patch), each match counted once however many tiers its players were in, and averages over all the champion's games. With `tier`, a row per champion at that tier, its rates over the matches that had a player at the tier. `minGames` and `limit` apply to the rows returned. Recomputed per (platform, queue) when a crawl completes. Sends an `ETag`; a matching `If-None-Match` gets 304. Games Riot flagged as remakes are left out unless `remakes=include`.",
         "operationId": "champions",
         "parameters": [
           {
@@ -9739,7 +9754,7 @@ expression: doc
             }
           },
           {
-            "description": "IRON … CHALLENGER, or UNKNOWN; default every tier",
+            "description": "IRON … CHALLENGER, or UNKNOWN: that tier's rows. Omitted: one row per champion summed over every tier, pick and ban rates over every match in the slice",
             "in": "query",
             "name": "tier",
             "required": false,
@@ -9943,7 +9958,7 @@ expression: doc
             }
           }
         },
-        "summary": "Champion pick and win rates by tier",
+        "summary": "Champion pick, ban and win rates",
         "tags": [
           "lol"
         ]
@@ -9951,7 +9966,7 @@ expression: doc
     },
     "/v1/lol/analytics/champions/{championId}": {
       "get": {
-        "description": "Sends an `ETag`; a matching `If-None-Match` gets 304. The stat row(s) at this slice plus this champion's top lane matchups, items, runes and summoner spells — one call for a champion page. Each section is independently trimmed by `minGames`/`limit`; a champion nobody has data for yet still returns 200 with empty arrays rather than a 404.",
+        "description": "Sends an `ETag`; a matching `If-None-Match` gets 304. The champion's stat row at this slice, its rows per tier, and its top lane matchups, items, runes and summoner spells — one call for a champion page. Without `tier`, `stats` is one row summed over every tier (`tier: null`), its pick and ban rates over every match in the slice, and `byTier` has a row per tier; with `tier`, both hold that tier's row. Each section is independently trimmed by `minGames`/`limit` (`stats` and `byTier` by `minGames` only); a champion nobody has data for yet still returns 200 with empty arrays rather than a 404.",
         "operationId": "champion_detail",
         "parameters": [
           {
@@ -9983,7 +9998,7 @@ expression: doc
             }
           },
           {
-            "description": "IRON … CHALLENGER, or UNKNOWN; applies to `stats`",
+            "description": "IRON … CHALLENGER, or UNKNOWN: `stats` and `byTier` are that tier's row. Omitted: `stats` is one row summed over every tier, pick and ban rates over every match in the slice, and `byTier` a row per tier",
             "in": "query",
             "name": "tier",
             "required": false,

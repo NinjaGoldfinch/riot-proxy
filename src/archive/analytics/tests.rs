@@ -392,6 +392,30 @@ async fn the_rebuild_matches_the_hand_computed_fixture() {
         ]
     );
 
+    // Totals over every tier (ADR-123): KR_1 has players in MASTER, DIAMOND
+    // and UNKNOWN, so the slices count it three times and these once: KR_1
+    // and KR_2, the remake KR_3 apart.
+    assert_eq!(
+        text_rows(
+            &db,
+            "SELECT patch || ' ' || remake || ' ' || matches || ' ' || computed_at FROM analytics_match_totals
+              ORDER BY remake"
+        )
+        .await,
+        ["14.18 0 2 77", "14.18 1 1 77"]
+    );
+    // 10 once (KR_1, banned by both teams), 11 twice (KR_1, KR_2), against the
+    // 3 and 4 the per-tier rows above sum to.
+    assert_eq!(
+        text_rows(
+            &db,
+            "SELECT champion_id || ' ' || remake || ' ' || bans || ' ' || computed_at FROM champion_ban_totals
+              ORDER BY champion_id"
+        )
+        .await,
+        ["10 0 1 77", "11 0 2 77"]
+    );
+
     // Matchups from both sides: 1 v 2 is A's (KR_1 win, KR_2 loss); 2 v 1 is
     // C's KR_1 loss and B's KR_2 win. D's lane has no opponent. The remake
     // apart.
@@ -469,23 +493,29 @@ async fn reads_leave_remakes_out_unless_asked_and_sum_roles() {
             .map(|r| (r.champion_id, r.tier.clone(), r.games))
             .collect::<Vec<_>>()
     };
+    let t = |tier: &str| Some(tier.to_string());
     assert_eq!(
-        games(stats(&db, read(false)).await.unwrap()),
+        games(stats_by_tier(&db, read(false)).await.unwrap()),
         [
-            (1, "MASTER".into(), 2),
-            (2, "DIAMOND".into(), 1),
-            (2, "MASTER".into(), 1),
-            (3, "UNKNOWN".into(), 1)
+            (1, t("MASTER"), 2),
+            (2, t("DIAMOND"), 1),
+            (2, t("MASTER"), 1),
+            (3, t("UNKNOWN"), 1)
         ]
     );
     assert_eq!(
-        games(stats(&db, read(true)).await.unwrap()),
+        games(stats_by_tier(&db, read(true)).await.unwrap()),
         [
-            (1, "MASTER".into(), 3),
-            (2, "DIAMOND".into(), 2),
-            (2, "MASTER".into(), 1),
-            (3, "UNKNOWN".into(), 1)
+            (1, t("MASTER"), 3),
+            (2, t("DIAMOND"), 2),
+            (2, t("MASTER"), 1),
+            (3, t("UNKNOWN"), 1)
         ]
+    );
+    // No tier named: one row per champion, every tier summed (ADR-123).
+    assert_eq!(
+        games(stats(&db, read(true)).await.unwrap()),
+        [(1, None, 3), (2, None, 3), (3, None, 1)]
     );
     let mut sl = slices(&db, read(true)).await.unwrap();
     sl.sort();
@@ -493,13 +523,14 @@ async fn reads_leave_remakes_out_unless_asked_and_sum_roles() {
         sl,
         [("DIAMOND".into(), 2), ("MASTER".into(), 3), ("UNKNOWN".into(), 1)]
     );
-    // minGames and tier.
+    // minGames and tier: a named tier gives its rows, from either read.
     let r = Read {
         tier: Some("MASTER".into()),
         min_games: 2,
         ..read(false)
     };
-    assert_eq!(games(stats(&db, r).await.unwrap()), [(1, "MASTER".into(), 2)]);
+    assert_eq!(games(stats(&db, r.clone()).await.unwrap()), [(1, t("MASTER"), 2)]);
+    assert_eq!(games(stats_by_tier(&db, r).await.unwrap()), [(1, t("MASTER"), 2)]);
 
     let facet_of = |f: Facet, remakes: bool| {
         let db = db.clone();
@@ -615,14 +646,19 @@ async fn every_patch_sums_and_the_patch_list_is_newest_first() {
             .map(|r| (r.tier.clone(), r.patch.clone(), r.games))
             .collect::<Vec<_>>()
     };
-    // M1 and M2 on 14.18, M4 on 14.9: one row, labelled "all".
+    // M1 and M2 on 14.18, M4 on 14.9: one row, labelled "all", every tier
+    // summed (A is MASTER throughout).
     assert_eq!(
         games(stats(&db, read(None)).await.unwrap()),
-        [("MASTER".into(), "all".into(), 3)]
+        [(None, "all".into(), 3)]
+    );
+    assert_eq!(
+        games(stats_by_tier(&db, read(None)).await.unwrap()),
+        [(Some("MASTER".into()), "all".into(), 3)]
     );
     assert_eq!(
         games(stats(&db, read(Some("14.18"))).await.unwrap()),
-        [("MASTER".into(), "14.18".into(), 2)]
+        [(None, "14.18".into(), 2)]
     );
     let slices_all = slices(&db, read(None)).await.unwrap();
     assert!(slices_all.contains(&("MASTER".into(), 3)), "{slices_all:?}");
@@ -817,6 +853,126 @@ async fn lookups_place_players_and_only_the_platforms_matches_count() {
             "MASTER 2 MIDDLE 0 1/1",
             "UNKNOWN 3 TOP 0 1/0",
         ]
+    );
+}
+
+/// SITE-08 (ADR-123): a read naming no tier sums each champion over every
+/// tier, and its denominators count each match once.
+#[tokio::test]
+async fn summed_reads_count_each_match_once() {
+    let (_d, db) = db();
+    db.write(|c| {
+        seed(c);
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    rebuild(&db, 0).await;
+    let read = |patch: Option<&str>, remakes: bool| Read {
+        key_scope: "s".into(),
+        platform: Some("kr".into()),
+        queue: "RANKED_SOLO_5x5".into(),
+        patch: patch.map(str::to_string),
+        tier: None,
+        role: None,
+        champion_id: None,
+        min_games: 0,
+        limit: 500,
+        remakes,
+    };
+    // Champion 2: C at DIAMOND in KR_1 (2/5/1, 180 cs, a loss) and B at MASTER
+    // in KR_2 (3/3/3, 150 cs, a win), every column summed.
+    let rows = stats(&db, read(Some("14.18"), false)).await.unwrap();
+    let two = rows.iter().find(|r| r.champion_id == 2).unwrap();
+    assert_eq!(
+        two,
+        &StatRow {
+            champion_id: 2,
+            tier: None,
+            patch: "14.18".into(),
+            games: 2,
+            wins: 1,
+            matches_picked: 2,
+            stated_games: 2,
+            kills: 5,
+            deaths: 8,
+            assists: 4,
+            cs: 330,
+            gold: 16_500,
+            damage: 33_000,
+            vision: 33,
+            duration_s: 3000,
+            computed_at: 77,
+        }
+    );
+    let ids = |rows: Vec<StatRow>| rows.iter().map(|r| (r.champion_id, r.games)).collect::<Vec<_>>();
+    assert_eq!(ids(rows), [(1, 2), (2, 2), (3, 1)], "each champion once");
+    // minGames and limit count summed rows: champion 2 clears 2 games only
+    // summed, as no tier of it does.
+    let min2 = Read {
+        min_games: 2,
+        ..read(Some("14.18"), false)
+    };
+    assert_eq!(ids(stats(&db, min2.clone()).await.unwrap()), [(1, 2), (2, 2)]);
+    assert_eq!(ids(stats_by_tier(&db, min2).await.unwrap()), [(1, 2)]);
+    let one = Read {
+        limit: 1,
+        ..read(Some("14.18"), false)
+    };
+    assert_eq!(ids(stats(&db, one).await.unwrap()), [(1, 2)]);
+    // A role: D's TOP game only; every patch: KR_4 (14.17) adds A's third game.
+    let top = Read {
+        role: Some("TOP".into()),
+        ..read(Some("14.18"), false)
+    };
+    assert_eq!(ids(stats(&db, top.clone()).await.unwrap()), [(3, 1)]);
+    assert_eq!(
+        ids(stats(&db, read(None, false)).await.unwrap()),
+        [(1, 3), (2, 2), (3, 1)]
+    );
+
+    // Matches: KR_1 and KR_2 once each though KR_1 is in three tiers' slices;
+    // the remake KR_3 when asked; KR_4 with every patch. A role doesn't narrow
+    // them: a pick rate in one role is still over every match.
+    let totals = |r: Read| {
+        let db = db.clone();
+        async move { match_totals(&db, r).await.unwrap() }
+    };
+    assert_eq!(totals(read(Some("14.18"), false)).await, 2);
+    assert_eq!(totals(read(Some("14.18"), true)).await, 3);
+    assert_eq!(totals(read(None, false)).await, 3);
+    assert_eq!(totals(top).await, 2);
+    // Every platform: kr's alone here; another platform has none.
+    assert_eq!(
+        totals(Read {
+            platform: None,
+            ..read(Some("14.18"), false)
+        })
+        .await,
+        2
+    );
+    assert_eq!(
+        totals(Read {
+            platform: Some("euw1".into()),
+            ..read(Some("14.18"), false)
+        })
+        .await,
+        0
+    );
+    let mut bans = ban_totals(&db, read(Some("14.18"), false)).await.unwrap();
+    bans.sort_unstable();
+    assert_eq!(bans, [(10, 1), (11, 2)]);
+    assert_eq!(
+        ban_totals(
+            &db,
+            Read {
+                champion_id: Some(11),
+                ..read(None, true)
+            }
+        )
+        .await
+        .unwrap(),
+        [(11, 2)]
     );
 }
 

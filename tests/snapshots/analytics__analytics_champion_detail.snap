@@ -4,6 +4,24 @@ assertion_line: 322
 expression: redact(detail.json())
 ---
 {
+  "byTier": [
+    {
+      "avgDamage": 36696,
+      "avgKda": 3.6667,
+      "avgVision": 33,
+      "banRate": 0,
+      "championId": 134,
+      "csPerMin": 7.3484,
+      "games": 1,
+      "goldPerMin": 476.5755,
+      "patch": "16.19",
+      "pickRate": 1,
+      "share": 1,
+      "tier": "MASTER",
+      "winRate": 1,
+      "wins": 1
+    }
+  ],
   "championId": 134,
   "computedAt": "<iso>",
   "items": [
@@ -95,7 +113,7 @@ expression: redact(detail.json())
       "patch": "16.19",
       "pickRate": 1,
       "share": 1,
-      "tier": "MASTER",
+      "tier": null,
       "winRate": 1,
       "wins": 1
     }

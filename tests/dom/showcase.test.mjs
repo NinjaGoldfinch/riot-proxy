@@ -114,8 +114,11 @@ test('rotation and top champions use the local icon mirror and champion names', 
   assert.ok(p.text('#rotation').includes('Annie'));
   const top = p.text('#top');
   assert.ok(top.includes('Highest win rate') && top.includes('Most played'));
-  assert.ok(top.includes('50.0%'), 'Annie summed over two tiers: 10 / 20');
+  assert.ok(top.includes('50.0%'), 'Annie, the route summing her tiers: 10 / 20');
   assert.ok(top.includes('80.0%'), 'Olaf');
+  // One row per champion from the route (ADR-123), so each is listed once.
+  const lists = [...p.w.document.querySelectorAll('#top ol')].map((ol) => [...ol.querySelectorAll('li')].map((li) => li.textContent.replace(/\s+/g, ' ').trim()));
+  assert.deepEqual(lists, [['Olaf80.0%5 games', 'Annie50.0%20 games'], ['Annie2050.0% win', 'Olaf580.0% win']]);
   assert.ok(p.text('#topMeta').startsWith('all patches'));
 });
 
@@ -493,8 +496,8 @@ test('the champion view: rates by tier and the calls it makes', async () => {
   assert.ok(p.text('#cHead').includes('Annie') && p.text('#cHead').includes('the Dark Child'));
   assert.ok(p.text('#cMeta').includes('all patches · 60 games'));
   const tiers = [...p.w.document.querySelectorAll('#cTiers tbody tr')].map((r) => r.cells[0].textContent);
-  assert.deepEqual(tiers, ['CHALLENGER', 'GOLD', 'UNKNOWN'], 'highest tier first, UNKNOWN last');
-  assert.ok(p.text('#cTiers').includes('55.0% win over 60 games'), 'summed over tiers');
+  assert.deepEqual(tiers, ['CHALLENGER', 'GOLD', 'UNKNOWN'], 'byTier, highest tier first, UNKNOWN last');
+  assert.ok(p.text('#cTiers').includes('55.0% win over 60 games'), 'the summed stats row');
   const gold = p.w.document.querySelectorAll('#cTiers tbody tr')[1].textContent.replace(/\s+/g, ' ');
   for (const bit of ['30', '50.0%', '5.0%', '1.0%', '2.50', '6.1', '402']) assert.ok(gold.includes(bit), bit);
   assert.deepEqual(p.errors, []);

@@ -295,21 +295,9 @@ function statusNotices(doc, locale = 'en_US') {
   ];
 }
 
-/** Analytics rows come per (champion, tier); sum them per champion. */
-function byChampion(rows) {
-  const m = new Map();
-  for (const r of rows ?? []) {
-    const c = m.get(r.championId) ?? { championId: r.championId, championName: r.championName, games: 0, wins: 0 };
-    c.games += r.games;
-    c.wins += r.wins;
-    m.set(r.championId, c);
-  }
-  return [...m.values()].map((c) => ({ ...c, winRate: c.games ? c.wins / c.games : 0 }));
-}
-
-/** The top `n` champions by win rate and by games played. */
+/** The top `n` champions by win rate and by games played, from the route's rows: one per champion, every tier summed (ADR-123). */
 function topChampions(rows, n = 10) {
-  const all = byChampion(rows);
+  const all = rows ?? [];
   return {
     winRate: [...all].sort((a, b) => b.winRate - a.winRate || b.games - a.games).slice(0, n),
     played: [...all].sort((a, b) => b.games - a.games || b.winRate - a.winRate).slice(0, n),
@@ -482,13 +470,8 @@ const signedGold = (n) => (n === 0 ? '0' : `${n > 0 ? '+' : '−'}${Math.abs(n) 
 /** Where a tier sorts: highest first, and UNKNOWN (players no ladder or lookup placed, ADR-105) last. */
 const tierOrder = (tier) => (TIERS.includes(tier) ? TIERS.indexOf(tier) : TIERS.length);
 
-/** Analytics stat rows, highest tier first, and the rows summed over tiers (pickRate is per tier, so not summed). */
-function tierRows(stats) {
-  const rows = [...(stats ?? [])].sort((a, b) => tierOrder(a.tier) - tierOrder(b.tier));
-  const games = rows.reduce((n, r) => n + r.games, 0);
-  const wins = rows.reduce((n, r) => n + r.wins, 0);
-  return { rows, all: { games, wins, winRate: games ? wins / games : null } };
-}
+/** Analytics stat rows per tier (the detail's `byTier`), highest tier first. */
+const tierRows = (rows) => [...(rows ?? [])].sort((a, b) => tierOrder(a.tier) - tierOrder(b.tier));
 
 /** Data Dragon's runesReforged.json as `{ id: { name, icon } }`, for styles and runes alike. */
 function runeIndex(doc) {
@@ -1341,12 +1324,14 @@ async function renderChampion({ id }) {
   if (!res.ok) { $('#cTiers').innerHTML = `<header><h2>By tier</h2></header>${failure(res)}`; $('#cBuild').innerHTML = `<header><h2>Builds</h2></header>`; return; }
   const d = res.json;
   $('#cMeta').textContent = `${region || 'every platform'} · ${QUEUES.find(([q2]) => q2 === d.queue)?.[1] ?? d.queue} · ${patchLabel(state.patch)} · ${(d.totalGames ?? 0).toLocaleString()} games`;
-  const { rows, all } = tierRows(d.stats);
+  const rows = tierRows(d.byTier);
+  // The champion over every tier: the route's one summed row (ADR-123).
+  const all = d.stats?.[0];
   const none = patches.length
     ? `<p class="empty">Not enough ${esc(name)} games on ${esc(patchLabel(state.patch))}${region ? '' : ' in any region'} yet.</p>`
     : `<p class="empty">No ${esc(name)} games in the analytics yet: they fill in when a ladder crawl${region ? ' for this platform' : ''} completes.</p>`;
   const num = (v, f) => (v == null ? '–' : f(v));
-  $('#cTiers').innerHTML = `<header><h2>By tier</h2>${rows.length ? `<span class="muted">${pct(all.winRate)} win over ${all.games.toLocaleString()} games</span>` : ''}</header><div>${sources(OP.champ)}</div>` + (rows.length
+  $('#cTiers').innerHTML = `<header><h2>By tier</h2>${all ? `<span class="muted">${pct(all.winRate)} win over ${all.games.toLocaleString()} games</span>` : ''}</header><div>${sources(OP.champ)}</div>` + (rows.length
     ? `<div class="scroll"><table><thead><tr><th>Tier</th><th class="n">Games</th><th>Win rate</th><th class="n">Pick</th><th class="n">Ban</th><th class="n hide-sm">KDA</th><th class="n hide-sm">CS/min</th><th class="n hide-sm">Gold/min</th></tr></thead><tbody>${rows.map((r) => `<tr>
         <td><span class="tier" style="background:${tierColour(r.tier)}">${esc(r.tier)}</span></td>
         <td class="n">${r.games.toLocaleString()}</td>

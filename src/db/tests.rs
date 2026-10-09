@@ -104,9 +104,11 @@ async fn migrations_create_exactly_the_design_04_tables() {
     assert_eq!(
         tables,
         [
+            "analytics_match_totals",
             "analytics_runs",
             "analytics_slices",
             "cache",
+            "champion_ban_totals",
             "champion_bans",
             "champion_build_parts",
             "champion_builds",
@@ -207,7 +209,104 @@ async fn a_v1_database_upgrades_to_v2_and_keeps_its_data() {
         })
         .await
         .expect("read");
-    assert_eq!((name.as_str(), versions), ("old", 14));
+    assert_eq!((name.as_str(), versions), ("old", 15));
+}
+
+/// V0015 (SITE-08, ADR-123) backfills the slices aggregated before it, as the
+/// rebuild would count them: a match once, whatever tiers its players are in;
+/// a ban once per match; only matches archived by the slice's recompute, and
+/// only slices that exist.
+#[tokio::test]
+async fn v0015_backfills_the_totals_of_every_aggregated_slice() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("riot-proxy.db");
+    {
+        let mut conn = Connection::open(&path).expect("open");
+        embedded::migrations::runner()
+            .set_grouped(true)
+            .set_target(refinery::Target::Version(14))
+            .run(&mut conn)
+            .expect("to V0014");
+        conn.execute_batch(
+            "INSERT INTO ladder_entries (key_scope, platform, queue, puuid, tier, division, league_points, wins,
+               losses, first_seen_crawl_id, last_seen_crawl_id, updated_at) VALUES
+               ('s', 'kr', 'RANKED_SOLO_5x5', 'A', 'MASTER', 'I', 1, 1, 1, 'c', 'c', 1),
+               ('s', 'kr', 'RANKED_SOLO_5x5', 'B', 'MASTER', 'I', 1, 1, 1, 'c', 'c', 1),
+               ('s', 'kr', 'RANKED_SOLO_5x5', 'C', 'DIAMOND', 'I', 1, 1, 1, 'c', 'c', 1);
+             -- KR_9 was archived after the slices' recompute (100); 14.10 and
+             -- flex were never aggregated.
+             INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size,
+               archived_at, game_duration, remake, facts_version) VALUES
+               ('KR_1', 'asia', '14.18', 420, 1, x'00', 1, 10, 1800, 0, 3),
+               ('KR_2', 'asia', '14.18', 420, 1, x'00', 1, 10, 1800, 0, 3),
+               ('KR_3', 'asia', '14.18', 420, 1, x'00', 1, 10, 200, 1, 3),
+               ('KR_9', 'asia', '14.18', 420, 1, x'00', 1, 500, 1800, 0, 3),
+               ('KR_7', 'asia', '14.10', 420, 1, x'00', 1, 10, 1800, 0, 3),
+               ('KR_5', 'asia', '14.18', 440, 1, x'00', 1, 10, 1800, 0, 3);
+             INSERT INTO match_facts (match_id, key_scope, puuid, team_id, position, champion_id, win, facts_version)
+               VALUES ('KR_1', 's', 'A', 100, 'MIDDLE', 1, 1, 3), ('KR_1', 's', 'C', 200, 'MIDDLE', 2, 0, 3),
+                      ('KR_2', 's', 'A', 100, 'MIDDLE', 1, 0, 3), ('KR_2', 's', 'B', 200, 'MIDDLE', 2, 1, 3),
+                      ('KR_3', 's', 'A', 100, 'MIDDLE', 1, 1, 3), ('KR_9', 's', 'A', 100, 'MIDDLE', 1, 1, 3),
+                      ('KR_7', 's', 'A', 100, 'MIDDLE', 1, 1, 3), ('KR_5', 's', 'A', 100, 'MIDDLE', 1, 1, 3);
+             INSERT INTO match_bans (match_id, team_id, pick_turn, champion_id) VALUES
+               ('KR_1', 100, 1, 10), ('KR_1', 200, 6, 10), ('KR_1', 200, 7, 11), ('KR_2', 100, 1, 11),
+               ('KR_9', 100, 1, 10);
+             -- What a V0014 rebuild of 14.18 wrote: KR_1 in MASTER and DIAMOND.
+             INSERT INTO analytics_slices (key_scope, platform, queue, tier, patch, remake, matches, computed_at)
+               VALUES ('s', 'kr', 'RANKED_SOLO_5x5', 'MASTER', '14.18', 0, 2, 100),
+                      ('s', 'kr', 'RANKED_SOLO_5x5', 'DIAMOND', '14.18', 0, 1, 100),
+                      ('s', 'kr', 'RANKED_SOLO_5x5', 'MASTER', '14.18', 1, 1, 100);",
+        )
+        .expect("seed");
+    }
+    let db = Db::open(&path, 1).expect("upgrade");
+    let totals = |db: Db| async move {
+        db.read(|c| {
+            let rows = |sql: &str| -> Result<Vec<String>, DbError> {
+                let mut stmt = c.prepare(sql)?;
+                let out = stmt.query_map([], |r| r.get(0))?.collect::<Result<Vec<String>, _>>()?;
+                Ok(out)
+            };
+            Ok::<_, DbError>((
+                rows(
+                    "SELECT key_scope || ' ' || platform || ' ' || queue || ' ' || patch || ' ' || remake || ' '
+                       || matches || ' ' || computed_at FROM analytics_match_totals ORDER BY remake",
+                )?,
+                rows(
+                    "SELECT patch || ' ' || champion_id || ' ' || remake || ' ' || bans || ' ' || computed_at
+                       FROM champion_ban_totals ORDER BY champion_id",
+                )?,
+            ))
+        })
+        .await
+        .expect("totals")
+    };
+    let (matches, bans) = totals(db.clone()).await;
+    assert_eq!(
+        matches,
+        [
+            "s kr RANKED_SOLO_5x5 14.18 0 2 100",
+            "s kr RANKED_SOLO_5x5 14.18 1 1 100"
+        ]
+    );
+    assert_eq!(bans, ["14.18 10 0 1 100", "14.18 11 0 2 100"]);
+
+    // A rebuild of 14.18 without KR_9 counts the same.
+    db.write(|c| {
+        c.execute("DELETE FROM matches WHERE match_id = 'KR_9'", [])?;
+        let scope = crate::archive::analytics::Scope {
+            key_scope: "s".into(),
+            platform: "kr".into(),
+            queue: "RANKED_SOLO_5x5".into(),
+            queue_id: 420,
+            patches: Some(vec!["14.18".into()]),
+            now: 100,
+        };
+        crate::archive::analytics::rebuild_champions(c, &scope)
+    })
+    .await
+    .expect("rebuild");
+    assert_eq!(totals(db).await, (matches, bans));
 }
 
 /// match_facts is a pure derivation of matches: deleting a match cascades (design 04).
@@ -378,11 +477,11 @@ async fn migrations_apply_once_across_reopens() {
         })
         .await
         .expect("insert");
-    assert_eq!(history(first.clone()).await.expect("history"), 14);
+    assert_eq!(history(first.clone()).await.expect("history"), 15);
     drop(first);
 
     let second = Db::open(&path, 1).expect("second open");
-    assert_eq!(history(second.clone()).await.expect("history"), 14, "no re-run");
+    assert_eq!(history(second.clone()).await.expect("history"), 15, "no re-run");
     let name: Option<String> = second
         .read(|c| {
             Ok::<_, DbError>(

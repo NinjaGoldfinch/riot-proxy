@@ -99,7 +99,12 @@ const TIMELINE = { metadata: { matchId: MATCH.metadata.matchId }, info: { frameI
 })), participants: MATCH.info.participants.map((x) => ({ participantId: x.participantId, puuid: x.puuid })) } };
 const DETAIL = { championId: 1, championName: 'Annie', queue: 'RANKED_SOLO_5x5', platform: 'oc1', tier: null, role: null, patch: '16.19', computedAt: '2026-10-08T00:00:00Z', totalGames: 60,
   sectionsComputedAt: { stats: null, matchups: null, items: null, runes: null, spells: null },
+  // No tier asked for: one row over every tier, its rates over every match in the slice (ADR-123) ...
   stats: [
+    { championId: 1, championName: 'Annie', tier: null, patch: '16.19', games: 60, wins: 33, winRate: 0.55, share: 1, pickRate: 0.04, banRate: 0.01, avgKda: 2.4, csPerMin: 6, goldPerMin: 400, avgDamage: 19000, avgVision: 19 },
+  ],
+  // ... and a row per tier.
+  byTier: [
     { championId: 1, championName: 'Annie', tier: 'GOLD', patch: '16.19', games: 30, wins: 15, winRate: 0.5, share: 0.75, pickRate: 0.05, banRate: 0.01, avgKda: 2.5, csPerMin: 6.1, goldPerMin: 402.4, avgDamage: 20000, avgVision: 20 },
     // Players no ladder or lookup placed (ADR-105): listed first here, shown last.
     { championId: 1, championName: 'Annie', tier: 'UNKNOWN', patch: '16.19', games: 20, wins: 11, winRate: 0.55, share: 0.5, pickRate: 0.03, banRate: 0.01 },
@@ -148,7 +153,7 @@ function detail(p, u, { noTimeline = false, noAnalytics = false, noBuilds = fals
   }
   if ((m = p.match(/^\/v1\/lol\/analytics\/champions\/(\d+)(\/matchups)?$/))) {
     // 16.19 stands in for a patch too new to clear minGames: listed, but empty.
-    if (noAnalytics || u.searchParams.get('patch') === '16.19') return [200, m[2] ? { ...MATCHUPS, matchups: [] } : { ...DETAIL, totalGames: 0, stats: [], items: [], spells: [], runes: [], matchups: [] }];
+    if (noAnalytics || u.searchParams.get('patch') === '16.19') return [200, m[2] ? { ...MATCHUPS, matchups: [] } : { ...DETAIL, totalGames: 0, stats: [], byTier: [], items: [], spells: [], runes: [], matchups: [] }];
     return [200, m[2] ? MATCHUPS : DETAIL];
   }
   return null;
@@ -173,10 +178,10 @@ function api(calls, url, { status = {}, unauthorized = false, ...opts } = {}) {
   if (p.startsWith('/v1/lol/league/apex/')) return [200, { tier: p.split('/')[6], queue: p.split('/')[7], name: 'L', leagueId: 'x', entries: Array.from({ length: opts.apexSizes?.[p.split('/')[6]] ?? LADDER }, (_, i) => entry(i)) }];
   if (p.startsWith('/v1/riot/accounts/by-puuid/')) { const id = p.split('/').pop(); return [200, { puuid: id, gameName: `Player ${id}`, tagLine: 'OCE' }]; }
   if (p.startsWith('/v1/lol/rotations/')) return [200, { freeChampionIds: [1, 2], freeChampionIdsForNewPlayers: [1], maxNewPlayerLevel: 10 }];
-  if (p === '/v1/lol/analytics/champions') return [200, { platform: 'oc1', queue: u.searchParams.get('queue'), tier: null, patch: '16.19', role: null, computedAt: null, totalGames: 30, champions: [
-    { championId: 1, championName: 'Annie', tier: 'GOLD', patch: '16.19', games: 10, wins: 6, winRate: 0.6, share: 0.3 },
-    { championId: 1, championName: 'Annie', tier: 'MASTER', patch: '16.19', games: 10, wins: 4, winRate: 0.4, share: 0.3 },
-    { championId: 2, championName: 'Olaf', tier: 'GOLD', patch: '16.19', games: 5, wins: 4, winRate: 0.8, share: 0.2 },
+  // No tier asked for: one row per champion, every tier summed (ADR-123).
+  if (p === '/v1/lol/analytics/champions') return [200, { platform: 'oc1', queue: u.searchParams.get('queue'), tier: null, patch: '16.19', role: null, computedAt: null, totalGames: 25, champions: [
+    { championId: 1, championName: 'Annie', tier: null, patch: '16.19', games: 20, wins: 10, winRate: 0.5, share: 0.8, pickRate: 0.2, banRate: 0.05 },
+    { championId: 2, championName: 'Olaf', tier: null, patch: '16.19', games: 5, wins: 4, winRate: 0.8, share: 0.2, pickRate: 0.05, banRate: 0 },
   ] }];
   return [404, { error: { code: 'NOT_FOUND', message: p } }];
 }

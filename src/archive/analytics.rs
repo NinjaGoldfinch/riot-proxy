@@ -5,7 +5,9 @@
 //! the tier the ladder holds them at (`ladder_entries`) or a league lookup
 //! last returned (`player_ranks`), whichever is newer, and under
 //! [`UNKNOWN_TIER`] when neither has them. A match with players in several
-//! tiers counts in each (v1). Every table is
+//! tiers counts in each (v1); `analytics_match_totals` and
+//! `champion_ban_totals` count it once, for rows summed over every tier
+//! (ADR-123). Every table is
 //! rebuilt wholesale for the newest `AGGREGATE_PATCH_LIMIT` patches (0: all)
 //! and keeps older patches' rows. Every row carries `remake`, so a read can
 //! leave remakes out (the default) or add them back.
@@ -118,11 +120,18 @@ fn ladder_facts(join: &str) -> String {
 /// Rows written per table by one rebuild step.
 pub type Written = Vec<(&'static str, i64)>;
 
-/// Slices, champion stats and bans, in one transaction (v1's champion step).
+/// Slices, champion stats and bans, and their totals over every tier
+/// (SITE-08), in one transaction (v1's champion step).
 pub fn rebuild_champions(c: &mut Connection, s: &Scope) -> Result<Written, DbError> {
     let facts = ladder_facts("");
     let tx = c.transaction()?;
-    for t in ["analytics_slices", "champion_stats", "champion_bans"] {
+    for t in [
+        "analytics_slices",
+        "analytics_match_totals",
+        "champion_stats",
+        "champion_bans",
+        "champion_ban_totals",
+    ] {
         s.clear(&tx, t)?;
     }
     s.insert(
@@ -132,6 +141,17 @@ pub fn rebuild_champions(c: &mut Connection, s: &Scope) -> Result<Written, DbErr
              SELECT ?1, ?2, ?3, {TIER}, m.patch, coalesce(m.remake, 0), count(DISTINCT m.match_id), ?6
              {facts}
              GROUP BY {TIER}, m.patch, coalesce(m.remake, 0)"
+        ),
+    )?;
+    // The same matches once each, whatever tiers their players are in: the
+    // denominator of a row summed over every tier (ADR-123).
+    s.insert(
+        &tx,
+        &format!(
+            "INSERT INTO analytics_match_totals (key_scope, platform, queue, patch, remake, matches, computed_at)
+             SELECT ?1, ?2, ?3, m.patch, coalesce(m.remake, 0), count(DISTINCT m.match_id), ?6
+             {facts}
+             GROUP BY m.patch, coalesce(m.remake, 0)"
         ),
     )?;
     let stats = s.insert(
@@ -159,6 +179,16 @@ pub fn rebuild_champions(c: &mut Connection, s: &Scope) -> Result<Written, DbErr
              SELECT ?1, ?2, ?3, {TIER}, m.patch, b.champion_id, coalesce(m.remake, 0), count(DISTINCT b.match_id), ?6
              {facts}
              GROUP BY {TIER}, m.patch, b.champion_id, coalesce(m.remake, 0)"
+        ),
+    )?;
+    // And once per match over every tier.
+    s.insert(
+        &tx,
+        &format!(
+            "INSERT INTO champion_ban_totals (key_scope, platform, queue, patch, champion_id, remake, bans, computed_at)
+             SELECT ?1, ?2, ?3, m.patch, b.champion_id, coalesce(m.remake, 0), count(DISTINCT b.match_id), ?6
+             {facts}
+             GROUP BY m.patch, b.champion_id, coalesce(m.remake, 0)"
         ),
     )?;
     tx.commit()?;
@@ -348,6 +378,7 @@ pub struct Read {
     pub queue: String,
     /// `None`: every patch summed (`?patch=all`, ADR-094).
     pub patch: Option<String>,
+    /// `None`: every tier, summed by [`stats`] (ADR-123).
     pub tier: Option<String>,
     /// `None`: every role summed; `Some("")` is the roleless rows.
     pub role: Option<String>,
@@ -453,12 +484,13 @@ fn read_where(tier: bool, role: bool, champion: bool) -> String {
     w
 }
 
-/// One champion at one tier, its roles summed unless a role is asked for;
-/// every patch summed when the read names none (`patch` is then `"all"`).
+/// One champion at one tier, or summed over every tier (`tier` `None`), its
+/// roles summed unless a role is asked for; every patch summed when the read
+/// names none (`patch` is then `"all"`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatRow {
     pub champion_id: i64,
-    pub tier: String,
+    pub tier: Option<String>,
     pub patch: String,
     pub games: i64,
     pub wins: i64,
@@ -475,16 +507,34 @@ pub struct StatRow {
     pub computed_at: i64,
 }
 
-/// v1 `listChampionStats`: most played first.
+/// Champion stats, most played first: one row per champion summed over every
+/// tier when the read names none (ADR-123), else that tier's rows (v1
+/// `listChampionStats`). `minGames` and `limit` apply to the rows returned.
 pub async fn stats(db: &Db, r: Read) -> Result<Vec<StatRow>, DbError> {
+    let by_tier = r.tier.is_some();
+    stat_rows(db, r, by_tier).await
+}
+
+/// Champion stats a row per (champion, tier), the named tier's or every
+/// tier's, most played first.
+pub async fn stats_by_tier(db: &Db, r: Read) -> Result<Vec<StatRow>, DbError> {
+    stat_rows(db, r, true).await
+}
+
+async fn stat_rows(db: &Db, r: Read, by_tier: bool) -> Result<Vec<StatRow>, DbError> {
+    let (tier, group) = if by_tier {
+        ("tier", "champion_id, tier")
+    } else {
+        ("NULL", "champion_id")
+    };
     db.read(move |c| {
         let mut stmt = c.prepare(&format!(
-            "SELECT champion_id, tier, coalesce(?4, 'all'), sum(games), sum(wins), sum(matches_picked), sum(stated_games),
-                    sum(kills), sum(deaths), sum(assists), sum(cs), sum(gold), sum(damage), sum(vision),
-                    sum(duration_s), max(computed_at)
+            "SELECT champion_id, {tier}, coalesce(?4, 'all'), sum(games), sum(wins), sum(matches_picked),
+                    sum(stated_games), sum(kills), sum(deaths), sum(assists), sum(cs), sum(gold), sum(damage),
+                    sum(vision), sum(duration_s), max(computed_at)
                FROM champion_stats WHERE {}
-              GROUP BY champion_id, tier HAVING sum(games) >= ?9
-              ORDER BY sum(games) DESC, champion_id, tier LIMIT ?10",
+              GROUP BY {group} HAVING sum(games) >= ?9
+              ORDER BY sum(games) DESC, {group} LIMIT ?10",
             read_where(true, true, true)
         ))?;
         let rows = stmt
@@ -575,6 +625,58 @@ pub async fn bans(db: &Db, r: Read) -> Result<Vec<(String, i64, i64)>, DbError> 
                     r.remakes
                 ],
                 |x| Ok((x.get(0)?, x.get(1)?, x.get(2)?)),
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    })
+    .await
+}
+
+/// Distinct matches in the slice, every tier and role (ADR-123): the pick- and
+/// ban-rate denominator of a row summed over every tier.
+pub async fn match_totals(db: &Db, r: Read) -> Result<i64, DbError> {
+    db.read(move |c| {
+        Ok(c.query_row(
+            &format!(
+                "SELECT coalesce(sum(matches), 0) FROM analytics_match_totals WHERE {}",
+                read_where(false, false, false)
+            ),
+            params![
+                r.key_scope,
+                r.platform,
+                r.queue,
+                r.patch,
+                None::<String>,
+                None::<String>,
+                None::<i64>,
+                r.remakes
+            ],
+            |x| x.get(0),
+        )?)
+    })
+    .await
+}
+
+/// Bans per champion over every tier, a match once (ADR-123): `(champion, bans)`.
+pub async fn ban_totals(db: &Db, r: Read) -> Result<Vec<(i64, i64)>, DbError> {
+    db.read(move |c| {
+        let mut stmt = c.prepare(&format!(
+            "SELECT champion_id, sum(bans) FROM champion_ban_totals WHERE {} GROUP BY champion_id",
+            read_where(false, false, true)
+        ))?;
+        let rows = stmt
+            .query_map(
+                params![
+                    r.key_scope,
+                    r.platform,
+                    r.queue,
+                    r.patch,
+                    None::<String>,
+                    None::<String>,
+                    r.champion_id,
+                    r.remakes
+                ],
+                |x| Ok((x.get(0)?, x.get(1)?)),
             )?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
