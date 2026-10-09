@@ -3,7 +3,10 @@
 A Debian 13 VM running riot-proxy in Docker that follows `main`: every push to
 `main` publishes `ghcr.io/ninjagoldfinch/riot-proxy:edge` (`.github/workflows/edge.yml`),
 and a timer in the VM pulls it every 2 minutes and restarts the container if it
-changed. Plain HTTP on your LAN, `ENV=development`, real Riot API. See ADR-069 and ADR-070.
+changed. `:edge` only moves forwards: a workflow run for a commit that is no
+longer the head of `main` (GitHub sometimes starts one late) pushes only its
+`:sha-<short>` tag. Plain HTTP on your LAN, `ENV=development`, real Riot API.
+See ADR-069, ADR-070 and ADR-114.
 
 Needs Proxmox VE 8 or later (`qm set --scsi0 …,import-from=`).
 
@@ -52,7 +55,9 @@ Set only the variables you need in `.env`. Don't copy a laptop `.env` that sets
 ## Updating
 
 Nothing to do: push to `main`, wait for the `edge` workflow (a few minutes), and
-the VM picks it up within 2 minutes. To check or force it:
+the VM picks it up within 2 minutes. When several commits land close together,
+`:edge` ends on the newest; a run whose commit is no longer the head logs
+"`:edge` stays" and pushes `:sha-<short>` only. To check or force it:
 
 ```bash
 systemctl list-timers riot-proxy-update.timer
@@ -60,7 +65,7 @@ journalctl -u riot-proxy-update -n 20          # "now running …:edge (<commit>
 sudo riot-proxy-update                         # pull now
 ```
 
-A new image has to pass its Docker healthcheck within 60 seconds (ADR-115). The
+A new image has to pass its Docker healthcheck within 120 seconds (ADR-115). The
 image's check first runs 30 s after start, so a good update takes about that long.
 If the container doesn't report `healthy` in time, or keeps exiting, the updater
 puts it back on the image it replaced (tagged `riot-proxy:previous` before each
@@ -78,7 +83,7 @@ sudo rm /opt/riot-proxy/.rejected && sudo riot-proxy-update   # try that image a
 
 While a rollback holds, update with `sudo riot-proxy-update`, not `docker compose up`:
 compose alone would start the rejected image again. To give the check longer, run
-`sudo systemctl edit riot-proxy-update` and add `[Service]` / `Environment=RIOT_PROXY_HEALTH_TIMEOUT=120`.
+`sudo systemctl edit riot-proxy-update` and add `[Service]` / `Environment=RIOT_PROXY_HEALTH_TIMEOUT=300`.
 
 To hold a version, set `RIOT_PROXY_TAG` in `/opt/riot-proxy/.env` to `sha-<short commit>`
 or a release such as `2.0.0-rc.3`, then run `sudo riot-proxy-update`. Set it back

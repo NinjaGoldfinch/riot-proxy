@@ -7,7 +7,7 @@
 set -euo pipefail
 
 dir=${RIOT_PROXY_DIR:-/opt/riot-proxy}
-timeout=${RIOT_PROXY_HEALTH_TIMEOUT:-60}
+timeout=${RIOT_PROXY_HEALTH_TIMEOUT:-120}
 poll=${RIOT_PROXY_HEALTH_POLL:-2}
 previous=riot-proxy:previous
 cd "$dir"
