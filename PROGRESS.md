@@ -260,7 +260,7 @@ The site's backfill question (item 3) needs no task: the unbounded lookup backfi
 - [ ] SITE-03 `gameVersion` described as the game build, plus `ddragonVersion` (IMPLEMENTATION.md §Post-release — SITE)
 - [ ] SITE-04 declare response headers in the OpenAPI document; document the image mirror and the backfill limit (IMPLEMENTATION.md §Post-release — SITE)
 - [ ] SITE-05 partial schemas for Riot's account, summoner, league and mastery payloads (IMPLEMENTATION.md §Post-release — SITE)
-- [x] SITE-06 `roleBoundItem` in `PlayerSummary`, next to `item6`: the role quest slot (a bot laner's boots, another role's quest reward), verbatim, absent when Riot didn't send it; the showcase shows it after the inventory (#PR, design/11, ADR-106)
+- [x] SITE-06 `roleBoundItem` in `PlayerSummary`, next to `item6`: the role quest slot (a bot laner's boots, another role's quest reward), verbatim, absent when Riot didn't send it; the showcase shows it after the inventory (#130, design/11, ADR-106)
 
 ## BLD — set builds on the champion page (owner request 2026-10-09)
 - [ ] BLD-01 per-player build facts from the timeline: `match_builds` (purchase order minus undos, finished items, boots, starter, skill order) filled by `builds:extract` before each recompute (IMPLEMENTATION.md §Post-release — BLD)
