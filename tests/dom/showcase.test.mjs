@@ -63,6 +63,20 @@ test('the ladder sorts by LP, pages by 25 and fills names for the visible page o
   assert.deepEqual(p.errors, []);
 });
 
+test("a Master list at Riot's cap says so under the ladder; a shorter list does not", async () => {
+  const p = await page({ apexSizes: { MASTER: 10000, GRANDMASTER: 700 } });
+  assert.equal(p.$('#ladder .cap-note'), null, 'Challenger: under the cap');
+  await p.click('#ladder [data-tier="MASTER"]');
+  assert.ok(p.text('#ladder').includes('page 1 of 400 · 10000 players'));
+  assert.equal(p.text('#ladder .cap-note'), 'Master: top 10,000 only (Riot API limit)');
+  assert.equal(p.$('#ladder .cap-note').previousElementSibling.className, 'pager', 'under the list');
+  await p.click('#ladder [data-page="1"]');
+  assert.ok(p.$('#ladder .cap-note'), 'on every page');
+  await p.click('#ladder [data-tier="GRANDMASTER"]');
+  assert.equal(p.$('#ladder .cap-note'), null);
+  assert.deepEqual(p.errors, []);
+});
+
 test('tier and queue toggles refetch the league; the queue also drives top champions', async () => {
   const p = await page();
   await p.click('#ladder [data-tier="MASTER"]');

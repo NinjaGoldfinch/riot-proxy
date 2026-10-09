@@ -66,7 +66,7 @@ fn entries(tier: &str, division: &str, page: u32, n: u32) -> Vec<Value> {
     (0..n)
         .map(|i| {
             json!({"puuid": format!("{tier}-{division}-{page}-{i}"), "rank": division,
-                   "leaguePoints": 100 - i, "wins": 10, "losses": 5, "veteran": i == 0})
+                   "leaguePoints": 100 - i64::from(i), "wins": 10, "losses": 5, "veteran": i == 0})
         })
         .collect()
 }
@@ -1033,6 +1033,7 @@ async fn crawls_are_listed_and_a_running_one_can_be_cancelled() {
         )
     );
     assert!(row["startedAt"].as_str().unwrap().ends_with('Z'));
+    assert_eq!(row["apexCapped"], json!([]), "no apex league stored yet");
     assert_eq!(
         a.call("GET", "/v1/admin/ladder/crawls?platform=euw1", &a.admin, None)
             .await
@@ -1123,6 +1124,60 @@ async fn crawls_are_listed_and_a_running_one_can_be_cancelled() {
             "{uri}"
         );
     }
+}
+
+/// LAD-01: Riot lists at most `RIOT_APEX_LIST_CAP` players in an apex league
+/// (kr, euw1 and na1's Master on 2026-10-09). A crawl that stores a list that
+/// long says so on its routes; the next crawl, with a shorter list, does not.
+#[tokio::test]
+async fn a_crawl_whose_master_list_is_at_the_cap_reports_it() {
+    use riot_proxy::riot::ladder::RIOT_APEX_LIST_CAP;
+    let a = app(&[]).await;
+    let e = Env {
+        db: a.state.db.clone(),
+        ..env().await
+    };
+    let cap = u32::try_from(RIOT_APEX_LIST_CAP).unwrap();
+    let crawl_route = |id: &str| format!("/v1/admin/ladder/crawls/{id}");
+
+    for (tier, n) in [("CHALLENGER", 300), ("GRANDMASTER", 700), ("MASTER", cap)] {
+        e.apex(tier, n).await;
+    }
+    let capped = e.start("MASTER").await;
+    let done = e.run(&e.ctx(0), &capped, 3).await;
+    assert_eq!(
+        (done.status.as_str(), done.counters.entries_seen),
+        ("completed", 11_000)
+    );
+    let one = a.call("GET", &crawl_route(&capped), &a.admin, None).await;
+    assert_eq!(one.status, StatusCode::OK);
+    assert_eq!(one.json()["crawl"]["apexCapped"], json!(["MASTER"]));
+
+    // The same ladder again, with Master one short of the cap.
+    e.server.reset().await;
+    for (tier, n) in [("CHALLENGER", 300), ("GRANDMASTER", 700), ("MASTER", cap - 1)] {
+        e.apex(tier, n).await;
+    }
+    let short = e.start("MASTER").await;
+    assert_eq!(e.run(&e.ctx(0), &short, 3).await.status, "completed");
+    assert_eq!(
+        a.call("GET", &crawl_route(&short), &a.admin, None).await.json()["crawl"]["apexCapped"],
+        json!([])
+    );
+    let list = a
+        .call("GET", "/v1/admin/ladder/crawls", &a.admin, None)
+        .await
+        .json();
+    let by_id = |id: &str| {
+        list["crawls"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == id)
+            .unwrap()["apexCapped"]
+            .clone()
+    };
+    assert_eq!((by_id(&capped), by_id(&short)), (json!(["MASTER"]), json!([])));
 }
 
 #[tokio::test]

@@ -59,6 +59,7 @@ test('a running crawl is a card: stage bars and totals, the rest folded under de
     assert.equal(bar.getAttribute('aria-valuenow'), '63');
     assert.equal(bar.querySelector('i').style.width, '62.5%');
     assert.equal(p.text(`#ladderRunning .totals`), '1,982 players21,137 match ids0 matches queued1 failed');
+    assert.equal(card.querySelector('.capped'), null, 'an uncapped crawl has no cap note');
 
     const more = card.querySelector('details.more');
     assert.equal(more.open, false, 'details are folded by default');
@@ -126,6 +127,12 @@ test('past crawls list finished runs ten at a time; a row opens into its detail'
     assert.equal(p.$(`tr[data-run="${DONE}"]`).getAttribute('aria-expanded'), 'true');
     assert.match(detail.textContent, /archive\s*done/);
     assert.ok(detail.textContent.includes('21,137 / 21,137 ids handed on'));
+    // Its Master list came back at Riot's cap: the note sits next to the player count.
+    assert.equal(
+      detail.querySelector('.totals').textContent.replace(/\s+/g, ' '),
+      '11,000 playersMaster: top 10,000 only (Riot API limit)21,137 match ids0 matches queued',
+    );
+    assert.equal(detail.querySelectorAll('.totals .capped').length, 1);
     assert.equal(detail.querySelector('details.more').open, true, 'an opened row shows its details');
     assert.ok(!detail.querySelector('[data-cancel]'), 'a finished crawl has nothing to cancel');
     detail.querySelector('details.more summary').click();
