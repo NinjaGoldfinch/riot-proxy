@@ -109,7 +109,7 @@
   <span class="row"><label for="rid">X-Request-Id</label><input id="rid" size="16" placeholder="auto"></span>
 </header>
 <nav id="nav">
-  <a href="#explorer">Explorer</a><a href="#status">Status</a><a href="#player">Player</a><a href="#live">Live</a><a href="#history">History</a><a href="#reset" class="danger">Reset</a>
+  <a href="#explorer">Explorer</a><a href="#status">Status</a><a href="#player">Player</a><a href="#live">Live</a><a href="#history">History</a><a href="#ladder">Ladder</a><a href="#reset" class="danger">Reset</a>
 </nav>
 <main>
   <section class="tab" id="tab-explorer">
@@ -171,6 +171,20 @@
     <div class="row" style="margin-bottom:12px"><button id="hClear">Clear history</button><span class="muted">last 50 requests, stored in this browser (no bodies)</span></div>
     <div class="card"><table><thead><tr><th>when</th><th>method</th><th>path</th><th>status</th><th>ms</th><th>request id</th><th></th></tr></thead><tbody id="hRows"></tbody></table></div>
     <div class="viewer" id="hView"></div>
+  </section>
+
+  <section class="tab" id="tab-ladder">
+    <form class="row card" id="lpForm">
+      <b>Apex cap probe</b>
+      <select id="lpPlatform" required></select>
+      <select id="lpQueue"><option value="RANKED_SOLO_5x5">RANKED_SOLO_5x5</option><option value="RANKED_FLEX_SR">RANKED_FLEX_SR</option></select>
+      <button class="primary" id="lpGo">Run checks</button>
+      <span class="muted" id="lpMsg"></span>
+    </form>
+    <p class="muted">Asks Riot now, skipping the cache, whether its Master list still stops at 10,000 players on this shard (found 2026-10-09, see LAD-01/LAD-02):
+      the three apex leagues, league-exp's MASTER/I pages until an empty one, and the paged route for MASTER. About 55 Riot calls and 10–15 s on a capped shard; nothing is stored.</p>
+    <div id="lpOut"></div>
+    <div class="viewer" id="lpView"></div>
   </section>
 
   <section class="tab" id="tab-reset">
@@ -431,6 +445,17 @@ function resetTotals(tables = []) {
   const nonEmpty = tables.filter((t) => t.rows > 0).sort((a, b) => b.rows - a.rows || a.name.localeCompare(b.name));
   return { total: tables.reduce((n, t) => n + (t.rows ?? 0), 0), nonEmpty };
 }
+
+/** A probe check's verdict as `[class, label]` (LAD-03). `changed` means Riot no longer answers as on 2026-10-09. */
+const probeVerdict = (v) => ({ confirmed: ['ok', '✓ confirmed'], 'not-seen': ['muted', '– not seen'], changed: ['no', '! changed'], error: ['no', '× error'] })[v] ?? ['muted', String(v ?? '?')];
+
+/** The probe's apex lists as table rows: a failed list has no counts, a full one is marked. */
+const probeLists = (lists = []) => lists.map((l) => ({
+  tier: l.tier,
+  players: l.error ? '—' : (l.entries ?? 0).toLocaleString('en-US'),
+  lowestLp: l.error || l.lowestLp == null ? '—' : String(l.lowestLp),
+  note: l.error ? `error: ${l.error}` : l.capped ? 'at the cap: players below are not listed' : '',
+}));
 // ---------- end pure helpers ----------
 
 // ---------- history ----------
@@ -959,6 +984,45 @@ $('#rsGo').onclick = async () => {
 };
 $('#tab-reset').addEventListener('click', (ev) => ev.target.dataset.raw && rsRes[ev.target.dataset.raw] && view($('#rsView'), rsRes[ev.target.dataset.raw], ev.target.dataset.raw));
 
+// ---------- ladder probe ----------
+const lpRes = {};
+$('#lpForm').onsubmit = async (ev) => {
+  ev.preventDefault();
+  const platform = $('#lpPlatform').value;
+  const queue = $('#lpQueue').value;
+  if (!platform) return;
+  store.set('rp.dev.probe', { platform, queue });
+  $('#lpGo').disabled = true;
+  $('#lpMsg').textContent = `asking Riot on ${platform}…`;
+  const r = await call('POST', '/v1/admin/ladder/probe', JSON.stringify({ platform, queue }));
+  lpRes.probe = r;
+  $('#lpGo').disabled = false;
+  $('#lpMsg').textContent = '';
+  if (r.status !== 200 || !r.json?.checks) {
+    $('#lpOut').innerHTML = '';
+    view($('#lpView'), r, 'Probe failed');
+    return;
+  }
+  view($('#lpView'), null);
+  const j = r.json;
+  const odd = j.checks.some((c) => c.verdict === 'changed' || c.verdict === 'error');
+  const e = j.exp ?? {};
+  $('#lpOut').innerHTML = `<div class="card">
+    <h3>${esc(j.platform)} · ${esc(j.queue)} <span class="muted">${(j.tookMs / 1000).toFixed(1)} s · cap ${j.cap.toLocaleString('en-US')}</span><button data-raw="probe">raw</button></h3>
+    <p id="lpSummary" class="${odd ? 'no' : 'ok'}"><b>${esc(j.summary)}</b></p>
+    <table><thead><tr><th>check</th><th>verdict</th><th>what Riot answered</th></tr></thead><tbody>${j.checks.map((c) => {
+      const [cls, label] = probeVerdict(c.verdict);
+      return `<tr data-check="${esc(c.id)}"><td>${esc(c.title)}</td><td class="${cls} mono">${esc(label)}</td><td>${esc(c.detail)}</td></tr>`;
+    }).join('')}</tbody></table>
+  </div>
+  <div class="card"><h3>Apex lists</h3>
+    <table><thead><tr><th>tier</th><th>players</th><th>lowest LP</th><th></th></tr></thead><tbody>${probeLists(j.lists).map((l) =>
+      `<tr data-tier="${esc(l.tier)}"><td>${esc(l.tier)}</td><td class="mono">${esc(l.players)}</td><td class="mono">${esc(l.lowestLp)}</td><td class="muted">${esc(l.note)}</td></tr>`).join('')}</tbody></table>
+    <p class="muted mono">league-exp MASTER/I: ${e.pages ?? 0} pages · ${(e.distinct ?? 0).toLocaleString('en-US')} players${e.inBoth != null ? ` · ${e.inBoth.toLocaleString('en-US')} in both · ${e.onlyInExp} only in league-exp · ${e.onlyInMaster} only in masterleagues` : ''}${e.truncated ? ' · stopped at the page limit' : ''}</p>
+  </div>`;
+};
+$('#tab-ladder').addEventListener('click', (ev) => ev.target.dataset.raw && lpRes[ev.target.dataset.raw] && view($('#lpView'), lpRes[ev.target.dataset.raw], ev.target.dataset.raw));
+
 // ---------- shell ----------
 // Esc closes the newest thing open on the current tab: an open scoreboard, else the response window.
 document.addEventListener('keydown', (e) => {
@@ -994,6 +1058,9 @@ async function boot() {
   const last = store.get('rp.dev.player', {});
   $('#plPlatform').innerHTML = `<option value="">platform…</option>${cfg.platforms.map((p) => `<option value="${esc(p.value)}" ${p.value === last.platform ? 'selected' : ''}>${esc(p.value)} · ${esc(p.label)}</option>`).join('')}`;
   $('#plId').value = last.id ?? '';
+  const probed = store.get('rp.dev.probe', {});
+  $('#lpPlatform').innerHTML = `<option value="">platform…</option>${cfg.platforms.map((p) => `<option value="${esc(p.value)}" ${p.value === probed.platform ? 'selected' : ''}>${esc(p.value)} · ${esc(p.label)}</option>`).join('')}`;
+  if (probed.queue) $('#lpQueue').value = probed.queue;
   $('#opFilter').oninput = renderOpList;
   window.onhashchange = route;
   route();

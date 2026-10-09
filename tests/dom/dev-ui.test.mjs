@@ -16,6 +16,20 @@ const ARCHIVED = 112;
 
 const line = (i) => ({ matchId: `OC1_${1000 + i}`, queueId: 420, gameMode: 'CLASSIC', gameDuration: 1500, gameEndTimestamp: 1_760_000_000_000 - i * 1e6, player: { win: i % 3 !== 0, kills: i, deaths: 2, assists: 3, totalMinionsKilled: 150, neutralMinionsKilled: 10, championName: 'Viego', gameEndedInEarlySurrender: i === 7 } });
 
+/** `POST /v1/admin/ladder/probe` on a capped shard (LAD-03). */
+const PROBE = {
+  platform: 'oc1', queue: 'RANKED_SOLO_5x5', tookMs: 8400, cap: 10000, churnTolerance: 10,
+  summary: 'Capped: Riot returns the top 10000 Master players only, and no route here lists the rest.',
+  checks: [
+    { id: 'master-capped', title: 'masterleagues stops at the cap', verdict: 'confirmed', detail: 'masterleagues lists exactly 10000 players, the lowest on 313 LP.' },
+    { id: 'exp-same-list', title: 'league-exp lists nobody masterleagues lacks', verdict: 'confirmed', detail: '49 pages (160 on the last)' },
+    { id: 'paged-refuses-apex', title: 'entries/…/MASTER/I is refused', verdict: 'changed', detail: 'Answered 200 with 205 entries on page 1' },
+  ],
+  lists: [{ tier: 'MASTER', entries: 10000, lowestLp: 313, capped: true, error: null }, { tier: 'GRANDMASTER', entries: 700, lowestLp: 410, capped: false, error: null }, { tier: 'CHALLENGER', entries: 300, lowestLp: 900, capped: false, error: null }],
+  exp: { pages: 49, entries: 10000, lastPageSize: 160, distinct: 10000, inBoth: 9998, onlyInExp: 2, onlyInMaster: 2, truncated: false, error: null },
+  pagedMaster: { status: 'answered', entries: 205, error: null },
+};
+
 /** The proxy as the page sees it. Every request is logged as `METHOD path?query`. */
 function api(calls, url, opts = {}) {
   const u = new URL(url, 'http://localhost');
@@ -46,6 +60,7 @@ function api(calls, url, opts = {}) {
     latestJobs: [{ kind: 'backfill:player', state: 'running', payload: { puuid: PUUID, limit: 500 }, attempts: 1 }],
   };
   if (p.startsWith('/v1/lol/matches/')) return match;
+  if (p === '/v1/admin/ladder/probe') return PROBE;
   if (p === '/dev/reset') {
     const tables = [{ name: 'matches', rows: m === 'POST' ? 112 : 0 }, { name: 'players', rows: 1 }, { name: 'jobs', rows: 2050 }];
     return m === 'POST' ? { ok: true, tables, l1Entries: 4, runningJobs: 1, tookMs: 3 } : { tables, l1Entries: 4, runningJobs: 1, kept: ['consumers', 'limiter_state'] };
@@ -211,4 +226,24 @@ test('the Reset tab is the last in the nav', async () => {
   const links = [...p.w.document.querySelectorAll('#nav a')].map((a) => a.getAttribute('href'));
   assert.equal(links.at(-1), '#reset');
   assert.ok(p.$('#tab-reset').classList.contains('on'));
+});
+
+test('the ladder tab runs the apex probe only when asked and shows each verdict', async () => {
+  const p = await page({ hash: 'ladder' });
+  assert.ok(p.$('#tab-ladder').classList.contains('on'));
+  assert.ok(!p.calls.some((c) => c.includes('/ladder/probe')), 'opening the tab costs no Riot calls');
+  p.$('#lpPlatform').value = 'oc1';
+  p.$('#lpForm').dispatchEvent(new p.w.Event('submit', { cancelable: true }));
+  await p.settle();
+  assert.deepEqual(p.sent, [{ url: '/v1/admin/ladder/probe', method: 'POST', body: '{"platform":"oc1","queue":"RANKED_SOLO_5x5"}' }]);
+  assert.match(p.text('#lpSummary'), /^Capped/);
+  assert.ok(p.$('#lpSummary').classList.contains('no'), 'a changed check flags the summary');
+  assert.match(p.text('#lpOut [data-check="master-capped"]'), /confirmed/);
+  assert.match(p.text('#lpOut [data-check="paged-refuses-apex"]'), /changed/);
+  assert.match(p.text('#lpOut [data-tier="MASTER"]'), /10,000\s*313\s*at the cap/);
+  assert.match(p.text('#lpOut'), /9,998 in both · 2 only in league-exp/);
+  assert.equal(JSON.parse(p.w.localStorage.getItem('rp.dev.probe')).platform, 'oc1', 'the choice is remembered');
+  await p.click('#lpOut [data-raw="probe"]');
+  assert.ok(p.$('#lpView [data-close]'), 'raw opens the response window');
+  assert.deepEqual(p.errors, []);
 });

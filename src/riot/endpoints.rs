@@ -88,7 +88,7 @@ const fn ep(
 use HostKind::{Account, Platform as OnPlatform, Regional};
 use NegTtl::{Account as NegAccount, Default as NegDefault, None as NoNeg};
 
-/// In v1's `METHOD_IDS` order.
+/// In v1's `METHOD_IDS` order, then v2's additions ([`V2_ADDED`]).
 pub const ENDPOINTS: &[Endpoint] = &[
     ep(
         "account.byRiotId",
@@ -254,7 +254,24 @@ pub const ENDPOINTS: &[Endpoint] = &[
         false,
         NoNeg,
     ),
+    // v2 (LAD-03). league-exp-v4 pages a tier like `entriesByTier` but also
+    // takes the apex tiers; the route and its paging are as the owner checked
+    // it (IMPLEMENTATION.md §Post-release — LAD). Only the apex probe calls it,
+    // so it is not persisted.
+    ep(
+        "league.expEntries",
+        OnPlatform,
+        "/lol/league-exp/v4/entries/{queue}/{tier}/{division}",
+        &["page"],
+        "ladder",
+        secs(120),
+        false,
+        NoNeg,
+    ),
 ];
+
+/// Method ids v2 added after v1's list, in registry order.
+pub const V2_ADDED: &[&str] = &["league.expEntries"];
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum PathError {
@@ -504,7 +521,7 @@ mod tests {
         p.ttls(ep(id)).soft.map(|d| d.as_secs())
     }
 
-    /// `cargo test endpoints::parity`: every v1 method id, and nothing else.
+    /// `cargo test endpoints::parity`: every v1 method id, then v2's additions.
     #[test]
     fn parity() {
         let v1: Vec<&str> = include_str!("../../docs/contract/v1-endpoints.txt")
@@ -512,7 +529,8 @@ mod tests {
             .filter(|l| !l.is_empty() && !l.starts_with('#'))
             .collect();
         let ours: Vec<&str> = ENDPOINTS.iter().map(|e| e.id).collect();
-        assert_eq!(ours, v1);
+        let want: Vec<&str> = v1.iter().chain(V2_ADDED).copied().collect();
+        assert_eq!(ours, want);
     }
 
     /// v1 "uses the documented TTL table", plus design/04 hard TTLs (×4).
@@ -528,6 +546,7 @@ mod tests {
             ("league.grandmaster", 120, 480),
             ("league.master", 120, 480),
             ("league.entriesByTier", 120, 480),
+            ("league.expEntries", 120, 480),
             ("match.idsByPuuid", 120, 480),
             ("spectator.activeGame", 30, 120),
             ("mastery.byPuuid", 3600, 14_400),
@@ -647,6 +666,7 @@ mod tests {
             "league.grandmaster",
             "league.master",
             "league.entriesByTier",
+            "league.expEntries",
         ] {
             assert_eq!(ep(id).override_key, "ladder", "{id}");
             assert_eq!(ep(id).host, HostKind::Platform);
@@ -794,8 +814,9 @@ mod tests {
             ("platform", "champion rotations"),
             ("status", "lol-status-v4"),
         ];
-        // Ladder reads are the ninth group, prefixed "league." like per-player entries.
-        assert_eq!(ENDPOINTS.iter().filter(|e| e.override_key == "ladder").count(), 4);
+        // Ladder reads are the ninth group, prefixed "league." like per-player
+        // entries; league-exp (LAD-03) joined v1's four.
+        assert_eq!(ENDPOINTS.iter().filter(|e| e.override_key == "ladder").count(), 5);
         for e in ENDPOINTS {
             let group = e.id.split('.').next().unwrap();
             assert!(groups.iter().any(|(g, _)| *g == group), "{} has no group", e.id);

@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 const html = readFileSync(new URL('../src/ui/dev-ui.html', import.meta.url), 'utf8');
 const block = html.match(/\/\/ -{10} pure helpers[^\n]*\n([\s\S]*?)\/\/ -{10} end pure helpers/);
 assert.ok(block, 'the pure helpers block is marked in dev-ui.html');
-const h = new Function(`${block[1]}; return { PAGE_SIZES, MATCH_CALL_MAX, pageCalls, mergePages, pageSummary, queueIndex, scoreboard, walkStatus, archivePage, pageCount, patchOf, clock, kdaRatio, kilo, role, RESET_WORD, resetArmed, resetTotals };`)();
+const h = new Function(`${block[1]}; return { PAGE_SIZES, MATCH_CALL_MAX, pageCalls, mergePages, pageSummary, queueIndex, scoreboard, walkStatus, archivePage, pageCount, patchOf, clock, kdaRatio, kilo, role, RESET_WORD, resetArmed, resetTotals, probeVerdict, probeLists };`)();
 
 test('page sizes are 10, 25 and 50', () => assert.deepEqual(h.PAGE_SIZES, [10, 25, 50]));
 
@@ -163,4 +163,24 @@ test('reset totals sum every table and list the non-empty ones, largest first', 
   assert.deepEqual(r.nonEmpty.map((t) => t.name), ['matches', 'cache', 'jobs']);
   assert.deepEqual(h.resetTotals([]), { total: 0, nonEmpty: [] });
   assert.deepEqual(h.resetTotals(), { total: 0, nonEmpty: [] });
+});
+
+test('probe verdicts flag what Riot no longer does', () => {
+  assert.deepEqual(h.probeVerdict('confirmed'), ['ok', '✓ confirmed']);
+  assert.equal(h.probeVerdict('not-seen')[0], 'muted');
+  assert.equal(h.probeVerdict('changed')[0], 'no');
+  assert.equal(h.probeVerdict('error')[0], 'no');
+  assert.deepEqual(h.probeVerdict('new-one'), ['muted', 'new-one'], 'an unknown verdict is shown as is');
+});
+
+test('probe lists mark a full list and leave a failed one without counts', () => {
+  const rows = h.probeLists([
+    { tier: 'MASTER', entries: 10000, lowestLp: 313, capped: true, error: null },
+    { tier: 'GRANDMASTER', entries: 700, lowestLp: 0, capped: false, error: null },
+    { tier: 'CHALLENGER', entries: null, lowestLp: null, capped: false, error: 'UPSTREAM_ERROR' },
+  ]);
+  assert.deepEqual(rows[0], { tier: 'MASTER', players: '10,000', lowestLp: '313', note: 'at the cap: players below are not listed' });
+  assert.deepEqual([rows[1].lowestLp, rows[1].note], ['0', '']);
+  assert.deepEqual([rows[2].players, rows[2].lowestLp, rows[2].note], ['—', '—', 'error: UPSTREAM_ERROR']);
+  assert.deepEqual(h.probeLists(), []);
 });
