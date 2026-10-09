@@ -704,7 +704,7 @@ async fn patch_all_sums_every_patch_and_the_patch_list_offers_them() {
     let body = redact(r.json());
     assert_eq!(
         body,
-        json!({"platform": "kr", "queue": "RANKED_SOLO_5x5", "patches": [
+        json!({"platform": "kr", "queue": "RANKED_SOLO_5x5", "championId": null, "patches": [
             {"patch": "16.19", "games": 10, "computedAt": "<iso>"},
             {"patch": "16.18", "games": 10, "computedAt": "<iso>"}]})
     );
@@ -719,6 +719,34 @@ async fn patch_all_sums_every_patch_and_the_patch_list_offers_them() {
         )
         .await;
     assert_eq!(again.status, StatusCode::NOT_MODIFIED);
+    // One champion's list counts its games only: one ranked game per patch (ADR-100).
+    let r = e
+        .get(&format!("/v1/lol/analytics/patches?platform=kr&championId={id}"))
+        .await;
+    assert_ne!(
+        r.headers["etag"].to_str().unwrap(),
+        tag,
+        "the champion is in the ETag"
+    );
+    assert_eq!(
+        redact(r.json()),
+        json!({"platform": "kr", "queue": "RANKED_SOLO_5x5", "championId": id, "patches": [
+            {"patch": "16.19", "games": 1, "computedAt": "<iso>"},
+            {"patch": "16.18", "games": 1, "computedAt": "<iso>"}]})
+    );
+    assert_eq!(
+        e.get("/v1/lol/analytics/patches?platform=kr&championId=99999")
+            .await
+            .json()["patches"],
+        json!([])
+    );
+    assert_eq!(
+        error(&e.get("/v1/lol/analytics/patches?championId=0").await),
+        (
+            StatusCode::BAD_REQUEST,
+            "querystring/championId must be >= 1".into()
+        )
+    );
     // The remake adds its players back in.
     let with = e.get("/v1/lol/analytics/patches?remakes=include").await.json();
     assert_eq!(with["platform"], Value::Null);

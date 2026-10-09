@@ -227,6 +227,7 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 - [x] DEV-22 the dev reset stops running jobs first: `Queue::halt` holds the workers and aborts what they run, the reset wipes (jobs included) and lets them go; the response adds `stoppedJobs` (#115, design/06, design/10, ADR-096)
 - [x] DEV-23 timelines on by default: `ARCHIVE_TIMELINES` defaults to `true`, so ladder crawls, polls and backfills fetch each archived match's timeline; `false` turns it off (#118, design/04, design/07, ADR-098)
 - [x] DEV-24 the showcase and the `/dev` explorer revalidate every call (`cache: 'no-cache'`), so a recompute shows at once instead of after the analytics routes' `max-age=300` (#119, design/10, design/11, ADR-099)
+- [x] DEV-25 the champion page's patch picker counts that champion's games: `GET /v1/lol/analytics/patches` takes `championId` and then lists only the patches it was played on, with its games (#120, design/11, ADR-100)
 
 ## SCH — scheduler fairness and an elastic pool (owner requests 2026-10-08/09)
 - [x] SCH-01 rate-limit-aware job claims: one lane per limiter scope plus the job's main endpoint, claims skip a region only when its app limit is full (a capped endpoint blocks only jobs that use it), spread over free regions, rate-limited jobs yield their worker and re-queue without using an attempt (IMPLEMENTATION.md §Post-release — SCH) (#107, ADR-089)

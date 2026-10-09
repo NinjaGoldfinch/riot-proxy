@@ -62,7 +62,7 @@ expression: doc
             ]
           },
           "games": {
-            "description": "Participant games, as `totalGames` counts them on the champions route.",
+            "description": "Participant games, as `totalGames` counts them on the champions route;\nwith `championId`, that champion's games.",
             "format": "int64",
             "type": "integer"
           },
@@ -81,6 +81,14 @@ expression: doc
       "AnalyticsPatchesResponse": {
         "description": "The patches a ladder has analytics for (ADR-094).",
         "properties": {
+          "championId": {
+            "description": "The champion asked for, whose games each entry then counts; `null` for every champion.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "patches": {
             "description": "Newest first.",
             "items": {
@@ -102,6 +110,7 @@ expression: doc
         "required": [
           "platform",
           "queue",
+          "championId",
           "patches"
         ],
         "type": "object"
@@ -6825,7 +6834,7 @@ expression: doc
     },
     "/v1/lol/analytics/patches": {
       "get": {
-        "description": "The patches the analytics tables hold for a ladder, newest first, with each one's games: what a client offers as `patch` choices on the other analytics routes (`all` sums them). Sends an `ETag`; a matching `If-None-Match` gets 304.",
+        "description": "The patches the analytics tables hold for a ladder, newest first, with each one's games: what a client offers as `patch` choices on the other analytics routes (`all` sums them). With `championId`, only the patches that champion was played on, each with its games. Sends an `ETag`; a matching `If-None-Match` gets 304.",
         "operationId": "patches",
         "parameters": [
           {
@@ -6844,6 +6853,16 @@ expression: doc
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "≥ 1: count only this champion's games",
+            "in": "query",
+            "name": "championId",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
             }
           },
           {

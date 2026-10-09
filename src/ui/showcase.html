@@ -677,10 +677,12 @@ async function loadRotation() {
     : `<p class="empty">No rotation published.</p>`);
 }
 
-/** The patches a ladder has analytics for; [] when the call fails, so the page still reads every patch. */
-async function patchList(platformId) {
+/** The patches a ladder has analytics for, with one champion's games when given one (DEV-25);
+ * [] when the call fails, so the page still reads every patch. */
+async function patchList(platformId, championId) {
   const q = new URLSearchParams({ queue: state.queue });
   if (platformId) q.set('platform', platformId);
+  if (championId) q.set('championId', String(championId));
   const res = await get(`/v1/lol/analytics/patches?${q}`);
   return res.ok ? res.json?.patches ?? [] : [];
 }
@@ -1101,7 +1103,8 @@ async function renderChampion({ id }) {
       <div><section class="card" id="cBuild"><header><h2>Builds</h2></header><p class="muted">loading…</p></section></div>
     </div>`;
   const region = champRegion();
-  const patches = await patchList(region);
+  // The champion's own games per patch, not the ladder's (DEV-25).
+  const patches = await patchList(region, id);
   if (seq !== viewSeq) return;
   state.patch = pickPatch(state.patch, patches);
   $('#cPatch').innerHTML = patchSelect(patches);
@@ -1120,7 +1123,7 @@ async function renderChampion({ id }) {
   const { rows, all } = tierRows(d.stats);
   const none = patches.length
     ? `<p class="empty">Not enough ${esc(name)} games on ${esc(patchLabel(state.patch))}${region ? '' : ' in any region'} yet.</p>`
-    : `<p class="empty">No analytics for ${esc(name)} yet: they fill in when a ladder crawl${region ? ' for this platform' : ''} completes.</p>`;
+    : `<p class="empty">No ${esc(name)} games in the analytics yet: they fill in when a ladder crawl${region ? ' for this platform' : ''} completes.</p>`;
   const num = (v, f) => (v == null ? '–' : f(v));
   $('#cTiers').innerHTML = `<header><h2>By tier</h2>${rows.length ? `<span class="muted">${pct(all.winRate)} win over ${all.games.toLocaleString()} games</span>` : ''}</header><div>${sources(OP.champ)}</div>` + (rows.length
     ? `<div class="scroll"><table><thead><tr><th>Tier</th><th class="n">Games</th><th>Win rate</th><th class="n">Pick</th><th class="n">Ban</th><th class="n hide-sm">KDA</th><th class="n hide-sm">CS/min</th><th class="n hide-sm">Gold/min</th></tr></thead><tbody>${rows.map((r) => `<tr>
