@@ -160,6 +160,13 @@ CREATE TABLE analytics_slices (                   -- distinct matches per tier: 
   key_scope, platform, queue, tier, patch, remake, matches, computed_at,
   PRIMARY KEY (key_scope, platform, queue, tier, patch, remake)
 );
+-- A match with players in several tiers is in each tier's slice and bans, so
+-- a row summed over every tier (no `tier` asked for) takes its denominators
+-- from the V0015 totals, which count it once (ADR-123).
+CREATE TABLE analytics_match_totals (             -- V0015: distinct matches, every tier
+  key_scope, platform, queue, patch, remake, matches, computed_at,
+  PRIMARY KEY (key_scope, platform, queue, patch, remake)
+);
 CREATE TABLE champion_stats (                     -- per tier and role
   key_scope, platform, queue, tier, patch, champion_id, role, remake,
   games, wins, matches_picked, stated_games, kills, deaths, assists, cs, gold, damage, vision,
@@ -167,6 +174,10 @@ CREATE TABLE champion_stats (                     -- per tier and role
   PRIMARY KEY (key_scope, platform, queue, tier, patch, champion_id, role, remake)
 );
 CREATE TABLE champion_bans (key_scope, platform, queue, tier, patch, champion_id, remake, bans, computed_at, …);
+CREATE TABLE champion_ban_totals (                -- V0015: matches banned in, every tier
+  key_scope, platform, queue, patch, champion_id, remake, bans, computed_at,
+  PRIMARY KEY (key_scope, platform, queue, patch, champion_id, remake)
+);
 CREATE TABLE champion_matchups (                  -- no tier; one row per (lane, opponent)
   key_scope, platform, queue, patch, champion_id, role, opponent_id, remake, games, wins, computed_at, …);
 CREATE TABLE champion_items  (… champion_id, role, item_id, remake, games, wins, computed_at);

@@ -51,14 +51,19 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(patches))
 }
 
-/// One champion at one tier (v1 `ChampionStatEntry`).
+/// One champion at one tier, or summed over every tier (v1 `ChampionStatEntry`).
+/// The averages are the row's sums over its games, so on a summed row every
+/// game weighs the same, whatever its tier.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ChampionStatEntry {
     champion_id: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     champion_name: Option<String>,
-    tier: String,
+    /// The row's tier; `null` on a row summed over every tier, which the
+    /// routes return when the request names no `tier`.
+    #[schema(required = true)]
+    tier: Option<String>,
     patch: String,
     games: i64,
     wins: i64,
@@ -67,9 +72,12 @@ pub struct ChampionStatEntry {
     /// Of the games in the rows returned.
     #[serde(serialize_with = "js_number")]
     share: f64,
-    /// Matches picked over the tier's matches, capped at 1. Absent without a slice.
+    /// Matches picked over the slice's matches that had a player at the
+    /// row's tier, capped at 1; on a row summed over every tier, over every
+    /// match in the slice, each counted once. Absent when there are none.
     #[serde(skip_serializing_if = "Option::is_none", serialize_with = "js_opt_number")]
     pick_rate: Option<f64>,
+    /// Matches it was banned in over the same matches as `pickRate`.
     #[serde(skip_serializing_if = "Option::is_none", serialize_with = "js_opt_number")]
     ban_rate: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none", serialize_with = "js_opt_number")]
@@ -207,8 +215,14 @@ pub struct ChampionDetailResponse {
     #[schema(required = true)]
     computed_at: Option<String>,
     sections_computed_at: SectionsComputedAt,
+    /// The games of `stats`.
     total_games: i64,
+    /// One row summed over every tier, or the named `tier`'s row; empty when
+    /// the champion has fewer than `minGames` games in the slice.
     stats: Vec<ChampionStatEntry>,
+    /// A row per tier, most played first: every tier's, or only the named
+    /// `tier`'s. `minGames` applies to each row.
+    by_tier: Vec<ChampionStatEntry>,
     matchups: Vec<ChampionMatchupEntry>,
     items: Vec<ChampionItemEntry>,
     runes: Vec<ChampionRuneEntry>,
@@ -345,6 +359,12 @@ pub struct AnalyticsPatchesResponse {
 
 /// `?patch=all`: every aggregated patch summed (ADR-094).
 const ALL_PATCHES: &str = "all";
+
+/// In the champion routes' `ETag`: the documents' shape. Without a `tier`
+/// they changed from a row per tier to one summed row (SITE-08, ADR-123) for
+/// the same query and the same rows, so a validator issued before must not
+/// get a 304 now. Change it whenever that happens again.
+const STATS_SHAPE: &str = "summed-tiers";
 
 /// What every analytics query names, validated in v1's property order.
 struct Common {
@@ -493,24 +513,46 @@ fn rate(n: i64, d: i64) -> f64 {
     if d == 0 { 0.0 } else { round4(n as f64 / d as f64) }
 }
 
+/// Pick- and ban-rate denominators, by a stat row's tier: `Some` a tier's
+/// (`analytics_slices`, `champion_bans`), `None` every tier's, a match once
+/// (`analytics_match_totals`, `champion_ban_totals`; ADR-123).
+#[derive(Debug, Default)]
+struct Rates {
+    matches: HashMap<Option<String>, i64>,
+    bans: HashMap<(Option<String>, i64), i64>,
+}
+
+impl Rates {
+    /// `slices` and `bans` per tier; `totals` and `ban_totals` over every tier.
+    fn new(
+        slices: Vec<(String, i64)>,
+        bans: Vec<(String, i64, i64)>,
+        totals: i64,
+        ban_totals: Vec<(i64, i64)>,
+    ) -> Self {
+        let mut matches: HashMap<_, _> = slices.into_iter().map(|(t, m)| (Some(t), m)).collect();
+        matches.insert(None, totals);
+        let mut banned: HashMap<_, _> = bans.into_iter().map(|(t, c, b)| ((Some(t), c), b)).collect();
+        banned.extend(ban_totals.into_iter().map(|(c, b)| ((None, c), b)));
+        Self {
+            matches,
+            bans: banned,
+        }
+    }
+}
+
 /// v1 `enrichChampionStats`: rates, averages and shares over exactly `rows`.
 #[allow(clippy::cast_precision_loss)]
-fn enrich(
-    rows: Vec<StatRow>,
-    slices: &[(String, i64)],
-    bans: &[(String, i64, i64)],
-    names: &HashMap<i64, String>,
-) -> (i64, Vec<ChampionStatEntry>) {
-    let slice: HashMap<&str, i64> = slices.iter().map(|(t, m)| (t.as_str(), *m)).collect();
-    let banned: HashMap<(&str, i64), i64> = bans.iter().map(|(t, c, b)| ((t.as_str(), *c), *b)).collect();
+fn enrich(rows: Vec<StatRow>, rates: &Rates, names: &HashMap<i64, String>) -> (i64, Vec<ChampionStatEntry>) {
     let total: i64 = rows.iter().map(|r| r.games).sum();
     let entries = rows
         .into_iter()
         .map(|r| {
-            let matches = slice.get(r.tier.as_str()).copied().filter(|m| *m > 0);
+            let matches = rates.matches.get(&r.tier).copied().filter(|m| *m > 0);
             // No ban row in a slice that exists is a computed zero (v1).
-            let bans = banned
-                .get(&(r.tier.as_str(), r.champion_id))
+            let bans = rates
+                .bans
+                .get(&(r.tier.clone(), r.champion_id))
                 .copied()
                 .unwrap_or(0);
             let minutes = r.duration_s as f64 / 60.0;
@@ -568,6 +610,20 @@ async fn patch_or_latest(state: &AppState, c: &Common) -> Result<Option<String>,
     analytics::latest_patch(&state.db, &scope, c.platform.as_deref(), &c.queue).await
 }
 
+/// The denominators of `read`'s stat rows, per tier and over every tier.
+/// Bans and matches have no role: a pick rate in one role is still over every
+/// match.
+async fn rates(state: &AppState, read: Read) -> Result<Rates, DbError> {
+    let read = Read { role: None, ..read };
+    let (slices, bans, totals, ban_totals) = tokio::try_join!(
+        analytics::slices(&state.db, read.clone()),
+        analytics::bans(&state.db, read.clone()),
+        analytics::match_totals(&state.db, read.clone()),
+        analytics::ban_totals(&state.db, read),
+    )?;
+    Ok(Rates::new(slices, bans, totals, ban_totals))
+}
+
 impl Common {
     fn read(&self, state: &AppState, patch: &str) -> Read {
         Read {
@@ -591,15 +647,19 @@ impl Common {
 
 #[utoipa::path(
     get, path = "/v1/lol/analytics/champions", tag = "lol",
-    summary = "Champion pick and win rates by tier",
+    summary = "Champion pick, ban and win rates",
     description = "Aggregated from every archived match on the platform. Each participant is placed at the tier the \
         ladder crawl or the latest league lookup of that player found them at, whichever is newer, and under \
-        `UNKNOWN` when neither has. Recomputed per (platform, queue) when a crawl completes. Sends an `ETag`; a matching \
+        `UNKNOWN` when neither has. Without `tier`, one row per champion summed over every tier (`tier: null`): \
+        pick and ban rates over every match in the slice (platform, queue, patch), each match counted once however \
+        many tiers its players were in, and averages over all the champion's games. With `tier`, a row per champion \
+        at that tier, its rates over the matches that had a player at the tier. `minGames` and `limit` apply to the \
+        rows returned. Recomputed per (platform, queue) when a crawl completes. Sends an `ETag`; a matching \
         `If-None-Match` gets 304. Games Riot flagged as remakes are left out unless `remakes=include`.",
     params(
         ("platform" = Option<String>, Query, description = "Only this platform's ladder. Omitted sums every platform"),
         ("queue" = Option<String>, Query, description = "RANKED_SOLO_5x5 or RANKED_FLEX_SR; default the first of `LADDER_QUEUES`"),
-        ("tier" = Option<String>, Query, description = "IRON … CHALLENGER, or UNKNOWN; default every tier"),
+        ("tier" = Option<String>, Query, description = "IRON … CHALLENGER, or UNKNOWN: that tier's rows. Omitted: one row per champion summed over every tier, pick and ban rates over every match in the slice"),
         ("patch" = Option<String>, Query, description = "`major.minor`, or `all` to sum every aggregated patch; default the newest aggregated patch"),
         ("role" = Option<String>, Query, description = "TOP, JUNGLE, MIDDLE, BOTTOM, UTILITY or empty; default every role summed"),
         ("minGames" = Option<i64>, Query, description = "≥ 0; default `AGGREGATE_MIN_GAMES`"),
@@ -624,30 +684,29 @@ async fn champions(
         Ok(p) => p,
         Err(e) => return internal(&e),
     };
-    let (rows, slices, bans) = match &patch {
+    let (rows, rates) = match &patch {
         Some(p) => {
             let read = Read {
                 min_games,
                 ..c.read(&state, p)
             };
-            let got = tokio::try_join!(
-                analytics::stats(&state.db, read.clone()),
-                analytics::slices(&state.db, read.clone()),
-                analytics::bans(&state.db, Read { role: None, ..read }),
-            );
+            // Without a tier, a row per champion summed over every tier, its
+            // rates over the totals (ADR-123).
+            let got = tokio::try_join!(analytics::stats(&state.db, read.clone()), rates(&state, read));
             match got {
                 Ok(g) => g,
                 Err(e) => return internal(&e),
             }
         }
-        None => (vec![], vec![], vec![]),
+        None => (vec![], Rates::default()),
     };
     let computed_at = newest(rows.iter().map(|r| r.computed_at));
     let ids: Vec<i64> = rows.iter().map(|r| r.champion_id).collect();
     let names = state.ddragon.champion_names(&ids).await;
-    let (total_games, champions) = enrich(rows, &slices, &bans, &names);
+    let (total_games, champions) = enrich(rows, &rates, &names);
     let tag = etag(&[
         some("champions"),
+        some(STATS_SHAPE),
         computed_at.clone(),
         state.ddragon.current_version().await,
         c.platform.clone(),
@@ -767,15 +826,17 @@ async fn champion_matchups(
 #[utoipa::path(
     get, path = "/v1/lol/analytics/champions/{championId}", tag = "lol",
     summary = "Champion detail composite",
-    description = "Sends an `ETag`; a matching `If-None-Match` gets 304. The stat row(s) at this slice plus this \
-        champion's top lane matchups, items, runes and summoner spells — one call for a champion page. Each section \
-        is independently trimmed by `minGames`/`limit`; a champion nobody has data for yet still returns 200 with \
-        empty arrays rather than a 404.",
+    description = "Sends an `ETag`; a matching `If-None-Match` gets 304. The champion's stat row at this slice, its \
+        rows per tier, and its top lane matchups, items, runes and summoner spells — one call for a champion page. \
+        Without `tier`, `stats` is one row summed over every tier (`tier: null`), its pick and ban rates over every \
+        match in the slice, and `byTier` has a row per tier; with `tier`, both hold that tier's row. Each section is \
+        independently trimmed by `minGames`/`limit` (`stats` and `byTier` by `minGames` only); a champion nobody has \
+        data for yet still returns 200 with empty arrays rather than a 404.",
     params(
         ("championId" = i64, Path, description = "Champion id, ≥ 1"),
         ("platform" = Option<String>, Query, description = "Only this platform's ladder. Omitted sums every platform"),
         ("queue" = Option<String>, Query, description = "RANKED_SOLO_5x5 or RANKED_FLEX_SR"),
-        ("tier" = Option<String>, Query, description = "IRON … CHALLENGER, or UNKNOWN; applies to `stats`"),
+        ("tier" = Option<String>, Query, description = "IRON … CHALLENGER, or UNKNOWN: `stats` and `byTier` are that tier's row. Omitted: `stats` is one row summed over every tier, pick and ban rates over every match in the slice, and `byTier` a row per tier"),
         ("patch" = Option<String>, Query, description = "`major.minor`, or `all` to sum every aggregated patch; default the newest aggregated patch"),
         ("role" = Option<String>, Query, description = "TOP, JUNGLE, MIDDLE, BOTTOM, UTILITY or empty"),
         ("minGames" = Option<i64>, Query, description = "≥ 0; default `AGGREGATE_MIN_GAMES`"),
@@ -809,14 +870,14 @@ async fn champion_detail(
     };
     type Sections = (
         Vec<StatRow>,
-        Vec<(String, i64)>,
-        Vec<(String, i64, i64)>,
+        Vec<StatRow>,
+        Rates,
         Vec<FacetRow>,
         Vec<FacetRow>,
         Vec<FacetRow>,
         Vec<FacetRow>,
     );
-    let (stats, slices, bans, matchups, items, runes, spells): Sections = match &patch {
+    let (stats, by_tier, rates, matchups, items, runes, spells): Sections = match &patch {
         Some(p) => {
             let base = Read {
                 champion_id: Some(id),
@@ -832,10 +893,12 @@ async fn champion_detail(
                 tier: None,
                 ..base.clone()
             };
+            // No tier: `stats` is the one row summed over every tier, and
+            // `byTier` has a row per tier (ADR-123).
             let got = tokio::try_join!(
-                analytics::stats(&state.db, stats),
-                analytics::slices(&state.db, base.clone()),
-                analytics::bans(&state.db, base.clone()),
+                analytics::stats(&state.db, stats.clone()),
+                analytics::stats_by_tier(&state.db, stats),
+                rates(&state, base.clone()),
                 analytics::facet(&state.db, Facet::Matchups, facets.clone()),
                 analytics::facet(&state.db, Facet::Items, facets.clone()),
                 analytics::facet(&state.db, Facet::Runes, facets.clone()),
@@ -853,7 +916,7 @@ async fn champion_detail(
     let names = state.ddragon.champion_names(&ids).await;
     let stamp = |rows: &[FacetRow]| newest(rows.iter().map(|r| r.computed_at));
     let sections = SectionsComputedAt {
-        stats: newest(stats.iter().map(|r| r.computed_at)),
+        stats: newest(stats.iter().chain(&by_tier).map(|r| r.computed_at)),
         matchups: stamp(&matchups),
         items: stamp(&items),
         runes: stamp(&runes),
@@ -868,14 +931,15 @@ async fn champion_detail(
     ];
     // ISO stamps of one format sort as their times do.
     let computed_at = section_stamps.iter().flatten().min().cloned();
-    let (total_games, stat_entries) = enrich(stats, &slices, &bans, &names);
+    let (total_games, stat_entries) = enrich(stats, &rates, &names);
+    let (_, by_tier) = enrich(by_tier, &rates, &names);
     let pair = |r: &FacetRow| {
         (
             r.ids.first().copied().unwrap_or(0),
             r.ids.get(1).copied().unwrap_or(0),
         )
     };
-    let mut parts = vec![some("detail")];
+    let mut parts = vec![some("detail"), some(STATS_SHAPE)];
     parts.extend(section_stamps);
     parts.extend([
         state.ddragon.current_version().await,
@@ -905,6 +969,7 @@ async fn champion_detail(
             sections_computed_at: sections,
             total_games,
             stats: stat_entries,
+            by_tier,
             matchups: matchups.iter().map(|r| matchup(r, &names)).collect(),
             items: items
                 .iter()
@@ -1237,7 +1302,7 @@ mod tests {
     fn rates_and_averages_follow_v1() {
         let row = StatRow {
             champion_id: 1,
-            tier: "MASTER".into(),
+            tier: Some("MASTER".into()),
             patch: "14.18".into(),
             games: 3,
             wins: 2,
@@ -1266,8 +1331,12 @@ mod tests {
                     ..row
                 },
             ],
-            &[("MASTER".into(), 2)],
-            &[("MASTER".into(), 1, 1)],
+            &Rates::new(
+                vec![("MASTER".into(), 2)],
+                vec![("MASTER".into(), 1, 1)],
+                0,
+                vec![],
+            ),
             &names,
         );
         assert_eq!(total, 4);
@@ -1293,8 +1362,68 @@ mod tests {
                 champion_id: 3,
                 ..e_row()
             }],
-            &[],
-            &[],
+            &Rates::default(),
+            &HashMap::new(),
+        );
+        assert!(e[0].pick_rate.is_none() && e[0].ban_rate.is_none());
+    }
+
+    /// ADR-123: a row summed over every tier is `tier: null`, and its rates
+    /// are over the totals, not over any tier's slice.
+    #[test]
+    fn a_summed_row_takes_its_rates_from_the_totals() {
+        let rates = Rates::new(
+            vec![("IRON".into(), 3), ("GOLD".into(), 3)],
+            vec![("IRON".into(), 0, 3), ("GOLD".into(), 0, 3)],
+            4,
+            vec![(0, 2)],
+        );
+        let summed = StatRow {
+            tier: None,
+            games: 2,
+            matches_picked: 2,
+            ..e_row()
+        };
+        let iron = StatRow {
+            matches_picked: 1,
+            ..e_row()
+        };
+        let (total, e) = enrich(vec![summed, iron], &rates, &HashMap::new());
+        assert_eq!(total, 3);
+        let v = serde_json::to_value(&e).unwrap();
+        assert_eq!(
+            (&v[0]["tier"], &v[0]["pickRate"], &v[0]["banRate"]),
+            (
+                &serde_json::Value::Null,
+                &serde_json::json!(0.5),
+                &serde_json::json!(0.5)
+            )
+        );
+        assert_eq!(
+            (&v[1]["tier"], &v[1]["pickRate"], &v[1]["banRate"]),
+            (
+                &serde_json::json!("IRON"),
+                &serde_json::json!(0.3333),
+                &serde_json::json!(1)
+            )
+        );
+        // A champion nobody banned is a computed zero; no matches, no rates.
+        let (_, e) = enrich(
+            vec![StatRow {
+                tier: None,
+                champion_id: 9,
+                ..e_row()
+            }],
+            &rates,
+            &HashMap::new(),
+        );
+        assert_eq!(e[0].ban_rate, Some(0.0));
+        let (_, e) = enrich(
+            vec![StatRow {
+                tier: None,
+                ..e_row()
+            }],
+            &Rates::new(vec![], vec![], 0, vec![]),
             &HashMap::new(),
         );
         assert!(e[0].pick_rate.is_none() && e[0].ban_rate.is_none());
@@ -1303,7 +1432,7 @@ mod tests {
     fn e_row() -> StatRow {
         StatRow {
             champion_id: 0,
-            tier: "IRON".into(),
+            tier: Some("IRON".into()),
             patch: "1.1".into(),
             games: 1,
             wins: 0,

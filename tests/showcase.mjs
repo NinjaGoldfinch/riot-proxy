@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 const html = readFileSync(new URL('../src/ui/showcase.html', import.meta.url), 'utf8');
 const block = html.match(/\/\/ -{10} pure helpers[^\n]*\n([\s\S]*?)\/\/ -{10} end pure helpers/);
 assert.ok(block, 'the pure helpers block is marked in showcase.html');
-const h = new Function(`${block[1]}; return { APEX, QUEUES, LADDER_PAGE, APEX_LIST_CAP, apexCapNote, tierColour, winRate, pct, sortLadder, ladderPage, championIndex, imageUrl, statusNotices, byChampion, topChampions, parseRiotId, parseRoute, explorerLink, rankLabel, rankCards, queueNames, spellIndex, outcome, kda, durationSecs, clock, ago, masterySummary, liveGame, TIERS, SIDES, matchHref, matchTeams, goldDiff, goldScale, signedGold, tierRows, runeIndex, runePair, runeUrl, itemIndex, bootsIndex, itemSlots, roleList, thousands, patchChoices, pickPatch, patchLabel, BUILD_STARTER_MS, SHOP_VISIT_GAP_MS, itemCatalog, playerBuild, shopVisits };`)();
+const h = new Function(`${block[1]}; return { APEX, QUEUES, LADDER_PAGE, APEX_LIST_CAP, apexCapNote, tierColour, winRate, pct, sortLadder, ladderPage, championIndex, imageUrl, statusNotices, topChampions, parseRiotId, parseRoute, explorerLink, rankLabel, rankCards, queueNames, spellIndex, outcome, kda, durationSecs, clock, ago, masterySummary, liveGame, TIERS, SIDES, matchHref, matchTeams, goldDiff, goldScale, signedGold, tierRows, runeIndex, runePair, runeUrl, itemIndex, bootsIndex, itemSlots, roleList, thousands, patchChoices, pickPatch, patchLabel, BUILD_STARTER_MS, SHOP_VISIT_GAP_MS, itemCatalog, playerBuild, shopVisits };`)();
 
 test('apex tiers and queues are the ones the apex route accepts', () => {
   assert.deepEqual(h.APEX, ['CHALLENGER', 'GRANDMASTER', 'MASTER']);
@@ -86,16 +86,12 @@ test('status notices list maintenances and incidents in the wanted locale', () =
   assert.deepEqual(h.statusNotices({ maintenances: [], incidents: [] }), []);
 });
 
-test('analytics rows per tier are summed per champion', () => {
+test('top champions rank the summed rows by win rate and by games', () => {
+  // The route's rows without a tier: one per champion, every tier summed (ADR-123).
   const rows = [
-    { championId: 1, championName: 'Annie', tier: 'GOLD', games: 10, wins: 6 },
-    { championId: 1, championName: 'Annie', tier: 'MASTER', games: 10, wins: 4 },
-    { championId: 2, championName: 'Olaf', tier: 'GOLD', games: 4, wins: 3 },
+    { championId: 1, championName: 'Annie', tier: null, games: 20, wins: 10, winRate: 0.5 },
+    { championId: 2, championName: 'Olaf', tier: null, games: 4, wins: 3, winRate: 0.75 },
   ];
-  assert.deepEqual(h.byChampion(rows), [
-    { championId: 1, championName: 'Annie', games: 20, wins: 10, winRate: 0.5 },
-    { championId: 2, championName: 'Olaf', games: 4, wins: 3, winRate: 0.75 },
-  ]);
   const top = h.topChampions(rows, 1);
   assert.deepEqual(top.winRate.map((c) => c.championId), [2]);
   assert.deepEqual(top.played.map((c) => c.championId), [1]);
@@ -255,12 +251,11 @@ test('the gold axis is symmetric with a round step, and leads read signed', () =
   assert.equal(h.signedGold(0), '0');
 });
 
-test('stat rows sort highest tier first and sum games and wins, not rates', () => {
+test('stat rows sort highest tier first, UNKNOWN last', () => {
   assert.equal(h.TIERS.length, 10);
-  const { rows, all } = h.tierRows([{ tier: 'GOLD', games: 30, wins: 15, pickRate: 0.1 }, { tier: 'CHALLENGER', games: 10, wins: 7, pickRate: 0.4 }]);
-  assert.deepEqual(rows.map((r) => r.tier), ['CHALLENGER', 'GOLD']);
-  assert.deepEqual(all, { games: 40, wins: 22, winRate: 0.55 });
-  assert.deepEqual(h.tierRows(undefined).all, { games: 0, wins: 0, winRate: null });
+  const rows = h.tierRows([{ tier: 'UNKNOWN' }, { tier: 'GOLD' }, { tier: 'CHALLENGER' }]);
+  assert.deepEqual(rows.map((r) => r.tier), ['CHALLENGER', 'GOLD', 'UNKNOWN']);
+  assert.deepEqual(h.tierRows(undefined), []);
 });
 
 test('runesReforged.json and item.json are indexed by id', () => {

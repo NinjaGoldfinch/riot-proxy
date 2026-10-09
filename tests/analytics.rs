@@ -595,7 +595,9 @@ async fn without_a_platform_the_routes_sum_every_platform() {
             for table in [
                 "champion_stats",
                 "champion_bans",
+                "champion_ban_totals",
                 "analytics_slices",
+                "analytics_match_totals",
                 "champion_matchups",
                 "champion_items",
                 "champion_runes",
@@ -646,7 +648,9 @@ async fn patch_all_sums_every_patch_and_the_patch_list_offers_them() {
             for table in [
                 "champion_stats",
                 "champion_bans",
+                "champion_ban_totals",
                 "analytics_slices",
+                "analytics_match_totals",
                 "champion_matchups",
                 "champion_items",
                 "champion_runes",
@@ -773,6 +777,146 @@ async fn patch_all_sums_every_patch_and_the_patch_list_offers_them() {
             StatusCode::BAD_REQUEST,
             "querystring/patch must match pattern \"^[0-9]+\\.[0-9]+$\"".into()
         )
+    );
+}
+
+/// SITE-08 (ADR-123): without `tier`, one row per champion summed over every
+/// tier, its pick and ban rates over every match in the slice, each counted
+/// once. The ranked game's blue side is moved to GRANDMASTER, so that game is
+/// in two tiers' slices; the remake's players are all MASTER.
+#[tokio::test]
+async fn without_a_tier_each_champion_is_one_row_over_every_match() {
+    let e = env().await;
+    e.seed().await;
+    let blue: Vec<String> = serde_json::from_slice::<Value>(RANKED).unwrap()["info"]["participants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|p| p["teamId"] == 100)
+        .map(|p| p["puuid"].as_str().unwrap().to_string())
+        .collect();
+    e.state
+        .db
+        .write(move |c| {
+            for p in blue {
+                c.execute(
+                    "UPDATE ladder_entries SET tier = 'GRANDMASTER' WHERE puuid = ?1",
+                    [p],
+                )?;
+            }
+            Ok::<_, DbError>(())
+        })
+        .await
+        .unwrap();
+    e.aggregate().await;
+
+    // The owner's query: each champion at most once, `tier: null`.
+    let r = e
+        .get("/v1/lol/analytics/champions?patch=all&minGames=0&limit=500&remakes=include")
+        .await;
+    let body = r.json();
+    let rows = body["champions"].as_array().unwrap();
+    let mut ids: Vec<i64> = rows.iter().map(|c| c["championId"].as_i64().unwrap()).collect();
+    assert_eq!(ids.len(), 18, "ten champions a game, 126 and 134 in both");
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), 18, "no champion twice");
+    assert!(rows.iter().all(|c| c["tier"].is_null()), "{body}");
+    assert_eq!(body["totalGames"], 20);
+    let row = |v: &Value, id: i64| {
+        v["champions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["championId"] == id)
+            .map(|c| (c["games"].clone(), c["pickRate"].clone(), c["banRate"].clone()))
+    };
+    // Two matches in the slice, though the per-tier slices hold three (the
+    // ranked game in MASTER and GRANDMASTER). 157 played the ranked game and
+    // was banned in the remake; 64 the reverse, its ranked-game ban in both
+    // tiers' rows but counted once here; 134 played both.
+    assert_eq!(row(&body, 157), Some((json!(1), json!(0.5), json!(0.5))));
+    assert_eq!(row(&body, 64), Some((json!(1), json!(0.5), json!(0.5))));
+    assert_eq!(row(&body, 134), Some((json!(2), json!(1), json!(0))));
+    // limit and minGames count champions.
+    let limited = e
+        .get("/v1/lol/analytics/champions?patch=all&minGames=0&limit=5&remakes=include")
+        .await
+        .json();
+    assert_eq!(limited["champions"].as_array().unwrap().len(), 5);
+    let min2 = e
+        .get("/v1/lol/analytics/champions?minGames=2&remakes=include")
+        .await
+        .json();
+    let min2_ids: Vec<&Value> = min2["champions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| &c["championId"])
+        .collect();
+    assert_eq!(min2_ids, [&json!(126), &json!(134)]);
+
+    // A named tier: that tier's rows, rates over its own matches, and its own
+    // validator.
+    let gm = e
+        .get("/v1/lol/analytics/champions?tier=GRANDMASTER&remakes=include")
+        .await;
+    assert_ne!(gm.headers["etag"], r.headers["etag"]);
+    let gm = gm.json();
+    assert_eq!(gm["champions"].as_array().unwrap().len(), 5);
+    assert!(
+        gm["champions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|c| c["tier"] == "GRANDMASTER")
+    );
+    assert_eq!(row(&gm, 157), Some((json!(1), json!(1), json!(0))));
+    let master = e
+        .get("/v1/lol/analytics/champions?tier=MASTER&remakes=include")
+        .await
+        .json();
+    assert_eq!(row(&master, 64), Some((json!(1), json!(0.5), json!(0.5))));
+
+    // The detail: `stats` the summed row, `byTier` a row per tier.
+    let d = e
+        .get("/v1/lol/analytics/champions/157?remakes=include")
+        .await
+        .json();
+    assert_eq!(d["stats"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        (
+            &d["stats"][0]["tier"],
+            &d["stats"][0]["pickRate"],
+            &d["stats"][0]["banRate"]
+        ),
+        (&Value::Null, &json!(0.5), &json!(0.5))
+    );
+    assert_eq!(d["totalGames"], 1);
+    let by_tier = d["byTier"].as_array().unwrap();
+    assert_eq!(by_tier.len(), 1);
+    assert_eq!(
+        (
+            &by_tier[0]["tier"],
+            &by_tier[0]["games"],
+            &by_tier[0]["pickRate"],
+            &by_tier[0]["banRate"]
+        ),
+        (&json!("GRANDMASTER"), &json!(1), &json!(1), &json!(0))
+    );
+    // Averages over the same game are the same, summed or not.
+    for k in ["avgKda", "avgDamage", "avgVision", "csPerMin", "goldPerMin"] {
+        assert_eq!(d["stats"][0][k], d["byTier"][0][k], "{k}");
+    }
+    // A named tier: both hold that tier's row.
+    let d = e
+        .get("/v1/lol/analytics/champions/64?remakes=include&tier=MASTER")
+        .await
+        .json();
+    assert_eq!(d["stats"], d["byTier"]);
+    assert_eq!(
+        (&d["stats"][0]["tier"], &d["stats"][0]["banRate"]),
+        (&json!("MASTER"), &json!(0.5))
     );
 }
 
