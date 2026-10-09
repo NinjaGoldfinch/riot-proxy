@@ -194,6 +194,14 @@ CREATE TABLE player_ranks (                       -- every league.entriesByPuuid
   tier TEXT, division TEXT, league_points INTEGER, fetched_at INTEGER,
   PRIMARY KEY (key_scope, platform, queue, puuid)
 );                                                -- a lookup replaces the player's rows on that platform
+CREATE TABLE rank_lookups (                       -- when each player was last looked up, ranked or not (ADR-110)
+  key_scope TEXT, platform TEXT, puuid TEXT, looked_up_at INTEGER,
+  PRIMARY KEY (key_scope, platform, puuid)
+);
+CREATE TABLE rank_lookup_queue (                  -- ranks:lookup's list: players analytics count under UNKNOWN
+  key_scope TEXT, platform TEXT, queue TEXT, puuid TEXT, games INTEGER,
+  PRIMARY KEY (key_scope, platform, queue, puuid)
+);                                                -- most games first; a lookup takes its row
 
 -- Operational ───────────────────────────────────────────────────────────────
 CREATE TABLE cache (                              -- L2, expensive tiers only

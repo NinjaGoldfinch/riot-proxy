@@ -172,6 +172,8 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         backfill_limit: config.ladder_backfill_limit,
         lookup_backfill_limit: config.lookup_backfill_limit,
         archive_timelines: config.archive_timelines,
+        rank_lookup_limit: config.rank_lookup_limit,
+        rank_lookup_recheck_s: config.rank_lookup_recheck_s,
     });
     let names = Arc::new(crate::jobs::names::NamesBackfill {
         db: db.clone(),

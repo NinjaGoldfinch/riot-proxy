@@ -7,11 +7,14 @@
 //! one id is collected until every page of the ladder is in, and not one match
 //! is fetched until every id is (v1). `ladder:collect` walks 25 players' match
 //! ids into the crawl's set; `ladder:archive` hands the set's unarchived ids to
-//! `archive:match`. A finished crawl queues `names:backfill`.
+//! `archive:match`. A finished crawl queues `names:backfill`; a completed one
+//! also queues `ranks:lookup` ([`ranks`]), which places the platform's archived
+//! players the ladder does not hold.
 //!
 //! Crawl state lives in SQLite (`store`), where v1 used Redis for the legs and
 //! cursors; see ADR-054.
 
+pub mod ranks;
 pub mod store;
 
 use std::sync::Arc;
@@ -53,6 +56,8 @@ pub mod order {
     /// depth-ranked archive jobs (v1: "a crawl yields to somebody looking up a
     /// player") and after the polls, which v1 ran on their own queue.
     pub const MATCH: i64 = BACKFILL + 5;
+    /// `ranks:lookup`: after the crawl's matches, whose players it places.
+    pub const RANKS: i64 = BACKFILL + 6;
 }
 
 /// Pages a walk covers per turn: it then re-queues itself (SCH-01), and checks
@@ -74,6 +79,11 @@ pub struct LadderContext {
     pub lookup_backfill_limit: u32,
     /// `ARCHIVE_TIMELINES`, for the archive jobs the crawl queues.
     pub archive_timelines: bool,
+    /// `RANK_LOOKUP_LIMIT`: players one `ranks:lookup` run looks up; 0 queues
+    /// none (ADR-110).
+    pub rank_lookup_limit: u32,
+    /// `RANK_LOOKUP_RECHECK_S`: a player looked up this recently is left off.
+    pub rank_lookup_recheck_s: u32,
 }
 
 /// Players one `ladder:collect` job walks (v1 `COLLECT_BATCH`).
@@ -766,6 +776,7 @@ impl LadderContext {
     pub async fn end_leg(&self, crawl_id: &str, leg: &str, failed: bool) -> Result<Ended, DbError> {
         let (crawl, leg) = (crawl_id.to_string(), leg.to_string());
         let backfill_limit = self.backfill_limit;
+        let rank_lookups = self.rank_lookup_limit > 0;
         let scope = self.key_scope.clone();
         let now = Clock::now().unix_ms;
         let ended = self
@@ -784,6 +795,10 @@ impl LadderContext {
                     if crawl.status == "completed" {
                         let job = crate::jobs::analytics::aggregate_job(&crawl.platform, &crawl.queue);
                         enqueue_on(&tx, &job, now)?;
+                        // Then place the players it counts under UNKNOWN (ADR-110).
+                        if rank_lookups {
+                            enqueue_on(&tx, &ranks::job(&crawl.platform, &crawl.queue), now)?;
+                        }
                     }
                 }
                 tx.commit()?;

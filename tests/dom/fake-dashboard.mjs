@@ -68,6 +68,7 @@ const QUEUE = {
     collect(1600, 'pending', { payload: { crawlId: RUNNING, platform: 'oc1', queue: 'RANKED_SOLO_5x5', offset: 1600, puuids: Array(17).fill('p') } }),
     collect(1375, 'pending', { attempts: 2 }),
     collect(25, 'pending', { payload: { crawlId: RUNNING, platform: 'kr', queue: 'RANKED_SOLO_5x5', offset: 25, puuids: Array(25).fill('p') } }),
+    job('ranks:lookup', 'pending', { platform: 'oc1', queue: 'RANKED_SOLO_5x5', planned: true }, { priority: 20006, attempts: 0 }),
   ],
   ready: 5, delayed: 3, nextDelayedAt: soon(90_000),
 };

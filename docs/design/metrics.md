@@ -23,6 +23,7 @@ The catalogue lives in `src/metrics.rs` (`CATALOGUE`). A unit test fails if a ca
 | `proxy_ladder_match_ids_total` | counter | platform, queue | — | Ladder collect (P7-03) |
 | `proxy_ladder_matches_queued_total` | counter | platform, queue | — | Ladder archive (P7-03) |
 | `proxy_ladder_crawl_duration_seconds` | histogram | platform, queue, status | 10, 60, 300, 900, 1800, 3600, 7200, 14400, 28800 | Ladder (P7-03) |
+| `proxy_rank_lookups_total` | counter | platform, queue | — | Rank lookups (DEV-29) |
 | `proxy_aggregate_runs_total` | counter | platform, queue, status | — | Analytics (P7-04) |
 | `proxy_aggregate_duration_seconds` | histogram | platform, queue, step | 1, 5, 15, 30, 60, 120, 300, 600, 1200 | Analytics (P7-04) |
 | `proxy_aggregate_rows` | gauge | platform, queue, table | — | Analytics (P7-04) |

@@ -37,7 +37,7 @@ pub fn of(kind: &str, payload: &Value) -> Option<Lane> {
     let platform = || str_field(payload, "platform").and_then(|p| Platform::parse(p).ok());
     match kind {
         kinds::POLL_LIVE => on("spectator.activeGame", platform()?),
-        kinds::POLL_RANK => on("league.entriesByPuuid", platform()?),
+        kinds::POLL_RANK | kinds::RANKS_LOOKUP => on("league.entriesByPuuid", platform()?),
         kinds::POLL_MATCHES | kinds::BACKFILL_PLAYER | kinds::LADDER_COLLECT => {
             on("match.idsByPuuid", platform()?)
         }
@@ -80,6 +80,13 @@ mod tests {
         assert_eq!(
             lane(kinds::POLL_RANK, p.clone()),
             Some(("na1", "league.entriesByPuuid"))
+        );
+        assert_eq!(
+            lane(
+                kinds::RANKS_LOOKUP,
+                json!({"platform": "oc1", "queue": "RANKED_SOLO_5x5"})
+            ),
+            Some(("oc1", "league.entriesByPuuid"))
         );
         assert_eq!(
             lane(kinds::POLL_MATCHES, p.clone()),
@@ -145,6 +152,7 @@ mod tests {
                 kinds::LADDER_APEX,
                 kinds::LADDER_WALK,
                 kinds::LADDER_COLLECT,
+                kinds::RANKS_LOOKUP,
             ] {
                 let l = of(kind, &p).unwrap_or_else(|| panic!("{kind} on {platform:?}"));
                 assert!(all.contains(&l.lane), "{kind}: {}", l.lane);
