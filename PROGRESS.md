@@ -222,7 +222,7 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 - [x] DEV-17 dashboard Ladder tab cleanup: one card per running crawl (stage bars and totals, the rest in a details fold), past crawls only below and paged by ten, job queue and analytics recompute folded, start form folded unless idle (#105, design/06, ADR-091)
 - [x] DEV-18 manual analytics recompute runs first: the route queues `aggregate:analytics` at priority 0 and lifts a rebuild already queued for the ladder, so the next free worker runs it on the matches archived so far (#106, design/06, ADR-090)
 - [x] DEV-19 `/dev/jobs`: live job activity (in-memory traces of what each worker's job does: steps, Riot calls, rate-limit waits, outcome) through `GET /v1/admin/jobs/activity` and `/v1/admin/jobs/{id}/activity`, and a page with the workers, the queue, and a closable tab per job that follows it (#108, design/06, design/10, ADR-092)
-- [x] DEV-20 dashboard job queue groups alike jobs: one row per kind and platform with its count (a collect row gives the player range), up next reads the next 100 ready jobs (#PR, design/06, ADR-093)
+- [x] DEV-20 dashboard job queue groups alike jobs: one row per kind and platform with its count (a collect row gives the player range), up next reads the next 100 ready jobs (#112, design/06, ADR-093)
 
 ## SCH — scheduler fairness and an elastic pool (owner requests 2026-10-08/09)
 - [x] SCH-01 rate-limit-aware job claims: one lane per limiter scope plus the job's main endpoint, claims skip a region only when its app limit is full (a capped endpoint blocks only jobs that use it), spread over free regions, rate-limited jobs yield their worker and re-queue without using an attempt (IMPLEMENTATION.md §Post-release — SCH) (#107, ADR-089)
