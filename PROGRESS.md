@@ -253,7 +253,7 @@ Baseline before THR-06a (one kr crawl to MASTER on the dev VM): not yet recorded
 
 ## SITE — requests from ninjagoldfinch.lol (owner request 2026-10-09)
 The site's backfill question (item 3) needs no task: the unbounded lookup backfill stays (ADR-081, owner confirmed 2026-10-09); SITE-04 documents it.
-- [ ] SITE-01 report when each part was last fetched from Riot: `fetchedAgeSeconds` on the profile, `matchIdsFetchedAgeSeconds` on the match page, `X-Cache-Fetched-Age` (IMPLEMENTATION.md §Post-release — SITE)
+- [x] SITE-01 report when each part was last fetched from Riot: `cache.fetched_at` (V0009) beside `content_at`, `fetchedAgeSeconds` on the profile, `matchIdsFetchedAgeSeconds` on the match page, `X-Cache-Fetched-Age` on passthroughs and composites (none from the archive) (#PR, design/04, ADR-103)
 - [ ] SITE-02 `champion` filter on the match page, from the archive, with `archive.complete` (IMPLEMENTATION.md §Post-release — SITE)
 - [ ] SITE-03 `gameVersion` described as the game build, plus `ddragonVersion` (IMPLEMENTATION.md §Post-release — SITE)
 - [ ] SITE-04 declare response headers in the OpenAPI document; document the image mirror and the backfill limit (IMPLEMENTATION.md §Post-release — SITE)

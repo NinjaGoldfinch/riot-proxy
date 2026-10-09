@@ -32,6 +32,7 @@ pub struct Row {
     pub body: Bytes,
     pub status: u16,
     pub content_at: i64,
+    pub fetched_at: i64,
     pub soft_expires: i64,
     pub hard_expires: i64,
 }
@@ -43,6 +44,7 @@ impl Row {
             body: entry.body.clone(),
             status: entry.status,
             content_at: clock.to_unix_ms(entry.content_at),
+            fetched_at: clock.to_unix_ms(entry.fetched_at),
             soft_expires: clock.to_unix_ms(entry.soft_expires),
             hard_expires: clock.to_unix_ms(entry.hard_expires),
         }
@@ -53,6 +55,7 @@ impl Row {
             status: self.status,
             body: self.body.clone(),
             content_at: clock.to_instant(self.content_at),
+            fetched_at: clock.to_instant(self.fetched_at),
             soft_expires: clock.to_instant(self.soft_expires),
             hard_expires: clock.to_instant(self.hard_expires),
         }
@@ -142,8 +145,8 @@ pub async fn put_rows(db: &Db, rows: Vec<Row>) -> Result<(), DbError> {
         let tx = c.transaction()?;
         {
             let mut stmt = tx.prepare(
-                "INSERT OR REPLACE INTO cache (key, body, status, content_at, soft_expires, hard_expires)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT OR REPLACE INTO cache (key, body, status, content_at, fetched_at, soft_expires, hard_expires)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             )?;
             for r in &rows {
                 stmt.execute(rusqlite::params![
@@ -151,6 +154,7 @@ pub async fn put_rows(db: &Db, rows: Vec<Row>) -> Result<(), DbError> {
                     r.body.as_ref(),
                     r.status,
                     r.content_at,
+                    r.fetched_at,
                     r.soft_expires,
                     r.hard_expires
                 ])?;
@@ -168,8 +172,10 @@ pub async fn warm(db: &Db, l1: &L1) -> Result<usize, DbError> {
     let now_ms = clock.unix_ms;
     let rows: Vec<Row> = db
         .read(move |c| {
+            // A row from before V0009 has no fetch time: its content's is the best there is.
             let mut stmt = c.prepare(
-                "SELECT key, body, status, content_at, soft_expires, hard_expires FROM cache WHERE hard_expires > ?1",
+                "SELECT key, body, status, content_at, COALESCE(fetched_at, content_at), soft_expires, hard_expires
+                 FROM cache WHERE hard_expires > ?1",
             )?;
             let rows = stmt
                 .query_map([now_ms], |r| {
@@ -178,8 +184,9 @@ pub async fn warm(db: &Db, l1: &L1) -> Result<usize, DbError> {
                         body: Bytes::from(r.get::<_, Vec<u8>>(1)?),
                         status: r.get(2)?,
                         content_at: r.get(3)?,
-                        soft_expires: r.get(4)?,
-                        hard_expires: r.get(5)?,
+                        fetched_at: r.get(4)?,
+                        soft_expires: r.get(5)?,
+                        hard_expires: r.get(6)?,
                     })
                 })?
                 .collect::<Result<Vec<_>, _>>()?;

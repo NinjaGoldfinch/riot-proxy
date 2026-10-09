@@ -192,6 +192,7 @@ CREATE TABLE cache (                              -- L2, expensive tiers only
   body         BLOB NOT NULL,
   status       INTEGER NOT NULL,                  -- 200 or 404 (negative)
   content_at   INTEGER NOT NULL,                  -- for X-Cache-Age (content, not fetch)
+  fetched_at   INTEGER,                           -- for X-Cache-Fetched-Age (SITE-01, V0009); NULL reads content_at
   soft_expires INTEGER NOT NULL,
   hard_expires INTEGER NOT NULL
 );
@@ -237,6 +238,8 @@ Migrations are embedded in the binary (`sqlx::migrate!("./src/db/migrations")` o
 L2 membership is a per-endpoint flag in `riot/endpoints.rs` (`persist: true`). The rule: persist it if `TTL ≥ 1 h` **or** it costs more than one upstream call to rebuild. Anything with a TTL under a few minutes is cheaper to refetch than to write.
 
 Write-behind: `l1.put()` also pushes `(key, entry)` onto an `mpsc`; a task batches inserts into the writer every 2 s or 500 entries. A crash loses at most 2 s of L2 writes, which is nothing.
+
+Two ages per entry (SITE-01, ADR-103). `content_at` is when these bytes were first seen: a refresh that returns the same bytes keeps it, so `X-Cache-Age` (and the composites' `ageSeconds`) is the age of the *content*. `fetched_at` is when Riot last answered, changed or not, so `X-Cache-Fetched-Age` (and `fetchedAgeSeconds` / `matchIdsFetchedAgeSeconds`) is the age of the *read*. A stale copy served because upstream failed keeps its own `fetched_at`. Archive reads have neither: immutable data is never read again, so they send `X-Cache-Age: 0` and no `X-Cache-Fetched-Age`.
 
 Boot warm: `SELECT * FROM cache WHERE hard_expires > now` into L1, then a sweep deletes expired rows. With a ~1 MB/entry upper bound and the L2 tiers listed, warm is sub-second even at tens of thousands of rows.
 

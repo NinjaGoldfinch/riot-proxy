@@ -14,6 +14,12 @@ expression: body
     "mastery": 0,
     "summoner": 0
   },
+  "fetchedAgeSeconds": {
+    "account": 0,
+    "league": 0,
+    "mastery": 0,
+    "summoner": 0
+  },
   "league": [
     {
       "freshBlood": false,

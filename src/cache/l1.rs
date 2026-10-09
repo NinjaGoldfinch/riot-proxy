@@ -27,6 +27,9 @@ pub struct CacheEntry {
     /// When this *content* was first seen. A refresh that returns byte-identical
     /// bytes keeps it, so `X-Cache-Age` reports content age, not fetch age (design 04).
     pub content_at: Instant,
+    /// When Riot last answered with this entry, whether or not the bytes
+    /// changed (`X-Cache-Fetched-Age`, SITE-01).
+    pub fetched_at: Instant,
     /// Fresh until.
     pub soft_expires: Instant,
     /// Servable as `STALE` until; gone after.
@@ -41,6 +44,11 @@ impl CacheEntry {
     /// Seconds since `content_at` (`X-Cache-Age`).
     pub fn age(&self, now: Instant) -> Duration {
         now.saturating_duration_since(self.content_at)
+    }
+
+    /// Seconds since `fetched_at` (`X-Cache-Fetched-Age`).
+    pub fn fetch_age(&self, now: Instant) -> Duration {
+        now.saturating_duration_since(self.fetched_at)
     }
 }
 
@@ -159,6 +167,7 @@ impl L1 {
             status,
             body,
             content_at,
+            fetched_at: now,
             soft_expires: now + soft,
             hard_expires: now + hard.max(soft),
         });
@@ -272,6 +281,8 @@ mod tests {
             "content unchanged: age keeps counting"
         );
         assert_eq!(same.age(Instant::now()), Duration::from_secs(45));
+        assert_eq!(same.fetched_at, Instant::now(), "but the fetch is new");
+        assert_eq!(same.fetch_age(Instant::now()), Duration::ZERO);
         assert_eq!(
             same.soft_expires,
             Instant::now() + Duration::from_secs(30),
