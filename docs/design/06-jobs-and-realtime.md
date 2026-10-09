@@ -136,7 +136,8 @@ Every handler that hits Riot calls the fetcher with `FetchOptions::JOB` (`Priori
 | `ladder:crawl` | tick or admin | create crawl row, fan out `ladder:apex` × 3 + `ladder:walk` × (tier, division) |
 | `ladder:apex` / `ladder:walk` | per crawl | upsert `ladder_entries`; an apex league of `RIOT_APEX_LIST_CAP` or more entries adds its tier to the crawl's `apex_capped`; last one flips `phase → collect` |
 | `ladder:collect` | phase collect | 25 players per job → `crawl_match_ids`; last one flips `phase → archive` |
-| `ladder:archive` | phase archive | `filter_unarchived`, enqueue `archive:match`; ends the crawl `completed`, enqueues `aggregate:analytics` and `names:backfill` |
+| `ladder:archive` | phase archive | `filter_unarchived`, enqueue `archive:match`; ends the crawl `completed`, enqueues `aggregate:analytics`, `ranks:lookup` and `names:backfill` |
+| `ranks:lookup` | crawl completed | plan up to `RANK_LOOKUP_LIMIT` archived players the ladder doesn't hold and nobody looked up within `RANK_LOOKUP_RECHECK_S`, most games first, then one `league.entriesByPuuid` each, 25 a turn; an empty list enqueues `aggregate:analytics` (ADR-111) |
 | `names:backfill` | crawl end, daily, admin | Riot IDs for nameless players from their latest archived matches; no Riot calls (v1, ADR-055) |
 | `facts:reextract` | admin / boot when stale | re-derive facts, bans and `remake` for matches below `FACTS_VERSION`, in batches of `FACTS_REEXTRACT_BATCH`; no Riot calls |
 | `aggregate:analytics` | crawl end, tick, admin | rebuild the analytics tables (v1's shape, ADR-056) for the last `AGGREGATE_PATCH_LIMIT` patches; `analytics.updated` |

@@ -26,6 +26,7 @@ pub mod kinds {
     pub const LADDER_WALK: &str = "ladder:walk";
     pub const LADDER_COLLECT: &str = "ladder:collect";
     pub const LADDER_ARCHIVE: &str = "ladder:archive";
+    pub const RANKS_LOOKUP: &str = "ranks:lookup";
     pub const NAMES_BACKFILL: &str = "names:backfill";
     pub const AGGREGATE_ANALYTICS: &str = "aggregate:analytics";
     pub const FACTS_REEXTRACT: &str = "facts:reextract";
@@ -85,6 +86,10 @@ pub fn handlers(
         .with(
             kinds::LADDER_ARCHIVE,
             ladder::LadderArchiveHandler(Arc::clone(ladder)),
+        )
+        .with(
+            kinds::RANKS_LOOKUP,
+            ladder::ranks::RanksLookupHandler(Arc::clone(ladder)),
         )
         .with(
             kinds::NAMES_BACKFILL,

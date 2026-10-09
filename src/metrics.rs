@@ -37,6 +37,7 @@ pub const LADDER_ENTRIES_TOTAL: &str = "proxy_ladder_entries_total";
 pub const LADDER_MATCH_IDS_TOTAL: &str = "proxy_ladder_match_ids_total";
 pub const LADDER_MATCHES_QUEUED_TOTAL: &str = "proxy_ladder_matches_queued_total";
 pub const LADDER_CRAWL_DURATION_SECONDS: &str = "proxy_ladder_crawl_duration_seconds";
+pub const RANK_LOOKUPS_TOTAL: &str = "proxy_rank_lookups_total";
 pub const AGGREGATE_RUNS_TOTAL: &str = "proxy_aggregate_runs_total";
 pub const AGGREGATE_DURATION_SECONDS: &str = "proxy_aggregate_duration_seconds";
 pub const AGGREGATE_ROWS: &str = "proxy_aggregate_rows";
@@ -171,6 +172,13 @@ pub const CATALOGUE: &[MetricDef] = &[
         Kind::Counter,
         &["platform", "queue"],
         "Matches a crawl handed to the archive queue, having found them unarchived",
+        &[],
+    ),
+    def(
+        RANK_LOOKUPS_TOTAL,
+        Kind::Counter,
+        &["platform", "queue"],
+        "Ranks looked up by ranks:lookup for archived players no ladder or earlier lookup placed",
         &[],
     ),
     def(

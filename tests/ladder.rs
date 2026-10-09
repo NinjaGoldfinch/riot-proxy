@@ -83,6 +83,8 @@ impl Env {
             backfill_limit,
             lookup_backfill_limit: 500,
             archive_timelines: false,
+            rank_lookup_limit: 50_000,
+            rank_lookup_recheck_s: 604_800,
         })
     }
 
@@ -725,6 +727,8 @@ impl Env {
             backfill_limit: 100,
             lookup_backfill_limit: 500,
             archive_timelines: config.archive_timelines,
+            rank_lookup_limit: 50_000,
+            rank_lookup_recheck_s: 604_800,
         });
         let archiving = Arc::new(riot_proxy::jobs::archive::ArchiveContext {
             fetcher,
@@ -749,6 +753,10 @@ impl Env {
             .with(
                 kinds::LADDER_ARCHIVE,
                 ladder::LadderArchiveHandler(Arc::clone(&ladder)),
+            )
+            .with(
+                kinds::RANKS_LOOKUP,
+                ladder::ranks::RanksLookupHandler(Arc::clone(&ladder)),
             )
             .with(
                 kinds::ARCHIVE_MATCH,
@@ -790,6 +798,36 @@ impl Env {
         .await
         .expect("the queue drains");
         running.shutdown(Duration::from_secs(5)).await;
+    }
+
+    /// Requests whose path holds `part` anywhere.
+    async fn fetches_of_part(&self, part: &str) -> usize {
+        self.requests().await.iter().filter(|r| r.contains(part)).count()
+    }
+
+    /// `league.entriesByPuuid` for one player answers `status` with `body`.
+    async fn league_entries(&self, puuid: &str, status: u16, body: Value) {
+        Mock::given(method("GET"))
+            .and(path(format!("/lol/league/v4/entries/by-puuid/{puuid}")))
+            .respond_with(ResponseTemplate::new(status).set_body_json(body))
+            .mount(&self.server)
+            .await;
+    }
+
+    /// The players `ranks:lookup` asked Riot about, in the order it asked.
+    async fn rank_lookups_asked(&self) -> Vec<String> {
+        self.server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter_map(|r| {
+                r.url
+                    .path()
+                    .strip_prefix("/lol/league/v4/entries/by-puuid/")
+                    .map(str::to_string)
+            })
+            .collect()
     }
 
     async fn fetches_of(&self, path_part: &str) -> usize {
@@ -888,6 +926,15 @@ async fn a_crawl_runs_every_stage_and_fetches_each_match_once() {
             .await
             > 0
     );
+
+    // Every player of its matches is on the ladder: the rank lookup it queued
+    // found nobody to ask about (ADR-111).
+    assert_eq!(
+        e.count("SELECT COUNT(*) FROM jobs WHERE kind = 'ranks:lookup' AND state = 'done'")
+            .await,
+        1
+    );
+    assert_eq!(e.fetches_of_part("/entries/by-puuid/").await, 0);
 
     // The finished crawl queued names:backfill, which named every player from
     // the archived matches without a request.
@@ -1731,5 +1778,152 @@ async fn the_queue_view_lists_running_jobs_and_the_next_in_claim_order() {
             .await
             .status,
         StatusCode::FORBIDDEN
+    );
+}
+
+// ── Rank lookups for players off the ladder (DEV-29, ADR-111) ───────────────
+
+/// Match `k` with its last players swapped for `outsiders`, whom no ladder holds.
+fn match_with_outsiders(k: usize, outsiders: &[&str]) -> Vec<u8> {
+    let mut body: Value = serde_json::from_slice(&match_body(k)).unwrap();
+    for (i, o) in outsiders.iter().enumerate() {
+        let slot = 10 - outsiders.len() + i;
+        body["metadata"]["participants"][slot] = json!(o);
+        body["info"]["participants"][slot]["puuid"] = json!(o);
+    }
+    serde_json::to_vec(&body).unwrap()
+}
+
+/// A completed crawl looks up the archived players its ladder does not hold,
+/// most games first, each once; the recompute after it counts them in their
+/// tiers. A second crawl within `RANK_LOOKUP_RECHECK_S` asks about nobody.
+#[tokio::test]
+async fn a_completed_crawl_looks_up_the_ranks_of_archived_players_off_the_ladder() {
+    let e = env().await;
+    e.ladder_of_thirty().await;
+    // Two archived solo games (from a profile, say) with players no ladder
+    // holds: EMMA in both, DAN unranked, GONE unknown to Riot on kr.
+    for (k, outsiders) in [(20, &["DAN", "EMMA"][..]), (21, &["EMMA", "GONE"][..])] {
+        riot_proxy::archive::matches::put(
+            &e.db,
+            &match_id(k),
+            "asia",
+            &e.scope,
+            match_with_outsiders(k, outsiders).into(),
+            1,
+        )
+        .await
+        .unwrap();
+    }
+    e.league_entries(
+        "EMMA",
+        200,
+        json!([{"queueType": SOLO, "tier": "EMERALD", "rank": "II", "leaguePoints": 41},
+               {"queueType": "RANKED_FLEX_SR", "tier": "GOLD", "rank": "I", "leaguePoints": 0}]),
+    )
+    .await;
+    e.league_entries("DAN", 200, json!([])).await;
+    e.league_entries("GONE", 404, json!({"status": {"status_code": 404}}))
+        .await;
+
+    let id = e.start("CHALLENGER").await;
+    e.drain_jobs(6, &[("ARCHIVE_TIMELINES", "false")]).await;
+    assert_eq!(e.crawl(&id).await.status, "completed");
+
+    // Each once, EMMA (two games) first; nobody on the ladder.
+    let asked = e.rank_lookups_asked().await;
+    assert_eq!(asked[0], "EMMA");
+    let mut sorted = asked.clone();
+    sorted.sort();
+    assert_eq!(sorted, ["DAN", "EMMA", "GONE"]);
+    assert_eq!(
+        e.count("SELECT COUNT(*) FROM rank_lookups").await,
+        3,
+        "the unranked and the unknown are stamped too"
+    );
+    assert_eq!(
+        e.count("SELECT COUNT(*) FROM player_ranks WHERE puuid = 'EMMA'")
+            .await,
+        2
+    );
+    assert_eq!(e.count("SELECT COUNT(*) FROM rank_lookup_queue").await, 0);
+
+    // The recompute after the lookups counts EMMA's two games at EMERALD; DAN
+    // and GONE have no solo rank, so their game stays under UNKNOWN.
+    let slices = |tier: &'static str| {
+        let db = e.db.clone();
+        async move {
+            db.read(move |c| {
+                Ok::<_, DbError>(c.query_row(
+                    "SELECT coalesce(sum(matches), 0) FROM analytics_slices WHERE platform = 'kr' AND tier = ?1",
+                    [tier],
+                    |r| r.get::<_, i64>(0),
+                )?)
+            })
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(slices("EMERALD").await, 2);
+    assert_eq!(slices("UNKNOWN").await, 2);
+    assert_eq!(
+        e.count("SELECT COUNT(*) FROM jobs WHERE kind = 'aggregate:analytics' AND state = 'running'")
+            .await,
+        0
+    );
+
+    // A second crawl a moment later: everyone was looked up within the
+    // recheck, so the lookup asks Riot nothing.
+    let again = e.start("CHALLENGER").await;
+    e.drain_jobs(6, &[("ARCHIVE_TIMELINES", "false")]).await;
+    assert_eq!(e.crawl(&again).await.status, "completed");
+    assert_eq!(
+        e.count("SELECT COUNT(*) FROM jobs WHERE kind = 'ranks:lookup' AND state = 'done'")
+            .await,
+        2
+    );
+    assert_eq!(e.rank_lookups_asked().await.len(), 3);
+}
+
+/// `RANK_LOOKUP_LIMIT=0` queues no lookup.
+#[tokio::test]
+async fn no_lookup_is_queued_when_the_limit_is_zero() {
+    let e = env().await;
+    e.ladder_of_thirty().await;
+    let mut ctx = e.ctx(100);
+    Arc::get_mut(&mut ctx).unwrap().rank_lookup_limit = 0;
+    let id = e.start("CHALLENGER").await;
+    // End every enumerate leg by hand: the crawl moves on without fetching.
+    let legs: Vec<String> =
+        e.db.read({
+            let id = id.clone();
+            move |c| {
+                let mut stmt = c.prepare("SELECT leg FROM crawl_legs WHERE crawl_id = ?1")?;
+                let rows = stmt
+                    .query_map([id], |r| r.get(0))?
+                    .collect::<Result<Vec<String>, _>>()?;
+                Ok::<_, DbError>(rows)
+            }
+        })
+        .await
+        .unwrap();
+    for leg in legs {
+        ctx.end_leg(&id, &leg, false).await.unwrap();
+    }
+    // Nobody stored, so collect is skipped and archive ends the crawl.
+    let archive: Vec<String> = vec![kinds::LADDER_ARCHIVE.to_string()];
+    for leg in archive {
+        ctx.end_leg(&id, &leg, false).await.unwrap();
+    }
+    assert_eq!(e.crawl(&id).await.status, "completed");
+    assert_eq!(
+        e.count("SELECT COUNT(*) FROM jobs WHERE kind = 'aggregate:analytics'")
+            .await,
+        1
+    );
+    assert_eq!(
+        e.count("SELECT COUNT(*) FROM jobs WHERE kind = 'ranks:lookup'")
+            .await,
+        0
     );
 }

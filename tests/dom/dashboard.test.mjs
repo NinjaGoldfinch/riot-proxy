@@ -171,6 +171,7 @@ test('the job queue panel is folded and lists what is running and what the worke
       ['archive:match', 'match OC1_700002', 'ready'],
       ['ladder:collect', 'match ids for 3 batches · players 1,275–1,616 · oc1', 'ready · try 2'],
       ['ladder:collect', 'match ids for players 25–49 · kr', 'ready'],
+      ['ranks:lookup', 'ranks of players off the ladder · oc1 RANKED_SOLO_5x5', 'ready'],
     ]);
     assert.equal(p.$('#queueNext li').title, 'archive:match · priority 100', 'priority in the tooltip');
     assert.equal(p.$('#queueNext li[data-count="3"]').title, 'ladder:collect · priority 20,003');

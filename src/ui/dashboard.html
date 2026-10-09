@@ -1583,6 +1583,8 @@
             return `match ${p.matchId}`;
           case 'backfill:player':
             return `history of ${String(p.puuid).slice(0, 10)}… · ${p.platform}`;
+          case 'ranks:lookup':
+            return `ranks of players off the ladder · ${p.platform} ${p.queue}`;
           default:
             return j.dedupeKey || '';
         }

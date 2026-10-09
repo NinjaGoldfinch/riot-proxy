@@ -129,6 +129,8 @@ impl Env {
             backfill_limit,
             lookup_backfill_limit: 500,
             archive_timelines: false,
+            rank_lookup_limit: 50_000,
+            rank_lookup_recheck_s: 604_800,
         })
     }
 

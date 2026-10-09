@@ -126,6 +126,8 @@ async fn migrations_create_exactly_the_design_04_tables() {
             "metrics_history",
             "player_ranks",
             "players",
+            "rank_lookup_queue",
+            "rank_lookups",
             "refinery_schema_history",
             "timelines",
         ]
@@ -202,7 +204,7 @@ async fn a_v1_database_upgrades_to_v2_and_keeps_its_data() {
         })
         .await
         .expect("read");
-    assert_eq!((name.as_str(), versions), ("old", 10));
+    assert_eq!((name.as_str(), versions), ("old", 11));
 }
 
 /// match_facts is a pure derivation of matches: deleting a match cascades (design 04).
@@ -332,11 +334,11 @@ async fn migrations_apply_once_across_reopens() {
         })
         .await
         .expect("insert");
-    assert_eq!(history(first.clone()).await.expect("history"), 10);
+    assert_eq!(history(first.clone()).await.expect("history"), 11);
     drop(first);
 
     let second = Db::open(&path, 1).expect("second open");
-    assert_eq!(history(second.clone()).await.expect("history"), 10, "no re-run");
+    assert_eq!(history(second.clone()).await.expect("history"), 11, "no re-run");
     let name: Option<String> = second
         .read(|c| {
             Ok::<_, DbError>(
