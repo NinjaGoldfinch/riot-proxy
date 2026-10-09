@@ -175,9 +175,12 @@ fn responses_declare_the_headers_they_send() {
                 .iter()
                 .map(|t| t.as_str().unwrap())
                 .collect();
-            let read = tags
-                .iter()
-                .any(|t| ["players", "riot", "lol", "static"].contains(t));
+            // The image mirror is outside the keyed API: no quota, no cache tier.
+            let images = path.starts_with("/ddragon/");
+            let read = !images
+                && tags
+                    .iter()
+                    .any(|t| ["players", "riot", "lol", "static"].contains(t));
             for (status, res) in op["responses"].as_object().unwrap() {
                 let at = format!("{method} {path} {status}");
                 let has = |h: &str| res["headers"].get(h).is_some();
@@ -190,6 +193,12 @@ fn responses_declare_the_headers_they_send() {
                 }
                 if read && status.as_str() != "401" && status.as_str() != "403" {
                     assert!(has("X-RateLimit-Remaining"), "{at}");
+                }
+                if images {
+                    assert!(!has("X-RateLimit-Remaining") && !has("X-Cache"), "{at}");
+                    if status == "200" {
+                        assert!(has("Cache-Control") && has("Last-Modified"), "{at}");
+                    }
                 }
                 if read && status.starts_with('2') && !path.starts_with("/v1/lol/analytics") {
                     assert!(has("X-Cache") && has("X-Cache-Age"), "{at}");

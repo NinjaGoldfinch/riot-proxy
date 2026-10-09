@@ -18,7 +18,7 @@ It is in the page bar (design/10 §Page bar) as **Showcase**, right after Dev ex
 
 ## Principles
 
-- **One file, no build, no other origin** (`src/ui/showcase.html`, `include_str!`). Icons come from the local mirror at `/ddragon/{v}/img/{kind}/{file}` (ADR-076), never from Riot's CDN.
+- **One file, no build, no other origin** (`src/ui/showcase.html`, `include_str!`). Icons come from the local mirror at `/ddragon/{v}/img/{kind}/{file}` (ADR-076), never from Riot's CDN. Both image routes are declared in the OpenAPI document (SITE-07, ADR-118), so they sit in the coverage block's `showcased` list like any read route. The page draws every icon at the current patch; the mirror now serves older patches too, but the page doesn't use them yet.
 - **Read routes only.** A consumer frontend has a read key, so the page calls no `/v1/admin/*` route.
 - **No platform by default** (ADR-065). The page asks for one and remembers it in `rp.showcase.platform`.
 - **Teaching first.** Each card carries chips naming its operations; a chip opens that operation in `/dev#explorer`. The **API calls** drawer at the bottom lists every call the page made, with status, time and `X-Cache`.

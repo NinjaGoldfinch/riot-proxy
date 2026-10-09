@@ -265,6 +265,7 @@ The site's backfill question (item 3) needs no task: the unbounded lookup backfi
 - [x] SITE-04 declare response headers in the OpenAPI document (one `components.headers` entry each, referenced from every response that sends it); an Images section on `/ddragon`; `BackfillNotice.limit` explains `4294967295` (#132, ADR-109)
 - [x] SITE-05 partial schemas for Riot's account, summoner, league and mastery payloads: the portal's DTOs (`routes::riot_schemas`), required only where the portal and every recording agree, on `ProfileBody`'s parts and the matching passthrough 200s (#133, ADR-110)
 - [x] SITE-06 `roleBoundItem` in `PlayerSummary`, next to `item6`: the role quest slot (a bot laner's boots, another role's quest reward), verbatim, absent when Riot didn't send it; the showcase shows it after the inventory (#130, design/11, ADR-106)
+- [ ] SITE-07 the `/ddragon` image routes in the OpenAPI document (`kind` an enum, the rune `icon` with raw or encoded slashes, `security: [{}]`, empty-bodied 404/502); any patch in Riot's list served, its data file fetched once on demand; `immutable` for a year (ADR-118)
 
 ## BLD — set builds on the champion page (owner request 2026-10-09)
 - [x] BLD-01 per-player build facts from the timeline: `match_builds` (purchase order minus undos, finished items, boots, starter, skill order) filled by `builds:extract` before each recompute (#142, ADR-117)

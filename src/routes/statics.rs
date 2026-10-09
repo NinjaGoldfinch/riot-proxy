@@ -21,8 +21,36 @@ use crate::routes::passthrough::{JSON, LocalErrors};
 use crate::r#static::images::{ImageError, RUNE_DIR};
 use crate::r#static::{DATA_FILES, FILE_ALIASES, Mirror, VERSIONS_FILE, resolve_file};
 
-/// v1's Caddyfile header for `/ddragon/*`: a patch's files never change.
-pub const IMMUTABLE: &str = "public, max-age=604800, immutable";
+/// `/ddragon/*`'s header: a patch's files never change once written, so a
+/// year (SITE-07; v1's Caddyfile said a week).
+pub const IMMUTABLE: &str = "public, max-age=31536000, immutable";
+
+/// The image kinds `/ddragon` serves, as the OpenAPI document names them:
+/// Data Dragon's own directory names, `spell` being summoner spells. The
+/// handler matches the path segment against `IMAGE_KINDS`; a test keeps the
+/// two lists the same.
+#[derive(utoipa::ToSchema)]
+#[schema(rename_all = "lowercase")]
+#[allow(dead_code)] // documentation only
+pub enum ImageKind {
+    Champion,
+    Profileicon,
+    Item,
+    Spell,
+}
+
+/// A PNG's bytes, for the OpenAPI document.
+#[derive(utoipa::ToSchema)]
+#[schema(value_type = String, format = Binary)]
+#[allow(dead_code)] // documentation only
+pub struct Png(Vec<u8>);
+
+/// What both image operations say about versions, immutability and load.
+const IMAGE_NOTES: &str = "No key. The image is Data Dragon's own, fetched from Riot's CDN on its first request and served from disk after that.\n\n\
+**Versions.** Any version in Riot's version list (`/v1/static/versions`) works, not only the current one, so a match can draw its own patch's icons (`ddragonVersion` on the match page). For a version the mirror hasn't synced, the one data file that lists the image (that patch's `item.json` for an item) is fetched first and kept. A version Riot doesn't list is a 404 with no fetch.\n\n\
+**Immutable.** The bytes at a given version and path never change once served, so they are sent with `Cache-Control: public, max-age=31536000, immutable`. A response that isn't a 200 has no `Cache-Control`.\n\n\
+**What can be fetched.** Only a file the version's own data lists, so a request can't make the proxy fetch anything else. Concurrent first requests for one file share one fetch, and a data file Riot has no copy of isn't asked for twice.\n\n\
+**Errors** have an empty body, not the JSON error envelope.";
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -39,8 +67,8 @@ pub fn router() -> OpenApiRouter<AppState> {
 pub fn files(mirror: Arc<Mirror>) -> Router {
     // Only what is not on disk yet reaches the fill route.
     let fill = Router::new()
-        .route("/{version}/img/{kind}/{file}", get(image))
-        .route("/{version}/img/perk-images/{*icon}", get(rune_image))
+        .route("/{version}/img/{kind}/{file}", get(ddragon_image))
+        .route("/{version}/img/perk-images/{*icon}", get(ddragon_rune_image))
         .fallback(|| async { StatusCode::NOT_FOUND })
         .with_state(Arc::clone(&mirror));
     Router::new()
@@ -54,7 +82,29 @@ pub fn files(mirror: Arc<Mirror>) -> Router {
         }))
 }
 
-async fn image(
+#[utoipa::path(
+    get, path = "/ddragon/{version}/img/{kind}/{file}", tag = "static",
+    summary = "A champion, item, summoner spell or profile icon image",
+    description = IMAGE_NOTES,
+    security(()),
+    params(
+        ("version" = String, Path, description = "A Data Dragon version from Riot's list, e.g. `16.19.1`.",
+            pattern = r"^[0-9]+(\.[0-9]+)*$", example = "16.19.1"),
+        ("kind" = ImageKind, Path, description = "Data Dragon's image directory: `spell` is summoner spells."),
+        ("file" = String, Path, description = "The image's file name as that version's data lists it: \
+            `image.full` in champion.json, item.json, summoner.json or profileicon.json.",
+            pattern = r"^[A-Za-z0-9_.]+\.png$", example = "3078.png"),
+    ),
+    responses(
+        (status = 200, description = "The PNG.", content_type = "image/png", body = Png),
+        (status = 304, description = "Not modified since `If-Modified-Since`, for a copy already on disk."),
+        (status = 404, description = "Not a version Riot lists, not a kind served, not a file that version's \
+            data lists, or a file Riot doesn't have. Empty body."),
+        (status = 502, description = "Riot's CDN failed on the first fetch (unreachable, an error status, \
+            or not a PNG). Nothing was kept, so the next request tries again. Empty body."),
+    ),
+)]
+pub async fn ddragon_image(
     State(mirror): State<Arc<Mirror>>,
     UrlPath((version, kind, file)): UrlPath<(String, String, String)>,
 ) -> Response {
@@ -65,7 +115,29 @@ async fn image(
     )
 }
 
-async fn rune_image(
+#[utoipa::path(
+    get, path = "/ddragon/{version}/img/perk-images/{icon}", tag = "static",
+    summary = "A rune or rune style icon",
+    description = IMAGE_NOTES,
+    security(()),
+    params(
+        ("version" = String, Path, description = "A Data Dragon version from Riot's list, e.g. `16.19.1`.",
+            pattern = r"^[0-9]+(\.[0-9]+)*$", example = "16.19.1"),
+        ("icon" = String, Path, description = "runesReforged.json's `icon` without its leading `perk-images/`, \
+            e.g. `Styles/Domination/Electrocute/Electrocute.png`. It spans several path segments: send its \
+            slashes as they are, or percent-encoded (`%2F`, as a generated client does). Both are served.",
+            example = "Styles/Domination/Electrocute/Electrocute.png"),
+    ),
+    responses(
+        (status = 200, description = "The PNG.", content_type = "image/png", body = Png),
+        (status = 304, description = "Not modified since `If-Modified-Since`, for a copy already on disk."),
+        (status = 404, description = "Not a version Riot lists, not an icon that version's runesReforged.json \
+            lists, or an icon Riot doesn't have. Empty body."),
+        (status = 502, description = "Riot's CDN failed on the first fetch (unreachable, an error status, \
+            or not a PNG). Nothing was kept, so the next request tries again. Empty body."),
+    ),
+)]
+pub async fn ddragon_rune_image(
     State(mirror): State<Arc<Mirror>>,
     UrlPath((version, icon)): UrlPath<(String, String)>,
 ) -> Response {
