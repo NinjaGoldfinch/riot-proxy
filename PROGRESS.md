@@ -250,6 +250,11 @@ Baseline before THR-06a (one kr crawl to MASTER on the dev VM): not yet recorded
 - [ ] LAD-02 find the Master players the cap leaves out: a `discover` stage that looks up the ranks of archived match participants not on the ladder (IMPLEMENTATION.md §Post-release — LAD)
 - [x] LAD-03 re-run the cap checks from `/dev`: `POST /v1/admin/ladder/probe` checks `masterleagues` against `RIOT_APEX_LIST_CAP`, pages league-exp-v4 (`league.expEntries`, new in the registry) and compares the two, and checks that the paged route refuses MASTER. Each check is confirmed / not-seen / changed / error, shown on a new Ladder tab on `/dev` (#114, design/10, ADR-095)
 
+## BLD — set builds on the champion page (owner request 2026-10-09)
+- [ ] BLD-01 per-player build facts from the timeline: `match_builds` (purchase order minus undos, finished items, boots, starter, skill order) filled by `builds:extract` before each recompute (IMPLEMENTATION.md §Post-release — BLD)
+- [ ] BLD-02 aggregate set builds: `champion_builds` keyed by the first two finished items, with `champion_build_parts` for the 3rd–5th items, starter, boots, skill order, runes and spells (IMPLEMENTATION.md §Post-release — BLD)
+- [ ] BLD-03 `GET /v1/lol/analytics/champions/{championId}/builds` and the showcase's build tabs, with today's lists as the fallback (IMPLEMENTATION.md §Post-release — BLD)
+
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
 
