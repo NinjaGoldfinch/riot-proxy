@@ -5,11 +5,13 @@ name: edge
 # Release tags and `:2` stay with release.yml; `:edge` is never a release.
 # A pull request that touches this file builds and smoke-tests, and pushes nothing.
 # Each image's description lists the commits since the `:edge` before it (OPS-05, ADR-107).
+# `:edge` only moves forwards: a run for a commit that is no longer the head of
+# `main` pushes `:sha-<short>` only (INC-02, ADR-114).
 on:
   push:
     branches: [main]
   pull_request:
-    paths: [".github/workflows/edge.yml", "Dockerfile.release", "scripts/image-description.sh"]
+    paths: [".github/workflows/edge.yml", "Dockerfile.release", "scripts/image-description.sh", "scripts/edge-tags.sh"]
 
 concurrency:
   group: edge-${{ github.ref }}
@@ -42,6 +44,21 @@ jobs:
           mkdir dist && cp target/x86_64-unknown-linux-musl/release/riot-proxy dist/riot-proxy-linux-amd64
           file dist/riot-proxy-linux-amd64 | grep -qE "static(ally|-pie) linked"
       - uses: docker/setup-buildx-action@v4
+      - name: the image serves and passes its own healthcheck
+        run: |
+          docker buildx build --load --platform linux/amd64 -f Dockerfile.release -t riot-proxy:edge .
+          docker run --rm riot-proxy:edge --version
+          docker run -d --name rp -e RIOT_API_KEY=ci-dummy-key-not-a-riot-key -p 8080:8080 riot-proxy:edge
+          for i in $(seq 1 30); do docker exec rp /riot-proxy healthcheck && break; sleep 1; done
+          docker exec rp /riot-proxy healthcheck
+          docker stop -t 15 rp
+      # Right before the push, so a commit that lands during the build counts:
+      # `:edge` moves only if this commit is still the head of `main`, so a run
+      # GitHub starts late never puts `:edge` back on an older image (INC-02, ADR-114).
+      # A pull request's merge commit is never the head; nothing is pushed there anyway.
+      - id: tags
+        name: pick the tags
+        run: scripts/edge-tags.sh "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
       # The commits since the image `:edge` points at now (its `revision` label);
       # on a pull request, since the base branch.
       - id: desc
@@ -49,14 +66,18 @@ jobs:
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
           BEFORE: ${{ github.event.before }}
+          EDGE: ${{ steps.tags.outputs.edge }}
         run: |
           from=$BASE
+          title="riot-proxy edge, main at ${GITHUB_SHA::7}"
           if [ "$GITHUB_EVENT_NAME" = push ]; then
             from=$(docker buildx imagetools inspect "$IMAGE:edge" --format '{{json .Image}}' 2>/dev/null \
               | jq -r '(if has("config") then . else .["linux/amd64"] end).config.Labels["org.opencontainers.image.revision"] // empty' || true)
             from=${from:-$BEFORE}
+            # Not the head any more: `:edge` is newer, so only this commit is listed.
+            [ "$EDGE" = true ] || title="riot-proxy main at ${GITHUB_SHA::7}, not :edge (main had moved on)"
           fi
-          text=$(scripts/image-description.sh "riot-proxy edge, main at ${GITHUB_SHA::7}" "$GITHUB_SHA" "$from")
+          text=$(scripts/image-description.sh "$title" "$GITHUB_SHA" "$from")
           echo "$text"
           echo "text=$text" >> "$GITHUB_OUTPUT"
       - id: meta
@@ -68,18 +89,10 @@ jobs:
           images: ${{ env.IMAGE }}
           flavor: latest=false
           tags: |
-            type=raw,value=edge
-            type=sha,prefix=sha-
+            type=raw,value=edge,enable=${{ steps.tags.outputs.edge }}
+            type=raw,value=${{ steps.tags.outputs.sha }}
           labels: org.opencontainers.image.description=${{ steps.desc.outputs.text }}
           annotations: org.opencontainers.image.description=${{ steps.desc.outputs.text }}
-      - name: the image serves and passes its own healthcheck
-        run: |
-          docker buildx build --load --platform linux/amd64 -f Dockerfile.release -t riot-proxy:edge .
-          docker run --rm riot-proxy:edge --version
-          docker run -d --name rp -e RIOT_API_KEY=ci-dummy-key-not-a-riot-key -p 8080:8080 riot-proxy:edge
-          for i in $(seq 1 30); do docker exec rp /riot-proxy healthcheck && break; sleep 1; done
-          docker exec rp /riot-proxy healthcheck
-          docker stop -t 15 rp
       - if: github.event_name == 'push'
         uses: docker/login-action@v4
         with:

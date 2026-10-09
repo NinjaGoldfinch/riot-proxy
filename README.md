@@ -26,7 +26,7 @@ Pick one:
 
 ## Dev VM on Proxmox
 
-This creates a Debian VM that runs the `:edge` image and updates itself within about 2 minutes of each push to `main`. It needs Proxmox VE 8 or later. Run these on the Proxmox host, as root:
+This creates a Debian VM that runs the `:edge` image and updates itself within about 2 minutes of each push to `main`. `:edge` only moves forwards: a late workflow run for an older commit pushes only its `:sha-<short>` tag. It needs Proxmox VE 8 or later. Run these on the Proxmox host, as root:
 
 ```bash
 # once: let the 'local' storage hold cloud-init snippets
