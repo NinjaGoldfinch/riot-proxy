@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 
-import { html, LADDER, PUUID, MATCH, RUNES, api } from './fake-api.mjs';
+import { html, LADDER, PUUID, BOOTS, MATCH, RUNES, api } from './fake-api.mjs';
 
 async function page({ platform = 'oc1', hash = '', ...opts } = {}) {
   const calls = [];
@@ -172,6 +172,7 @@ test('the player view loads the profile, then matches, pool, mastery and live ga
     `/v1/lol/spectator/active/oc1/${PUUID}`,
     '/v1/static/queues',
     '/v1/static/summoner',
+    '/v1/static/item',
   ]) assert.ok(p.calls.includes(c), c);
   assert.ok(p.text('#pHead').includes('Faker #KR1'));
   assert.ok(p.text('#pHead').includes('Level 939'));
@@ -200,15 +201,18 @@ test('match cards: result, queue name, KDA, CS per minute, level, spells, runes 
     '/ddragon/16.19.1/img/champion/Annie.png',
     '/ddragon/16.19.1/img/spell/SummonerFlash.png', '/ddragon/16.19.1/img/spell/SummonerDot.png',
     '/ddragon/16.19.1/img/perk-images/Styles/Precision/Conqueror/Conqueror.png', '/ddragon/16.19.1/img/perk-images/Styles/7200_Domination.png',
-    '/ddragon/16.19.1/img/item/1001.png', '/ddragon/16.19.1/img/item/3047.png', '/ddragon/16.19.1/img/item/3340.png', '/ddragon/16.19.1/img/item/3006.png',
-  ], 'empty item slots (0) have no image; the trinket, then the role quest slot, after the inventory');
+    '/ddragon/16.19.1/img/item/3078.png', '/ddragon/16.19.1/img/item/3047.png', '/ddragon/16.19.1/img/item/3340.png', '/ddragon/16.19.1/img/item/3006.png',
+  ], 'empty item slots (0) have no image');
   assert.deepEqual([...cards[0].querySelectorAll('.runes img')].map((i) => i.getAttribute('title')), ['Conqueror', 'Domination']);
   const lvl = cards[0].querySelectorAll('.lvl');
   assert.equal(lvl.length, 1, 'the level once, on the portrait');
   assert.equal(lvl[0].parentElement.className, 'portrait');
   assert.equal(lvl[0].textContent, '16');
-  assert.deepEqual([...cards[0].querySelectorAll('.items > *')].map((e) => e.tagName), ['IMG', 'IMG', 'IMG', 'IMG', 'SPAN', 'SPAN', 'SPAN', 'SPAN'],
-    'item0–6 and roleBoundItem, filled slots first: item1–3 and item5 are empty boxes at the end, not holes in the build');
+  const cells = (card) => [...card.querySelectorAll('.items > *')].map((e) => e.getAttribute('src')?.match(/item\/(\d+)\.png$/)[1] ?? '-');
+  assert.deepEqual(cells(cards[0]), ['3078', '3047', '-', '3340', '-', '-', '-', '3006'],
+    'a bot laner: the inventory closed up (item1–3 and item5 empty), the trinket in cell 4, the role quest boots in cell 8');
+  assert.deepEqual(cells(cards[1]), ['3078', '-', '-', '3340', '-', '-', '-', '3047'],
+    'a top laner: the role quest reward is not shown, and the boots move from item4 to cell 8');
   assert.ok(p.text('#pMatches').includes('queued the player\'s history for archiving (queued)'));
 });
 
@@ -361,11 +365,20 @@ test('the scoreboard: two sides, totals, bans, objectives, every player line', a
     const sub = x.perks.styles.find((s) => s.description === 'subStyle');
     const want = [RUNES.flatMap((s) => s.slots[0].runes).find((r) => r.id === primary.selections[0].perk), RUNES.find((s) => s.id === sub.style)];
     assert.deepEqual(runes.map((r) => r.getAttribute('src')), want.map((r) => `/ddragon/16.19.1/img/${r.icon}`), `row ${i}`);
-    // The recorded game has sold-item holes (rows 1, 2, 6): the filled slots close up, the empty boxes go last.
-    const slots = [x.item0, x.item1, x.item2, x.item3, x.item4, x.item5, x.item6, x.roleBoundItem];
+    // The recorded game has sold-item holes (rows 1, 2, 6), boots in several slots and a role quest item on every row:
+    // the inventory closes up around the trinket (cell 4) and the boots (cell 8, a bot laner's role quest boots).
+    const inv = [x.item0, x.item1, x.item2, x.item3, x.item4, x.item5].filter(Boolean);
+    const at = x.teamPosition === 'BOTTOM' ? -1 : inv.findIndex((id) => id in BOOTS);
+    const shoes = x.teamPosition === 'BOTTOM' ? x.roleBoundItem : at >= 0 ? inv.splice(at, 1)[0] : 0;
+    const grid = [inv[0], inv[1], inv[2], x.item6, inv[3], inv[4], inv[5], shoes].map((id) => (id ? `/ddragon/16.19.1/img/item/${id}.png` : null));
     const cells = [...row.querySelectorAll('.items.row > *')];
-    assert.deepEqual(cells.map((c) => c.getAttribute('src')), [...slots.filter(Boolean).map((id) => `/ddragon/16.19.1/img/item/${id}.png`), ...slots.filter((id) => !id).map(() => null)], `row ${i}: items`);
+    assert.deepEqual(cells.map((c) => c.getAttribute('src')), grid, `row ${i}: items`);
   }
+  const ids = (row) => [...row.querySelectorAll('.items.row > *')].map((c) => c.getAttribute('src')?.match(/item\/(\d+)\.png$/)[1] ?? '-');
+  const rows = [...p.w.document.querySelectorAll('#mTeams tbody tr')];
+  assert.deepEqual(ids(rows[2]), ['3036', '3172', '6673', '3363', '3031', '-', '-', '-'], 'no boots: cell 8 stays empty, the role quest reward is not shown');
+  assert.deepEqual(ids(rows[7]), ['3137', '4629', '2503', '3363', '1058', '1082', '-', '3170'], 'boots in item1 move to cell 8');
+  assert.deepEqual(ids(rows[3]), ['6675', '3508', '2019', '3363', '1086', '3095', '3031', '3008'], 'a bot laner: a full inventory, and the role quest boots in cell 8');
   assert.ok(p.text('#mHead').includes('5v5 Ranked Solo'), 'queue name from queues.json, without "games"');
   assert.ok(p.text('#mHead').includes('patch 16.19'));
   assert.deepEqual(p.errors, []);
