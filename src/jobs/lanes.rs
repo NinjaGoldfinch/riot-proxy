@@ -129,6 +129,7 @@ mod tests {
             kinds::AGGREGATE_ANALYTICS,
             kinds::FACTS_REEXTRACT,
             kinds::BUILDS_EXTRACT,
+            kinds::TIERS_BACKFILL,
             kinds::MAINTENANCE,
             kinds::DDRAGON_SYNC,
         ] {

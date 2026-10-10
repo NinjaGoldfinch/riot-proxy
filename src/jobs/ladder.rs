@@ -84,6 +84,9 @@ pub struct LadderContext {
     pub rank_lookup_limit: u32,
     /// `RANK_LOOKUP_RECHECK_S`: a player looked up this recently is left off.
     pub rank_lookup_recheck_s: u32,
+    /// `TIER_LATE_STAMP_DAYS`: how far back a ladder page places its players'
+    /// `UNKNOWN` tier stamps (THR-02).
+    pub late_stamp_days: u32,
 }
 
 /// Players one `ladder:collect` job walks (v1 `COLLECT_BATCH`).
@@ -516,6 +519,7 @@ impl LadderContext {
         cursor: Option<(&str, i64)>,
         apex_tier: Option<&str>,
     ) -> Result<(), JobError> {
+        let now = Clock::now().unix_ms;
         store::write_page(
             self.db(),
             store::Page {
@@ -526,7 +530,8 @@ impl LadderContext {
                 entries,
                 cursor,
                 apex_tier,
-                now: Clock::now().unix_ms,
+                now,
+                late_since: crate::archive::tiers::late_since(now, self.late_stamp_days),
             },
         )
         .await

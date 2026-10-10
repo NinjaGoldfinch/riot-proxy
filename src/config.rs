@@ -58,6 +58,7 @@ pub const VARS: &[&str] = &[
     "LADDER_BACKFILL_LIMIT",
     "RANK_LOOKUP_LIMIT",
     "RANK_LOOKUP_RECHECK_S",
+    "TIER_LATE_STAMP_DAYS",
     "FACTS_REEXTRACT_BATCH",
     "AGGREGATE_PATCH_LIMIT",
     "AGGREGATE_INTERVAL_S",
@@ -243,6 +244,9 @@ pub struct Config {
     pub rank_lookup_limit: u32,
     /// How long a lookup keeps a player off the next run's list (ADR-111).
     pub rank_lookup_recheck_s: u32,
+    /// How far back a rank places a player's `UNKNOWN` tier stamps, in days;
+    /// 0 places none (THR-02, ADR-127).
+    pub tier_late_stamp_days: u32,
     pub facts_reextract_batch: u32,
     pub aggregate_patch_limit: u32,
     pub aggregate_interval_s: u32,
@@ -500,6 +504,7 @@ impl Config {
             ladder_backfill_limit: v.int("LADDER_BACKFILL_LIMIT", 100, 0, 10_000),
             rank_lookup_limit: v.int("RANK_LOOKUP_LIMIT", 50_000, 0, 10_000_000),
             rank_lookup_recheck_s: v.int("RANK_LOOKUP_RECHECK_S", 604_800, 0, 31_536_000),
+            tier_late_stamp_days: v.int("TIER_LATE_STAMP_DAYS", 14, 0, 365),
             facts_reextract_batch: v.int("FACTS_REEXTRACT_BATCH", 500, 1, 10_000),
             aggregate_patch_limit: v.int("AGGREGATE_PATCH_LIMIT", 4, 0, 100),
             aggregate_interval_s: v.int("AGGREGATE_INTERVAL_S", 0, 0, 604_800),
