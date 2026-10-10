@@ -1,6 +1,6 @@
 ---
 source: tests/analytics.rs
-assertion_line: 322
+assertion_line: 354
 expression: redact(detail.json())
 ---
 {
@@ -91,6 +91,7 @@ expression: redact(detail.json())
     "spells": "<iso>",
     "stats": "<iso>"
   },
+  "side": null,
   "spells": [
     {
       "games": 1,

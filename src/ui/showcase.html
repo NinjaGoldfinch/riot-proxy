@@ -38,6 +38,9 @@
   .card .tools { margin-left: auto; display: flex; gap: 4px; flex-wrap: wrap; }
   .card .tools button { font-size: 12px; padding: 2px 9px; }
   .card .tools select { font-size: 12px; padding: 2px 6px; }
+  /* The champion view's side toggle and the slice each of its cards shows (FLT-02). */
+  .seg { display: inline-flex; gap: 2px; }
+  .card > header .slice { font-size: 12px; }
   .src { font: 11px var(--mono); color: var(--dim); border: 1px dashed var(--line); border-radius: 4px; padding: 1px 6px; display: inline-block; margin: 2px 4px 0 0; max-width: calc(100% - 4px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: top; }
   .src:hover { color: var(--accent); border-color: var(--accent); }
   .muted { color: var(--dim); }
@@ -1315,9 +1318,19 @@ function renderGold(tl, match) {
 
 // ---------- champion view (DEV-08)
 // scrolled: the `#/champion/{id}/builds` hash whose Builds card was last scrolled to (SITE-10).
-const ch = { id: null, role: '', builds: null, tab: 0, scrolled: '' };
+// tier and side: the slice the page reads (FLT-02), '' for every tier / both sides; kept across champions.
+const ch = { id: null, role: '', builds: null, tab: 0, scrolled: '', tier: '', side: '' };
 /** The champion view's platform: the one picked on the page, else the home view's; '' is every platform. */
 const champRegion = () => state.region ?? platform();
+/** The champion view's tier picker and side toggle (FLT-02). UNKNOWN is the players no ladder or lookup placed. */
+const tierSelect = () => `<select data-ctier aria-label="tier"><option value="">All tiers</option>${[...TIERS, 'UNKNOWN'].map((t) => `<option value="${t}" ${t === ch.tier ? 'selected' : ''}>${titleCase(t)}</option>`).join('')}</select>`;
+const SIDE_CHOICES = [['', 'Both'], ['blue', 'Blue'], ['red', 'Red']];
+const sideToggle = () => `<span class="seg" role="group" aria-label="side">${SIDE_CHOICES.map(([v, l]) => `<button data-cside="${v}" class="${v === ch.side ? 'on' : ''}">${l}</button>`).join('')}</span>`;
+/** The slice a champion card shows, named in its header. */
+const sliceLabel = () => `${ch.tier ? titleCase(ch.tier) : 'All tiers'} · ${ch.side ? `${SIDE_CHOICES.find(([v]) => v === ch.side)[1]} side` : 'both sides'}`;
+const sliceTag = () => `<span class="muted slice">${esc(sliceLabel())}</span>`;
+/** Add the picked tier and side to an analytics query. */
+const withSlice = (q) => { if (ch.tier) q.set('tier', ch.tier); if (ch.side) q.set('side', ch.side); return q; };
 const regionSelect = () => `<select data-region aria-label="region"><option value="">All regions</option>${(cfg?.platforms ?? []).map((p) => `<option value="${esc(p.value)}" ${p.value === champRegion() ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}</select>`;
 
 async function renderChampion({ id, focus }) {
@@ -1335,7 +1348,7 @@ async function renderChampion({ id, focus }) {
   const tabs = QUEUES.map(([q, l]) => `<button data-cqueue="${q}" class="${q === state.queue ? 'on' : ''}">${l}</button>`).join('');
   $('#view').innerHTML = `<section class="card" id="cHead"><div class="who">${champIcon(id)}
       <div><h2>${esc(name)}</h2><div class="muted">${esc(c?.title ?? '')}</div><div id="cMeta" class="muted"></div></div>
-      <div class="tools">${tabs}${regionSelect()}<span id="cPatch"></span></div></div>
+      <div class="tools">${tabs}${regionSelect()}<span id="cPatch"></span>${tierSelect()}${sideToggle()}</div></div>
       <div>${sources(OP.champ, OP.builds, OP.patches, OP.file)}</div></section>
     <div class="grid">
       <div><section class="card" id="cTiers"><header><h2>By tier</h2></header><p class="muted">loading…</p></section>
@@ -1350,9 +1363,11 @@ async function renderChampion({ id, focus }) {
   $('#cPatch').innerHTML = patchSelect(patches);
   const q = new URLSearchParams({ queue: state.queue, patch: state.patch, limit: '10' });
   if (region) q.set('platform', region);
+  withSlice(q);
   // No role: the route picks the champion's most-played one (BLD-03).
   const bq = new URLSearchParams({ queue: state.queue, patch: state.patch });
   if (region) bq.set('platform', region);
+  withSlice(bq);
   const [res, builds] = await Promise.all([
     get(`/v1/lol/analytics/champions/${id}?${q}`),
     get(`/v1/lol/analytics/champions/${id}/builds?${bq}`),
@@ -1361,7 +1376,7 @@ async function renderChampion({ id, focus }) {
   if (seq !== viewSeq) return;
   loadMatchups(seq);
   ch.builds = builds.ok ? builds.json : null;
-  if (!res.ok) { $('#cTiers').innerHTML = `<header><h2>By tier</h2></header>${failure(res)}`; $('#cBuild').innerHTML = `<header><h2>Builds</h2></header>`; toBuilds(); return; }
+  if (!res.ok) { $('#cTiers').innerHTML = `<header><h2>By tier</h2>${sliceTag()}</header>${failure(res)}`; $('#cBuild').innerHTML = `<header><h2>Builds</h2>${sliceTag()}</header>`; toBuilds(); return; }
   const d = res.json;
   $('#cMeta').textContent = `${region || 'every platform'} · ${QUEUES.find(([q2]) => q2 === d.queue)?.[1] ?? d.queue} · ${patchLabel(state.patch)} · ${(d.totalGames ?? 0).toLocaleString()} games`;
   const rows = tierRows(d.byTier);
@@ -1371,7 +1386,7 @@ async function renderChampion({ id, focus }) {
     ? `<p class="empty">No ${esc(name)} games on ${esc(patchLabel(state.patch))}${region ? '' : ' in any region'} yet.</p>`
     : `<p class="empty">No ${esc(name)} games in the analytics yet: they fill in when a ladder crawl${region ? ' for this platform' : ''} completes.</p>`;
   const num = (v, f) => (v == null ? '–' : f(v));
-  $('#cTiers').innerHTML = `<header><h2>By tier</h2>${all ? `<span class="muted">${pct(all.winRate)} win over ${all.games.toLocaleString()} games</span>` : ''}</header><div>${sources(OP.champ)}</div>` + (rows.length
+  $('#cTiers').innerHTML = `<header><h2>By tier</h2>${sliceTag()}${all ? `<span class="muted">${pct(all.winRate)} win over ${all.games.toLocaleString()} games</span>` : ''}</header><div>${sources(OP.champ)}</div>` + (rows.length
     ? `<div class="scroll"><table><thead><tr><th>Tier</th><th class="n">Games</th><th>Win rate</th><th class="n">Pick</th><th class="n">Ban</th><th class="n hide-sm">KDA</th><th class="n hide-sm">CS/min</th><th class="n hide-sm">Gold/min</th></tr></thead><tbody>${rows.map((r) => `<tr>
         <td><span class="tier" style="background:${tierColour(r.tier)}">${esc(r.tier)}</span></td>
         <td class="n">${r.games.toLocaleString()}</td>
@@ -1385,7 +1400,7 @@ async function renderChampion({ id, focus }) {
   const spellRows = (d.spells ?? []).map((e) => `<li><span class="spells-row">${spellIcon(e.spellA)}${spellIcon(e.spellB)}</span>${stat(e)}</li>`).join('');
   const runeRows = (d.runes ?? []).map((e) => `<li><span class="spells-row">${runeIcon(e.keystoneId)}${runeIcon(e.subStyleId)}</span><span>${esc(runes?.[e.keystoneId]?.name ?? `rune ${e.keystoneId}`)} <small class="muted">+ ${esc(runes?.[e.subStyleId]?.name ?? e.subStyleId)}</small></span>${stat(e)}</li>`).join('');
   const sub = (title, body) => `<h3 class="muted sub">${title}</h3>${body ? `<ol class="list">${body}</ol>` : '<p class="muted">–</p>'}`;
-  $('#cBuild').innerHTML = `<header><h2>Builds</h2></header><div>${sources(OP.builds, OP.champ, OP.file)}</div>`
+  $('#cBuild').innerHTML = `<header><h2>Builds</h2>${sliceTag()}</header><div>${sources(OP.builds, OP.champ, OP.file)}</div>`
     + (items || spellRows || runeRows ? sub('Items', items) + sub('Summoner spells', spellRows) + sub('Runes', runeRows) : `<p class="empty">No builds ${state.patch === 'all' ? 'yet' : `on ${esc(patchLabel(state.patch))}`}.</p>`);
   toBuilds();
 }
@@ -1407,7 +1422,7 @@ function renderBuilds() {
   const order = b.skillOrder[0]?.order;
   const sep = '<span class="sep">›</span>';
   const step = (opts) => `<span class="step">${opts.length ? opts.map((o) => `<span class="opt">${namedItem(o.itemId)}<span>${pct(o.winRate)}<small class="muted"> · ${o.games.toLocaleString()}</small></span></span>`).join('') : '<span class="muted">–</span>'}</span>`;
-  $('#cBuild').innerHTML = `<header><h2>Builds</h2><span class="muted">${role ? `${esc(titleCase(role))} · ` : ''}${pct(b.pickRate)} of ${ch.builds.totalGames.toLocaleString()} games with a build</span></header><div>${sources(OP.builds, OP.file)}</div>
+  $('#cBuild').innerHTML = `<header><h2>Builds</h2>${sliceTag()}<span class="muted">${role ? `${esc(titleCase(role))} · ` : ''}${pct(b.pickRate)} of ${ch.builds.totalGames.toLocaleString()} games with a build</span></header><div>${sources(OP.builds, OP.file)}</div>
     <div class="tools builds">${tabs}</div>
     <div class="brow">${[
       group('Runes', rune ? `<span class="spells-row">${runeIcon(rune.keystoneId)}${runeIcon(rune.subStyleId)}</span>` : ''),
@@ -1423,9 +1438,10 @@ async function loadMatchups(seq) {
   const el = $('#cMatchups');
   const q = new URLSearchParams({ queue: state.queue, patch: state.patch, limit: '200' });
   if (champRegion()) q.set('platform', champRegion());
+  withSlice(q);
   const res = await get(`/v1/lol/analytics/champions/${ch.id}/matchups?${q}`);
   if (seq !== viewSeq) return;
-  const head = (tabs = '') => `<header><h2>Matchups</h2><div class="tools">${tabs}</div></header><div>${sources(OP.matchups)}</div>`;
+  const head = (tabs = '') => `<header><h2>Matchups</h2>${sliceTag()}<div class="tools">${tabs}</div></header><div>${sources(OP.matchups)}</div>`;
   if (!res.ok) { el.innerHTML = head() + failure(res); return; }
   ch.matchups = res.json.matchups ?? [];
   renderMatchups();
@@ -1437,7 +1453,7 @@ function renderMatchups() {
   if (ch.role && !roles.includes(ch.role)) ch.role = '';
   const tabs = roles.length > 1 ? [['', 'All'], ...roles.map((r) => [r, titleCase(r)])].map(([r, l]) => `<button data-role="${r}" class="${r === ch.role ? 'on' : ''}">${l}</button>`).join('') : '';
   const rows = ch.matchups.filter((m) => !ch.role || m.role === ch.role).sort((a, b) => b.games - a.games || b.winRate - a.winRate);
-  el.innerHTML = `<header><h2>Matchups</h2><div class="tools">${tabs}</div></header><div>${sources(OP.matchups)}</div>` + (rows.length
+  el.innerHTML = `<header><h2>Matchups</h2>${sliceTag()}<div class="tools">${tabs}</div></header><div>${sources(OP.matchups)}</div>` + (rows.length
     ? `<p class="muted note">Win rate of ${esc(champions[ch.id]?.name ?? 'this champion')} against each lane opponent, most games first.</p>
       <div class="scroll tall"><table><thead><tr><th>Against</th><th>Lane</th><th class="n">Games</th><th>Win rate</th></tr></thead><tbody>${rows.map((m) => `<tr>
       <td class="name">${champLink(m.opponentId, 'sm')} ${esc(champions[m.opponentId]?.name ?? m.opponentName ?? `#${m.opponentId}`)}</td>
@@ -1471,6 +1487,7 @@ document.addEventListener('click', (ev) => {
   if (t.dataset.cqueue) { state.queue = t.dataset.cqueue; route(); }
   if (t.dataset.role !== undefined) { ch.role = t.dataset.role; renderMatchups(); }
   if (t.dataset.build !== undefined) { ch.tab = Number(t.dataset.build); renderBuilds(); }
+  if (t.dataset.cside !== undefined) { ch.side = t.dataset.cside; route(); }
   if (t.dataset.bplayer) { mb.puuid = t.dataset.bplayer; renderBuild(); }
   if ('refresh' in t.dataset) { const { view, args } = parseRoute(location.hash); if (view === 'player') renderPlayer(args, true); }
 });
@@ -1479,6 +1496,7 @@ document.addEventListener('change', (ev) => {
   const t = ev.target;
   if ('patch' in t.dataset) { state.patch = t.value; if (parseRoute(location.hash).view === 'champion') route(); else loadTop(); }
   if ('region' in t.dataset) { state.region = t.value; route(); }
+  if ('ctier' in t.dataset) { ch.tier = t.value; route(); }
   if (t.id === 'hPlatform') { store.set('rp.showcase.platform', t.value); state.ladderFor = ''; state.region = null; renderHome(); }
 });
 // An image the mirror cannot serve (an item retired since that game, say) becomes the

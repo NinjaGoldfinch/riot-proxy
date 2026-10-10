@@ -1,6 +1,6 @@
 ---
 source: tests/analytics.rs
-assertion_line: 870
+assertion_line: 1073
 expression: redact(body)
 ---
 {
@@ -80,5 +80,7 @@ expression: redact(body)
   "platform": null,
   "queue": "RANKED_SOLO_5x5",
   "role": "MIDDLE",
+  "side": null,
+  "tier": null,
   "totalGames": 1
 }

@@ -1,5 +1,6 @@
 ---
 source: tests/openapi.rs
+assertion_line: 12
 expression: doc
 ---
 {
@@ -188,12 +189,20 @@ expression: doc
           },
           "queue": {
             "type": "string"
+          },
+          "side": {
+            "description": "`blue` or `red` when the request named one, whose games each entry then counts; `null`: both.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
           "platform",
           "queue",
           "championId",
+          "side",
           "patches"
         ],
         "type": "object"
@@ -755,6 +764,20 @@ expression: doc
               "null"
             ]
           },
+          "side": {
+            "description": "`blue` or `red` when the request named one; `null`: both sides summed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tier": {
+            "description": "The tier asked for (the builder's, FLT-02); `null`: every tier summed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "totalGames": {
             "description": "The champion's games in this role that had a build: `pickRate`'s denominator.",
             "format": "int64",
@@ -765,6 +788,8 @@ expression: doc
           "championId",
           "platform",
           "queue",
+          "tier",
+          "side",
           "patch",
           "role",
           "computedAt",
@@ -843,6 +868,13 @@ expression: doc
           "sectionsComputedAt": {
             "$ref": "#/components/schemas/SectionsComputedAt"
           },
+          "side": {
+            "description": "`blue` or `red` when the request named one; `null`: both sides summed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "spells": {
             "items": {
               "$ref": "#/components/schemas/ChampionSpellEntry"
@@ -873,6 +905,7 @@ expression: doc
           "platform",
           "queue",
           "tier",
+          "side",
           "patch",
           "role",
           "computedAt",
@@ -1077,12 +1110,28 @@ expression: doc
               "string",
               "null"
             ]
+          },
+          "side": {
+            "description": "`blue` or `red` when the request named one; `null`: both sides summed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tier": {
+            "description": "The tier asked for (the champion's player's, FLT-02); `null`: every tier summed.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
           "championId",
           "platform",
           "queue",
+          "tier",
+          "side",
           "patch",
           "role",
           "computedAt",
@@ -1295,6 +1344,13 @@ expression: doc
               "null"
             ]
           },
+          "side": {
+            "description": "`blue` or `red` when the request named one; `null`: both sides summed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "tier": {
             "type": [
               "string",
@@ -1310,6 +1366,7 @@ expression: doc
           "platform",
           "queue",
           "tier",
+          "side",
           "patch",
           "role",
           "computedAt",
@@ -9763,6 +9820,15 @@ expression: doc
             }
           },
           {
+            "description": "`blue` or `red`: only the champion's games on that side, its pick rate over every match in the slice. Omitted: both sides summed",
+            "in": "query",
+            "name": "side",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "description": "`major.minor`, or `all` to sum every aggregated patch; default the newest aggregated patch",
             "in": "query",
             "name": "patch",
@@ -9998,9 +10064,18 @@ expression: doc
             }
           },
           {
-            "description": "IRON … CHALLENGER, or UNKNOWN: `stats` and `byTier` are that tier's row. Omitted: `stats` is one row summed over every tier, pick and ban rates over every match in the slice, and `byTier` a row per tier",
+            "description": "IRON … CHALLENGER, or UNKNOWN: `stats` and `byTier` are that tier's row, and the matchups, items, runes and spells that tier's players'. Omitted: `stats` is one row summed over every tier, pick and ban rates over every match in the slice, `byTier` a row per tier, and the other sections every tier summed",
             "in": "query",
             "name": "tier",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`blue` or `red`: every section from the champion's games on that side only. Omitted: both sides summed",
+            "in": "query",
+            "name": "side",
             "required": false,
             "schema": {
               "type": "string"
@@ -10210,7 +10285,7 @@ expression: doc
     },
     "/v1/lol/analytics/champions/{championId}/builds": {
       "get": {
-        "description": "The item paths players take on this champion: each build is the first two finished items, with the most common 3rd, 4th and 5th items, starter, boots, skill order, runes and spells of the players who built it (at most three each). Worked out from archived match timelines, so matches archived without one aren't counted, nor are players who finished fewer than two items. Without `role`, the champion's most-played role in the slice, named in `role`. Sends an `ETag`; a matching `If-None-Match` gets 304. A champion nobody has builds for yet still returns 200 with an empty `builds`.",
+        "description": "The item paths players take on this champion: each build is the first two finished items, with the most common 3rd, 4th and 5th items, starter, boots, skill order, runes and spells of the players who built it (at most three each). Worked out from archived match timelines, so matches archived without one aren't counted, nor are players who finished fewer than two items. Without `role`, the champion's most-played role in the slice (its `tier` and `side` included), named in `role`. Sends an `ETag`; a matching `If-None-Match` gets 304. A champion nobody has builds for yet still returns 200 with an empty `builds`.",
         "operationId": "champion_builds",
         "parameters": [
           {
@@ -10236,6 +10311,24 @@ expression: doc
             "description": "RANKED_SOLO_5x5 or RANKED_FLEX_SR",
             "in": "query",
             "name": "queue",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "IRON … CHALLENGER, or UNKNOWN: only builds of players at that tier. Omitted: every tier summed",
+            "in": "query",
+            "name": "tier",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`blue` or `red`: only builds of players on that side. Omitted: both sides summed",
+            "in": "query",
+            "name": "side",
             "required": false,
             "schema": {
               "type": "string"
@@ -10445,7 +10538,7 @@ expression: doc
     },
     "/v1/lol/analytics/champions/{championId}/matchups": {
       "get": {
-        "description": "Sends an `ETag`; a matching `If-None-Match` gets 304. Every lane matchup this champion has archived data for. No tier dimension: sample sizes die fast enough per (champion, opponent, role) alone, and the two laners can sit in different tiers anyway. Mirror lanes are excluded — their win rate is 50% by construction. Every archived lane is recorded from both sides, so the opposite champion's view of the same lane mirrors this one.",
+        "description": "Sends an `ETag`; a matching `If-None-Match` gets 304. Every lane matchup this champion has archived data for, at the tier and side of this champion's player (`tier`, `side`); the opponent may have been in another tier. Mirror lanes are excluded — their win rate is 50% by construction. Every archived lane is recorded from both sides, so the opposite champion's view of the same lane mirrors this one.",
         "operationId": "champion_matchups",
         "parameters": [
           {
@@ -10471,6 +10564,24 @@ expression: doc
             "description": "RANKED_SOLO_5x5 or RANKED_FLEX_SR",
             "in": "query",
             "name": "queue",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "IRON … CHALLENGER, or UNKNOWN: only games where this champion's player was at that tier; the opponent may have been in another. Omitted: every tier summed",
+            "in": "query",
+            "name": "tier",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`blue` or `red`: only games where this champion was on that side. Omitted: both sides summed",
+            "in": "query",
+            "name": "side",
             "required": false,
             "schema": {
               "type": "string"
@@ -10709,6 +10820,15 @@ expression: doc
             "schema": {
               "format": "int64",
               "type": "integer"
+            }
+          },
+          {
+            "description": "`blue` or `red`: count only games on that side. Omitted: both",
+            "in": "query",
+            "name": "side",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           },
           {

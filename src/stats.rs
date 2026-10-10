@@ -488,6 +488,7 @@ impl Stats {
                     queue,
                     patch: Some(p),
                     tier: None,
+                    side: None,
                     role: None,
                     champion_id: None,
                     min_games: 0,
