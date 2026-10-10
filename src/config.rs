@@ -59,7 +59,6 @@ pub const VARS: &[&str] = &[
     "RANK_LOOKUP_LIMIT",
     "RANK_LOOKUP_RECHECK_S",
     "FACTS_REEXTRACT_BATCH",
-    "AGGREGATE_MIN_GAMES",
     "AGGREGATE_PATCH_LIMIT",
     "AGGREGATE_INTERVAL_S",
     "DDRAGON_DIR",
@@ -245,7 +244,6 @@ pub struct Config {
     /// How long a lookup keeps a player off the next run's list (ADR-111).
     pub rank_lookup_recheck_s: u32,
     pub facts_reextract_batch: u32,
-    pub aggregate_min_games: u32,
     pub aggregate_patch_limit: u32,
     pub aggregate_interval_s: u32,
     pub ddragon_dir: PathBuf,
@@ -503,7 +501,6 @@ impl Config {
             rank_lookup_limit: v.int("RANK_LOOKUP_LIMIT", 50_000, 0, 10_000_000),
             rank_lookup_recheck_s: v.int("RANK_LOOKUP_RECHECK_S", 604_800, 0, 31_536_000),
             facts_reextract_batch: v.int("FACTS_REEXTRACT_BATCH", 500, 1, 10_000),
-            aggregate_min_games: v.int("AGGREGATE_MIN_GAMES", 10, 0, 10_000),
             aggregate_patch_limit: v.int("AGGREGATE_PATCH_LIMIT", 4, 0, 100),
             aggregate_interval_s: v.int("AGGREGATE_INTERVAL_S", 0, 0, 604_800),
             ddragon_locale: v.string("DDRAGON_LOCALE", "en_US"),

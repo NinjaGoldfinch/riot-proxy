@@ -1368,7 +1368,7 @@ async function renderChampion({ id, focus }) {
   // The champion over every tier: the route's one summed row (ADR-123).
   const all = d.stats?.[0];
   const none = patches.length
-    ? `<p class="empty">Not enough ${esc(name)} games on ${esc(patchLabel(state.patch))}${region ? '' : ' in any region'} yet.</p>`
+    ? `<p class="empty">No ${esc(name)} games on ${esc(patchLabel(state.patch))}${region ? '' : ' in any region'} yet.</p>`
     : `<p class="empty">No ${esc(name)} games in the analytics yet: they fill in when a ladder crawl${region ? ' for this platform' : ''} completes.</p>`;
   const num = (v, f) => (v == null ? '–' : f(v));
   $('#cTiers').innerHTML = `<header><h2>By tier</h2>${all ? `<span class="muted">${pct(all.winRate)} win over ${all.games.toLocaleString()} games</span>` : ''}</header><div>${sources(OP.champ)}</div>` + (rows.length

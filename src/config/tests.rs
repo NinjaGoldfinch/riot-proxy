@@ -77,7 +77,6 @@ fn defaults_match_v1_and_design_07() {
     assert_eq!(c.rank_lookup_limit, 50_000);
     assert_eq!(c.rank_lookup_recheck_s, 604_800, "seven days (ADR-111)");
     assert_eq!(c.facts_reextract_batch, 500);
-    assert_eq!(c.aggregate_min_games, 10);
     assert_eq!(c.aggregate_patch_limit, 4);
     assert_eq!(c.aggregate_interval_s, 0);
     assert_eq!(c.ddragon_locale, "en_US");

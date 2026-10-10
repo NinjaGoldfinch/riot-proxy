@@ -32,7 +32,11 @@ struct Env {
 }
 
 async fn env() -> Env {
-    let (dir, state, router) = common::app_with(&[("AGGREGATE_MIN_GAMES", "0")], "http://127.0.0.1:9");
+    env_with(&[]).await
+}
+
+async fn env_with(vars: &[(&str, &str)]) -> Env {
+    let (dir, state, router) = common::app_with(vars, "http://127.0.0.1:9");
     let mint = |name: &str, scopes| NewConsumer {
         name: name.into(),
         scopes,
@@ -337,6 +341,47 @@ async fn the_recompute_feeds_v1s_routes_and_remakes_are_opt_in() {
         json!([{"role": "MIDDLE", "opponentId": 13, "games": 1, "wins": 0, "winRate": 0},
                {"role": "MIDDLE", "opponentId": 157, "games": 1, "wins": 1, "winRate": 1}])
     );
+}
+
+/// SITE-11: the API serves every row it has. A floor is the caller's
+/// `minGames`, and a leftover `AGGREGATE_MIN_GAMES` no longer sets one.
+#[tokio::test]
+async fn without_min_games_every_row_is_served_even_a_one_game_one() {
+    let e = env_with(&[("AGGREGATE_MIN_GAMES", "10")]).await;
+    e.seed().await;
+    e.seed_builds().await;
+    e.aggregate().await;
+
+    // Ten champions, one game each.
+    let list = e.get("/v1/lol/analytics/champions").await.json();
+    let champions = list["champions"].as_array().unwrap();
+    assert_eq!(champions.len(), 10);
+    assert!(champions.iter().all(|c| c["games"] == 1));
+
+    // The detail: the stat row, its tier row and every build list.
+    let d = e.get("/v1/lol/analytics/champions/134").await.json();
+    assert_eq!(
+        (&d["stats"][0]["games"], &d["totalGames"]),
+        (&json!(1), &json!(1))
+    );
+    for section in ["byTier", "matchups", "items", "runes", "spells"] {
+        let rows = d[section].as_array().unwrap();
+        assert!(!rows.is_empty(), "{section} is empty");
+        assert!(rows.iter().all(|r| r["games"] == 1), "{section}: {rows:?}");
+    }
+
+    // A set build played once.
+    let b = e.get("/v1/lol/analytics/champions/134/builds").await.json();
+    assert_eq!(
+        (&b["builds"][0]["core"], &b["builds"][0]["games"]),
+        (&json!([6655, 3157]), &json!(1))
+    );
+
+    // The caller's floor still applies.
+    let floored = e.get("/v1/lol/analytics/champions/134?minGames=2").await.json();
+    for section in ["stats", "byTier", "matchups", "items", "runes", "spells"] {
+        assert_eq!(floored[section], json!([]), "{section}");
+    }
 }
 
 #[tokio::test]

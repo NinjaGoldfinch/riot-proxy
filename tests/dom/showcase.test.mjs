@@ -727,7 +727,7 @@ test('a patch with too few games says so rather than "no analytics yet"', async 
   sel.value = '16.19';
   sel.dispatchEvent(new p.w.Event('change', { bubbles: true }));
   await p.settle();
-  assert.ok(p.text('#cTiers').includes('Not enough Annie games on patch 16.19 yet'), p.text('#cTiers'));
+  assert.ok(p.text('#cTiers').includes('No Annie games on patch 16.19 yet'), p.text('#cTiers'));
   assert.ok(p.text('#cMatchups').includes('No lane matchups'));
   const empty = await page({ hash: '#/champion/1', noAnalytics: true });
   assert.ok(empty.text('#cTiers').includes('No Annie games in the analytics yet'), 'nothing aggregated at all');

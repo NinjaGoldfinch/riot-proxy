@@ -269,6 +269,7 @@ The site's backfill question (item 3) needs no task: the unbounded lookup backfi
 - [x] SITE-08 without `tier`, one row per champion over every tier (`tier: null`): pick and ban rates over every match in the slice from new totals (`analytics_match_totals`, `champion_ban_totals`, V0015, backfilled), averages weighted by games, `limit`/`minGames` on summed rows; the detail's `stats` summed and a new `byTier`; the showcase reads `byTier` (#148, design/04, design/11, ADR-123)
 - [x] SITE-09 a player's platform from their account: `account.regionByPuuid` (account-v1 active region, cached as an account), `GET /v1/riot/accounts/region/by-puuid/{puuid}`, `platform` optional on the profile routes (ADR-124) (#149)
 - [ ] SITE-10 the showcase without a platform picker; champion builds from the search box
+- [x] SITE-11 no games floor in the API: `minGames` defaults to 0 on the champions, champion detail and builds routes; `AGGREGATE_MIN_GAMES` removed (a leftover setting is ignored); the floor is the caller's (#PR, ADR-128)
 
 ## BLD — set builds on the champion page (owner request 2026-10-09)
 - [x] BLD-01 per-player build facts from the timeline: `match_builds` (purchase order minus undos, finished items, boots, starter, skill order) filled by `builds:extract` before each recompute (#142, ADR-117)

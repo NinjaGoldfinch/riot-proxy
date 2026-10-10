@@ -1358,3 +1358,12 @@ Accepted (owner request 2026-10-10, task THR-06a). design/05 §Priorities, desig
 - **Waking.** A bulk acquire, or `bulk_blocked`, held only by the busy ceiling reports the moment the scope goes idle as its retry time when that is sooner than the window clearing, so jobs re-queue for the right instant.
 - **`Limiter::new(c)`** still means one ceiling for both; `with_idle_ceiling(c, after)` adds the idle one. `serve` always sets it.
 - **Tests:** `src/riot/limiter/tests.rs` (bulk to 95/100 idle; an interactive request at 94% admitted at once and bulk held at 95; bulk idle again exactly 30 s after the last interactive request, with `retry_at` and `bulk_blocked` naming that instant; a waiting bulk caller wakes then; per scope; `new` alone keeps 0.80); `src/riot/limiter/proptest.rs` (never over-commits, and bulk never passes whichever ceiling applied, with and without the idle ceiling); `src/config/tests.rs` (defaults, bounds, following a raised usage ceiling).
+
+## ADR-128 — The API serves every row; a games floor is the caller's (2026-10-10)
+Accepted (owner request 2026-10-10, task SITE-11). Supersedes the `AGGREGATE_MIN_GAMES` default of ADR-056's routes; amends ADR-121 (builds' `minGames`).
+- **Why.** With the default floor of 10, an item, rune page, build or champion seen in fewer than 10 games of a slice was dropped, so a build that had been played once didn't show. Every row already carries `games`, so the caller can judge the sample. The owner's rule: the API shows all the data it has, and a floor is set by the consuming app, or by a public route that filters, added later.
+- **`minGames` defaults to 0** on `/v1/lol/analytics/champions`, `/champions/{championId}` (every section) and `/champions/{championId}/builds`. `/matchups` already did. A caller's `minGames` works as before.
+- **`AGGREGATE_MIN_GAMES` is removed**, not defaulted to 0: a server-wide floor is the thing being removed. A deployment that still sets it boots and ignores it, as with any variable the config doesn't read.
+- **ETags** carry the resolved `minGames`, so a client's old validator (taken under 10) doesn't match the new, longer responses.
+- **Tests:** `tests/analytics.rs` (`without_min_games_every_row_is_served_even_a_one_game_one`: with `AGGREGATE_MIN_GAMES=10` set, one-game rows on the list, every detail section and builds; `minGames=2` still empties them). The other analytics tests no longer set the variable.
+

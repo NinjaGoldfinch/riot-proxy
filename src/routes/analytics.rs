@@ -218,7 +218,7 @@ pub struct ChampionDetailResponse {
     /// The games of `stats`.
     total_games: i64,
     /// One row summed over every tier, or the named `tier`'s row; empty when
-    /// the champion has fewer than `minGames` games in the slice.
+    /// the champion has no games in the slice, or fewer than `minGames`.
     stats: Vec<ChampionStatEntry>,
     /// A row per tier, most played first: every tier's, or only the named
     /// `tier`'s. `minGames` applies to each row.
@@ -662,7 +662,7 @@ impl Common {
         ("tier" = Option<String>, Query, description = "IRON … CHALLENGER, or UNKNOWN: that tier's rows. Omitted: one row per champion summed over every tier, pick and ban rates over every match in the slice"),
         ("patch" = Option<String>, Query, description = "`major.minor`, or `all` to sum every aggregated patch; default the newest aggregated patch"),
         ("role" = Option<String>, Query, description = "TOP, JUNGLE, MIDDLE, BOTTOM, UTILITY or empty; default every role summed"),
-        ("minGames" = Option<i64>, Query, description = "≥ 0; default `AGGREGATE_MIN_GAMES`"),
+        ("minGames" = Option<i64>, Query, description = "≥ 0; default 0, every row"),
         ("limit" = Option<i64>, Query, description = "1–500, default 200"),
         ("remakes" = Option<String>, Query, description = "`exclude` (default) or `include`"),
     ),
@@ -679,7 +679,7 @@ async fn champions(
         Ok(c) => c,
         Err(e) => return e.into_response(),
     };
-    let min_games = c.min_games.unwrap_or(i64::from(state.config.aggregate_min_games));
+    let min_games = c.min_games.unwrap_or(0);
     let patch = match patch_or_latest(&state, &c).await {
         Ok(p) => p,
         Err(e) => return internal(&e),
@@ -748,7 +748,7 @@ async fn champions(
         ("queue" = Option<String>, Query, description = "RANKED_SOLO_5x5 or RANKED_FLEX_SR"),
         ("patch" = Option<String>, Query, description = "`major.minor`, or `all` to sum every aggregated patch; default the newest aggregated patch"),
         ("role" = Option<String>, Query, description = "TOP, JUNGLE, MIDDLE, BOTTOM or UTILITY; default every lane"),
-        ("minGames" = Option<i64>, Query, description = "≥ 0; no default"),
+        ("minGames" = Option<i64>, Query, description = "≥ 0; default 0, every row"),
         ("limit" = Option<i64>, Query, description = "1–200, default 50"),
         ("remakes" = Option<String>, Query, description = "`exclude` (default) or `include`"),
     ),
@@ -839,7 +839,7 @@ async fn champion_matchups(
         ("tier" = Option<String>, Query, description = "IRON … CHALLENGER, or UNKNOWN: `stats` and `byTier` are that tier's row. Omitted: `stats` is one row summed over every tier, pick and ban rates over every match in the slice, and `byTier` a row per tier"),
         ("patch" = Option<String>, Query, description = "`major.minor`, or `all` to sum every aggregated patch; default the newest aggregated patch"),
         ("role" = Option<String>, Query, description = "TOP, JUNGLE, MIDDLE, BOTTOM, UTILITY or empty"),
-        ("minGames" = Option<i64>, Query, description = "≥ 0; default `AGGREGATE_MIN_GAMES`"),
+        ("minGames" = Option<i64>, Query, description = "≥ 0; default 0, every row"),
         ("limit" = Option<i64>, Query, description = "1–50, default 10, per section"),
         ("remakes" = Option<String>, Query, description = "`exclude` (default) or `include`"),
     ),
@@ -863,7 +863,7 @@ async fn champion_detail(
         Ok(v) => v,
         Err(e) => return e.into_response(),
     };
-    let min_games = c.min_games.unwrap_or(i64::from(state.config.aggregate_min_games));
+    let min_games = c.min_games.unwrap_or(0);
     let patch = match patch_or_latest(&state, &c).await {
         Ok(p) => p,
         Err(e) => return internal(&e),
@@ -1095,7 +1095,7 @@ fn build_entry(b: &BuildRow, parts: &[BuildPartRow], total: i64) -> ChampionBuil
         ("queue" = Option<String>, Query, description = "RANKED_SOLO_5x5 or RANKED_FLEX_SR"),
         ("patch" = Option<String>, Query, description = "`major.minor`, or `all` to sum every aggregated patch; default the newest aggregated patch"),
         ("role" = Option<String>, Query, description = "TOP, JUNGLE, MIDDLE, BOTTOM, UTILITY or empty; default the champion's most-played role"),
-        ("minGames" = Option<i64>, Query, description = "≥ 0, games a build needs; default `AGGREGATE_MIN_GAMES`"),
+        ("minGames" = Option<i64>, Query, description = "≥ 0, games a build needs; default 0, every build"),
         ("limit" = Option<i64>, Query, description = "1–10 builds, default 3"),
         ("remakes" = Option<String>, Query, description = "`exclude` (default) or `include`"),
     ),
@@ -1119,7 +1119,7 @@ async fn champion_builds(
         Ok(v) => v,
         Err(e) => return e.into_response(),
     };
-    let min_games = c.min_games.unwrap_or(i64::from(state.config.aggregate_min_games));
+    let min_games = c.min_games.unwrap_or(0);
     let patch = match patch_or_latest(&state, &c).await {
         Ok(p) => p,
         Err(e) => return internal(&e),
