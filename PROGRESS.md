@@ -291,7 +291,7 @@ The site's backfill question (item 3) needs no task: the unbounded lookup backfi
 
 ## FLT — builds and matchups by rank, opponent and side (owner request 2026-10-10)
 Order: THR-02 → FLT-01 → FLT-02 → FLT-03 → FLT-04, then PAIR.
-- [ ] FLT-01 `tier` and `side` keys on matchups and every build table, `side` on `champion_stats`; reads sum over them, output unchanged; after THR-02 (IMPLEMENTATION.md §Post-release — FLT)
+- [x] FLT-01 `tier` and `side` keys on matchups and every build table, `side` on `champion_stats` (V0017), the row's own player's stamped tier and side; reads sum over them, output unchanged; rows from before V0017 kept with tier and side `''` until one rebuild over every patch of their ladder (`analytics_unsplit`, queued at boot) (#155, design/04, ADR-129)
 - [ ] FLT-02 `tier` and `side` on the matchups, builds and detail routes; the champion page's tier picker and side toggle drive the build and matchup cards (IMPLEMENTATION.md §Post-release — FLT)
 - [ ] FLT-03 `minTier` ranges on every analytics route, with per-floor match and ban totals; *Emerald+*, *Diamond+*, *Master+* in the picker (IMPLEMENTATION.md §Post-release — FLT)
 - [ ] FLT-04 builds against a lane opponent: `champion_matchup_builds`, `opponentId` on the builds route, a *vs* picker (IMPLEMENTATION.md §Post-release — FLT)

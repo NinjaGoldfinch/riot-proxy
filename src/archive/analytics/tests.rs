@@ -323,10 +323,12 @@ async fn the_rebuild_matches_the_hand_computed_fixture() {
         written,
         [
             ("champion_stats", 6),
-            ("champion_matchups", 4),
+            // C's two matchup, rune and spell rows, DIAMOND and MASTER
+            // (B), are one each summed (below).
+            ("champion_matchups", 5),
             ("champion_items", 3),
-            ("champion_runes", 3),
-            ("champion_spells", 5),
+            ("champion_runes", 4),
+            ("champion_spells", 6),
             ("champion_builds", 3),
             ("champion_build_parts", 18),
         ]
@@ -428,10 +430,11 @@ async fn the_rebuild_matches_the_hand_computed_fixture() {
 
     // Matchups from both sides: 1 v 2 is A's (KR_1 win, KR_2 loss); 2 v 1 is
     // C's KR_1 loss and B's KR_2 win. D's lane has no opponent. The remake
-    // apart.
+    // apart. Summed over tier and side, as every read does (FLT-01).
     assert_eq!(
-        text_rows(&db, "SELECT champion_id || ' v ' || opponent_id || ' ' || role || ' ' || remake || ' ' || games || '/' || wins
-                          FROM champion_matchups ORDER BY champion_id, remake").await,
+        text_rows(&db, "SELECT champion_id || ' v ' || opponent_id || ' ' || role || ' ' || remake || ' ' || sum(games) || '/' || sum(wins)
+                          FROM champion_matchups GROUP BY champion_id, opponent_id, role, remake
+                          ORDER BY champion_id, remake").await,
         ["1 v 2 MIDDLE 0 2/1", "1 v 2 MIDDLE 1 1/1", "2 v 1 MIDDLE 0 2/1", "2 v 1 MIDDLE 1 1/0"]
     );
 
@@ -439,24 +442,26 @@ async fn the_rebuild_matches_the_hand_computed_fixture() {
     assert_eq!(
         text_rows(
             &db,
-            "SELECT champion_id || ' ' || item_id || ' ' || games || '/' || wins FROM champion_items
-                         ORDER BY champion_id, item_id"
+            "SELECT champion_id || ' ' || item_id || ' ' || sum(games) || '/' || sum(wins) FROM champion_items
+                         GROUP BY champion_id, item_id ORDER BY champion_id, item_id"
         )
         .await,
         ["1 3020 1/1", "1 3157 2/1", "2 3157 1/0"]
     );
     // Runes: an empty page is left out.
     assert_eq!(
-        text_rows(&db, "SELECT champion_id || ' ' || keystone_id || '/' || sub_style_id || ' ' || remake || ' ' || games || '/' || wins
-                          FROM champion_runes ORDER BY champion_id, remake").await,
+        text_rows(&db, "SELECT champion_id || ' ' || keystone_id || '/' || sub_style_id || ' ' || remake || ' ' || sum(games) || '/' || sum(wins)
+                          FROM champion_runes GROUP BY champion_id, keystone_id, sub_style_id, remake
+                          ORDER BY champion_id, remake").await,
         ["1 8112/8300 0 2/1", "1 8112/8300 1 1/1", "2 8010/8400 0 2/1"]
     );
     // Spells: [4,14] and [14,4] are one pair; D's [4,12] counts too.
     assert_eq!(
         text_rows(
             &db,
-            "SELECT champion_id || ' ' || spell_a || '+' || spell_b || ' ' || remake || ' ' || games
-                          FROM champion_spells ORDER BY champion_id, remake"
+            "SELECT champion_id || ' ' || spell_a || '+' || spell_b || ' ' || remake || ' ' || sum(games)
+                          FROM champion_spells GROUP BY champion_id, spell_a, spell_b, remake
+                          ORDER BY champion_id, remake"
         )
         .await,
         [
@@ -751,10 +756,11 @@ async fn a_lane_two_players_of_a_team_share_has_no_matchup() {
     rebuild(&db, 1).await;
     // The fixture's four rows, untouched by KR_6's shared MIDDLE (C's side
     // too: its opponent lane has two players), plus E's TOP game against D
-    // and D's against E.
+    // and D's against E. Summed over tier and side.
     assert_eq!(
-        text_rows(&db, "SELECT champion_id || ' v ' || opponent_id || ' ' || role || ' ' || remake || ' ' || games || '/' || wins
-                          FROM champion_matchups ORDER BY champion_id, remake").await,
+        text_rows(&db, "SELECT champion_id || ' v ' || opponent_id || ' ' || role || ' ' || remake || ' ' || sum(games) || '/' || sum(wins)
+                          FROM champion_matchups GROUP BY champion_id, opponent_id, role, remake
+                          ORDER BY champion_id, remake").await,
         [
             "1 v 2 MIDDLE 0 2/1",
             "1 v 2 MIDDLE 1 1/1",
@@ -762,6 +768,159 @@ async fn a_lane_two_players_of_a_team_share_has_no_matchup() {
             "2 v 1 MIDDLE 1 1/0",
             "5 v 6 TOP 0 1/1",
             "6 v 5 TOP 0 1/0"
+        ]
+    );
+}
+
+/// FLT-01 (ADR-129): every per-participant row is its own player's tier and
+/// side. KR_6 (14.18 solo) puts B (MASTER) on champion 1 for red against C
+/// (DIAMOND) on champion 2 for blue, so champion 1 has a red row beside A's
+/// blue ones, and C's lane against champion 1 has rows in two tiers: C's
+/// DIAMOND ones and B's MASTER one from KR_2.
+#[tokio::test]
+async fn rows_are_split_by_their_own_players_tier_and_side() {
+    let (_d, db) = db();
+    db.write(|c| {
+        seed(c);
+        c.execute_batch(
+            r#"INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size,
+               archived_at, game_duration, remake, facts_version)
+               VALUES ('KR_6', 'asia', '14.18', 420, 1, x'00', 1, 1, 1500, 0, 3);
+             INSERT INTO match_facts (match_id, key_scope, puuid, team_id, position, champion_id, win,
+               kills, deaths, assists, cs, gold, damage, vision, items, runes, summoners, facts_version)
+               VALUES ('KR_6', 's', 'B', 200, 'MIDDLE', 1, 1, 2, 2, 2, 100, 5000, 10000, 10,
+                         '[3157,3020,0,0,0,0]', '{"keystone":8112,"subStyle":8300}', '[4,14]', 3),
+                      ('KR_6', 's', 'C', 100, 'MIDDLE', 2, 0, 1, 1, 1, 100, 5000, 10000, 10,
+                         '[3157,0,0,0,0,0]', '{"keystone":8010,"subStyle":8400}', '[14,4]', 3);
+             INSERT INTO match_builds (match_id, key_scope, puuid, starter, boots, items, skills, skill_order,
+               builds_version) VALUES ('KR_6', 's', 'B', '[1056]', 3020, '[6655,3157]', 'QWE', 'QWE', 1);"#,
+        )?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    rebuild(&db, 1).await;
+
+    assert_eq!(
+        text_rows(
+            &db,
+            "SELECT champion_id || ' ' || tier || ' ' || side || ' ' || remake || ' ' || games || '/' || wins
+               FROM champion_stats ORDER BY champion_id, remake, tier, side"
+        )
+        .await,
+        [
+            "1 MASTER blue 0 2/1",
+            "1 MASTER red 0 1/1",
+            "1 MASTER blue 1 1/1",
+            "2 DIAMOND blue 0 1/0",
+            "2 DIAMOND red 0 1/0",
+            "2 MASTER red 0 1/1",
+            "2 DIAMOND red 1 1/0",
+            "3 UNKNOWN blue 0 1/0",
+        ]
+    );
+    // C's lane against champion 1: DIAMOND red (KR_1), DIAMOND blue (KR_6),
+    // and B's MASTER red (KR_2), whoever the opponent was.
+    assert_eq!(
+        text_rows(
+            &db,
+            "SELECT champion_id || ' v ' || opponent_id || ' ' || tier || ' ' || side || ' ' || remake || ' '
+                    || games || '/' || wins
+               FROM champion_matchups ORDER BY champion_id, remake, tier, side"
+        )
+        .await,
+        [
+            "1 v 2 MASTER blue 0 2/1",
+            "1 v 2 MASTER red 0 1/1",
+            "1 v 2 MASTER blue 1 1/1",
+            "2 v 1 DIAMOND blue 0 1/0",
+            "2 v 1 DIAMOND red 0 1/0",
+            "2 v 1 MASTER red 0 1/1",
+            "2 v 1 DIAMOND red 1 1/0",
+        ]
+    );
+    assert_eq!(
+        text_rows(
+            &db,
+            "SELECT champion_id || ' ' || item_id || ' ' || tier || ' ' || side || ' ' || games || '/' || wins
+               FROM champion_items ORDER BY champion_id, item_id, tier, side"
+        )
+        .await,
+        [
+            "1 3020 MASTER blue 1/1",
+            "1 3020 MASTER red 1/1",
+            "1 3157 MASTER blue 2/1",
+            "1 3157 MASTER red 1/1",
+            "2 3157 DIAMOND blue 1/0",
+            "2 3157 DIAMOND red 1/0",
+        ]
+    );
+    assert_eq!(
+        text_rows(
+            &db,
+            "SELECT champion_id || ' ' || keystone_id || ' ' || tier || ' ' || side || ' ' || remake || ' '
+                    || games || '/' || wins
+               FROM champion_runes ORDER BY champion_id, remake, tier, side"
+        )
+        .await,
+        [
+            "1 8112 MASTER blue 0 2/1",
+            "1 8112 MASTER red 0 1/1",
+            "1 8112 MASTER blue 1 1/1",
+            "2 8010 DIAMOND blue 0 1/0",
+            "2 8010 DIAMOND red 0 1/0",
+            "2 8010 MASTER red 0 1/1",
+        ]
+    );
+    assert_eq!(
+        text_rows(
+            &db,
+            "SELECT champion_id || ' ' || spell_a || '+' || spell_b || ' ' || tier || ' ' || side || ' '
+                    || remake || ' ' || games
+               FROM champion_spells ORDER BY champion_id, remake, tier, side"
+        )
+        .await,
+        [
+            "1 4+14 MASTER blue 0 2",
+            "1 4+14 MASTER red 0 1",
+            "1 4+14 MASTER blue 1 1",
+            "2 4+14 DIAMOND blue 0 1",
+            "2 4+14 DIAMOND red 0 1",
+            "2 4+14 MASTER red 0 1",
+            "2 4+14 DIAMOND red 1 1",
+            "3 4+12 UNKNOWN blue 0 1",
+        ]
+    );
+    assert_eq!(
+        text_rows(
+            &db,
+            "SELECT champion_id || ' ' || core || ' ' || tier || ' ' || side || ' ' || remake || ' '
+                    || games || '/' || wins
+               FROM champion_builds ORDER BY champion_id, core, remake, tier, side"
+        )
+        .await,
+        [
+            "1 [6655,3157] MASTER blue 0 2/1",
+            "1 [6655,3157] MASTER red 0 1/1",
+            "1 [6655,3157] MASTER blue 1 1/1",
+            "2 [3157,4645] MASTER red 0 1/1",
+        ]
+    );
+    // A part keeps its player's tier and side too: A's boots in KR_1 and
+    // KR_2, B's in KR_6.
+    assert_eq!(
+        text_rows(
+            &db,
+            "SELECT value || ' ' || tier || ' ' || side || ' ' || games || '/' || wins
+               FROM champion_build_parts
+              WHERE champion_id = 1 AND core = '[6655,3157]' AND part = 'boots' AND remake = 0
+              ORDER BY value, tier, side"
+        )
+        .await,
+        [
+            "3020 MASTER blue 1/1",
+            "3020 MASTER red 1/1",
+            "3047 MASTER blue 1/0"
         ]
     );
 }
@@ -774,6 +933,9 @@ async fn a_lane_two_players_of_a_team_share_has_no_matchup() {
 async fn the_matchups_plan_reaches_the_opponent_by_key() {
     let plan = plan_of(MATCHUPS.to_string()).await;
     assert!(step(&plan, "b").contains("match_id=?"), "{plan:#?}");
+    // And the player's tier stamp (FLT-01).
+    let mt = step(&plan, "mt");
+    assert!(mt.contains("match_id=?") && mt.contains("puuid=?"), "{plan:#?}");
 }
 
 /// The facts reach each player's tier stamp by key, not by walking
