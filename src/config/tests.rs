@@ -42,6 +42,10 @@ fn defaults_match_v1_and_design_07() {
     assert_eq!(c.ddragon_dir, PathBuf::from("./data/ddragon"));
     assert_eq!(c.role, Role::All);
     assert_eq!(c.job_concurrency, 8);
+    assert_eq!(
+        c.job_kind_limits,
+        BTreeMap::from([("aggregate:analytics".to_string(), 1)])
+    );
     assert_eq!(c.job_yield_budget_ms, 1000);
     assert_eq!(c.riot_user_agent, DEFAULT_USER_AGENT);
     assert_eq!(c.cache_l1_max_mb, 128);
@@ -139,11 +143,13 @@ fn every_flag_overrides_its_variable() {
         role: Some("all".into()),
         log_level: Some("warn".into()),
         log_format: Some("pretty".into()),
+        job_concurrency: Some(2),
     };
     let c = load(Sources {
         args,
-        ..env(&[("ENV", "production")])
+        ..env(&[("ENV", "production"), ("JOB_CONCURRENCY", "8")])
     });
+    assert_eq!(c.job_concurrency, 2);
     assert_eq!(c.host, "127.0.0.1");
     assert_eq!(c.port, 9000);
     assert_eq!(c.data_dir, PathBuf::from("/srv/rp"));
@@ -602,4 +608,39 @@ fn idle_bulk_ceiling_defaults_and_bounds() {
             "{value}: {errs:#?}"
         );
     }
+}
+
+#[test]
+fn job_kind_limits_cap_kinds_that_never_call_riot() {
+    let c = load(env(&[(
+        "JOB_KIND_LIMITS",
+        " aggregate:analytics = 2 , names:backfill=1",
+    )]));
+    assert_eq!(
+        c.job_kind_limits,
+        BTreeMap::from([
+            ("aggregate:analytics".to_string(), 2),
+            ("names:backfill".to_string(), 1),
+        ])
+    );
+    assert!(
+        load(env(&[("JOB_KIND_LIMITS", "none")]))
+            .job_kind_limits
+            .is_empty()
+    );
+
+    let errs = errors(env(&[(
+        "JOB_KIND_LIMITS",
+        "aggregate:analytics,nope=1,archive:match=2,names:backfill=0,builds:extract=x",
+    )]));
+    assert_eq!(
+        errs,
+        vec![
+            "JOB_KIND_LIMITS: 'aggregate:analytics' is not kind=n",
+            "JOB_KIND_LIMITS: 'nope' is not a job kind",
+            "JOB_KIND_LIMITS: 'archive:match' calls Riot; the rate limiter paces it",
+            "JOB_KIND_LIMITS: '0' for names:backfill is not a whole number of at least 1",
+            "JOB_KIND_LIMITS: 'x' for builds:extract is not a whole number of at least 1",
+        ]
+    );
 }

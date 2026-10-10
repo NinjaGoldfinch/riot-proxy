@@ -7,6 +7,8 @@
 //! feature so the trait keeps compiling against a second engine; every call
 //! fails, and the config still refuses `postgres://` URLs (ADR-062).
 
+use std::collections::BTreeMap;
+
 use futures_util::future::BoxFuture;
 use rusqlite::OptionalExtension;
 
@@ -34,17 +36,27 @@ pub trait Store: Send + Sync + 'static {
 
 /// What a claim may take (SCH-01): ready rows in `lanes` (the lanes whose app
 /// limit has room) or with no lane, except rows whose `(lane, method)` is in
-/// `methods`. Both are JSON arrays of strings; a pair is `"lane method"`.
+/// `methods`, and rows of a kind that already has its limit's worth running
+/// (OPS-06). `lanes` and `methods` are JSON arrays of strings (a pair is
+/// `"lane method"`); `kinds` is a JSON object of kind to limit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClaimFilter {
     pub lanes: String,
     pub methods: String,
+    pub kinds: String,
 }
 
 impl ClaimFilter {
-    /// Every lane open, no method blocked.
+    /// Every lane open, no method blocked, no kind capped.
     pub fn open() -> Self {
         Self::new(crate::jobs::lanes::all(), std::iter::empty::<(&str, &str)>())
+    }
+
+    /// Cap how many jobs of each kind run at once.
+    #[must_use]
+    pub fn with_kind_limits(mut self, limits: &BTreeMap<String, u32>) -> Self {
+        self.kinds = serde_json::to_string(limits).unwrap_or_else(|_| "{}".into());
+        self
     }
 
     pub fn new<'a, 'b>(
@@ -56,13 +68,15 @@ impl ClaimFilter {
         Self {
             lanes: serde_json::to_string(&lanes).unwrap_or_else(|_| "[]".into()),
             methods: serde_json::to_string(&methods).unwrap_or_else(|_| "[]".into()),
+            kinds: "{}".into(),
         }
     }
 }
 
 /// The job claim (design/06 §Claiming, SCH-01). `$1` is now, `$2` the open
-/// lanes and `$3` the blocked `"lane method"` pairs (see [`ClaimFilter`]);
-/// each binds the same value at every use on both engines.
+/// lanes, `$3` the blocked `"lane method"` pairs and `$4` the kind limits
+/// (see [`ClaimFilter`]); each binds the same value at every use on both
+/// engines.
 ///
 /// `heads` is the best ready row of each open lane (in `CLAIM_ORDER`,
 /// skipping blocked methods) and of the lane-less rows: one index seek
@@ -70,6 +84,12 @@ impl ClaimFilter {
 /// priority band, then the lane with the fewest running jobs, then priority,
 /// `run_after` and id. So N workers cover N lanes before doubling up on one,
 /// and a blocked lane's work never holds up a free one's.
+///
+/// A kind with as many `running` rows as its limit is skipped in every head
+/// (OPS-06), so the next row of another kind heads its lane instead. The
+/// count is taken inside the claim's own write, so two workers can't both
+/// take the last slot. `capped` doesn't depend on the row, so it is worked out
+/// once per claim.
 ///
 /// `+run_after` keeps SQLite on `jobs_lane_claim` without `ANALYZE`
 /// statistics. Postgres also locks the chosen row and skips rows another
@@ -83,15 +103,21 @@ pub fn claim_sql(engine: Engine) -> String {
     format!(
         "UPDATE jobs SET state = 'running', claimed_at = $1, attempts = attempts + 1
           WHERE id = (
-            WITH heads(id) AS MATERIALIZED (
+            WITH capped(kind) AS MATERIALIZED (
+              SELECT caps.key FROM json_each($4) AS caps
+               WHERE caps.value <= (SELECT count(*) FROM jobs r WHERE r.state = 'running' AND r.kind = caps.key)
+            ),
+            heads(id) AS MATERIALIZED (
               SELECT (SELECT h.id FROM jobs h
                        WHERE h.state = 'pending' AND h.lane = lanes.value AND +h.run_after <= $1
                          AND (h.method IS NULL OR h.lane || ' ' || h.method NOT IN (SELECT value FROM json_each($3)))
+                         AND h.kind NOT IN (SELECT kind FROM capped)
                        ORDER BY {order} LIMIT 1)
                 FROM json_each($2) AS lanes
               UNION ALL
               SELECT (SELECT h.id FROM jobs h
                        WHERE h.state = 'pending' AND h.lane IS NULL AND +h.run_after <= $1
+                         AND h.kind NOT IN (SELECT kind FROM capped)
                        ORDER BY {order} LIMIT 1)
             )
             SELECT j.id FROM heads JOIN jobs j ON j.id = heads.id
@@ -132,7 +158,9 @@ impl Store for SqliteStore {
         Box::pin(self.db.write(move |c| {
             c.query_row(
                 &claim_sql(Engine::Sqlite),
-                rusqlite::named_params! {"$1": now_ms, "$2": filter.lanes, "$3": filter.methods},
+                rusqlite::named_params! {
+                    "$1": now_ms, "$2": filter.lanes, "$3": filter.methods, "$4": filter.kinds,
+                },
                 scheduler::row,
             )
             .optional()
@@ -217,6 +245,42 @@ mod tests {
         assert_eq!((job.id.as_str(), job.attempts), ("01A", 1));
         assert!(store.claim_job(1_000, &open).await.unwrap().is_none());
         assert_eq!(store.claim_job(2_000, &open).await.unwrap().unwrap().id, "01B");
+    }
+
+    /// The kind caps (OPS-06) leave each lane's head an index seek on
+    /// `jobs_lane_claim`; the running counts read only `jobs_lane_running`,
+    /// a partial index of the running rows (at most one per worker).
+    #[tokio::test]
+    async fn the_claim_keeps_its_indexes_with_kind_limits() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open_async(dir.path().join("t.db"), 1).await.unwrap();
+        let filter =
+            ClaimFilter::open().with_kind_limits(&BTreeMap::from([("aggregate:analytics".into(), 1)]));
+        let plan: Vec<String> = db
+            .write(move |c| {
+                let mut s = c.prepare(&format!("EXPLAIN QUERY PLAN {}", claim_sql(Engine::Sqlite)))?;
+                let rows = s.query_map(
+                    rusqlite::named_params! {
+                        "$1": 0, "$2": filter.lanes, "$3": filter.methods, "$4": filter.kinds,
+                    },
+                    |r| r.get::<_, String>(3),
+                )?;
+                rows.collect::<Result<_, _>>().map_err(DbError::from)
+            })
+            .await
+            .unwrap();
+        let text = plan.join("\n");
+        assert!(
+            !plan.iter().any(|l| l == "SCAN h" || l.starts_with("SCAN h ")),
+            "{text}"
+        );
+        assert!(
+            plan.iter()
+                .filter(|l| l.starts_with("SCAN r"))
+                .all(|l| l.contains("jobs_lane_running")),
+            "{text}"
+        );
+        assert!(text.contains("SEARCH h USING INDEX jobs_lane_claim"), "{text}");
     }
 
     #[cfg(feature = "postgres")]

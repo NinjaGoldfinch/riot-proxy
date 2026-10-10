@@ -49,6 +49,7 @@ test('the overview shows each worker, the queue, the counts, what finished and w
     assert.match(p.$$('#workers .worker')[1].textContent, /W2\s*idle/);
 
     assert.ok(p.text('#queueSummary').includes('1 waiting out a backoff'));
+    assert.ok(p.text('#queueSummary').includes('2 waiting their turn (aggregate:analytics)'), p.text('#queueSummary'));
     const next = p.$(`#queue tr[data-job="${PENDING}"]`);
     assert.ok(next.textContent.includes('backfill:player'));
     assert.ok(next.textContent.includes('oc1 · puuid pppppppp… · limit 100'), next.textContent);

@@ -32,6 +32,7 @@ pub const VARS: &[&str] = &[
     "DATABASE_URL",
     "ROLE",
     "JOB_CONCURRENCY",
+    "JOB_KIND_LIMITS",
     "JOB_YIELD_BUDGET_MS",
     "CACHE_TTL_OVERRIDES",
     "CACHE_L1_MAX_MB",
@@ -89,6 +90,11 @@ pub const DB_FILE_NAME: &str = "riot-proxy.db";
 /// Bulk's ceiling while nobody is using the app (THR-06a). Below 1.0 so the gap
 /// absorbs drift between our windows and Riot's.
 pub const DEFAULT_BULK_IDLE_CEILING: f64 = 0.95;
+
+/// One analytics rebuild at a time (OPS-06): rebuilds for several ladders
+/// started together run one after another instead of sharing the CPU and
+/// SQLite's write lock.
+pub const DEFAULT_JOB_KIND_LIMITS: &str = "aggregate:analytics=1";
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
@@ -209,6 +215,9 @@ pub struct Config {
     pub database: Database,
     pub role: Role,
     pub job_concurrency: u32,
+    /// The most jobs of a kind running at once, for kinds with no rate-limit
+    /// lane (OPS-06). Kinds not named have no cap beyond the worker count.
+    pub job_kind_limits: BTreeMap<String, u32>,
     /// How long a job's fetch waits for the limiter before the job gives its
     /// worker back (SCH-01).
     pub job_yield_budget_ms: u64,
@@ -297,6 +306,9 @@ pub struct ConfigArgs {
     /// all | api | worker [env: ROLE]
     #[arg(long, global = true)]
     pub role: Option<String>,
+    /// Background jobs run at once [env: JOB_CONCURRENCY]
+    #[arg(long, global = true)]
+    pub job_concurrency: Option<u32>,
     /// tracing filter, e.g. info or riot_proxy=debug [env: LOG_LEVEL]
     #[arg(long, global = true)]
     pub log_level: Option<String>,
@@ -317,6 +329,7 @@ impl ConfigArgs {
             ("DATABASE_URL", self.database_url.clone()),
             ("ENV", self.environment.clone()),
             ("ROLE", self.role.clone()),
+            ("JOB_CONCURRENCY", self.job_concurrency.map(|n| n.to_string())),
             ("LOG_LEVEL", self.log_level.clone()),
             ("LOG_FORMAT", self.log_format.clone()),
         ];
@@ -480,6 +493,7 @@ impl Config {
             database,
             role,
             job_concurrency: v.int("JOB_CONCURRENCY", 8, 1, u32::MAX),
+            job_kind_limits: v.kind_limits("JOB_KIND_LIMITS", DEFAULT_JOB_KIND_LIMITS),
             job_yield_budget_ms: v.int("JOB_YIELD_BUDGET_MS", 1000, 0, 900_000),
             cache_ttl_overrides: v.string("CACHE_TTL_OVERRIDES", ""),
             cache_l1_max_mb: v.int("CACHE_L1_MAX_MB", 128, 1, 1_048_576),
@@ -732,6 +746,41 @@ impl Vars {
     }
 
     /// A ranked ladder in Riot's casing (v1 refused anything else at boot).
+    /// `kind=n,kind=n`: each kind one of [`kinds::ALL`] with no lane, `n ≥ 1`.
+    /// `none` for no caps (an empty value is unset, so the default).
+    fn kind_limits(&mut self, name: &str, default: &str) -> BTreeMap<String, u32> {
+        use crate::jobs::{kinds, lanes};
+        let raw = self.string(name, default);
+        let mut limits = BTreeMap::new();
+        if raw.trim().eq_ignore_ascii_case("none") {
+            return limits;
+        }
+        for item in csv(&raw) {
+            let Some((kind, n)) = item.split_once('=').map(|(k, n)| (k.trim(), n.trim())) else {
+                self.push(name, &format!("'{item}' is not kind=n"));
+                continue;
+            };
+            if !kinds::ALL.contains(&kind) {
+                self.push(name, &format!("'{kind}' is not a job kind"));
+            } else if lanes::LANED.contains(&kind) {
+                // The claim would scan past every queued row of a capped
+                // laned kind; the limiter already paces those (ADR-134).
+                self.push(name, &format!("'{kind}' calls Riot; the rate limiter paces it"));
+            } else {
+                match n.parse::<u32>() {
+                    Ok(n) if n >= 1 => {
+                        limits.insert(kind.to_string(), n);
+                    }
+                    _ => self.push(
+                        name,
+                        &format!("'{n}' for {kind} is not a whole number of at least 1"),
+                    ),
+                }
+            }
+        }
+        limits
+    }
+
     fn ranked_queue(&mut self, name: &str, raw: &str) -> bool {
         let ok = crate::riot::ladder::RANKED_QUEUES.contains(&raw);
         if !ok {

@@ -1839,8 +1839,10 @@
       function renderQueue(q) {
         const wait = q.nextDelayedAt ? (new Date(q.nextDelayedAt) - Date.now()) / 1000 : null;
         const due = wait == null ? '' : ` · next due ${wait > 1 ? 'in ' + fmtDuration(wait) : 'now'}`;
+        // Ready jobs of a kind at its JOB_KIND_LIMITS cap wait for one to finish.
+        const held = q.held ? ` · ${fmt(q.held)} waiting their turn (${q.heldKinds.join(', ')})` : '';
         $('queueMeta').textContent =
-          `${fmt(q.running.length)} running · ${fmt(q.ready)} ready · ${fmt(q.delayed)} waiting out a backoff${due}`;
+          `${fmt(q.running.length)} running · ${fmt(q.ready)} ready${held} · ${fmt(q.delayed)} waiting out a backoff${due}`;
         $('queueRunning').innerHTML = groupList(q.running, 'Nothing running.');
         $('queueNext').innerHTML = groupList(q.next, 'Nothing ready.');
       }

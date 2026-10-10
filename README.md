@@ -98,7 +98,8 @@ Values come from CLI flags, then the environment, then `.env`, then the built-in
 | `HOST` / `PORT` | `0.0.0.0` / `8080` | Listen address |
 | `DATA_DIR` | `./data` | SQLite, Data Dragon mirror, backups |
 | `LOG_LEVEL` / `LOG_FORMAT` | `info` / `json` (`pretty` on a terminal) | Logging |
-| `JOB_CONCURRENCY` | `8` | Background jobs run at once |
+| `JOB_CONCURRENCY` | `8` | Background jobs run at once (also `--job-concurrency`). On a 2-vCPU host use `2` (docs/design/07 §Sizing) |
+| `JOB_KIND_LIMITS` | `aggregate:analytics=1` | The most jobs of a kind running at once, as `kind=n,…`, for kinds that don't call Riot (the rate limiter paces the rest); `none` for no caps. By default analytics rebuilds run one at a time |
 | `CACHE_TTL_OVERRIDES` | — | e.g. `league=120,spectator=20` (seconds) |
 | `CACHE_L1_MAX_MB` | `128` | In-memory cache budget |
 | `BULK_USAGE_CEILING` | `0.80` | Share of each rate-limit bucket that background work may use while someone is using the app |

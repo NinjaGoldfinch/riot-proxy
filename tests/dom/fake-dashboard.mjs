@@ -71,6 +71,7 @@ const QUEUE = {
     job('ranks:lookup', 'pending', { platform: 'oc1', queue: 'RANKED_SOLO_5x5', planned: true }, { priority: 20006, attempts: 0 }),
   ],
   ready: 5, delayed: 3, nextDelayedAt: soon(90_000),
+  heldKinds: ['aggregate:analytics'], held: 2,
 };
 
 // `GET /v1/admin/ladder/options`, trimmed to two platforms.

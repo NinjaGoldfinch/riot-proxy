@@ -59,6 +59,20 @@ pub fn of(kind: &str, payload: &Value) -> Option<Lane> {
     }
 }
 
+/// The kinds [`of`] can give a lane. Every other kind has none.
+pub const LANED: &[&str] = &[
+    kinds::POLL_LIVE,
+    kinds::POLL_RANK,
+    kinds::RANKS_LOOKUP,
+    kinds::POLL_MATCHES,
+    kinds::BACKFILL_PLAYER,
+    kinds::LADDER_COLLECT,
+    kinds::ARCHIVE_MATCH,
+    kinds::LADDER_WALK,
+    kinds::LADDER_APEX,
+    kinds::TIMELINES_BACKFILL,
+];
+
 /// Every lane [`of`] can name: each platform and each region. The claim
 /// looks at these lanes (less the blocked ones) and at jobs with no lane.
 pub fn all() -> impl Iterator<Item = &'static str> {
@@ -152,21 +166,22 @@ mod tests {
     fn every_lane_a_job_can_have_is_one_the_claim_looks_at() {
         let all: Vec<&str> = all().collect();
         for platform in Platform::ALL {
-            let p = json!({"platform": platform.as_str(), "tier": "MASTER", "matchId": format!("{}_1", platform.as_str())});
-            for kind in [
-                kinds::POLL_LIVE,
-                kinds::POLL_RANK,
-                kinds::POLL_MATCHES,
-                kinds::BACKFILL_PLAYER,
-                kinds::ARCHIVE_MATCH,
-                kinds::LADDER_APEX,
-                kinds::LADDER_WALK,
-                kinds::LADDER_COLLECT,
-                kinds::RANKS_LOOKUP,
-            ] {
+            let p = json!({"platform": platform.as_str(), "tier": "MASTER", "matchId": format!("{}_1", platform.as_str()),
+                "region": platform.region().as_str()});
+            for kind in LANED {
                 let l = of(kind, &p).unwrap_or_else(|| panic!("{kind} on {platform:?}"));
                 assert!(all.contains(&l.lane), "{kind}: {}", l.lane);
             }
+        }
+    }
+
+    /// `JOB_KIND_LIMITS` accepts only kinds outside `LANED` (OPS-06), so a
+    /// kind missing from it must really have no lane.
+    #[test]
+    fn kinds_outside_laned_never_get_a_lane() {
+        let p = json!({"platform": "na1", "puuid": "p", "tier": "MASTER", "matchId": "NA1_1", "queue": "RANKED_SOLO_5x5"});
+        for kind in kinds::ALL.iter().filter(|k| !LANED.contains(k)) {
+            assert_eq!(lane(kind, p.clone()), None, "{kind}");
         }
     }
 }

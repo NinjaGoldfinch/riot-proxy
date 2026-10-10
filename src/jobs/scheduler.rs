@@ -18,7 +18,7 @@
 //! - **Restart**: rows left `running` by a process that died are reset to
 //!   `pending` on boot ([`Scheduler::recover`]), so the work resumes.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -275,6 +275,9 @@ pub struct Queue {
     db: Db,
     notify: Arc<Notify>,
     control: Arc<Control>,
+    /// `JOB_KIND_LIMITS` (OPS-06): the claim's caps, and what the queue
+    /// view reports as held.
+    kind_limits: Arc<BTreeMap<String, u32>>,
 }
 
 /// Holding the workers still and stopping what they run (DEV-22), for the dev
@@ -358,7 +361,21 @@ impl Queue {
             db,
             notify: Arc::new(Notify::new()),
             control: Arc::new(Control::default()),
+            kind_limits: Arc::default(),
         }
+    }
+
+    /// Run at most `limits[kind]` jobs of each named kind at once (OPS-06).
+    /// Set before the queue is cloned: clones made earlier keep the old caps.
+    #[must_use]
+    pub fn with_kind_limits(mut self, limits: BTreeMap<String, u32>) -> Self {
+        self.kind_limits = Arc::new(limits);
+        self
+    }
+
+    /// The caps set by [`Queue::with_kind_limits`].
+    pub fn kind_limits(&self) -> &BTreeMap<String, u32> {
+        &self.kind_limits
     }
 
     /// Stop the workers: no more claims, every running handler aborted, then
@@ -536,6 +553,11 @@ pub struct QueueView {
     pub delayed: i64,
     /// When the soonest delayed job comes due.
     pub next_delayed_at: Option<i64>,
+    /// Kinds with as many jobs running as `JOB_KIND_LIMITS` allows: their
+    /// ready rows wait for one to finish (OPS-06).
+    pub held_kinds: Vec<String>,
+    /// Ready rows of `held_kinds`, counted in `ready` too.
+    pub held: i64,
 }
 
 /// The priority order inside a lane (design/06 §Claiming). Across lanes the
@@ -553,6 +575,7 @@ pub(crate) const CLAIM_BAND: &str = "CASE WHEN j.priority < 100 THEN 0 WHEN j.pr
 impl Queue {
     /// Running jobs and the next `limit` a worker would claim (DEV-13).
     pub async fn view(&self, now_ms: i64, limit: u32) -> Result<QueueView, DbError> {
+        let limits = Arc::clone(&self.kind_limits);
         self.db
             .read(move |c| {
                 let running = c
@@ -568,15 +591,25 @@ impl Queue {
                     ))?
                     .query_map(rusqlite::params![now_ms, limit], full_row)?
                     .collect::<Result<Vec<_>, _>>()?;
-                let (ready, delayed, next_delayed_at) = c.query_row(
+                let held_kinds: Vec<String> = limits
+                    .iter()
+                    .filter(|(kind, limit)| {
+                        let on = running.iter().filter(|r| &r.kind == *kind).count();
+                        u32::try_from(on).unwrap_or(u32::MAX) >= **limit
+                    })
+                    .map(|(kind, _)| kind.clone())
+                    .collect();
+                let held_json = serde_json::to_string(&held_kinds).unwrap_or_else(|_| "[]".into());
+                let (ready, delayed, next_delayed_at, held) = c.query_row(
                     "SELECT count(*) FILTER (WHERE run_after <= ?1),
                             count(*) FILTER (WHERE run_after > ?1),
-                            min(run_after) FILTER (WHERE run_after > ?1)
+                            min(run_after) FILTER (WHERE run_after > ?1),
+                            count(*) FILTER (WHERE run_after <= ?1 AND kind IN (SELECT value FROM json_each(?2)))
                        FROM jobs WHERE state = 'pending'",
-                    [now_ms],
-                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                    rusqlite::params![now_ms, held_json],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
                 )?;
-                Ok(QueueView { running, next, ready, delayed, next_delayed_at })
+                Ok(QueueView { running, next, ready, delayed, next_delayed_at, held_kinds, held })
             })
             .await
     }
@@ -872,7 +905,8 @@ impl Scheduler {
                 )
             }
             None => ClaimFilter::open(),
-        };
+        }
+        .with_kind_limits(&self.queue.kind_limits);
         SqliteStore::new(self.db.clone()).claim_job(now_ms, &filter).await
     }
 
