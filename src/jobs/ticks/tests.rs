@@ -188,6 +188,28 @@ fn periods_come_from_config() {
 }
 
 #[test]
+fn the_timeline_backfill_ticks_hourly_only_while_it_is_on() {
+    let with = |patches: &str| {
+        Config::from_sources(crate::config::Sources {
+            env: vec![
+                ("RIOT_API_KEY".into(), "RGAPI-test-key-not-real".into()),
+                ("TIMELINE_BACKFILL_PATCHES".into(), patches.into()),
+            ],
+            ..crate::config::Sources::default()
+        })
+        .unwrap()
+    };
+    let tick = |c: &Config| {
+        schedule(c)
+            .into_iter()
+            .find(|(k, _)| *k == kinds::TIMELINES_BACKFILL)
+            .map(|(_, d)| d.as_secs())
+    };
+    assert_eq!(tick(&with("0")), None, "off by default (TL-02)");
+    assert_eq!(tick(&with("6")), Some(3600));
+}
+
+#[test]
 fn serve_ticks_every_kind_whose_handler_exists() {
     let config = Config::from_sources(crate::config::Sources {
         env: vec![("RIOT_API_KEY".into(), "RGAPI-test-key-not-real".into())],

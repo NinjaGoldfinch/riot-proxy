@@ -102,6 +102,9 @@ pub async fn aggregate_ladders(
     Ok(created)
 }
 
+/// How often the timeline backfill is queued again for every region (TL-02).
+pub const TIMELINE_BACKFILL_EVERY: Duration = Duration::from_secs(3_600);
+
 /// Each tick and its period (config names are v1's).
 pub fn schedule(config: &Config) -> Vec<(&'static str, Duration)> {
     let s = |n: u32| Duration::from_secs(u64::from(n));
@@ -123,6 +126,12 @@ pub fn schedule(config: &Config) -> Vec<(&'static str, Duration)> {
     .chain(
         (config.aggregate_interval_s > 0)
             .then(|| (kinds::AGGREGATE_ANALYTICS, s(config.aggregate_interval_s))),
+    )
+    // TL-02: off unless TIMELINE_BACKFILL_PATCHES is set. Hourly, so a region
+    // whose job finished starts again once newer matches arrive without one.
+    .chain(
+        (config.timeline_backfill_patches > 0)
+            .then_some((kinds::TIMELINES_BACKFILL, TIMELINE_BACKFILL_EVERY)),
     )
     .collect()
 }
@@ -178,6 +187,9 @@ impl Ticks {
                         }
                         kinds::LADDER_CRAWL => crawl_ladders(&scheduler, &ladders).await,
                         kinds::AGGREGATE_ANALYTICS => aggregate_ladders(&scheduler, &ladders).await,
+                        kinds::TIMELINES_BACKFILL => {
+                            crate::jobs::timelines::enqueue_all(scheduler.queue()).await
+                        }
                         _ => singleton(&scheduler, kind, priority::MAINTENANCE)
                             .await
                             .map(usize::from),

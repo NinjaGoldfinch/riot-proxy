@@ -203,7 +203,7 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 - [x] OPS-03 `create-vm.sh --generate-key`: a unique login keypair per VM (#82, ADR-072)
 - [x] OPS-04 faster CI: `build-musl` packages its own binary, the source `Dockerfile` builds in a cached `docker` job, caches saved from `main` only (#93, ADR-079)
 - [ ] OPS-05 each image's GHCR description lists the commits since the image before it (`:edge` and releases); release notes list the PRs (ADR-107)
-- [x] OPS-06 `JOB_KIND_LIMITS` (default `aggregate:analytics=1`): the most jobs of a kind that doesn't call Riot running at once, enforced in the claim; `--job-concurrency`; the queue view's `heldKinds`/`held`; a 2-vCPU sizing note in design/07 (#162, owner issue 2026-10-11, ADR-133)
+- [x] OPS-06 `JOB_KIND_LIMITS` (default `aggregate:analytics=1`): the most jobs of a kind that doesn't call Riot running at once, enforced in the claim; `--job-concurrency`; the queue view's `heldKinds`/`held`; a 2-vCPU sizing note in design/07 (#162, owner issue 2026-10-11, ADR-134)
 
 ## DEV — dev explorer (owner request 2026-10-05)
 - [x] DEV-01 dev explorer at `/dev` (#81; replaces v1's dev UI, forms from the OpenAPI document, never in production, design/10, ADR-071)
@@ -292,6 +292,7 @@ The site's backfill question (item 3) needs no task: the unbounded lookup backfi
 
 ## TL — a match and its timeline archived together (owner request 2026-10-10)
 - [x] TL-01 whatever stores a match queues its timeline, and a timeline its match, as a priority-0 `archive:match`; timelines no longer need their match first (V0013); a boot catch-up queues the archive's missing halves (#144, ADR-118)
+- [x] TL-02 `timelines:backfill`: the missing timelines of archived ranked matches in the newest `TIMELINE_BACKFILL_PATCHES` patches (default 0, off), newest first, one job per region at priority 40 000; 404s marked in `timeline_gaps` (V0018); progress at `GET /v1/admin/timelines/backfill` (#161, ADR-133)
 
 ## FLT — builds and matchups by rank, opponent and side (owner request 2026-10-10)
 Order: THR-02 → FLT-01 → FLT-02 → FLT-03 → FLT-04, then PAIR.

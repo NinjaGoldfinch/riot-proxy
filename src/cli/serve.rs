@@ -197,6 +197,11 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         reextract_batch: config.facts_reextract_batch,
         mirror: Arc::clone(&mirror),
     });
+    let timelines = Arc::new(crate::jobs::timelines::TimelinesContext {
+        fetcher: fetcher.clone(),
+        queue: queue.clone(),
+        patches: config.timeline_backfill_patches,
+    });
     let activity = crate::jobs::activity::Activity::new();
     let scheduler = crate::jobs::Scheduler::with_queue(
         queue.clone(),
@@ -208,6 +213,7 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
             &names,
             &analytics,
             &maintenance,
+            &timelines,
         ),
     )
     .with_limiter(Arc::clone(&limiter))

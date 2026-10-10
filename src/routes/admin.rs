@@ -73,6 +73,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(queue_names_backfill))
         .routes(routes!(recompute_analytics))
         .routes(routes!(reextract_facts))
+        .routes(routes!(timeline_backfill))
         .routes(routes!(metrics_snapshot))
         .routes(routes!(metrics_history))
 }
@@ -2083,6 +2084,33 @@ async fn queue_names_backfill(State(state): State<AppState>, Extension(_c): Who)
             &serde_json::json!({"ok": true, "unnamed": unnamed}),
         ),
         Err(e) => internal(&e, "could not queue names:backfill"),
+    }
+}
+
+// ── Timelines ───────────────────────────────────────────────────────────────
+
+#[utoipa::path(
+    get, path = "/v1/admin/timelines/backfill", tag = "admin",
+    summary = "How far the timeline backfill has got",
+    description = "`timelines:backfill` (TL-02) fetches the missing timelines of archived ranked matches \
+        (queues 420 and 440) in the newest `TIMELINE_BACKFILL_PATCHES` patches, newest patch first, at the \
+        lowest priority. Per patch: ranked matches, how many have a timeline, how many Riot answered 404 \
+        for (marked, never asked for again) and how many are left; per region, what is left and the patch \
+        its job is on. Reads the archive; makes no Riot call.",
+    params(("patches" = Option<u32>, Query,
+        description = "1–1000 newest patches to report on; default `TIMELINE_BACKFILL_PATCHES`, so a preview \
+            of a wider backfill before turning it up")),
+    responses((status = 200, description = "Progress", body = crate::jobs::timelines::Progress), LocalErrors),
+)]
+async fn timeline_backfill(State(state): State<AppState>, Extension(_c): Who, Query(q): Q) -> Response {
+    let configured = state.config.timeline_backfill_patches;
+    let n = match validate::int_query("patches", q.get("patches").map(String::as_str), 1, 1000) {
+        Ok(n) => n.and_then(|n| u32::try_from(n).ok()).unwrap_or(configured),
+        Err(e) => return e.into_response(),
+    };
+    match crate::jobs::timelines::progress(&state.db, configured, n).await {
+        Ok(p) => ok(&p),
+        Err(e) => internal(&e, "could not read the timeline backfill's progress"),
     }
 }
 

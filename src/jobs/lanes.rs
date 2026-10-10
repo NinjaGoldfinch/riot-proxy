@@ -47,6 +47,14 @@ pub fn of(kind: &str, payload: &Value) -> Option<Lane> {
         ),
         kinds::LADDER_WALK => on("league.entriesByTier", platform()?),
         kinds::LADDER_APEX => on(apex_endpoint(str_field(payload, "tier")?)?, platform()?),
+        kinds::TIMELINES_BACKFILL => {
+            let region = Region::parse(str_field(payload, "region")?).ok()?;
+            let endpoint = Endpoint::by_id("match.timeline")?;
+            Some(Lane {
+                lane: endpoint.target_for_region(region)?.scope(),
+                method: endpoint.method_scope_key,
+            })
+        }
         _ => None,
     }
 }
@@ -62,6 +70,7 @@ pub const LANED: &[&str] = &[
     kinds::ARCHIVE_MATCH,
     kinds::LADDER_WALK,
     kinds::LADDER_APEX,
+    kinds::TIMELINES_BACKFILL,
 ];
 
 /// Every lane [`of`] can name: each platform and each region. The claim
@@ -157,7 +166,8 @@ mod tests {
     fn every_lane_a_job_can_have_is_one_the_claim_looks_at() {
         let all: Vec<&str> = all().collect();
         for platform in Platform::ALL {
-            let p = json!({"platform": platform.as_str(), "tier": "MASTER", "matchId": format!("{}_1", platform.as_str())});
+            let p = json!({"platform": platform.as_str(), "tier": "MASTER", "matchId": format!("{}_1", platform.as_str()),
+                "region": platform.region().as_str()});
             for kind in LANED {
                 let l = of(kind, &p).unwrap_or_else(|| panic!("{kind} on {platform:?}"));
                 assert!(all.contains(&l.lane), "{kind}: {}", l.lane);

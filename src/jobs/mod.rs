@@ -12,6 +12,7 @@ pub mod names;
 pub mod poll;
 pub mod scheduler;
 pub mod ticks;
+pub mod timelines;
 
 /// Job kinds (v1 `JOB`, design/06 §Job catalogue).
 pub mod kinds {
@@ -33,6 +34,7 @@ pub mod kinds {
     pub const BUILDS_EXTRACT: &str = "builds:extract";
     pub const TIERS_BACKFILL: &str = "tiers:backfill";
     pub const MAINTENANCE: &str = "maintenance";
+    pub const TIMELINES_BACKFILL: &str = "timelines:backfill";
 
     /// Every kind above.
     pub const ALL: &[&str] = &[
@@ -54,6 +56,7 @@ pub mod kinds {
         BUILDS_EXTRACT,
         TIERS_BACKFILL,
         MAINTENANCE,
+        TIMELINES_BACKFILL,
     ];
 }
 
@@ -69,6 +72,9 @@ pub mod priority {
     /// `aggregate:analytics`, `facts:reextract`, `builds:extract`, `tiers:backfill`, `maintenance`,
     /// `ddragon:sync`.
     pub const MAINTENANCE: i64 = 30_000;
+    /// `timelines:backfill` (TL-02): below everything, so it only gets a
+    /// worker nothing else wants.
+    pub const TIMELINE_BACKFILL: i64 = 40_000;
 }
 
 /// Every handler that exists, by kind.
@@ -80,6 +86,7 @@ pub fn handlers(
     names: &std::sync::Arc<names::NamesBackfill>,
     analytics: &std::sync::Arc<analytics::AnalyticsContext>,
     maintenance: &std::sync::Arc<maintenance::Maintenance>,
+    timelines: &std::sync::Arc<timelines::TimelinesContext>,
 ) -> Registry {
     use std::sync::Arc;
     Registry::new()
@@ -139,6 +146,10 @@ pub fn handlers(
         .with(
             kinds::MAINTENANCE,
             maintenance::MaintenanceHandler(Arc::clone(maintenance)),
+        )
+        .with(
+            kinds::TIMELINES_BACKFILL,
+            timelines::TimelinesBackfillHandler(Arc::clone(timelines)),
         )
 }
 

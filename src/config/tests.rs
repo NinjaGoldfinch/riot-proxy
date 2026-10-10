@@ -65,6 +65,10 @@ fn defaults_match_v1_and_design_07() {
         "archive jobs fetch timelines unless told not to (ADR-098)"
     );
     assert_eq!(
+        c.timeline_backfill_patches, 0,
+        "the timeline backfill is off until the owner sets it (TL-02)"
+    );
+    assert_eq!(
         c.lookup_backfill_limit,
         u32::MAX,
         "no cap: a walk ends where the history does (ADR-081)"
