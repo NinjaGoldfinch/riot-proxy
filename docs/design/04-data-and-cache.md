@@ -156,6 +156,13 @@ CREATE INDEX facts_champ  ON match_facts(champion_id);
 -- remake (0/1) as a key, so a read excludes remakes (default) or sums both.
 -- Every participant of the platform's archived matches counts (ADR-105), at
 -- the tier stamped in match_tiers when the match was archived (ADR-127).
+-- The per-participant tables (stats, matchups, items, runes, spells, builds,
+-- build parts) are keyed by the row's own player's tier and side as well
+-- (V0017, ADR-129): side is 'blue' (team 100) or 'red' (team 200). Their rows
+-- are disjoint across tiers and sides, so a read that names neither sums them
+-- exactly. Both go last in the key, after the columns the reads filter on.
+-- Rows V0017 couldn't split carry tier and side '' until their ladder's next
+-- rebuild, which covers every patch while the ladder is in analytics_unsplit.
 CREATE TABLE analytics_slices (                   -- distinct matches per tier: pick/ban-rate denominator
   key_scope, platform, queue, tier, patch, remake, matches, computed_at,
   PRIMARY KEY (key_scope, platform, queue, tier, patch, remake)
@@ -167,34 +174,40 @@ CREATE TABLE analytics_match_totals (             -- V0015: distinct matches, ev
   key_scope, platform, queue, patch, remake, matches, computed_at,
   PRIMARY KEY (key_scope, platform, queue, patch, remake)
 );
-CREATE TABLE champion_stats (                     -- per tier and role
-  key_scope, platform, queue, tier, patch, champion_id, role, remake,
+CREATE TABLE champion_stats (                     -- per tier, role and side
+  key_scope, platform, queue, tier, patch, champion_id, role, remake, side,
   games, wins, matches_picked, stated_games, kills, deaths, assists, cs, gold, damage, vision,
   duration_s, computed_at,
-  PRIMARY KEY (key_scope, platform, queue, tier, patch, champion_id, role, remake)
+  PRIMARY KEY (key_scope, platform, queue, tier, patch, champion_id, role, remake, side)
 );
 CREATE TABLE champion_bans (key_scope, platform, queue, tier, patch, champion_id, remake, bans, computed_at, …);
 CREATE TABLE champion_ban_totals (                -- V0015: matches banned in, every tier
   key_scope, platform, queue, patch, champion_id, remake, bans, computed_at,
   PRIMARY KEY (key_scope, platform, queue, patch, champion_id, remake)
 );
-CREATE TABLE champion_matchups (                  -- no tier; one row per (lane, opponent)
-  key_scope, platform, queue, patch, champion_id, role, opponent_id, remake, games, wins, computed_at, …);
-CREATE TABLE champion_items  (… champion_id, role, item_id, remake, games, wins, computed_at);
-CREATE TABLE champion_runes  (… champion_id, role, keystone_id, sub_style_id, remake, games, wins, computed_at);
-CREATE TABLE champion_spells (… champion_id, role, spell_a, spell_b, remake, games, wins, computed_at);  -- spell_a <= spell_b
+CREATE TABLE champion_matchups (                  -- one row per (lane, opponent); tier and side are
+  key_scope, platform, queue, patch, champion_id, role, opponent_id, remake,  -- champion_id's player's
+  tier, side, games, wins, computed_at,
+  PRIMARY KEY (key_scope, platform, queue, patch, champion_id, role, opponent_id, remake, tier, side)
+);
+CREATE TABLE champion_items  (… champion_id, role, item_id, remake, tier, side, games, wins, computed_at);
+CREATE TABLE champion_runes  (… champion_id, role, keystone_id, sub_style_id, remake, tier, side, games, wins, computed_at);
+CREATE TABLE champion_spells (… champion_id, role, spell_a, spell_b, remake, tier, side, games, wins, computed_at);  -- spell_a <= spell_b
 CREATE TABLE champion_builds (                    -- V0014 (ADR-120): set builds, from match_builds
   key_scope, platform, queue, patch, champion_id, role, remake,
   core,                                           -- JSON: the first two finished items, "[a,b]"
-  games, wins, computed_at,
-  PRIMARY KEY (key_scope, platform, queue, patch, champion_id, role, remake, core)
+  tier, side, games, wins, computed_at,
+  PRIMARY KEY (key_scope, platform, queue, patch, champion_id, role, remake, core, tier, side)
 );
 CREATE TABLE champion_build_parts (               -- what a build's players chose besides its core
   key_scope, platform, queue, patch, champion_id, role, remake, core,
   part,                                           -- item3 | item4 | item5 | starter | boots | skill_order | runes | spells
   value,                                          -- item id; starter JSON; "QWE"; "keystone:subStyle"; "a:b", a <= b
-  games, wins, computed_at,
-  PRIMARY KEY (key_scope, platform, queue, patch, champion_id, role, remake, core, part, value)
+  tier, side, games, wins, computed_at,
+  PRIMARY KEY (key_scope, platform, queue, patch, champion_id, role, remake, core, part, value, tier, side)
+);
+CREATE TABLE analytics_unsplit (                  -- V0017: ladders whose next rebuild covers every patch
+  key_scope, platform, queue, PRIMARY KEY (key_scope, platform, queue)
 );
 
 -- Ladder ──────────────────────────────────────────────────────────────────── (v1's shape, ADR-054)

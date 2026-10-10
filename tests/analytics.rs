@@ -13,7 +13,7 @@ use axum::http::{Request, StatusCode};
 use riot_proxy::archive::matches;
 use riot_proxy::consumers::{self, NewConsumer, Scope};
 use riot_proxy::db::DbError;
-use riot_proxy::jobs::analytics::{AnalyticsContext, reextract_if_stale, stale_matches};
+use riot_proxy::jobs::analytics::{AnalyticsContext, reextract_if_stale, split_if_needed, stale_matches};
 use riot_proxy::jobs::{Job, Queue};
 use riot_proxy::ws::Topic;
 use riot_proxy::ws::protocol::LADDER;
@@ -74,11 +74,15 @@ fn job(kind: &str, payload: Value) -> Job {
 
 impl Env {
     fn ctx(&self) -> AnalyticsContext {
+        self.ctx_with(4)
+    }
+
+    fn ctx_with(&self, patch_limit: u32) -> AnalyticsContext {
         AnalyticsContext {
             queue: Queue::new(self.state.db.clone()),
             hub: self.state.hub.clone(),
             key_scope: self.scope.clone(),
-            patch_limit: 4,
+            patch_limit,
             reextract_batch: 1,
             mirror: std::sync::Arc::clone(&self.state.ddragon),
         }
@@ -1218,4 +1222,153 @@ async fn a_promotion_leaves_earlier_games_in_their_tier() {
         .await
         .json();
     assert_eq!(master["champions"].as_array().unwrap().len(), 10);
+}
+
+/// V0017 (FLT-01, ADR-129) copies the rows it can't split by tier and side
+/// with both '' and lists their ladder in `analytics_unsplit`. The routes
+/// answer as before, since every read sums over both. Boot queues a rebuild
+/// for the ladder, and that rebuild covers every patch whatever
+/// `AGGREGATE_PATCH_LIMIT` says: an older patch's rows are split too, then
+/// the ladder leaves the list and later rebuilds keep to the limit.
+#[tokio::test]
+async fn rows_v0017_could_not_split_are_rebuilt_over_every_patch_once() {
+    let e = env().await;
+    e.seed().await;
+    e.seed_builds().await;
+    // The remake on an older patch, so a one-patch rebuild leaves it alone.
+    e.state
+        .db
+        .write(|c| {
+            c.execute(
+                "UPDATE matches SET patch = '16.18' WHERE match_id = 'KR_8393320187'",
+                [],
+            )?;
+            Ok::<_, DbError>(())
+        })
+        .await
+        .unwrap();
+    let ladder = json!({"platform": "kr", "queue": "RANKED_SOLO_5x5"});
+    e.ctx_with(0)
+        .aggregate(&job("aggregate:analytics", ladder.clone()))
+        .await
+        .unwrap();
+    let uris = [
+        "/v1/lol/analytics/champions?patch=all&remakes=include",
+        "/v1/lol/analytics/champions/134?patch=all&remakes=include",
+        "/v1/lol/analytics/champions/134/matchups?patch=all&remakes=include",
+        "/v1/lol/analytics/champions/134/builds?patch=all&remakes=include",
+        "/v1/lol/analytics/patches?remakes=include",
+    ];
+    let read = || async {
+        let mut out = vec![];
+        for uri in uris {
+            out.push(redact(e.get(uri).await.json()));
+        }
+        out
+    };
+    let before = read().await;
+    assert!(
+        !before[1]["matchups"].as_array().unwrap().is_empty(),
+        "{:#}",
+        before[1]
+    );
+    assert!(
+        !before[3]["builds"].as_array().unwrap().is_empty(),
+        "{:#}",
+        before[3]
+    );
+
+    // What V0017 leaves behind. Each champion plays once per match, and the
+    // two matches differ in patch, so no two rows collapse into one key.
+    let unsplit = |db: riot_proxy::db::Db| async move {
+        db.read(|c| {
+            let mut n = 0;
+            for t in [
+                "champion_matchups",
+                "champion_items",
+                "champion_runes",
+                "champion_spells",
+                "champion_builds",
+                "champion_build_parts",
+            ] {
+                n += c.query_row(
+                    &format!("SELECT count(*) FROM {t} WHERE tier = '' OR side = ''"),
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )?;
+            }
+            n += c.query_row("SELECT count(*) FROM champion_stats WHERE side = ''", [], |r| {
+                r.get::<_, i64>(0)
+            })?;
+            let listed: i64 = c.query_row("SELECT count(*) FROM analytics_unsplit", [], |r| r.get(0))?;
+            Ok::<_, DbError>((n, listed))
+        })
+        .await
+        .unwrap()
+    };
+    let scope = e.scope.clone();
+    e.state
+        .db
+        .write(move |c| {
+            for t in [
+                "champion_matchups",
+                "champion_items",
+                "champion_runes",
+                "champion_spells",
+                "champion_builds",
+                "champion_build_parts",
+            ] {
+                c.execute(&format!("UPDATE {t} SET tier = '', side = ''"), [])?;
+            }
+            c.execute("UPDATE champion_stats SET side = ''", [])?;
+            c.execute(
+                "INSERT INTO analytics_unsplit (key_scope, platform, queue) VALUES (?1, 'kr', 'RANKED_SOLO_5x5')",
+                [scope],
+            )?;
+            Ok::<_, DbError>(())
+        })
+        .await
+        .unwrap();
+    let (rows, listed) = unsplit(e.state.db.clone()).await;
+    assert!(rows > 0);
+    assert_eq!(listed, 1);
+    assert_eq!(read().await, before, "every read sums over tier and side");
+
+    // Boot queues the ladder's rebuild, once.
+    let queue = Queue::new(e.state.db.clone());
+    assert_eq!(split_if_needed(&queue, &e.scope).await.unwrap(), 1);
+    assert_eq!(
+        split_if_needed(&queue, &e.scope).await.unwrap(),
+        0,
+        "deduplicated"
+    );
+
+    // A one-patch rebuild still splits 16.18's rows.
+    e.ctx_with(1)
+        .aggregate(&job("aggregate:analytics", ladder.clone()))
+        .await
+        .unwrap();
+    assert_eq!(unsplit(e.state.db.clone()).await, (0, 0));
+    assert_eq!(read().await, before);
+
+    // Off the list, the limit holds again: 16.18's rows are left as they are.
+    let stamp = |db: riot_proxy::db::Db| async move {
+        db.read(|c| {
+            Ok::<_, DbError>(c.query_row(
+                "SELECT max(computed_at) FROM champion_stats WHERE patch = '16.18'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )?)
+        })
+        .await
+        .unwrap()
+    };
+    let older = stamp(e.state.db.clone()).await;
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    e.ctx_with(1)
+        .aggregate(&job("aggregate:analytics", ladder))
+        .await
+        .unwrap();
+    assert_eq!(stamp(e.state.db.clone()).await, older);
+    assert_eq!(read().await, before);
 }

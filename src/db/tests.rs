@@ -107,6 +107,7 @@ async fn migrations_create_exactly_the_design_04_tables() {
             "analytics_match_totals",
             "analytics_runs",
             "analytics_slices",
+            "analytics_unsplit",
             "cache",
             "champion_ban_totals",
             "champion_bans",
@@ -210,7 +211,7 @@ async fn a_v1_database_upgrades_to_v2_and_keeps_its_data() {
         })
         .await
         .expect("read");
-    assert_eq!((name.as_str(), versions), ("old", 16));
+    assert_eq!((name.as_str(), versions), ("old", 17));
 }
 
 /// V0015 (SITE-08, ADR-123) backfills the slices aggregated before it, as the
@@ -312,6 +313,118 @@ async fn v0015_backfills_the_totals_of_every_aggregated_slice() {
     .await
     .expect("rebuild");
     assert_eq!(totals(db).await, (matches, bans));
+}
+
+/// V0017 (FLT-01, ADR-129) keeps every analytics row, with tier and side ''
+/// where it has none to give, and lists each ladder that had rows, so its
+/// next rebuild covers every patch. `champion_stats` keeps its tier.
+#[tokio::test]
+async fn v0017_keeps_every_row_unsplit_and_lists_its_ladder() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("riot-proxy.db");
+    {
+        let mut conn = Connection::open(&path).expect("open");
+        embedded::migrations::runner()
+            .set_grouped(true)
+            .set_target(refinery::Target::Version(16))
+            .run(&mut conn)
+            .expect("to V0016");
+        conn.execute_batch(
+            "INSERT INTO champion_stats (key_scope, platform, queue, tier, patch, champion_id, role, remake, games,
+               wins, matches_picked, stated_games, kills, deaths, assists, cs, gold, damage, vision, duration_s,
+               computed_at) VALUES
+               ('s', 'kr', 'RANKED_SOLO_5x5', 'MASTER', '14.18', 1, 'MIDDLE', 0, 3, 2, 3, 3, 1, 2, 3, 4, 5, 6, 7, 8, 100),
+               ('s', 'kr', 'RANKED_SOLO_5x5', 'DIAMOND', '14.10', 1, 'MIDDLE', 0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 90);
+             INSERT INTO champion_matchups (key_scope, platform, queue, patch, champion_id, role, opponent_id, remake,
+               games, wins, computed_at) VALUES ('s', 'kr', 'RANKED_SOLO_5x5', '14.18', 1, 'MIDDLE', 2, 0, 3, 2, 100);
+             INSERT INTO champion_items (key_scope, platform, queue, patch, champion_id, role, item_id, remake,
+               games, wins, computed_at) VALUES ('s', 'kr', 'RANKED_SOLO_5x5', '14.18', 1, 'MIDDLE', 3157, 0, 3, 2, 100);
+             INSERT INTO champion_runes (key_scope, platform, queue, patch, champion_id, role, keystone_id,
+               sub_style_id, remake, games, wins, computed_at)
+               VALUES ('s', 'kr', 'RANKED_SOLO_5x5', '14.18', 1, 'MIDDLE', 8112, 8300, 0, 3, 2, 100);
+             INSERT INTO champion_spells (key_scope, platform, queue, patch, champion_id, role, spell_a, spell_b,
+               remake, games, wins, computed_at)
+               VALUES ('s', 'kr', 'RANKED_SOLO_5x5', '14.18', 1, 'MIDDLE', 4, 14, 0, 3, 2, 100);
+             -- Flex has set builds only, under another key scope.
+             INSERT INTO champion_builds (key_scope, platform, queue, patch, champion_id, role, remake, core,
+               games, wins, computed_at)
+               VALUES ('t', 'euw1', 'RANKED_FLEX_SR', '14.18', 1, 'MIDDLE', 0, '[6655,3157]', 2, 1, 100);
+             INSERT INTO champion_build_parts (key_scope, platform, queue, patch, champion_id, role, remake, core,
+               part, value, games, wins, computed_at)
+               VALUES ('t', 'euw1', 'RANKED_FLEX_SR', '14.18', 1, 'MIDDLE', 0, '[6655,3157]', 'boots', '3020', 2, 1, 100);",
+        )
+        .expect("seed");
+    }
+    let db = Db::open(&path, 1).expect("migrate");
+    let rows = db
+        .read(|c| {
+            let mut out = vec![];
+            for (t, cols) in [
+                (
+                    "champion_stats",
+                    "tier, patch, games, kills, duration_s, computed_at",
+                ),
+                (
+                    "champion_matchups",
+                    "patch, opponent_id, games, wins, computed_at",
+                ),
+                ("champion_items", "patch, item_id, games, wins, computed_at"),
+                (
+                    "champion_runes",
+                    "patch, keystone_id, sub_style_id, games, wins, computed_at",
+                ),
+                (
+                    "champion_spells",
+                    "patch, spell_a, spell_b, games, wins, computed_at",
+                ),
+                ("champion_builds", "key_scope, core, games, wins, computed_at"),
+                (
+                    "champion_build_parts",
+                    "key_scope, core, part, value, games, wins, computed_at",
+                ),
+            ] {
+                let tier = if t == "champion_stats" { "'-'" } else { "tier" };
+                let mut stmt = c.prepare(&format!(
+                    "SELECT '{t}' || ' [' || {tier} || '/' || side || '] ' || concat_ws(' ', {cols})
+                       FROM {t} ORDER BY patch DESC"
+                ))?;
+                out.extend(
+                    stmt.query_map([], |r| r.get::<_, String>(0))?
+                        .collect::<Result<Vec<_>, _>>()?,
+                );
+            }
+            let mut stmt =
+                c.prepare("SELECT key_scope, platform, queue FROM analytics_unsplit ORDER BY key_scope")?;
+            let listed = stmt
+                .query_map([], |r| {
+                    Ok(format!(
+                        "{} {} {}",
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok::<_, DbError>((out, listed))
+        })
+        .await
+        .expect("rows");
+    assert_eq!(
+        rows,
+        (
+            vec![
+                "champion_stats [-/] MASTER 14.18 3 1 8 100".to_string(),
+                "champion_stats [-/] DIAMOND 14.10 1 1 1 90".into(),
+                "champion_matchups [/] 14.18 2 3 2 100".into(),
+                "champion_items [/] 14.18 3157 3 2 100".into(),
+                "champion_runes [/] 14.18 8112 8300 3 2 100".into(),
+                "champion_spells [/] 14.18 4 14 3 2 100".into(),
+                "champion_builds [/] t [6655,3157] 2 1 100".into(),
+                "champion_build_parts [/] t [6655,3157] boots 3020 2 1 100".into(),
+            ],
+            vec!["s kr RANKED_SOLO_5x5".to_string(), "t euw1 RANKED_FLEX_SR".into()]
+        )
+    );
 }
 
 /// match_facts is a pure derivation of matches: deleting a match cascades (design 04).
@@ -482,11 +595,11 @@ async fn migrations_apply_once_across_reopens() {
         })
         .await
         .expect("insert");
-    assert_eq!(history(first.clone()).await.expect("history"), 16);
+    assert_eq!(history(first.clone()).await.expect("history"), 17);
     drop(first);
 
     let second = Db::open(&path, 1).expect("second open");
-    assert_eq!(history(second.clone()).await.expect("history"), 16, "no re-run");
+    assert_eq!(history(second.clone()).await.expect("history"), 17, "no re-run");
     let name: Option<String> = second
         .read(|c| {
             Ok::<_, DbError>(
