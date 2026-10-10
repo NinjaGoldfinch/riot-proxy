@@ -240,6 +240,16 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         Ok(false) => {}
         Err(e) => tracing::warn!(error = %e, "could not check for matches without tier stamps"),
     }
+    // Analytics rows from before their tables had a tier and side (V0017) are
+    // replaced by one rebuild over every patch of their ladder (ADR-129).
+    match crate::jobs::analytics::split_if_needed(&queue, &scope).await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(
+            ladders = n,
+            "queued analytics rebuilds to split rows by tier and side"
+        ),
+        Err(e) => tracing::warn!(error = %e, "could not check for analytics rows to split by tier and side"),
+    }
     let workers = scheduler.start(usize::try_from(config.job_concurrency).unwrap_or(8));
     let ticks = crate::jobs::ticks::Ticks::start_with(
         &scheduler,

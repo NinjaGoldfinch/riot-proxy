@@ -129,12 +129,12 @@ async fn the_snapshot_is_v1s_whole_document_from_v2s_sources() {
     };
     record_run(&e.state.db, &e.scope, &ladder_kr, &run).await.unwrap();
     e.sql(format!(
-        "INSERT INTO champion_stats (key_scope, platform, queue, tier, patch, champion_id, role, remake, games, wins,
-           matches_picked, stated_games, kills, deaths, assists, cs, gold, damage, vision, duration_s, computed_at)
-         VALUES ('{s}', 'kr', 'RANKED_SOLO_5x5', 'MASTER', '16.19', 103, 'MIDDLE', 0, 4, 3, 4, 4, 0,0,0,0,0,0,0,0, 1),
-                ('{s}', 'kr', 'RANKED_SOLO_5x5', 'DIAMOND', '16.19', 103, 'MIDDLE', 0, 2, 0, 2, 2, 0,0,0,0,0,0,0,0, 1),
-                ('{s}', 'kr', 'RANKED_SOLO_5x5', 'MASTER', '16.19', 86, 'TOP', 0, 5, 1, 5, 5, 0,0,0,0,0,0,0,0, 1),
-                ('{s}', 'kr', 'RANKED_SOLO_5x5', 'MASTER', '16.18', 1, 'TOP', 0, 99, 1, 5, 5, 0,0,0,0,0,0,0,0, 1);",
+        "INSERT INTO champion_stats (key_scope, platform, queue, tier, patch, champion_id, role, remake, side,
+           games, wins, matches_picked, stated_games, kills, deaths, assists, cs, gold, damage, vision, duration_s, computed_at)
+         VALUES ('{s}', 'kr', 'RANKED_SOLO_5x5', 'MASTER', '16.19', 103, 'MIDDLE', 0, 'blue', 4, 3, 4, 4, 0,0,0,0,0,0,0,0, 1),
+                ('{s}', 'kr', 'RANKED_SOLO_5x5', 'DIAMOND', '16.19', 103, 'MIDDLE', 0, 'red', 2, 0, 2, 2, 0,0,0,0,0,0,0,0, 1),
+                ('{s}', 'kr', 'RANKED_SOLO_5x5', 'MASTER', '16.19', 86, 'TOP', 0, 'blue', 5, 1, 5, 5, 0,0,0,0,0,0,0,0, 1),
+                ('{s}', 'kr', 'RANKED_SOLO_5x5', 'MASTER', '16.18', 1, 'TOP', 0, 'red', 99, 1, 5, 5, 0,0,0,0,0,0,0,0, 1);",
         s = e.scope
     ))
     .await;

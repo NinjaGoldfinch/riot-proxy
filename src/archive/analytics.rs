@@ -7,7 +7,10 @@
 //! [`UNKNOWN_TIER`] when neither had them. A match with players in several
 //! tiers counts in each (v1); `analytics_match_totals` and
 //! `champion_ban_totals` count it once, for rows summed over every tier
-//! (ADR-123). Every table is
+//! (ADR-123). The per-participant tables (stats, matchups, items, runes,
+//! spells, set builds) are keyed by the row's own player's tier and side as
+//! well (FLT-01, ADR-129), so a read sums over whichever it doesn't name.
+//! Every table is
 //! rebuilt wholesale for the newest `AGGREGATE_PATCH_LIMIT` patches (0: all)
 //! and keeps older patches' rows. Every row carries `remake`, so a read can
 //! leave remakes out (the default) or add them back.
@@ -94,13 +97,18 @@ pub const UNKNOWN_TIER: &str = "UNKNOWN";
 /// A fact's tier in [`ladder_facts`]: its stamp (THR-02).
 const TIER: &str = "mt.tier";
 
+/// A fact's side in [`ladder_facts`] (FLT-01): team 100 is blue, 200 red
+/// (design/10 §Scoreboard layout).
+const SIDE: &str = "CASE f.team_id WHEN 100 THEN 'blue' ELSE 'red' END";
+
 /// The platform's matches only: a match id starts with its platform (`OC1_…`).
 /// Binds `?2` platform.
 const ON_PLATFORM: &str = "substr(m.match_id, 1, length(?2) + 1) = upper(?2) || '_'";
 
 /// Facts of the platform's archived matches in this queue, each with its
-/// player's stamped [`TIER`], plus any further `join`. A fact with no stamp
-/// (a match `tiers:backfill` hasn't reached) doesn't count. Binds `?1` key
+/// player's stamped [`TIER`] and their [`SIDE`], plus any further `join`. A
+/// fact with no stamp (a match `tiers:backfill` hasn't reached) doesn't
+/// count, nor one of a team other than Summoner's Rift's two. Binds `?1` key
 /// scope, `?2` platform, `?3` queue, `?4` queue id, `?5` patches.
 fn ladder_facts(join: &str) -> String {
     format!(
@@ -110,6 +118,7 @@ fn ladder_facts(join: &str) -> String {
            AND mt.key_scope = f.key_scope AND mt.platform = ?2 AND mt.queue = ?3
          {join}
         WHERE f.key_scope = ?1 AND m.queue_id = ?4 AND m.patch IS NOT NULL AND {ON_PLATFORM}
+          AND f.team_id IN (100, 200)
           AND (?5 IS NULL OR m.patch IN (SELECT value FROM json_each(?5)))"
     )
 }
@@ -154,17 +163,17 @@ pub fn rebuild_champions(c: &mut Connection, s: &Scope) -> Result<Written, DbErr
     let stats = s.insert(
         &tx,
         &format!(
-            "INSERT INTO champion_stats (key_scope, platform, queue, tier, patch, champion_id, role, remake,
+            "INSERT INTO champion_stats (key_scope, platform, queue, tier, patch, champion_id, role, remake, side,
                games, wins, matches_picked, stated_games, kills, deaths, assists, cs, gold, damage, vision,
                duration_s, computed_at)
              SELECT ?1, ?2, ?3, {TIER}, m.patch, f.champion_id, coalesce(f.position, ''), coalesce(m.remake, 0),
-               count(*), sum(f.win), count(DISTINCT m.match_id), count(f.kills),
+               {SIDE}, count(*), sum(f.win), count(DISTINCT m.match_id), count(f.kills),
                coalesce(sum(f.kills), 0), coalesce(sum(f.deaths), 0), coalesce(sum(f.assists), 0),
                coalesce(sum(f.cs), 0), coalesce(sum(f.gold), 0), coalesce(sum(f.damage), 0),
                coalesce(sum(f.vision), 0),
                coalesce(sum(m.game_duration) FILTER (WHERE f.kills IS NOT NULL), 0), ?6
              {facts}
-             GROUP BY {TIER}, m.patch, f.champion_id, coalesce(f.position, ''), coalesce(m.remake, 0)"
+             GROUP BY {TIER}, m.patch, f.champion_id, coalesce(f.position, ''), coalesce(m.remake, 0), {SIDE}"
         ),
     )?;
     // A ban counts once per match, in every tier the match had a player in (v1).
@@ -194,7 +203,10 @@ pub fn rebuild_champions(c: &mut Connection, s: &Scope) -> Result<Written, DbErr
 
 /// Lane matchups (v1): two players of opposite teams in the same lane, each
 /// lane held by exactly one player per team, mirror lanes excluded. Recorded
-/// from both sides, since every participant counts (ADR-105).
+/// from both sides, since every participant counts (ADR-105), each at its
+/// own player's stamped tier and side (FLT-01): the opponent's tier may
+/// differ. A player with no stamp has no row, as in [`ladder_facts`]; the
+/// lane's head count is taken before that, from every fact.
 ///
 /// Each laned fact is read once, with its lane's head count from a window,
 /// and that set is joined to itself (ADR-101). The earlier shape (two
@@ -211,12 +223,15 @@ const MATCHUPS: &str = "WITH lane AS (
           AND (?5 IS NULL OR m.patch IN (SELECT value FROM json_each(?5)))
      )
      INSERT INTO champion_matchups (key_scope, platform, queue, patch, champion_id, role, opponent_id,
-       remake, games, wins, computed_at)
-     SELECT ?1, ?2, ?3, a.patch, a.champion_id, a.position, b.champion_id, a.remake, count(*), sum(a.win), ?6
+       remake, tier, side, games, wins, computed_at)
+     SELECT ?1, ?2, ?3, a.patch, a.champion_id, a.position, b.champion_id, a.remake, mt.tier,
+       CASE a.team_id WHEN 100 THEN 'blue' ELSE 'red' END, count(*), sum(a.win), ?6
        FROM lane a
        JOIN lane b ON b.match_id = a.match_id AND b.position = a.position AND b.team_id <> a.team_id
-      WHERE a.n = 1 AND b.n = 1 AND a.champion_id <> b.champion_id
-      GROUP BY a.patch, a.position, a.champion_id, b.champion_id, a.remake";
+       JOIN match_tiers mt ON mt.match_id = a.match_id AND mt.puuid = a.puuid
+         AND mt.key_scope = ?1 AND mt.platform = ?2 AND mt.queue = ?3
+      WHERE a.n = 1 AND b.n = 1 AND a.champion_id <> b.champion_id AND a.team_id IN (100, 200)
+      GROUP BY a.patch, a.position, a.champion_id, b.champion_id, a.remake, mt.tier, a.team_id";
 
 pub fn rebuild_matchups(c: &mut Connection, s: &Scope) -> Result<Written, DbError> {
     let tx = c.transaction()?;
@@ -238,13 +253,14 @@ pub fn rebuild_builds(c: &mut Connection, s: &Scope) -> Result<Written, DbError>
         &tx,
         &format!(
             "INSERT INTO champion_items (key_scope, platform, queue, patch, champion_id, role, item_id, remake,
-               games, wins, computed_at)
+               tier, side, games, wins, computed_at)
              SELECT ?1, ?2, ?3, m.patch, f.champion_id, coalesce(f.position, ''), CAST(i.value AS INTEGER),
-               coalesce(m.remake, 0), count(DISTINCT f.match_id || ' ' || f.puuid),
+               coalesce(m.remake, 0), {TIER}, {SIDE}, count(DISTINCT f.match_id || ' ' || f.puuid),
                count(DISTINCT CASE WHEN f.win THEN f.match_id || ' ' || f.puuid END), ?6
              {facts}
                AND i.value IS NOT NULL AND i.value <> 0
-             GROUP BY m.patch, f.champion_id, coalesce(f.position, ''), CAST(i.value AS INTEGER), coalesce(m.remake, 0)"
+             GROUP BY m.patch, f.champion_id, coalesce(f.position, ''), CAST(i.value AS INTEGER), coalesce(m.remake, 0),
+               {TIER}, {SIDE}"
         ),
     )?;
     tx.commit()?;
@@ -257,15 +273,15 @@ pub fn rebuild_builds(c: &mut Connection, s: &Scope) -> Result<Written, DbError>
         &tx,
         &format!(
             "INSERT INTO champion_runes (key_scope, platform, queue, patch, champion_id, role, keystone_id,
-               sub_style_id, remake, games, wins, computed_at)
+               sub_style_id, remake, tier, side, games, wins, computed_at)
              SELECT ?1, ?2, ?3, m.patch, f.champion_id, coalesce(f.position, ''),
                json_extract(f.runes, '$.keystone'), json_extract(f.runes, '$.subStyle'),
-               coalesce(m.remake, 0), count(*), sum(f.win), ?6
+               coalesce(m.remake, 0), {TIER}, {SIDE}, count(*), sum(f.win), ?6
              {facts}
                AND json_extract(f.runes, '$.keystone') IS NOT NULL
                AND json_extract(f.runes, '$.subStyle') IS NOT NULL
              GROUP BY m.patch, f.champion_id, coalesce(f.position, ''), json_extract(f.runes, '$.keystone'),
-               json_extract(f.runes, '$.subStyle'), coalesce(m.remake, 0)"
+               json_extract(f.runes, '$.subStyle'), coalesce(m.remake, 0), {TIER}, {SIDE}"
         ),
     )?;
     tx.commit()?;
@@ -278,18 +294,18 @@ pub fn rebuild_builds(c: &mut Connection, s: &Scope) -> Result<Written, DbError>
         &tx,
         &format!(
             "INSERT INTO champion_spells (key_scope, platform, queue, patch, champion_id, role, spell_a, spell_b,
-               remake, games, wins, computed_at)
+               remake, tier, side, games, wins, computed_at)
              SELECT ?1, ?2, ?3, m.patch, f.champion_id, coalesce(f.position, ''),
                min(json_extract(f.summoners, '$[0]'), json_extract(f.summoners, '$[1]')),
                max(json_extract(f.summoners, '$[0]'), json_extract(f.summoners, '$[1]')),
-               coalesce(m.remake, 0), count(*), sum(f.win), ?6
+               coalesce(m.remake, 0), {TIER}, {SIDE}, count(*), sum(f.win), ?6
              {facts}
                AND json_extract(f.summoners, '$[0]') IS NOT NULL
                AND json_extract(f.summoners, '$[1]') IS NOT NULL
              GROUP BY m.patch, f.champion_id, coalesce(f.position, ''),
                min(json_extract(f.summoners, '$[0]'), json_extract(f.summoners, '$[1]')),
                max(json_extract(f.summoners, '$[0]'), json_extract(f.summoners, '$[1]')),
-               coalesce(m.remake, 0)"
+               coalesce(m.remake, 0), {TIER}, {SIDE}"
         ),
     )?;
     tx.commit()?;
@@ -305,9 +321,9 @@ pub fn rebuild_builds(c: &mut Connection, s: &Scope) -> Result<Written, DbError>
         &format!(
             "{players}
              INSERT INTO champion_builds (key_scope, platform, queue, patch, champion_id, role, remake, core,
-               games, wins, computed_at)
-             SELECT ?1, ?2, ?3, patch, champion_id, role, remake, core, count(*), sum(win), ?6
-               FROM p GROUP BY patch, champion_id, role, remake, core"
+               tier, side, games, wins, computed_at)
+             SELECT ?1, ?2, ?3, patch, champion_id, role, remake, core, tier, side, count(*), sum(win), ?6
+               FROM p GROUP BY patch, champion_id, role, remake, core, tier, side"
         ),
     )?;
     out.push(("champion_builds", n));
@@ -318,7 +334,7 @@ pub fn rebuild_builds(c: &mut Connection, s: &Scope) -> Result<Written, DbError>
              k (part) AS (VALUES ('item3'), ('item4'), ('item5'), ('starter'), ('boots'), ('skill_order'),
                ('runes'), ('spells')),
              v AS (
-               SELECT p.patch, p.champion_id, p.role, p.remake, p.core, p.win, k.part,
+               SELECT p.patch, p.champion_id, p.role, p.remake, p.core, p.tier, p.side, p.win, k.part,
                  CASE k.part
                    WHEN 'item3' THEN CAST(json_extract(p.items, '$[2]') AS TEXT)
                    WHEN 'item4' THEN CAST(json_extract(p.items, '$[3]') AS TEXT)
@@ -334,10 +350,10 @@ pub fn rebuild_builds(c: &mut Connection, s: &Scope) -> Result<Written, DbError>
                  FROM p CROSS JOIN k
              )
              INSERT INTO champion_build_parts (key_scope, platform, queue, patch, champion_id, role, remake, core,
-               part, value, games, wins, computed_at)
-             SELECT ?1, ?2, ?3, patch, champion_id, role, remake, core, part, value, count(*), sum(win), ?6
+               part, value, tier, side, games, wins, computed_at)
+             SELECT ?1, ?2, ?3, patch, champion_id, role, remake, core, part, value, tier, side, count(*), sum(win), ?6
                FROM v WHERE value IS NOT NULL
-              GROUP BY patch, champion_id, role, remake, core, part, value"
+              GROUP BY patch, champion_id, role, remake, core, part, value, tier, side"
         ),
     )?;
     tx.commit()?;
@@ -355,13 +371,48 @@ fn set_build_players() -> String {
     );
     format!(
         "WITH p AS (
-           SELECT m.patch, f.champion_id, coalesce(f.position, '') AS role, coalesce(m.remake, 0) AS remake, f.win,
+           SELECT m.patch, f.champion_id, coalesce(f.position, '') AS role, coalesce(m.remake, 0) AS remake,
+             {TIER} AS tier, {SIDE} AS side, f.win,
              json_array(json_extract(b.items, '$[0]'), json_extract(b.items, '$[1]')) AS core,
              b.items, b.starter, b.boots, b.skill_order, f.runes, f.summoners
            {facts}
              AND json_array_length(b.items) >= 2
          )"
     )
+}
+
+/// Whether a ladder still holds rows V0017 copied without a tier and side
+/// (`analytics_unsplit`, ADR-129). Its next rebuild then covers every patch.
+pub fn unsplit(c: &Connection, key_scope: &str, platform: &str, queue: &str) -> Result<bool, DbError> {
+    use rusqlite::OptionalExtension;
+    Ok(c.query_row(
+        "SELECT 1 FROM analytics_unsplit WHERE key_scope = ?1 AND platform = ?2 AND queue = ?3",
+        params![key_scope, platform, queue],
+        |_| Ok(()),
+    )
+    .optional()?
+    .is_some())
+}
+
+/// Take a ladder off `analytics_unsplit`, once every step has rebuilt every
+/// patch of it.
+pub fn mark_split(c: &Connection, key_scope: &str, platform: &str, queue: &str) -> Result<(), DbError> {
+    c.execute(
+        "DELETE FROM analytics_unsplit WHERE key_scope = ?1 AND platform = ?2 AND queue = ?3",
+        params![key_scope, platform, queue],
+    )?;
+    Ok(())
+}
+
+/// One key scope's ladders still on `analytics_unsplit`, as `(platform, queue)`.
+pub fn unsplit_ladders(c: &Connection, key_scope: &str) -> Result<Vec<(String, String)>, DbError> {
+    let mut stmt = c.prepare(
+        "SELECT platform, queue FROM analytics_unsplit WHERE key_scope = ?1 ORDER BY platform, queue",
+    )?;
+    let rows = stmt
+        .query_map([key_scope], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
 }
 
 // ── Reads ───────────────────────────────────────────────────────────────────

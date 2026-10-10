@@ -110,6 +110,24 @@ pub async fn backfill_tiers_if_needed(queue: &Queue) -> Result<bool, DbError> {
     Ok(queue.enqueue(tiers_job()).await?.created)
 }
 
+/// Queue a rebuild of each of the key scope's ladders whose analytics rows
+/// V0017 couldn't split by tier and side (at boot, ADR-129). Returns how many
+/// were queued.
+pub async fn split_if_needed(queue: &Queue, key_scope: &str) -> Result<usize, DbError> {
+    let key_scope = key_scope.to_string();
+    let ladders = queue
+        .db()
+        .read(move |c| analytics::unsplit_ladders(c, &key_scope))
+        .await?;
+    let mut queued = 0;
+    for (platform, ladder) in ladders {
+        if enqueue_aggregate(queue, &platform, &ladder).await?.created {
+            queued += 1;
+        }
+    }
+    Ok(queued)
+}
+
 /// Matches whose facts an older `FACTS_VERSION` derived.
 pub async fn stale_matches(db: &Db) -> Result<i64, DbError> {
     db.read(|c| {
@@ -298,6 +316,14 @@ impl AnalyticsContext {
             ("matchups", analytics::rebuild_matchups),
             ("builds", analytics::rebuild_builds),
         ];
+        // A ladder with rows V0017 couldn't split by tier and side is rebuilt
+        // over every patch once, which replaces them all (ADR-129).
+        let (key_scope, l) = (self.key_scope.clone(), ladder.clone());
+        let full = self
+            .db()
+            .read(move |c| analytics::unsplit(c, &key_scope, &l.platform, &l.queue))
+            .await
+            .map_err(|e| store(&e))?;
         let mut tables = BTreeMap::new();
         for (name, step) in steps {
             activity::step(format!(
@@ -314,7 +340,11 @@ impl AnalyticsContext {
                         platform: l.platform,
                         queue: l.queue,
                         queue_id,
-                        patches: analytics::recent_patches(c, queue_id, limit)?,
+                        patches: if full {
+                            None
+                        } else {
+                            analytics::recent_patches(c, queue_id, limit)?
+                        },
                         now: Clock::now().unix_ms,
                     };
                     step(c, &scope)
@@ -333,6 +363,13 @@ impl AnalyticsContext {
                 .set(n as f64);
                 tables.insert(table.to_string(), n);
             }
+        }
+        if full {
+            let (key_scope, l) = (self.key_scope.clone(), ladder.clone());
+            self.db()
+                .write(move |c| analytics::mark_split(c, &key_scope, &l.platform, &l.queue))
+                .await
+                .map_err(|e| store(&e))?;
         }
         Ok(tables)
     }

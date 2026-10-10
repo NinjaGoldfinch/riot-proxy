@@ -63,6 +63,7 @@ pub const WIPED: &[&str] = &[
     "analytics_slices",
     "analytics_match_totals",
     "analytics_runs",
+    "analytics_unsplit",
     "cache",
     "jobs",
     "metrics_history",
