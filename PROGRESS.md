@@ -196,6 +196,7 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 - [x] RC-04 `TRUST_PROXY` (#75; default off: the admin allowlist uses the TCP peer, `X-Forwarded-For` only behind a trusted proxy, ADR-068)
 - [x] RC release `v2.0.0-rc.3` (#76; RC-03 + RC-04)
 - [x] Release `v2.0.0`: the first stable release, with everything on main since rc.3 (owner request 2026-10-10)
+- [x] Release `v2.1.0`: BLD-06, TL-02 and OPS-06 since 2.0.0 (owner request 2026-10-11)
 
 ## OPS — dev environment on Proxmox (owner request 2026-10-05)
 - [x] OPS-01 `:edge` image on every push to `main` (#79, ADR-069)
