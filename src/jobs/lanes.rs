@@ -47,6 +47,14 @@ pub fn of(kind: &str, payload: &Value) -> Option<Lane> {
         ),
         kinds::LADDER_WALK => on("league.entriesByTier", platform()?),
         kinds::LADDER_APEX => on(apex_endpoint(str_field(payload, "tier")?)?, platform()?),
+        kinds::TIMELINES_BACKFILL => {
+            let region = Region::parse(str_field(payload, "region")?).ok()?;
+            let endpoint = Endpoint::by_id("match.timeline")?;
+            Some(Lane {
+                lane: endpoint.target_for_region(region)?.scope(),
+                method: endpoint.method_scope_key,
+            })
+        }
         _ => None,
     }
 }

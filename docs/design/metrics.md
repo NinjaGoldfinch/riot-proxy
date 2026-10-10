@@ -51,5 +51,7 @@ Owner decision (2026-09-24, ADR-014): these use the names **exactly as design/07
 | `events_published_total` | counter | name | Events (P6-02), implemented; one per event handed to the hub, whether or not anyone holds its topic |
 | `sqlite_wal_bytes` | gauge | — | Maintenance / sampler (P7-05) |
 | `sqlite_readers_free` | gauge | — | SQLite reader pool (INC-01), implemented; idle read connections, set on every borrow and return. A value that stays below the pool size while idle is a leak (ADR-113) |
+| `timeline_backfill_fetched_total` | counter | region | `timelines:backfill` (TL-02), implemented; timelines fetched and archived by the backfill. Left to do: `GET /v1/admin/timelines/backfill` (ADR-133) |
+| `timeline_backfill_not_found_total` | counter | region | `timelines:backfill` (TL-02), implemented; timelines Riot answered 404 for, marked in `timeline_gaps` and never asked for again |
 
 Labels are provisional until the implementing task confirms them. `limiter_interactive_waiters` comes from P2-05 and `events_published_total` from the plan's P6-02; the others from design/07 §Observability.

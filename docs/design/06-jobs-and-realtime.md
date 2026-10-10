@@ -69,7 +69,7 @@ RETURNING *;
 
 **Yield instead of waiting.** A job's fetch (`FetchOptions::JOB`) waits at most `JOB_YIELD_BUDGET_MS` (default 1 000) for the limiter, for the app limit or one method's. If it would wait longer, the fetch fails with `limited_until`, and the handler returns `JobError::Yield { retry_at }`. The scheduler puts the row back to `pending` with `run_after = retry_at`, gives the attempt back, keeps the last real error, and counts nothing in `jobs_total`. A 429 that Riot actually sent is still a failure with backoff. Handlers resume where they stopped: a walk from its page cursor, `ladder:collect` re-queued with only the players it has not done (the yield's `payload` replaces the job's), `backfill:player` from `backfill_state`, `archive:match` from the archive (the match is announced before its timeline is fetched, so a timeline yield loses nothing). The other kinds are one request.
 
-**Take turns.** A walk re-queues itself every `CANCEL_CHECK_PAGES` (10) pages, so higher-priority work queued behind it gets a worker. This takes the place of a per-kind concurrency cap.
+**Take turns.** A walk re-queues itself every `CANCEL_CHECK_PAGES` (10) pages, so higher-priority work queued behind it gets a worker. This takes the place of a per-kind concurrency cap. `timelines:backfill` does the same after every 25 timelines; it keeps no cursor, since what is left is read from the archive each turn.
 
 **Wake.** `enqueue()` also `notify_one()`s the claim loop. A worker that found nothing claimable sleeps until the next delayed row is due or the first blocked lane or method frees up, whichever is sooner (`idle_for`), or 1 s when there is neither. Single process only (`ROLE=all`, the only role SQLite allows), where the limiter and the workers share memory.
 
@@ -84,6 +84,7 @@ RETURNING *;
 | 10 000 | polls | |
 | 20 000 | `backfill:player`, `ladder:*` | |
 | 30 000 | `aggregate:analytics`, `facts:reextract`, `builds:extract`, `tiers:backfill`, `maintenance` | |
+| 40 000 | `timelines:backfill` (TL-02) | below everything: a worker only when nothing else is claimable, so polls, walks and a crawl's downloads always go first |
 
 Every enqueue sets a priority explicitly; there is no "unprioritised outranks prioritised" surprise because there is no separate `wait` list.
 
@@ -142,6 +143,7 @@ Every handler that hits Riot calls the fetcher with `FetchOptions::JOB` (`Priori
 | `facts:reextract` | admin / boot when stale | re-derive facts, bans and `remake` for matches below `FACTS_VERSION`, in batches of `FACTS_REEXTRACT_BATCH`; no Riot calls |
 | `builds:extract` | run inline by `aggregate:analytics` | derive `match_builds` from every archived timeline whose match has facts and no rows at `BUILDS_VERSION`, 25 timelines a batch, with the newest mirrored `item.json` and each player's champion from `match_facts` (BLD-05); does nothing without one; no Riot calls (ADR-117, ADR-131) |
 | `tiers:backfill` | boot when a ranked match has facts and no tier stamps; run inline by `aggregate:analytics` | stamp `match_tiers` for those matches, 500 a batch, from the ladder and league lookups as they are now (ADR-105's tier), in id order; no Riot calls (ADR-127) |
+| `timelines:backfill` | hourly, one per match-v5 region (deduped by region, in its region's lane), only while `TIMELINE_BACKFILL_PATCHES` > 0 | fetch the missing timelines of archived ranked matches (420, 440) in the newest `TIMELINE_BACKFILL_PATCHES` patches, newest patch then newest game first, 25 a turn through the bulk lane; a 404 is marked in `timeline_gaps` and never asked again; a turn that stored any queues `builds:extract`. Progress: `GET /v1/admin/timelines/backfill` (TL-02, ADR-133) |
 | `aggregate:analytics` | crawl end, tick, admin | run `builds:extract` and `tiers:backfill`, then rebuild the analytics tables (v1's shape, ADR-056) for the last `AGGREGATE_PATCH_LIMIT` patches; `analytics.updated` |
 | `maintenance` | daily | trim `jobs`/`metrics_history`, sweep L2, `PRAGMA optimize`, WAL checkpoint, `VACUUM INTO` backup |
 

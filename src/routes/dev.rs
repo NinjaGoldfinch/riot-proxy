@@ -38,6 +38,7 @@ pub const CONFIRM: &str = "reset";
 /// Tables the reset empties, children before parents so foreign keys hold.
 pub const WIPED: &[&str] = &[
     "timelines",
+    "timeline_gaps",
     "match_bans",
     "match_builds",
     "match_tiers",

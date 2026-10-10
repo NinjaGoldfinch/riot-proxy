@@ -33,7 +33,7 @@ pub struct Scope {
 }
 
 /// SQL ordering for `major.minor`: string order puts 16.9 above 16.10 (v1).
-const PATCH_DESC: &str = "CAST(substr(patch, 1, instr(patch, '.') - 1) AS INTEGER) DESC, \
+pub(crate) const PATCH_DESC: &str = "CAST(substr(patch, 1, instr(patch, '.') - 1) AS INTEGER) DESC, \
      CAST(substr(patch, instr(patch, '.') + 1) AS INTEGER) DESC";
 
 /// The newest `limit` patches archived for a queue, any platform (v1
