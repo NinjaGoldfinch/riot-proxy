@@ -212,6 +212,84 @@ async fn the_puuid_route_fetches_the_account_itself() {
     assert_eq!(r.json()["region"], "asia");
 }
 
+// ── Platform from the account (SITE-09) ────────────────────────────────────
+
+const ACTIVE_REGION: &str = "/riot/account/v1/region/by-game/lol/by-puuid/";
+
+/// account-v1's `AccountRegionDTO` for the recorded player, as Riot shapes it.
+async fn active_region(e: &Env, response: ResponseTemplate) {
+    Mock::given(method("GET"))
+        .and(path(format!("{ACTIVE_REGION}{PUUID}")))
+        .respond_with(response)
+        .with_priority(2)
+        .mount(&e.server)
+        .await;
+}
+
+fn region_body(region: &str) -> ResponseTemplate {
+    ok(json!({"puuid": PUUID, "game": "lol", "region": region})
+        .to_string()
+        .into_bytes())
+}
+
+#[tokio::test]
+async fn without_a_platform_the_profile_reads_the_players_own() {
+    let e = env(&[]).await;
+    active_region(&e, region_body("kr")).await;
+    let uri = "/v1/players/by-riot-id/Hide%20on%20bush/KR1/profile";
+    let r = e.get(uri).await;
+    assert_eq!(r.status, StatusCode::OK);
+    let body = r.json();
+    assert_eq!(
+        (body["platform"].as_str(), body["region"].as_str()),
+        (Some("kr"), Some("asia"))
+    );
+    assert!(body["summoner"].is_object() && body["league"].is_array());
+    // Cached like an account: the second lookup asks Riot nothing new.
+    assert_eq!(e.get(uri).await.status, StatusCode::OK);
+    assert_eq!(
+        e.get(&format!("/v1/players/{PUUID}/profile")).await.status,
+        StatusCode::OK
+    );
+    assert_eq!(e.calls_to(ACTIVE_REGION).await, 1);
+}
+
+#[tokio::test]
+async fn a_named_platform_skips_the_lookup() {
+    let e = env(&[]).await;
+    active_region(&e, region_body("oc1")).await;
+    let r = e.get(PROFILE).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.json()["platform"], "kr");
+    assert_eq!(e.calls_to(ACTIVE_REGION).await, 0);
+}
+
+#[tokio::test]
+async fn a_player_riot_has_no_region_for_is_a_404() {
+    let e = env(&[]).await;
+    active_region(
+        &e,
+        ResponseTemplate::new(404).set_body_raw(
+            br#"{"status":{"message":"Data not found","status_code":404}}"#.to_vec(),
+            "application/json",
+        ),
+    )
+    .await;
+    let r = e.get(&format!("/v1/players/{PUUID}/profile")).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    assert_eq!(e.calls_to("/summoners/").await, 0, "nothing routed on a guess");
+}
+
+#[tokio::test]
+async fn a_region_that_is_not_a_platform_is_a_502() {
+    let e = env(&[]).await;
+    active_region(&e, region_body("xx9")).await;
+    let r = e.get(&format!("/v1/players/{PUUID}/profile")).await;
+    assert_eq!(r.status, StatusCode::BAD_GATEWAY);
+    assert_eq!(r.json()["error"]["code"], "UPSTREAM_ERROR");
+    assert_eq!(e.calls_to("/summoners/").await, 0);
+}
+
 #[tokio::test]
 async fn a_riot_id_that_resolves_to_no_puuid_is_a_404() {
     let server = MockServer::start().await;
@@ -259,17 +337,7 @@ async fn every_part_failing_is_a_404() {
 async fn profile_queries_follow_v1_validation() {
     let e = env(&[]).await;
     for (uri, code, message) in [
-        // No default platform (ADR-065).
-        (
-            format!("/v1/players/{PUUID}/profile"),
-            "VALIDATION",
-            "querystring must have required property 'platform'",
-        ),
-        (
-            "/v1/players/by-riot-id/Hide%20on%20bush/KR1/profile".to_string(),
-            "VALIDATION",
-            "querystring must have required property 'platform'",
-        ),
+        // No default platform (ADR-065). The profile finds the player's own (SITE-09).
         (
             format!("/v1/players/{PUUID}/matches"),
             "VALIDATION",

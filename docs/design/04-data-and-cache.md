@@ -304,7 +304,7 @@ Boot warm: `SELECT * FROM cache WHERE hard_expires > now` into L1, then a sweep 
 |---|---|---|---|
 | match / timeline | archive | — | archive |
 | match id list | 120 s | 480 s | no |
-| account | 24 h | 96 h | yes |
+| account (and its active region, SITE-09) | 24 h | 96 h | yes |
 | summoner | 1 h | 4 h | yes |
 | league entries | 300 s | 20 min | no |
 | ladder (apex + paged) | 120 s | 8 min | yes (a full page walk is thousands of calls) |

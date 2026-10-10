@@ -13432,10 +13432,10 @@ expression: doc
             }
           },
           {
-            "description": "Platform routing value, e.g. `oc1`. Required",
+            "description": "Platform routing value, e.g. `oc1`. Optional: left out, it is the player's own, from account-v1's active region",
             "in": "query",
             "name": "platform",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -14143,7 +14143,7 @@ expression: doc
     },
     "/v1/players/{puuid}/profile": {
       "get": {
-        "description": "Account, summoner, ranked entries and top mastery, fetched concurrently and each cached on its own. A part that fails is `null` and named in `warnings`; only every part failing is a 404. `refresh=true` re-reads every part upstream, at most once a minute per player.",
+        "description": "Account, summoner, ranked entries and top mastery, fetched concurrently and each cached on its own. A part that fails is `null` and named in `warnings`; only every part failing is a 404. `refresh=true` re-reads every part upstream, at most once a minute per player. Without `platform`, the proxy reads the player's platform from account-v1's active region (cached like an account) and echoes it as `platform`, so the player's other routes can be routed from the profile alone.",
         "operationId": "profile",
         "parameters": [
           {
@@ -14156,10 +14156,10 @@ expression: doc
             }
           },
           {
-            "description": "Platform routing value, e.g. `oc1`. Required",
+            "description": "Platform routing value, e.g. `oc1`. Optional: left out, it is the player's own, from account-v1's active region",
             "in": "query",
             "name": "platform",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -15272,6 +15272,217 @@ expression: doc
           }
         },
         "summary": "Account by Riot ID",
+        "tags": [
+          "riot"
+        ]
+      }
+    },
+    "/v1/riot/accounts/region/by-puuid/{puuid}": {
+      "get": {
+        "description": "account-v1's active region for `lol`: Riot's `AccountRegionDTO`, unmodified, whose `region` is the platform routing value the player plays on (`oc1`, `kr`). A Riot ID belongs to one platform, so this is how to route its summoner, league, mastery and match calls without asking. The cluster is picked as for the other account routes.",
+        "operationId": "account_region_by_puuid",
+        "parameters": [
+          {
+            "description": "Encrypted player UUID (60–128 characters, [A-Za-z0-9_-])",
+            "in": "path",
+            "name": "puuid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {}
+            },
+            "description": "Riot's payload, unmodified. `X-Cache` and `X-Cache-Age` describe where it came from.",
+            "headers": {
+              "X-Cache": {
+                "$ref": "#/components/headers/X-Cache"
+              },
+              "X-Cache-Age": {
+                "$ref": "#/components/headers/X-Cache-Age"
+              },
+              "X-Cache-Fetched-Age": {
+                "$ref": "#/components/headers/X-Cache-Fetched-Age"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region).",
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found upstream; a cached 404 carries `X-Cache: HIT-NEG`.",
+            "headers": {
+              "X-Cache": {
+                "$ref": "#/components/headers/X-Cache"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`).",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/Retry-After"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot failed or rejected the proxy's key (`UPSTREAM_ERROR`).",
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Riot's rate limit budget is exhausted (`RATE_LIMITED`, with `Retry-After`).",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/Retry-After"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          }
+        },
+        "summary": "A player's League of Legends platform, any cluster",
         "tags": [
           "riot"
         ]

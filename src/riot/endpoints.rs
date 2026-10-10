@@ -268,10 +268,24 @@ pub const ENDPOINTS: &[Endpoint] = &[
         false,
         NoNeg,
     ),
+    // v2 (SITE-09). account-v1's "Get active region (lol and tft)": the
+    // platform a player plays on, in `AccountRegionDTO.region` (`oc1`, `kr`).
+    // Served from the same clusters as the other account methods and cached
+    // like them: a player moves platform about as often as they rename.
+    ep(
+        "account.regionByPuuid",
+        Account,
+        "/riot/account/v1/region/by-game/{game}/by-puuid/{puuid}",
+        &[],
+        "account",
+        secs(86_400),
+        true,
+        NegAccount,
+    ),
 ];
 
 /// Method ids v2 added after v1's list, in registry order.
-pub const V2_ADDED: &[&str] = &["league.expEntries"];
+pub const V2_ADDED: &[&str] = &["league.expEntries", "account.regionByPuuid"];
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum PathError {
@@ -540,6 +554,7 @@ mod tests {
         let table: &[(&str, u64, u64)] = &[
             ("account.byRiotId", 86_400, 345_600),
             ("account.byPuuid", 86_400, 345_600),
+            ("account.regionByPuuid", 86_400, 345_600),
             ("summoner.byPuuid", 3600, 14_400),
             ("league.entriesByPuuid", 300, 1200),
             ("league.challenger", 120, 480),
@@ -604,6 +619,7 @@ mod tests {
             [
                 "account.byPuuid",
                 "account.byRiotId",
+                "account.regionByPuuid",
                 "match.byId",
                 "match.idsByPuuid",
                 "match.timeline"
@@ -628,6 +644,7 @@ mod tests {
             [
                 "account.byPuuid",
                 "account.byRiotId",
+                "account.regionByPuuid",
                 "league.challenger",
                 "league.entriesByTier",
                 "league.grandmaster",
@@ -645,6 +662,7 @@ mod tests {
         let neg = |id| p.ttls(ep(id)).negative.map(|d| d.as_secs());
         assert_eq!(neg("account.byRiotId"), Some(301));
         assert_eq!(neg("account.byPuuid"), Some(301));
+        assert_eq!(neg("account.regionByPuuid"), Some(301));
         assert_eq!(neg("spectator.activeGame"), Some(31));
         assert_eq!(neg("summoner.byPuuid"), Some(31));
         assert_eq!(neg("match.byId"), Some(31));

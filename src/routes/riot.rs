@@ -24,6 +24,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(account_by_puuid))
         .routes(routes!(account_by_riot_id_any))
         .routes(routes!(account_by_puuid_any))
+        .routes(routes!(account_region_by_puuid))
 }
 
 /// Malformed path segments (e.g. invalid UTF-8) in the envelope, not axum's text.
@@ -105,6 +106,36 @@ async fn account_by_puuid_any(
         Ok(r) => r,
         Err(e) => return e.into_response(),
     };
+    respond(state.fetcher.fetch(req, options(&consumer, &query)).await)
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/riot/accounts/region/by-puuid/{puuid}",
+    tag = "riot",
+    summary = "A player's League of Legends platform, any cluster",
+    description = "account-v1's active region for `lol`: Riot's `AccountRegionDTO`, unmodified, whose \
+                   `region` is the platform routing value the player plays on (`oc1`, `kr`). A Riot ID \
+                   belongs to one platform, so this is how to route its summoner, league, mastery and \
+                   match calls without asking. The cluster is picked as for the other account routes.",
+    params(("puuid" = String, Path, description = "Encrypted player UUID (60–128 characters, [A-Za-z0-9_-])")),
+    responses(PassthroughResponses),
+)]
+async fn account_region_by_puuid(
+    State(state): State<AppState>,
+    Extension(consumer): Extension<Arc<Consumer>>,
+    path: Result<Path<String>, PathRejection>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response {
+    let Path(puuid) = match path {
+        Ok(p) => p,
+        Err(e) => return bad_path(&e).into_response(),
+    };
+    let req =
+        match validate::puuid(&puuid).and_then(|()| any_cluster("account.regionByPuuid", &["lol", &puuid])) {
+            Ok(r) => r,
+            Err(e) => return e.into_response(),
+        };
     respond(state.fetcher.fetch(req, options(&consumer, &query)).await)
 }
 
