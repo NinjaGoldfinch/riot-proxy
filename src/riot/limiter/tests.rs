@@ -910,3 +910,96 @@ async fn a_waiting_interactive_caller_holds_bulk_off_its_scope() {
     assert!(l.bulk_blocked().scope_blocked(SCOPE));
     waiter.abort();
 }
+
+// ── idle bulk ceiling (THR-06a) ─────────────────────────────────────────────────
+
+const IDLE_CEILING: f64 = 0.95;
+const IDLE_AFTER: Duration = Duration::from_secs(30);
+
+/// A 100-token window too long to roll over inside a test, with both ceilings.
+fn idle_limiter() -> Limiter {
+    let l = Limiter::new(CEILING).with_idle_ceiling(IDLE_CEILING, IDLE_AFTER);
+    l.configure_app(SCOPE, &w("100:3600"));
+    l
+}
+
+async fn fill_bulk(l: &Limiter, n: usize) {
+    for _ in 0..n {
+        take_bulk(l).await.unwrap();
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn bulk_goes_up_to_the_idle_ceiling_while_nobody_uses_the_app() {
+    let l = idle_limiter();
+    fill_bulk(&l, 95).await;
+    assert!(take_bulk(&l).await.is_err(), "95 of 100 is the idle ceiling");
+    assert!(take(&l, "m").await.is_ok(), "interactive still gets the rest");
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_interactive_request_at_94_percent_is_admitted_and_holds_bulk_back() {
+    let l = idle_limiter();
+    fill_bulk(&l, 94).await;
+    assert!(take(&l, "m").await.is_ok(), "admitted at once");
+    assert!(
+        take_bulk(&l).await.is_err(),
+        "bulk is back under the 0.80 ceiling, and 95 is over it"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn bulk_returns_to_the_idle_ceiling_after_the_last_interactive_request() {
+    let l = idle_limiter();
+    fill_bulk(&l, 80).await;
+    take(&l, "m").await.unwrap();
+    let last = Instant::now();
+    advance(Duration::from_secs(20)).await;
+    // A second interactive request restarts the clock.
+    take(&l, "m").await.unwrap();
+    let last_interactive = last + Duration::from_secs(20);
+
+    let held = take_bulk(&l).await.unwrap_err();
+    assert_eq!(held.retry_at, last_interactive + IDLE_AFTER, "retry when idle");
+    assert!(l.bulk_blocked().scope_blocked(SCOPE));
+    assert_eq!(
+        l.bulk_blocked().scopes,
+        vec![(SCOPE.to_string(), last_interactive + IDLE_AFTER)]
+    );
+
+    advance(Duration::from_secs(29)).await;
+    assert!(take_bulk(&l).await.is_err(), "29 s after the last one");
+    advance(Duration::from_secs(1)).await;
+    assert!(take_bulk(&l).await.is_ok(), "30 s after: idle again");
+    assert!(l.bulk_blocked().scopes.is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_waiting_bulk_caller_wakes_when_the_scope_goes_idle() {
+    let l = idle_limiter();
+    fill_bulk(&l, 85).await;
+    take(&l, "m").await.unwrap();
+    let t0 = Instant::now();
+    let permit = l
+        .acquire(SCOPE, "m", Priority::Bulk, Duration::from_secs(60))
+        .await
+        .unwrap();
+    assert_eq!(permit.waited, IDLE_AFTER);
+    assert_eq!(Instant::now(), t0 + IDLE_AFTER);
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_idle_ceiling_is_per_scope() {
+    let l = idle_limiter();
+    l.configure_app("other", &w("100:3600"));
+    fill_bulk(&l, 85).await;
+    l.acquire("other", "m", Priority::Interactive, NOW).await.unwrap();
+    assert!(take_bulk(&l).await.is_ok(), "an interactive request elsewhere");
+}
+
+#[tokio::test(start_paused = true)]
+async fn without_an_idle_ceiling_bulk_keeps_to_the_usage_ceiling() {
+    let l = limiter_with_app("100:3600");
+    fill_bulk(&l, 80).await;
+    assert!(take_bulk(&l).await.is_err());
+}

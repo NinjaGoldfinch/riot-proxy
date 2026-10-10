@@ -1,6 +1,8 @@
 //! Property test (plan P2-07): under any interleaving of acquires (both
 //! priorities), clock advances, Riot count syncs and freezes, the limiter never
 //! over-commits a window. Checked against an independent log of what it admitted.
+//! Run with and without the idle bulk ceiling (THR-06a), which also checks bulk
+//! never takes a token past whichever ceiling applied.
 
 use std::time::Duration;
 
@@ -8,7 +10,7 @@ use ::proptest::prelude::*;
 use tokio::time::Instant;
 
 use super::headers::{CountWindow, LimitWindow, RateLimitHeaders, RateLimitType};
-use super::{Limiter, Priority};
+use super::{Limiter, Priority, max_under_ceiling};
 
 const SCOPE: &str = "prop";
 const METHODS: [&str; 2] = ["a", "b"];
@@ -47,13 +49,21 @@ fn worst_burst(stamps: &[Instant], span: Duration) -> usize {
         .unwrap_or(0)
 }
 
-fn run(ops: Vec<Op>) -> Result<(), TestCaseError> {
+const BUSY: f64 = 0.8;
+const IDLE: f64 = 0.95;
+const IDLE_AFTER: Duration = Duration::from_secs(2);
+
+fn run(ops: Vec<Op>, idle: bool) -> Result<(), TestCaseError> {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .start_paused(true)
         .build()?;
     rt.block_on(async move {
-        let l = Limiter::new(0.8);
+        let mut l = Limiter::new(BUSY);
+        if idle {
+            l = l.with_idle_ceiling(IDLE, IDLE_AFTER);
+        }
+        let mut last_interactive: Option<Instant> = None;
         l.configure_app(SCOPE, &APP);
         l.configure_method(SCOPE, METHODS[0], &METHOD_A);
 
@@ -70,10 +80,24 @@ fn run(ops: Vec<Op>) -> Result<(), TestCaseError> {
                     } else {
                         Priority::Interactive
                     };
+                    if !bulk {
+                        last_interactive = Some(now);
+                    }
+                    let before = l.usage(SCOPE);
                     if l.acquire(SCOPE, METHODS[method], prio, Duration::ZERO)
                         .await
                         .is_ok()
                     {
+                        if bulk {
+                            let quiet = last_interactive.is_none_or(|at| now >= at + IDLE_AFTER);
+                            let share = if idle && quiet { IDLE } else { BUSY };
+                            for u in &before {
+                                prop_assert!(
+                                    u.used <= max_under_ceiling(u.limit, share),
+                                    "bulk admitted at {u:?} under {share}"
+                                );
+                            }
+                        }
                         prop_assert!(frozen_until.is_none_or(|t| now >= t), "admitted while frozen");
                         all.push(now);
                         if method == 0 {
@@ -139,6 +163,11 @@ proptest! {
 
     #[test]
     fn never_over_commits_a_window(ops in proptest::collection::vec(op(), 1..200)) {
-        run(ops)?;
+        run(ops, false)?;
+    }
+
+    #[test]
+    fn never_over_commits_a_window_with_an_idle_ceiling(ops in proptest::collection::vec(op(), 1..200)) {
+        run(ops, true)?;
     }
 }

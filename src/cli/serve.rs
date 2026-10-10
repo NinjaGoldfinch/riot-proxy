@@ -67,7 +67,10 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
     }
 
     // Restore the limiter before accepting traffic (design/03 §Process model).
-    let limiter = Arc::new(Limiter::new(config.bulk_usage_ceiling));
+    let limiter = Arc::new(Limiter::new(config.bulk_usage_ceiling).with_idle_ceiling(
+        config.bulk_idle_ceiling,
+        Duration::from_secs(config.bulk_idle_after_s.into()),
+    ));
     let restored = Arc::new(AtomicBool::new(false));
     match persist::restore_from(&limiter, &db).await {
         Ok(rows) => tracing::info!(rows, "limiter checkpoint restored"),

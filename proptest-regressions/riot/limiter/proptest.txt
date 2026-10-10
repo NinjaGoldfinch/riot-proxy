@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 5e7d3326a7c1069ff4bafe9e837b87c8f80e51c48d02da86f12d95ec487396fe # shrinks to ops = [Acquire { method: 0, bulk: false }, Acquire { method: 0, bulk: false }, Acquire { method: 0, bulk: false }, Acquire { method: 0, bulk: false }]
+cc 35d45937d39b09bfa2190e56795d205463d7f06dc896a76966440563f3ea8f9b # shrinks to ops = [Sync { app_short: 0, app_long: 10 }, Freeze { ms: 654 }, Acquire { method: 0, bulk: false }, Acquire { method: 0, bulk: false }, Acquire { method: 0, bulk: false }, Advance { ms: 654 }, Acquire { method: 0, bulk: true }]

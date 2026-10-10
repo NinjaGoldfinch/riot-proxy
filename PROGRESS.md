@@ -242,7 +242,7 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 
 ## THR — crawl and analytics throughput (owner plan 2026-10-09)
 Baseline before THR-06a (one kr crawl to MASTER on the dev VM): not yet recorded. Since DEV-23 a crawl fetches timelines by default (ADR-098); record which setting the baseline used.
-- [ ] THR-06a idle bulk ceiling: `BULK_IDLE_CEILING` replaces `BULK_USAGE_CEILING` for a scope with no interactive request in `BULK_IDLE_AFTER_S` (IMPLEMENTATION.md §Post-release — THR)
+- [x] THR-06a idle bulk ceiling: `BULK_IDLE_CEILING` replaces `BULK_USAGE_CEILING` for a scope with no interactive request in `BULK_IDLE_AFTER_S` (IMPLEMENTATION.md §Post-release — THR)
 - [ ] THR-01 batch fetching: `archive:batch` fetches a crawl's ids `ARCHIVE_BATCH_CONCURRENCY` at a time, so the limiter paces them, not the worker count (IMPLEMENTATION.md §Post-release — THR)
 - [ ] THR-02 stored tiers: `match_tiers` stamped when a ranked match is archived, `tiers:backfill`, analytics join it in place of `ladder_entries` (IMPLEMENTATION.md §Post-release — THR)
 - [ ] THR-03 incremental analytics: `aggregate:delta` adds uncounted matches in short transactions; the rebuild stays as a repair tool (IMPLEMENTATION.md §Post-release — THR)
