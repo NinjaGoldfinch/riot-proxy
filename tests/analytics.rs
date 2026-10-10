@@ -217,8 +217,8 @@ async fn before_any_recompute_the_routes_answer_empty_documents() {
     assert_eq!(r.status, StatusCode::OK);
     assert_eq!(
         r.json(),
-        json!({"platform": null, "queue": "RANKED_SOLO_5x5", "tier": null, "patch": null, "role": null,
-               "computedAt": null, "totalGames": 0, "champions": []})
+        json!({"platform": null, "queue": "RANKED_SOLO_5x5", "tier": null, "side": null, "patch": null,
+               "role": null, "computedAt": null, "totalGames": 0, "champions": []})
     );
     let d = e.get("/v1/lol/analytics/champions/134").await.json();
     assert_eq!(
@@ -781,7 +781,7 @@ async fn patch_all_sums_every_patch_and_the_patch_list_offers_them() {
     let body = redact(r.json());
     assert_eq!(
         body,
-        json!({"platform": "kr", "queue": "RANKED_SOLO_5x5", "championId": null, "patches": [
+        json!({"platform": "kr", "queue": "RANKED_SOLO_5x5", "championId": null, "side": null, "patches": [
             {"patch": "16.19", "games": 10, "computedAt": "<iso>"},
             {"patch": "16.18", "games": 10, "computedAt": "<iso>"}]})
     );
@@ -807,7 +807,7 @@ async fn patch_all_sums_every_patch_and_the_patch_list_offers_them() {
     );
     assert_eq!(
         redact(r.json()),
-        json!({"platform": "kr", "queue": "RANKED_SOLO_5x5", "championId": id, "patches": [
+        json!({"platform": "kr", "queue": "RANKED_SOLO_5x5", "championId": id, "side": null, "patches": [
             {"patch": "16.19", "games": 1, "computedAt": "<iso>"},
             {"patch": "16.18", "games": 1, "computedAt": "<iso>"}]})
     );
@@ -1056,8 +1056,8 @@ async fn the_builds_route_reads_set_builds_in_the_most_played_role() {
     // Before any recompute: 200, no patch, no role, no builds.
     assert_eq!(
         e.get("/v1/lol/analytics/champions/134/builds").await.json(),
-        json!({"championId": 134, "platform": null, "queue": "RANKED_SOLO_5x5", "patch": null, "role": null,
-               "computedAt": null, "totalGames": 0, "builds": []})
+        json!({"championId": 134, "platform": null, "queue": "RANKED_SOLO_5x5", "tier": null, "side": null,
+               "patch": null, "role": null, "computedAt": null, "totalGames": 0, "builds": []})
     );
     e.seed().await;
     e.seed_builds().await;
@@ -1371,4 +1371,131 @@ async fn rows_v0017_could_not_split_are_rebuilt_over_every_patch_once() {
         .unwrap();
     assert_eq!(stamp(e.state.db.clone()).await, older);
     assert_eq!(read().await, before);
+}
+
+/// FLT-02 (ADR-130): `tier` and `side` slice every analytics route. The
+/// ranked game's players alternate between Master and Grandmaster, so its
+/// rows split by tier and, independently, by side. Every route's tier
+/// slices, and its sides, add up to its total; a route's own tier and side
+/// are named in the body and the `ETag`; any other side is the routes' usual
+/// 400.
+#[tokio::test]
+async fn tier_and_side_slice_every_route_and_add_up_to_the_total() {
+    let e = env().await;
+    let players: Vec<String> = serde_json::from_slice::<Value>(RANKED).unwrap()["metadata"]["participants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p.as_str().unwrap().to_string())
+        .collect();
+    let master: Vec<String> = players.iter().step_by(2).cloned().collect();
+    e.seed_with(move |p| {
+        if master.iter().any(|m| m == p) {
+            "MASTER"
+        } else {
+            "GRANDMASTER"
+        }
+    })
+    .await;
+    e.seed_builds().await;
+    e.aggregate().await;
+
+    let sum = |v: &Value, key: &str| -> i64 {
+        v[key]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x["games"].as_i64().unwrap())
+            .sum()
+    };
+    // Each route's games in one slice: (champions, detail stats, detail
+    // matchups, detail items, matchups, builds, patches).
+    let games = |filter: &'static str| {
+        let e = &e;
+        async move {
+            let list = e
+                .get(&format!("/v1/lol/analytics/champions?patch=all{filter}"))
+                .await
+                .json();
+            let detail = e
+                .get(&format!("/v1/lol/analytics/champions/134?patch=all{filter}"))
+                .await
+                .json();
+            let matchups = e
+                .get(&format!(
+                    "/v1/lol/analytics/champions/134/matchups?patch=all{filter}"
+                ))
+                .await
+                .json();
+            let builds = e
+                .get(&format!(
+                    "/v1/lol/analytics/champions/134/builds?patch=all&role=MIDDLE{filter}"
+                ))
+                .await
+                .json();
+            let side = if filter.contains("side") { filter } else { "" };
+            let patches = e
+                .get(&format!("/v1/lol/analytics/patches?championId=134{side}"))
+                .await
+                .json();
+            // Every body names the slice it is.
+            for body in [&list, &detail, &matchups, &builds] {
+                let named = |key: &str, v: &Value| {
+                    filter
+                        .split('&')
+                        .find_map(|kv| kv.strip_prefix(&format!("{key}=")))
+                        .map_or(Value::Null, |x| json!(x))
+                        == *v
+                };
+                assert!(
+                    named("tier", &body["tier"]) && named("side", &body["side"]),
+                    "{filter}: {body}"
+                );
+            }
+            [
+                list["totalGames"].as_i64().unwrap(),
+                detail["stats"].get(0).map_or(0, |s| s["games"].as_i64().unwrap()),
+                sum(&detail, "matchups"),
+                sum(&detail, "items"),
+                sum(&matchups, "matchups"),
+                builds["totalGames"].as_i64().unwrap(),
+                sum(&patches, "patches"),
+            ]
+        }
+    };
+    let all = games("").await;
+    assert!(all.iter().all(|n| *n > 0), "{all:?}");
+    let add = |a: [i64; 7], b: [i64; 7]| std::array::from_fn::<i64, 7, _>(|i| a[i] + b[i]);
+    let (m, gm) = (games("&tier=MASTER").await, games("&tier=GRANDMASTER").await);
+    // The patch list takes no tier: each tier's call reads every tier.
+    assert_eq!(&add(m, gm)[..6], &all[..6], "tiers: {m:?} + {gm:?}");
+    assert_ne!(m, gm, "the tiers differ");
+    let (blue, red) = (games("&side=blue").await, games("&side=red").await);
+    assert_eq!(add(blue, red), all, "sides: {blue:?} + {red:?}");
+    assert_ne!(blue, red, "the sides differ");
+
+    // A side is part of every ETag.
+    for uri in [
+        "/v1/lol/analytics/champions",
+        "/v1/lol/analytics/champions/134",
+        "/v1/lol/analytics/champions/134/matchups",
+        "/v1/lol/analytics/champions/134/builds",
+        "/v1/lol/analytics/patches",
+    ] {
+        let both = e.get(uri).await;
+        let sep = if uri.contains('?') { '&' } else { '?' };
+        let one = e.get(&format!("{uri}{sep}side=blue")).await;
+        assert_ne!(both.headers["etag"], one.headers["etag"], "{uri}");
+        let bad = e.get(&format!("{uri}{sep}side=green")).await;
+        assert_eq!(
+            error(&bad),
+            (
+                StatusCode::BAD_REQUEST,
+                "querystring/side must be equal to one of the allowed values".to_string()
+            ),
+            "{uri}"
+        );
+        // The routes' usual 400, as a bad `tier` or `remakes` gets.
+        assert_eq!(bad.json()["error"]["code"], "VALIDATION", "{uri}");
+    }
 }

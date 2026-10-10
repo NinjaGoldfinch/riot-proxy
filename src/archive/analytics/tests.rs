@@ -490,6 +490,7 @@ async fn reads_leave_remakes_out_unless_asked_and_sum_roles() {
         queue: "RANKED_SOLO_5x5".into(),
         patch: Some("14.18".into()),
         tier: None,
+        side: None,
         role: None,
         champion_id: None,
         min_games: 0,
@@ -541,6 +542,7 @@ async fn reads_leave_remakes_out_unless_asked_and_sum_roles() {
     // minGames and tier: a named tier gives its rows, from either read.
     let r = Read {
         tier: Some("MASTER".into()),
+        side: None,
         min_games: 2,
         ..read(false)
     };
@@ -650,6 +652,7 @@ async fn every_patch_sums_and_the_patch_list_is_newest_first() {
         queue: "RANKED_SOLO_5x5".into(),
         patch: patch.map(str::to_string),
         tier: None,
+        side: None,
         role: None,
         champion_id: Some(1),
         min_games: 0,
@@ -681,7 +684,7 @@ async fn every_patch_sums_and_the_patch_list_is_newest_first() {
     let list = |remakes| {
         let db = db.clone();
         async move {
-            patches(&db, "s", Some("kr"), "RANKED_SOLO_5x5", None, remakes)
+            patches(&db, "s", Some("kr"), "RANKED_SOLO_5x5", None, None, remakes)
                 .await
                 .unwrap()
                 .into_iter()
@@ -694,7 +697,7 @@ async fn every_patch_sums_and_the_patch_list_is_newest_first() {
     // M3, the remake, adds A and C.
     assert_eq!(list(true).await, [("14.18".into(), 7), ("14.9".into(), 1)]);
     assert!(
-        patches(&db, "s", Some("euw1"), "RANKED_SOLO_5x5", None, false)
+        patches(&db, "s", Some("euw1"), "RANKED_SOLO_5x5", None, None, false)
             .await
             .unwrap()
             .is_empty()
@@ -715,7 +718,7 @@ async fn a_champions_patch_list_has_only_its_games() {
     let list = |champion| {
         let db = db.clone();
         async move {
-            patches(&db, "s", Some("kr"), "RANKED_SOLO_5x5", champion, false)
+            patches(&db, "s", Some("kr"), "RANKED_SOLO_5x5", champion, None, false)
                 .await
                 .unwrap()
                 .into_iter()
@@ -772,6 +775,20 @@ async fn a_lane_two_players_of_a_team_share_has_no_matchup() {
     );
 }
 
+/// KR_6 (14.18 solo, FLT-01): B (MASTER) on champion 1 for red against C
+/// (DIAMOND) on champion 2 for blue, with a set build for B.
+const BOTH_SIDES: &str = r#"INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size,
+               archived_at, game_duration, remake, facts_version)
+               VALUES ('KR_6', 'asia', '14.18', 420, 1, x'00', 1, 1, 1500, 0, 3);
+             INSERT INTO match_facts (match_id, key_scope, puuid, team_id, position, champion_id, win,
+               kills, deaths, assists, cs, gold, damage, vision, items, runes, summoners, facts_version)
+               VALUES ('KR_6', 's', 'B', 200, 'MIDDLE', 1, 1, 2, 2, 2, 100, 5000, 10000, 10,
+                         '[3157,3020,0,0,0,0]', '{"keystone":8112,"subStyle":8300}', '[4,14]', 3),
+                      ('KR_6', 's', 'C', 100, 'MIDDLE', 2, 0, 1, 1, 1, 100, 5000, 10000, 10,
+                         '[3157,0,0,0,0,0]', '{"keystone":8010,"subStyle":8400}', '[14,4]', 3);
+             INSERT INTO match_builds (match_id, key_scope, puuid, starter, boots, items, skills, skill_order,
+               builds_version) VALUES ('KR_6', 's', 'B', '[1056]', 3020, '[6655,3157]', 'QWE', 'QWE', 1);"#;
+
 /// FLT-01 (ADR-129): every per-participant row is its own player's tier and
 /// side. KR_6 (14.18 solo) puts B (MASTER) on champion 1 for red against C
 /// (DIAMOND) on champion 2 for blue, so champion 1 has a red row beside A's
@@ -782,19 +799,7 @@ async fn rows_are_split_by_their_own_players_tier_and_side() {
     let (_d, db) = db();
     db.write(|c| {
         seed(c);
-        c.execute_batch(
-            r#"INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size,
-               archived_at, game_duration, remake, facts_version)
-               VALUES ('KR_6', 'asia', '14.18', 420, 1, x'00', 1, 1, 1500, 0, 3);
-             INSERT INTO match_facts (match_id, key_scope, puuid, team_id, position, champion_id, win,
-               kills, deaths, assists, cs, gold, damage, vision, items, runes, summoners, facts_version)
-               VALUES ('KR_6', 's', 'B', 200, 'MIDDLE', 1, 1, 2, 2, 2, 100, 5000, 10000, 10,
-                         '[3157,3020,0,0,0,0]', '{"keystone":8112,"subStyle":8300}', '[4,14]', 3),
-                      ('KR_6', 's', 'C', 100, 'MIDDLE', 2, 0, 1, 1, 1, 100, 5000, 10000, 10,
-                         '[3157,0,0,0,0,0]', '{"keystone":8010,"subStyle":8400}', '[14,4]', 3);
-             INSERT INTO match_builds (match_id, key_scope, puuid, starter, boots, items, skills, skill_order,
-               builds_version) VALUES ('KR_6', 's', 'B', '[1056]', 3020, '[6655,3157]', 'QWE', 'QWE', 1);"#,
-        )?;
+        c.execute_batch(BOTH_SIDES)?;
         Ok::<_, DbError>(())
     })
     .await
@@ -925,6 +930,141 @@ async fn rows_are_split_by_their_own_players_tier_and_side() {
     );
 }
 
+/// FLT-02 (ADR-130): every per-participant read takes a tier and a side,
+/// and sums over whichever it isn't given; the per-match reads ignore the
+/// side. Over the fixture plus [`BOTH_SIDES`], 14.18, remakes left out.
+#[tokio::test]
+async fn reads_filter_by_tier_and_side() {
+    let (_d, db) = db();
+    db.write(|c| {
+        seed(c);
+        c.execute_batch(BOTH_SIDES)?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    rebuild(&db, 1).await;
+    let read = |champion: i64, tier: Option<&str>, side: Option<Side>| Read {
+        key_scope: "s".into(),
+        platform: Some("kr".into()),
+        queue: "RANKED_SOLO_5x5".into(),
+        patch: Some("14.18".into()),
+        tier: tier.map(str::to_string),
+        side,
+        role: None,
+        champion_id: Some(champion),
+        min_games: 0,
+        limit: 50,
+        remakes: false,
+    };
+    let matchups = |r: Read| {
+        let db = db.clone();
+        async move {
+            facet(&db, Facet::Matchups, r)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|m| (m.ids[0], m.games, m.wins))
+                .collect::<Vec<_>>()
+        }
+    };
+    // Champion 1 against 2: A's KR_1 win and KR_2 loss for blue, B's KR_6 win for red.
+    assert_eq!(matchups(read(1, None, None)).await, [(2, 3, 2)]);
+    assert_eq!(matchups(read(1, None, Some(Side::Blue))).await, [(2, 2, 1)]);
+    assert_eq!(matchups(read(1, None, Some(Side::Red))).await, [(2, 1, 1)]);
+    assert_eq!(matchups(read(1, Some("DIAMOND"), None)).await, []);
+    // Champion 2 against 1: C (DIAMOND) lost KR_1 for red and KR_6 for blue;
+    // B (MASTER) won KR_2. The tier is the champion's player's.
+    assert_eq!(matchups(read(2, Some("DIAMOND"), None)).await, [(1, 2, 0)]);
+    assert_eq!(
+        matchups(read(2, Some("DIAMOND"), Some(Side::Blue))).await,
+        [(1, 1, 0)]
+    );
+    assert_eq!(matchups(read(2, Some("MASTER"), None)).await, [(1, 1, 1)]);
+
+    let items = facet(&db, Facet::Items, read(1, Some("MASTER"), Some(Side::Red)))
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|m| (m.ids[0], m.games, m.wins))
+        .collect::<Vec<_>>();
+    assert_eq!(items, [(3020, 1, 1), (3157, 1, 1)]);
+
+    // B's KR_6 build is champion 1's only red one; A's two are blue.
+    let middle = |r: Read| Read {
+        role: Some("MIDDLE".into()),
+        ..r
+    };
+    let red = builds(&db, middle(read(1, Some("MASTER"), Some(Side::Red))))
+        .await
+        .unwrap();
+    assert_eq!(
+        red.iter().map(|b| (b.core, b.games, b.wins)).collect::<Vec<_>>(),
+        [([6655, 3157], 1, 1)]
+    );
+    assert_eq!(
+        build_totals(&db, middle(read(1, None, Some(Side::Blue))))
+            .await
+            .unwrap()
+            .0,
+        2
+    );
+    assert_eq!(
+        build_totals(&db, middle(read(1, Some("DIAMOND"), None)))
+            .await
+            .unwrap()
+            .0,
+        0
+    );
+    let parts = build_parts(&db, middle(read(1, None, Some(Side::Red))), vec![[6655, 3157]])
+        .await
+        .unwrap();
+    assert!(
+        parts.iter().all(|p| p.games == 1) && parts.iter().any(|p| p.part == "boots" && p.value == "3020"),
+        "{parts:?}"
+    );
+
+    // Stats: champion 1's red row is B's KR_6 win; the side doesn't touch
+    // the per-match denominators.
+    let s = stats(&db, read(1, None, Some(Side::Red))).await.unwrap();
+    assert_eq!(
+        (s.len(), s[0].games, s[0].wins, s[0].matches_picked),
+        (1, 1, 1, 1)
+    );
+    assert_eq!(
+        slices(&db, read(1, Some("MASTER"), Some(Side::Red)))
+            .await
+            .unwrap(),
+        slices(&db, read(1, Some("MASTER"), None)).await.unwrap()
+    );
+    assert_eq!(
+        top_role(&db, read(2, Some("MASTER"), Some(Side::Red)))
+            .await
+            .unwrap(),
+        Some("MIDDLE".into())
+    );
+    assert_eq!(
+        top_role(&db, read(2, Some("MASTER"), Some(Side::Blue)))
+            .await
+            .unwrap(),
+        None
+    );
+    let games = |side| {
+        let db = db.clone();
+        async move {
+            patches(&db, "s", Some("kr"), "RANKED_SOLO_5x5", Some(1), side, false)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|p| (p.patch, p.games))
+                .collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(games(Some(Side::Red)).await, [("14.18".to_string(), 1)]);
+    assert_eq!(games(Some(Side::Blue)).await, [("14.18".to_string(), 2)]);
+    assert_eq!(games(None).await, [("14.18".to_string(), 3)]);
+}
+
 /// The database has no `ANALYZE` statistics, so the plan is SQLite's guess and
 /// the same for any table size (ADR-101). It must reach a lane's opponent by
 /// the match: before, it walked every ladder player for each fact, which took
@@ -1047,6 +1187,7 @@ async fn summed_reads_count_each_match_once() {
         queue: "RANKED_SOLO_5x5".into(),
         patch: patch.map(str::to_string),
         tier: None,
+        side: None,
         role: None,
         champion_id: None,
         min_games: 0,
@@ -1237,6 +1378,7 @@ async fn build_reads_sum_patches_and_roles_and_leave_remakes_out() {
         queue: "RANKED_SOLO_5x5".into(),
         patch: patch.map(str::to_string),
         tier: None,
+        side: None,
         role: role.map(str::to_string),
         champion_id: Some(1),
         min_games: 0,

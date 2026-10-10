@@ -23,7 +23,9 @@ use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
 use crate::app::AppState;
-use crate::archive::analytics::{self, BuildPartRow, BuildRow, Facet, FacetRow, PatchRow, Read, StatRow};
+use crate::archive::analytics::{
+    self, BuildPartRow, BuildRow, Facet, FacetRow, PatchRow, Read, Side, StatRow,
+};
 use crate::clock::iso_ms;
 use crate::db::DbError;
 use crate::http::{ApiError, validate};
@@ -102,6 +104,9 @@ pub struct ChampionStatsResponse {
     queue: String,
     #[schema(required = true)]
     tier: Option<String>,
+    /// `blue` or `red` when the request named one; `null`: both sides summed.
+    #[schema(required = true)]
+    side: Option<String>,
     #[schema(required = true)]
     patch: Option<String>,
     #[schema(required = true)]
@@ -138,6 +143,12 @@ pub struct ChampionMatchupsResponse {
     #[schema(required = true)]
     platform: Option<String>,
     queue: String,
+    /// The tier asked for (the champion's player's, FLT-02); `null`: every tier summed.
+    #[schema(required = true)]
+    tier: Option<String>,
+    /// `blue` or `red` when the request named one; `null`: both sides summed.
+    #[schema(required = true)]
+    side: Option<String>,
     #[schema(required = true)]
     patch: Option<String>,
     #[schema(required = true)]
@@ -207,6 +218,9 @@ pub struct ChampionDetailResponse {
     queue: String,
     #[schema(required = true)]
     tier: Option<String>,
+    /// `blue` or `red` when the request named one; `null`: both sides summed.
+    #[schema(required = true)]
+    side: Option<String>,
     #[schema(required = true)]
     patch: Option<String>,
     #[schema(required = true)]
@@ -315,6 +329,12 @@ pub struct ChampionBuildsResponse {
     #[schema(required = true)]
     platform: Option<String>,
     queue: String,
+    /// The tier asked for (the builder's, FLT-02); `null`: every tier summed.
+    #[schema(required = true)]
+    tier: Option<String>,
+    /// `blue` or `red` when the request named one; `null`: both sides summed.
+    #[schema(required = true)]
+    side: Option<String>,
     #[schema(required = true)]
     patch: Option<String>,
     /// The role asked for, else the champion's most-played role in the slice;
@@ -353,6 +373,9 @@ pub struct AnalyticsPatchesResponse {
     /// The champion asked for, whose games each entry then counts; `null` for every champion.
     #[schema(required = true)]
     champion_id: Option<i64>,
+    /// `blue` or `red` when the request named one, whose games each entry then counts; `null`: both.
+    #[schema(required = true)]
+    side: Option<String>,
     /// Newest first.
     patches: Vec<AnalyticsPatchEntry>,
 }
@@ -363,8 +386,10 @@ const ALL_PATCHES: &str = "all";
 /// In the champion routes' `ETag`: the documents' shape. Without a `tier`
 /// they changed from a row per tier to one summed row (SITE-08, ADR-123) for
 /// the same query and the same rows, so a validator issued before must not
-/// get a 304 now. Change it whenever that happens again.
-const STATS_SHAPE: &str = "summed-tiers";
+/// get a 304 now. Change it whenever that happens again: FLT-02 made the
+/// matchups, builds and detail sections honour `tier`, which they ignored,
+/// and added `side` to every body.
+const STATS_SHAPE: &str = "tier-side";
 
 /// What every analytics query names, validated in v1's property order.
 struct Common {
@@ -372,6 +397,8 @@ struct Common {
     platform: Option<String>,
     queue: String,
     tier: Option<String>,
+    /// `None`: both sides summed (FLT-02).
+    side: Option<Side>,
     /// A `major.minor`, or [`ALL_PATCHES`].
     patch: Option<String>,
     role: Option<String>,
@@ -385,12 +412,11 @@ fn q<'a>(query: &'a HashMap<String, String>, name: &str) -> Option<&'a str> {
     query.get(name).map(String::as_str)
 }
 
-/// `tier` is `None` for the matchups route, which has none; `roles` and the
-/// limit bounds differ by route (v1's three query schemas).
+/// `roles` and the limit bounds differ by route (v1's three query schemas).
+/// Every route takes `tier` and `side` (FLT-02).
 fn common(
     state: &AppState,
     query: &HashMap<String, String>,
-    tier: bool,
     roles: &[&'static str],
     limit: (i64, i64, i64),
 ) -> Result<Common, ApiError> {
@@ -398,11 +424,7 @@ fn common(
     let tiers: Vec<&'static str> = crate::riot::ladder::tiers()
         .chain([analytics::UNKNOWN_TIER])
         .collect();
-    let tier = if tier {
-        validate::query_one_of("tier", q(query, "tier"), &tiers)?
-    } else {
-        None
-    };
+    let tier = validate::query_one_of("tier", q(query, "tier"), &tiers)?;
     // `all` sums every patch (ADR-094); anything else is a `major.minor`.
     let patch = match q(query, "patch") {
         Some(ALL_PATCHES) => Some(ALL_PATCHES),
@@ -413,16 +435,23 @@ fn common(
     let (min, max, default) = limit;
     let limit = validate::int_query("limit", q(query, "limit"), min, max)?.unwrap_or(default);
     let remakes = validate::remakes_query(q(query, "remakes"))?;
+    let side = side_query(query)?;
     Ok(Common {
         platform: ladder.platform,
         queue: ladder.queue,
         tier: tier.map(str::to_string),
+        side,
         patch: patch.map(str::to_string),
         role: role.map(str::to_string),
         min_games,
         limit,
         remakes,
     })
+}
+
+/// `side`: `blue` or `red` (FLT-02); anything else is a 400.
+fn side_query(query: &HashMap<String, String>) -> Result<Option<Side>, ApiError> {
+    Ok(validate::query_one_of("side", q(query, "side"), &Side::ALL)?.and_then(Side::parse))
 }
 
 /// The ladder a query names: platform (`None`: every platform) and queue
@@ -632,12 +661,17 @@ impl Common {
             queue: self.queue.clone(),
             patch: (patch != ALL_PATCHES).then(|| patch.to_string()),
             tier: self.tier.clone(),
+            side: self.side,
             role: self.role.clone(),
             champion_id: None,
             min_games: 0,
             limit: self.limit,
             remakes: self.remakes,
         }
+    }
+
+    fn side_part(&self) -> Option<String> {
+        self.side.map(|s| s.as_str().to_string())
     }
 
     fn remakes_part(&self) -> Option<String> {
@@ -660,6 +694,7 @@ impl Common {
         ("platform" = Option<String>, Query, description = "Only this platform's ladder. Omitted sums every platform"),
         ("queue" = Option<String>, Query, description = "RANKED_SOLO_5x5 or RANKED_FLEX_SR; default the first of `LADDER_QUEUES`"),
         ("tier" = Option<String>, Query, description = "IRON … CHALLENGER, or UNKNOWN: that tier's rows. Omitted: one row per champion summed over every tier, pick and ban rates over every match in the slice"),
+        ("side" = Option<String>, Query, description = "`blue` or `red`: only the champion's games on that side, its pick rate over every match in the slice. Omitted: both sides summed"),
         ("patch" = Option<String>, Query, description = "`major.minor`, or `all` to sum every aggregated patch; default the newest aggregated patch"),
         ("role" = Option<String>, Query, description = "TOP, JUNGLE, MIDDLE, BOTTOM, UTILITY or empty; default every role summed"),
         ("minGames" = Option<i64>, Query, description = "≥ 0; default 0, every row"),
@@ -675,7 +710,7 @@ async fn champions(
     headers: HeaderMap,
     Query(query): Q,
 ) -> Response {
-    let c = match common(&state, &query, true, &TEAM_POSITIONS, (1, 500, 200)) {
+    let c = match common(&state, &query, &TEAM_POSITIONS, (1, 500, 200)) {
         Ok(c) => c,
         Err(e) => return e.into_response(),
     };
@@ -712,6 +747,7 @@ async fn champions(
         c.platform.clone(),
         some(&c.queue),
         c.tier.clone(),
+        c.side_part(),
         patch.clone(),
         c.role.clone(),
         some(min_games),
@@ -722,6 +758,7 @@ async fn champions(
         &headers,
         &tag,
         &ChampionStatsResponse {
+            side: c.side_part(),
             platform: c.platform,
             queue: c.queue,
             tier: c.tier,
@@ -738,14 +775,16 @@ async fn champions(
     get, path = "/v1/lol/analytics/champions/{championId}/matchups", tag = "lol",
     summary = "A champion's lane matchups",
     description = "Sends an `ETag`; a matching `If-None-Match` gets 304. Every lane matchup this champion has archived \
-        data for. No tier dimension: sample sizes die fast enough per (champion, opponent, role) alone, and the two \
-        laners can sit in different tiers anyway. Mirror lanes are excluded — their win rate is 50% by construction. \
+        data for, at the tier and side of this champion's player (`tier`, `side`); the opponent may have been in \
+        another tier. Mirror lanes are excluded — their win rate is 50% by construction. \
         Every archived lane is recorded from both sides, so the opposite champion's view of the same lane mirrors \
         this one.",
     params(
         ("championId" = i64, Path, description = "Champion id, ≥ 1"),
         ("platform" = Option<String>, Query, description = "Only this platform's ladder. Omitted sums every platform"),
         ("queue" = Option<String>, Query, description = "RANKED_SOLO_5x5 or RANKED_FLEX_SR"),
+        ("tier" = Option<String>, Query, description = "IRON … CHALLENGER, or UNKNOWN: only games where this champion's player was at that tier; the opponent may have been in another. Omitted: every tier summed"),
+        ("side" = Option<String>, Query, description = "`blue` or `red`: only games where this champion was on that side. Omitted: both sides summed"),
         ("patch" = Option<String>, Query, description = "`major.minor`, or `all` to sum every aggregated patch; default the newest aggregated patch"),
         ("role" = Option<String>, Query, description = "TOP, JUNGLE, MIDDLE, BOTTOM or UTILITY; default every lane"),
         ("minGames" = Option<i64>, Query, description = "≥ 0; default 0, every row"),
@@ -766,8 +805,8 @@ async fn champion_matchups(
         Ok(p) => p,
         Err(e) => return bad_path(&e).into_response(),
     };
-    let checked = champion_id(&raw)
-        .and_then(|id| Ok((id, common(&state, &query, false, &LANE_POSITIONS, (1, 200, 50))?)));
+    let checked =
+        champion_id(&raw).and_then(|id| Ok((id, common(&state, &query, &LANE_POSITIONS, (1, 200, 50))?)));
     let (id, c) = match checked {
         Ok(v) => v,
         Err(e) => return e.into_response(),
@@ -796,10 +835,13 @@ async fn champion_matchups(
     let computed_at = newest(rows.iter().map(|r| r.computed_at));
     let tag = etag(&[
         some("matchups"),
+        some(STATS_SHAPE),
         computed_at.clone(),
         state.ddragon.current_version().await,
         c.platform.clone(),
         some(&c.queue),
+        c.tier.clone(),
+        c.side_part(),
         patch.clone(),
         some(id),
         c.role.clone(),
@@ -813,8 +855,10 @@ async fn champion_matchups(
         &ChampionMatchupsResponse {
             champion_id: id,
             champion_name: names.get(&id).cloned(),
+            side: c.side_part(),
             platform: c.platform,
             queue: c.queue,
+            tier: c.tier,
             patch,
             role: c.role,
             computed_at,
@@ -836,7 +880,8 @@ async fn champion_matchups(
         ("championId" = i64, Path, description = "Champion id, ≥ 1"),
         ("platform" = Option<String>, Query, description = "Only this platform's ladder. Omitted sums every platform"),
         ("queue" = Option<String>, Query, description = "RANKED_SOLO_5x5 or RANKED_FLEX_SR"),
-        ("tier" = Option<String>, Query, description = "IRON … CHALLENGER, or UNKNOWN: `stats` and `byTier` are that tier's row. Omitted: `stats` is one row summed over every tier, pick and ban rates over every match in the slice, and `byTier` a row per tier"),
+        ("tier" = Option<String>, Query, description = "IRON … CHALLENGER, or UNKNOWN: `stats` and `byTier` are that tier's row, and the matchups, items, runes and spells that tier's players'. Omitted: `stats` is one row summed over every tier, pick and ban rates over every match in the slice, `byTier` a row per tier, and the other sections every tier summed"),
+        ("side" = Option<String>, Query, description = "`blue` or `red`: every section from the champion's games on that side only. Omitted: both sides summed"),
         ("patch" = Option<String>, Query, description = "`major.minor`, or `all` to sum every aggregated patch; default the newest aggregated patch"),
         ("role" = Option<String>, Query, description = "TOP, JUNGLE, MIDDLE, BOTTOM, UTILITY or empty"),
         ("minGames" = Option<i64>, Query, description = "≥ 0; default 0, every row"),
@@ -857,8 +902,8 @@ async fn champion_detail(
         Ok(p) => p,
         Err(e) => return bad_path(&e).into_response(),
     };
-    let checked = champion_id(&raw)
-        .and_then(|id| Ok((id, common(&state, &query, true, &TEAM_POSITIONS, (1, 50, 10))?)));
+    let checked =
+        champion_id(&raw).and_then(|id| Ok((id, common(&state, &query, &TEAM_POSITIONS, (1, 50, 10))?)));
     let (id, c) = match checked {
         Ok(v) => v,
         Err(e) => return e.into_response(),
@@ -889,12 +934,10 @@ async fn champion_detail(
                 limit: 500,
                 ..base.clone()
             };
-            let facets = Read {
-                tier: None,
-                ..base.clone()
-            };
             // No tier: `stats` is the one row summed over every tier, and
-            // `byTier` has a row per tier (ADR-123).
+            // `byTier` has a row per tier (ADR-123); the facets are the
+            // tier's and side's, or summed over them (FLT-02).
+            let facets = base.clone();
             let got = tokio::try_join!(
                 analytics::stats(&state.db, stats.clone()),
                 analytics::stats_by_tier(&state.db, stats),
@@ -946,6 +989,7 @@ async fn champion_detail(
         c.platform.clone(),
         some(&c.queue),
         c.tier.clone(),
+        c.side_part(),
         patch.clone(),
         some(id),
         c.role.clone(),
@@ -960,6 +1004,7 @@ async fn champion_detail(
         &ChampionDetailResponse {
             champion_id: id,
             champion_name: names.get(&id).cloned(),
+            side: c.side_part(),
             platform: c.platform,
             queue: c.queue,
             tier: c.tier,
@@ -1087,12 +1132,15 @@ fn build_entry(b: &BuildRow, parts: &[BuildPartRow], total: i64) -> ChampionBuil
         the most common 3rd, 4th and 5th items, starter, boots, skill order, runes and spells of the players who \
         built it (at most three each). Worked out from archived match timelines, so matches archived without one \
         aren't counted, nor are players who finished fewer than two items. Without `role`, the champion's \
-        most-played role in the slice, named in `role`. Sends an `ETag`; a matching `If-None-Match` gets 304. A \
-        champion nobody has builds for yet still returns 200 with an empty `builds`.",
+        most-played role in the slice (its `tier` and `side` included), named in `role`. Sends an `ETag`; a \
+        matching `If-None-Match` gets 304. A champion nobody has builds for yet still returns 200 with an empty \
+        `builds`.",
     params(
         ("championId" = i64, Path, description = "Champion id, ≥ 1"),
         ("platform" = Option<String>, Query, description = "Only this platform's ladder. Omitted sums every platform"),
         ("queue" = Option<String>, Query, description = "RANKED_SOLO_5x5 or RANKED_FLEX_SR"),
+        ("tier" = Option<String>, Query, description = "IRON … CHALLENGER, or UNKNOWN: only builds of players at that tier. Omitted: every tier summed"),
+        ("side" = Option<String>, Query, description = "`blue` or `red`: only builds of players on that side. Omitted: both sides summed"),
         ("patch" = Option<String>, Query, description = "`major.minor`, or `all` to sum every aggregated patch; default the newest aggregated patch"),
         ("role" = Option<String>, Query, description = "TOP, JUNGLE, MIDDLE, BOTTOM, UTILITY or empty; default the champion's most-played role"),
         ("minGames" = Option<i64>, Query, description = "≥ 0, games a build needs; default 0, every build"),
@@ -1113,8 +1161,8 @@ async fn champion_builds(
         Ok(p) => p,
         Err(e) => return bad_path(&e).into_response(),
     };
-    let checked = champion_id(&raw)
-        .and_then(|id| Ok((id, common(&state, &query, false, &TEAM_POSITIONS, (1, 10, 3))?)));
+    let checked =
+        champion_id(&raw).and_then(|id| Ok((id, common(&state, &query, &TEAM_POSITIONS, (1, 10, 3))?)));
     let (id, c) = match checked {
         Ok(v) => v,
         Err(e) => return e.into_response(),
@@ -1168,10 +1216,13 @@ async fn champion_builds(
     let computed_at = computed.and_then(iso_ms);
     let tag = etag(&[
         some("builds"),
+        some(STATS_SHAPE),
         computed_at.clone(),
         state.ddragon.current_version().await,
         c.platform.clone(),
         some(&c.queue),
+        c.tier.clone(),
+        c.side_part(),
         patch.clone(),
         some(id),
         c.role.clone(),
@@ -1186,8 +1237,10 @@ async fn champion_builds(
         &ChampionBuildsResponse {
             champion_id: id,
             champion_name: names.get(&id).cloned(),
+            side: c.side_part(),
             platform: c.platform,
             queue: c.queue,
+            tier: c.tier,
             patch,
             role,
             computed_at,
@@ -1211,6 +1264,7 @@ async fn champion_builds(
         ("platform" = Option<String>, Query, description = "Only this platform's ladder. Omitted sums every platform"),
         ("queue" = Option<String>, Query, description = "RANKED_SOLO_5x5 or RANKED_FLEX_SR; default the first of `LADDER_QUEUES`"),
         ("championId" = Option<i64>, Query, description = "≥ 1: count only this champion's games"),
+        ("side" = Option<String>, Query, description = "`blue` or `red`: count only games on that side. Omitted: both"),
         ("remakes" = Option<String>, Query, description = "`exclude` (default) or `include`"),
     ),
     responses((status = 200, description = "The patches, newest first", body = AnalyticsPatchesResponse),
@@ -1224,9 +1278,10 @@ async fn patches(
 ) -> Response {
     let checked = ladder_query(&state, &query).and_then(|l| {
         let champion = validate::int_query("championId", q(&query, "championId"), 1, i64::MAX)?;
-        Ok((l, champion, validate::remakes_query(q(&query, "remakes"))?))
+        let remakes = validate::remakes_query(q(&query, "remakes"))?;
+        Ok((l, champion, remakes, side_query(&query)?))
     });
-    let (c, champion_id, remakes) = match checked {
+    let (c, champion_id, remakes, side) = match checked {
         Ok(v) => v,
         Err(e) => return e.into_response(),
     };
@@ -1237,6 +1292,7 @@ async fn patches(
         c.platform.as_deref(),
         &c.queue,
         champion_id,
+        side,
         remakes,
     )
     .await
@@ -1251,6 +1307,7 @@ async fn patches(
         c.platform.clone(),
         some(&c.queue),
         champion_id.map(|id| id.to_string()),
+        side.map(|s| s.as_str().to_string()),
         some(if remakes { "include" } else { "exclude" }),
     ]);
     respond(
@@ -1260,6 +1317,7 @@ async fn patches(
             platform: c.platform,
             queue: c.queue,
             champion_id,
+            side: side.map(|s| s.as_str().to_string()),
             patches: rows
                 .into_iter()
                 .map(|r| AnalyticsPatchEntry {

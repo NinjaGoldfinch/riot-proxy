@@ -750,3 +750,36 @@ test('top champions read every patch by default and the patch picker refetches t
   assert.equal(p.$('#top [data-patch]').value, '16.18');
   assert.deepEqual(p.errors, []);
 });
+
+test('the tier picker and side toggle reload the champion cards with that slice, and each card names it (FLT-02)', async () => {
+  const p = await page({ hash: '#/champion/1' });
+  const slices = () => ['#cTiers', '#cBuild', '#cMatchups'].map((s) => p.text(`${s} header .slice`));
+  assert.deepEqual(slices(), Array(3).fill('All tiers · both sides'));
+  assert.deepEqual([...p.$('[data-ctier]').options].map((o) => o.value).slice(0, 2), ['', 'CHALLENGER']);
+  assert.equal(p.$('[data-ctier]').options[p.$('[data-ctier]').options.length - 1].value, 'UNKNOWN');
+  assert.equal(p.$('[data-cside].on').textContent, 'Both');
+
+  p.calls.length = 0;
+  await p.pick('[data-ctier]', 'MASTER');
+  assert.ok(p.calls.includes('/v1/lol/analytics/champions/1?queue=RANKED_SOLO_5x5&patch=all&limit=10&platform=oc1&tier=MASTER'));
+  assert.ok(p.calls.includes('/v1/lol/analytics/champions/1/builds?queue=RANKED_SOLO_5x5&patch=all&platform=oc1&tier=MASTER'));
+  assert.ok(p.calls.includes('/v1/lol/analytics/champions/1/matchups?queue=RANKED_SOLO_5x5&patch=all&limit=200&platform=oc1&tier=MASTER'));
+  assert.deepEqual(slices(), Array(3).fill('Master · both sides'));
+
+  p.calls.length = 0;
+  await p.click('[data-cside="red"]');
+  assert.ok(p.calls.includes('/v1/lol/analytics/champions/1?queue=RANKED_SOLO_5x5&patch=all&limit=10&platform=oc1&tier=MASTER&side=red'));
+  assert.ok(p.calls.includes('/v1/lol/analytics/champions/1/builds?queue=RANKED_SOLO_5x5&patch=all&platform=oc1&tier=MASTER&side=red'));
+  assert.ok(p.calls.includes('/v1/lol/analytics/champions/1/matchups?queue=RANKED_SOLO_5x5&patch=all&limit=200&platform=oc1&tier=MASTER&side=red'));
+  assert.deepEqual(slices(), Array(3).fill('Master · Red side'));
+  assert.equal(p.$('[data-cside].on').textContent, 'Red');
+  assert.equal(p.$('[data-ctier]').value, 'MASTER', 'the picker keeps its choice');
+
+  // Back to every tier and both sides: the plain queries again.
+  await p.pick('[data-ctier]', '');
+  p.calls.length = 0;
+  await p.click('[data-cside=""]');
+  assert.ok(p.calls.includes('/v1/lol/analytics/champions/1/builds?queue=RANKED_SOLO_5x5&patch=all&platform=oc1'));
+  assert.deepEqual(slices(), Array(3).fill('All tiers · both sides'));
+  assert.deepEqual(p.errors, []);
+});
