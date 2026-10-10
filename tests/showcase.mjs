@@ -434,14 +434,53 @@ test('a strange timeline or an unknown player gives an empty build, never an err
   assert.deepEqual(h.playerBuild(timeline([bought(1055, 1)]), 'someone else', CATALOG), empty);
 });
 
-test('the golden file: every player of OC1_711969250, as builds:extract works it out', () => {
-  const tl = BLD('OC1_711969250.timeline.json');
-  const expected = BLD('OC1_711969250.expected.json');
-  assert.equal(Object.keys(expected).length, 10);
-  for (const [puuid, want] of Object.entries(expected)) {
-    const b = h.playerBuild(tl, puuid, CATALOG);
-    assert.deepEqual({ starter: b.starter, boots: b.boots, items: b.items.map((x) => x.itemId), skills: b.skills, skillOrder: b.skillOrder }, want, puuid);
-  }
+// Each golden file with its match's champions, as the match view passes them, and its patch's item.json.
+for (const [matchId, items] of [['OC1_711969250', 'item-16.19.1.json'], ['OC1_712417978', 'item-16.20.1.json']]) {
+  test(`the golden file: every player of ${matchId}, as builds:extract works it out`, () => {
+    const tl = BLD(`${matchId}.timeline.json`);
+    const champion = Object.fromEntries(BLD(`${matchId}.match.json`).info.participants.map((p) => [p.puuid, p.championId]));
+    const catalog = h.itemCatalog(BLD(items));
+    const expected = BLD(`${matchId}.expected.json`);
+    assert.equal(Object.keys(expected).length, 10);
+    for (const [puuid, want] of Object.entries(expected)) {
+      const b = h.playerBuild(tl, puuid, catalog, champion[puuid]);
+      assert.deepEqual({ starter: b.starter, boots: b.boots, items: b.items.map((x) => x.itemId), skills: b.skills, skillOrder: b.skillOrder }, want, puuid);
+    }
+  });
+}
+
+test("Viego's possession (BLD-05): OC1_712417978's Viego has 13 points, R at 6 and 11 only", () => {
+  const tl = BLD('OC1_712417978.timeline.json');
+  const catalog = h.itemCatalog(BLD('item-16.20.1.json'));
+  const viego = h.playerBuild(tl, 'bld-fixture-puuid-02', catalog, 234);
+  assert.equal(viego.levelUps.length, 13);
+  assert.deepEqual(viego.levelUps.flatMap((l, i) => (l.slot === 4 ? [i + 1] : [])), [6, 11]);
+  assert.ok(!viego.levelUps.some((l) => l.t === 1370679), 'the possessed Nidalee\'s R ranks');
+  assert.equal(h.playerBuild(tl, 'bld-fixture-puuid-02', catalog, undefined).levelUps.length, 15, 'without his champion the rule cannot apply');
+  const morgana = h.playerBuild(tl, 'bld-fixture-puuid-10', catalog, 25);
+  assert.equal(morgana.levelUps.length, 13, 'Morgana keeps the point she took in the ms of one ITEM_DESTROYED');
+  assert.ok(morgana.levelUps.some((l) => l.t === 1002026));
+});
+
+test("Viego's level-ups in the ms of his ITEM_DESTROYED are dropped; anyone else's are kept", () => {
+  const up = (skillSlot, timestamp) => ({ type: 'SKILL_LEVEL_UP', participantId: 1, skillSlot, levelUpType: 'NORMAL', timestamp });
+  const gone = (itemId, timestamp, participantId = 1) => ({ type: 'ITEM_DESTROYED', participantId, itemId, timestamp });
+  const possession = timeline([up(1, 1000), up(3, 2000), gone(6676, 900000), gone(1001, 900000), up(4, 900000), up(4, 900000), up(1, 950000)]);
+  assert.equal(h.playerBuild(possession, 'P', CATALOG, 234).skills, 'QEQ');
+  assert.equal(h.playerBuild(possession, 'P', CATALOG, 238).skills, 'QERRQ', 'Zed: the same events are real points');
+  assert.equal(h.playerBuild(possession, 'P', CATALOG).skills, 'QERRQ', 'no champion: not Viego');
+  // One item is enough for Viego; another ms, or another player's item, is not.
+  assert.equal(h.playerBuild(timeline([up(2, 1000), gone(2003, 5000), up(1, 5000)]), 'P', CATALOG, 234).skills, 'W');
+  assert.equal(h.playerBuild(timeline([up(1, 1000), gone(6676, 899999), up(4, 900000), gone(6673, 900001), gone(3036, 950000, 2), up(2, 950000)]), 'P', CATALOG, 234).skills, 'QRW');
+});
+
+test('a Triple Tonic point at level 9 is kept: nothing caps points by level', () => {
+  const up = (skillSlot, timestamp) => ({ type: 'SKILL_LEVEL_UP', participantId: 1, skillSlot, levelUpType: 'NORMAL', timestamp });
+  const ups = [1, 2, 3, 1, 1, 4, 1, 3, 1, 1, 3, 4, 3, 3].map((s, k) => up(s, 60000 * (k + 1)));
+  ups[9] = up(1, 60000 * 9 + 4000);
+  for (const champion of [238, 234]) assert.equal(h.playerBuild(timeline(ups), 'P', CATALOG, champion).skills, 'QWEQQRQEQQEREE', String(champion));
+  const zed = h.playerBuild(BLD('OC1_712417978.timeline.json'), 'bld-fixture-puuid-01', h.itemCatalog(BLD('item-16.20.1.json')), 238);
+  assert.equal(zed.levelUps.length, 14, 'the recorded Zed with Triple Tonic: 14 points at level 13');
 });
 
 test('shop visits: purchases under 30 s apart are one visit', () => {

@@ -276,6 +276,7 @@ The site's backfill question (item 3) needs no task: the unbounded lookup backfi
 - [x] BLD-02 aggregate set builds: `champion_builds` keyed by the first two finished items, with `champion_build_parts` for the 3rd–5th items, starter, boots, skill order, runes and spells; only players with 2+ finished items count; `analytics::builds` / `build_parts` read them (#145, ADR-120)
 - [x] BLD-03 `GET /v1/lol/analytics/champions/{championId}/builds` (the most-played role without `role`, 3 options a step) and the showcase's build tabs, with today's lists as the fallback (#146, design/11, ADR-121)
 - [x] BLD-04 one player's build on the match page (starter, boots, finished items with times, skill grid, shop visits), worked out in the browser from the timeline (`playerBuild`, held to BLD-01's golden file); design/11 gets notes for a frontend (#147, ADR-122)
+- [x] BLD-05 Viego's possession isn't counted as his skill points: for Viego, a level-up in the ms of his own `ITEM_DESTROYED` is dropped (`extract` takes the match's champions, `playerBuild` the player's); `BUILDS_VERSION` 2; the skill grid grows past 18 points; golden fixture OC1_712417978 (#158, ADR-131)
 
 ## MU — matchups worth reading (owner request 2026-10-09)
 - [ ] MU-01 show how much a matchup's win rate can be trusted: `winRateLow` (Wilson 95% lower bound), `sort=confidence`, small samples dimmed in the showcase (IMPLEMENTATION.md §Post-release — MU)

@@ -84,22 +84,25 @@ flowchart LR
 
 ## Builds — notes for a frontend
 
-The showcase is what ninjagoldfinch.lol copies, so this is how its two build views are put together (BLD-03, BLD-04; ADR-117, ADR-121, ADR-122). Both use the definitions in IMPLEMENTATION.md §Post-release — BLD. The server's version is `src/archive/builds.rs` and the page's is `playerBuild` in `showcase.html`; both are held to `tests/fixtures/builds/*.expected.json`.
+The showcase is what ninjagoldfinch.lol copies, so this is how its two build views are put together (BLD-03, BLD-04; ADR-117, ADR-121, ADR-122). Both use the definitions in IMPLEMENTATION.md §Post-release — BLD (BLD-05 adds Viego's possession, ADR-131). The server's version is `src/archive/builds.rs` and the page's is `playerBuild` in `showcase.html`; both are held to `tests/fixtures/builds/*.expected.json`.
 
 **One player's build on the match page (BLD-04).** No route serves it: the page works it out from the two documents it already has.
 
 | Piece | From | How |
 |---|---|---|
 | the player | the timeline's `info.participants` | puuid → `participantId`; events with `participantId: 0` are not a player's |
+| the player's champion | the match's `info.participants` | `championId`, passed to `playerBuild(timeline, puuid, catalog, championId)`: the timeline doesn't name champions, and the Viego rule below needs it |
 | purchase order | `ITEM_PURCHASED`, `ITEM_UNDO` | in time order; an undo with `afterId: 0` removes the latest earlier purchase of `beforeId`. Sales and their undos are ignored: a build is what was bought |
 | starter | purchase order, item.json | everything bought before 60 s except a trinket, sorted |
 | boots | purchase order, item.json | the first item tagged `Boots` other than base Boots (1001), or built from one (Gunmetal Greaves has no tag) |
 | finished items | purchase order, item.json | purchasable, builds into nothing, ≥ 1500 gold, not Boots, Consumable or Trinket; the first six, each with its time |
-| skill order | `SKILL_LEVEL_UP`, `levelUpType: NORMAL` only | Q, W and E by points at the end, a tie to the skill that got there first |
-| skill grid | the same level-ups | rows Q W E R, columns 1–18: the n-th level-up marks column n |
+| level-ups | `SKILL_LEVEL_UP`, `levelUpType: NORMAL` only | in time order. For Viego (`championId` 234), a level-up in the same ms as one or more of his own `ITEM_DESTROYED` isn't counted: it is a possessed champion's rank, logged as his (BLD-05). Nothing is capped by level: Triple Tonic's level-9 point, Aphelios's self-ranking R and Udyr's 19th point are real |
+| skill order | the level-ups | Q, W and E by points at the end, a tie to the skill that got there first |
+| skills | the level-ups | the first 15, as `"QWEQQRQ…"` |
+| skill grid | the level-ups | rows Q W E R, a column per point in the order taken, at least 18 and more if the player has more (Udyr with Triple Tonic takes 19): the n-th point marks column n. Columns are points, not levels: with Triple Tonic the 10th point comes at level 9 |
 | shop visits | purchase order | purchases less than 30 s apart are one visit (`SHOP_VISIT_GAP_MS`). This is a display choice, not Riot's: the timeline has no event for the shop opening |
 
-Layout: a card with the ten champions' portraits as tabs in its header, 28 px, or 22 px under 600 px so they stay on one line. Then three plain rows: (1) starter, boots, skill order `Q › W › E` and the finished items, each with its `mm:ss` underneath; (2) the skill grid, scrolling sideways on a phone; (3) the shop visits, each `mm:ss` then its items.
+Layout: a card with the ten champions' portraits as tabs in its header, 28 px, or 22 px under 600 px so they stay on one line. Then three plain rows: (1) starter, boots, skill order `Q › W › E` and the finished items, each with its `mm:ss` underneath; (2) the skill grid, headed "points in the order taken", scrolling sideways on a phone; (3) the shop visits, each `mm:ss` then its items.
 
 Failure cases:
 - **The timeline fails:** the card shows the error, as the gold graph does. The tabs and the rest of the page still render.

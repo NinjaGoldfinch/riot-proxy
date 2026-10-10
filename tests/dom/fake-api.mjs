@@ -86,7 +86,8 @@ const MATCH = JSON.parse(readFileSync(new URL('tests/fixtures/replay/cold-lookup
 const team = (id) => MATCH.info.participants.find((x) => x.participantId === id).teamId;
 // A build's events in Riot's EventsTimeLineDto shapes (BLD-04). Participant 1 (blue side's first): starter with a trinket,
 // boots, two finished items in one visit, a third, and an undone fourth; Q maxed first, then W. Participant 3: one item
-// and three level-ups. Participant 0 is not a player. Nobody else has events.
+// and three level-ups. Participant 2: 19 level-ups, two of them R in the ms two of their items are destroyed, which is
+// Viego's possession if `viegoIn: 2` makes them Viego (BLD-05). Participant 0 is not a player. Nobody else has events.
 const up = (participantId, skillSlot, timestamp, levelUpType = 'NORMAL') => ({ type: 'SKILL_LEVEL_UP', participantId, skillSlot, levelUpType, timestamp });
 const buy = (participantId, itemId, timestamp) => ({ type: 'ITEM_PURCHASED', participantId, itemId, timestamp });
 const EVENTS = [
@@ -96,6 +97,9 @@ const EVENTS = [
   ...[1, 2, 3, 1, 1, 4, 1, 2, 1, 2, 4, 2, 2, 3, 3].map((slot, i) => up(1, slot, 70000 + i * 60000)),
   up(1, 2, 75000, 'EVOLVE'),
   buy(3, 3153, 400000), up(3, 3, 80000), up(3, 1, 140000), up(3, 3, 200000),
+  ...[1, 2, 3, 1, 1, 4, 1, 3, 1, 1, 3, 4, 3, 3, 2, 2, 2].map((slot, i) => up(2, slot, 60000 + i * 60000)),
+  { type: 'ITEM_DESTROYED', participantId: 2, itemId: 3020, timestamp: 750000 }, { type: 'ITEM_DESTROYED', participantId: 2, itemId: 3078, timestamp: 750000 },
+  up(2, 4, 750000), up(2, 4, 750000),
 ].sort((a, b) => a.timestamp - b.timestamp);
 const TIMELINE = { metadata: { matchId: MATCH.metadata.matchId }, info: { frameInterval: 60000, frames: Array.from({ length: 21 }, (_, m) => ({
   timestamp: m * 60000 + (m ? 37 : 0),
@@ -138,12 +142,15 @@ const BUILDS = { championId: 1, championName: 'Annie', platform: 'oc1', queue: '
 ] };
 // `meIn: n` makes participant n the fake profile's player (PUUID), in the match and its timeline alike.
 const mine = (doc, n) => JSON.parse(JSON.stringify(doc).replaceAll(MATCH.info.participants[n - 1].puuid, PUUID));
-function detail(p, u, { noTimeline = false, noAnalytics = false, noBuilds = false, buildsFail = false, meIn = 0 }) {
+// `viegoIn: n` makes participant n Viego (championId 234) in the match.
+const viego = (doc, n) => ({ ...doc, info: { ...doc.info, participants: doc.info.participants.map((x) => (x.participantId === n ? { ...x, championId: 234, championName: 'Viego' } : x)) } });
+function detail(p, u, { noTimeline = false, noAnalytics = false, noBuilds = false, buildsFail = false, meIn = 0, viegoIn = 0 }) {
   let m;
   if ((m = p.match(/^\/v1\/lol\/matches\/([a-z]+)\/([A-Z0-9]+_\d+)(\/timeline)?$/))) {
     if (m[2] === 'OC1_1') return [404, { error: { code: 'NOT_FOUND', message: 'no match', requestId: 'r' } }];
     if (m[3]) return noTimeline ? [503, { error: { code: 'UPSTREAM_UNAVAILABLE', message: 'try later', requestId: 'r' } }] : [200, meIn ? mine(TIMELINE, meIn) : TIMELINE];
-    return [200, meIn ? mine(MATCH, meIn) : MATCH];
+    const body = meIn ? mine(MATCH, meIn) : MATCH;
+    return [200, viegoIn ? viego(body, viegoIn) : body];
   }
   // The proxy's AnalyticsPatchesResponse (DEV-21): newest first. With a championId (DEV-25), that
   // champion's games: 60 in all, as the detail's totalGames.

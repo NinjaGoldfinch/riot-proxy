@@ -11,7 +11,7 @@
 //! archived before V0016 (THR-02); `aggregate:analytics` runs both before its
 //! rebuild.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -495,7 +495,8 @@ impl AnalyticsContext {
         let mut done = 0i64;
         loop {
             let from = after.clone();
-            let todo: Vec<(String, String)> = self
+            // (match id, key scope, puuid → championId from its facts)
+            let todo: Vec<(String, String, HashMap<String, i64>)> = self
                 .db()
                 .read(move |c| {
                     // The rows stay with the key scope whose PUUIDs the match holds.
@@ -511,28 +512,38 @@ impl AnalyticsContext {
                     )?;
                     let rows = stmt
                         .query_map(params![from, BUILDS_VERSION, BUILDS_BATCH], |r| {
-                            Ok((r.get(0)?, r.get(1)?))
+                            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
                         })?
                         .collect::<Result<Vec<_>, _>>()?;
-                    Ok::<_, DbError>(rows)
+                    // BLD-05 needs each player's champion, which the timeline doesn't name.
+                    let mut champs =
+                        c.prepare_cached("SELECT puuid, champion_id FROM match_facts WHERE match_id = ?1")?;
+                    let mut out = Vec::with_capacity(rows.len());
+                    for (id, scope) in rows {
+                        let champions = champs
+                            .query_map([&id], |r| Ok((r.get(0)?, r.get(1)?)))?
+                            .collect::<Result<HashMap<String, i64>, _>>()?;
+                        out.push((id, scope, champions));
+                    }
+                    Ok::<_, DbError>(out)
                 })
                 .await
                 .map_err(|e| store(&e))?;
-            let Some((last, _)) = todo.last() else {
+            let Some((last, _, _)) = todo.last() else {
                 break;
             };
             after.clone_from(last);
-            let ids: Vec<String> = todo.iter().map(|(id, _)| id.clone()).collect();
+            let ids: Vec<String> = todo.iter().map(|(id, _, _)| id.clone()).collect();
             let bodies = matches::get_timelines(self.db(), &ids)
                 .await
                 .map_err(|e| store(&e))?;
             let cat = Arc::clone(&catalog);
             let derived: Vec<(String, String, Vec<BuildFact>)> = tokio::task::spawn_blocking(move || {
                 todo.into_iter()
-                    .map(|(id, scope)| {
+                    .map(|(id, scope, champions)| {
                         let rows = bodies
                             .get(&id)
-                            .map(|b| builds::extract(b, &cat))
+                            .map(|b| builds::extract(b, &cat, &champions))
                             .unwrap_or_default();
                         (id, scope, rows)
                     })
