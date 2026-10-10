@@ -291,6 +291,7 @@ The site's backfill question (item 3) needs no task: the unbounded lookup backfi
 
 ## TL — a match and its timeline archived together (owner request 2026-10-10)
 - [x] TL-01 whatever stores a match queues its timeline, and a timeline its match, as a priority-0 `archive:match`; timelines no longer need their match first (V0013); a boot catch-up queues the archive's missing halves (#144, ADR-118)
+- [x] TL-02 `timelines:backfill`: the missing timelines of archived ranked matches in the newest `TIMELINE_BACKFILL_PATCHES` patches (default 0, off), newest first, one job per region at priority 40 000; 404s marked in `timeline_gaps` (V0018); progress at `GET /v1/admin/timelines/backfill` (#161, ADR-133)
 
 ## FLT — builds and matchups by rank, opponent and side (owner request 2026-10-10)
 Order: THR-02 → FLT-01 → FLT-02 → FLT-03 → FLT-04, then PAIR.

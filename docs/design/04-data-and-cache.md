@@ -112,6 +112,12 @@ CREATE TABLE timelines (                          -- every fetched timeline, bef
   body_zstd BLOB NOT NULL
 );
 
+CREATE TABLE timeline_gaps (                      -- timelines Riot won't serve (TL-02, ADR-133)
+  match_id  TEXT PRIMARY KEY,                     -- no FK, like timelines
+  reason    TEXT NOT NULL,                        -- "not_found": a 404; timelines:backfill never asks again
+  marked_at INTEGER NOT NULL
+);
+
 CREATE TABLE match_facts (                        -- one row per participant; pure derivation of matches
   match_id     TEXT NOT NULL REFERENCES matches(match_id) ON DELETE CASCADE,
   key_scope    TEXT NOT NULL,
