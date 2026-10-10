@@ -105,7 +105,7 @@ function measure({ icons }) {
     }
   }
   // Content wider than its box (scroll containers are meant to scroll, so they are the boundary).
-  for (const el of document.querySelectorAll('.card, .match, .rank, .banner, .who, .card > header, .team-card header')) {
+  for (const el of document.querySelectorAll('.hero-in, .search, .homebar, .card, .match, .rank, .banner, .who, .card > header, .team-card header')) {
     if (el.closest('.scroll') || !rect(el).width) continue;
     if (el.scrollWidth > el.clientWidth + 1) out.overflow.push(`${label(el)}: ${el.scrollWidth} > ${el.clientWidth}`);
   }
@@ -169,6 +169,34 @@ for (const [view, hash, ready] of VIEWS) {
       }
     });
   }
+}
+
+// SITE-10: the search box takes a Riot ID or a champion; its message for an ambiguous name stays inside the header.
+for (const [device, width] of WIDTHS) {
+  test(`the search box and its message fit the header at ${device} (${width} px)`, { timeout: 60000 }, async (t) => {
+    if (skip) return t.skip(skip);
+    const { page, errors } = await open(width, '', '#ladder tbody tr td.name small');
+    try {
+      const input = page.locator('#search input[name=id]');
+      assert.ok((await input.boundingBox()).width >= Math.min(240, width - 60), 'wide enough to read the placeholder');
+      await input.fill('a');
+      await input.press('Enter');
+      await page.waitForFunction(() => document.querySelector('#searchMsg').textContent);
+      assert.ok(await page.locator('#searchMsg').isVisible());
+      const m = await page.evaluate(measure, { icons: [] });
+      assert.deepEqual(m.overflow.filter((x) => /hero-in|search/.test(x)), []);
+      assert.ok(m.page.scroll <= m.page.width, 'no sideways scroll');
+      const [hero, msg] = await Promise.all([page.locator('.hero').boundingBox(), page.locator('#searchMsg').boundingBox()]);
+      assert.ok(msg.x >= hero.x && msg.x + msg.width <= hero.x + hero.width + 1 && msg.y + msg.height <= hero.y + hero.height + 1, 'the message sits inside the header');
+      await input.fill('Wukong');
+      await input.press('Enter');
+      await page.waitForSelector('#cBuild .tools.builds');
+      assert.equal(new URL(page.url()).hash, '#/champion/62/builds');
+      assert.deepEqual(errors, []);
+    } finally {
+      await page.close();
+    }
+  });
 }
 
 test('the gold graph tooltip follows the pointer and hides on leave', { timeout: 60000 }, async (t) => {

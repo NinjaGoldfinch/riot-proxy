@@ -13,10 +13,12 @@ async function page({ platform = 'oc1', hash = '', ...opts } = {}) {
   const calls = [];
   const modes = []; // [url, init.cache] per fetch
   const errors = [];
+  const scrolled = []; // ids of the elements scrolled into view
   const dom = new JSDOM(html.replace('<script type="module">', '<script>(async()=>{').replace(/<\/script>\s*<\/body>/, '})()</script></body>'), {
     url: `http://localhost/dev/showcase${hash}`, runScripts: 'dangerously', pretendToBeVisual: true,
     beforeParse(w) {
       if (platform) w.localStorage.setItem('rp.showcase.platform', JSON.stringify(platform));
+      w.Element.prototype.scrollIntoView = function scrollIntoView() { scrolled.push(this.id); };
       w.fetch = async (url, init) => {
         modes.push([String(url), init?.cache]);
         const [status, body] = api(calls, url, opts);
@@ -34,13 +36,39 @@ async function page({ platform = 'oc1', hash = '', ...opts } = {}) {
   const click = async (sel) => { $(sel).click(); await settle(); };
   const text = (sel) => $(sel)?.textContent ?? '';
   const rows = () => [...w.document.querySelectorAll('#ladder tbody tr')];
-  return { w, $, calls, modes, errors, settle, click, text, rows };
+  const pick = async (sel, value) => { const el = $(sel); el.value = value; el.dispatchEvent(new w.Event('change', { bubbles: true })); await settle(); };
+  const search = async (value) => { const form = $('#search'); form.elements.id.value = value; form.dispatchEvent(new w.Event('submit', { cancelable: true })); await settle(); };
+  return { w, $, calls, modes, errors, scrolled, settle, click, pick, search, text, rows };
 }
 
-test('without a platform the page asks for one and calls nothing platform-scoped', async () => {
+test('without a platform the home view asks for one on its own picker and calls nothing platform-scoped', async () => {
   const p = await page({ platform: '' });
-  assert.ok(p.text('#view').includes('Pick a platform'));
+  assert.ok(p.text('#view').includes('Pick a platform here'));
+  assert.equal(p.$('#view #hPlatform').value, '');
+  assert.deepEqual([...p.$('#hPlatform').options].map((o) => [o.value, o.textContent]), [['', 'platform…'], ['oc1', 'Oceania'], ['kr', 'Korea']]);
   assert.deepEqual(p.calls.filter((c) => c.startsWith('/v1/lol/')), []);
+  assert.deepEqual(p.errors, []);
+});
+
+test('the header has no platform picker: the home view has its own (SITE-10)', async () => {
+  const p = await page();
+  assert.equal(p.$('#platform'), null);
+  assert.equal(p.$('.hero select'), null, 'no select in the header at all');
+  assert.equal(p.$('#hPlatform').value, 'oc1', 'the saved choice');
+  assert.equal(p.$('#view').firstElementChild.className, 'homebar', 'at the top of the home view');
+});
+
+test('the home picker drives the ladder, status, rotation and top champions, and is remembered', async () => {
+  const p = await page();
+  assert.ok(p.calls.includes('/v1/lol/league/apex/oc1/CHALLENGER/RANKED_SOLO_5x5'));
+  await p.pick('#hPlatform', 'kr');
+  for (const c of ['/v1/lol/league/apex/kr/CHALLENGER/RANKED_SOLO_5x5', '/v1/lol/status/kr', '/v1/lol/rotations/kr', '/v1/lol/analytics/champions?platform=kr&queue=RANKED_SOLO_5x5&patch=all&limit=500']) assert.ok(p.calls.includes(c), c);
+  assert.equal(JSON.parse(p.w.localStorage.getItem('rp.showcase.platform')), 'kr');
+  assert.equal(p.$('#hPlatform').value, 'kr');
+  assert.equal(p.rows().length, 25);
+  await p.pick('#hPlatform', '');
+  assert.ok(p.text('#view').includes('Pick a platform here'));
+  assert.equal(p.$('#ladder'), null);
   assert.deepEqual(p.errors, []);
 });
 
@@ -94,7 +122,7 @@ test('clicking a named ladder row routes to the player view', async () => {
   const p = await page();
   await p.click('#ladder tbody tr');
   assert.equal(p.w.location.hash, `#/player/Player%20P${LADDER - 1}/OCE`);
-  assert.ok(p.calls.includes(`/v1/players/by-riot-id/Player%20P${LADDER - 1}/OCE/profile?platform=oc1&topMastery=3`));
+  assert.ok(p.calls.includes(`/v1/players/by-riot-id/Player%20P${LADDER - 1}/OCE/profile?topMastery=3`));
   assert.ok(p.text('#pHead').includes(`Player P${LADDER - 1} #OCE`));
   assert.deepEqual(p.errors, []);
 });
@@ -148,17 +176,65 @@ test('a missing key says so on each card instead of failing silently', async () 
   assert.deepEqual(p.errors, []);
 });
 
-test('search goes to the player route; a bad Riot ID stays put', async () => {
+test('search goes to the player route; a bad Riot ID stays put and says so', async () => {
   const p = await page();
-  const form = p.$('#search');
-  form.elements.id.value = 'Hide on bush#KR1';
-  form.dispatchEvent(new p.w.Event('submit', { cancelable: true }));
-  await p.settle();
+  await p.search('Hide on bush#KR1');
   assert.equal(p.w.location.hash, '#/player/Hide%20on%20bush/KR1');
-  form.elements.id.value = 'no tag';
-  form.dispatchEvent(new p.w.Event('submit', { cancelable: true }));
-  await p.settle();
+  assert.equal(p.text('#searchMsg'), '');
+  await p.search('Faker#');
   assert.equal(p.w.location.hash, '#/player/Hide%20on%20bush/KR1');
+  assert.equal(p.text('#searchMsg'), 'A Riot ID is Name#TAG.');
+  assert.ok(p.$('#search input[name=id]').hasAttribute('aria-invalid'));
+  p.$('#search input[name=id]').dispatchEvent(new p.w.Event('input'));
+  assert.equal(p.text('#searchMsg'), '', 'typing clears it');
+});
+
+// ---------- champion search (SITE-10)
+
+test('the search box takes a champion name and opens its builds', async () => {
+  const p = await page();
+  const input = p.$('#search input[name=id]');
+  assert.match(input.placeholder, /Riot ID or champion/);
+  assert.match(input.getAttribute('aria-label'), /champion/);
+  assert.deepEqual([...p.w.document.querySelectorAll(`#${input.getAttribute('list')} option`)].map((o) => o.value), ['Ahri', 'Annie', "Kai'Sa", 'Olaf', 'Wukong'], 'a datalist of names');
+  for (const [q, id] of [['ahri', 103], ["Kai'Sa", 145], ['KAI SA', 145], ['kais', 145], ['Wukong', 62], ['monkeyking', 62], ['annie', 1]]) {
+    p.w.location.hash = '#/';
+    await p.settle();
+    await p.search(q);
+    assert.equal(p.w.location.hash, `#/champion/${id}/builds`, q);
+    assert.equal(p.text('#searchMsg'), '', q);
+  }
+  assert.ok(p.text('#cHead h2').includes('Annie'));
+  assert.ok(p.calls.includes('/v1/lol/analytics/champions/1/builds?queue=RANKED_SOLO_5x5&patch=all&platform=oc1'));
+  assert.deepEqual(p.errors, []);
+});
+
+test("a champion's builds hash scrolls the Builds card into view, once", async () => {
+  const p = await page({ hash: '#/champion/103/builds' });
+  assert.ok(p.$('#cBuild .tools.builds'), 'the builds are drawn');
+  assert.deepEqual(p.scrolled, ['cBuild']);
+  await p.pick('#cHead [data-patch]', '16.18');
+  assert.deepEqual(p.scrolled, ['cBuild'], 'a picker afterwards does not scroll back');
+  await p.search('Ahri');
+  assert.deepEqual(p.scrolled, ['cBuild', 'cBuild'], 'searching the same champion again does');
+  const plain = await page({ hash: '#/champion/103' });
+  assert.deepEqual(plain.scrolled, [], 'the plain champion route does not scroll');
+  assert.deepEqual(p.errors, []);
+});
+
+test('an unknown or ambiguous champion name says so and stays put', async () => {
+  const p = await page();
+  await p.search('xyz');
+  assert.equal(p.w.location.hash, '');
+  assert.match(p.text('#searchMsg'), /^No champion matches 'xyz'/);
+  await p.search('a');
+  assert.equal(p.w.location.hash, '');
+  assert.equal(p.text('#searchMsg'), "'a' matches Ahri, Annie — keep typing");
+  await p.search('   ');
+  assert.equal(p.w.location.hash, '');
+  assert.match(p.text('#searchMsg'), /Riot ID .* or a champion name/);
+  assert.ok(p.$('#ladder'), 'still home');
+  assert.deepEqual(p.errors, []);
 });
 
 // ---------- player view (DEV-07)
@@ -168,7 +244,7 @@ const playerPage = (opts = {}) => page({ hash: '#/player/Faker/KR1', ...opts });
 test('the player view loads the profile, then matches, pool, mastery and live game for its PUUID', async () => {
   const p = await playerPage();
   for (const c of [
-    '/v1/players/by-riot-id/Faker/KR1/profile?platform=oc1&topMastery=3',
+    '/v1/players/by-riot-id/Faker/KR1/profile?topMastery=3',
     `/v1/players/${PUUID}/matches?platform=oc1&start=0&count=10`,
     `/v1/players/${PUUID}/champions?platform=oc1&limit=10`,
     `/v1/lol/mastery/by-puuid/oc1/${PUUID}`,
@@ -182,6 +258,24 @@ test('the player view loads the profile, then matches, pool, mastery and live ga
   assert.equal(p.$('#pHead img.avatar').getAttribute('src'), '/ddragon/16.19.1/img/profileicon/6.png');
   assert.deepEqual([...p.w.document.querySelectorAll('#pHead .mains img')].map((i) => i.alt), ['Olaf'], 'top mastery from the profile');
   assert.deepEqual(p.errors, []);
+});
+
+test("the player view needs no platform picked: every call after the profile uses the profile's (SITE-10)", async () => {
+  for (const platform of ['', 'kr']) {
+    const p = await playerPage({ platform });
+    assert.ok(p.calls.includes('/v1/players/by-riot-id/Faker/KR1/profile?topMastery=3'), 'the profile without a platform');
+    assert.equal(p.calls.filter((c) => c.includes('/profile') && c.includes('platform=')).length, 0);
+    for (const c of [
+      `/v1/players/${PUUID}/matches?platform=oc1&start=0&count=10`,
+      `/v1/players/${PUUID}/champions?platform=oc1&limit=10`,
+      `/v1/lol/mastery/by-puuid/oc1/${PUUID}`,
+      `/v1/lol/spectator/active/oc1/${PUUID}`,
+    ]) assert.ok(p.calls.includes(c), `${platform || 'none'} saved: ${c}`);
+    assert.equal(p.calls.filter((c) => c.includes('/kr/') || c.includes('platform=kr')).length, 0, 'the saved home platform is not used');
+    assert.ok(p.text('#pHead').includes('oc1 · sea'));
+    assert.ok(!p.text('#view').includes('Pick'), 'no empty state asking for a platform');
+    assert.deepEqual(p.errors, []);
+  }
 });
 
 test('rank cards: Challenger without a division, unranked Flex', async () => {
@@ -278,7 +372,7 @@ test('the live-game banner shows only while the player is in a game', async () =
 test('refresh re-reads the profile and the match page, and waits out its window', async () => {
   const p = await playerPage();
   await p.click('#pHead [data-refresh]');
-  assert.ok(p.calls.includes('/v1/players/by-riot-id/Faker/KR1/profile?platform=oc1&topMastery=3&refresh=true'));
+  assert.ok(p.calls.includes('/v1/players/by-riot-id/Faker/KR1/profile?topMastery=3&refresh=true'));
   assert.ok(p.calls.includes(`/v1/players/${PUUID}/matches?platform=oc1&start=0&count=10&refresh=true`));
   assert.ok(p.text('#pHead').includes('Refreshed'));
   const waiting = await playerPage({ refreshWait: 42 });
@@ -610,7 +704,7 @@ test('the champion view reads every patch by default; the patch and region picke
   const opts = (sel) => [...p.$(sel).options].map((o) => [o.value, o.textContent]);
   assert.deepEqual(opts('#cHead [data-patch]'), [['all', 'All patches · 60 games'], ['16.19', '16.19 · 3 games'], ['16.18', '16.18 · 57 games']], "the champion's games, not the ladder's");
   assert.deepEqual(opts('#cHead [data-region]'), [['', 'All regions'], ['oc1', 'Oceania'], ['kr', 'Korea']]);
-  assert.equal(p.$('#cHead [data-region]').value, 'oc1', 'follows the platform picked above');
+  assert.equal(p.$('#cHead [data-region]').value, 'oc1', "follows the home view's platform");
   const pick = async (sel, value) => { const el = p.$(sel); el.value = value; el.dispatchEvent(new p.w.Event('change', { bubbles: true })); await p.settle(); };
   await pick('#cHead [data-patch]', '16.18');
   assert.ok(p.calls.includes('/v1/lol/analytics/champions/1?queue=RANKED_SOLO_5x5&patch=16.18&limit=10&platform=oc1'));
@@ -621,7 +715,7 @@ test('the champion view reads every patch by default; the patch and region picke
   assert.ok(p.calls.includes('/v1/lol/analytics/patches?queue=RANKED_SOLO_5x5&championId=1'));
   assert.ok(p.calls.includes('/v1/lol/analytics/champions/1?queue=RANKED_SOLO_5x5&patch=16.18&limit=10'), 'the patch stays picked');
   assert.ok(p.text('#cMeta').startsWith('every platform'));
-  assert.equal(p.$('#platform').value, 'oc1', 'the platform above is left alone');
+  assert.equal(JSON.parse(p.w.localStorage.getItem('rp.showcase.platform')), 'oc1', "the home view's platform is left alone");
   await pick('#cHead [data-region]', 'kr');
   assert.ok(p.calls.includes('/v1/lol/analytics/champions/1?queue=RANKED_SOLO_5x5&patch=16.18&limit=10&platform=kr'));
   assert.deepEqual(p.errors, []);

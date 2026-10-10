@@ -10,7 +10,13 @@ const LADDER = 60;
 // Riot's documented shapes: league-v4 LeagueListDTO, champion-v3 ChampionInfo,
 // lol-status-v4 PlatformDataDto, Data Dragon champion.json.
 const entry = (i) => ({ puuid: `P${i}`, leaguePoints: 1000 + i * 10, wins: 100 + i, losses: 100, rank: 'I', hotStreak: i === LADDER - 1, veteran: false, inactive: false, freshBlood: false });
-const CHAMPS = { data: { Annie: { key: '1', id: 'Annie', name: 'Annie', title: 'the Dark Child', image: { full: 'Annie.png' } }, Olaf: { key: '2', id: 'Olaf', name: 'Olaf', title: 'the Berserker', image: { full: 'Olaf.png' } } } };
+// Ahri, Kai'Sa and Wukong (whose Data Dragon id is MonkeyKing) are there for the search box (SITE-10).
+const champ = (id, key, name, title) => ({ key, id, name, title, image: { full: `${id}.png` } });
+const CHAMPS = { data: {
+  Annie: champ('Annie', '1', 'Annie', 'the Dark Child'), Olaf: champ('Olaf', '2', 'Olaf', 'the Berserker'),
+  MonkeyKing: champ('MonkeyKing', '62', 'Wukong', 'the Monkey King'), Ahri: champ('Ahri', '103', 'Ahri', 'the Nine-Tailed Fox'),
+  Kaisa: champ('Kaisa', '145', "Kai'Sa", 'Daughter of the Void'),
+} };
 
 // Data Dragon runesReforged.json: the five styles, a keystone of each that the match fixture uses.
 const style = (id, key, file, keystones) => ({ id, key, name: key, icon: `perk-images/Styles/${file}`,
