@@ -86,7 +86,7 @@ compose alone would start the rejected image again. To give the check longer, ru
 `sudo systemctl edit riot-proxy-update` and add `[Service]` / `Environment=RIOT_PROXY_HEALTH_TIMEOUT=300`.
 
 To hold a version, set `RIOT_PROXY_TAG` in `/opt/riot-proxy/.env` to `sha-<short commit>`
-or a release such as `2.0.0`, then run `sudo riot-proxy-update`. Set it back
+or a release such as `2.1.0`, then run `sudo riot-proxy-update`. Set it back
 to `edge` to follow `main` again. To stop updates: `sudo systemctl disable --now riot-proxy-update.timer`.
 
 Debian security updates install themselves (`unattended-upgrades`).
