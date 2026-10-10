@@ -23,7 +23,12 @@
   .hero h1 { margin: 0; font-size: 24px; letter-spacing: -.01em; }
   .hero p { margin: 2px 0 0; color: var(--dim); font-size: 13px; }
   .search { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; align-items: center; }
-  .search input[name=id] { width: 240px; }
+  .search input[name=id] { width: 300px; max-width: 100%; }
+  /* A champion search that matched nothing or several says so on its own line (SITE-10). */
+  .search .msg { flex-basis: 100%; margin: 0; font-size: 12px; color: var(--warn); text-align: right; overflow-wrap: anywhere; }
+  .search .msg:empty { display: none; }
+  /* Home's own platform picker (SITE-10): the ladder, status, rotation and top champions are per platform. */
+  .homebar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 16px; }
   .patch { font: 600 11px var(--mono); padding: 3px 9px; border-radius: 10px; border: 1px solid var(--line); color: var(--dim); }
   main { max-width: 1180px; margin: 0 auto; padding: 18px 20px 60px; }
   .grid { display: grid; gap: 16px; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); align-items: start; }
@@ -168,7 +173,7 @@
   .brow .sep { color: var(--dim); }
   .note { font-size: 12px; margin: 6px 0; }
   @media (max-width: 900px) { .grid { grid-template-columns: minmax(0, 1fr); } .search { margin-left: 0; } }
-  @media (max-width: 600px) { .match { grid-template-columns: auto minmax(0, 1fr) auto; row-gap: 6px; } .match .meta { grid-column: 1 / -1; flex-direction: row; gap: 8px; } .match .meta > b, .match .meta > span:last-child { flex: none; } .match .meta > span:nth-child(2) { flex: 1; min-width: 0; } .match .cs { display: none; } td.name { max-width: 8em; } table.board th, table.board td { padding: 6px 4px; } .cols { grid-template-columns: 1fr; } .hide-sm { display: none; } .search input[name=id] { width: 100%; } }
+  @media (max-width: 600px) { .match { grid-template-columns: auto minmax(0, 1fr) auto; row-gap: 6px; } .match .meta { grid-column: 1 / -1; flex-direction: row; gap: 8px; } .match .meta > b, .match .meta > span:last-child { flex: none; } .match .meta > span:nth-child(2) { flex: 1; min-width: 0; } .match .cs { display: none; } td.name { max-width: 8em; } table.board th, table.board td { padding: 6px 4px; } .cols { grid-template-columns: 1fr; } .hide-sm { display: none; } .search input[name=id] { width: 100%; } .search .msg { text-align: left; } }
 </style>
 </head>
 <body>
@@ -180,11 +185,12 @@
       <p>An example frontend built only on this proxy's read routes. Every card names the calls behind it.</p>
     </div>
     <form class="search" id="search">
-      <input name="id" placeholder="Riot ID, e.g. Faker#KR1" aria-label="Riot ID" autocomplete="off">
-      <select name="platform" id="platform" aria-label="platform"></select>
+      <input name="id" placeholder="Riot ID or champion, e.g. Faker#KR1 or Ahri" aria-label="Riot ID or champion name" autocomplete="off" list="champList">
+      <datalist id="champList"></datalist>
       <input id="key" type="password" placeholder="API key (rpx_…)" aria-label="API key" size="16">
       <button type="submit">Search</button>
       <span class="patch" id="patch" title="Data Dragon patch">patch …</span>
+      <p class="msg" id="searchMsg" role="status" aria-live="polite"></p>
     </form>
   </div>
 </div>
@@ -311,13 +317,33 @@ function parseRiotId(s) {
   return m ? { gameName: m[1].trim(), tagLine: m[2].trim() } : null;
 }
 
-/** `#/`, `#/player/{name}/{tag}`, `#/champion/{id}` → `{ view, args }`. */
+/** `#/`, `#/player/{name}/{tag}`, `#/champion/{id}`, `#/champion/{id}/builds` (SITE-10) → `{ view, args }`. */
 function parseRoute(hash) {
   const parts = String(hash ?? '').replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
   if (parts[0] === 'player' && parts.length === 3) return { view: 'player', args: { gameName: parts[1], tagLine: parts[2] } };
-  if (parts[0] === 'champion' && /^\d+$/.test(parts[1] ?? '')) return { view: 'champion', args: { id: Number(parts[1]) } };
+  if (parts[0] === 'champion' && /^\d+$/.test(parts[1] ?? '')) return { view: 'champion', args: parts[2] === 'builds' ? { id: Number(parts[1]), focus: 'builds' } : { id: Number(parts[1]) } };
   if (parts[0] === 'match' && parts.length === 3 && /^[a-z]+$/.test(parts[1]) && /^[A-Z0-9]+_\d+$/.test(parts[2])) return { view: 'match', args: { region: parts[1], matchId: parts[2] } };
   return { view: 'home', args: {} };
+}
+
+/** A name as the search compares it (SITE-10): lower case, accents, spaces and punctuation dropped, so `Kai'Sa` is `kaisa`. */
+const champKey = (s) => String(s ?? '').normalize('NFD').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+
+/**
+ * A champion for a search (SITE-10), from championIndex's map: matched on the display name and on
+ * Data Dragon's id (`MonkeyKing` for Wukong), compared by champKey. An exact match first, else a
+ * unique prefix. `{ id, name }` when found; `{ id: null, matches }` (names, sorted) otherwise, empty
+ * when nothing matches and two or more when the query is ambiguous.
+ */
+function findChampion(index, query) {
+  const q = champKey(query);
+  const all = Object.entries(index ?? {}).map(([id, c]) => ({ id: Number(id), name: c.name ?? '', keys: [champKey(c.name), champKey(c.id)].filter(Boolean) }));
+  if (!q) return { id: null, matches: [] };
+  const exact = all.find((c) => c.keys.includes(q));
+  if (exact) return { id: exact.id, name: exact.name };
+  const prefix = all.filter((c) => c.keys.some((k) => k.startsWith(q)));
+  if (prefix.length === 1) return { id: prefix[0].id, name: prefix[0].name };
+  return { id: null, matches: prefix.map((c) => c.name).sort((a, b) => a.localeCompare(b)) };
 }
 
 /** The dev explorer's link to one operation (design/10). */
@@ -666,7 +692,7 @@ let champions = {};
 const names = new Map(); // puuid → account, for the session
 const calls = [];
 // patch: the analytics patch, `all` or a `major.minor` (DEV-21). region: the champion view's
-// platform, '' for every platform; null follows the platform picked above.
+// platform, '' for every platform; null follows the one picked on the home view.
 const state = { tier: 'CHALLENGER', queue: 'RANKED_SOLO_5x5', page: 0, ladder: null, ladderFor: '', patch: 'all', region: null };
 
 /** One GET through the proxy, logged in the calls drawer. */
@@ -714,16 +740,20 @@ function champIcon(id, cls = '') {
   return url ? `<img class="icon ${cls}" src="${esc(url)}" alt="${esc(label)}" data-short="${esc(label.slice(0, 2))}" loading="lazy">` : `<span class="icon ${cls}">${esc(label.slice(0, 2))}</span>`;
 }
 
-const platform = () => $('#platform').value;
+/** The home view's platform (SITE-10): its own picker's saved choice, '' until one is picked. A player's comes from their profile. */
+const platform = () => { const v = store.get('rp.showcase.platform', ''); return (cfg?.platforms ?? []).some((p) => p.value === v) ? v : ''; };
 
 // ---------- home
+/** Home's platform picker (SITE-10): the ladder, status, rotation and top champions are per platform. */
+const homeBar = () => `<div class="homebar"><label for="hPlatform" class="muted">Platform</label><select id="hPlatform" aria-label="platform"><option value="">platform…</option>${(cfg?.platforms ?? []).map((p) => `<option value="${esc(p.value)}" ${p.value === platform() ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}</select></div>`;
+
 function renderHome() {
   viewSeq++;
   if (!platform()) {
-    $('#view').innerHTML = `<div class="card empty">Pick a platform above to load its ladder, status and rotation.</div>`;
+    $('#view').innerHTML = `${homeBar()}<div class="card empty">Pick a platform here to load its ladder, status, rotation and top champions.</div>`;
     return;
   }
-  $('#view').innerHTML = `<div id="status"></div>
+  $('#view').innerHTML = `${homeBar()}<div id="status"></div>
   <div class="grid">
     <div>
       <section class="card" id="ladder"></section>
@@ -878,6 +908,7 @@ let boots = null; // ids of the items Data Dragon tags "Boots", once per session
 let catalog = null; // item.json as a build reads it (BLD-04), once per session
 // Bumped on every route, so a slow call for a view the user already left draws nothing.
 let viewSeq = 0;
+// The player's platform is their profile's (SITE-09), so `id` is just the Riot ID (SITE-10).
 const pl = { id: null, profile: null, queue: 0, champion: 0, start: 0, matches: [], hasMore: false, mastery: null, masteryAll: false };
 
 async function loadLookups() {
@@ -920,15 +951,12 @@ const champLink = (id, cls = '') => `<a href="#/champion/${esc(id)}" title="${es
 async function renderPlayer({ gameName, tagLine }, refresh = false) {
   const seq = ++viewSeq;
   const alive = () => seq === viewSeq;
-  if (!platform()) {
-    $('#view').innerHTML = `<div class="card empty">Pick the platform ${esc(gameName)} #${esc(tagLine)} plays on above.</div>`;
-    return;
-  }
   if (!refresh) {
-    Object.assign(pl, { id: `${platform()}/${gameName}#${tagLine}`, profile: null, queue: 0, champion: 0, start: 0, matches: [], hasMore: false, mastery: null, masteryAll: false });
+    Object.assign(pl, { id: `${gameName}#${tagLine}`, profile: null, queue: 0, champion: 0, start: 0, matches: [], hasMore: false, mastery: null, masteryAll: false });
     $('#view').innerHTML = `<section class="card profile" id="pHead"><p class="muted">Looking up ${esc(gameName)} #${esc(tagLine)}…</p></section>`;
   }
-  const q = new URLSearchParams({ platform: platform(), topMastery: '3' });
+  // No platform: the proxy finds the player's from their account and echoes it (SITE-09).
+  const q = new URLSearchParams({ topMastery: '3' });
   if (refresh) q.set('refresh', 'true');
   const [res] = await Promise.all([get(`/v1/players/by-riot-id/${encodeURIComponent(gameName)}/${encodeURIComponent(tagLine)}/profile?${q}`), loadLookups()]);
   if (!alive()) return;
@@ -990,9 +1018,12 @@ function renderRanks() {
   $('#pRanks').innerHTML = `<header><h2>Ranked</h2></header><div>${sources(OP.profile)}</div>${body}`;
 }
 
+/** The platform the profile came back on (SITE-09): every other player call names it. */
+const plPlatform = () => pl.profile?.platform ?? '';
+
 async function loadLive(seq) {
   const p = pl.profile;
-  const res = await get(`/v1/lol/spectator/active/${platform()}/${encodeURIComponent(p.puuid)}`);
+  const res = await get(`/v1/lol/spectator/active/${encodeURIComponent(plPlatform())}/${encodeURIComponent(p.puuid)}`);
   // Not in a game is a 404 (spectator-v5); nothing to show then.
   if (seq !== viewSeq || !res.ok) return;
   const g = liveGame(res.json, p.puuid);
@@ -1018,7 +1049,7 @@ async function loadMatches(seq, refresh = false, more = false) {
     pl.matches = [];
     el.innerHTML = matchesHeader() + `<p class="muted">loading…</p>`;
   }
-  const q = new URLSearchParams({ platform: platform(), start: String(pl.start), count: String(MATCH_PAGE) });
+  const q = new URLSearchParams({ platform: plPlatform(), start: String(pl.start), count: String(MATCH_PAGE) });
   if (pl.queue) q.set('queue', String(pl.queue));
   if (pl.champion) q.set('champion', String(pl.champion));
   if (refresh) q.set('refresh', 'true');
@@ -1059,7 +1090,7 @@ async function loadPool(seq) {
   const el = $('#pPool');
   const head = `<header><h2>Champion pool</h2><span class="muted" id="poolMeta"></span></header><div>${sources(OP.pool)}</div>`;
   el.innerHTML = head + `<p class="muted">loading…</p>`;
-  const q = new URLSearchParams({ platform: platform(), limit: '10' });
+  const q = new URLSearchParams({ platform: plPlatform(), limit: '10' });
   if (pl.queue) q.set('queue', String(pl.queue));
   const res = await get(`/v1/players/${encodeURIComponent(pl.profile.puuid)}/champions?${q}`);
   if (seq !== viewSeq) return;
@@ -1080,7 +1111,7 @@ async function loadMastery(seq) {
   const el = $('#pMastery');
   const head = `<header><h2>Mastery</h2><span class="muted" id="mMeta"></span></header><div>${sources(OP.mastery)}</div>`;
   el.innerHTML = head + `<p class="muted">loading…</p>`;
-  const res = await get(`/v1/lol/mastery/by-puuid/${platform()}/${encodeURIComponent(pl.profile.puuid)}`);
+  const res = await get(`/v1/lol/mastery/by-puuid/${encodeURIComponent(plPlatform())}/${encodeURIComponent(pl.profile.puuid)}`);
   if (seq !== viewSeq) return;
   if (!res.ok) { el.innerHTML = head + failure(res); return; }
   pl.mastery = masterySummary(res.json);
@@ -1283,14 +1314,22 @@ function renderGold(tl, match) {
 }
 
 // ---------- champion view (DEV-08)
-const ch = { id: null, role: '', builds: null, tab: 0 };
-/** The champion view's platform: the one picked on the page, else the one picked above; '' is every platform. */
+// scrolled: the `#/champion/{id}/builds` hash whose Builds card was last scrolled to (SITE-10).
+const ch = { id: null, role: '', builds: null, tab: 0, scrolled: '' };
+/** The champion view's platform: the one picked on the page, else the home view's; '' is every platform. */
 const champRegion = () => state.region ?? platform();
 const regionSelect = () => `<select data-region aria-label="region"><option value="">All regions</option>${(cfg?.platforms ?? []).map((p) => `<option value="${esc(p.value)}" ${p.value === champRegion() ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}</select>`;
 
-async function renderChampion({ id }) {
+async function renderChampion({ id, focus }) {
   const seq = ++viewSeq;
   if (ch.id !== id) Object.assign(ch, { id, role: '', tab: 0 });
+  // Opened from the search box (SITE-10): bring the Builds card into view once it is drawn, once per visit,
+  // so a picker changed afterwards doesn't scroll the page back.
+  const toBuilds = () => {
+    if (focus !== 'builds' || ch.scrolled === location.hash) return;
+    ch.scrolled = location.hash;
+    $('#cBuild')?.scrollIntoView?.({ block: 'start' });
+  };
   const c = champions[id];
   const name = c?.name ?? `Champion #${id}`;
   const tabs = QUEUES.map(([q, l]) => `<button data-cqueue="${q}" class="${q === state.queue ? 'on' : ''}">${l}</button>`).join('');
@@ -1322,7 +1361,7 @@ async function renderChampion({ id }) {
   if (seq !== viewSeq) return;
   loadMatchups(seq);
   ch.builds = builds.ok ? builds.json : null;
-  if (!res.ok) { $('#cTiers').innerHTML = `<header><h2>By tier</h2></header>${failure(res)}`; $('#cBuild').innerHTML = `<header><h2>Builds</h2></header>`; return; }
+  if (!res.ok) { $('#cTiers').innerHTML = `<header><h2>By tier</h2></header>${failure(res)}`; $('#cBuild').innerHTML = `<header><h2>Builds</h2></header>`; toBuilds(); return; }
   const d = res.json;
   $('#cMeta').textContent = `${region || 'every platform'} · ${QUEUES.find(([q2]) => q2 === d.queue)?.[1] ?? d.queue} · ${patchLabel(state.patch)} · ${(d.totalGames ?? 0).toLocaleString()} games`;
   const rows = tierRows(d.byTier);
@@ -1340,7 +1379,7 @@ async function renderChampion({ id }) {
         <td class="n">${pct(r.pickRate)}</td><td class="n">${pct(r.banRate)}</td>
         <td class="n hide-sm">${num(r.avgKda, (v) => v.toFixed(2))}</td><td class="n hide-sm">${num(r.csPerMin, (v) => v.toFixed(1))}</td><td class="n hide-sm">${num(r.goldPerMin, (v) => Math.round(v))}</td></tr>`).join('')}</tbody></table></div>`
     : none);
-  if (ch.builds?.builds?.length) { renderBuilds(); return; }
+  if (ch.builds?.builds?.length) { renderBuilds(); toBuilds(); return; }
   // No set builds (no timelines archived for this slice yet): each item, rune page and spell pair on its own.
   const items = (d.items ?? []).map((e) => `<li>${itemIcon(e.itemId)}<span>${esc(itemNames?.[e.itemId] ?? `item ${e.itemId}`)}</span>${stat(e)}</li>`).join('');
   const spellRows = (d.spells ?? []).map((e) => `<li><span class="spells-row">${spellIcon(e.spellA)}${spellIcon(e.spellB)}</span>${stat(e)}</li>`).join('');
@@ -1348,6 +1387,7 @@ async function renderChampion({ id }) {
   const sub = (title, body) => `<h3 class="muted sub">${title}</h3>${body ? `<ol class="list">${body}</ol>` : '<p class="muted">–</p>'}`;
   $('#cBuild').innerHTML = `<header><h2>Builds</h2></header><div>${sources(OP.builds, OP.champ, OP.file)}</div>`
     + (items || spellRows || runeRows ? sub('Items', items) + sub('Summoner spells', spellRows) + sub('Runes', runeRows) : `<p class="empty">No builds ${state.patch === 'all' ? 'yet' : `on ${esc(patchLabel(state.patch))}`}.</p>`);
+  toBuilds();
 }
 
 const stat = (e) => `<span class="stat">${pct(e.winRate)}<small>${e.games.toLocaleString()} games</small></span>`;
@@ -1411,6 +1451,7 @@ function route() {
   if (view === 'player') return renderPlayer(args);
   if (view === 'champion') return renderChampion(args);
   if (view === 'match') return renderMatch(args);
+  ch.scrolled = '';
   renderHome();
 }
 
@@ -1438,6 +1479,7 @@ document.addEventListener('change', (ev) => {
   const t = ev.target;
   if ('patch' in t.dataset) { state.patch = t.value; if (parseRoute(location.hash).view === 'champion') route(); else loadTop(); }
   if ('region' in t.dataset) { state.region = t.value; route(); }
+  if (t.id === 'hPlatform') { store.set('rp.showcase.platform', t.value); state.ladderFor = ''; state.region = null; renderHome(); }
 });
 // An image the mirror cannot serve (an item retired since that game, say) becomes the
 // same empty box, with a champion's initials where it has them.
@@ -1450,26 +1492,42 @@ document.addEventListener('error', (ev) => {
   img.replaceWith(box);
 }, true);
 
+const searchSay = (msg) => { $('#searchMsg').textContent = msg; $('#search').elements.id.toggleAttribute('aria-invalid', Boolean(msg)); };
+// A `#` makes it a Riot ID; anything else is a champion name, opened on its Builds card (SITE-10).
 $('#search').onsubmit = (ev) => {
   ev.preventDefault();
-  const id = parseRiotId(ev.target.elements.id.value);
-  if (!id) { ev.target.elements.id.setCustomValidity('Name#TAG'); ev.target.elements.id.reportValidity(); return; }
-  location.hash = `#/player/${encodeURIComponent(id.gameName)}/${encodeURIComponent(id.tagLine)}`;
+  const raw = ev.target.elements.id.value.trim();
+  if (!raw) { searchSay('Type a Riot ID (Name#TAG) or a champion name.'); return; }
+  if (raw.includes('#')) {
+    const id = parseRiotId(raw);
+    if (!id) { searchSay('A Riot ID is Name#TAG.'); return; }
+    searchSay('');
+    location.hash = `#/player/${encodeURIComponent(id.gameName)}/${encodeURIComponent(id.tagLine)}`;
+    return;
+  }
+  const c = findChampion(champions, raw);
+  if (c.id == null) {
+    const shown = c.matches.slice(0, 5).join(', ') + (c.matches.length > 5 ? ', …' : '');
+    searchSay(c.matches.length ? `'${raw}' matches ${shown} — keep typing` : `No champion matches '${raw}'${Object.keys(champions).length ? '' : ' (champion.json is not mirrored yet)'}. A Riot ID needs its #TAG.`);
+    return;
+  }
+  searchSay('');
+  const hash = `#/champion/${c.id}/builds`;
+  if (location.hash === hash) { ch.scrolled = ''; route(); } else location.hash = hash;
 };
-$('#search').elements.id.oninput = (ev) => ev.target.setCustomValidity('');
+$('#search').elements.id.oninput = () => searchSay('');
 
 async function boot() {
   $('#key').value = store.get('rp.dev.key', '');
   $('#key').onchange = () => { store.set('rp.dev.key', $('#key').value.trim()); route(); };
   cfg = await fetch('/dev/config.json').then((r) => r.json());
   $('#key').hidden = cfg.authDisabled;
-  const saved = store.get('rp.showcase.platform', '');
-  $('#platform').innerHTML = `<option value="">platform…</option>${cfg.platforms.map((p) => `<option value="${esc(p.value)}" ${p.value === saved ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}`;
-  $('#platform').onchange = () => { store.set('rp.showcase.platform', platform()); state.ladderFor = ''; state.region = null; route(); };
   const [v, c] = await Promise.all([get('/v1/static/versions'), get('/v1/static/champion')]);
   version = v.json?.current ?? null;
   $('#patch').textContent = version ? `patch ${version}` : 'no patch mirrored';
   if (c.ok) champions = championIndex(c.json);
+  // The search box suggests every champion by name (SITE-10).
+  $('#champList').innerHTML = Object.values(champions).map((x) => x.name).filter(Boolean).sort((a, b) => a.localeCompare(b)).map((n) => `<option value="${esc(n)}">`).join('');
   window.onhashchange = route;
   route();
 }
