@@ -1,6 +1,6 @@
 # Build fixtures
 
-For `builds:extract` (BLD-01, ADR-117; BLD-05, ADR-131): `src/archive/builds/tests.rs` and `tests/builds.rs`. BLD-04's showcase tests (`tests/showcase.mjs`) read the golden files too. No API key; CI greps for `RGAPI-`.
+For `builds:extract` (BLD-01, ADR-117; BLD-05, ADR-131; BLD-06, ADR-132): `src/archive/builds/tests.rs` and `tests/builds.rs`. BLD-04's showcase tests (`tests/showcase.mjs`) read the golden files too. No API key; CI greps for `RGAPI-`.
 
 | File | Source | What it covers |
 |---|---|---|
@@ -12,6 +12,10 @@ For `builds:extract` (BLD-01, ADR-117; BLD-05, ADR-131): `src/archive/builds/tes
 | `OC1_712417978.timeline.json` | real: that match's timeline, puuids replaced | Viego's possession (BLD-05): participant 2 (Viego) has two R level-ups at 1370679 ms, in the ms six of his items are destroyed, after possessing Nidalee. Participant 10 (Morgana) takes a real W at 1002026 ms, in the ms one of her items is destroyed. Participant 1 (Zed) has Triple Tonic: 14 points at level 13 |
 | `item-16.20.1.json` | **derived** from Data Dragon 16.20.1's `item.json`, cut down as `item-16.19.1.json` | the catalogue for OC1_712417978's patch |
 | `OC1_712417978.expected.json` | **derived** as `OC1_711969250.expected.json`, with Viego's `skills` (`"QWQEQRQEQEREE"`) and `skillOrder` (`"QEW"`) written by hand from the BLD-05 rule | per puuid, the same fields. Only Viego differs from the definitions before BLD-05 |
+| `OC1_706102889.match.json` | real: OC1 ranked solo (queue 420, patch 16.14), from the dev VM's archive 2026-10-10, puuids replaced | the match the timeline belongs to; its `championId`s say who is Udyr |
+| `OC1_706102889.timeline.json` | real: that match's timeline, puuids replaced | Udyr's skill order (BLD-06): participant 1 (Udyr, Triple Tonic) ends at level 20 with 21 points, R6 W6 E6 Q3, R first to 6, with points at levels 19 and 20. Participant 5 (Karma) has her R from level 1 |
+| `item-16.14.1.json` | **derived** from Data Dragon 16.14.1's `item.json`, cut down as `item-16.19.1.json` | the catalogue for OC1_706102889's patch |
+| `OC1_706102889.expected.json` | **derived** as the others, with Udyr's `skillOrder` (`"RWEQ"`) written by hand from the BLD-06 rule | per puuid, the same fields. Only Udyr differs from the definitions before BLD-06 (`"WEQ"`) |
 
 Every puuid in the match and timeline was replaced with `bld-fixture-puuid-NN`, NN being the player's position in `metadata.participants`, the same in both files. Nothing else was changed.
 

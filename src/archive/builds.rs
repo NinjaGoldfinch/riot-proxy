@@ -7,7 +7,7 @@
 //!   undone purchases ([`purchases`]); sales and their undos are ignored;
 //! - finished item, boots: [`ItemCatalog`];
 //! - starter: every purchase before [`BUILD_STARTER_MS`] that isn't a trinket;
-//! - skill order: [`skill_order`];
+//! - skill order: [`skill_order`], with R for Udyr (BLD-06);
 //! - Viego's possession: [`possessed`] level-ups aren't counted (BLD-05).
 //!
 //! The extraction never panics on a strange body: an item id the catalogue
@@ -21,7 +21,7 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 /// The version of [`extract`] that wrote a row (`match_builds.builds_version`).
-pub const BUILDS_VERSION: i64 = 2;
+pub const BUILDS_VERSION: i64 = 3;
 
 /// Purchases before this many ms into the game are the starter (BLD). In the
 /// match the definitions were checked on, starters were bought at 7–29 s and
@@ -41,6 +41,9 @@ const SKILL_KEYS: [char; 4] = ['Q', 'W', 'E', 'R'];
 /// Viego, whose possession logs the possessed champion's ranks as his own
 /// level-ups (BLD-05, ADR-131).
 const VIEGO: i64 = 234;
+/// Udyr, whose R is an ordinary ability ranked like Q, W and E, so his skill
+/// order ranks all four (BLD-06, ADR-132).
+const UDYR: i64 = 77;
 
 /// One `match_builds` row, minus the `match_id` and `key_scope` the caller owns.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,8 +59,8 @@ pub struct BuildFact {
     pub items: Vec<i64>,
     /// The first 15 normal level-ups, `"EQWWW…"`.
     pub skills: String,
-    /// Q, W and E in the order they were maxed (`"QWE"`); `None` with no
-    /// level-ups.
+    /// Q, W and E in the order they were maxed (`"QWE"`), and R too for
+    /// Udyr (`"RWEQ"`); `None` with no level-ups.
     pub skill_order: Option<String>,
 }
 
@@ -273,23 +276,33 @@ fn possessed(champion: Option<i64>, events: &[&Event]) -> HashSet<i64> {
         .collect()
 }
 
-/// Q, W and E (`skillSlot` 1–3) ranked by points at the end, a tie going to
-/// the skill that reached that count first; a skill never levelled ranks
-/// after the others, in Q W E order. `None` with no level-ups at all.
-fn skill_order(slots: &[usize]) -> Option<String> {
+/// The skills a skill order ranks: Q, W and E, or all four for Udyr, whose R
+/// is ranked like the others (BLD-06). For everyone else R is the ultimate,
+/// taken when it can be.
+fn ranked_skills(champion: Option<i64>) -> usize {
+    if champion == Some(UDYR) { 4 } else { 3 }
+}
+
+/// The first `ranked` skills (`skillSlot` 1–`ranked`) ranked by points at the
+/// end, a tie going to the skill that reached that count first; a skill never
+/// levelled ranks after the others, in Q W E R order. `None` with no level-ups
+/// at all.
+fn skill_order(slots: &[usize], ranked: usize) -> Option<String> {
     if slots.is_empty() {
         return None;
     }
-    let mut points = [0usize; 3];
+    let mut points = [0usize; 4];
     // The level-up (its index) at which each skill reached its final count.
-    let mut reached = [usize::MAX; 3];
+    let mut reached = [usize::MAX; 4];
     for (k, &s) in slots.iter().enumerate() {
-        if let Some(p) = points.get_mut(s) {
+        if s < ranked
+            && let Some(p) = points.get_mut(s)
+        {
             *p += 1;
             reached[s] = k;
         }
     }
-    let mut order = [0usize, 1, 2];
+    let mut order: Vec<usize> = (0..ranked.min(SKILL_KEYS.len())).collect();
     order.sort_by_key(|&s| (std::cmp::Reverse(points[s]), reached[s]));
     Some(order.iter().map(|&s| SKILL_KEYS[s]).collect())
 }
@@ -339,7 +352,8 @@ pub fn extract(timeline: &[u8], catalog: &ItemCatalog, champions: &HashMap<Strin
             .filter(|&id| catalog.is_finished(id))
             .take(ITEMS_KEPT)
             .collect();
-        let possession = possessed(champions.get(puuid).copied(), &mine);
+        let champion = champions.get(puuid).copied();
+        let possession = possessed(champion, &mine);
         let slots: Vec<usize> = mine
             .iter()
             .filter(|e| e.kind == "SKILL_LEVEL_UP" && e.level_up_type.as_deref() == Some("NORMAL"))
@@ -357,7 +371,7 @@ pub fn extract(timeline: &[u8], catalog: &ItemCatalog, champions: &HashMap<Strin
             boots,
             items,
             skills,
-            skill_order: skill_order(&slots),
+            skill_order: skill_order(&slots, ranked_skills(champion)),
         });
     }
     out

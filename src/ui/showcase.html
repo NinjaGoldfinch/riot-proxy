@@ -579,6 +579,8 @@ const SKILLS_KEPT = 15;
 const SKILL_KEYS = ['Q', 'W', 'E', 'R'];
 /** Viego, whose possession logs the possessed champion's ranks as his own level-ups (BLD-05). */
 const VIEGO = 234;
+/** Udyr, whose R is ranked like Q, W and E, so his skill order ranks all four (BLD-06). */
+const UDYR = 77;
 /** The skill grid has at least this many columns, one per point in the order taken. */
 const SKILL_GRID_MIN = 18;
 /**
@@ -619,13 +621,17 @@ function isBoots(catalog, id) {
   return tagged(id) || (catalog.get(id)?.from ?? []).some(tagged);
 }
 
-/** Q, W and E ranked by points at the end, a tie going to the one that reached its count first. */
-function skillOrder(slots) {
+/**
+ * The first `ranked` skills (Q, W and E; all four for Udyr) ranked by points at the end, a tie
+ * going to the one that reached its count first; one never levelled goes last, in Q W E R order.
+ */
+function skillOrder(slots, ranked = 3) {
   if (!slots.length) return null;
-  const points = [0, 0, 0];
-  const reached = [Infinity, Infinity, Infinity];
-  slots.forEach((s, k) => { if (s < 3) { points[s] += 1; reached[s] = k; } });
-  return [0, 1, 2].sort((a, b) => points[b] - points[a] || reached[a] - reached[b]).map((s) => SKILL_KEYS[s]).join('');
+  const keys = [...Array(ranked).keys()];
+  const points = keys.map(() => 0);
+  const reached = keys.map(() => Infinity);
+  slots.forEach((s, k) => { if (s < ranked) { points[s] += 1; reached[s] = k; } });
+  return keys.sort((a, b) => points[b] - points[a] || reached[a] - reached[b]).map((s) => SKILL_KEYS[s]).join('');
 }
 
 /**
@@ -636,7 +642,8 @@ function skillOrder(slots) {
  * `afterId: 0` removes the latest earlier purchase of `beforeId`); sales and their undos are
  * ignored. Only NORMAL level-ups count. For Viego (`championId` 234, from the match, since the
  * timeline doesn't name champions), a level-up in the same ms as one or more of his own
- * ITEM_DESTROYED isn't counted: it is a possessed champion's rank, logged as his (BLD-05).
+ * ITEM_DESTROYED isn't counted: it is a possessed champion's rank, logged as his (BLD-05). Udyr's
+ * skill order ranks R with Q, W and E (BLD-06).
  * Without a catalogue, `starter`, `boots` and `items` are `null`; with one, an item it doesn't
  * know is dropped from them, not guessed. Never throws: a strange timeline gives an empty build.
  */
@@ -672,7 +679,7 @@ function playerBuild(timeline, puuid, catalog, championId) {
     boots: catalog ? (known.find((p) => isBoots(catalog, p.itemId))?.itemId ?? null) : null,
     items: catalog ? known.filter((p) => catalog.get(p.itemId).finished).slice(0, ITEMS_KEPT) : null,
     skills: slots.slice(0, SKILLS_KEPT).map((s) => SKILL_KEYS[s]).join(''),
-    skillOrder: skillOrder(slots),
+    skillOrder: skillOrder(slots, championId === UDYR ? 4 : 3),
     levelUps,
   };
 }

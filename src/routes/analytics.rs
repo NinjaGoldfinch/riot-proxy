@@ -263,7 +263,8 @@ pub struct BuildStarterOption {
     win_rate: f64,
 }
 
-/// A skill order: Q, W and E in the order they were maxed, `"QWE"`.
+/// A skill order: Q, W and E in the order they were maxed, `"QWE"`. For Udyr,
+/// whose R is ranked like the others, all four, `"RWEQ"`.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BuildSkillOrderOption {

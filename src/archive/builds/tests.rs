@@ -21,6 +21,13 @@ const POSSESSION_EXPECTED: &[u8] =
     include_bytes!("../../../tests/fixtures/builds/OC1_712417978.expected.json");
 const VIEGO: i64 = 234;
 const ZED: i64 = 238;
+const UDYR: i64 = 77;
+/// OC1_706102889 (patch 16.14): Udyr maxes R first and ends with 21 points at
+/// level 20, Triple Tonic's included (BLD-06).
+const UDYR_TIMELINE: &[u8] = include_bytes!("../../../tests/fixtures/builds/OC1_706102889.timeline.json");
+const UDYR_MATCH: &[u8] = include_bytes!("../../../tests/fixtures/builds/OC1_706102889.match.json");
+const UDYR_ITEMS: &[u8] = include_bytes!("../../../tests/fixtures/builds/item-16.14.1.json");
+const UDYR_EXPECTED: &[u8] = include_bytes!("../../../tests/fixtures/builds/OC1_706102889.expected.json");
 
 fn catalog() -> ItemCatalog {
     ItemCatalog::from_item_json(ITEMS).unwrap()
@@ -125,6 +132,52 @@ fn the_possession_game_matches_its_golden_file() {
     let blind = extract(POSSESSION_TIMELINE, &c, &no_champions());
     assert_eq!(blind[1].skills, "QWQEQRQEQEREERR");
     assert_eq!(blind[2..], rows[2..]);
+}
+
+#[test]
+fn the_udyr_game_matches_its_golden_file() {
+    let c = ItemCatalog::from_item_json(UDYR_ITEMS).unwrap();
+    let rows = extract(UDYR_TIMELINE, &c, &champions_of(UDYR_MATCH));
+    assert_eq!(rows.len(), 10);
+    let want: BTreeMap<String, Value> = serde_json::from_slice(UDYR_EXPECTED).unwrap();
+    assert_eq!(by_puuid(&rows), want);
+    // Udyr (participant 1): R6 W6 E6 Q3, R first to 6.
+    assert_eq!(rows[0].skill_order.as_deref(), Some("RWEQ"));
+    // Without his champion he is ranked as anyone else: W and E tie at 6, W first.
+    let blind = extract(UDYR_TIMELINE, &c, &no_champions());
+    assert_eq!(blind[0].skill_order.as_deref(), Some("WEQ"));
+    assert_eq!(blind[1..], rows[1..]);
+}
+
+#[test]
+fn udyrs_skill_order_ranks_r_with_q_w_and_e() {
+    // R E R E R R W: R 4, E 2, W 1, Q never.
+    let events = json!([
+        level(4, 1),
+        level(3, 2),
+        level(4, 3),
+        level(3, 4),
+        level(4, 5),
+        level(4, 6),
+        level(2, 7)
+    ]);
+    let b = only_as(UDYR, events.clone());
+    assert_eq!(
+        b.skill_order.as_deref(),
+        Some("REWQ"),
+        "a skill never levelled goes last"
+    );
+    assert_eq!(b.skills, "RERERRW");
+    // The same events for anyone else: R isn't ranked.
+    assert_eq!(only_as(ZED, events.clone()).skill_order.as_deref(), Some("EWQ"));
+    assert_eq!(
+        only(events).skill_order.as_deref(),
+        Some("EWQ"),
+        "no champion: not Udyr"
+    );
+    // A tie between R and Q goes to the one that got there first.
+    let b = only_as(UDYR, json!([level(4, 1), level(1, 2), level(1, 3), level(4, 4)]));
+    assert_eq!(b.skill_order.as_deref(), Some("QRWE"));
 }
 
 #[test]

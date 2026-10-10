@@ -87,7 +87,7 @@ const team = (id) => MATCH.info.participants.find((x) => x.participantId === id)
 // A build's events in Riot's EventsTimeLineDto shapes (BLD-04). Participant 1 (blue side's first): starter with a trinket,
 // boots, two finished items in one visit, a third, and an undone fourth; Q maxed first, then W. Participant 3: one item
 // and three level-ups. Participant 2: 19 level-ups, two of them R in the ms two of their items are destroyed, which is
-// Viego's possession if `viegoIn: 2` makes them Viego (BLD-05). Participant 0 is not a player. Nobody else has events.
+// Viego's possession if `playing: { 2: [234, 'Viego'] }` makes them Viego (BLD-05). Participant 0 is not a player. Nobody else has events.
 const up = (participantId, skillSlot, timestamp, levelUpType = 'NORMAL') => ({ type: 'SKILL_LEVEL_UP', participantId, skillSlot, levelUpType, timestamp });
 const buy = (participantId, itemId, timestamp) => ({ type: 'ITEM_PURCHASED', participantId, itemId, timestamp });
 const EVENTS = [
@@ -142,15 +142,15 @@ const BUILDS = { championId: 1, championName: 'Annie', platform: 'oc1', queue: '
 ] };
 // `meIn: n` makes participant n the fake profile's player (PUUID), in the match and its timeline alike.
 const mine = (doc, n) => JSON.parse(JSON.stringify(doc).replaceAll(MATCH.info.participants[n - 1].puuid, PUUID));
-// `viegoIn: n` makes participant n Viego (championId 234) in the match.
-const viego = (doc, n) => ({ ...doc, info: { ...doc.info, participants: doc.info.participants.map((x) => (x.participantId === n ? { ...x, championId: 234, championName: 'Viego' } : x)) } });
-function detail(p, u, { noTimeline = false, noAnalytics = false, noBuilds = false, buildsFail = false, meIn = 0, viegoIn = 0 }) {
+// `playing: { n: [championId, championName] }` puts participant n on that champion in the match.
+const playAs = (doc, playing) => ({ ...doc, info: { ...doc.info, participants: doc.info.participants.map((x) => (playing[x.participantId] ? { ...x, championId: playing[x.participantId][0], championName: playing[x.participantId][1] } : x)) } });
+function detail(p, u, { noTimeline = false, noAnalytics = false, noBuilds = false, buildsFail = false, meIn = 0, playing = null }) {
   let m;
   if ((m = p.match(/^\/v1\/lol\/matches\/([a-z]+)\/([A-Z0-9]+_\d+)(\/timeline)?$/))) {
     if (m[2] === 'OC1_1') return [404, { error: { code: 'NOT_FOUND', message: 'no match', requestId: 'r' } }];
     if (m[3]) return noTimeline ? [503, { error: { code: 'UPSTREAM_UNAVAILABLE', message: 'try later', requestId: 'r' } }] : [200, meIn ? mine(TIMELINE, meIn) : TIMELINE];
     const body = meIn ? mine(MATCH, meIn) : MATCH;
-    return [200, viegoIn ? viego(body, viegoIn) : body];
+    return [200, playing ? playAs(body, playing) : body];
   }
   // The proxy's AnalyticsPatchesResponse (DEV-21): newest first. With a championId (DEV-25), that
   // champion's games: 60 in all, as the detail's totalGames.
