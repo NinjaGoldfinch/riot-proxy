@@ -98,7 +98,7 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         tracing::warn!(key = %key, "CACHE_TTL_OVERRIDES key matches no cacheable endpoint; ignored");
     }
     // The archive queues what a stored match or timeline lacks (TL-01).
-    let queue = crate::jobs::Queue::new(db.clone());
+    let queue = crate::jobs::Queue::new(db.clone()).with_kind_limits(config.job_kind_limits.clone());
     let fetcher = Fetcher::new(FetcherParts {
         client: match options.riot_base_url.as_ref().or(config.riot_base_url.as_ref()) {
             Some(url) => RiotClient::with_base_url(&config, url)?,
@@ -250,6 +250,11 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         ),
         Err(e) => tracing::warn!(error = %e, "could not check for analytics rows to split by tier and side"),
     }
+    tracing::info!(
+        workers = config.job_concurrency,
+        kind_limits = ?config.job_kind_limits,
+        "starting job workers"
+    );
     let workers = scheduler.start(usize::try_from(config.job_concurrency).unwrap_or(8));
     let ticks = crate::jobs::ticks::Ticks::start_with(
         &scheduler,

@@ -312,6 +312,8 @@ const jobRow = (j, cells) =>
 
 function renderQueue(q) {
   const parts = [`${q.ready} ready`];
+  // Ready jobs of a kind at its JOB_KIND_LIMITS cap wait for one to finish.
+  if (q.held) parts.push(`${q.held} waiting their turn (${q.heldKinds.join(', ')})`);
   if (q.delayed) parts.push(`${q.delayed} waiting out a backoff${q.nextDelayedAt ? ` (next ${when(q.nextDelayedAt)})` : ''}`);
   $('queueSummary').textContent = parts.join(' · ');
   const rows = q.next.map((j, i) =>

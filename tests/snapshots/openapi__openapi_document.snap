@@ -1979,6 +1979,18 @@ expression: doc
             "format": "int64",
             "type": "integer"
           },
+          "held": {
+            "description": "Ready jobs of `heldKinds`, counted in `ready` too.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "heldKinds": {
+            "description": "Kinds with as many jobs running as `JOB_KIND_LIMITS` allows. Their rows in `next` wait for one to\nfinish; workers claim other kinds meanwhile.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "next": {
             "description": "What the workers claim next, in claim order (`priority`, then `runAfter`, then id).",
             "items": {
@@ -2011,7 +2023,9 @@ expression: doc
           "next",
           "ready",
           "delayed",
-          "nextDelayedAt"
+          "nextDelayedAt",
+          "heldKinds",
+          "held"
         ],
         "type": "object"
       },
@@ -4529,7 +4543,7 @@ expression: doc
     },
     "/v1/admin/analytics/recompute": {
       "post": {
-        "description": "Queues `aggregate:analytics` for one ladder and answers 202 — the scan runs on the next free worker, ahead of every queued job (a rebuild already queued for the ladder is moved up), from the matches archived so far. Bounded by `AGGREGATE_PATCH_LIMIT`: only the latest N patches are rebuilt (v1).",
+        "description": "Queues `aggregate:analytics` for one ladder and answers 202 — the scan runs on the next free worker, ahead of every queued job (a rebuild already queued for the ladder is moved up), from the matches archived so far. Rebuilds run one at a time by default (`JOB_KIND_LIMITS`): one for another ladder already running goes first. Bounded by `AGGREGATE_PATCH_LIMIT`: only the latest N patches are rebuilt (v1).",
         "operationId": "recompute_analytics",
         "requestBody": {
           "content": {
@@ -6584,7 +6598,7 @@ expression: doc
     },
     "/v1/admin/jobs/queue": {
       "get": {
-        "description": "The running jobs and the next ones a worker would claim, in the claim order (design/06 §Claiming), with how many are ready and how many wait out a backoff.",
+        "description": "The running jobs and the next ones a worker would claim, in the claim order (design/06 §Claiming), with how many are ready, how many wait out a backoff, and which kinds are at their `JOB_KIND_LIMITS` cap (their jobs wait for one of the kind to finish).",
         "operationId": "job_queue",
         "parameters": [
           {

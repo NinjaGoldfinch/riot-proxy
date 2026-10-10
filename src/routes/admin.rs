@@ -1715,13 +1715,19 @@ pub struct JobQueue {
     /// When the soonest delayed job comes due.
     #[schema(required = true)]
     next_delayed_at: Option<String>,
+    /// Kinds with as many jobs running as `JOB_KIND_LIMITS` allows. Their rows in `next` wait for one to
+    /// finish; workers claim other kinds meanwhile.
+    held_kinds: Vec<String>,
+    /// Ready jobs of `heldKinds`, counted in `ready` too.
+    held: i64,
 }
 
 #[utoipa::path(
     get, path = "/v1/admin/jobs/queue", tag = "admin",
     summary = "What is running and what runs next",
     description = "The running jobs and the next ones a worker would claim, in the claim order \
-        (design/06 §Claiming), with how many are ready and how many wait out a backoff.",
+        (design/06 §Claiming), with how many are ready, how many wait out a backoff, and which kinds are at \
+        their `JOB_KIND_LIMITS` cap (their jobs wait for one of the kind to finish).",
     params(("limit" = Option<i64>, Query, description = "1–100 jobs in `next`, default 15")),
     responses((status = 200, description = "The queue", body = JobQueue), LocalErrors),
 )]
@@ -1737,6 +1743,8 @@ async fn job_queue(State(state): State<AppState>, Extension(_c): Who, Query(q): 
             ready: v.ready,
             delayed: v.delayed,
             next_delayed_at: v.next_delayed_at.and_then(iso_ms),
+            held_kinds: v.held_kinds,
+            held: v.held,
         }),
         Err(e) => internal(&e, "could not read the job queue"),
     }
@@ -2095,6 +2103,7 @@ pub struct RecomputeAnalytics {
     summary = "Recompute the analytics tables from the archive",
     description = "Queues `aggregate:analytics` for one ladder and answers 202 — the scan runs on the next free worker, \
         ahead of every queued job (a rebuild already queued for the ladder is moved up), from the matches archived so far. \
+        Rebuilds run one at a time by default (`JOB_KIND_LIMITS`): one for another ladder already running goes first. \
         Bounded by `AGGREGATE_PATCH_LIMIT`: only the latest N patches are rebuilt (v1).",
     request_body = RecomputeAnalytics,
     responses((status = 202, description = "`{ok, platform, queue}`", body = serde_json::Value), LocalErrors),

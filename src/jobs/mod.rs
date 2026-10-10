@@ -33,6 +33,28 @@ pub mod kinds {
     pub const BUILDS_EXTRACT: &str = "builds:extract";
     pub const TIERS_BACKFILL: &str = "tiers:backfill";
     pub const MAINTENANCE: &str = "maintenance";
+
+    /// Every kind above.
+    pub const ALL: &[&str] = &[
+        POLL_LIVE,
+        POLL_RANK,
+        POLL_MATCHES,
+        ARCHIVE_MATCH,
+        BACKFILL_PLAYER,
+        DDRAGON_SYNC,
+        LADDER_CRAWL,
+        LADDER_APEX,
+        LADDER_WALK,
+        LADDER_COLLECT,
+        LADDER_ARCHIVE,
+        RANKS_LOOKUP,
+        NAMES_BACKFILL,
+        AGGREGATE_ANALYTICS,
+        FACTS_REEXTRACT,
+        BUILDS_EXTRACT,
+        TIERS_BACKFILL,
+        MAINTENANCE,
+    ];
 }
 
 /// design/06 §Priority bands: lower runs first.

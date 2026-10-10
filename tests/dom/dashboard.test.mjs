@@ -161,7 +161,7 @@ test('the job queue panel is folded and lists what is running and what the worke
   try {
     assert.equal(p.$('#queueFold').open, false);
     assert.ok(p.calls.includes('/v1/admin/jobs/queue?limit=100'));
-    assert.match(p.text('#queueMeta'), /^3 running · 5 ready · 3 waiting out a backoff · next due in 1m \d+s$/);
+    assert.match(p.text('#queueMeta'), /^3 running · 5 ready · 2 waiting their turn \(aggregate:analytics\) · 3 waiting out a backoff · next due in 1m \d+s$/);
     const rows = (sel) => [...p.w.document.querySelectorAll(`${sel} li`)].map((li) => [...li.children].map((c) => c.textContent));
     assert.deepEqual(rows('#queueRunning'), [
       ['ladder:collect', 'match ids for 2 batches · players 825–1,274 · oc1', 'oldest started 3m ago'],

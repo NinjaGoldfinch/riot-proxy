@@ -41,21 +41,29 @@ SQLite's single-writer rule makes the claim atomic without `SELECT … FOR UPDAT
 
 - **Lanes.** Every job that calls Riot carries a `lane`, the limiter scope its requests hit (`Target::scope()`: the platform for league/spectator, the region for match-v5), and a `method`, the endpoint it mainly calls. Both are derived from the kind and payload at enqueue (`jobs::lanes::of`), so every producer agrees: `ladder:walk` → (platform, `league.entriesByTier`), `ladder:apex` → (platform, the apex league), `ladder:collect` / `backfill:player` / `poll:matches` → (region, `match.idsByPuuid`), `archive:match` → (region of the match id, `match.byId`), `poll:live` → (platform, `spectator.activeGame`), `poll:rank` → (platform, `league.entriesByPuuid`). Kinds that make no Riot call have neither and can always be claimed. Rows queued before V0007 get theirs at boot (`assign_lanes`).
 - **Skip blocked work.** Before claiming, the worker asks the limiter what has no bulk room now (`Limiter::bulk_blocked`). A lane is blocked when its *app* limit is: frozen after a typed 429, at `BULK_USAGE_CEILING`, out of tokens, or held for a waiting interactive caller. A method at its ceiling blocks only that `(lane, method)` pair: other endpoints on that lane can still be claimed. The claim excludes both, so a blocked lane's work never holds a worker, and a free lane's lower-band job beats a blocked lane's higher-band one.
+- **Kind limits.** `JOB_KIND_LIMITS` (default `aggregate:analytics=1`, OPS-06, ADR-133) caps how many jobs of a kind run at once. A kind with that many `running` rows is left out of every head, so the next row of another kind heads its lane, and its own rows wait as `pending`. The count is taken inside the claim's write, so two workers never both take the last slot. Only kinds with no lane may be capped: a capped laned kind would make each head seek scan past that kind's whole backlog (an `archive:match` backlog runs to a million rows), and the limiter already paces those kinds.
 - **Bands, then spread.** Among what is claimable, the best priority band wins (0–99, 100–9 999, then each 10 000; see below). Inside it, the lane with the fewest running jobs wins, then `priority, run_after, id` (`CLAIM_ORDER`). So N workers cover N lanes before doubling up on one, and three crawls queued one after another all start at once, along with a finished crawl's `archive:match` downloads in another region.
 
 ```sql
 UPDATE jobs SET state = 'running', claimed_at = $1, attempts = attempts + 1
  WHERE id = (
-   WITH heads(id) AS MATERIALIZED (
-     -- each open lane's best ready row, skipping blocked methods
+   WITH capped(kind) AS MATERIALIZED (
+     -- kinds with as many jobs running as their limit
+     SELECT caps.key FROM json_each($4) AS caps
+      WHERE caps.value <= (SELECT count(*) FROM jobs r WHERE r.state = 'running' AND r.kind = caps.key)
+   ),
+   heads(id) AS MATERIALIZED (
+     -- each open lane's best ready row, skipping blocked methods and capped kinds
      SELECT (SELECT h.id FROM jobs h
               WHERE h.state = 'pending' AND h.lane = lanes.value AND +h.run_after <= $1
                 AND (h.method IS NULL OR h.lane || ' ' || h.method NOT IN (SELECT value FROM json_each($3)))
+                AND h.kind NOT IN (SELECT kind FROM capped)
               ORDER BY priority, run_after, id LIMIT 1)
        FROM json_each($2) AS lanes
      UNION ALL
      -- and the best row with no lane
      SELECT (SELECT h.id FROM jobs h WHERE h.state = 'pending' AND h.lane IS NULL AND +h.run_after <= $1
+                AND h.kind NOT IN (SELECT kind FROM capped)
               ORDER BY priority, run_after, id LIMIT 1))
    SELECT j.id FROM heads JOIN jobs j ON j.id = heads.id
     ORDER BY band(j.priority),
@@ -65,11 +73,11 @@ UPDATE jobs SET state = 'running', claimed_at = $1, attempts = attempts + 1
 RETURNING *;
 ```
 
-`$2` is every lane (each platform and region) less the blocked ones, and `$3` the blocked `"lane method"` pairs. One index seek per lane (`jobs_lane_claim`) keeps the claim at about 0.1 ms on a 75 000-row queue, where sorting every ready row took about 60 ms on the single writer. `+run_after` keeps SQLite on that index without `ANALYZE` statistics. The Postgres variant appends `FOR UPDATE SKIP LOCKED` to the subquery; its `json_each` reads are settled with the rest of the stub (P8-04).
+`$2` is every lane (each platform and region) less the blocked ones, `$3` the blocked `"lane method"` pairs, and `$4` the kind limits as a JSON object. One index seek per lane (`jobs_lane_claim`) keeps the claim at about 0.1 ms on a 75 000-row queue, where sorting every ready row took about 60 ms on the single writer. `+run_after` keeps SQLite on that index without `ANALYZE` statistics. The Postgres variant appends `FOR UPDATE SKIP LOCKED` to the subquery; its `json_each` reads are settled with the rest of the stub (P8-04).
 
 **Yield instead of waiting.** A job's fetch (`FetchOptions::JOB`) waits at most `JOB_YIELD_BUDGET_MS` (default 1 000) for the limiter, for the app limit or one method's. If it would wait longer, the fetch fails with `limited_until`, and the handler returns `JobError::Yield { retry_at }`. The scheduler puts the row back to `pending` with `run_after = retry_at`, gives the attempt back, keeps the last real error, and counts nothing in `jobs_total`. A 429 that Riot actually sent is still a failure with backoff. Handlers resume where they stopped: a walk from its page cursor, `ladder:collect` re-queued with only the players it has not done (the yield's `payload` replaces the job's), `backfill:player` from `backfill_state`, `archive:match` from the archive (the match is announced before its timeline is fetched, so a timeline yield loses nothing). The other kinds are one request.
 
-**Take turns.** A walk re-queues itself every `CANCEL_CHECK_PAGES` (10) pages, so higher-priority work queued behind it gets a worker. This takes the place of a per-kind concurrency cap.
+**Take turns.** A walk re-queues itself every `CANCEL_CHECK_PAGES` (10) pages, so higher-priority work queued behind it gets a worker. This takes the place of a per-kind concurrency cap for the kinds that call Riot. The kinds that don't (CPU and SQLite work such as `aggregate:analytics`) are capped by `JOB_KIND_LIMITS` instead (§Claiming).
 
 **Wake.** `enqueue()` also `notify_one()`s the claim loop. A worker that found nothing claimable sleeps until the next delayed row is due or the first blocked lane or method frees up, whichever is sooner (`idle_for`), or 1 s when there is neither. Single process only (`ROLE=all`, the only role SQLite allows), where the limiter and the workers share memory.
 
@@ -101,7 +109,7 @@ Handlers are idempotent as in v1: `archive:match` upserts; polls diff against st
 
 Two admin reads show the queue as the workers see it (DEV-13, ADR-087). Both list ready jobs in `CLAIM_ORDER` (`priority, run_after, id`), the order inside a lane. Across lanes a claim also skips work the limiter has no room for and spreads workers (§Claiming), so "up next" is the order of the work, not exactly which job the next worker takes.
 
-- `GET /v1/admin/jobs/queue?limit=` — the running jobs (oldest claim first), the next `limit` ready jobs (1–100, default 15), how many are ready and how many are waiting out a backoff, and when the soonest delayed job comes due.
+- `GET /v1/admin/jobs/queue?limit=` — the running jobs (oldest claim first), the next `limit` ready jobs (1–100, default 15), how many are ready and how many are waiting out a backoff, and when the soonest delayed job comes due. `heldKinds` names the kinds at their `JOB_KIND_LIMITS` cap and `held` counts their ready rows (part of `ready`): listed in `next`, they wait for the running one to finish (OPS-06).
 - `GET /v1/admin/ladder/crawls/{id}` — one crawl's progress. For each stage (`enumerate` in legs, `collect` in 25-player batches, `archive` in ids handed to the archive queue) it gives `done`/`total`, a state (`done`, `now`, `waiting`, or `stopped`/`skipped` for a crawl that ended early), and a pace and ETA over the last ten minutes. It also lists the legs in flight (with each walk's next page), the crawl's running, next and failed jobs, and how many ready jobs of any kind a worker will claim before the crawl's next one. Last, the platform's crawl-found match downloads. Once handed off, an `archive:match` names only its match, so those counts cover every crawl on the platform.
 
 On `/dashboard` the Ladder tab shows each running crawl as a card: stage bars and a totals line, with the rest of its view in a closed details fold (DEV-17, ADR-091). Past crawls are listed below, finished runs only, ten at a time. Each row opens into that crawl's view. The job queue is a folded panel. Its running and up-next lists (the next 100 ready jobs) put alike jobs, same kind and platform, on one row with their count, in the order each first appears; a collect row gives the player range its batches cover (DEV-20, ADR-093). While the tab is visible, running crawls and open rows refresh every 5 s. A finished crawl is fetched once.

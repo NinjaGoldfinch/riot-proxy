@@ -65,7 +65,7 @@ function fake() {
       }];
     }
     if (p === '/v1/admin/jobs/queue') {
-      return [200, { running: [jobs[RUN]], next: [jobs[PENDING]], ready: 0, delayed: 1, nextDelayedAt: jobs[PENDING].runAfter }];
+      return [200, { running: [jobs[RUN]], next: [jobs[PENDING]], ready: 0, delayed: 1, nextDelayedAt: jobs[PENDING].runAfter, heldKinds: ['aggregate:analytics'], held: 2 }];
     }
     if (p === '/v1/admin/jobs' && u.searchParams.get('state') === 'failed') {
       return [200, { jobs: Object.values(jobs).filter((j) => j.state === 'failed') }];

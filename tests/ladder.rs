@@ -1775,6 +1775,7 @@ async fn the_queue_view_lists_running_jobs_and_the_next_in_claim_order() {
     );
     assert_eq!((v["ready"].clone(), v["delayed"].clone()), (json!(3), json!(1)));
     assert!(v["nextDelayedAt"].as_str().unwrap().ends_with('Z'));
+    assert_eq!((v["heldKinds"].clone(), v["held"].clone()), (json!([]), json!(0)));
 
     let one = a
         .call("GET", "/v1/admin/jobs/queue?limit=1", &a.admin, None)
@@ -1792,6 +1793,69 @@ async fn the_queue_view_lists_running_jobs_and_the_next_in_claim_order() {
             .await
             .status,
         StatusCode::FORBIDDEN
+    );
+}
+
+/// One rebuild running (`JOB_KIND_LIMITS` default): the others are listed as
+/// waiting, not running (OPS-06).
+#[tokio::test]
+async fn the_queue_view_names_rebuilds_waiting_for_the_one_running() {
+    use riot_proxy::jobs::priority;
+    let a = app(&[]).await;
+    let now = now_ms();
+    for (i, (platform, state)) in [
+        ("oc1", "running"),
+        ("euw1", "pending"),
+        ("na1", "pending"),
+        ("kr", "pending"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        put_job(
+            &a.state.db,
+            &format!("01AAAAAAAAAAAAAAAAAAAAAAB{i}"),
+            kinds::AGGREGATE_ANALYTICS,
+            &format!("{platform}:RANKED_SOLO_5x5"),
+            priority::INTERACTIVE,
+            json!({"platform": platform, "queue": "RANKED_SOLO_5x5"}),
+            state,
+            now - 10,
+            None,
+        )
+        .await;
+    }
+    put_job(
+        &a.state.db,
+        "01AAAAAAAAAAAAAAAAAAAAAAC1",
+        kinds::NAMES_BACKFILL,
+        "names",
+        priority::MAINTENANCE,
+        json!({}),
+        "pending",
+        now - 10,
+        None,
+    )
+    .await;
+
+    let v = a.call("GET", "/v1/admin/jobs/queue", &a.admin, None).await.json();
+    assert_eq!(v["running"].as_array().unwrap().len(), 1);
+    assert_eq!(v["heldKinds"], json!(["aggregate:analytics"]));
+    assert_eq!((v["held"].clone(), v["ready"].clone()), (json!(3), json!(4)));
+    let next: Vec<&str> = v["next"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|j| j["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        next,
+        [
+            "aggregate:analytics",
+            "aggregate:analytics",
+            "aggregate:analytics",
+            "names:backfill"
+        ]
     );
 }
 

@@ -671,3 +671,189 @@ fn a_trace_says_how_each_run_ended() {
         "yielded: no rate-limit room until 2025-10-09T08:53:20.000Z"
     );
 }
+
+/// `JOB_KIND_LIMITS` (OPS-06).
+mod kind_limits {
+    use std::sync::atomic::AtomicUsize;
+
+    use super::*;
+
+    fn capped(db: &Db, limit: u32) -> Scheduler {
+        let queue = Queue::new(db.clone())
+            .with_kind_limits(BTreeMap::from([("aggregate:analytics".to_string(), limit)]));
+        Scheduler::with_queue(queue, Registry::new())
+    }
+
+    /// As `POST /v1/admin/analytics/recompute` queues them: ahead of everything.
+    fn rebuild(platform: &str) -> NewJob {
+        let mut job = crate::jobs::analytics::aggregate_job(platform, "RANKED_SOLO_5x5");
+        job.priority = 0;
+        job
+    }
+
+    fn platform_of(job: &Job) -> String {
+        job.payload::<serde_json::Value>().unwrap()["platform"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn a_capped_kind_waits_its_turn_and_other_kinds_run_meanwhile() {
+        let (_d, db) = db();
+        let s = capped(&db, 1);
+        for p in ["oc1", "euw1", "na1", "kr"] {
+            s.enqueue(rebuild(p)).await.unwrap();
+        }
+        s.enqueue(NewJob::new("names:backfill", 30_000, json!({})))
+            .await
+            .unwrap();
+        s.enqueue(NewJob::new("archive:match", 100, json!({"matchId": "OC1_1"})))
+            .await
+            .unwrap();
+
+        let first = s.claim(i64::MAX).await.unwrap().unwrap();
+        assert_eq!(
+            (first.kind.as_str(), platform_of(&first).as_str()),
+            ("aggregate:analytics", "oc1")
+        );
+        // The other rebuilds outrank both, but one is running: the rest wait.
+        let kinds: Vec<String> = [
+            s.claim(i64::MAX).await.unwrap().unwrap(),
+            s.claim(i64::MAX).await.unwrap().unwrap(),
+        ]
+        .into_iter()
+        .map(|j| j.kind)
+        .collect();
+        assert_eq!(kinds, ["archive:match", "names:backfill"]);
+        assert!(s.claim(i64::MAX).await.unwrap().is_none());
+
+        // Each one done lets the next in, in the order they were queued.
+        let mut order = vec![platform_of(&first)];
+        let mut running = first;
+        loop {
+            s.finish(&running, &Ok(()), 1).await.unwrap();
+            let Some(next) = s.claim(i64::MAX).await.unwrap() else {
+                break;
+            };
+            assert!(s.claim(i64::MAX).await.unwrap().is_none(), "one at a time");
+            order.push(platform_of(&next));
+            running = next;
+        }
+        assert_eq!(order, ["oc1", "euw1", "na1", "kr"]);
+    }
+
+    #[tokio::test]
+    async fn without_a_limit_a_kind_fills_every_claim_and_a_limit_of_two_allows_two() {
+        let (_d, db) = db();
+        let open = sched(&db);
+        for p in ["oc1", "euw1", "na1"] {
+            open.enqueue(rebuild(p)).await.unwrap();
+        }
+        for _ in 0..3 {
+            assert!(open.claim(i64::MAX).await.unwrap().is_some());
+        }
+
+        let (_d, db) = super::db();
+        let two = capped(&db, 2);
+        for p in ["oc1", "euw1", "na1"] {
+            two.enqueue(rebuild(p)).await.unwrap();
+        }
+        assert!(two.claim(i64::MAX).await.unwrap().is_some());
+        assert!(two.claim(i64::MAX).await.unwrap().is_some());
+        assert!(two.claim(i64::MAX).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn claims_racing_for_the_last_slot_take_it_once() {
+        let (_d, db) = db();
+        let s = capped(&db, 1);
+        for p in ["oc1", "euw1", "na1", "kr"] {
+            s.enqueue(rebuild(p)).await.unwrap();
+        }
+        let claims = futures_util::future::join_all((0..4).map(|_| s.claim(i64::MAX))).await;
+        assert_eq!(claims.into_iter().filter(|c| matches!(c, Ok(Some(_)))).count(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_queue_view_names_the_kinds_waiting_for_a_slot() {
+        let (_d, db) = db();
+        let s = capped(&db, 1);
+        for p in ["oc1", "euw1", "na1", "kr"] {
+            s.enqueue(rebuild(p)).await.unwrap();
+        }
+        s.enqueue(NewJob::new("names:backfill", 30_000, json!({})))
+            .await
+            .unwrap();
+        let now = Clock::now().unix_ms + 1_000;
+
+        let v = s.queue().view(now, 10).await.unwrap();
+        assert_eq!(
+            (v.held_kinds.len(), v.held, v.ready),
+            (0, 0, 5),
+            "nothing runs yet"
+        );
+
+        s.claim(now).await.unwrap().unwrap();
+        let v = s.queue().view(now, 10).await.unwrap();
+        assert_eq!(v.running.len(), 1);
+        assert_eq!(v.held_kinds, ["aggregate:analytics"]);
+        assert_eq!((v.held, v.ready), (3, 4));
+        assert_eq!(
+            v.next.iter().filter(|r| r.kind == "aggregate:analytics").count(),
+            3,
+            "still listed, as pending"
+        );
+    }
+
+    /// One rebuild running, a slow one, with four workers free.
+    struct Slow {
+        on: Arc<AtomicUsize>,
+        most: Arc<AtomicUsize>,
+        done: Arc<AtomicUsize>,
+    }
+
+    impl Handler for Slow {
+        fn run<'a>(&'a self, _job: &'a Job) -> futures_util::future::BoxFuture<'a, Result<(), JobError>> {
+            Box::pin(async move {
+                let on = self.on.fetch_add(1, Ordering::SeqCst) + 1;
+                self.most.fetch_max(on, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(30)).await;
+                self.on.fetch_sub(1, Ordering::SeqCst);
+                self.done.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn four_workers_run_four_rebuilds_one_after_another() {
+        let (_d, db) = db();
+        let (on, most, done) = (
+            Arc::default(),
+            Arc::<AtomicUsize>::default(),
+            Arc::<AtomicUsize>::default(),
+        );
+        let slow = Slow {
+            on,
+            most: Arc::clone(&most),
+            done: Arc::clone(&done),
+        };
+        let queue =
+            Queue::new(db.clone()).with_kind_limits(BTreeMap::from([("aggregate:analytics".to_string(), 1)]));
+        let s = Scheduler::with_queue(queue, Registry::new().with("aggregate:analytics", slow));
+        for p in ["oc1", "euw1", "na1", "kr"] {
+            s.enqueue(rebuild(p)).await.unwrap();
+        }
+        let workers = s.start(4);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while done.load(Ordering::SeqCst) < 4 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("all four rebuilds finish");
+        workers.shutdown(Duration::from_secs(1)).await;
+        assert_eq!(most.load(Ordering::SeqCst), 1);
+    }
+}

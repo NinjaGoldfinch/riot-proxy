@@ -118,7 +118,8 @@ Same variable names as v1 where the concept survives; removed variables are list
 | `PORT` / `HOST` | `8080` / `0.0.0.0` | |
 | `TRUST_PROXY` | `false` | **new** — v1 always trusted `X-Forwarded-For` (ADR-068) |
 | `ROLE` | `all` | **new** — `api` / `worker` only with Postgres |
-| `JOB_CONCURRENCY` | `8` | **new** |
+| `JOB_CONCURRENCY` | `8` | **new** — also `--job-concurrency`; see §Sizing for small hosts |
+| `JOB_KIND_LIMITS` | `aggregate:analytics=1` | **new** — `kind=n,…`, the most jobs of a kind running at once, for kinds that don't call Riot; `none` for no caps (OPS-06, ADR-133) |
 | `JOB_YIELD_BUDGET_MS` | `1000` | **new** — how long a job's fetch waits for the rate limiter before the job re-queues itself and frees its worker (SCH-01, ADR-089); `0`–`900000` |
 | `LOG_FORMAT` | `json` (tty → `pretty`) | |
 | `ENV` | `development` | replaces `NODE_ENV`; `production` refuses `AUTH_DISABLED` and always turns `DEV_UI` off (ADR-071) |
@@ -154,6 +155,8 @@ No Docker, no Redis, no Postgres, no `npm run migrate`. Mint a consumer key with
 | Tracked players only, no crawl | 1 shared | 256 MB | 1 GB |
 | Master+ crawls, one platform | 1 | 512 MB | 5 GB |
 | Emerald-floor crawl, timelines on | 2 | 1–2 GB | 50+ GB → consider Postgres |
+
+**Workers on a small host.** Each worker runs one job, and the jobs that don't wait on Riot (analytics rebuilds, `builds:extract`, `facts:reextract`) keep a core busy, and they and every job that stores a match take turns on SQLite's single write lock. On a 2-vCPU host, 8 workers left the CPU about 1 % idle with CPU pressure near 48 % (PSI `some avg60`), and four rebuilds started together alongside archiving hadn't finished after 7 minutes where one alone takes about 30 s (OPS-06). With readers always active, the WAL never checkpointed and kept growing. For 2 vCPU set `JOB_CONCURRENCY=2` and keep the default `JOB_KIND_LIMITS=aggregate:analytics=1`. Rebuilds for several ladders then run one after another, each about as fast as on its own. Fewer workers don't lower the API's own throughput: requests are served outside the job pool.
 
 The binary's own RSS is dominated by the SQLite page cache (`cache_size`, 64 MB default) plus L1 (`moka` weight-bounded, `CACHE_L1_MAX_MB`, default 128). Both are tunable down to run in ~50 MB total on a Pi.
 
