@@ -128,6 +128,7 @@ Same variable names as v1 where the concept survives; removed variables are list
 | `ARCHIVE_TIMELINES` | `true` | v1 defaulted to `false`. Archive jobs, ladder crawls included, now fetch each match's timeline unless it is `false` (ADR-098) |
 | `RANK_LOOKUP_LIMIT` | `50000` | **new** — players one `ranks:lookup` run looks up, most archived games first; `0` turns the lookups off (ADR-111) |
 | `RANK_LOOKUP_RECHECK_S` | `604800` (7 days) | **new** — a player looked up this recently is left off the next run's list (ADR-111) |
+| `TIER_LATE_STAMP_DAYS` | `14` | **new** — a rank the ladder or a league lookup returns places that player's `UNKNOWN` tier stamps on matches that ended within this many days; a known tier is never changed; `0` places none (ADR-127) |
 | `LOOKUP_BACKFILL_LIMIT` | `4294967295` (`u32::MAX`) | v1 capped it at 10000; now the walk ends where the player's history does (ADR-081) |
 | `BULK_IDLE_CEILING` / `BULK_IDLE_AFTER_S` | `0.95` / `30` | **new** — bulk's share of a bucket on a region with no interactive request in the last `BULK_IDLE_AFTER_S` seconds. At least `BULK_USAGE_CEILING` (which it follows when unset and lower) and below 1 (ADR-126) |
 | `BOOTSTRAP_ADMIN_KEY` | — | printed on first `serve`, no separate migrate step |

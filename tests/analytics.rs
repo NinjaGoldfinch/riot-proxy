@@ -80,36 +80,52 @@ impl Env {
         }
     }
 
-    /// Archive both matches and put every player on the KR solo ladder.
+    /// Put every player on the KR solo ladder at MASTER, then archive both
+    /// matches, which stamps their tiers (THR-02).
     async fn seed(&self) {
+        self.seed_with(|_| "MASTER").await;
+    }
+
+    /// [`Env::seed`] with each player's ladder tier from `tier_of`.
+    async fn seed_with(&self, tier_of: impl Fn(&str) -> &'static str) {
         for (id, body) in [("KR_8393343196", RANKED), ("KR_8393320187", REMAKE)] {
+            self.on_ladder(body, &tier_of).await;
             matches::put(&self.state.db, id, "asia", &self.scope, body.to_vec().into(), 1)
                 .await
                 .unwrap();
-            let puuids: Vec<String> =
-                serde_json::from_slice::<Value>(body).unwrap()["metadata"]["participants"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|p| p.as_str().unwrap().to_string())
-                    .collect();
-            let scope = self.scope.clone();
-            self.state
-                .db
-                .write(move |c| {
-                    for p in puuids {
-                        c.execute(
-                            "INSERT OR IGNORE INTO ladder_entries (key_scope, platform, queue, puuid, tier, division,
-                               league_points, wins, losses, first_seen_crawl_id, last_seen_crawl_id, updated_at)
-                             VALUES (?1, 'kr', 'RANKED_SOLO_5x5', ?2, 'MASTER', 'I', 100, 1, 1, 'c', 'c', 1)",
-                            rusqlite::params![scope, p],
-                        )?;
-                    }
-                    Ok::<_, DbError>(())
-                })
-                .await
-                .unwrap();
         }
+    }
+
+    /// Put `body`'s players on the KR solo ladder, each at `tier_of` their
+    /// PUUID; a player already there is moved.
+    async fn on_ladder(&self, body: &[u8], tier_of: &impl Fn(&str) -> &'static str) {
+        let players: Vec<(String, &'static str)> = serde_json::from_slice::<Value>(body).unwrap()["metadata"]
+            ["participants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| {
+                let p = p.as_str().unwrap();
+                (p.to_string(), tier_of(p))
+            })
+            .collect();
+        let scope = self.scope.clone();
+        self.state
+            .db
+            .write(move |c| {
+                for (p, tier) in players {
+                    c.execute(
+                        "INSERT INTO ladder_entries (key_scope, platform, queue, puuid, tier, division,
+                           league_points, wins, losses, first_seen_crawl_id, last_seen_crawl_id, updated_at)
+                         VALUES (?1, 'kr', 'RANKED_SOLO_5x5', ?2, ?3, 'I', 100, 1, 1, 'c', 'c', 1)
+                         ON CONFLICT (key_scope, platform, queue, puuid) DO UPDATE SET tier = excluded.tier",
+                        rusqlite::params![scope, p, tier],
+                    )?;
+                }
+                Ok::<_, DbError>(())
+            })
+            .await
+            .unwrap();
     }
 
     async fn aggregate(&self) {
@@ -787,7 +803,6 @@ async fn patch_all_sums_every_patch_and_the_patch_list_offers_them() {
 #[tokio::test]
 async fn without_a_tier_each_champion_is_one_row_over_every_match() {
     let e = env().await;
-    e.seed().await;
     let blue: Vec<String> = serde_json::from_slice::<Value>(RANKED).unwrap()["info"]["participants"]
         .as_array()
         .unwrap()
@@ -795,19 +810,14 @@ async fn without_a_tier_each_champion_is_one_row_over_every_match() {
         .filter(|p| p["teamId"] == 100)
         .map(|p| p["puuid"].as_str().unwrap().to_string())
         .collect();
-    e.state
-        .db
-        .write(move |c| {
-            for p in blue {
-                c.execute(
-                    "UPDATE ladder_entries SET tier = 'GRANDMASTER' WHERE puuid = ?1",
-                    [p],
-                )?;
-            }
-            Ok::<_, DbError>(())
-        })
-        .await
-        .unwrap();
+    e.seed_with(move |p| {
+        if blue.iter().any(|b| b == p) {
+            "GRANDMASTER"
+        } else {
+            "MASTER"
+        }
+    })
+    .await;
     e.aggregate().await;
 
     // The owner's query: each champion at most once, `tier: null`.
@@ -1101,4 +1111,66 @@ async fn the_builds_route_reads_set_builds_in_the_most_played_role() {
             "{uri}"
         );
     }
+}
+
+/// THR-02 (ADR-127): a game stays in the tier its players had when it was
+/// archived. Promoted after one game, every player's next game counts at the
+/// new tier and the first stays at the old one, through every rebuild.
+#[tokio::test]
+async fn a_promotion_leaves_earlier_games_in_their_tier() {
+    let e = env().await;
+    e.on_ladder(RANKED, &|_| "MASTER").await;
+    matches::put(
+        &e.state.db,
+        "KR_8393343196",
+        "asia",
+        &e.scope,
+        RANKED.to_vec().into(),
+        1,
+    )
+    .await
+    .unwrap();
+    e.aggregate().await;
+    // The same ten players again, a game later, after a promotion.
+    e.on_ladder(RANKED, &|_| "GRANDMASTER").await;
+    let mut again: Value = serde_json::from_slice(RANKED).unwrap();
+    again["metadata"]["matchId"] = json!("KR_1");
+    matches::put(
+        &e.state.db,
+        "KR_1",
+        "asia",
+        &e.scope,
+        serde_json::to_vec(&again).unwrap().into(),
+        2,
+    )
+    .await
+    .unwrap();
+    for _ in 0..2 {
+        e.aggregate().await;
+        let tiers = e
+            .state
+            .db
+            .read(|c| {
+                let mut stmt = c.prepare(
+                    "SELECT tier, matches FROM analytics_slices WHERE platform = 'kr' ORDER BY tier",
+                )?;
+                let rows = stmt
+                    .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok::<_, DbError>(rows)
+            })
+            .await
+            .unwrap();
+        assert_eq!(tiers, [("GRANDMASTER".to_string(), 1), ("MASTER".to_string(), 1)]);
+    }
+    let gm = e
+        .get("/v1/lol/analytics/champions?tier=GRANDMASTER&minGames=0")
+        .await
+        .json();
+    assert_eq!(gm["champions"].as_array().unwrap().len(), 10);
+    let master = e
+        .get("/v1/lol/analytics/champions?tier=MASTER&minGames=0")
+        .await
+        .json();
+    assert_eq!(master["champions"].as_array().unwrap().len(), 10);
 }

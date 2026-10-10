@@ -200,12 +200,16 @@ pub struct Page<'a> {
     /// tier capped on the crawl.
     pub apex_tier: Option<&'a str>,
     pub now: i64,
+    /// Matches that ended at or after this (unix ms) have their players'
+    /// `UNKNOWN` tier stamps placed at the page's tiers (THR-02).
+    pub late_since: i64,
 }
 
 /// One page, in one transaction: the entries (`first_seen` set once,
 /// `last_seen` restamped, v1), every player as a known but untracked player,
 /// the crawl's counters, the walk's cursor, and whether an apex league hit
-/// Riot's cap. A crash before the commit re-walks the page; after it, resumes
+/// Riot's cap, and each player's `UNKNOWN` tier stamps on recent matches
+/// (THR-02). A crash before the commit re-walks the page; after it, resumes
 /// on the next.
 pub async fn write_page(db: &Db, page: Page<'_>) -> Result<(), DbError> {
     let key_scope = page.key_scope.to_string();
@@ -218,7 +222,7 @@ pub async fn write_page(db: &Db, page: Page<'_>) -> Result<(), DbError> {
         .apex_tier
         .filter(|_| page.entries.len() >= RIOT_APEX_LIST_CAP)
         .map(str::to_string);
-    let now = page.now;
+    let (now, late_since) = (page.now, page.late_since);
     db.write(move |c| {
         let tx = c.transaction()?;
         {
@@ -263,6 +267,9 @@ pub async fn write_page(db: &Db, page: Page<'_>) -> Result<(), DbError> {
                     now
                 ])?;
                 player.execute(params![key_scope, e.puuid, platform, now])?;
+                crate::archive::tiers::late_stamp(
+                    &tx, &key_scope, &platform, &queue, &e.puuid, &e.tier, late_since, now,
+                )?;
             }
         }
         let n = i64::try_from(entries.len()).unwrap_or(i64::MAX);

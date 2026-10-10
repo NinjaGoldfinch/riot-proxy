@@ -131,6 +131,7 @@ impl Env {
             archive_timelines: false,
             rank_lookup_limit: 50_000,
             rank_lookup_recheck_s: 604_800,
+            late_stamp_days: 14,
         })
     }
 

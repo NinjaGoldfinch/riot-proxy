@@ -85,6 +85,7 @@ impl Env {
             archive_timelines: false,
             rank_lookup_limit: 50_000,
             rank_lookup_recheck_s: 604_800,
+            late_stamp_days: 14,
         })
     }
 
@@ -710,7 +711,10 @@ impl Env {
     fn all_handlers(&self, vars: &[(&str, &str)]) -> Registry {
         let config = common::config(vars);
         let key = KeyScope::from_key(&config.riot_api_key);
-        let archive = Arc::new(riot_proxy::archive::SqliteArchive::new(self.db.clone(), key));
+        let archive = Arc::new(
+            riot_proxy::archive::SqliteArchive::new(self.db.clone(), key)
+                .late_stamp_days(config.tier_late_stamp_days),
+        );
         let fetcher = common::fetcher(
             &config,
             &self.server.uri(),
@@ -729,6 +733,7 @@ impl Env {
             archive_timelines: config.archive_timelines,
             rank_lookup_limit: 50_000,
             rank_lookup_recheck_s: 604_800,
+            late_stamp_days: 14,
         });
         let archiving = Arc::new(riot_proxy::jobs::archive::ArchiveContext {
             fetcher,
@@ -1812,13 +1817,22 @@ async fn a_completed_crawl_looks_up_the_ranks_of_archived_players_off_the_ladder
     e.ladder_of_thirty().await;
     // Two archived solo games (from a profile, say) with players no ladder
     // holds: EMMA in both, DAN unranked, GONE unknown to Riot on kr.
-    for (k, outsiders) in [(20, &["DAN", "EMMA"][..]), (21, &["EMMA", "GONE"][..])] {
+    // Game 20 ended yesterday, inside `TIER_LATE_STAMP_DAYS`; game 21 in 2023.
+    let yesterday = riot_proxy::clock::Clock::now().unix_ms - 86_400_000;
+    for (k, outsiders, end) in [
+        (20, &["DAN", "EMMA"][..], Some(yesterday)),
+        (21, &["EMMA", "GONE"][..], None),
+    ] {
+        let mut body: Value = serde_json::from_slice(&match_with_outsiders(k, outsiders)).unwrap();
+        if let Some(end) = end {
+            body["info"]["gameEndTimestamp"] = json!(end);
+        }
         riot_proxy::archive::matches::put(
             &e.db,
             &match_id(k),
             "asia",
             &e.scope,
-            match_with_outsiders(k, outsiders).into(),
+            serde_json::to_vec(&body).unwrap().into(),
             1,
         )
         .await
@@ -1857,8 +1871,10 @@ async fn a_completed_crawl_looks_up_the_ranks_of_archived_players_off_the_ladder
     );
     assert_eq!(e.count("SELECT COUNT(*) FROM rank_lookup_queue").await, 0);
 
-    // The recompute after the lookups counts EMMA's two games at EMERALD; DAN
-    // and GONE have no solo rank, so their game stays under UNKNOWN.
+    // Both games were archived with their outsiders under UNKNOWN (THR-02).
+    // EMMA's lookup places her game of yesterday at EMERALD; her 2023 game is
+    // outside `TIER_LATE_STAMP_DAYS` and stays UNKNOWN, as do DAN and GONE,
+    // who have no solo rank. So game 20 is in both slices, game 21 in UNKNOWN.
     let slices = |tier: &'static str| {
         let db = e.db.clone();
         async move {
@@ -1873,7 +1889,7 @@ async fn a_completed_crawl_looks_up_the_ranks_of_archived_players_off_the_ladder
             .unwrap()
         }
     };
-    assert_eq!(slices("EMERALD").await, 2);
+    assert_eq!(slices("EMERALD").await, 1);
     assert_eq!(slices("UNKNOWN").await, 2);
     assert_eq!(
         e.count("SELECT COUNT(*) FROM jobs WHERE kind = 'aggregate:analytics' AND state = 'running'")

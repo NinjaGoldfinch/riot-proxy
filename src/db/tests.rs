@@ -127,6 +127,7 @@ async fn migrations_create_exactly_the_design_04_tables() {
             "match_bans",
             "match_builds",
             "match_facts",
+            "match_tiers",
             "matches",
             "metrics_history",
             "player_ranks",
@@ -209,7 +210,7 @@ async fn a_v1_database_upgrades_to_v2_and_keeps_its_data() {
         })
         .await
         .expect("read");
-    assert_eq!((name.as_str(), versions), ("old", 15));
+    assert_eq!((name.as_str(), versions), ("old", 16));
 }
 
 /// V0015 (SITE-08, ADR-123) backfills the slices aggregated before it, as the
@@ -294,6 +295,10 @@ async fn v0015_backfills_the_totals_of_every_aggregated_slice() {
     // A rebuild of 14.18 without KR_9 counts the same.
     db.write(|c| {
         c.execute("DELETE FROM matches WHERE match_id = 'KR_9'", [])?;
+        // What `tiers:backfill` does before the first rebuild after V0016.
+        for (id, queue_id) in crate::archive::tiers::unstamped(c, "", 100)? {
+            crate::archive::tiers::stamp(c, &id, queue_id, 100)?;
+        }
         let scope = crate::archive::analytics::Scope {
             key_scope: "s".into(),
             platform: "kr".into(),
@@ -477,11 +482,11 @@ async fn migrations_apply_once_across_reopens() {
         })
         .await
         .expect("insert");
-    assert_eq!(history(first.clone()).await.expect("history"), 15);
+    assert_eq!(history(first.clone()).await.expect("history"), 16);
     drop(first);
 
     let second = Db::open(&path, 1).expect("second open");
-    assert_eq!(history(second.clone()).await.expect("history"), 15, "no re-run");
+    assert_eq!(history(second.clone()).await.expect("history"), 16, "no re-run");
     let name: Option<String> = second
         .read(|c| {
             Ok::<_, DbError>(

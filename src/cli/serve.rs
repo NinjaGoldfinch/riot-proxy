@@ -108,7 +108,8 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         cache: Arc::clone(&cache),
         archive: Arc::new(
             SqliteArchive::new(db.clone(), KeyScope::from_key(&config.riot_api_key))
-                .queue_missing_halves(queue.clone(), config.archive_timelines),
+                .queue_missing_halves(queue.clone(), config.archive_timelines)
+                .late_stamp_days(config.tier_late_stamp_days),
         ),
         scope: KeyScope::from_key(&config.riot_api_key),
         policy,
@@ -178,6 +179,7 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         archive_timelines: config.archive_timelines,
         rank_lookup_limit: config.rank_lookup_limit,
         rank_lookup_recheck_s: config.rank_lookup_recheck_s,
+        late_stamp_days: config.tier_late_stamp_days,
     });
     let names = Arc::new(crate::jobs::names::NamesBackfill {
         db: db.clone(),
@@ -230,6 +232,13 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         Ok(true) => tracing::info!("queued facts:reextract for matches an older facts version derived"),
         Ok(false) => {}
         Err(e) => tracing::warn!(error = %e, "could not check for stale match facts"),
+    }
+    // Ranked matches archived before their tiers were stamped (V0016) are
+    // stamped once, in the background (THR-02).
+    match crate::jobs::analytics::backfill_tiers_if_needed(&queue).await {
+        Ok(true) => tracing::info!("queued tiers:backfill for matches archived without tier stamps"),
+        Ok(false) => {}
+        Err(e) => tracing::warn!(error = %e, "could not check for matches without tier stamps"),
     }
     let workers = scheduler.start(usize::try_from(config.job_concurrency).unwrap_or(8));
     let ticks = crate::jobs::ticks::Ticks::start_with(

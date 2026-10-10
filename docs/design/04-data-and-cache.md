@@ -155,7 +155,7 @@ CREATE INDEX facts_champ  ON match_facts(champion_id);
 -- Every table is keyed by (key_scope, platform, queue, …, patch) and carries
 -- remake (0/1) as a key, so a read excludes remakes (default) or sums both.
 -- Every participant of the platform's archived matches counts (ADR-105), at
--- the newer of its ladder_entries and player_ranks tier, else 'UNKNOWN'.
+-- the tier stamped in match_tiers when the match was archived (ADR-127).
 CREATE TABLE analytics_slices (                   -- distinct matches per tier: pick/ban-rate denominator
   key_scope, platform, queue, tier, patch, remake, matches, computed_at,
   PRIMARY KEY (key_scope, platform, queue, tier, patch, remake)
@@ -230,6 +230,16 @@ CREATE TABLE player_ranks (                       -- every league.entriesByPuuid
   tier TEXT, division TEXT, league_points INTEGER, fetched_at INTEGER,
   PRIMARY KEY (key_scope, platform, queue, puuid)
 );                                                -- a lookup replaces the player's rows on that platform
+CREATE TABLE match_tiers (                        -- V0016: each participant's tier when a solo/flex match was archived (ADR-127)
+  match_id TEXT REFERENCES matches(match_id) ON DELETE CASCADE,
+  key_scope TEXT, puuid TEXT, platform TEXT, queue TEXT,  -- platform: the match id's prefix; queue: league-v4's name
+  tier TEXT,                                      -- newer of ladder_entries and player_ranks then, else 'UNKNOWN'
+  stamped_at INTEGER,
+  PRIMARY KEY (match_id, puuid)
+);                                                -- never restamped; a later rank places an UNKNOWN row on a match
+                                                  -- that ended within TIER_LATE_STAMP_DAYS; facts:reextract leaves it
+CREATE INDEX match_tiers_ladder ON match_tiers (key_scope, platform, queue, tier);
+CREATE INDEX match_tiers_unknown ON match_tiers (key_scope, platform, queue, puuid) WHERE tier = 'UNKNOWN';
 CREATE TABLE rank_lookups (                       -- when each player was last looked up, ranked or not (ADR-111)
   key_scope TEXT, platform TEXT, puuid TEXT, looked_up_at INTEGER,
   PRIMARY KEY (key_scope, platform, puuid)

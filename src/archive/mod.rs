@@ -8,6 +8,7 @@ pub mod matches;
 pub mod player;
 pub mod pool;
 pub mod ranks;
+pub mod tiers;
 
 use bytes::Bytes;
 use futures_util::future::BoxFuture;
@@ -29,6 +30,9 @@ pub struct SqliteArchive {
     scope: KeyScope,
     /// Where the other half of a stored match or timeline is queued (TL-01).
     halves: Option<Halves>,
+    /// `TIER_LATE_STAMP_DAYS`: how far back a league lookup places a
+    /// player's `UNKNOWN` tier stamps (THR-02).
+    late_stamp_days: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -47,7 +51,15 @@ impl SqliteArchive {
             db,
             scope,
             halves: None,
+            late_stamp_days: tiers::LATE_STAMP_DAYS,
         }
+    }
+
+    /// `TIER_LATE_STAMP_DAYS` (THR-02); 0 places no earlier games.
+    #[must_use]
+    pub fn late_stamp_days(mut self, days: u32) -> Self {
+        self.late_stamp_days = days;
+        self
     }
 
     /// Queue the other half of whatever is stored, at the top priority (TL-01,
@@ -151,7 +163,10 @@ impl Archive for SqliteArchive {
         let (puuid, platform) = (puuid.clone(), req.target.scope());
         Box::pin(async move {
             let now = Clock::now().unix_ms;
-            if let Err(e) = ranks::record(&self.db, self.scope.as_str(), platform, &puuid, &body, now).await {
+            let since = tiers::late_since(now, self.late_stamp_days);
+            if let Err(e) =
+                ranks::record(&self.db, self.scope.as_str(), platform, &puuid, &body, now, since).await
+            {
                 tracing::warn!(error = %e, "player rank write failed");
             }
         })
