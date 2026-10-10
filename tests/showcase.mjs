@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 const html = readFileSync(new URL('../src/ui/showcase.html', import.meta.url), 'utf8');
 const block = html.match(/\/\/ -{10} pure helpers[^\n]*\n([\s\S]*?)\/\/ -{10} end pure helpers/);
 assert.ok(block, 'the pure helpers block is marked in showcase.html');
-const h = new Function(`${block[1]}; return { APEX, QUEUES, LADDER_PAGE, APEX_LIST_CAP, apexCapNote, tierColour, winRate, pct, sortLadder, ladderPage, championIndex, imageUrl, statusNotices, topChampions, parseRiotId, parseRoute, explorerLink, rankLabel, rankCards, queueNames, spellIndex, outcome, kda, durationSecs, clock, ago, masterySummary, liveGame, TIERS, SIDES, matchHref, matchTeams, goldDiff, goldScale, signedGold, tierRows, runeIndex, runePair, runeUrl, itemIndex, bootsIndex, itemSlots, roleList, thousands, patchChoices, pickPatch, patchLabel, BUILD_STARTER_MS, SHOP_VISIT_GAP_MS, itemCatalog, playerBuild, shopVisits };`)();
+const h = new Function(`${block[1]}; return { APEX, QUEUES, LADDER_PAGE, APEX_LIST_CAP, apexCapNote, tierColour, winRate, pct, sortLadder, ladderPage, championIndex, imageUrl, statusNotices, topChampions, parseRiotId, parseRoute, champKey, findChampion, explorerLink, rankLabel, rankCards, queueNames, spellIndex, outcome, kda, durationSecs, clock, ago, masterySummary, liveGame, TIERS, SIDES, matchHref, matchTeams, goldDiff, goldScale, signedGold, tierRows, runeIndex, runePair, runeUrl, itemIndex, bootsIndex, itemSlots, roleList, thousands, patchChoices, pickPatch, patchLabel, BUILD_STARTER_MS, SHOP_VISIT_GAP_MS, itemCatalog, playerBuild, shopVisits };`)();
 
 test('apex tiers and queues are the ones the apex route accepts', () => {
   assert.deepEqual(h.APEX, ['CHALLENGER', 'GRANDMASTER', 'MASTER']);
@@ -109,10 +109,38 @@ test('hash routes', () => {
   assert.deepEqual(h.parseRoute('#/'), { view: 'home', args: {} });
   assert.deepEqual(h.parseRoute('#/player/Hide%20on%20bush/KR1'), { view: 'player', args: { gameName: 'Hide on bush', tagLine: 'KR1' } });
   assert.deepEqual(h.parseRoute('#/champion/266'), { view: 'champion', args: { id: 266 } });
+  assert.deepEqual(h.parseRoute('#/champion/266/builds'), { view: 'champion', args: { id: 266, focus: 'builds' } });
+  assert.deepEqual(h.parseRoute('#/champion/266/other'), { view: 'champion', args: { id: 266 } });
   assert.deepEqual(h.parseRoute('#/champion/abc'), { view: 'home', args: {} });
   assert.deepEqual(h.parseRoute('#/nowhere'), { view: 'home', args: {} });
   assert.deepEqual(h.parseRoute('#/match/sea/OC1_700123'), { view: 'match', args: { region: 'sea', matchId: 'OC1_700123' } });
   for (const bad of ['#/match/SEA/OC1_1', '#/match/sea/oc1-1', '#/match/sea']) assert.equal(h.parseRoute(bad).view, 'home', bad);
+});
+
+test('champion search: names compared without case, spaces or punctuation; exact first, then a unique prefix (SITE-10)', () => {
+  assert.equal(h.champKey("Kai'Sa"), 'kaisa');
+  assert.equal(h.champKey(' KAI SA '), 'kaisa');
+  assert.equal(h.champKey('Nunu & Willump'), 'nunuwillump');
+  assert.equal(h.champKey('Kog\u2019Maw'), 'kogmaw');
+  const idx = h.championIndex({ data: Object.fromEntries([
+    ['Ahri', '103', 'Ahri'], ['Akali', '84', 'Akali'], ['Aatrox', '266', 'Aatrox'], ['Kaisa', '145', "Kai'Sa"], ['Kayle', '10', 'Kayle'],
+    ['MonkeyKing', '62', 'Wukong'], ['Vi', '254', 'Vi'], ['Viego', '234', 'Viego'], ['Nunu', '20', 'Nunu & Willump'],
+  ].map(([id, key, name]) => [id, { id, key, name, image: { full: `${id}.png` } }])) });
+  const found = (q) => h.findChampion(idx, q).id;
+  assert.equal(found('ahri'), 103);
+  assert.equal(found("Kai'Sa"), 145);
+  assert.equal(found('KAI SA'), 145);
+  assert.equal(found('kais'), 145, 'a unique prefix');
+  assert.equal(found('Wukong'), 62);
+  assert.equal(found('monkey king'), 62, "Data Dragon's id");
+  assert.equal(found('vi'), 254, 'an exact name beats the prefix it shares with Viego');
+  assert.equal(found('nunu'), 20);
+  assert.deepEqual(h.findChampion(idx, 'xyz'), { id: null, matches: [] });
+  assert.deepEqual(h.findChampion(idx, 'a'), { id: null, matches: ['Aatrox', 'Ahri', 'Akali'] });
+  assert.deepEqual(h.findChampion(idx, 'ka'), { id: null, matches: ["Kai'Sa", 'Kayle'] });
+  assert.deepEqual(h.findChampion(idx, " ' "), { id: null, matches: [] }, 'nothing left to match');
+  assert.deepEqual(h.findChampion({}, 'ahri'), { id: null, matches: [] });
+  assert.deepEqual(h.findChampion(idx, 'Ahri'), { id: 103, name: 'Ahri' });
 });
 
 test('source chips open the operation in the dev explorer', () => {
