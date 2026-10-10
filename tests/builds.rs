@@ -28,7 +28,7 @@ struct Env {
 }
 
 async fn env() -> Env {
-    let (dir, state, _router) = common::app_with(&[("AGGREGATE_MIN_GAMES", "0")], "http://127.0.0.1:9");
+    let (dir, state, _router) = common::app_with(&[], "http://127.0.0.1:9");
     Env { _dir: dir, state }
 }
 

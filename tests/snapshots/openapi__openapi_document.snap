@@ -850,7 +850,7 @@ expression: doc
             "type": "array"
           },
           "stats": {
-            "description": "One row summed over every tier, or the named `tier`'s row; empty when\nthe champion has fewer than `minGames` games in the slice.",
+            "description": "One row summed over every tier, or the named `tier`'s row; empty when\nthe champion has no games in the slice, or fewer than `minGames`.",
             "items": {
               "$ref": "#/components/schemas/ChampionStatEntry"
             },
@@ -9781,7 +9781,7 @@ expression: doc
             }
           },
           {
-            "description": "≥ 0; default `AGGREGATE_MIN_GAMES`",
+            "description": "≥ 0; default 0, every row",
             "in": "query",
             "name": "minGames",
             "required": false,
@@ -10025,7 +10025,7 @@ expression: doc
             }
           },
           {
-            "description": "≥ 0; default `AGGREGATE_MIN_GAMES`",
+            "description": "≥ 0; default 0, every row",
             "in": "query",
             "name": "minGames",
             "required": false,
@@ -10260,7 +10260,7 @@ expression: doc
             }
           },
           {
-            "description": "≥ 0, games a build needs; default `AGGREGATE_MIN_GAMES`",
+            "description": "≥ 0, games a build needs; default 0, every build",
             "in": "query",
             "name": "minGames",
             "required": false,
@@ -10495,7 +10495,7 @@ expression: doc
             }
           },
           {
-            "description": "≥ 0; no default",
+            "description": "≥ 0; default 0, every row",
             "in": "query",
             "name": "minGames",
             "required": false,
