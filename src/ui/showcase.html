@@ -226,7 +226,8 @@
     "GET /v1/lol/league/entries/{platform}/{queue}/{tier}/{division}": "one division page at a time; the home ladder shows the apex tiers",
     "GET /v1/riot/accounts/by-riot-id/{gameName}/{tagLine}": "search goes straight to the profile, which resolves the Riot ID",
     "GET /v1/riot/accounts/by-riot-id/{region}/{gameName}/{tagLine}": "pinned-cluster variant; the page lets the proxy pick (ADR-066)",
-    "GET /v1/riot/accounts/by-puuid/{region}/{puuid}": "pinned-cluster variant; the page lets the proxy pick (ADR-066)"
+    "GET /v1/riot/accounts/by-puuid/{region}/{puuid}": "pinned-cluster variant; the page lets the proxy pick (ADR-066)",
+    "GET /v1/riot/accounts/region/by-puuid/{puuid}": "the profile composite looks it up when no platform is given and echoes it as `platform` (SITE-09)"
   }
 }
 </script>

@@ -218,17 +218,48 @@ pub struct ProfileBody {
 }
 
 struct ProfileAsk {
-    platform: Platform,
+    /// `None`: the player's own, from account-v1's active region (SITE-09).
+    platform: Option<Platform>,
     top_mastery: i64,
     refresh: bool,
 }
 
 fn profile_query(query: &HashMap<String, String>) -> Result<ProfileAsk, ApiError> {
     Ok(ProfileAsk {
-        platform: required_platform(query)?,
+        platform: validate::query_platform(q(query, "platform"))?,
         top_mastery: validate::int_query("topMastery", q(query, "topMastery"), 1, 20)?.unwrap_or(5),
         refresh: validate::bool_query("refresh", q(query, "refresh"))?.unwrap_or(false),
     })
+}
+
+/// account-v1's `AccountRegionDTO`; only `region` is read.
+#[derive(Deserialize)]
+struct ActiveRegion {
+    region: Option<String>,
+}
+
+/// The platform a profile is read on: the caller's, else the one Riot says
+/// this player plays League on (SITE-09). Riot's 404 for an unknown player
+/// passes through; a `region` that isn't a platform we route is a 502.
+async fn profile_platform(
+    state: &AppState,
+    puuid: &str,
+    given: Option<Platform>,
+) -> Result<Platform, FetchError> {
+    if let Some(p) = given {
+        return Ok(p);
+    }
+    let found = fetch(
+        state,
+        account_request("account.regionByPuuid", &["lol", puuid]),
+        false,
+    )
+    .await?;
+    serde_json::from_slice::<ActiveRegion>(&found.body)
+        .ok()
+        .and_then(|r| r.region)
+        .and_then(|r| r.parse::<Platform>().ok())
+        .ok_or_else(|| FetchError::from(ApiError::upstream()))
 }
 
 #[derive(Deserialize)]
@@ -244,11 +275,12 @@ struct Identity {
 async fn compose_profile(
     state: &AppState,
     puuid: &str,
+    platform: Platform,
     ask: &ProfileAsk,
     window: Window,
     account: Option<Result<FetchResult, FetchError>>,
 ) -> Response {
-    let p = ask.platform;
+    let p = platform;
     let bypass = window.refreshed;
     let account = async {
         match account {
@@ -354,9 +386,13 @@ async fn compose_profile(
     summary = "A player's profile in one call",
     description = "Account, summoner, ranked entries and top mastery, fetched concurrently and each cached on \
                    its own. A part that fails is `null` and named in `warnings`; only every part failing is a \
-                   404. `refresh=true` re-reads every part upstream, at most once a minute per player.",
+                   404. `refresh=true` re-reads every part upstream, at most once a minute per player. \
+                   Without `platform`, the proxy reads the player's platform from account-v1's active region \
+                   (cached like an account) and echoes it as `platform`, so the player's other routes can \
+                   be routed from the profile alone.",
     params(("puuid" = String, Path, description = "Encrypted player UUID"),
-           ("platform" = String, Query, description = "Platform routing value, e.g. `oc1`. Required"),
+           ("platform" = Option<String>, Query, description = "Platform routing value, e.g. `oc1`. Optional: \
+                                                              left out, it is the player's own, from account-v1's active region"),
            ("topMastery" = Option<i64>, Query, description = "1–20, default 5"),
            ("refresh" = Option<bool>, Query, description = "Spend quota to re-read; once a minute per player")),
     responses((status = 200, description = "The profile", body = ProfileBody), UpstreamErrors),
@@ -375,8 +411,12 @@ async fn profile(
         Ok(a) => a,
         Err(e) => return e.into_response(),
     };
+    let platform = match profile_platform(&state, &puuid, ask.platform).await {
+        Ok(p) => p,
+        Err(e) => return respond(Err(e)),
+    };
     let window = state.refresh.window("profile", &puuid, ask.refresh);
-    compose_profile(&state, &puuid, &ask, window, None).await
+    compose_profile(&state, &puuid, platform, &ask, window, None).await
 }
 
 #[utoipa::path(
@@ -386,7 +426,8 @@ async fn profile(
                    rather than fetched twice.",
     params(("gameName" = String, Path, description = "The part of a Riot ID before the `#` (1–16 characters)"),
            ("tagLine" = String, Path, description = "The part of a Riot ID after the `#` (1–5 characters)"),
-           ("platform" = String, Query, description = "Platform routing value, e.g. `oc1`. Required"),
+           ("platform" = Option<String>, Query, description = "Platform routing value, e.g. `oc1`. Optional: \
+                                                              left out, it is the player's own, from account-v1's active region"),
            ("topMastery" = Option<i64>, Query, description = "1–20, default 5"),
            ("refresh" = Option<bool>, Query, description = "Spend quota to re-read; once a minute per player")),
     responses((status = 200, description = "The profile", body = ProfileBody), UpstreamErrors),
@@ -425,10 +466,14 @@ async fn profile_by_riot_id(
         ))
         .into_response();
     };
+    let platform = match profile_platform(&state, &puuid, ask.platform).await {
+        Ok(p) => p,
+        Err(e) => return respond(Err(e)),
+    };
     // Keyed on the PUUID, so both ways in share one window (v1).
     let window = state.refresh.window("profile", &puuid, ask.refresh);
     let known = (!window.refreshed).then_some(Ok(account));
-    compose_profile(&state, &puuid, &ask, window, known).await
+    compose_profile(&state, &puuid, platform, &ask, window, known).await
 }
 
 // ── Match page ──────────────────────────────────────────────────────────────

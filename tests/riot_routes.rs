@@ -291,6 +291,27 @@ async fn region_less_lookups_start_on_asia_and_share_the_pinned_entry() {
     assert_eq!((r.status, r.body.as_slice()), (StatusCode::OK, body.as_slice()));
 }
 
+/// SITE-09: the active region, for `lol`, on the first cluster with room, passed through.
+#[tokio::test]
+async fn the_active_region_is_passed_through_from_any_cluster() {
+    let e = env().await;
+    let body = format!(r#"{{"puuid":"{PUUID}","game":"lol","region":"oc1"}}"#);
+    Mock::given(path(format!(
+        "/riot/account/v1/region/by-game/lol/by-puuid/{PUUID}"
+    )))
+    .and(header("x-riot-host", ASIA))
+    .respond_with(ResponseTemplate::new(200).set_body_raw(body.clone().into_bytes(), "application/json"))
+    .expect(1)
+    .mount(&e.server)
+    .await;
+    let uri = format!("/v1/riot/accounts/region/by-puuid/{PUUID}");
+    let r = get(&e, &uri, Some(&e.read)).await;
+    assert_eq!((r.status, r.body.as_slice()), (StatusCode::OK, body.as_bytes()));
+    assert_eq!(get(&e, &uri, Some(&e.read)).await.headers["x-cache"], "HIT");
+    let bad = get(&e, "/v1/riot/accounts/region/by-puuid/short", Some(&e.read)).await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST);
+}
+
 /// A typed 429 freezes asia; this lookup and the next go to americas, and
 /// asia is not asked again while frozen.
 #[tokio::test]
@@ -415,11 +436,13 @@ fn every_v1_riot_operation_is_documented() {
         v.sort();
         v
     };
-    // v1's operations, plus RC-02's region-less account lookups (ADR-066).
+    // v1's operations, plus RC-02's region-less account lookups (ADR-066)
+    // and SITE-09's active region.
     let mut want = ops(&v1);
     want.extend([
         "get /v1/riot/accounts/by-puuid/{puuid}".to_string(),
         "get /v1/riot/accounts/by-riot-id/{gameName}/{tagLine}".to_string(),
+        "get /v1/riot/accounts/region/by-puuid/{puuid}".to_string(),
     ]);
     want.sort();
     assert_eq!(ops(&ours), want);
