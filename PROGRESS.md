@@ -244,7 +244,7 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 Baseline before THR-06a (one kr crawl to MASTER on the dev VM): not yet recorded. Since DEV-23 a crawl fetches timelines by default (ADR-098); record which setting the baseline used.
 - [ ] THR-06a idle bulk ceiling: `BULK_IDLE_CEILING` replaces `BULK_USAGE_CEILING` for a scope with no interactive request in `BULK_IDLE_AFTER_S` (IMPLEMENTATION.md §Post-release — THR)
 - [ ] THR-01 batch fetching: `archive:batch` fetches a crawl's ids `ARCHIVE_BATCH_CONCURRENCY` at a time, so the limiter paces them, not the worker count (IMPLEMENTATION.md §Post-release — THR)
-- [ ] THR-02 stored tiers: `match_tiers` stamped when a ranked match is archived, `tiers:backfill`, analytics join it in place of `ladder_entries` (IMPLEMENTATION.md §Post-release — THR)
+- [ ] THR-02 stored tiers: `match_tiers` stamped for every participant when a ranked match is archived, `UNKNOWN` stamps upgraded by a later rank within `TIER_LATE_STAMP_DAYS`, `tiers:backfill`, analytics join it in place of `ladder_entries`; owner questions 3 and 4 answered 2026-10-10, pulled ahead of THR-06a/THR-01 for FLT (IMPLEMENTATION.md §Post-release — THR)
 - [ ] THR-03 incremental analytics: `aggregate:delta` adds uncounted matches in short transactions; the rebuild stays as a repair tool (IMPLEMENTATION.md §Post-release — THR)
 - [ ] THR-04 collect cursor: skip players whose wins + losses are unchanged, `startTime` for the rest (IMPLEMENTATION.md §Post-release — THR)
 - [ ] THR-05 wider coverage: LAD-02's discover ordered by match count, run alongside archive, tiers stamped for discovered players (IMPLEMENTATION.md §Post-release — THR)
@@ -287,6 +287,18 @@ The site's backfill question (item 3) needs no task: the unbounded lookup backfi
 
 ## TL — a match and its timeline archived together (owner request 2026-10-10)
 - [x] TL-01 whatever stores a match queues its timeline, and a timeline its match, as a priority-0 `archive:match`; timelines no longer need their match first (V0013); a boot catch-up queues the archive's missing halves (#144, ADR-118)
+
+## FLT — builds and matchups by rank, opponent and side (owner request 2026-10-10)
+Order: THR-02 → FLT-01 → FLT-02 → FLT-03 → FLT-04, then PAIR.
+- [ ] FLT-01 `tier` and `side` keys on matchups and every build table, `side` on `champion_stats`; reads sum over them, output unchanged; after THR-02 (IMPLEMENTATION.md §Post-release — FLT)
+- [ ] FLT-02 `tier` and `side` on the matchups, builds and detail routes; the champion page's tier picker and side toggle drive the build and matchup cards (IMPLEMENTATION.md §Post-release — FLT)
+- [ ] FLT-03 `minTier` ranges on every analytics route, with per-floor match and ban totals; *Emerald+*, *Diamond+*, *Master+* in the picker (IMPLEMENTATION.md §Post-release — FLT)
+- [ ] FLT-04 builds against a lane opponent: `champion_matchup_builds`, `opponentId` on the builds route, a *vs* picker (IMPLEMENTATION.md §Post-release — FLT)
+
+## PAIR — team pairings (owner request 2026-10-10, outline)
+- [ ] PAIR-01 `champion_pairs`: every ally role per player, keyed by tier and side (IMPLEMENTATION.md §Post-release — PAIR)
+- [ ] PAIR-02 the pairings route with `allyRole`, `winRateLow` and `delta` (IMPLEMENTATION.md §Post-release — PAIR)
+- [ ] PAIR-03 the showcase's *Best with* card (IMPLEMENTATION.md §Post-release — PAIR)
 
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
