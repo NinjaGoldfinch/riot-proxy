@@ -7,7 +7,9 @@
 //! `facts:reextract` re-derives the facts of every match below the current
 //! `FACTS_VERSION`, a batch at a time, from the stored bodies; no Riot call.
 //! `builds:extract` derives `match_builds` from the archived timelines the
-//! same way (BLD-01); `aggregate:analytics` runs it before its rebuild.
+//! same way (BLD-01), and `tiers:backfill` stamps the tiers of matches
+//! archived before V0016 (THR-02); `aggregate:analytics` runs both before its
+//! rebuild.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -21,7 +23,7 @@ use serde_json::json;
 use crate::archive::analytics::{self, Scope};
 use crate::archive::builds::{self, BUILDS_VERSION, BuildFact, ItemCatalog};
 use crate::archive::facts::FACTS_VERSION;
-use crate::archive::matches;
+use crate::archive::{matches, tiers};
 use crate::clock::Clock;
 use crate::db::{Db, DbError};
 use crate::events::{self, Event};
@@ -39,6 +41,9 @@ const REEXTRACT_PACE: Duration = Duration::from_millis(50);
 /// decompressed, so a batch holds about 20 MB where a facts batch of 500
 /// match bodies holds about 40 MB.
 const BUILDS_BATCH: i64 = 25;
+
+/// Matches per `tiers:backfill` batch: ten participant rows each.
+const TIERS_BATCH: i64 = 500;
 
 /// `aggregate:analytics`'s payload (v1).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -85,6 +90,24 @@ pub fn reextract_job() -> NewJob {
 /// One `builds:extract` at a time (BLD-01).
 pub fn builds_job() -> NewJob {
     NewJob::new(kinds::BUILDS_EXTRACT, priority::MAINTENANCE, json!({})).dedupe(kinds::BUILDS_EXTRACT)
+}
+
+/// One `tiers:backfill` at a time (THR-02).
+pub fn tiers_job() -> NewJob {
+    NewJob::new(kinds::TIERS_BACKFILL, priority::MAINTENANCE, json!({})).dedupe(kinds::TIERS_BACKFILL)
+}
+
+/// Queue `tiers:backfill` when a ranked match has facts and no tier stamps
+/// (at boot, after V0016). Returns whether one was queued.
+pub async fn backfill_tiers_if_needed(queue: &Queue) -> Result<bool, DbError> {
+    if !queue
+        .db()
+        .read(|c| Ok::<_, DbError>(tiers::any_unstamped(c)?))
+        .await?
+    {
+        return Ok(false);
+    }
+    Ok(queue.enqueue(tiers_job()).await?.created)
 }
 
 /// Matches whose facts an older `FACTS_VERSION` derived.
@@ -217,6 +240,13 @@ impl AnalyticsContext {
         activity::step("extracting builds".to_string());
         if let Err(e) = self.extract_builds().await {
             tracing::warn!(error = ?e, "could not extract builds");
+        }
+        // Facts without a tier stamp don't count, so matches archived before
+        // the stamps existed are stamped first (THR-02). Once they are, this
+        // reads nothing.
+        activity::step("stamping tiers".to_string());
+        if let Err(e) = self.backfill_tiers().await {
+            tracing::warn!(error = ?e, "could not stamp match tiers");
         }
         let mut steps = BTreeMap::new();
         let result = self.rebuild(&ladder, i64::from(queue_id), &mut steps).await;
@@ -492,9 +522,63 @@ impl AnalyticsContext {
     }
 }
 
+impl AnalyticsContext {
+    /// `tiers:backfill` (THR-02, ADR-127): stamp every ranked match that has
+    /// facts and no tier stamps, a batch at a time, from the ladder and league
+    /// lookups as they are now. That is the tier every rebuild before V0016
+    /// used, so the next rebuild's output is unchanged. Walks in id order, so
+    /// a match that stamps nothing isn't read twice in one sweep. Returns the
+    /// matches it stamped.
+    pub async fn backfill_tiers(&self) -> Result<i64, JobError> {
+        let mut after = String::new();
+        let mut done = 0i64;
+        loop {
+            let from = after.clone();
+            // Found on a reader, so the writer isn't held while a mostly
+            // stamped archive is walked; a match archived meanwhile was
+            // stamped by its archive and is skipped by `INSERT OR IGNORE`.
+            let todo = self
+                .db()
+                .read(move |c| Ok::<_, DbError>(tiers::unstamped(c, &from, TIERS_BATCH)?))
+                .await
+                .map_err(|e| store(&e))?;
+            let n = todo.last().map(|(id, _)| (id.clone(), todo.len()));
+            self.db()
+                .write(move |c| {
+                    let now = Clock::now().unix_ms;
+                    let tx = c.transaction()?;
+                    for (id, queue_id) in &todo {
+                        tiers::stamp(&tx, id, *queue_id, now)?;
+                    }
+                    tx.commit()?;
+                    Ok::<_, DbError>(())
+                })
+                .await
+                .map_err(|e| store(&e))?;
+            let Some((last, n)) = n else {
+                break;
+            };
+            after = last;
+            done += i64::try_from(n).unwrap_or(0);
+            tokio::time::sleep(REEXTRACT_PACE).await;
+        }
+        if done > 0 {
+            tracing::info!(matches = done, "match tiers stamped");
+        }
+        Ok(done)
+    }
+}
+
 pub struct AggregateHandler(pub Arc<AnalyticsContext>);
 pub struct ReextractHandler(pub Arc<AnalyticsContext>);
 pub struct BuildsHandler(pub Arc<AnalyticsContext>);
+pub struct TiersHandler(pub Arc<AnalyticsContext>);
+
+impl Handler for TiersHandler {
+    fn run<'a>(&'a self, _job: &'a Job) -> BoxFuture<'a, Result<(), JobError>> {
+        Box::pin(async { self.0.backfill_tiers().await.map(|_| ()) })
+    }
+}
 
 impl Handler for AggregateHandler {
     fn run<'a>(&'a self, job: &'a Job) -> BoxFuture<'a, Result<(), JobError>> {

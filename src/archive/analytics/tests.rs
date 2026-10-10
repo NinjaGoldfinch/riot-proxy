@@ -259,8 +259,11 @@ fn scope(c: &Connection, patch_limit: u32) -> Scope {
     }
 }
 
+/// Stamps the fixture's tiers as `tiers:backfill` would (THR-02), then
+/// rebuilds.
 async fn rebuild(db: &Db, patch_limit: u32) -> Written {
     db.write(move |c| {
+        stamp_all(c);
         let s = scope(c, patch_limit);
         let mut w = rebuild_champions(c, &s)?;
         w.extend(rebuild_matchups(c, &s)?);
@@ -269,6 +272,13 @@ async fn rebuild(db: &Db, patch_limit: u32) -> Written {
     })
     .await
     .unwrap()
+}
+
+/// Stamp every unstamped match from the ladder and lookups as they are now.
+fn stamp_all(c: &Connection) {
+    for (id, queue_id) in crate::archive::tiers::unstamped(c, "", 1000).unwrap() {
+        crate::archive::tiers::stamp(c, &id, queue_id, 1).unwrap();
+    }
 }
 
 async fn rows(db: &Db, sql: &'static str) -> Vec<Vec<i64>> {
@@ -766,13 +776,13 @@ async fn the_matchups_plan_reaches_the_opponent_by_key() {
     assert!(step(&plan, "b").contains("match_id=?"), "{plan:#?}");
 }
 
-/// The facts reach each player's ladder entry and lookup by key, not by
-/// walking either table per fact (ADR-105).
+/// The facts reach each player's tier stamp by key, not by walking
+/// `match_tiers` per fact (THR-02).
 #[tokio::test]
-async fn the_facts_plan_reaches_ladder_and_lookup_by_key() {
+async fn the_facts_plan_reaches_the_tier_stamp_by_key() {
     let plan = plan_of(format!("SELECT {TIER} {}", ladder_facts(""))).await;
-    assert!(step(&plan, "le").contains("puuid=?"), "{plan:#?}");
-    assert!(step(&plan, "pr").contains("puuid=?"), "{plan:#?}");
+    let mt = step(&plan, "mt");
+    assert!(mt.contains("match_id=?") && mt.contains("puuid=?"), "{plan:#?}");
 }
 
 /// `EXPLAIN QUERY PLAN` of `sql` over the fixture, bound as a rebuild binds it.
@@ -780,6 +790,7 @@ async fn plan_of(sql: String) -> Vec<String> {
     let (_d, db) = db();
     db.write(move |c| {
         seed(c);
+        stamp_all(c);
         let s = scope(c, 0);
         let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
         let n = stmt.parameter_count();

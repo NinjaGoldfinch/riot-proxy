@@ -1,10 +1,10 @@
 //! The analytics tables (V0005, ADR-056; v1 `db/analytics.ts`): rebuilt from
 //! `match_facts` per ladder (platform, queue) and read by `/v1/lol/analytics/*`.
 //!
-//! Every participant of the platform's archived matches counts (ADR-105): at
-//! the tier the ladder holds them at (`ladder_entries`) or a league lookup
-//! last returned (`player_ranks`), whichever is newer, and under
-//! [`UNKNOWN_TIER`] when neither has them. A match with players in several
+//! Every participant of the platform's archived matches counts (ADR-105), at
+//! the tier stamped when the match was archived (`match_tiers`, THR-02,
+//! ADR-127): the newer of the ladder's and the last league lookup's then, or
+//! [`UNKNOWN_TIER`] when neither had them. A match with players in several
 //! tiers counts in each (v1); `analytics_match_totals` and
 //! `champion_ban_totals` count it once, for rows summed over every tier
 //! (ADR-123). Every table is
@@ -91,26 +91,23 @@ impl Scope {
 /// placed (ADR-105). Not one of Riot's tiers.
 pub const UNKNOWN_TIER: &str = "UNKNOWN";
 
-/// A fact's tier in [`ladder_facts`]: the newer of the ladder's and the last
-/// league lookup's, else [`UNKNOWN_TIER`].
-const TIER: &str = "CASE WHEN pr.tier IS NOT NULL AND (le.tier IS NULL OR pr.fetched_at > le.updated_at)
-       THEN pr.tier ELSE coalesce(le.tier, 'UNKNOWN') END";
+/// A fact's tier in [`ladder_facts`]: its stamp (THR-02).
+const TIER: &str = "mt.tier";
 
 /// The platform's matches only: a match id starts with its platform (`OC1_…`).
 /// Binds `?2` platform.
 const ON_PLATFORM: &str = "substr(m.match_id, 1, length(?2) + 1) = upper(?2) || '_'";
 
 /// Facts of the platform's archived matches in this queue, each with its
-/// player's [`TIER`], plus any further `join`. Binds `?1` key scope, `?2`
-/// platform, `?3` queue, `?4` queue id, `?5` patches.
+/// player's stamped [`TIER`], plus any further `join`. A fact with no stamp
+/// (a match `tiers:backfill` hasn't reached) doesn't count. Binds `?1` key
+/// scope, `?2` platform, `?3` queue, `?4` queue id, `?5` patches.
 fn ladder_facts(join: &str) -> String {
     format!(
         "FROM match_facts f
          JOIN matches m ON m.match_id = f.match_id
-         LEFT JOIN ladder_entries le ON le.key_scope = f.key_scope AND le.platform = ?2
-           AND le.queue = ?3 AND le.puuid = f.puuid
-         LEFT JOIN player_ranks pr ON pr.key_scope = f.key_scope AND pr.platform = ?2
-           AND pr.queue = ?3 AND pr.puuid = f.puuid
+         JOIN match_tiers mt ON mt.match_id = f.match_id AND mt.puuid = f.puuid
+           AND mt.key_scope = f.key_scope AND mt.platform = ?2 AND mt.queue = ?3
          {join}
         WHERE f.key_scope = ?1 AND m.queue_id = ?4 AND m.patch IS NOT NULL AND {ON_PLATFORM}
           AND (?5 IS NULL OR m.patch IN (SELECT value FROM json_each(?5)))"

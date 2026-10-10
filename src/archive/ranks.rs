@@ -6,6 +6,7 @@
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Deserialize;
 
+use crate::archive::tiers;
 use crate::db::{Db, DbError};
 
 /// The fields of league-v4's `LeagueEntryDTO` a rank needs (the same ones
@@ -22,6 +23,8 @@ struct Entry {
 /// Replace one player's ranks on one platform with what `body` says, and stamp
 /// the lookup. A queue the body has no entry for is one the player is unranked
 /// in, so its row goes. A body that is not a list of entries changes nothing.
+/// Each rank also places the player's `UNKNOWN` tier stamps on matches that
+/// ended at or after `late_since` (THR-02, [`tiers::late_stamp`]).
 pub async fn record(
     db: &Db,
     key_scope: &str,
@@ -29,6 +32,7 @@ pub async fn record(
     puuid: &str,
     body: &[u8],
     now: i64,
+    late_since: i64,
 ) -> Result<usize, DbError> {
     let Ok(entries) = serde_json::from_slice::<Vec<Entry>>(body) else {
         return Ok(0);
@@ -58,6 +62,7 @@ pub async fn record(
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![scope, platform, queue, puuid, tier, division, lp, now],
             )?;
+            tiers::late_stamp(&tx, &scope, &platform, queue, &puuid, tier, late_since, now)?;
         }
         stamp_on(&tx, &scope, &platform, &puuid, now)?;
         tx.commit()?;
@@ -243,10 +248,10 @@ mod tests {
             {"queueType":"RANKED_SOLO_5x5","tier":"EMERALD","rank":"II","leaguePoints":41,"puuid":"P","wins":1},
             {"queueType":"RANKED_FLEX_SR","tier":"GOLD","rank":"I","leaguePoints":0}
         ]"#;
-        assert_eq!(record(&db, "s", "oc1", "P", body, 10).await.unwrap(), 2);
+        assert_eq!(record(&db, "s", "oc1", "P", body, 10, i64::MAX).await.unwrap(), 2);
         // Another platform's row is a different account's standing and stays.
         let other = br#"[{"queueType":"RANKED_SOLO_5x5","tier":"IRON","rank":"IV","leaguePoints":1}]"#;
-        record(&db, "s", "euw1", "P", other, 11).await.unwrap();
+        record(&db, "s", "euw1", "P", other, 11, i64::MAX).await.unwrap();
         assert_eq!(
             ranks(&db).await,
             [
@@ -258,7 +263,7 @@ mod tests {
 
         // Unranked in flex now: its row goes; solo is updated.
         let later = br#"[{"queueType":"RANKED_SOLO_5x5","tier":"DIAMOND","rank":"IV","leaguePoints":0}]"#;
-        record(&db, "s", "oc1", "P", later, 20).await.unwrap();
+        record(&db, "s", "oc1", "P", later, 20, i64::MAX).await.unwrap();
         assert_eq!(
             ranks(&db).await,
             [
@@ -270,9 +275,9 @@ mod tests {
         // An entry with a tier we don't know counts as unranked (euw1's row
         // goes); a body that isn't a list changes nothing.
         let odd = br#"[{"queueType":"RANKED_SOLO_5x5","tier":"WOOD","rank":"I","leaguePoints":0}]"#;
-        assert_eq!(record(&db, "s", "euw1", "P", odd, 30).await.unwrap(), 0);
+        assert_eq!(record(&db, "s", "euw1", "P", odd, 30, i64::MAX).await.unwrap(), 0);
         assert_eq!(
-            record(&db, "s", "oc1", "P", br#"{"status":{}}"#, 30)
+            record(&db, "s", "oc1", "P", br#"{"status":{}}"#, 30, i64::MAX)
                 .await
                 .unwrap(),
             0
@@ -353,8 +358,8 @@ mod tests {
         on_ladder(&db, "RANKED_FLEX_SR", "B").await;
         // R was looked up after the recheck point, OLD before it; a lookup
         // on another platform is another account's.
-        record(&db, "s", "oc1", "R", b"[]", 500).await.unwrap();
-        record(&db, "s", "oc1", "OLD", b"[]", 50).await.unwrap();
+        record(&db, "s", "oc1", "R", b"[]", 500, i64::MAX).await.unwrap();
+        record(&db, "s", "oc1", "OLD", b"[]", 50, i64::MAX).await.unwrap();
         stamp(&db, "s", "na1", "C", 500).await.unwrap();
 
         assert_eq!(plan(&db, &solo(), 50_000, 100).await.unwrap(), 4);
@@ -417,9 +422,9 @@ mod tests {
     async fn a_lookup_is_stamped_ranked_or_not() {
         let dir = tempfile::tempdir().unwrap();
         let db = Db::open(&dir.path().join("t.db"), 1).unwrap();
-        record(&db, "s", "oc1", "U", b"[]", 10).await.unwrap();
-        record(&db, "s", "oc1", "U", b"[]", 20).await.unwrap();
-        record(&db, "s", "oc1", "X", br#"{"status":{}}"#, 30)
+        record(&db, "s", "oc1", "U", b"[]", 10, i64::MAX).await.unwrap();
+        record(&db, "s", "oc1", "U", b"[]", 20, i64::MAX).await.unwrap();
+        record(&db, "s", "oc1", "X", br#"{"status":{}}"#, 30, i64::MAX)
             .await
             .unwrap();
         stamp(&db, "s", "oc1", "GONE", 40).await.unwrap();

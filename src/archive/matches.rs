@@ -8,7 +8,8 @@
 //! v1, and v2 until then, dropped it).
 //!
 //! Archiving a match also writes its `match_facts` in the same transaction
-//! (v1 `archiveMatch`), for the key scope whose PUUIDs the body carries.
+//! (v1 `archiveMatch`), for the key scope whose PUUIDs the body carries, and
+//! a ranked match's `match_tiers` (THR-02).
 
 use bytes::Bytes;
 use rusqlite::{OptionalExtension, params_from_iter};
@@ -258,6 +259,8 @@ pub async fn put(
             ],
         )?;
         write_derived(&tx, &id, &scope, &derived)?;
+        // Each participant's tier as it is now, kept from then on (THR-02).
+        crate::archive::tiers::stamp(&tx, &id, row.queue_id, now_ms)?;
         tx.commit()?;
         Ok::<_, ArchiveError>(())
     })

@@ -321,6 +321,7 @@ async fn collect_skips_players_walked_since_the_crawl_started_and_goes_best_firs
             cursor: None,
             apex_tier: Some("CHALLENGER"),
             now: crawl.started_at,
+            late_since: i64::MAX,
         },
     )
     .await
@@ -376,6 +377,7 @@ async fn capped_after(db: &Db, crawl_id: &str, tier: &str, n: usize) -> Vec<Stri
             cursor: None,
             apex_tier: apex.then_some(tier),
             now: 1,
+            late_since: i64::MAX,
         },
     )
     .await
