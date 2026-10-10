@@ -573,3 +573,29 @@ fn tls_true_is_refused_now_that_built_in_tls_is_gone() {
         ("TLS_PORT", "443"),
     ]));
 }
+
+#[test]
+fn idle_bulk_ceiling_defaults_and_bounds() {
+    let c = load(env(&[]));
+    assert_eq!(c.bulk_idle_ceiling, 0.95);
+    assert_eq!(c.bulk_idle_after_s, 30);
+
+    let c = load(env(&[("BULK_IDLE_CEILING", "0.9"), ("BULK_IDLE_AFTER_S", "60")]));
+    assert_eq!(c.bulk_idle_ceiling, 0.9);
+    assert_eq!(c.bulk_idle_after_s, 60);
+
+    // Unset, it never sits below a raised usage ceiling.
+    let c = load(env(&[("BULK_USAGE_CEILING", "0.97")]));
+    assert_eq!(c.bulk_idle_ceiling, 0.97);
+
+    for (value, usage) in [("1.0", "0.8"), ("1", "0.8"), ("0.7", "0.8"), ("1.5", "0.8")] {
+        let errs = errors(env(&[
+            ("BULK_IDLE_CEILING", value),
+            ("BULK_USAGE_CEILING", usage),
+        ]));
+        assert!(
+            errs.iter().any(|e| e.starts_with("BULK_IDLE_CEILING:")),
+            "{value}: {errs:#?}"
+        );
+    }
+}

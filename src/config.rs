@@ -39,6 +39,8 @@ pub const VARS: &[&str] = &[
     "NEG_TTL_ACCOUNT_SECONDS",
     "CLIENT_WAIT_BUDGET_MS",
     "BULK_USAGE_CEILING",
+    "BULK_IDLE_CEILING",
+    "BULK_IDLE_AFTER_S",
     "STALE_WHILE_REVALIDATE",
     "METRICS_INTERVAL_S",
     "METRICS_HISTORY_INTERVAL_S",
@@ -83,6 +85,9 @@ const LEGACY_ENV_VAR: &str = "NODE_ENV";
 
 pub const DEFAULT_USER_AGENT: &str = "riot-proxy/2.0 (+https://github.com/NinjaGoldfinch/riot-proxy)";
 pub const DB_FILE_NAME: &str = "riot-proxy.db";
+/// Bulk's ceiling while nobody is using the app (THR-06a). Below 1.0 so the gap
+/// absorbs drift between our windows and Riot's.
+pub const DEFAULT_BULK_IDLE_CEILING: f64 = 0.95;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
@@ -215,6 +220,10 @@ pub struct Config {
     pub neg_ttl_account_seconds: u32,
     pub client_wait_budget_ms: u64,
     pub bulk_usage_ceiling: f64,
+    /// Bulk's ceiling on a scope with no interactive request in the last
+    /// `bulk_idle_after_s` (THR-06a). Never below `bulk_usage_ceiling`.
+    pub bulk_idle_ceiling: f64,
+    pub bulk_idle_after_s: u32,
     pub stale_while_revalidate: bool,
     pub metrics_interval_s: u32,
     pub metrics_history_interval_s: u32,
@@ -447,7 +456,9 @@ impl Config {
             .map(|p| v.platform("LADDER_PLATFORMS", p))
             .collect();
 
-        let config = Config {
+        let bulk_idle_ceiling_set = v.opt_string("BULK_IDLE_CEILING").is_some();
+
+        let mut config = Config {
             riot_api_key: Secret::new(riot_api_key),
             riot_user_agent: v.string("RIOT_USER_AGENT", DEFAULT_USER_AGENT),
             env,
@@ -469,6 +480,8 @@ impl Config {
             neg_ttl_account_seconds: v.int("NEG_TTL_ACCOUNT_SECONDS", 300, 1, u32::MAX),
             client_wait_budget_ms: v.int("CLIENT_WAIT_BUDGET_MS", 2000, 0, u64::MAX),
             bulk_usage_ceiling: v.float("BULK_USAGE_CEILING", 0.8, 0.0, 1.0),
+            bulk_idle_ceiling: v.float("BULK_IDLE_CEILING", DEFAULT_BULK_IDLE_CEILING, 0.0, 1.0),
+            bulk_idle_after_s: v.int("BULK_IDLE_AFTER_S", 30, 0, 86_400),
             stale_while_revalidate: v.bool("STALE_WHILE_REVALIDATE", true),
             metrics_interval_s: v.int("METRICS_INTERVAL_S", 5, 1, 300),
             metrics_history_interval_s: v.int("METRICS_HISTORY_INTERVAL_S", 60, 10, 3600),
@@ -505,6 +518,21 @@ impl Config {
             riot_base_url,
             ddragon_base_url,
         };
+
+        let (idle, busy) = (config.bulk_idle_ceiling, config.bulk_usage_ceiling);
+        if !bulk_idle_ceiling_set {
+            // Unset, it never sits below a raised usage ceiling.
+            config.bulk_idle_ceiling = idle.max(busy);
+        } else if idle >= 1.0 {
+            // The local windows and Riot's are never exactly in step; the gap
+            // is what prevents 429s.
+            v.push("BULK_IDLE_CEILING", &format!("'{idle}' must be below 1"));
+        } else if idle < busy {
+            v.push(
+                "BULK_IDLE_CEILING",
+                &format!("'{idle}' is below BULK_USAGE_CEILING ({busy})"),
+            );
+        }
 
         if v.errors.is_empty() {
             Ok(config)

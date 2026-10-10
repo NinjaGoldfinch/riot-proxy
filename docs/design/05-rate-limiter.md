@@ -80,7 +80,9 @@ After every upstream response:
 
 ## Priorities and fairness
 
-Two `Notify`-based queues. On every token release (window reset), wake all interactive waiters first; bulk waiters only if the interactive queue is empty **and** no window is above `BULK_USAGE_CEILING` (0.80). Bulk can therefore starve indefinitely during a burst of user traffic — that is the intended guarantee, and a scheduler gauge (`limiter_bulk_waiters`) shows it.
+Two `Notify`-based queues. On every token release (window reset), wake all interactive waiters first; bulk waiters only if the interactive queue is empty **and** no window is above bulk's ceiling. Bulk can therefore starve indefinitely during a burst of user traffic — that is the intended guarantee, and a scheduler gauge (`limiter_bulk_waiters`) shows it.
+
+**The ceiling depends on whether anyone is using the app (THR-06a, ADR-126).** On a scope with no interactive acquire in the last `BULK_IDLE_AFTER_S` (30 s), bulk may go up to `BULK_IDLE_CEILING` (0.95), so crawls run near full speed when nobody is looking anything up. Any interactive acquire, admitted or not, drops that scope to `BULK_USAGE_CEILING` (0.80) at once, and it stays there until `BULK_IDLE_AFTER_S` after the last one. The interactive request itself is admitted from whatever is left, up to the full limit. The idle ceiling stays below 1.0: the local windows and Riot's are never exactly in step, and the gap is what prevents 429s. A bulk caller held only by the busy ceiling is told to retry when the scope goes idle, if that comes before the window clears.
 
 **Jobs don't wait it out (SCH-01, ADR-089).** `Limiter::bulk_blocked()` reports, under the same rules, which scopes a bulk acquire would wait on (frozen, at the ceiling, out of tokens, or held for an interactive waiter) and which `(scope, method)` pairs are at a method's ceiling, each with when it frees. The job claim skips that work (06 §Claiming). Job fetches wait at most `JOB_YIELD_BUDGET_MS` in `acquire`, then the job re-queues itself for when the limiter has room. Background stale-while-revalidate refreshes keep the 15-minute bulk budget.
 

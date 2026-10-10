@@ -175,6 +175,9 @@ pub struct ScopeEntry {
     pub frozen_until: Option<Instant>,
     /// Interactive acquires currently waiting on this scope. Bulk yields while > 0.
     pub interactive_waiters: usize,
+    /// The last interactive acquire on this scope, taken or not. Bulk keeps to
+    /// `BULK_USAGE_CEILING` for `BULK_IDLE_AFTER_S` after it (THR-06a).
+    pub last_interactive: Option<Instant>,
 }
 
 #[cfg(test)]

@@ -29,7 +29,9 @@ use self::bucket::{ScopeEntry, ScopeState, Window};
 use self::headers::{BOOTSTRAP_APP_LIMITS, CountWindow, LimitWindow, RateLimitHeaders, RateLimitType};
 
 /// Who is asking. Interactive requests are a user waiting; bulk is background work
-/// that yields at `BULK_USAGE_CEILING` and whenever interactive requests queue.
+/// that yields at its ceiling and whenever interactive requests queue. The ceiling
+/// is `BULK_IDLE_CEILING` on a scope nobody is using and `BULK_USAGE_CEILING`
+/// for `BULK_IDLE_AFTER_S` after an interactive request (THR-06a).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Priority {
     Interactive,
@@ -97,6 +99,8 @@ pub struct MethodUsage {
 #[derive(Debug)]
 pub struct Limiter {
     bulk_ceiling: f64,
+    idle_ceiling: f64,
+    idle_after: Duration,
     scopes: Mutex<HashMap<String, ScopeEntry>>,
     /// Wakes waiters when state changes in a way a sleep would not notice: an
     /// interactive waiter leaving, a freeze lifting early, new limits.
@@ -197,14 +201,36 @@ fn usage_of(window: &mut Window, now: Instant) -> WindowUsage {
 }
 
 impl Limiter {
-    /// `bulk_ceiling` is `BULK_USAGE_CEILING` (0.80 by default).
+    /// `bulk_ceiling` is `BULK_USAGE_CEILING` (0.80 by default). Bulk keeps to it
+    /// whether or not anyone is using the app, until [`Self::with_idle_ceiling`].
     pub fn new(bulk_ceiling: f64) -> Self {
         Self {
             bulk_ceiling,
+            idle_ceiling: bulk_ceiling,
+            idle_after: Duration::ZERO,
             scopes: Mutex::new(HashMap::new()),
             changed: Notify::new(),
             bulk_waiting: AtomicUsize::new(0),
             interactive_waiting: AtomicUsize::new(0),
+        }
+    }
+
+    /// Let bulk go up to `ceiling` (`BULK_IDLE_CEILING`) on a scope with no
+    /// interactive request in the last `after` (`BULK_IDLE_AFTER_S`). An
+    /// interactive request drops the scope back to `BULK_USAGE_CEILING` at once.
+    #[must_use]
+    pub fn with_idle_ceiling(mut self, ceiling: f64, after: Duration) -> Self {
+        self.idle_ceiling = ceiling;
+        self.idle_after = after;
+        self
+    }
+
+    /// Bulk's ceiling on a scope right now and, while it is the busy one, when
+    /// the idle one takes over.
+    fn ceiling_for(&self, last_interactive: Option<Instant>, now: Instant) -> (f64, Option<Instant>) {
+        match last_interactive.map(|at| at + self.idle_after) {
+            Some(idle_at) if idle_at > now => (self.bulk_ceiling, Some(idle_at)),
+            _ => (self.idle_ceiling, None),
         }
     }
 
@@ -282,6 +308,10 @@ impl Limiter {
         let entry = scopes
             .entry(scope.to_string())
             .or_insert_with(ScopeEntry::bootstrap);
+        // Someone is using the app even if this attempt waits (THR-06a).
+        if priority == Priority::Interactive {
+            entry.last_interactive = Some(now);
+        }
         if let Some(until) = entry.frozen_until {
             if until > now {
                 return Attempt::WaitUntil(until);
@@ -289,6 +319,7 @@ impl Limiter {
             entry.frozen_until = None;
         }
         let interactive_waiting = entry.interactive_waiters > 0;
+        let (ceiling, idle_at) = self.ceiling_for(entry.last_interactive, now);
         let ScopeEntry { app, methods, .. } = entry;
         let mut windows: Vec<&mut Window> = app.windows.iter_mut().collect();
         if let Some(m) = methods.get_mut(method) {
@@ -298,11 +329,12 @@ impl Limiter {
         if priority == Priority::Bulk {
             let ceiling_clear = windows
                 .iter_mut()
-                .map(|w| w.until_at_most(max_under_ceiling(w.limit, self.bulk_ceiling), now))
+                .map(|w| w.until_at_most(max_under_ceiling(w.limit, ceiling), now))
                 .max()
                 .unwrap_or(now);
             if ceiling_clear > now {
-                return Attempt::WaitUntil(ceiling_clear);
+                // The idle ceiling may open room before the busy one clears.
+                return Attempt::WaitUntil(idle_at.map_or(ceiling_clear, |at| at.min(ceiling_clear)));
             }
             if interactive_waiting {
                 let room = windows.iter_mut().map(|w| w.next_free(now)).max().unwrap_or(now);
@@ -494,8 +526,8 @@ impl Limiter {
     /// (SCH-01, design/05 §Priorities): the job claim skips that work rather
     /// than hand it to a worker that would only wait.
     ///
-    /// A scope is blocked when its app limit is: frozen, at
-    /// `BULK_USAGE_CEILING`, out of tokens, or held for a waiting interactive
+    /// A scope is blocked when its app limit is: frozen, at bulk's ceiling
+    /// (idle or busy), out of tokens, or held for a waiting interactive
     /// caller. A method at its ceiling blocks only that method on that scope.
     /// Scopes never touched are free.
     pub fn bulk_blocked(&self) -> BulkBlocked {
@@ -503,8 +535,12 @@ impl Limiter {
         let mut out = BulkBlocked::default();
         let mut scopes = self.lock();
         for (scope, entry) in scopes.iter_mut() {
-            let ceiling =
-                |w: &mut Window| w.until_at_most(max_under_ceiling(w.limit, self.bulk_ceiling), now);
+            let (share, idle_at) = self.ceiling_for(entry.last_interactive, now);
+            // When the idle ceiling takes over first, look again then.
+            let ceiling = |w: &mut Window| {
+                let clear = w.until_at_most(max_under_ceiling(w.limit, share), now);
+                idle_at.map_or(clear, |at| at.min(clear))
+            };
             let mut until = entry.frozen_until.filter(|&u| u > now).unwrap_or(now);
             until = entry
                 .app
