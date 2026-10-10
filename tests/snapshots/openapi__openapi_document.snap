@@ -492,7 +492,7 @@ expression: doc
         "type": "object"
       },
       "BuildSkillOrderOption": {
-        "description": "A skill order: Q, W and E in the order they were maxed, `\"QWE\"`.",
+        "description": "A skill order: Q, W and E in the order they were maxed, `\"QWE\"`. For Udyr,\nwhose R is ranked like the others, all four, `\"RWEQ\"`.",
         "properties": {
           "games": {
             "format": "int64",

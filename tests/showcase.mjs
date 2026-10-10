@@ -435,7 +435,7 @@ test('a strange timeline or an unknown player gives an empty build, never an err
 });
 
 // Each golden file with its match's champions, as the match view passes them, and its patch's item.json.
-for (const [matchId, items] of [['OC1_711969250', 'item-16.19.1.json'], ['OC1_712417978', 'item-16.20.1.json']]) {
+for (const [matchId, items] of [['OC1_711969250', 'item-16.19.1.json'], ['OC1_712417978', 'item-16.20.1.json'], ['OC1_706102889', 'item-16.14.1.json']]) {
   test(`the golden file: every player of ${matchId}, as builds:extract works it out`, () => {
     const tl = BLD(`${matchId}.timeline.json`);
     const champion = Object.fromEntries(BLD(`${matchId}.match.json`).info.participants.map((p) => [p.puuid, p.championId]));
@@ -472,6 +472,20 @@ test("Viego's level-ups in the ms of his ITEM_DESTROYED are dropped; anyone else
   // One item is enough for Viego; another ms, or another player's item, is not.
   assert.equal(h.playerBuild(timeline([up(2, 1000), gone(2003, 5000), up(1, 5000)]), 'P', CATALOG, 234).skills, 'W');
   assert.equal(h.playerBuild(timeline([up(1, 1000), gone(6676, 899999), up(4, 900000), gone(6673, 900001), gone(3036, 950000, 2), up(2, 950000)]), 'P', CATALOG, 234).skills, 'QRW');
+});
+
+test("Udyr's skill order ranks R with Q, W and E (BLD-06); everyone else's doesn't", () => {
+  const up = (skillSlot, timestamp) => ({ type: 'SKILL_LEVEL_UP', participantId: 1, skillSlot, levelUpType: 'NORMAL', timestamp });
+  const events = timeline([up(4, 1), up(3, 2), up(4, 3), up(3, 4), up(4, 5), up(4, 6), up(2, 7)]);
+  assert.equal(h.playerBuild(events, 'P', CATALOG, 77).skillOrder, 'REWQ', 'a skill never levelled goes last');
+  assert.equal(h.playerBuild(events, 'P', CATALOG, 238).skillOrder, 'EWQ');
+  assert.equal(h.playerBuild(events, 'P', CATALOG).skillOrder, 'EWQ', 'no champion: not Udyr');
+  assert.equal(h.playerBuild(timeline([up(4, 1), up(1, 2), up(1, 3), up(4, 4)]), 'P', CATALOG, 77).skillOrder, 'QRWE', 'a tie goes to the one that got there first');
+  // The recorded Udyr: R6 W6 E6 Q3 over 21 points at level 20, R first to 6.
+  const udyr = h.playerBuild(BLD('OC1_706102889.timeline.json'), 'bld-fixture-puuid-01', h.itemCatalog(BLD('item-16.14.1.json')), 77);
+  assert.equal(udyr.skillOrder, 'RWEQ');
+  assert.equal(udyr.levelUps.length, 21);
+  assert.equal(udyr.skills.length, 15);
 });
 
 test('a Triple Tonic point at level 9 is kept: nothing caps points by level', () => {

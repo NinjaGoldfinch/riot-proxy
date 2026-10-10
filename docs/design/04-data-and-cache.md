@@ -144,7 +144,7 @@ CREATE TABLE match_builds (                       -- V0012 (ADR-117): from the t
   boots INTEGER,                                  -- first boots bought, tier 2 or an upgrade
   items TEXT NOT NULL,                            -- JSON: finished items in purchase order, ≤ 6
   skills TEXT NOT NULL,                           -- first 15 level-ups, "QWEQQRQ…"
-  skill_order TEXT,                               -- Q, W, E in max order, "QWE"
+  skill_order TEXT,                               -- Q, W, E in max order, "QWE"; Udyr adds R (BLD-06)
   builds_version INTEGER NOT NULL,                -- builds:extract rewrites rows below BUILDS_VERSION
   PRIMARY KEY (match_id, key_scope, puuid)
 );

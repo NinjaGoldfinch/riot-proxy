@@ -579,17 +579,27 @@ test('the skill grid grows past 18 columns for a 19th point, labelled as points,
   assert.deepEqual(heads, ['', ...Array.from({ length: 19 }, (_, i) => String(i + 1))], 'a column per point');
   assert.deepEqual(marked(p, 'R'), [6, 12, 13, 14], 'not Viego: the two R ups beside the destroyed items are points');
   assert.deepEqual(marked(p, 'W'), [2, 17, 18, 19]);
+  assert.ok(p.text('#mBuild .brow').includes('Q › E › W'), 'not Udyr: R is not ranked');
   assert.ok(p.text('#mBuild h3').includes('points in the order taken'));
   assert.deepEqual(p.errors, []);
 });
 
 test("Viego's possession (BLD-05): the match view passes his champion, so the possessed ranks aren't points", async () => {
-  const p = await matchPage({ viegoIn: 2 });
+  const p = await matchPage({ playing: { 2: [234, 'Viego'] } });
   await p.click(`#mBuild [data-bplayer="${MATCH.info.participants[1].puuid}"]`);
   assert.equal(p.w.document.querySelectorAll('#mBuild table.skillgrid thead th').length, 19, '17 points: the 18 columns and the corner');
   assert.deepEqual(marked(p, 'R'), [6, 12]);
   assert.deepEqual(marked(p, 'W'), [2, 15, 16, 17]);
   assert.ok(p.text('#mBuild .brow').includes('Q › E › W'));
+  assert.deepEqual(p.errors, []);
+});
+
+test("Udyr's skill order ranks R (BLD-06): the match view passes his champion", async () => {
+  const p = await matchPage({ playing: { 2: [77, 'Udyr'] } });
+  await p.click(`#mBuild [data-bplayer="${MATCH.info.participants[1].puuid}"]`);
+  // Q 6, E 5, then R and W at 4 each: R got there first, at the 14th point.
+  assert.ok(p.text('#mBuild .brow').includes('Q › E › R › W'));
+  assert.deepEqual(marked(p, 'R'), [6, 12, 13, 14], 'his level-ups are all points');
   assert.deepEqual(p.errors, []);
 });
 
