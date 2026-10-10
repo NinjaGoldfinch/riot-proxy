@@ -544,7 +544,7 @@ test("the build card: starter, boots, skill order, finished items with times, th
   assert.deepEqual(marked(p, 'W'), [2, 8, 10, 12, 13]);
   assert.deepEqual(marked(p, 'E'), [3, 14, 15]);
   assert.deepEqual(marked(p, 'R'), [6, 11]);
-  assert.equal(p.w.document.querySelectorAll('#mBuild table.skillgrid thead th').length, 19, 'levels 1–18');
+  assert.equal(p.w.document.querySelectorAll('#mBuild table.skillgrid thead th').length, 19, 'points 1–18 for 15 points');
   const visits = [...p.w.document.querySelectorAll('#mBuild ol.visits li')].map((li) => [li.querySelector('.muted').textContent, buildSrcs(p, `#mBuild ol.visits li:nth-child(${[...li.parentNode.children].indexOf(li) + 1}) img`)]);
   assert.deepEqual(visits, [['0:05', ['1055', '2003', '3340']], ['5:00', ['3047']], ['10:00', ['3078', '3153']], ['15:00', ['6672']]]);
   assert.deepEqual(p.errors, []);
@@ -570,6 +570,27 @@ test('the build card opens on the viewed player when they are in the match', asy
   await p.click('#pMatches article.match');
   assert.ok(p.$(`#mBuild [data-bplayer="${PUUID}"]`).classList.contains('on'));
   assert.ok(p.text('#mBuild .brow').includes('E › Q › W'));
+});
+
+test('the skill grid grows past 18 columns for a 19th point, labelled as points, not levels', async () => {
+  const p = await matchPage();
+  await p.click(`#mBuild [data-bplayer="${MATCH.info.participants[1].puuid}"]`);
+  const heads = [...p.w.document.querySelectorAll('#mBuild table.skillgrid thead th')].map((th) => th.textContent);
+  assert.deepEqual(heads, ['', ...Array.from({ length: 19 }, (_, i) => String(i + 1))], 'a column per point');
+  assert.deepEqual(marked(p, 'R'), [6, 12, 13, 14], 'not Viego: the two R ups beside the destroyed items are points');
+  assert.deepEqual(marked(p, 'W'), [2, 17, 18, 19]);
+  assert.ok(p.text('#mBuild h3').includes('points in the order taken'));
+  assert.deepEqual(p.errors, []);
+});
+
+test("Viego's possession (BLD-05): the match view passes his champion, so the possessed ranks aren't points", async () => {
+  const p = await matchPage({ viegoIn: 2 });
+  await p.click(`#mBuild [data-bplayer="${MATCH.info.participants[1].puuid}"]`);
+  assert.equal(p.w.document.querySelectorAll('#mBuild table.skillgrid thead th').length, 19, '17 points: the 18 columns and the corner');
+  assert.deepEqual(marked(p, 'R'), [6, 12]);
+  assert.deepEqual(marked(p, 'W'), [2, 15, 16, 17]);
+  assert.ok(p.text('#mBuild .brow').includes('Q › E › W'));
+  assert.deepEqual(p.errors, []);
 });
 
 test("without item.json the card says so, and the skill grid and shop visits still show", async () => {

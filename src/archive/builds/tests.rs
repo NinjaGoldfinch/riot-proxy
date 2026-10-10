@@ -11,6 +11,16 @@ const ITEMS: &[u8] = include_bytes!("../../../tests/fixtures/builds/item-16.19.1
 /// The definitions worked out independently of this module (see the
 /// fixtures' README); BLD-04's showcase helpers are held to it too.
 const EXPECTED: &[u8] = include_bytes!("../../../tests/fixtures/builds/OC1_711969250.expected.json");
+/// OC1_712417978 (patch 16.20): Viego possesses Nidalee and two of her ranks are
+/// logged as his level-ups (BLD-05).
+const POSSESSION_TIMELINE: &[u8] =
+    include_bytes!("../../../tests/fixtures/builds/OC1_712417978.timeline.json");
+const POSSESSION_MATCH: &[u8] = include_bytes!("../../../tests/fixtures/builds/OC1_712417978.match.json");
+const POSSESSION_ITEMS: &[u8] = include_bytes!("../../../tests/fixtures/builds/item-16.20.1.json");
+const POSSESSION_EXPECTED: &[u8] =
+    include_bytes!("../../../tests/fixtures/builds/OC1_712417978.expected.json");
+const VIEGO: i64 = 234;
+const ZED: i64 = 238;
 
 fn catalog() -> ItemCatalog {
     ItemCatalog::from_item_json(ITEMS).unwrap()
@@ -36,33 +46,167 @@ fn level(slot: i64, at: i64) -> Value {
     json!({"type": "SKILL_LEVEL_UP", "participantId": 1, "skillSlot": slot, "levelUpType": "NORMAL", "timestamp": at})
 }
 
+fn destroyed(item: i64, at: i64) -> Value {
+    json!({"type": "ITEM_DESTROYED", "participantId": 1, "itemId": item, "timestamp": at})
+}
+
+/// No champions known: every player is treated as any champion but Viego.
+fn no_champions() -> HashMap<String, i64> {
+    HashMap::new()
+}
+
+/// A match's puuid → championId, as `builds:extract` reads it from `match_facts`.
+fn champions_of(match_json: &[u8]) -> HashMap<String, i64> {
+    let m: Value = serde_json::from_slice(match_json).unwrap();
+    m["info"]["participants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| {
+            (
+                p["puuid"].as_str().unwrap().to_string(),
+                p["championId"].as_i64().unwrap(),
+            )
+        })
+        .collect()
+}
+
 fn only(events: Value) -> BuildFact {
-    let mut rows = extract(&timeline(events), &catalog());
+    let mut rows = extract(&timeline(events), &catalog(), &no_champions());
     assert_eq!(rows.len(), 1);
     rows.remove(0)
 }
 
-#[test]
-fn the_recorded_ranked_game_matches_the_golden_file() {
-    let rows = extract(TIMELINE, &catalog());
-    assert_eq!(rows.len(), 10);
-    let got: BTreeMap<String, Value> = rows
-        .iter()
+/// [`only`], with the player on this champion.
+fn only_as(champion: i64, events: Value) -> BuildFact {
+    let champions = HashMap::from([("p1".to_string(), champion)]);
+    let mut rows = extract(&timeline(events), &catalog(), &champions);
+    assert_eq!(rows.len(), 1);
+    rows.remove(0)
+}
+
+/// `rows` keyed by puuid, in the golden file's shape.
+fn by_puuid(rows: &[BuildFact]) -> BTreeMap<String, Value> {
+    rows.iter()
         .map(|b| {
             let mut v = serde_json::to_value(b).unwrap();
             v.as_object_mut().unwrap().remove("puuid");
             (b.puuid.clone(), v)
         })
-        .collect();
+        .collect()
+}
+
+#[test]
+fn the_recorded_ranked_game_matches_the_golden_file() {
+    // With its champions known, as builds:extract runs it: no Viego, so nothing changes.
+    let match_json = include_bytes!("../../../tests/fixtures/builds/OC1_711969250.match.json");
+    let rows = extract(TIMELINE, &catalog(), &champions_of(match_json));
+    assert_eq!(rows.len(), 10);
+    assert_eq!(rows, extract(TIMELINE, &catalog(), &no_champions()));
     let want: BTreeMap<String, Value> = serde_json::from_slice(EXPECTED).unwrap();
-    assert_eq!(got, want);
+    assert_eq!(by_puuid(&rows), want);
     insta::assert_json_snapshot!("builds_ranked_solo", rows);
+}
+
+#[test]
+fn the_possession_game_matches_its_golden_file() {
+    let c = ItemCatalog::from_item_json(POSSESSION_ITEMS).unwrap();
+    let rows = extract(POSSESSION_TIMELINE, &c, &champions_of(POSSESSION_MATCH));
+    assert_eq!(rows.len(), 10);
+    let want: BTreeMap<String, Value> = serde_json::from_slice(POSSESSION_EXPECTED).unwrap();
+    assert_eq!(by_puuid(&rows), want);
+    // Viego (participant 2): 13 points at level 13, R at 6 and 11 only.
+    let viego = &rows[1];
+    assert_eq!(viego.skills, "QWQEQRQEQEREE");
+    assert_eq!(viego.skill_order.as_deref(), Some("QEW"));
+    // Morgana (participant 10) keeps the W she took in the same ms as one ITEM_DESTROYED.
+    assert_eq!(rows[9].skills, "QWEQQRQWQWRWW");
+    // Without the champions, Viego keeps Nidalee's two R ranks: the rule needs them.
+    let blind = extract(POSSESSION_TIMELINE, &c, &no_champions());
+    assert_eq!(blind[1].skills, "QWQEQRQEQEREERR");
+    assert_eq!(blind[2..], rows[2..]);
+}
+
+#[test]
+fn a_viego_level_up_in_the_ms_of_his_item_destroyed_is_dropped() {
+    let events = json!([
+        level(1, 1_000),
+        level(3, 2_000),
+        // A possession: his inventory goes and two ranks are logged in the same ms.
+        destroyed(6676, 900_000),
+        destroyed(1001, 900_000),
+        level(4, 900_000),
+        level(4, 900_000),
+        level(1, 950_000),
+    ]);
+    let b = only_as(VIEGO, events.clone());
+    assert_eq!(b.skills, "QEQ");
+    assert_eq!(b.skill_order.as_deref(), Some("QEW"));
+    // One destroyed item is enough for Viego.
+    let b = only_as(
+        VIEGO,
+        json!([level(2, 1_000), destroyed(2003, 5_000), level(1, 5_000)]),
+    );
+    assert_eq!(b.skills, "W");
+}
+
+#[test]
+fn the_same_events_for_another_champion_are_kept() {
+    let events = json!([
+        level(1, 1_000),
+        level(3, 2_000),
+        destroyed(6676, 900_000),
+        destroyed(1001, 900_000),
+        level(4, 900_000),
+        level(4, 900_000),
+        level(1, 950_000),
+    ]);
+    assert_eq!(only_as(ZED, events.clone()).skills, "QERRQ");
+    // A player whose champion isn't known is not Viego.
+    assert_eq!(only(events).skills, "QERRQ");
+}
+
+#[test]
+fn a_viego_level_up_with_no_item_destroyed_in_its_ms_is_kept() {
+    let b = only_as(
+        VIEGO,
+        json!([
+            level(1, 1_000),
+            destroyed(6676, 899_999),
+            level(4, 900_000),
+            destroyed(6673, 900_001),
+            // Another player's item destroyed in his millisecond doesn't count.
+            {"type": "ITEM_DESTROYED", "participantId": 2, "itemId": 3036, "timestamp": 950_000},
+            level(2, 950_000),
+        ]),
+    );
+    assert_eq!(b.skills, "QRW");
+}
+
+#[test]
+fn a_triple_tonic_player_keeps_the_level_nine_point() {
+    // Triple Tonic (rune 8313) grants a point at level 9: two points seconds
+    // apart, ending one above champLevel. Nothing caps points by level, Viego included.
+    let mut ups: Vec<Value> = [1, 2, 3, 1, 1, 4, 1, 3, 1, 1, 3, 4, 3, 3]
+        .iter()
+        .enumerate()
+        .map(|(k, &s)| level(s, 60_000 * (k as i64 + 1)))
+        .collect();
+    ups[9] = level(1, 60_000 * 9 + 4_000);
+    for champion in [ZED, VIEGO] {
+        let b = only_as(champion, Value::Array(ups.clone()));
+        assert_eq!(b.skills, "QWEQQRQEQQEREE", "champion {champion}");
+    }
+    // The recorded Zed with Triple Tonic: 14 points at level 13.
+    let c = ItemCatalog::from_item_json(POSSESSION_ITEMS).unwrap();
+    let zed = &extract(POSSESSION_TIMELINE, &c, &champions_of(POSSESSION_MATCH))[0];
+    assert_eq!(zed.skills.len(), 14);
 }
 
 #[test]
 fn every_item_kept_in_the_recorded_game_is_finished() {
     let c = catalog();
-    for b in extract(TIMELINE, &c) {
+    for b in extract(TIMELINE, &c, &no_champions()) {
         assert!(!b.items.is_empty(), "{} finished nothing", b.puuid);
         assert!(b.items.iter().all(|&i| c.is_finished(i)));
         assert!(b.boots.is_some_and(|i| c.is_boots(i)));
@@ -163,6 +307,7 @@ fn participant_zero_and_evolutions_are_ignored() {
         }}))
         .unwrap(),
         &catalog(),
+        &no_champions(),
     );
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].puuid, "p1");
@@ -213,13 +358,14 @@ fn unknown_items_are_dropped_and_finished_items_capped_at_six() {
 #[test]
 fn a_malformed_timeline_gives_no_rows() {
     let c = catalog();
-    assert!(extract(b"", &c).is_empty());
-    assert!(extract(b"{\"info\": 3}", &c).is_empty());
-    assert!(extract(b"{\"metadata\": {}}", &c).is_empty());
+    assert!(extract(b"", &c, &no_champions()).is_empty());
+    assert!(extract(b"{\"info\": 3}", &c, &no_champions()).is_empty());
+    assert!(extract(b"{\"metadata\": {}}", &c, &no_champions()).is_empty());
     // A participant with no puuid is skipped, the rest kept.
     let rows = extract(
         br#"{"info": {"participants": [{"participantId": 1}, {"participantId": 2, "puuid": "p2"}], "frames": []}}"#,
         &c,
+        &no_champions(),
     );
     assert_eq!(rows.len(), 1);
 }

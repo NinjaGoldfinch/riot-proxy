@@ -7,7 +7,8 @@
 //!   undone purchases ([`purchases`]); sales and their undos are ignored;
 //! - finished item, boots: [`ItemCatalog`];
 //! - starter: every purchase before [`BUILD_STARTER_MS`] that isn't a trinket;
-//! - skill order: [`skill_order`].
+//! - skill order: [`skill_order`];
+//! - Viego's possession: [`possessed`] level-ups aren't counted (BLD-05).
 //!
 //! The extraction never panics on a strange body: an item id the catalogue
 //! doesn't know is dropped, not guessed, a participant with no puuid is
@@ -20,7 +21,7 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 /// The version of [`extract`] that wrote a row (`match_builds.builds_version`).
-pub const BUILDS_VERSION: i64 = 1;
+pub const BUILDS_VERSION: i64 = 2;
 
 /// Purchases before this many ms into the game are the starter (BLD). In the
 /// match the definitions were checked on, starters were bought at 7–29 s and
@@ -37,6 +38,9 @@ const ITEMS_KEPT: usize = 6;
 const SKILLS_KEPT: usize = 15;
 /// `SKILL_LEVEL_UP.skillSlot` 1–4.
 const SKILL_KEYS: [char; 4] = ['Q', 'W', 'E', 'R'];
+/// Viego, whose possession logs the possessed champion's ranks as his own
+/// level-ups (BLD-05, ADR-131).
+const VIEGO: i64 = 234;
 
 /// One `match_builds` row, minus the `match_id` and `key_scope` the caller owns.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -253,6 +257,22 @@ fn purchases(events: &[&Event]) -> Vec<Purchase> {
     out
 }
 
+/// BLD-05: for Viego, a `SKILL_LEVEL_UP` at the same timestamp as one or more
+/// of his own `ITEM_DESTROYED` events is a possessed champion's rank, logged
+/// as Viego's: the possession swaps his inventory in that millisecond. Only
+/// Viego: other champions' level-ups do coincide with a destroyed item now
+/// and then, and those points are real.
+fn possessed(champion: Option<i64>, events: &[&Event]) -> HashSet<i64> {
+    if champion != Some(VIEGO) {
+        return HashSet::new();
+    }
+    events
+        .iter()
+        .filter(|e| e.kind == "ITEM_DESTROYED")
+        .map(|e| e.timestamp)
+        .collect()
+}
+
 /// Q, W and E (`skillSlot` 1–3) ranked by points at the end, a tie going to
 /// the skill that reached that count first; a skill never levelled ranks
 /// after the others, in Q W E order. `None` with no level-ups at all.
@@ -277,7 +297,11 @@ fn skill_order(slots: &[usize]) -> Option<String> {
 /// The build facts for every player in a timeline, in Riot's participant
 /// order. A participant with no puuid, `participantId: 0` (not a player) and
 /// a puuid seen twice are skipped; a timeline that doesn't parse gives `[]`.
-pub fn extract(timeline: &[u8], catalog: &ItemCatalog) -> Vec<BuildFact> {
+///
+/// `champions` is the match's puuid → championId (its `match_facts`); the
+/// timeline doesn't name champions. A player missing from it is treated as
+/// any champion but Viego.
+pub fn extract(timeline: &[u8], catalog: &ItemCatalog, champions: &HashMap<String, i64>) -> Vec<BuildFact> {
     let Ok(t) = serde_json::from_slice::<Timeline>(timeline) else {
         return Vec::new();
     };
@@ -315,9 +339,11 @@ pub fn extract(timeline: &[u8], catalog: &ItemCatalog) -> Vec<BuildFact> {
             .filter(|&id| catalog.is_finished(id))
             .take(ITEMS_KEPT)
             .collect();
+        let possession = possessed(champions.get(puuid).copied(), &mine);
         let slots: Vec<usize> = mine
             .iter()
             .filter(|e| e.kind == "SKILL_LEVEL_UP" && e.level_up_type.as_deref() == Some("NORMAL"))
+            .filter(|e| !possession.contains(&e.timestamp))
             .filter_map(|e| {
                 e.skill_slot
                     .and_then(|s| usize::try_from(s - 1).ok())

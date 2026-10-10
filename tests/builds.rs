@@ -216,3 +216,52 @@ async fn deleting_a_match_deletes_its_builds() {
     e.sql("DELETE FROM timelines; DELETE FROM matches;").await;
     assert!(e.rows().await.is_empty());
 }
+
+/// BLD-05: the job passes each player's champion from `match_facts`, so
+/// Viego's possession isn't counted as his skill points.
+#[tokio::test]
+async fn extraction_drops_viegos_possessed_level_ups() {
+    const ID: &str = "OC1_712417978";
+    let e = env().await;
+    matches::put(
+        &e.state.db,
+        ID,
+        "sea",
+        OWNER,
+        include_bytes!("fixtures/builds/OC1_712417978.match.json")
+            .to_vec()
+            .into(),
+        1,
+    )
+    .await
+    .unwrap();
+    matches::put_timeline(
+        &e.state.db,
+        ID,
+        include_bytes!("fixtures/builds/OC1_712417978.timeline.json")
+            .to_vec()
+            .into(),
+    )
+    .await
+    .unwrap();
+    let dir = e.state.ddragon.dir().join("16.20.1");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("item.json"),
+        include_bytes!("fixtures/builds/item-16.20.1.json"),
+    )
+    .unwrap();
+    std::fs::write(dir.join("versions.json"), r#"["16.20.1"]"#).unwrap();
+    assert_eq!(e.ctx().extract_builds().await.unwrap(), 1);
+
+    let expected: Value =
+        serde_json::from_slice(include_bytes!("fixtures/builds/OC1_712417978.expected.json")).unwrap();
+    let rows = e.rows().await;
+    assert_eq!(rows.len(), 10);
+    for (puuid, _, _, _, _, skills, order, _) in &rows {
+        assert_eq!(json!(skills), expected[puuid]["skills"], "{puuid}");
+        assert_eq!(json!(order), expected[puuid]["skillOrder"], "{puuid}");
+    }
+    let viego = rows.iter().find(|r| r.0 == "bld-fixture-puuid-02").unwrap();
+    assert_eq!(viego.5, "QWQEQRQEQEREE");
+}

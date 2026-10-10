@@ -577,6 +577,10 @@ const ITEMS_KEPT = 6;
 const SKILLS_KEPT = 15;
 /** `SKILL_LEVEL_UP.skillSlot` 1–4. */
 const SKILL_KEYS = ['Q', 'W', 'E', 'R'];
+/** Viego, whose possession logs the possessed champion's ranks as his own level-ups (BLD-05). */
+const VIEGO = 234;
+/** The skill grid has at least this many columns, one per point in the order taken. */
+const SKILL_GRID_MIN = 18;
 /**
  * Purchases less than this far apart are one shop visit. A display choice, not Riot's: the
  * timeline has no event for opening or closing the shop.
@@ -630,11 +634,13 @@ function skillOrder(slots) {
  * `info.participants` (puuid → participantId); events of `participantId: 0` are not a player's.
  * Purchases are ITEM_PURCHASED in time order minus undone purchases (an ITEM_UNDO with
  * `afterId: 0` removes the latest earlier purchase of `beforeId`); sales and their undos are
- * ignored. Only NORMAL level-ups count. Without a catalogue, `starter`, `boots` and `items` are
- * `null`; with one, an item it doesn't know is dropped from them, not guessed. Never throws: a
- * strange timeline gives an empty build.
+ * ignored. Only NORMAL level-ups count. For Viego (`championId` 234, from the match, since the
+ * timeline doesn't name champions), a level-up in the same ms as one or more of his own
+ * ITEM_DESTROYED isn't counted: it is a possessed champion's rank, logged as his (BLD-05).
+ * Without a catalogue, `starter`, `boots` and `items` are `null`; with one, an item it doesn't
+ * know is dropped from them, not guessed. Never throws: a strange timeline gives an empty build.
  */
-function playerBuild(timeline, puuid, catalog) {
+function playerBuild(timeline, puuid, catalog, championId) {
   const info = timeline?.info;
   const parts = Array.isArray(info?.participants) ? info.participants : [];
   const pid = puuid ? parts.find((p) => p?.puuid === puuid && Number.isInteger(p.participantId) && p.participantId !== 0)?.participantId : null;
@@ -653,8 +659,10 @@ function playerBuild(timeline, puuid, catalog) {
       }
     }
   }
+  const possessed = new Set(championId === VIEGO ? events.filter((e) => e.type === 'ITEM_DESTROYED').map((e) => e.timestamp ?? 0) : []);
   const levelUps = events
     .filter((e) => e.type === 'SKILL_LEVEL_UP' && e.levelUpType === 'NORMAL' && e.skillSlot >= 1 && e.skillSlot <= 4)
+    .filter((e) => !possessed.has(e.timestamp ?? 0))
     .map((e) => ({ slot: e.skillSlot, t: e.timestamp ?? 0 }));
   const slots = levelUps.map((l) => l.slot - 1);
   const known = catalog ? purchases.filter((p) => catalog.has(p.itemId)) : [];
@@ -1187,7 +1195,8 @@ function renderBuild() {
   const tabs = teams.flatMap((t) => t.players).map((p) => `<button data-bplayer="${esc(p.puuid ?? '')}" class="${p.puuid === mb.puuid ? 'on' : ''}" title="${esc(champions[p.championId]?.name ?? p.championName ?? '')}${p.riotIdGameName ? ` · ${esc(p.riotIdGameName)}` : ''}">${champIcon(p.championId, size)}</button>`).join('');
   const head = `<header><h2>Build</h2><div class="tools bplayers">${tabs}</div></header><div>${sources(OP.timeline, OP.file)}</div>`;
   if (!tl.ok) { el.innerHTML = head + failure(tl); return; }
-  const b = playerBuild(tl.json, mb.puuid, catalog);
+  const player = teams.flatMap((t) => t.players).find((p) => p.puuid === mb.puuid);
+  const b = playerBuild(tl.json, mb.puuid, catalog, player?.championId);
   if (!b.purchases.length && !b.levelUps.length) { el.innerHTML = head + '<p class="empty">No build for this player.</p>'; return; }
   const at = (ms) => clock(ms / 1000);
   const group = (label, body) => `<span class="bgroup"><small>${label}</small>${body || '<span class="muted">–</span>'}</span>`;
@@ -1199,11 +1208,13 @@ function renderBuild() {
       group('Items', b.items.length ? `<span class="timed-row">${b.items.map((x) => `<span class="timed">${namedItem(x.itemId)}${at(x.t)}</span>`).join('')}</span>` : ''),
     ].join('')}</div>`
     : '<p class="muted note">Item data is unavailable, so the starter, boots and finished items can\'t be told apart.</p>';
-  const levels = Array.from({ length: 18 }, (_, i) => i + 1);
-  const grid = `<h3 class="muted sub">Skills</h3><div class="scroll"><table class="skillgrid"><thead><tr><th></th>${levels.map((l) => `<th>${l}</th>`).join('')}</tr></thead><tbody>
-    ${SKILL_KEYS.map((k, i) => `<tr><th>${k}</th>${levels.map((l) => {
-      const up = b.levelUps[l - 1];
-      return up?.slot === i + 1 ? `<td class="on" title="${k} at ${at(up.t)}">${l}</td>` : '<td></td>';
+  // Columns are points in the order taken, not levels: Triple Tonic's extra point comes at level 9,
+  // and Udyr can take 19.
+  const points = Array.from({ length: Math.max(SKILL_GRID_MIN, b.levelUps.length) }, (_, i) => i + 1);
+  const grid = `<h3 class="muted sub">Skills <small>points in the order taken</small></h3><div class="scroll"><table class="skillgrid"><thead><tr><th></th>${points.map((n) => `<th>${n}</th>`).join('')}</tr></thead><tbody>
+    ${SKILL_KEYS.map((k, i) => `<tr><th>${k}</th>${points.map((n) => {
+      const up = b.levelUps[n - 1];
+      return up?.slot === i + 1 ? `<td class="on" title="${k}, point ${n}, at ${at(up.t)}">${n}</td>` : '<td></td>';
     }).join('')}</tr>`).join('')}</tbody></table></div>`;
   const visits = shopVisits(b.purchases);
   const shop = `<h3 class="muted sub">Shop visits</h3>${visits.length
