@@ -104,7 +104,7 @@ Handlers are idempotent as in v1: `archive:match` upserts; polls diff against st
 
 ### Backoff and failure
 
-`attempts < 5` → `run_after = now + 2^attempts × 30 s ± 20 %`, state back to `pending`. A yield to the rate limiter (§Claiming) is not a failure and uses no attempt. Otherwise `failed` with `error`. `/v1/admin/jobs` lists and retries failed rows; `maintenance` deletes `done` rows older than 7 days.
+`attempts < 5` → `run_after = now + 2^attempts × 30 s ± 20 %`, state back to `pending`. A yield to the rate limiter (§Claiming) is not a failure and uses no attempt. Otherwise `failed` with `error`. `/v1/admin/jobs` lists and retries failed rows; `maintenance` deletes `done` rows older than 7 days. `DELETE /v1/admin/jobs?kind=&state=&minPriority=&dryRun=` deletes the `pending` or `failed` rows of one kind from a priority band down, in chunks of 5 000 with a pause between, so a crawl's backlog of a million rows goes without holding the writer; `running` rows are never touched and `done` rows stay `maintenance`'s. The queue keeps no copy of the table in memory (a claim is one `UPDATE … RETURNING`; `recover` at boot only resets `running` rows), so rows can be deleted under a running scheduler (DSK-03, ADR-137).
 
 ### Activity views
 

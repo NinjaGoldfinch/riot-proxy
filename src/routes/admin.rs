@@ -56,7 +56,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(limits))
         .routes(routes!(debug_riot))
         .routes(routes!(debug_cache))
-        .routes(routes!(list_jobs))
+        .routes(routes!(list_jobs, purge_jobs))
         .routes(routes!(job_stats))
         .routes(routes!(job_queue))
         .routes(routes!(job_activity))
@@ -1355,6 +1355,92 @@ async fn cancel_job(
             ok(&JobSummary::from(row))
         }
         Err(e) => job_error(e),
+    }
+}
+
+/// `DELETE /v1/admin/jobs` (DSK-03).
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct JobsPurged {
+    kind: String,
+    state: String,
+    min_priority: i64,
+    /// Rows the filter matched when the purge started.
+    matched: u64,
+    /// Rows deleted; 0 on a dry run.
+    deleted: u64,
+    dry_run: bool,
+}
+
+#[utoipa::path(
+    delete, path = "/v1/admin/jobs", tag = "admin",
+    summary = "Purge pending or failed jobs of one kind",
+    description = "Deletes every `pending` or `failed` row of `kind` whose priority is `minPriority` or a larger \
+                   number (a lower band), in chunks, so a backlog of a million rows never holds the writer. \
+                   Running rows are never touched; `done` rows are `maintenance`'s. Crawl-found matches are queued \
+                   at 20 005 and lookups below 10 000, so `minPriority=20000` leaves a visitor's work alone. \
+                   `dryRun=true` only counts.",
+    params(("kind" = String, Query, description = "A job kind, e.g. archive:match"),
+           ("state" = String, Query, description = "pending or failed"),
+           ("minPriority" = Option<i64>, Query, description = "0 or more, default 0 (every row of the kind and state)"),
+           ("dryRun" = Option<bool>, Query, description = "Count only")),
+    responses((status = 200, description = "`{kind, state, minPriority, matched, deleted, dryRun}`", body = JobsPurged), LocalErrors),
+)]
+async fn purge_jobs(State(state): State<AppState>, Extension(_c): Who, Query(query): Q) -> Response {
+    use crate::jobs::scheduler::{PURGEABLE_STATES, Purge};
+    let parsed = (|| {
+        let missing = |n: &str| {
+            ApiError::new(
+                ErrorCode::Validation,
+                format!("querystring must have required property '{n}'"),
+            )
+        };
+        let kind = validate::query_one_of(
+            "kind",
+            query.get("kind").map(String::as_str),
+            crate::jobs::kinds::ALL,
+        )?
+        .ok_or_else(|| missing("kind"))?;
+        let st = validate::query_one_of("state", query.get("state").map(String::as_str), &PURGEABLE_STATES)?
+            .ok_or_else(|| missing("state"))?;
+        let min_priority = validate::int_query(
+            "minPriority",
+            query.get("minPriority").map(String::as_str),
+            0,
+            i64::MAX,
+        )?
+        .unwrap_or(0);
+        let dry_run =
+            validate::bool_query("dryRun", query.get("dryRun").map(String::as_str))?.unwrap_or(false);
+        Ok::<_, ApiError>(Purge {
+            kind: kind.to_string(),
+            state: st.to_string(),
+            min_priority,
+            dry_run,
+        })
+    })();
+    let purge = match parsed {
+        Ok(p) => p,
+        Err(e) => return e.into_response(),
+    };
+    match state.jobs.purge(purge.clone()).await {
+        Ok(done) => {
+            if !purge.dry_run {
+                tracing::warn!(
+                    kind = %purge.kind, state = %purge.state, min_priority = purge.min_priority,
+                    matched = done.matched, deleted = done.deleted, "jobs purged"
+                );
+            }
+            ok(&JobsPurged {
+                kind: purge.kind,
+                state: purge.state,
+                min_priority: purge.min_priority,
+                matched: done.matched,
+                deleted: done.deleted,
+                dry_run: purge.dry_run,
+            })
+        }
+        Err(e) => internal(&e, "could not purge jobs"),
     }
 }
 
