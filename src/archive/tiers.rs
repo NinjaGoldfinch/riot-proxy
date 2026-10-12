@@ -1,12 +1,15 @@
 //! Each participant's tier as it was when their ranked match was archived
-//! (V0016, THR-02, ADR-127). Analytics read it in place of the current
-//! ladder, so a player's old games stay in the tier they were played at.
+//! (`match_facts.tier`; V0016 and THR-02 as `match_tiers`, folded into the
+//! fact row by V0019, DSK-04, ADR-138). Analytics read it in place of the
+//! current ladder, so a player's old games stay in the tier they were played
+//! at.
 //!
 //! A match is stamped in the transaction that archives it; `tiers:backfill`
-//! stamps the matches archived before V0016. The tier is ADR-105's: the newer
-//! of the ladder's and the last league lookup's for the match's platform and
+//! stamps the matches left with no tier. The tier is ADR-105's: the newer of
+//! the ladder's and the last league lookup's for the match's platform and
 //! queue, else [`UNKNOWN_TIER`]. A stamp is never redone, except that a later
 //! rank upgrades an `UNKNOWN` one on a recent match ([`late_stamp`]).
+//! `facts::write` never touches the column, so a re-extraction keeps it.
 
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -28,36 +31,37 @@ pub fn ranked_queue(queue_id: i64) -> Option<&'static str> {
         .map(|(name, _)| *name)
 }
 
-/// Every participant of `?1` at their tier. Binds `?2` platform, `?3` queue,
-/// `?4` the stamp time.
-const STAMP: &str =
-    "INSERT OR IGNORE INTO match_tiers (match_id, key_scope, puuid, platform, queue, tier, stamped_at)
-     SELECT f.match_id, f.key_scope, f.puuid, ?2, ?3,
-       CASE WHEN pr.tier IS NOT NULL AND (le.tier IS NULL OR pr.fetched_at > le.updated_at)
-         THEN pr.tier ELSE coalesce(le.tier, 'UNKNOWN') END,
-       ?4
-       FROM match_facts f
-       LEFT JOIN ladder_entries le ON le.key_scope = f.key_scope AND le.platform = ?2
-         AND le.queue = ?3 AND le.puuid = f.puuid
-       LEFT JOIN player_ranks pr ON pr.key_scope = f.key_scope AND pr.platform = ?2
-         AND pr.queue = ?3 AND pr.puuid = f.puuid
-      WHERE f.match_id = ?1";
+/// Every unstamped participant of `?1` at their tier. Binds `?2` platform,
+/// `?3` queue. The one-row subquery always answers, so a player neither the
+/// ladder nor a lookup placed gets `UNKNOWN`, not NULL.
+const STAMP: &str = "UPDATE match_facts SET tier = coalesce(
+       (SELECT CASE WHEN pr.tier IS NOT NULL AND (le.tier IS NULL OR pr.fetched_at > le.updated_at)
+                    THEN pr.tier ELSE le.tier END
+          FROM (SELECT 1)
+          LEFT JOIN ladder_entries le ON le.key_scope = match_facts.key_scope AND le.platform = ?2
+            AND le.queue = ?3 AND le.puuid = match_facts.puuid
+          LEFT JOIN player_ranks pr ON pr.key_scope = match_facts.key_scope AND pr.platform = ?2
+            AND pr.queue = ?3 AND pr.puuid = match_facts.puuid),
+       'UNKNOWN')
+     WHERE match_id = ?1 AND tier IS NULL";
 
 /// Stamp the participants of a match whose facts are written. A match outside
 /// solo and flex, or whose id names no platform, writes nothing; a participant
-/// already stamped keeps their stamp. Returns the rows written.
-pub fn stamp(c: &Connection, match_id: &str, queue_id: i64, now: i64) -> rusqlite::Result<usize> {
+/// already stamped keeps their stamp. Returns the rows stamped.
+pub fn stamp(c: &Connection, match_id: &str, queue_id: i64) -> rusqlite::Result<usize> {
     let (Some(platform), Some(queue)) = (Platform::from_match_id(match_id), ranked_queue(queue_id)) else {
         return Ok(0);
     };
     c.prepare_cached(STAMP)?
-        .execute(params![match_id, platform.as_str(), queue, now])
+        .execute(params![match_id, platform.as_str(), queue])
 }
 
 /// Upgrade one player's `UNKNOWN` stamps on a platform and queue to `tier`,
 /// for matches that ended at or after `since` (unix ms). Called with a rank
-/// the ladder or a league lookup just returned. Returns the rows changed.
-#[allow(clippy::too_many_arguments)]
+/// the ladder or a league lookup just returned. The platform is the match
+/// id's prefix and the queue the match's queue id, so the player's facts are
+/// read through `facts_player` and each match checked by key. Returns the
+/// rows changed.
 pub fn late_stamp(
     c: &Connection,
     key_scope: &str,
@@ -66,18 +70,24 @@ pub fn late_stamp(
     puuid: &str,
     tier: &str,
     since: i64,
-    now: i64,
 ) -> rusqlite::Result<usize> {
+    let Some(queue_id) = crate::riot::ladder::queue_id(queue) else {
+        return Ok(0);
+    };
     if tier == UNKNOWN_TIER {
         return Ok(0);
     }
-    c.prepare_cached(
-        "UPDATE match_tiers SET tier = ?5, stamped_at = ?7
-          WHERE key_scope = ?1 AND platform = ?2 AND queue = ?3 AND puuid = ?4 AND tier = 'UNKNOWN'
-            AND (SELECT m.game_end_ms FROM matches m WHERE m.match_id = match_tiers.match_id) >= ?6",
-    )?
-    .execute(params![key_scope, platform, queue, puuid, tier, since, now])
+    c.prepare_cached(LATE_STAMP)?
+        .execute(params![key_scope, platform, queue_id, puuid, tier, since])
 }
+
+/// Binds `?1` key scope, `?2` platform, `?3` queue id, `?4` puuid, `?5` the
+/// tier, `?6` the window's start.
+const LATE_STAMP: &str = "UPDATE match_facts SET tier = ?5
+     WHERE key_scope = ?1 AND puuid = ?4 AND tier = 'UNKNOWN'
+       AND match_id > upper(?2) || '_' AND match_id < upper(?2) || '`'
+       AND EXISTS (SELECT 1 FROM matches m WHERE m.match_id = match_facts.match_id
+                     AND m.queue_id = ?3 AND m.game_end_ms >= ?6)";
 
 /// Where a late stamp's window starts: `days` before `now`. With 0 days it is
 /// after every match, so nothing is upgraded.
@@ -88,8 +98,8 @@ pub fn late_since(now: i64, days: u32) -> i64 {
     now.saturating_sub(i64::from(days).saturating_mul(DAY_MS))
 }
 
-/// Ranked matches with facts and no stamp, after `after` in id order, up to
-/// `limit`, with their queue ids: what `tiers:backfill` stamps.
+/// Ranked matches with a fact left unstamped, after `after` in id order, up
+/// to `limit`, with their queue ids: what `tiers:backfill` stamps.
 pub fn unstamped(c: &Connection, after: &str, limit: i64) -> rusqlite::Result<Vec<(String, i64)>> {
     let mut stmt = c.prepare_cached(&format!(
         "SELECT m.match_id, m.queue_id {UNSTAMPED} ORDER BY m.match_id LIMIT ?2"
@@ -110,8 +120,7 @@ pub fn any_unstamped(c: &Connection) -> rusqlite::Result<bool> {
 /// Binds `?1`, the id to start after.
 const UNSTAMPED: &str = "FROM matches m
      WHERE m.match_id > ?1 AND m.queue_id IN (420, 440)
-       AND EXISTS (SELECT 1 FROM match_facts f WHERE f.match_id = m.match_id)
-       AND NOT EXISTS (SELECT 1 FROM match_tiers t WHERE t.match_id = m.match_id)";
+       AND EXISTS (SELECT 1 FROM match_facts f WHERE f.match_id = m.match_id AND f.tier IS NULL)";
 
 #[cfg(test)]
 mod tests;

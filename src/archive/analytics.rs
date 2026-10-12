@@ -2,8 +2,8 @@
 //! `match_facts` per ladder (platform, queue) and read by `/v1/lol/analytics/*`.
 //!
 //! Every participant of the platform's archived matches counts (ADR-105), at
-//! the tier stamped when the match was archived (`match_tiers`, THR-02,
-//! ADR-127): the newer of the ladder's and the last league lookup's then, or
+//! the tier stamped when the match was archived (`match_facts.tier`, THR-02,
+//! ADR-127, ADR-138): the newer of the ladder's and the last league lookup's then, or
 //! [`UNKNOWN_TIER`] when neither had them. A match with players in several
 //! tiers counts in each (v1); `analytics_match_totals` and
 //! `champion_ban_totals` count it once, for rows summed over every tier
@@ -94,8 +94,8 @@ impl Scope {
 /// placed (ADR-105). Not one of Riot's tiers.
 pub const UNKNOWN_TIER: &str = "UNKNOWN";
 
-/// A fact's tier in [`ladder_facts`]: its stamp (THR-02).
-const TIER: &str = "mt.tier";
+/// A fact's tier in [`ladder_facts`]: its stamp (THR-02, on the row since DSK-04).
+const TIER: &str = "f.tier";
 
 /// A fact's side in [`ladder_facts`] (FLT-01): team 100 is blue, 200 red
 /// (design/10 §Scoreboard layout).
@@ -114,11 +114,9 @@ fn ladder_facts(join: &str) -> String {
     format!(
         "FROM match_facts f
          JOIN matches m ON m.match_id = f.match_id
-         JOIN match_tiers mt ON mt.match_id = f.match_id AND mt.puuid = f.puuid
-           AND mt.key_scope = f.key_scope AND mt.platform = ?2 AND mt.queue = ?3
          {join}
         WHERE f.key_scope = ?1 AND m.queue_id = ?4 AND m.patch IS NOT NULL AND {ON_PLATFORM}
-          AND f.team_id IN (100, 200)
+          AND f.tier IS NOT NULL AND f.team_id IN (100, 200)
           AND (?5 IS NULL OR m.patch IN (SELECT value FROM json_each(?5)))"
     )
 }
@@ -214,7 +212,7 @@ pub fn rebuild_champions(c: &mut Connection, s: &Scope) -> Result<Written, DbErr
 /// which has no `ANALYZE` statistics, loop over the whole ladder for every
 /// fact: 44 s for a 16,600-game ladder.
 const MATCHUPS: &str = "WITH lane AS (
-       SELECT f.match_id, f.puuid, f.team_id, f.position, f.champion_id, f.win, m.patch,
+       SELECT f.match_id, f.puuid, f.team_id, f.position, f.champion_id, f.win, f.tier, m.patch,
          coalesce(m.remake, 0) AS remake,
          count(*) OVER (PARTITION BY f.match_id, f.team_id, f.position) AS n
          FROM match_facts f JOIN matches m ON m.match_id = f.match_id
@@ -224,14 +222,13 @@ const MATCHUPS: &str = "WITH lane AS (
      )
      INSERT INTO champion_matchups (key_scope, platform, queue, patch, champion_id, role, opponent_id,
        remake, tier, side, games, wins, computed_at)
-     SELECT ?1, ?2, ?3, a.patch, a.champion_id, a.position, b.champion_id, a.remake, mt.tier,
+     SELECT ?1, ?2, ?3, a.patch, a.champion_id, a.position, b.champion_id, a.remake, a.tier,
        CASE a.team_id WHEN 100 THEN 'blue' ELSE 'red' END, count(*), sum(a.win), ?6
        FROM lane a
        JOIN lane b ON b.match_id = a.match_id AND b.position = a.position AND b.team_id <> a.team_id
-       JOIN match_tiers mt ON mt.match_id = a.match_id AND mt.puuid = a.puuid
-         AND mt.key_scope = ?1 AND mt.platform = ?2 AND mt.queue = ?3
       WHERE a.n = 1 AND b.n = 1 AND a.champion_id <> b.champion_id AND a.team_id IN (100, 200)
-      GROUP BY a.patch, a.position, a.champion_id, b.champion_id, a.remake, mt.tier, a.team_id";
+        AND a.tier IS NOT NULL
+      GROUP BY a.patch, a.position, a.champion_id, b.champion_id, a.remake, a.tier, a.team_id";
 
 pub fn rebuild_matchups(c: &mut Connection, s: &Scope) -> Result<Written, DbError> {
     let tx = c.transaction()?;
