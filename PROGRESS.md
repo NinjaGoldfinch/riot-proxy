@@ -304,7 +304,7 @@ Order: THR-02 → FLT-01 → FLT-02 → FLT-03 → FLT-04, then PAIR.
 
 ## DSK — less disk for the derived data (owner alert 2026-10-13)
 The VPS (38 GB) hit 97 %: `riot-proxy.db` 20.26 GB (timelines 12.7 GiB, matches 2.6 GiB, derived tables and their indexes ≈ 3.5 GiB, 1.13 M stale pending `archive:match` rows ≈ 0.4 GiB) plus a 9.9 GiB daily backup. Freed pages stay in the file (no `auto_vacuum`, no room for a `VACUUM`), so each task below defers growth until the raw bodies move off the box and the file is copied compact (design/07 §Reclaiming space). Specs in IMPLEMENTATION.md §Post-release — DSK.
-- [x] DSK-01 disk gauges `sqlite_db_bytes`, `sqlite_wal_bytes`, `sqlite_freelist_bytes`, `data_dir_free_bytes`, sampled with the metrics history; `GET /v1/admin/stats` reports the file, WAL, page geometry, free list and free disk; design/07 §Reclaiming space (ADR-135)
+- [x] DSK-01 disk gauges `sqlite_db_bytes`, `sqlite_wal_bytes`, `sqlite_freelist_bytes`, `data_dir_free_bytes`, sampled with the metrics history; `GET /v1/admin/stats` reports the file, WAL, page geometry, free list and free disk; design/07 §Reclaiming space (#164, ADR-135)
 - [ ] DSK-02 `BACKUP_KEEP` (0 = no on-box backup); the backup step skips itself when free disk is under 1.2 × the file and never fails the rest of `maintenance`
 - [ ] DSK-03 `DELETE /v1/admin/jobs?kind&state&minPriority&dryRun`: pending or failed jobs purged in chunks; used to drop the stale crawl backlog
 - [ ] DSK-04 `match_facts.tier` replaces `match_tiers` (V0019); `facts:reextract` leaves the tier alone
