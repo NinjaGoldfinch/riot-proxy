@@ -560,6 +560,31 @@ async fn stats_count_the_archive_and_the_players() {
     assert!(s["archiveStoredBytes"].as_i64().unwrap() < s["archiveRawBytes"].as_i64().unwrap());
 }
 
+/// DSK-01: the file, its WAL, the page geometry and the disk, read live.
+#[tokio::test]
+async fn stats_report_what_the_database_takes_on_disk() {
+    let e = env().await;
+    e.get(&format!("/v1/lol/matches/asia/{MATCH_ID}")).await;
+    let s = e.get("/v1/admin/stats").await.json();
+    let n = |k: &str| {
+        s[k].as_u64()
+            .unwrap_or_else(|| panic!("{k} missing or not a number: {s}"))
+    };
+    assert_eq!(n("dbPageSize"), 4096);
+    assert!(n("dbFreelistPages") < n("dbPageCount"), "{s}");
+    // A fresh WAL database: the file holds its first pages, the rest wait in the
+    // WAL until a checkpoint, so the file is at most pages × page size.
+    assert!(
+        n("dbFileBytes") > 0 && n("dbFileBytes") <= n("dbPageCount") * 4096,
+        "{s}"
+    );
+    assert!(n("walBytes") > 0, "{s}");
+    assert!(
+        n("diskTotalBytes") >= n("diskFreeBytes") && n("diskFreeBytes") > 0,
+        "{s}"
+    );
+}
+
 #[tokio::test]
 async fn a_players_archive_counts_everything_stored_without_calling_riot() {
     let e = env().await;
