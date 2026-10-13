@@ -171,6 +171,23 @@ expression: doc
       "AdminStats": {
         "description": "Archive and tracking counts (v1's three fields, plus archive size).",
         "properties": {
+          "archiveBodies": {
+            "$ref": "#/components/schemas/ArchiveBodies",
+            "description": "Where each kind of body is kept (OBJ-02, design/12)."
+          },
+          "archivePackBytes": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "archivePackLiveBytes": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "archivePacks": {
+            "description": "Pack objects in the bucket, their bytes, and the bytes of bodies still\nlocated in them.",
+            "format": "int64",
+            "type": "integer"
+          },
           "archiveRawBytes": {
             "description": "What they decompress to.",
             "format": "int64",
@@ -255,6 +272,10 @@ expression: doc
           "archivedTimelines",
           "archiveStoredBytes",
           "archiveRawBytes",
+          "archiveBodies",
+          "archivePacks",
+          "archivePackBytes",
+          "archivePackLiveBytes",
           "dbFileBytes",
           "walBytes",
           "dbPageSize",
@@ -356,6 +377,21 @@ expression: doc
         "required": [
           "lastRuns",
           "topChampions"
+        ],
+        "type": "object"
+      },
+      "ArchiveBodies": {
+        "properties": {
+          "matches": {
+            "$ref": "#/components/schemas/BodyStates"
+          },
+          "timelines": {
+            "$ref": "#/components/schemas/BodyStates"
+          }
+        },
+        "required": [
+          "matches",
+          "timelines"
         ],
         "type": "object"
       },
@@ -683,6 +719,32 @@ expression: doc
         "required": [
           "scope",
           "forMs"
+        ],
+        "type": "object"
+      },
+      "BodyStates": {
+        "description": "Bodies of one kind by where they are kept (design/12 §SQLite).",
+        "properties": {
+          "local": {
+            "description": "Only in SQLite: not yet packed.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "offloaded": {
+            "description": "Only in the bucket; reads fetch its byte range.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "packed": {
+            "description": "In a verified pack in the bucket, and still in SQLite.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "local",
+          "packed",
+          "offloaded"
         ],
         "type": "object"
       },
@@ -10886,7 +10948,7 @@ expression: doc
     },
     "/v1/admin/stats": {
       "get": {
-        "description": "`archivedMatches` counts the whole archive, which is not key-scoped: match ids are not encrypted, so it survives a key rotation. `trackedPlayers` is scoped to the current key and reads zero right after one. The `db*`, `wal*` and `disk*` fields are the SQLite file, its write-ahead log and free list, and the data directory's file system (DSK-01). The match and player counts are read with the request; `archivedTimelines`, the archive's bytes and the disk readings are sampled in the background with each history point (`METRICS_HISTORY_INTERVAL_S`, a minute by default; `sampledAt.slow`).",
+        "description": "`archivedMatches` counts the whole archive, which is not key-scoped: match ids are not encrypted, so it survives a key rotation. `trackedPlayers` is scoped to the current key and reads zero right after one. The `db*`, `wal*` and `disk*` fields are the SQLite file, its write-ahead log and free list, and the data directory's file system (DSK-01). The match and player counts are read with the request; `archivedTimelines`, the archive's bytes and the disk readings are sampled in the background with each history point (`METRICS_HISTORY_INTERVAL_S`, a minute by default; `sampledAt.slow`). `archiveBodies` and `archivePack*` say how much of the archive is in object storage (design/12): `archiveStoredBytes` counts only bodies still in SQLite.",
         "operationId": "stats",
         "responses": {
           "200": {

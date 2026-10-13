@@ -596,6 +596,22 @@ async fn stats_count_the_archive_and_the_players() {
         )
     );
     assert!(s["archiveStoredBytes"].as_i64().unwrap() < s["archiveRawBytes"].as_i64().unwrap());
+    // OBJ-02: nothing packed yet, so every body is local.
+    assert_eq!(
+        s["archiveBodies"],
+        json!({
+            "matches": {"local": 1, "packed": 0, "offloaded": 0},
+            "timelines": {"local": 0, "packed": 0, "offloaded": 0},
+        })
+    );
+    assert_eq!(
+        (
+            &s["archivePacks"],
+            &s["archivePackBytes"],
+            &s["archivePackLiveBytes"]
+        ),
+        (&json!(0), &json!(0), &json!(0))
+    );
 }
 
 /// DSK-01: the file, its WAL, the page geometry and the disk, read live.

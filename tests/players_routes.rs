@@ -454,6 +454,43 @@ async fn hydrates_every_id_on_the_page_then_serves_it_from_the_archive() {
     assert_eq!((row.platform.as_str(), row.game_name), ("kr", None));
 }
 
+/// design/12 (OBJ-02): a page over offloaded matches is byte-identical, read
+/// from the bucket by range, and asks Riot for nothing more.
+#[tokio::test]
+async fn a_page_over_offloaded_matches_is_byte_identical() {
+    use riot_proxy::archive::{objects::Objects, offload, pack::Kind};
+    let e = env(&[]).await;
+    let objects = Objects::in_memory();
+    assert!(e.state.db.attach_objects(objects.clone()));
+    e.get(&page("&count=5")).await;
+    let local = e.get(&page("&count=5")).await;
+    let calls = e.server.received_requests().await.unwrap().len();
+
+    let ids: Vec<String> = MATCH_IDS.iter().map(ToString::to_string).collect();
+    // Two packs, so the page reads from both.
+    for half in [&ids[..2], &ids[2..]] {
+        offload::write_pack(&e.state.db, &objects, Kind::Match, half, 1_000)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    assert_eq!(
+        offload::free(&e.state.db, Kind::Match, &ids, 1_001)
+            .await
+            .unwrap(),
+        ids.len()
+    );
+    assert_eq!(objects.list("packs/matches/").await.unwrap().len(), 2);
+
+    let remote = e.get(&page("&count=5")).await;
+    assert_eq!(remote.status, StatusCode::OK);
+    assert_eq!(
+        String::from_utf8(remote.body).unwrap(),
+        String::from_utf8(local.body).unwrap()
+    );
+    assert_eq!(e.server.received_requests().await.unwrap().len(), calls);
+}
+
 #[tokio::test]
 async fn a_short_page_has_no_more() {
     let e = env(&[]).await;

@@ -164,6 +164,7 @@ cheap on 20 GB, same pattern as V0019):
 ```sql
 CREATE TABLE body_packs (
   pack_id    TEXT PRIMARY KEY,                -- ULID; object key derives from it
+  kind       TEXT NOT NULL,                   -- match | timeline; the key needs it
   bytes      INTEGER NOT NULL,                -- object size
   bodies     INTEGER NOT NULL,
   live_bytes INTEGER NOT NULL,                -- bytes of bodies still referenced
@@ -184,11 +185,21 @@ ALTER TABLE matches   ADD COLUMN packed_at    INTEGER;  -- unix ms; set once the
 ALTER TABLE matches   ADD COLUMN offloaded_at INTEGER;  -- unix ms; set once the local copy is freed
 ALTER TABLE timelines ADD COLUMN packed_at    INTEGER;
 ALTER TABLE timelines ADD COLUMN offloaded_at INTEGER;
-CREATE INDEX matches_to_pack   ON matches(archived_at) WHERE packed_at IS NULL;
-CREATE INDEX matches_to_free   ON matches(archived_at) WHERE packed_at IS NOT NULL AND offloaded_at IS NULL;
-CREATE INDEX timelines_to_pack ON timelines(match_id)  WHERE packed_at IS NULL;
-CREATE INDEX timelines_to_free ON timelines(match_id)  WHERE packed_at IS NOT NULL AND offloaded_at IS NULL;
+CREATE INDEX matches_to_pack   ON matches(archived_at, packed_at) WHERE packed_at IS NULL;
+CREATE INDEX matches_to_free   ON matches(archived_at, packed_at, offloaded_at)
+  WHERE packed_at IS NOT NULL AND offloaded_at IS NULL;
+CREATE INDEX timelines_to_pack ON timelines(match_id, packed_at) WHERE packed_at IS NULL;
+CREATE INDEX timelines_to_free ON timelines(match_id, packed_at, offloaded_at)
+  WHERE packed_at IS NOT NULL AND offloaded_at IS NULL;
 ```
+
+As built (V0023, OBJ-02, ADR-163): `body_packs` keeps the pack's `kind`, so
+its key can still be derived after its last body is deleted (OBJ-06). Each
+partial index ends with its state columns. The `WHERE` already implies them,
+but SQLite checks a query's terms against the row unless the index holds the
+columns, and in a row they sit after the body, so a state count would read
+every body. With them, the dashboard's counts read the indexes alone (a test
+checks the query plans).
 
 A body moves through three states: **local** (`packed_at` NULL), **packed**
 (in the bucket and still in SQLite, `packed_at` set), and **offloaded** (in the
@@ -231,6 +242,17 @@ merges ranges in the same pack that are close together (`object_store`'s
 `get_ranges` does this) and fetches packs with bounded concurrency
 (`ARCHIVE_OBJECT_CONCURRENCY`, default 16). A body read back from the bucket
 is not re-written to SQLite.
+
+As built (OBJ-02): the bucket is attached to the database handle at boot
+(`Db::attach_objects`), since its locations are only meaningful with that
+database, so every caller of `get_many` reads offloaded bodies with no change.
+A read logs one warning per pack, not per body, when a pack read fails. A
+match or timeline archived again after it was offloaded (a fallback to Riot)
+is local again: `offloaded_at` is cleared and its location, still valid,
+stays. `archive::offload` holds the two steps OBJ-03's job drives:
+`write_pack` (build, upload, HEAD-verify, record in one transaction; a store
+without metadata is read back and hashed) and `free` (packed and located rows
+only).
 
 The 14-day local window (`ARCHIVE_BODY_LOCAL_DAYS`) is a read cache, not a
 delay before the bucket: every body is in the bucket within hours, and the

@@ -35,6 +35,8 @@ pub const MULTIPART_THRESHOLD: usize = 8 * 1024 * 1024;
 /// Every part but the last is exactly this size: R2 needs equal parts and S3
 /// at least 5 MiB.
 const PART_BYTES: usize = MULTIPART_THRESHOLD;
+/// `ARCHIVE_OBJECT_CONCURRENCY`'s default.
+pub const DEFAULT_CONCURRENCY: usize = 16;
 /// Parts of one upload in flight at once.
 const PART_CONCURRENCY: usize = 4;
 const CONTENT_TYPE: &str = "application/octet-stream";
@@ -81,6 +83,8 @@ pub struct Objects {
     metadata: bool,
     /// For logs: the URL and endpoint, never a key.
     describe: String,
+    /// Packs read at once by a batch read (`ARCHIVE_OBJECT_CONCURRENCY`).
+    concurrency: usize,
 }
 
 impl fmt::Debug for Objects {
@@ -100,11 +104,12 @@ impl Objects {
                     store: "LocalFileSystem",
                     source: Box::new(e),
                 })?;
-                Ok(Self {
-                    store: Arc::new(LocalFileSystem::new_with_prefix(dir)?),
-                    metadata: false,
-                    describe: format!("file://{}", dir.display()),
-                })
+                Ok(Self::from_store(
+                    Arc::new(LocalFileSystem::new_with_prefix(dir)?),
+                    false,
+                    &format!("file://{}", dir.display()),
+                )
+                .with_concurrency(config.archive_object_concurrency as usize))
             }
             Some(ObjectUrl::S3 { bucket }) => {
                 let endpoint = config.archive_object_endpoint.as_deref().unwrap_or_default();
@@ -123,11 +128,12 @@ impl Objects {
                         .with_access_key_id(access.expose())
                         .with_secret_access_key(secret.expose());
                 }
-                Ok(Self {
-                    store: Arc::new(builder.build()?),
-                    metadata: true,
-                    describe: format!("s3://{bucket} at {endpoint}"),
-                })
+                Ok(Self::from_store(
+                    Arc::new(builder.build()?),
+                    true,
+                    &format!("s3://{bucket} at {endpoint}"),
+                )
+                .with_concurrency(config.archive_object_concurrency as usize))
             }
         }
     }
@@ -144,7 +150,19 @@ impl Objects {
             store,
             metadata,
             describe: describe.to_string(),
+            concurrency: DEFAULT_CONCURRENCY,
         }
+    }
+
+    /// How many packs a batch read fetches at once; at least 1.
+    #[must_use]
+    pub fn with_concurrency(mut self, concurrency: usize) -> Self {
+        self.concurrency = concurrency.max(1);
+        self
+    }
+
+    pub fn concurrency(&self) -> usize {
+        self.concurrency
     }
 
     /// The URL and endpoint, for the boot log. Never a key.

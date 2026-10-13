@@ -900,6 +900,13 @@ pub struct AdminStats {
     archive_stored_bytes: i64,
     /// What they decompress to.
     archive_raw_bytes: i64,
+    /// Where each kind of body is kept (OBJ-02, design/12).
+    archive_bodies: ArchiveBodies,
+    /// Pack objects in the bucket, their bytes, and the bytes of bodies still
+    /// located in them.
+    archive_packs: i64,
+    archive_pack_bytes: i64,
+    archive_pack_live_bytes: i64,
     /// The SQLite file on disk (DSK-01).
     db_file_bytes: u64,
     /// Its write-ahead log; 0 right after a truncating checkpoint.
@@ -916,6 +923,35 @@ pub struct AdminStats {
     sampled_at: crate::stats::SampledAt,
 }
 
+/// Bodies of one kind by where they are kept (design/12 §SQLite).
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BodyStates {
+    /// Only in SQLite: not yet packed.
+    local: i64,
+    /// In a verified pack in the bucket, and still in SQLite.
+    packed: i64,
+    /// Only in the bucket; reads fetch its byte range.
+    offloaded: i64,
+}
+
+impl From<crate::archive::matches::BodyStates> for BodyStates {
+    fn from(b: crate::archive::matches::BodyStates) -> Self {
+        Self {
+            local: b.local,
+            packed: b.packed,
+            offloaded: b.offloaded,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchiveBodies {
+    matches: BodyStates,
+    timelines: BodyStates,
+}
+
 #[utoipa::path(
     get, path = "/v1/admin/stats", tag = "admin",
     summary = "Archive and tracking counts, and what the database takes on disk",
@@ -925,7 +961,9 @@ pub struct AdminStats {
                    write-ahead log and free list, and the data directory's file system (DSK-01). The match and \
                    player counts are read with the request; `archivedTimelines`, the archive's bytes and the disk \
                    readings are sampled in the background with each history point (`METRICS_HISTORY_INTERVAL_S`, \
-                   a minute by default; `sampledAt.slow`).",
+                   a minute by default; `sampledAt.slow`). `archiveBodies` and `archivePack*` say how much of \
+                   the archive is in object storage (design/12): `archiveStoredBytes` counts only bodies still \
+                   in SQLite.",
     responses((status = 200, description = "The counts", body = AdminStats), LocalErrors),
 )]
 async fn stats(State(state): State<AppState>, Extension(_c): Who) -> Response {
@@ -947,6 +985,13 @@ async fn stats(State(state): State<AppState>, Extension(_c): Who) -> Response {
         archived_timelines: archive.timelines,
         archive_stored_bytes: archive.stored_bytes,
         archive_raw_bytes: archive.raw_bytes,
+        archive_bodies: ArchiveBodies {
+            matches: archive.match_bodies.into(),
+            timelines: archive.timeline_bodies.into(),
+        },
+        archive_packs: archive.packs,
+        archive_pack_bytes: archive.pack_bytes,
+        archive_pack_live_bytes: archive.pack_live_bytes,
         db_file_bytes: disk.db_bytes,
         wal_bytes: disk.wal_bytes,
         db_page_size: disk.page_size,
