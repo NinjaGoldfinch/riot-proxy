@@ -511,6 +511,31 @@ async fn purge_drops_matching_entries_from_memory_and_disk() {
     e.get(status).await;
     assert_eq!(e.get(&summoner).await.headers["x-cache"], "HIT");
 
+    // ADM-10: a dry run counts what would go and removes nothing.
+    let dry = e
+        .post(
+            "/v1/admin/cache/purge",
+            json!({"pattern": "summoner.byPuuid:*", "dryRun": true}),
+        )
+        .await;
+    assert_eq!(
+        dry.json(),
+        json!({"ok": true, "pattern": "summoner.byPuuid:*", "matched": 1, "dryRun": true})
+    );
+    assert_eq!(
+        e.get(&summoner).await.headers["x-cache"],
+        "HIT",
+        "a dry run purges nothing"
+    );
+    assert_eq!(
+        error(
+            &e.post("/v1/admin/cache/purge", json!({"pattern": "x*", "dryRun": "yes"}))
+                .await
+        )
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+
     let r = e
         .post("/v1/admin/cache/purge", json!({"pattern": "summoner.byPuuid:*"}))
         .await;

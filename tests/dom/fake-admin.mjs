@@ -74,6 +74,24 @@ export function recent(n = 60) {
   }));
 }
 
+/** Three scopes: kr frozen, europe holding bulk work with a full method, oc1 quiet with many methods. */
+export function limiterSnapshot() {
+  const w = (window, used, limit) => ({ window, used, limit });
+  const m = (method, used, limit) => ({ method, windows: [w(`${limit}:10`, used, limit)] });
+  return snapshot({
+    limiter: [
+      { scope: 'oc1', kind: 'platform', label: 'Oceania', frozenMs: 0, interactiveWaiters: 0, windows: [w('20:1', 2, 20), w('100:120', 30, 100)],
+        methods: [m('summoner.byPuuid', 10, 1600), m('league.entries', 5, 50), m('match.ids', 1, 2000), m('status', 0, 20), m('spectator', 3, 20000), m('mastery', 1, 20000)] },
+      { scope: 'kr', kind: 'platform', label: 'Korea', frozenMs: 30_000, interactiveWaiters: 1, windows: [w('20:1', 20, 20), w('100:120', 99, 100)], methods: [] },
+      { scope: 'europe', kind: 'region', label: 'Europe', frozenMs: 0, interactiveWaiters: 2, windows: [w('20:1', 9, 20), w('100:120', 85, 100)], methods: [m('match.byId', 1990, 2000)] },
+    ],
+    gates: { bulkUsageCeiling: 0.8, bulkIdleCeiling: 0.95, bulkIdleAfterS: 30, clientWaitBudgetMs: 2000,
+      blockedScopes: [{ scope: 'europe', forMs: 12_000 }, { scope: 'kr', forMs: 30_000 }],
+      blockedMethods: [{ scope: 'europe', method: 'match.byId', forMs: 4_000 }] },
+    cacheStore: { l1Entries: 12_400, l1Bytes: 100 * 1024 * 1024, l1MaxBytes: 128 * 1024 * 1024, l2Rows: 3_210, l2Dropped: 7 },
+  });
+}
+
 export const scene = {
   // What GET /v1/admin/info answers without a key: 401, or 200 when AUTH_DISABLED.
   authDisabled: false,
@@ -81,6 +99,8 @@ export const scene = {
   backups: { dir: '/data/backups', keep: 14, files: [{ name: 'riot-proxy-2026-10-13.db', bytes: 21 * 1024 ** 3, modifiedAt: NOW - 7 * 3_600_000 }], lastRun: null, diskFreeBytes: 51 * 1024 ** 3 },
   ready: { ok: true, sqlite: true, limiter: true, readers: 6, readersFree: 6 },
   history: history(),
+  // Cache keys the purge matches against.
+  cacheKeys: ['5f3a:summoner.byPuuid:kr:a', '5f3a:summoner.byPuuid:kr:b', '5f3a:league.entries:kr:c'],
   recent: recent(),
   errors: [
     { at: NOW - 60_000, code: 'UPSTREAM_ERROR', status: 502, message: 'Upstream request failed', requestId: '01J00000000000000000REQ000' },
@@ -92,8 +112,8 @@ const unauthorized = [401, { error: { code: 'UNAUTHORIZED', message: 'Missing or
 const forbidden = [403, { error: { code: 'FORBIDDEN', message: 'This key lacks the admin scope' } }];
 
 /** `[status, body]` for one call; `calls` records `{ url, method, auth }`. */
-export function api(calls, url, { method = 'GET', auth = null } = {}) {
-  calls.push({ url, method, auth });
+export function api(calls, url, { method = 'GET', auth = null, body = null } = {}) {
+  calls.push({ url, method, auth, body });
   const path = new URL(url, 'http://x').pathname;
   if (path === '/readyz') return [200, scene.ready];
   if (path.startsWith('/v1/admin/')) {
@@ -105,6 +125,20 @@ export function api(calls, url, { method = 'GET', auth = null } = {}) {
     case '/v1/admin/metrics': return [200, scene.snapshot];
     case '/v1/admin/backups': return [200, scene.backups];
     case '/v1/admin/metrics/history': return [200, scene.history];
+    case '/v1/admin/debug/cache': {
+      const q = new URL(url, 'http://x').searchParams;
+      if (!q.get('method')) return [400, { error: { code: 'VALIDATION', message: "querystring must have required property 'method'" } }];
+      const present = q.get('method') === 'summoner.byPuuid';
+      return [200, { key: `5f3a:${q.get('method')}:${q.get('scope')}:x`, present, ageSeconds: present ? 125 : null, stale: present ? false : null }];
+    }
+    case '/v1/admin/cache/purge': {
+      const b = JSON.parse(body ?? '{}');
+      const re = new RegExp(`^5f3a:${String(b.pattern).replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`);
+      const hits = scene.cacheKeys.filter((k) => re.test(k));
+      if (b.dryRun) return [200, { ok: true, pattern: b.pattern, matched: hits.length, dryRun: true }];
+      scene.cacheKeys = scene.cacheKeys.filter((k) => !hits.includes(k));
+      return [200, { ok: true, pattern: b.pattern, deleted: hits.length }];
+    }
     case '/v1/admin/recent': {
       const q = new URL(url, 'http://x').searchParams;
       const limit = Number(q.get('limit') ?? 100);
@@ -112,6 +146,11 @@ export function api(calls, url, { method = 'GET', auth = null } = {}) {
         ? [200, { kind: 'errors', capacity: 200, errors: scene.errors.slice(0, limit) }]
         : [200, { kind: 'requests', capacity: 500, requests: scene.recent.slice(0, limit) }];
     }
-    default: return [404, { error: { code: 'NOT_FOUND', message: `No route for ${method} ${path}` } }];
+    default:
+      if (path.startsWith('/v1/admin/limits/')) {
+        const scope = decodeURIComponent(path.split('/').pop());
+        return [200, { scope, usage: [{ window: '20:1', used: 4, limit: 20 }, { window: '100:120', used: 40, limit: 100 }], frozenMs: scope === 'kr' ? 25_000 : 0 }];
+      }
+      return [404, { error: { code: 'NOT_FOUND', message: `No route for ${method} ${path}` } }];
   }
 }

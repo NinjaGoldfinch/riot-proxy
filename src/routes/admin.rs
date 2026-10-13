@@ -802,11 +802,14 @@ async fn player_archive_matches(
 
 /// `POST /v1/admin/cache/purge` body.
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 pub struct Purge {
     /// A Redis-style glob (`*`, `?`, `[…]`) over cache keys, 1–200 characters. Scoped to the
     /// current key unless it already starts with a key scope.
     pattern: String,
+    /// Count what would go, delete nothing (ADM-10). Default false.
+    dry_run: Option<bool>,
 }
 
 #[utoipa::path(
@@ -814,20 +817,41 @@ pub struct Purge {
     summary = "Purge cache entries by pattern",
     description = "Removes matching entries from memory and from the persisted cache. Keys look like \
                    `{keyScope}:{endpointId}:{host}:{params…}`, e.g. `summoner.byPuuid:*`. The match archive \
-                   is not a cache and is never purged.",
+                   is not a cache and is never purged. With `dryRun` it only counts the entries that would go \
+                   and answers `{ok, pattern, matched, dryRun: true}`.",
     request_body = Purge,
-    responses((status = 200, description = "`{ok, pattern, deleted}`", body = serde_json::Value), LocalErrors),
+    responses((status = 200, description = "`{ok, pattern, deleted}`, or `{ok, pattern, matched, dryRun}`", body = serde_json::Value), LocalErrors),
 )]
 async fn purge_cache(State(state): State<AppState>, Extension(_c): Who, bytes: Bytes) -> Response {
     let parsed = Body::parse(&bytes).and_then(|b| {
         b.required(&["pattern"])?;
-        Ok(b.string("pattern", 1, 200)?.unwrap_or_default())
+        Ok((
+            b.string("pattern", 1, 200)?.unwrap_or_default(),
+            b.boolean("dryRun")?.unwrap_or(false),
+        ))
     });
-    let pattern = match parsed {
+    let (pattern, dry_run) = match parsed {
         Ok(p) => p,
         Err(e) => return e.into_response(),
     };
     let scoped = scoped_purge_pattern(state.fetcher.key_scope(), &pattern);
+    if dry_run {
+        let mut matched: HashSet<String> = state
+            .fetcher
+            .cache()
+            .l1
+            .keys_where(|k| glob_match(&scoped, k))
+            .into_iter()
+            .collect();
+        let matcher = scoped.clone();
+        match l2::keys_where(&state.db, move |k| glob_match(&matcher, k)).await {
+            Ok(rows) => matched.extend(rows),
+            Err(e) => return internal(&e, "could not read the persisted cache"),
+        }
+        return ok(
+            &serde_json::json!({"ok": true, "pattern": pattern, "matched": matched.len(), "dryRun": true}),
+        );
+    }
     let mut gone: HashSet<String> = state
         .fetcher
         .cache()

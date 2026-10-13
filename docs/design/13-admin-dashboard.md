@@ -353,6 +353,12 @@ Validated with the dataviz palette script; both modes pass.
 - **Traffic.** By route from `snapshot.requests`: requests, 2xx, 4xx, 5xx, the cache hit share of cacheable reads, and p50/p95 latency from the recent ring. Riot calls from `snapshot.upstream` by region, method and status. Recent requests from `/recent?kind=requests&limit=500`, on entry and every 5 s while the tab is open and visible (a `setTimeout` chain stopped on leaving or hiding), filtered by text, status class and cache state; status sits next to the time so it stays on a phone screen, and a 4xx or 5xx carries an icon.
 - **Tests.** `tests/dom/admin-overview.test.mjs`, `admin-traffic.test.mjs`, the browser test's overview and traffic views, and the helpers (`percentile`, `downsample`, `historyPointOf`, `seriesOf`, `routeRows`, `upstreamRows`) in `tests/admin_ui.mjs`.
 
+## Limiter and Cache (ADM-10)
+
+- **Meters.** `meter(label, used, limit)` is a `role="meter"` row: the label, a track whose fill carries severity (the accent under 80 %, warning to 95 %, critical above, with an icon from 80 %), and `used / limit` as text. The track is the accent at 16 %, a lighter step of the same hue.
+- **Limiter.** A summary (scopes, frozen, holding bulk work, interactive waiting, the bulk ceilings and the client wait budget), then a card per scope from `snapshot.limiter`: frozen first, then held by the bulk gate (`gates.blockedScopes`), then the fullest. Each card: its state (frozen with a countdown, bulk held with a countdown, or open), waiters, app windows, the four fullest method buckets with the rest folded, a held method flagged, and "Live usage", which reads `/v1/admin/limits/{scope}` each time it opens. Countdowns run on the 1 s clock from the snapshot's time, with no refetch. Folds stay open across snapshots. The rail's Limiter badge counts frozen scopes.
+- **Cache.** Tiles for memory entries, memory used (a meter in bytes), persisted rows, dropped writes (flagged when any) and reads since start; the 24 h hit ratio from history; a probe of `/v1/admin/debug/cache`; and a purge that is counted first (`POST /v1/admin/cache/purge` with `dryRun`, ADM-10) and then confirmed, reporting how many entries went. Editing the pattern after a count disarms the purge.
+
 The rail lists only the tabs that exist; each later task adds its own. Until ADM-12 there is no Ladder tab: `/dev/jobs`, `/v1/admin/ladder/*` and the firehose cover it.
 
 ## Chart rules
@@ -367,8 +373,8 @@ Each tab's task fills its row and adds a section below.
 |---|---|---|---|---|
 | `#overview` | Overview: stat tiles, 24 h charts, recent errors | snapshot, history, `/recent` | ADM-08, ADM-09 | built |
 | `#traffic` | Traffic: by route, upstream, live recent requests | snapshot, `/recent` | ADM-09 | built |
-| `#limiter` | Limiter: a card per scope | snapshot, `/limits/{scope}` | ADM-10 | planned |
-| `#cache` | Cache: L1/L2, ratios, probe, purge | snapshot, `/debug/cache`, `/cache/purge` | ADM-10 | planned |
+| `#limiter` | Limiter: a card per scope | snapshot, `/limits/{scope}` | ADM-10 | built |
+| `#cache` | Cache: L1/L2, ratios, probe, purge | snapshot, history, `/debug/cache`, `/cache/purge` | ADM-10 | built |
 | `#jobs`, `#jobs/<id>` | Jobs (folds in `/dev/jobs`) | `/jobs/*` | ADM-11 | planned |
 | `#ladder`, `#ladder/<id>` | Ladder | `/ladder/*`, `crawl.phase` frames | ADM-12 | planned |
 | `#archive` | Archive & Storage: counts, disk, backups, actions | `/stats`, `/backups` | ADM-13 | planned |

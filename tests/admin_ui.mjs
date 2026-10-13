@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs';
 const html = readFileSync(new URL('../src/ui/admin.html', import.meta.url), 'utf8');
 const block = html.match(/\/\/ -{10} pure helpers[^\n]*\n([\s\S]*?)\/\/ -{10} end pure helpers/);
 assert.ok(block, 'the pure helpers block is marked in admin.html');
-const h = new Function(`${block[1]}; return { APEX_LIST_CAP, fmt, compact, fmtBytes, fmtDuration, pct, esc, relTime, sumValues, hitRatio, rate, jobTotals, diskLevel, backupLevel, limiterLevel, route, joinUrl, wsUrl, maskKey, contrast, sortRows, capRows, percentile, downsample, historyPointOf, seriesOf, statusClass, routeRows, upstreamRows };`)();
+const h = new Function(`${block[1]}; return { APEX_LIST_CAP, fmt, compact, fmtBytes, fmtDuration, pct, esc, relTime, sumValues, hitRatio, rate, jobTotals, diskLevel, backupLevel, limiterLevel, route, joinUrl, wsUrl, maskKey, contrast, sortRows, capRows, percentile, downsample, historyPointOf, seriesOf, statusClass, routeRows, upstreamRows, windowLabel, fullness, meterLevel, scopeOrder };`)();
 
 const tokens = (name) => {
   const m = html.match(new RegExp(`/\\* tokens:${name}[^*]*\\*/\\s*[^{]+\\{([^}]*)\\}`));
@@ -31,6 +31,7 @@ test('numbers: grouped, compact for tiles, bytes in binary units', () => {
 
 test('durations and ages read as an operator says them', () => {
   assert.equal(h.fmtDuration(65), '1m 5s');
+  assert.equal(h.fmtDuration(30), '30s');
   assert.equal(h.fmtDuration(3 * 3600 + 120), '3h 2m');
   assert.equal(h.fmtDuration(3 * 86400 + 4 * 3600), '3d 4h');
   assert.equal(h.fmtDuration(-1), '—');
@@ -197,4 +198,18 @@ test('status classes and the traffic tables', () => {
   assert.deepEqual([b.total, b.s4xx, b.hitRatio, b.p50], [3, 3, 1, null]);
   assert.deepEqual(h.upstreamRows({ 'sea|match.byId|200': 4 }), [{ region: 'sea', method: 'match.byId', status: '200', count: 4 }]);
   assert.deepEqual(h.routeRows(undefined), []);
+});
+
+test('rate-limit windows read as people say them; fullness is the fullest window', () => {
+  assert.deepEqual(['20:1', '100:120', '2000:10', '30:600', '5:90'].map(h.windowLabel), ['1 s', '2 min', '10 s', '10 min', '90 s']);
+  assert.equal(h.fullness([{ used: 5, limit: 20 }, { used: 90, limit: 100 }]), 0.9);
+  assert.equal(h.fullness([{ used: 1, limit: 0 }]), 0);
+  assert.equal(h.fullness(undefined), 0);
+  assert.deepEqual([0.5, 0.79, 0.8, 0.94, 0.95, 1].map(h.meterLevel), ['ok', 'ok', 'warning', 'warning', 'critical', 'critical']);
+});
+
+test('scopes in need of a look come first: frozen, held, then the fullest, then by name', () => {
+  const s = (scope, frozenMs, used) => ({ scope, frozenMs, windows: [{ used, limit: 100 }] });
+  const order = h.scopeOrder([s('a', 0, 10), s('b', 0, 90), s('c', 5, 0), s('d', 0, 0), s('e', 0, 10)], [{ scope: 'd' }]);
+  assert.deepEqual(order.map((x) => x.scope), ['c', 'd', 'b', 'a', 'e']);
 });

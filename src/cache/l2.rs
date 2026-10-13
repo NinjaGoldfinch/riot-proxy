@@ -223,6 +223,21 @@ pub async fn sweep(db: &Db) -> Result<usize, DbError> {
 }
 
 /// Delete rows whose key matches `pred` (admin purge, P5-05).
+/// Keys matching `pred`, deleting nothing (a purge's dry run, ADM-10).
+pub async fn keys_where(
+    db: &Db,
+    pred: impl Fn(&str) -> bool + Send + 'static,
+) -> Result<Vec<String>, DbError> {
+    db.read(move |c| {
+        let mut stmt = c.prepare("SELECT key FROM cache")?;
+        let keys = stmt
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(keys.into_iter().filter(|k| pred(k)).collect())
+    })
+    .await
+}
+
 pub async fn delete_where(
     db: &Db,
     pred: impl Fn(&str) -> bool + Send + 'static,
