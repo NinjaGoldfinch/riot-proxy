@@ -54,6 +54,7 @@ Everything else in these docs follows from that observation.
 | 10 | [Dev explorer](10-dev-explorer.md) | The dev-only `/dev` page: gating, what it calls, page map |
 | 11 | [Showcase](11-showcase.md) | The dev-only `/dev/showcase` example frontend: page map and the coverage rule |
 | 12 | [Object storage & hosting](12-object-storage-and-hosting.md) | The move to Onidel and how it ran; raw bodies in an S3 bucket and the offload job (proposal) |
+| 13 | [Admin dashboard](13-admin-dashboard.md) | The operator page at `/dashboard`: reach through Cloudflare Access, what it calls, layout and page map (proposal) |
 | — | [img/](img/) | Standalone SVG diagrams used above |
 
 All diagrams are Mermaid (rendered natively by GitHub) except the two in `img/`, which are plain SVG so they work in any viewer.

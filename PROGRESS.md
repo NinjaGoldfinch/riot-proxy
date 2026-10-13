@@ -324,6 +324,28 @@ Before (OVH VPS, 2026-10-13 01:00 UTC): 38 GB disk at 77 %, `riot-proxy.db` 20 G
 - [x] ME-01 `ME1_` match ids archive from `europe` (#175, ADR-143)
 - [ ] OBJ-01..05 raw match and timeline bodies in object storage: proposal in design/12 §Tasks, waiting on the owner's answers to its §Open questions
 
+## ADM — a better admin dashboard (owner request 2026-10-13)
+`/dashboard` is v1's page ported verbatim: it shows no disk, backups, traffic, errors or build, polls while hidden, and every snapshot scans `matches` and `jobs`. The series samples the aggregates, adds the missing readings as JSON and rebuilds the page as one embedded file reached through `admin.ninjagoldfinch.lol` behind Cloudflare Access. Specs in IMPLEMENTATION.md §Post-release — ADM; design/13.
+- [ ] ADM-00 series spec, design/13 (Proposed), the ADM-01 runbook in design/12 (ADR-144)
+- [ ] ADM-01 owner runbook: `admin.ninjagoldfinch.lol` behind Access (One-time PIN); WAF rule blocking `/metrics`, `/dashboard*`, `/dev*`, `/v1/admin*` on `api.` (design/12 §Admin hostname behind Access)
+- [ ] ADM-02 sampled aggregates behind the snapshot (`StatsCache`), `jobs(state, kind, run_after, finished_at)` index
+- [ ] ADM-03 `GET /v1/admin/info` and build identity (`build.rs`, `GIT_SHA`)
+- [ ] ADM-04 runtime gauges in the snapshot and history (cache store, gates, quotas, SQLite readers, disk)
+- [ ] ADM-05 recent requests and errors rings, `GET /v1/admin/recent`
+- [ ] ADM-06 backups and maintenance status, `GET /v1/admin/backups`, `POST /v1/admin/maintenance/run`
+- [ ] ADM-07 opt-in `ADMIN_CORS_ORIGINS` (parallel-ok)
+- [ ] ADM-08 new dashboard shell (`src/ui/admin.html`), Overview tiles; old `dashboard.html` deleted
+- [ ] ADM-09 Overview charts and Traffic tab
+- [ ] ADM-10 Limiter and Cache tabs
+- [ ] ADM-11 Jobs tab (folds in `/dev/jobs`)
+- [ ] ADM-12 Ladder tab
+- [ ] ADM-13 Archive & Storage tab
+- [ ] ADM-14 Consumers & Players tab
+- [ ] ADM-15 Events and About tabs
+- [ ] ADM-16 keyboard, command palette, accessibility
+- [ ] ADM-17 retire `/dashboard/config.json` and `/dev/jobs`; design/13 Accepted
+- [ ] ADM-18 optional: Access JWT as admin login (ask the owner first)
+
 ## PAIR — team pairings (owner request 2026-10-10, outline)
 - [ ] PAIR-01 `champion_pairs`: every ally role per player, keyed by tier and side (IMPLEMENTATION.md §Post-release — PAIR)
 - [ ] PAIR-02 the pairings route with `allyRole`, `winRateLow` and `delta` (IMPLEMENTATION.md §Post-release — PAIR)
@@ -333,6 +355,7 @@ Before (OVH VPS, 2026-10-13 01:00 UTC): 38 GB disk at 77 %, `riot-proxy.db` 20 G
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
 
 ## Notes for the next task
+- **ADM (dashboard):** next is ADM-02. Between ADM-08 and ADM-12 the new page has no Ladder tab; `/dev/jobs`, `/v1/admin/ladder/*` and the firehose cover it. `/dev/jobs` and `/dashboard/config.json` stay until ADM-17. ADM-01 is the owner's (Cloudflare); leave its tick to them.
 - **Names backfill:** `names:backfill` and `POST /v1/admin/players/names/backfill` (v1's job that fills Riot IDs from archived matches) landed with P7-03 (#57): `src/jobs/names.rs`, a daily tick, queued when a crawl ends, tests in `tests/ladder.rs`.
 - **Events** keep v1's names plus `crawl.phase` (ADR-045): P7-04 publishes `analytics.updated`; P7-02/03 publish `crawl.phase` and `ladder.crawl.completed`; the dashboard's names already match.
 - Routes: follow `src/routes/riot.rs`, which uses `http::validate::*` for v1 rules and `routes::passthrough::{respond, options}`. Add read routers to `routes::docs::api_router`'s `read` group so they get auth+quota. `tests/common::app_with(env, wiremock_uri)` gives a full app. v1's `/v1/lol` bodies are raw passthrough too (`PassthroughResponse`), so P4-05's "typed" part is request validation.
