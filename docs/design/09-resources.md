@@ -48,6 +48,7 @@ Verify versions on crates.io / pkg.go.dev before pinning; this list is about *wh
 | Developer portal + API reference | https://developer.riotgames.com |
 | Rate limiting (headers, types) | https://developer.riotgames.com/docs/portal#web-apis_rate-limiting |
 | Routing values (platform vs regional) | https://developer.riotgames.com/docs/lol#routing-values |
+| `ME1_` match ids (not in the table above) | served by `europe`; `americas`, `asia` and `sea` 404 (live API, 2026-10-13; ADR-143) |
 | Data Dragon | https://developer.riotgames.com/docs/lol#data-dragon |
 | Policies (key hygiene, ToS) | https://developer.riotgames.com/policies/general |
 

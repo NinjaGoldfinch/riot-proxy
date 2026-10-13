@@ -350,6 +350,30 @@ async fn a_rate_limited_timeline_yields_and_the_rerun_fetches_only_it() {
     assert_eq!(paths, [m.to_string(), format!("{m}/timeline")]);
 }
 
+/// ME-01: an `ME1_` match id names no platform, but europe serves it.
+#[tokio::test]
+async fn a_middle_east_match_is_archived_from_europe() {
+    let e = env().await;
+    Mock::given(method("GET"))
+        .and(path("/lol/match/v5/matches/ME1_17228556"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(MATCH, "application/json"))
+        .mount(&e.server)
+        .await;
+    e.ctx().archive_match(&archive("ME1_17228556")).await.unwrap();
+    let region: String =
+        e.db.read(|c| {
+            c.query_row(
+                "SELECT region FROM matches WHERE match_id = 'ME1_17228556'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(DbError::from)
+        })
+        .await
+        .unwrap();
+    assert_eq!(region, "europe");
+}
+
 #[tokio::test]
 async fn a_match_riot_does_not_know_fails_without_retrying() {
     let e = env().await;

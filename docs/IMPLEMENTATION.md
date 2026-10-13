@@ -505,6 +505,14 @@ The OVH VPS was out of disk and its Sydney region out of stock. Production moved
 |---|---|---|---|---|---|
 | HOST-01 | **Move production to Onidel.** An ONI-4 in Sydney (`ngf-prod-syd1`) takes the proxy, ninjagoldfinch.lol and its Cloudflare Tunnel, copied with `rsync` (seed while serving, then a stop, checkpoint and final copy). The old box's off-box backup job moves with them, pointed at R2 `ngf-backups` with a 14-day expiry. The old box is wiped and kept as `ngf-mon-syd1` for monitoring. Record it: ADR, PROGRESS, design/12 §As executed. | `docs/design/12-object-storage-and-hosting.md`, `docs/design/README.md`, `docs/design/07-deployment.md`, `docs/DECISIONS.md`, `PROGRESS.md` | none: no code. Checked on the box instead | `quick_check` ok on the new box; `/readyz` ok; the tunnel's only connector is the new box; a backup in R2 passes `rclone check` | 12; ADR-142 |
 
+### Post-release — ME: Middle East match ids (owner report 2026-10-13)
+
+The EUW crawl collects match ids from players who also play on Riot's Middle East shard. Their ids start `ME1_`, which is no platform in `routing.rs`, so `archive:match` failed them with "cannot derive region from match id".
+
+| ID | Task | Files | Tests | Accept | Design |
+|---|---|---|---|---|---|
+| ME-01 | **`ME1_` match ids route to `europe`.** `Region::from_match_id` gives a platform prefix's region, or the region of a prefix in `MATCH_ONLY_PREFIXES` (`ME1` → europe). `archive:match`, its rate-limit lane and the `/lol/match` route's region check use it. ME1 is not a platform: no `me1` host is documented, so routes taking a platform still reject it. | `src/riot/routing.rs`, `src/jobs/archive.rs`, `src/jobs/lanes.rs`, `src/routes/lol.rs`, `docs/design/09-resources.md` | unit: `ME1_` (any case) → europe, not a platform, unknown and malformed prefixes none; the archive lane is europe's; the match route accepts europe and names europe when another region is declared. Integration: an `ME1_` match archives with region `europe` | The 27 failed `ME1_` jobs on production archive once re-queued | 09; ADR-143 |
+
 ## 3. Parallelism and ordering
 
 Strict order within a phase unless `[parallel-ok]`. Phases are sequential except:

@@ -31,6 +31,14 @@ fn on(method: &'static str, platform: Platform) -> Option<Lane> {
     })
 }
 
+fn on_region(method: &'static str, region: Region) -> Option<Lane> {
+    let endpoint = Endpoint::by_id(method)?;
+    Some(Lane {
+        lane: endpoint.target_for_region(region)?.scope(),
+        method: endpoint.method_scope_key,
+    })
+}
+
 /// The lane of a `kind` job with this payload; `None` for kinds that make
 /// no Riot calls, or a payload too broken to say (the handler fails it).
 pub fn of(kind: &str, payload: &Value) -> Option<Lane> {
@@ -41,20 +49,16 @@ pub fn of(kind: &str, payload: &Value) -> Option<Lane> {
         kinds::POLL_MATCHES | kinds::BACKFILL_PLAYER | kinds::LADDER_COLLECT => {
             on("match.idsByPuuid", platform()?)
         }
-        kinds::ARCHIVE_MATCH => on(
+        kinds::ARCHIVE_MATCH => on_region(
             "match.byId",
-            Platform::from_match_id(str_field(payload, "matchId")?)?,
+            Region::from_match_id(str_field(payload, "matchId")?)?,
         ),
         kinds::LADDER_WALK => on("league.entriesByTier", platform()?),
         kinds::LADDER_APEX => on(apex_endpoint(str_field(payload, "tier")?)?, platform()?),
-        kinds::TIMELINES_BACKFILL => {
-            let region = Region::parse(str_field(payload, "region")?).ok()?;
-            let endpoint = Endpoint::by_id("match.timeline")?;
-            Some(Lane {
-                lane: endpoint.target_for_region(region)?.scope(),
-                method: endpoint.method_scope_key,
-            })
-        }
+        kinds::TIMELINES_BACKFILL => on_region(
+            "match.timeline",
+            Region::parse(str_field(payload, "region")?).ok()?,
+        ),
         _ => None,
     }
 }
@@ -121,6 +125,10 @@ mod tests {
         assert_eq!(
             lane(kinds::ARCHIVE_MATCH, json!({"matchId": "OC1_123"})),
             Some(("sea", "match.byId"))
+        );
+        assert_eq!(
+            lane(kinds::ARCHIVE_MATCH, json!({"matchId": "ME1_17228556"})),
+            Some(("europe", "match.byId"))
         );
         let leg = json!({"crawlId": "c", "platform": "euw1", "queue": "RANKED_SOLO_5x5", "tier": "DIAMOND", "division": "I"});
         assert_eq!(

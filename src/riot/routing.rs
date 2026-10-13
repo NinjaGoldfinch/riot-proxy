@@ -136,6 +136,12 @@ impl Platform {
     }
 }
 
+/// Match id prefixes that are not a platform this proxy serves, and the
+/// match-v5 host that answers for them (ME-01, ADR-143). Riot's routing table
+/// lists no ME1; `europe` serving `ME1_` matches (and `americas`, `asia` and
+/// `sea` 404ing) was checked against the live API on 2026-10-13.
+pub const MATCH_ONLY_PREFIXES: [(&str, Region); 1] = [("ME1", Region::Europe)];
+
 impl Region {
     pub const ALL: [Region; 4] = [Self::Americas, Self::Europe, Self::Asia, Self::Sea];
 
@@ -172,6 +178,20 @@ impl Region {
             Self::Sea => Self::Asia,
             other => other,
         }
+    }
+
+    /// The match-v5 host a match id routes to: its platform's region, or for a
+    /// prefix in [`MATCH_ONLY_PREFIXES`], the region listed there (ME-01).
+    pub fn from_match_id(match_id: &str) -> Option<Region> {
+        Platform::from_match_id(match_id)
+            .map(Platform::region)
+            .or_else(|| {
+                let (prefix, _) = match_id.split_once('_')?;
+                MATCH_ONLY_PREFIXES
+                    .iter()
+                    .find(|(p, _)| p.eq_ignore_ascii_case(prefix))
+                    .map(|&(_, region)| region)
+            })
     }
 
     pub fn platforms(self) -> impl Iterator<Item = Platform> {
@@ -342,6 +362,18 @@ mod tests {
         );
         assert_eq!(Platform::from_match_id("NOPE_1"), None);
         assert_eq!(Platform::from_match_id("EUW17381937461"), None);
+    }
+
+    #[test]
+    fn a_match_id_routes_to_its_region_including_match_only_prefixes() {
+        assert_eq!(Region::from_match_id("EUW1_7381937461"), Some(Region::Europe));
+        assert_eq!(Region::from_match_id("OC1_1"), Some(Region::Sea));
+        // ME1 is no platform here, but its matches are served by europe.
+        assert_eq!(Platform::from_match_id("ME1_17228556"), None);
+        assert_eq!(Region::from_match_id("ME1_17228556"), Some(Region::Europe));
+        assert_eq!(Region::from_match_id("me1_17228556"), Some(Region::Europe));
+        assert_eq!(Region::from_match_id("NOPE_1"), None);
+        assert_eq!(Region::from_match_id("ME117228556"), None);
     }
 
     #[test]
