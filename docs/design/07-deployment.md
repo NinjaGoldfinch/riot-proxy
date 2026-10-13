@@ -136,6 +136,11 @@ Same variable names as v1 where the concept survives; removed variables are list
 | `LOOKUP_BACKFILL_LIMIT` | `4294967295` (`u32::MAX`) | v1 capped it at 10000; now the walk ends where the player's history does (ADR-081) |
 | `BULK_IDLE_CEILING` / `BULK_IDLE_AFTER_S` | `0.95` / `30` | **new** — bulk's share of a bucket on a region with no interactive request in the last `BULK_IDLE_AFTER_S` seconds. At least `BULK_USAGE_CEILING` (which it follows when unset and lower) and below 1 (ADR-126) |
 | `BACKUP_KEEP` | `14` | **new** — daily `VACUUM INTO` backups kept in `$DATA_DIR/backups`; `0` takes none. A backup is skipped, with a warning, when the disk has under 1.2 × the database's size free (DSK-02, ADR-136) |
+| `ARCHIVE_OBJECT_URL` | unset | **new** — where packed bodies go: `s3://<bucket>`, or `file:///<dir>` outside production; unset keeps every body in SQLite (design/12, OBJ-01, ADR-162) |
+| `ARCHIVE_OBJECT_ENDPOINT` | unset | **new** — `https://host[:port]`, required with `s3://`; a host starting with `<bucket>.` is addressed virtual-hosted style, any other path style; `http://` refused in production |
+| `ARCHIVE_OBJECT_REGION` | `auto` | **new** — signing region, passed through |
+| `ARCHIVE_OBJECT_ACCESS_KEY` / `ARCHIVE_OBJECT_SECRET_KEY` | unset | **new** — both or neither; production refuses a URL without them; `[REDACTED]` in `/v1/admin/info`, never logged |
+| `ARCHIVE_OBJECT_CONCURRENCY` | `16` | **new** — ranged GETs at once when a batch of offloaded bodies is read; `1`–`256` |
 | `BOOTSTRAP_ADMIN_KEY` | — | printed on first `serve`, no separate migrate step |
 | everything else (`CACHE_TTL_OVERRIDES`, `NEG_TTL_*`, `CLIENT_WAIT_BUDGET_MS`, `BULK_USAGE_CEILING`, `STALE_WHILE_REVALIDATE`, `METRICS_*`, `TRACK_POLL_*`, `TRACK_CATCHUP_LIMIT`, `LADDER_*`, `FACTS_REEXTRACT_BATCH`, `AGGREGATE_*`, `ADMIN_IP_ALLOWLIST`, `AUTH_DISABLED`, `DEV_UI`, `DOCS_UI`, `DASHBOARD_UI`, `LOG_LEVEL`) | as v1 | unchanged |
 

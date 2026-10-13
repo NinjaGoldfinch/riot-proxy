@@ -23,6 +23,9 @@ hex = "0.4"
 jiff = "0.2"
 libc = "0.2"
 metrics = "0.24"
+# Packed bodies in S3-compatible storage (OBJ-01, ADR-146); `fs` for the
+# local-directory store. Shares reqwest 0.13 and aws-lc-rs with the proxy.
+object_store = { version = "0.14", features = ["aws"] }
 metrics-exporter-prometheus = { version = "0.18", default-features = false }
 moka = { version = "0.12", features = ["future"] }
 refinery = { version = "0.9", features = ["rusqlite"] }
@@ -53,6 +56,8 @@ dev-cli = []
 postgres = []
 
 [dev-dependencies]
+# Test wrappers around an `object_store` back end (OBJ-01).
+async-trait = "0.1"
 futures-util = "0.3"
 insta = { version = "1.48", features = ["json"] }
 proptest = "1.11"

@@ -719,3 +719,190 @@ fn admin_cors_origins_are_exact_origins() {
     }
     assert!(errors(env(&[("ADMIN_CORS_ORIGINS", "*")]))[0].contains("refused"));
 }
+
+const ONIDEL: &str = "https://s3.ap-southeast-2.onidel.cloud";
+
+/// OBJ-01: the object store is off by default.
+#[test]
+fn archive_object_defaults_to_off() {
+    let c = load(env(&[]));
+    assert_eq!(c.archive_object_url, None);
+    assert_eq!(c.archive_object_endpoint, None);
+    assert_eq!(c.archive_object_region, "auto");
+    assert!(c.archive_object_access_key.is_none() && c.archive_object_secret_key.is_none());
+    assert_eq!(c.archive_object_concurrency, 16);
+}
+
+/// OBJ-01: `s3://<bucket>` with an endpoint, or `file:///<dir>`.
+#[test]
+fn archive_object_url_forms() {
+    let c = load(env(&[
+        ("ARCHIVE_OBJECT_URL", "s3://riot-proxy-archive"),
+        (
+            "ARCHIVE_OBJECT_ENDPOINT",
+            "https://s3.ap-southeast-2.onidel.cloud/",
+        ),
+        ("ARCHIVE_OBJECT_REGION", "ap-southeast-2"),
+        ("ARCHIVE_OBJECT_CONCURRENCY", "32"),
+    ]));
+    assert_eq!(
+        c.archive_object_url,
+        Some(ObjectUrl::S3 {
+            bucket: "riot-proxy-archive".into()
+        })
+    );
+    assert_eq!(
+        c.archive_object_endpoint.as_deref(),
+        Some(ONIDEL),
+        "trailing / dropped"
+    );
+    assert_eq!(c.archive_object_region, "ap-southeast-2");
+    assert_eq!(c.archive_object_concurrency, 32);
+
+    let c = load(env(&[("ARCHIVE_OBJECT_URL", "file:///tmp/objects")]));
+    assert_eq!(
+        c.archive_object_url,
+        Some(ObjectUrl::File(PathBuf::from("/tmp/objects")))
+    );
+    assert_eq!(
+        c.archive_object_url.map(|u| u.to_string()).as_deref(),
+        Some("file:///tmp/objects")
+    );
+
+    // Plain HTTP outside production: a local MinIO, say.
+    let c = load(env(&[
+        ("ARCHIVE_OBJECT_URL", "s3://bucket"),
+        ("ARCHIVE_OBJECT_ENDPOINT", "http://localhost:9000"),
+    ]));
+    assert_eq!(
+        c.archive_object_endpoint.as_deref(),
+        Some("http://localhost:9000")
+    );
+}
+
+#[test]
+fn archive_object_bad_values_are_reported() {
+    for (url, endpoint, expect) in [
+        ("https://bucket", ONIDEL, "must start with s3:// or file://"),
+        ("s3://Riot_Archive", ONIDEL, "valid bucket name"),
+        ("s3://ab", ONIDEL, "valid bucket name"),
+        ("s3://bucket/prefix", ONIDEL, "no path"),
+        ("s3://-bucket", ONIDEL, "valid bucket name"),
+        ("file://relative/dir", ONIDEL, "absolute path"),
+        ("s3://bucket", "s3.example.com", "is not an endpoint"),
+        (
+            "s3://bucket",
+            "https://s3.example.com/bucket",
+            "is not an endpoint",
+        ),
+        ("s3://bucket", "https://", "is not an endpoint"),
+    ] {
+        let errs = errors(env(&[
+            ("ARCHIVE_OBJECT_URL", url),
+            ("ARCHIVE_OBJECT_ENDPOINT", endpoint),
+        ]));
+        assert_eq!(errs.len(), 1, "{url} {endpoint}: {errs:?}");
+        assert!(errs[0].contains(expect), "{url} {endpoint}: {errs:?}");
+    }
+
+    assert_eq!(
+        errors(env(&[("ARCHIVE_OBJECT_URL", "s3://riot-proxy-archive")])),
+        ["ARCHIVE_OBJECT_ENDPOINT: is required with an s3:// ARCHIVE_OBJECT_URL"]
+    );
+    assert_eq!(
+        errors(env(&[("ARCHIVE_OBJECT_ACCESS_KEY", "AKID")])),
+        ["ARCHIVE_OBJECT_ACCESS_KEY and ARCHIVE_OBJECT_SECRET_KEY: set both or neither"]
+    );
+    for n in ["0", "257"] {
+        let errs = errors(env(&[("ARCHIVE_OBJECT_CONCURRENCY", n)]));
+        assert!(errs[0].starts_with("ARCHIVE_OBJECT_CONCURRENCY"), "{errs:?}");
+    }
+}
+
+/// OBJ-01, design/12 §Configuration: production refuses a URL without
+/// credentials, a local directory and plain HTTP.
+#[test]
+fn production_needs_an_s3_bucket_with_keys_over_https() {
+    let prod = |extra: &[(&str, &str)]| {
+        let mut all = vec![
+            ("ENV", "production"),
+            ("ARCHIVE_OBJECT_URL", "s3://riot-proxy-archive"),
+        ];
+        all.extend_from_slice(extra);
+        env(&all)
+    };
+    assert_eq!(
+        errors(prod(&[("ARCHIVE_OBJECT_ENDPOINT", ONIDEL)])),
+        [
+            "ARCHIVE_OBJECT_URL: needs ARCHIVE_OBJECT_ACCESS_KEY and ARCHIVE_OBJECT_SECRET_KEY when ENV=production"
+        ]
+    );
+    let keys = [
+        ("ARCHIVE_OBJECT_ACCESS_KEY", "AKIDEXAMPLE"),
+        ("ARCHIVE_OBJECT_SECRET_KEY", "s3cr3t-value"),
+    ];
+    let mut ok = keys.to_vec();
+    ok.push(("ARCHIVE_OBJECT_ENDPOINT", ONIDEL));
+    let c = load(prod(&ok));
+    assert_eq!(
+        c.archive_object_access_key.as_ref().map(Secret::expose),
+        Some("AKIDEXAMPLE")
+    );
+    assert_eq!(
+        c.archive_object_secret_key.as_ref().map(Secret::expose),
+        Some("s3cr3t-value")
+    );
+
+    let mut http = keys.to_vec();
+    http.push(("ARCHIVE_OBJECT_ENDPOINT", "http://s3.example.com"));
+    assert_eq!(
+        errors(prod(&http)),
+        ["ARCHIVE_OBJECT_ENDPOINT: must be https:// when ENV=production"]
+    );
+
+    assert_eq!(
+        errors(env(&[
+            ("ENV", "production"),
+            ("ARCHIVE_OBJECT_URL", "file:///srv/objects")
+        ])),
+        ["ARCHIVE_OBJECT_URL: file:// cannot be used when ENV=production"]
+    );
+
+    // Keys without a URL are inert, so they can go in before the bucket is ready.
+    let c = load(env(&[("ENV", "production"), keys[0], keys[1]]));
+    assert_eq!(c.archive_object_url, None);
+}
+
+#[test]
+fn archive_object_keys_are_redacted() {
+    let c = load(env(&[
+        ("ARCHIVE_OBJECT_URL", "s3://riot-proxy-archive"),
+        ("ARCHIVE_OBJECT_ENDPOINT", ONIDEL),
+        ("ARCHIVE_OBJECT_ACCESS_KEY", "AKIDEXAMPLEACCESS"),
+        ("ARCHIVE_OBJECT_SECRET_KEY", "wJalrXUtnFEMI-secret"),
+    ]));
+    let debug = format!("{c:?}");
+    assert!(
+        !debug.contains("AKIDEXAMPLE") && !debug.contains("wJalrXUtnFEMI"),
+        "{debug}"
+    );
+    let r = c.redacted();
+    assert_eq!(r["ARCHIVE_OBJECT_ACCESS_KEY"].as_deref(), Some(REDACTED));
+    assert_eq!(r["ARCHIVE_OBJECT_SECRET_KEY"].as_deref(), Some(REDACTED));
+    assert_eq!(
+        r["ARCHIVE_OBJECT_URL"].as_deref(),
+        Some("s3://riot-proxy-archive")
+    );
+    assert_eq!(r["ARCHIVE_OBJECT_ENDPOINT"].as_deref(), Some(ONIDEL));
+    assert_eq!(r["ARCHIVE_OBJECT_REGION"].as_deref(), Some("auto"));
+    assert_eq!(r["ARCHIVE_OBJECT_CONCURRENCY"].as_deref(), Some("16"));
+    let all = format!("{r:?}");
+    assert!(
+        !all.contains("AKIDEXAMPLE") && !all.contains("wJalrXUtnFEMI"),
+        "{all}"
+    );
+
+    let r = load(env(&[])).redacted();
+    assert_eq!(r["ARCHIVE_OBJECT_URL"], None);
+    assert_eq!(r["ARCHIVE_OBJECT_ACCESS_KEY"], None);
+}
