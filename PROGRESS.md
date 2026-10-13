@@ -331,7 +331,7 @@ Before (OVH VPS, 2026-10-13 01:00 UTC): 38 GB disk at 77 %, `riot-proxy.db` 20 G
 - [x] ADM-02 sampled aggregates behind the snapshot and `/v1/admin/stats` (fast 15 s, slow with each history point), `sampledAt`; V0022 `jobs_state_kind` index (#178, ADR-145)
 - [x] ADM-03 `GET /v1/admin/info` (build, uptime, features, redacted config) and build identity (`build.rs`, `GIT_SHA` in every workflow) (#180, ADR-147)
 - [x] ADM-04 runtime gauges in the snapshot (cache store, gates, inflight, quotas, SQLite readers, disk, interactive waiters) and history (disk, request totals); `cache_l2_dropped_total` (#181, ADR-148)
-- [ ] ADM-05 recent requests and errors rings, `GET /v1/admin/recent`
+- [x] ADM-05 recent requests (500) and errors (200) in memory, `GET /v1/admin/recent`; snapshot `requests` and `upstream` by label (#182, ADR-149)
 - [ ] ADM-06 backups and maintenance status, `GET /v1/admin/backups`, `POST /v1/admin/maintenance/run`
 - [ ] ADM-07 opt-in `ADMIN_CORS_ORIGINS` (parallel-ok)
 - [ ] ADM-08 new dashboard shell (`src/ui/admin.html`), Overview tiles; old `dashboard.html` deleted
@@ -355,7 +355,7 @@ Before (OVH VPS, 2026-10-13 01:00 UTC): 38 GB disk at 77 %, `riot-proxy.db` 20 G
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
 
 ## Notes for the next task
-- **ADM (dashboard):** next is ADM-05. `/v1/admin/info` is the key probe the page uses (ADM-08). Since ADM-02 the snapshot reads `Stats::samples`; new table-scanning readings belong in the fast or slow set, not in `snapshot()`. Between ADM-08 and ADM-12 the new page has no Ladder tab; `/dev/jobs`, `/v1/admin/ladder/*` and the firehose cover it. `/dev/jobs` and `/dashboard/config.json` stay until ADM-17. ADM-01 is the owner's (Cloudflare); leave its tick to them.
+- **ADM (dashboard):** next is ADM-06. `/v1/admin/info` is the key probe the page uses (ADM-08). Since ADM-02 the snapshot reads `Stats::samples`; new table-scanning readings belong in the fast or slow set, not in `snapshot()`. Between ADM-08 and ADM-12 the new page has no Ladder tab; `/dev/jobs`, `/v1/admin/ladder/*` and the firehose cover it. `/dev/jobs` and `/dashboard/config.json` stay until ADM-17. ADM-01 is the owner's (Cloudflare); leave its tick to them.
 - **Names backfill:** `names:backfill` and `POST /v1/admin/players/names/backfill` (v1's job that fills Riot IDs from archived matches) landed with P7-03 (#57): `src/jobs/names.rs`, a daily tick, queued when a crawl ends, tests in `tests/ladder.rs`.
 - **Events** keep v1's names plus `crawl.phase` (ADR-045): P7-04 publishes `analytics.updated`; P7-02/03 publish `crawl.phase` and `ladder.crawl.completed`; the dashboard's names already match.
 - Routes: follow `src/routes/riot.rs`, which uses `http::validate::*` for v1 rules and `routes::passthrough::{respond, options}`. Add read routers to `routes::docs::api_router`'s `read` group so they get auth+quota. `tests/common::app_with(env, wiremock_uri)` gives a full app. v1's `/v1/lol` bodies are raw passthrough too (`PassthroughResponse`), so P4-05's "typed" part is request validation.
