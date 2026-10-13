@@ -155,7 +155,7 @@ Deletes every piece of fetched data so the proxy starts from empty, without a re
 
 ## Jobs page (DEV-19)
 
-`/dev/jobs` shows what every worker is doing, what is queued, and one tab per job that follows it live. It is gated with the rest of `/dev*` and is its own single file, `src/ui/jobs.html`. It is listed in the page bar as **Jobs**.
+`/dev/jobs` shows what every worker is doing, what is queued, and one tab per job that follows it live. The dashboard's Jobs tab (design/13 §Jobs, ADM-11) now does the same in production too; this page retires in ADM-17. It is gated with the rest of `/dev*` and is its own single file, `src/ui/jobs.html`. It is listed in the page bar as **Jobs**.
 
 | Part | Calls | Renders |
 |---|---|---|

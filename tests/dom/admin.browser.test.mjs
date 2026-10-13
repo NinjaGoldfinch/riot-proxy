@@ -54,12 +54,12 @@ for (const [device, width] of [['desktop', 1280], ['tablet', 820], ['phone', 390
         // Each view: nothing sideways, nothing wider than its box (tables scroll inside .scroll).
         const fits = () => page.evaluate(() => {
           const out = { page: [document.documentElement.scrollWidth, innerWidth], overflow: [] };
-          for (const el of document.querySelectorAll('.strip, .tile, .tile .value, .rail-foot, main, .chart, .chart figcaption, .xaxis, .panel, .filters, .meter, .scope header, .form-row')) {
+          for (const el of document.querySelectorAll('.strip, .tile, .tile .value, .rail-foot, main, .chart, .chart figcaption, .xaxis, .panel, .filters, .meter, .scope header, .form-row, .worker, ul.groups li, ol.timeline li')) {
             if (el.scrollWidth > el.clientWidth + 1) out.overflow.push(`${el.id || el.className || el.tagName}: ${el.scrollWidth} > ${el.clientWidth}`);
           }
           return out;
         });
-        const ready = { overview: '#chArchive .plotwrap', traffic: '#trRecent tbody tr', limiter: '.scope[data-scope="oc1"] .meter', cache: '#chCacheHit .plotwrap' };
+        const ready = { overview: '#chArchive .plotwrap', traffic: '#trRecent tbody tr', limiter: '.scope[data-scope="oc1"] .meter', cache: '#chCacheHit .plotwrap', jobs: '#jNext ul.groups li', 'jobs/01K00000000000000000000RUN': '#jtTimeline li' };
         for (const view of Object.keys(ready)) {
           await page.evaluate((v) => { location.hash = v; }, view);
           await page.waitForSelector(ready[view]);
@@ -68,7 +68,7 @@ for (const [device, width] of [['desktop', 1280], ['tablet', 820], ['phone', 390
             for (const s of await page.$$('.scope details summary')) await s.click();
             await page.waitForSelector('details[data-live="kr"] .live .meter');
           }
-          await page.screenshot({ path: new URL(`./screenshots/admin-${view}-${device}-${theme}.png`, import.meta.url).pathname, fullPage: true });
+          await page.screenshot({ path: new URL(`./screenshots/admin-${view.split('/')[0]}${view.includes('/') ? '-trace' : ''}-${device}-${theme}.png`, import.meta.url).pathname, fullPage: true });
           const f = await fits();
           assert.ok(f.page[0] <= f.page[1], `${view}: page scrolls sideways: ${f.page[0]} > ${f.page[1]}`);
           assert.deepEqual(f.overflow, [], `${view}: nothing wider than its box`);
