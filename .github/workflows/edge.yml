@@ -21,6 +21,8 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   IMAGE: ghcr.io/ninjagoldfinch/riot-proxy
+  # build.rs embeds it for GET /v1/admin/info (ADM-03).
+  GIT_SHA: ${{ github.sha }}
 
 permissions:
   contents: read
@@ -43,6 +45,7 @@ jobs:
         run: |
           mkdir dist && cp target/x86_64-unknown-linux-musl/release/riot-proxy dist/riot-proxy-linux-amd64
           file dist/riot-proxy-linux-amd64 | grep -qE "static(ally|-pie) linked"
+          grep -qa "${GIT_SHA:0:12}" dist/riot-proxy-linux-amd64
       - uses: docker/setup-buildx-action@v4
       - name: the image serves and passes its own healthcheck
         run: |

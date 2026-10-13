@@ -14,6 +14,8 @@ flowchart LR
 
 Everything the service needs at runtime except `.env` and the data directory is inside the binary: `include_str!` for the two HTML pages, `sqlx::migrate!` for schema, `utoipa` for the OpenAPI document, `rustls` + `webpki-roots` so there is not even a CA bundle to mount.
 
+**Build identity (ADM-03).** `build.rs` embeds the commit (`GIT_SHA` from the environment, else `git rev-parse HEAD`, else `unknown`; 12 characters), `rustc --version` and the build time (`SOURCE_DATE_EPOCH` when set). `GET /v1/admin/info` reports them with the uptime, feature switches and every configuration variable in effect (secrets `[REDACTED]`, `RIOT_API_KEY` left out). The CI, edge and release workflows set `GIT_SHA` from `github.sha` and check the built binary carries it. `Dockerfile`'s context has no `.git`, so pass it: `docker build --build-arg GIT_SHA=$(git rev-parse HEAD) .`, or `GIT_SHA=$(git rev-parse HEAD) docker compose up --build`. `--version` still prints only `riot-proxy <version>`.
+
 ## Option A — Docker, single service
 
 `Dockerfile`:

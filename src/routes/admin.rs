@@ -6,7 +6,7 @@
 //! The job routes (P6-08) are v2's: v1's queues were BullMQ's. Ladder,
 //! analytics and metrics routes arrive with their features (P7).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use axum::Extension;
@@ -76,6 +76,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(timeline_backfill))
         .routes(routes!(metrics_snapshot))
         .routes(routes!(metrics_history))
+        .routes(routes!(info))
 }
 
 fn json<T: Serialize>(status: StatusCode, body: &T) -> Response {
@@ -2338,4 +2339,88 @@ async fn metrics_history(State(state): State<AppState>, Extension(_c): Who) -> R
         }),
         Err(e) => internal(&e, "could not read the metrics history"),
     }
+}
+
+/// Feature switches this process runs with (`GET /v1/admin/info`).
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Features {
+    /// `/dev` and `/dev/showcase`; never in production.
+    dev_ui: bool,
+    docs_ui: bool,
+    dashboard_ui: bool,
+    auth_disabled: bool,
+    archive_timelines: bool,
+    stale_while_revalidate: bool,
+    trust_proxy: bool,
+    /// Built with the `postgres` feature.
+    postgres: bool,
+}
+
+/// `GET /v1/admin/info` (ADM-03): what is running, since when, and how it is configured.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminInfo {
+    /// As `riot-proxy --version` prints it.
+    version: &'static str,
+    /// The commit it was built from, 12 characters; `unknown` for a build without one.
+    git_sha: &'static str,
+    /// `rustc --version` of the compiler that built it.
+    rustc: &'static str,
+    /// Unix ms.
+    built_at: i64,
+    /// Unix ms.
+    started_at: i64,
+    uptime_seconds: u64,
+    /// `development`, `test` or `production`.
+    env: &'static str,
+    /// `all`, `api` or `worker`.
+    role: &'static str,
+    key_scope: String,
+    features: Features,
+    /// `JOB_CONCURRENCY`.
+    workers: u32,
+    /// Every variable but `RIOT_API_KEY`, with the value in effect, as `.env` would
+    /// spell it. Secrets read `[REDACTED]`; an unset optional value is null.
+    config: BTreeMap<String, Option<String>>,
+}
+
+#[utoipa::path(
+    get, path = "/v1/admin/info", tag = "admin",
+    summary = "Build, uptime and configuration",
+    description = "The version and commit this binary was built from, when it started, its feature switches and \
+        every configuration variable in effect. Secrets read `[REDACTED]`; `RIOT_API_KEY` is not listed.",
+    responses((status = 200, description = "The process", body = AdminInfo), LocalErrors),
+)]
+async fn info(State(state): State<AppState>, Extension(_c): Who) -> Response {
+    let c = &state.config;
+    let uptime = state.stats.started.elapsed();
+    let started_at = Clock::now().unix_ms - i64::try_from(uptime.as_millis()).unwrap_or(0);
+    ok(&AdminInfo {
+        version: crate::build_info::VERSION,
+        git_sha: crate::build_info::GIT_SHA,
+        rustc: crate::build_info::RUSTC_VERSION,
+        built_at: crate::build_info::built_at_ms(),
+        started_at,
+        uptime_seconds: uptime.as_secs(),
+        env: c.env.as_str(),
+        role: c.role.as_str(),
+        key_scope: scope_of(&state),
+        features: Features {
+            dev_ui: c.dev_ui,
+            docs_ui: c.docs_ui,
+            dashboard_ui: c.dashboard_ui,
+            auth_disabled: c.auth_disabled,
+            archive_timelines: c.archive_timelines,
+            stale_while_revalidate: c.stale_while_revalidate,
+            trust_proxy: c.trust_proxy,
+            postgres: cfg!(feature = "postgres"),
+        },
+        workers: c.job_concurrency,
+        config: c
+            .redacted()
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect(),
+    })
 }

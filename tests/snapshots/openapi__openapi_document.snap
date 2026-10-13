@@ -1,6 +1,5 @@
 ---
 source: tests/openapi.rs
-assertion_line: 12
 expression: doc
 ---
 {
@@ -86,6 +85,86 @@ expression: doc
         },
         "required": [
           "puuid"
+        ],
+        "type": "object"
+      },
+      "AdminInfo": {
+        "description": "`GET /v1/admin/info` (ADM-03): what is running, since when, and how it is configured.",
+        "properties": {
+          "builtAt": {
+            "description": "Unix ms.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "config": {
+            "additionalProperties": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "description": "Every variable but `RIOT_API_KEY`, with the value in effect, as `.env` would\nspell it. Secrets read `[REDACTED]`; an unset optional value is null.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "env": {
+            "description": "`development`, `test` or `production`.",
+            "type": "string"
+          },
+          "features": {
+            "$ref": "#/components/schemas/Features"
+          },
+          "gitSha": {
+            "description": "The commit it was built from, 12 characters; `unknown` for a build without one.",
+            "type": "string"
+          },
+          "keyScope": {
+            "type": "string"
+          },
+          "role": {
+            "description": "`all`, `api` or `worker`.",
+            "type": "string"
+          },
+          "rustc": {
+            "description": "`rustc --version` of the compiler that built it.",
+            "type": "string"
+          },
+          "startedAt": {
+            "description": "Unix ms.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "uptimeSeconds": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "version": {
+            "description": "As `riot-proxy --version` prints it.",
+            "type": "string"
+          },
+          "workers": {
+            "description": "`JOB_CONCURRENCY`.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "gitSha",
+          "rustc",
+          "builtAt",
+          "startedAt",
+          "uptimeSeconds",
+          "env",
+          "role",
+          "keyScope",
+          "features",
+          "workers",
+          "config"
         ],
         "type": "object"
       },
@@ -1815,6 +1894,48 @@ expression: doc
           "kind",
           "text",
           "ms"
+        ],
+        "type": "object"
+      },
+      "Features": {
+        "description": "Feature switches this process runs with (`GET /v1/admin/info`).",
+        "properties": {
+          "archiveTimelines": {
+            "type": "boolean"
+          },
+          "authDisabled": {
+            "type": "boolean"
+          },
+          "dashboardUi": {
+            "type": "boolean"
+          },
+          "devUi": {
+            "description": "`/dev` and `/dev/showcase`; never in production.",
+            "type": "boolean"
+          },
+          "docsUi": {
+            "type": "boolean"
+          },
+          "postgres": {
+            "description": "Built with the `postgres` feature.",
+            "type": "boolean"
+          },
+          "staleWhileRevalidate": {
+            "type": "boolean"
+          },
+          "trustProxy": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "devUi",
+          "docsUi",
+          "dashboardUi",
+          "authDisabled",
+          "archiveTimelines",
+          "staleWhileRevalidate",
+          "trustProxy",
+          "postgres"
         ],
         "type": "object"
       },
@@ -6450,6 +6571,147 @@ expression: doc
           }
         },
         "summary": "Raw Riot passthrough",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/admin/info": {
+      "get": {
+        "description": "The version and commit this binary was built from, when it started, its feature switches and every configuration variable in effect. Secrets read `[REDACTED]`; `RIOT_API_KEY` is not listed.",
+        "operationId": "info",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminInfo"
+                }
+              }
+            },
+            "description": "The process",
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region).",
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found.",
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`).",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/Retry-After"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          }
+        },
+        "summary": "Build, uptime and configuration",
         "tags": [
           "admin"
         ]

@@ -21,6 +21,8 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   IMAGE: ghcr.io/ninjagoldfinch/riot-proxy
+  # build.rs embeds it for GET /v1/admin/info (ADM-03).
+  GIT_SHA: ${{ github.sha }}
 
 permissions:
   contents: read
@@ -69,6 +71,8 @@ jobs:
           bin=target/${{ matrix.target }}/release/riot-proxy
           file "$bin"
           "$bin" --version | tee /dev/stderr | grep -qx "riot-proxy ${{ needs.version.outputs.version }}"
+          # The commit is embedded, not `unknown` (ADM-03).
+          grep -qa "${GIT_SHA:0:12}" "$bin"
           mkdir dist && cp "$bin" dist/${{ matrix.asset }}
       - if: runner.os == 'Linux'
         name: static and under 20 MB
