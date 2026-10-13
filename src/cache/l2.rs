@@ -8,6 +8,7 @@
 //!
 //! Boot: [`warm`] loads every unexpired row into L1, then [`sweep`] deletes the rest.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
@@ -67,6 +68,8 @@ impl Row {
 pub struct L2Writer {
     tx: Mutex<Option<mpsc::Sender<Row>>>,
     task: Mutex<Option<JoinHandle<()>>>,
+    /// Entries dropped on a full queue since the start (`cache_l2_dropped_total`).
+    dropped: AtomicU64,
 }
 
 impl L2Writer {
@@ -76,12 +79,23 @@ impl L2Writer {
     }
 
     pub fn spawn_with(db: Db, batch: usize, every: Duration) -> Self {
-        let (tx, rx) = mpsc::channel(QUEUE);
+        Self::spawn_queued(db, batch, every, QUEUE)
+    }
+
+    /// As [`L2Writer::spawn_with`], holding at most `queue` writes before it drops.
+    pub fn spawn_queued(db: Db, batch: usize, every: Duration, queue: usize) -> Self {
+        let (tx, rx) = mpsc::channel(queue.max(1));
         let task = tokio::spawn(write_loop(db, rx, batch.max(1), every));
         Self {
             tx: Mutex::new(Some(tx)),
             task: Mutex::new(Some(task)),
+            dropped: AtomicU64::new(0),
         }
+    }
+
+    /// Entries dropped because the queue was full, since the start.
+    pub fn dropped(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed)
     }
 
     /// Queue an entry. Never waits. After shutdown, does nothing.
@@ -91,6 +105,8 @@ impl L2Writer {
         if let Some(tx) = tx
             && let Err(mpsc::error::TrySendError::Full(row)) = tx.try_send(row)
         {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+            metrics::counter!(crate::metrics::CACHE_L2_DROPPED_TOTAL).increment(1);
             tracing::warn!(key = %row.key, "L2 write queue full; entry not persisted");
         }
     }
@@ -207,6 +223,21 @@ pub async fn sweep(db: &Db) -> Result<usize, DbError> {
 }
 
 /// Delete rows whose key matches `pred` (admin purge, P5-05).
+/// Keys matching `pred`, deleting nothing (a purge's dry run, ADM-10).
+pub async fn keys_where(
+    db: &Db,
+    pred: impl Fn(&str) -> bool + Send + 'static,
+) -> Result<Vec<String>, DbError> {
+    db.read(move |c| {
+        let mut stmt = c.prepare("SELECT key FROM cache")?;
+        let keys = stmt
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(keys.into_iter().filter(|k| pred(k)).collect())
+    })
+    .await
+}
+
 pub async fn delete_where(
     db: &Db,
     pred: impl Fn(&str) -> bool + Send + 'static,

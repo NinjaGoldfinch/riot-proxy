@@ -6,7 +6,7 @@
 //! The job routes (P6-08) are v2's: v1's queues were BullMQ's. Ladder,
 //! analytics and metrics routes arrive with their features (P7).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use axum::Extension;
@@ -75,6 +75,10 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(timeline_backfill))
         .routes(routes!(metrics_snapshot))
         .routes(routes!(metrics_history))
+        .routes(routes!(info))
+        .routes(routes!(recent))
+        .routes(routes!(list_backups))
+        .routes(routes!(run_maintenance))
 }
 
 fn json<T: Serialize>(status: StatusCode, body: &T) -> Response {
@@ -380,12 +384,25 @@ pub struct PlayerList {
     get, path = "/v1/admin/tracked-players", tag = "admin",
     summary = "List known players",
     description = "Every player row for the current `keyScope`, tracked or not: tracking is a flag on the row. \
-                   Rows written under a previous Riot key are not returned, because PUUIDs are encrypted per key.",
+                   Rows written under a previous Riot key are not returned, because PUUIDs are encrypted per key. \
+                   `tracked=true` returns only the tracked rows (ADM-14): the full list can run to tens of \
+                   thousands of players a crawl discovered.",
+    params(("tracked" = Option<String>, Query, description = "`true`: tracked players only")),
     responses((status = 200, description = "The players", body = PlayerList), LocalErrors),
 )]
-async fn list_players(State(state): State<AppState>, Extension(_c): Who) -> Response {
+async fn list_players(State(state): State<AppState>, Extension(_c): Who, Query(q): Q) -> Response {
     let scope = scope_of(&state);
-    match players::list(&state.db, &scope).await {
+    let only_tracked =
+        match validate::query_one_of("tracked", q.get("tracked").map(String::as_str), &["true"]) {
+            Ok(t) => t.is_some(),
+            Err(e) => return e.into_response(),
+        };
+    let rows = if only_tracked {
+        players::list_tracked(&state.db, &scope).await
+    } else {
+        players::list(&state.db, &scope).await
+    };
+    match rows {
         Ok(rows) => ok(&PlayerList {
             players: rows.into_iter().map(|p| PlayerRecord::new(&scope, p)).collect(),
         }),
@@ -798,11 +815,14 @@ async fn player_archive_matches(
 
 /// `POST /v1/admin/cache/purge` body.
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 pub struct Purge {
     /// A Redis-style glob (`*`, `?`, `[…]`) over cache keys, 1–200 characters. Scoped to the
     /// current key unless it already starts with a key scope.
     pattern: String,
+    /// Count what would go, delete nothing (ADM-10). Default false.
+    dry_run: Option<bool>,
 }
 
 #[utoipa::path(
@@ -810,20 +830,41 @@ pub struct Purge {
     summary = "Purge cache entries by pattern",
     description = "Removes matching entries from memory and from the persisted cache. Keys look like \
                    `{keyScope}:{endpointId}:{host}:{params…}`, e.g. `summoner.byPuuid:*`. The match archive \
-                   is not a cache and is never purged.",
+                   is not a cache and is never purged. With `dryRun` it only counts the entries that would go \
+                   and answers `{ok, pattern, matched, dryRun: true}`.",
     request_body = Purge,
-    responses((status = 200, description = "`{ok, pattern, deleted}`", body = serde_json::Value), LocalErrors),
+    responses((status = 200, description = "`{ok, pattern, deleted}`, or `{ok, pattern, matched, dryRun}`", body = serde_json::Value), LocalErrors),
 )]
 async fn purge_cache(State(state): State<AppState>, Extension(_c): Who, bytes: Bytes) -> Response {
     let parsed = Body::parse(&bytes).and_then(|b| {
         b.required(&["pattern"])?;
-        Ok(b.string("pattern", 1, 200)?.unwrap_or_default())
+        Ok((
+            b.string("pattern", 1, 200)?.unwrap_or_default(),
+            b.boolean("dryRun")?.unwrap_or(false),
+        ))
     });
-    let pattern = match parsed {
+    let (pattern, dry_run) = match parsed {
         Ok(p) => p,
         Err(e) => return e.into_response(),
     };
     let scoped = scoped_purge_pattern(state.fetcher.key_scope(), &pattern);
+    if dry_run {
+        let mut matched: HashSet<String> = state
+            .fetcher
+            .cache()
+            .l1
+            .keys_where(|k| glob_match(&scoped, k))
+            .into_iter()
+            .collect();
+        let matcher = scoped.clone();
+        match l2::keys_where(&state.db, move |k| glob_match(&matcher, k)).await {
+            Ok(rows) => matched.extend(rows),
+            Err(e) => return internal(&e, "could not read the persisted cache"),
+        }
+        return ok(
+            &serde_json::json!({"ok": true, "pattern": pattern, "matched": matched.len(), "dryRun": true}),
+        );
+    }
     let mut gone: HashSet<String> = state
         .fetcher
         .cache()
@@ -2343,5 +2384,245 @@ async fn metrics_history(State(state): State<AppState>, Extension(_c): Who) -> R
             points,
         }),
         Err(e) => internal(&e, "could not read the metrics history"),
+    }
+}
+
+/// Feature switches this process runs with (`GET /v1/admin/info`).
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Features {
+    /// `/dev` and `/dev/showcase`; never in production.
+    dev_ui: bool,
+    docs_ui: bool,
+    dashboard_ui: bool,
+    auth_disabled: bool,
+    archive_timelines: bool,
+    stale_while_revalidate: bool,
+    trust_proxy: bool,
+    /// Built with the `postgres` feature.
+    postgres: bool,
+}
+
+/// `GET /v1/admin/info` (ADM-03): what is running, since when, and how it is configured.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminInfo {
+    /// As `riot-proxy --version` prints it.
+    version: &'static str,
+    /// The commit it was built from, 12 characters; `unknown` for a build without one.
+    git_sha: &'static str,
+    /// `rustc --version` of the compiler that built it.
+    rustc: &'static str,
+    /// Unix ms.
+    built_at: i64,
+    /// Unix ms.
+    started_at: i64,
+    uptime_seconds: u64,
+    /// `development`, `test` or `production`.
+    env: &'static str,
+    /// `all`, `api` or `worker`.
+    role: &'static str,
+    key_scope: String,
+    features: Features,
+    /// `JOB_CONCURRENCY`.
+    workers: u32,
+    /// Every variable but `RIOT_API_KEY`, with the value in effect, as `.env` would
+    /// spell it. Secrets read `[REDACTED]`; an unset optional value is null.
+    config: BTreeMap<String, Option<String>>,
+}
+
+#[utoipa::path(
+    get, path = "/v1/admin/info", tag = "admin",
+    summary = "Build, uptime and configuration",
+    description = "The version and commit this binary was built from, when it started, its feature switches and \
+        every configuration variable in effect. Secrets read `[REDACTED]`; `RIOT_API_KEY` is not listed.",
+    responses((status = 200, description = "The process", body = AdminInfo), LocalErrors),
+)]
+async fn info(State(state): State<AppState>, Extension(_c): Who) -> Response {
+    let c = &state.config;
+    let uptime = state.stats.started.elapsed();
+    let started_at = Clock::now().unix_ms - i64::try_from(uptime.as_millis()).unwrap_or(0);
+    ok(&AdminInfo {
+        version: crate::build_info::VERSION,
+        git_sha: crate::build_info::GIT_SHA,
+        rustc: crate::build_info::RUSTC_VERSION,
+        built_at: crate::build_info::built_at_ms(),
+        started_at,
+        uptime_seconds: uptime.as_secs(),
+        env: c.env.as_str(),
+        role: c.role.as_str(),
+        key_scope: scope_of(&state),
+        features: Features {
+            dev_ui: c.dev_ui,
+            docs_ui: c.docs_ui,
+            dashboard_ui: c.dashboard_ui,
+            auth_disabled: c.auth_disabled,
+            archive_timelines: c.archive_timelines,
+            stale_while_revalidate: c.stale_while_revalidate,
+            trust_proxy: c.trust_proxy,
+            postgres: cfg!(feature = "postgres"),
+        },
+        workers: c.job_concurrency,
+        config: c
+            .redacted()
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect(),
+    })
+}
+
+/// `GET /v1/admin/recent` (ADM-05): one of the two rings, newest first.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Recent {
+    /// `requests` or `errors`.
+    kind: &'static str,
+    /// How many the ring keeps: 500 requests, 200 errors.
+    capacity: usize,
+    /// Set for `kind=requests`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    requests: Option<Vec<crate::http::recent::RecentRequest>>,
+    /// Set for `kind=errors`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    errors: Option<Vec<crate::http::recent::RecentError>>,
+}
+
+#[utoipa::path(
+    get, path = "/v1/admin/recent", tag = "admin",
+    summary = "The last requests or errors",
+    description = "This process's last 500 answered requests (method, route, path, status, cache, latency, \
+        consumer, request id) or its last 200 error envelopes, newest first. Kept in memory, so a restart \
+        empties them. Health probes, `/metrics` and the dashboard's own polling of `/v1/admin/metrics` and \
+        this route are not recorded.",
+    params(("kind" = Option<String>, Query, description = "requests (default) or errors"),
+           ("limit" = Option<i64>, Query, description = "1–500, default 100")),
+    responses((status = 200, description = "The ring", body = Recent), LocalErrors),
+)]
+async fn recent(Extension(_c): Who, Query(query): Q) -> Response {
+    use crate::http::recent;
+    let parsed = (|| {
+        let kind = validate::query_one_of(
+            "kind",
+            query.get("kind").map(String::as_str),
+            &["requests", "errors"],
+        )?
+        .unwrap_or("requests");
+        let limit =
+            validate::int_query("limit", query.get("limit").map(String::as_str), 1, 500)?.unwrap_or(100);
+        Ok::<_, ApiError>((kind, usize::try_from(limit).unwrap_or(100)))
+    })();
+    let (kind, limit) = match parsed {
+        Ok(p) => p,
+        Err(e) => return e.into_response(),
+    };
+    if kind == "errors" {
+        ok(&Recent {
+            kind: "errors",
+            capacity: recent::ERRORS_CAP,
+            requests: None,
+            errors: Some(recent::errors(limit)),
+        })
+    } else {
+        ok(&Recent {
+            kind: "requests",
+            capacity: recent::REQUESTS_CAP,
+            requests: Some(recent::requests(limit)),
+            errors: None,
+        })
+    }
+}
+
+/// One daily backup on disk.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupFile {
+    /// `riot-proxy-<YYYY-MM-DD>.db`.
+    name: String,
+    bytes: u64,
+    /// Unix ms; null where the file system keeps no time.
+    modified_at: Option<i64>,
+}
+
+/// `GET /v1/admin/backups` (ADM-06).
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Backups {
+    /// `$DATA_DIR/backups`.
+    dir: String,
+    /// `BACKUP_KEEP`; 0 takes none.
+    keep: usize,
+    /// Newest first; `[]` when the directory does not exist.
+    files: Vec<BackupFile>,
+    /// The last `maintenance` run since this process started; null before the first.
+    last_run: Option<crate::jobs::maintenance::LastRun>,
+    /// Free bytes on the backup directory's file system (its parent's while it
+    /// does not exist); null when it cannot be read.
+    disk_free_bytes: Option<u64>,
+}
+
+#[utoipa::path(
+    get, path = "/v1/admin/backups", tag = "admin",
+    summary = "Backups and the last maintenance run",
+    description = "The daily `VACUUM INTO` backups in `$DATA_DIR/backups`, newest first, with their sizes and \
+        times, read from the directory without opening a file; `BACKUP_KEEP`; the free space beside them; and \
+        what the last `maintenance` run since the process started did (design/07 §Backups).",
+    responses((status = 200, description = "The backups", body = Backups), LocalErrors),
+)]
+async fn list_backups(State(state): State<AppState>, Extension(_c): Who) -> Response {
+    let m = &state.maintenance;
+    let paths = match crate::jobs::maintenance::backups(&m.backup_dir).await {
+        Ok(p) => p,
+        Err(e) => return internal(&e, "could not list the backups"),
+    };
+    let mut files = Vec::with_capacity(paths.len());
+    for path in paths {
+        // Metadata only: a backup is never opened.
+        let Ok(meta) = tokio::fs::metadata(&path).await else {
+            continue;
+        };
+        files.push(BackupFile {
+            name: path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default(),
+            bytes: meta.len(),
+            modified_at: meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .and_then(|d| i64::try_from(d.as_millis()).ok()),
+        });
+    }
+    let disk_free_bytes = [Some(m.backup_dir.as_path()), m.backup_dir.parent()]
+        .into_iter()
+        .flatten()
+        .find_map(|p| (m.disk_free)(p).ok());
+    ok(&Backups {
+        dir: m.backup_dir.display().to_string(),
+        keep: m.keep,
+        files,
+        last_run: m.last(),
+        disk_free_bytes,
+    })
+}
+
+#[utoipa::path(
+    post, path = "/v1/admin/maintenance/run", tag = "admin",
+    summary = "Queue maintenance now",
+    description = "Queues the daily `maintenance` job under the same dedupe key as its tick, so it joins one \
+        already queued. The run takes a backup only if today's (UTC) does not exist yet; the trims, sweep, \
+        statistics and checkpoint always run.",
+    responses((status = 202, description = "`{ok, jobId, status}`: `queued` or `already-queued`", body = serde_json::Value), LocalErrors),
+)]
+async fn run_maintenance(State(state): State<AppState>, Extension(_c): Who) -> Response {
+    use crate::jobs::{NewJob, kinds, priority};
+    let job = NewJob::new(kinds::MAINTENANCE, priority::MAINTENANCE, serde_json::json!({}))
+        .dedupe(kinds::MAINTENANCE);
+    match state.jobs.enqueue(job).await {
+        Ok(q) => json(
+            StatusCode::ACCEPTED,
+            &serde_json::json!({"ok": true, "jobId": q.id, "status": q.status()}),
+        ),
+        Err(e) => internal(&e, "could not queue maintenance"),
     }
 }

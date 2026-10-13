@@ -162,6 +162,10 @@ async fn every_admin_route_needs_the_admin_scope() {
         ("GET", format!("/v1/admin/players/{PUUID}/archive/matches")),
         ("POST", "/v1/admin/cache/purge".to_string()),
         ("GET", "/v1/admin/stats".to_string()),
+        ("GET", "/v1/admin/info".to_string()),
+        ("GET", "/v1/admin/recent".to_string()),
+        ("GET", "/v1/admin/backups".to_string()),
+        ("POST", "/v1/admin/maintenance/run".to_string()),
         ("GET", "/v1/admin/limits/euw1".to_string()),
         (
             "GET",
@@ -414,12 +418,21 @@ async fn track_by_riot_id_then_untrack() {
     assert_eq!(again["puuid"], PUUID);
     let list = e.get("/v1/admin/tracked-players").await.json();
     assert_eq!(list["players"].as_array().unwrap().len(), 1);
+    // ADM-14: `tracked=true` lists the tracked rows only.
+    let tracked = e.get("/v1/admin/tracked-players?tracked=true").await.json();
+    assert_eq!(tracked["players"][0]["puuid"], PUUID);
 
     let off = e.delete(&format!("/v1/admin/tracked-players/{PUUID}")).await;
     assert_eq!(off.json(), json!({"ok": true, "puuid": PUUID, "tracked": false}));
     let list = e.get("/v1/admin/tracked-players").await.json();
     assert_eq!(list["players"][0]["tracked"], false, "untracked, not deleted");
     assert_eq!(list["players"][0]["gameName"], "Hide on bush");
+    let tracked = e.get("/v1/admin/tracked-players?tracked=true").await.json();
+    assert_eq!(tracked["players"], json!([]), "untracked rows are left out");
+    assert_eq!(
+        error(&e.get("/v1/admin/tracked-players?tracked=yes").await),
+        bad("querystring/tracked must be equal to one of the allowed values")
+    );
 }
 
 #[tokio::test]
@@ -506,6 +519,31 @@ async fn purge_drops_matching_entries_from_memory_and_disk() {
     e.get(&summoner).await;
     e.get(status).await;
     assert_eq!(e.get(&summoner).await.headers["x-cache"], "HIT");
+
+    // ADM-10: a dry run counts what would go and removes nothing.
+    let dry = e
+        .post(
+            "/v1/admin/cache/purge",
+            json!({"pattern": "summoner.byPuuid:*", "dryRun": true}),
+        )
+        .await;
+    assert_eq!(
+        dry.json(),
+        json!({"ok": true, "pattern": "summoner.byPuuid:*", "matched": 1, "dryRun": true})
+    );
+    assert_eq!(
+        e.get(&summoner).await.headers["x-cache"],
+        "HIT",
+        "a dry run purges nothing"
+    );
+    assert_eq!(
+        error(
+            &e.post("/v1/admin/cache/purge", json!({"pattern": "x*", "dryRun": "yes"}))
+                .await
+        )
+        .0,
+        StatusCode::BAD_REQUEST
+    );
 
     let r = e
         .post("/v1/admin/cache/purge", json!({"pattern": "summoner.byPuuid:*"}))
@@ -803,5 +841,269 @@ async fn debug_cache_reports_an_entry_without_fetching() {
     assert_eq!(
         error(&e.get("/v1/admin/debug/cache?scope=kr&path=/x").await),
         bad("querystring must have required property 'method'")
+    );
+}
+
+/// ADM-03: `GET /v1/admin/info` names the build and the configuration in
+/// effect, and leaks no key: not the Riot key, not the bootstrap key, not the
+/// caller's own.
+#[tokio::test]
+async fn info_reports_the_build_and_config_without_secrets() {
+    const BOOTSTRAP: &str = "rpx_bootstrap_info_test_secret";
+    let (_dir, state, router) = common::app_with(
+        &[("BOOTSTRAP_ADMIN_KEY", BOOTSTRAP), ("JOB_CONCURRENCY", "3")],
+        "http://127.0.0.1:9",
+    );
+    let mint = |name: &str, scopes: Vec<Scope>| NewConsumer {
+        name: name.into(),
+        scopes,
+        quota_per_min: 10_000,
+        key: None,
+    };
+    let admin = consumers::create(&state.db, mint("ops", vec![Scope::Read, Scope::Admin]))
+        .await
+        .unwrap();
+    let reader = consumers::create(&state.db, mint("web", vec![Scope::Read]))
+        .await
+        .unwrap();
+    let get = |key: String| {
+        let router = router.clone();
+        async move {
+            let req = Request::get("/v1/admin/info")
+                .header("authorization", format!("Bearer {key}"))
+                .body(Body::empty())
+                .unwrap();
+            common::send(router, req).await
+        }
+    };
+
+    let r = get(admin.key.expose().to_string()).await;
+    assert_eq!(r.status, StatusCode::OK);
+    let raw = String::from_utf8(r.body.clone()).unwrap();
+    for secret in ["rpx_", "RGAPI", BOOTSTRAP, common::TEST_KEY] {
+        assert!(!raw.contains(secret), "{secret} in {raw}");
+    }
+    let b = r.json();
+    assert_eq!(b["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(b["gitSha"], riot_proxy::build_info::GIT_SHA);
+    assert!(b["rustc"].as_str().unwrap().starts_with("rustc "));
+    assert!(b["builtAt"].as_i64().unwrap() > 0);
+    let started = b["startedAt"].as_i64().unwrap();
+    assert!(started <= riot_proxy::clock::Clock::now().unix_ms && b["uptimeSeconds"].is_u64());
+    assert_eq!(
+        (&b["env"], &b["role"], &b["workers"]),
+        (&json!("development"), &json!("all"), &json!(3))
+    );
+    assert_eq!(b["keyScope"], state.fetcher.key_scope().as_str());
+    assert_eq!(b["features"]["dashboardUi"], true);
+    assert_eq!(b["features"]["postgres"], cfg!(feature = "postgres"));
+    let config = b["config"].as_object().unwrap();
+    assert!(!config.contains_key("RIOT_API_KEY"));
+    assert_eq!(config.len(), riot_proxy::config::VARS.len() - 1);
+    assert_eq!(config["BOOTSTRAP_ADMIN_KEY"], "[REDACTED]");
+    assert_eq!(config["JOB_CONCURRENCY"], "3");
+    assert_eq!(config["RIOT_BASE_URL"], Value::Null);
+
+    assert_eq!(
+        get(reader.key.expose().to_string()).await.status,
+        StatusCode::FORBIDDEN
+    );
+}
+
+/// ADM-05: the last requests and errors, by request id. The rings are global
+/// to this test binary, so the test finds its own entries by the ids it sent
+/// and never asserts on what else is there.
+#[tokio::test]
+async fn recent_requests_and_errors_are_kept_by_request_id() {
+    let e = env().await;
+    let send = |uri: &str, id: &str, key: Option<&str>| {
+        let mut req = Request::get(uri).header("x-request-id", id);
+        if let Some(k) = key {
+            req = req.header("authorization", format!("Bearer {k}"));
+        }
+        common::send(e.router.clone(), req.body(Body::empty()).unwrap())
+    };
+    let tag = ulid::Ulid::generate().to_string();
+    let id = |n: &str| format!("adm05-{tag}-{n}");
+    assert_eq!(
+        send("/v1/admin/stats", &id("ok"), Some(&e.admin)).await.status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        send("/nowhere/at/all", &id("404"), None).await.status,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        send("/v1/admin/stats", &id("403"), Some(&e.reader)).await.status,
+        StatusCode::FORBIDDEN
+    );
+    // Not recorded: probes and the dashboard's own polling.
+    send("/healthz", &id("probe"), None).await;
+    send("/v1/admin/metrics", &id("poll"), Some(&e.admin)).await;
+
+    let all = e.get("/v1/admin/recent?kind=requests&limit=500").await.json();
+    assert_eq!(
+        (&all["kind"], &all["capacity"]),
+        (&json!("requests"), &json!(500))
+    );
+    let mine: Vec<Value> = all["requests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["requestId"].as_str().unwrap_or_default().contains(&tag))
+        .cloned()
+        .collect();
+    let by = |n: &str| mine.iter().find(|r| r["requestId"] == id(n)).cloned();
+    assert_eq!(mine.len(), 3, "{mine:?}");
+    let ok = by("ok").unwrap();
+    assert_eq!(
+        (
+            &ok["method"],
+            &ok["route"],
+            &ok["path"],
+            &ok["status"],
+            &ok["cache"],
+            &ok["consumer"]
+        ),
+        (
+            &json!("GET"),
+            &json!("/v1/admin/stats"),
+            &json!("/v1/admin/stats"),
+            &json!(200),
+            &json!("none"),
+            &json!("ops")
+        )
+    );
+    assert!(ok["latencyMs"].is_u64() && ok["at"].is_i64());
+    let missing = by("404").unwrap();
+    assert_eq!(
+        (&missing["route"], &missing["status"], &missing["consumer"]),
+        (&json!("unmatched"), &json!(404), &Value::Null)
+    );
+    assert_eq!(by("403").unwrap()["status"], 403);
+    assert!(by("probe").is_none() && by("poll").is_none());
+    // Newest first.
+    let order: Vec<&str> = mine.iter().map(|r| r["requestId"].as_str().unwrap()).collect();
+    assert_eq!(order, [id("403"), id("404"), id("ok")]);
+
+    let errs = e.get("/v1/admin/recent?kind=errors&limit=200").await.json();
+    assert_eq!(
+        (&errs["kind"], &errs["capacity"]),
+        (&json!("errors"), &json!(200))
+    );
+    let err = |n: &str| {
+        errs["errors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["requestId"] == id(n))
+            .cloned()
+    };
+    let nf = err("404").unwrap();
+    assert_eq!(
+        (&nf["code"], &nf["status"], &nf["message"]),
+        (
+            &json!("NOT_FOUND"),
+            &json!(404),
+            &json!("No route for GET /nowhere/at/all")
+        )
+    );
+    assert_eq!(err("403").unwrap()["code"], "FORBIDDEN");
+    assert!(err("ok").is_none());
+
+    // A 500, raised the way every handler raises one.
+    let rid = id("500");
+    riot_proxy::http::request_id::CURRENT
+        .scope(riot_proxy::http::request_id::RequestId(rid.clone()), async {
+            axum::response::IntoResponse::into_response(riot_proxy::http::ApiError::internal())
+        })
+        .await;
+    let errs = e.get("/v1/admin/recent?kind=errors").await.json();
+    let five = errs["errors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["requestId"] == rid.as_str())
+        .cloned()
+        .unwrap();
+    assert_eq!(
+        (&five["code"], &five["status"]),
+        (&json!("INTERNAL"), &json!(500))
+    );
+
+    assert_eq!(
+        error(&e.get("/v1/admin/recent?kind=everything").await),
+        bad("querystring/kind must be equal to one of the allowed values")
+    );
+    assert_eq!(
+        error(&e.get("/v1/admin/recent?limit=0").await),
+        bad("querystring/limit must be >= 1")
+    );
+    let one = e.get("/v1/admin/recent?limit=1").await.json();
+    assert_eq!(one["requests"].as_array().unwrap().len(), 1);
+}
+
+/// ADM-06: the backups beside the database, the last maintenance run, and a
+/// run queued on demand under the tick's dedupe key.
+#[tokio::test]
+async fn backups_list_the_files_and_the_last_run_and_run_now_dedupes() {
+    let e = env().await;
+    let m = std::sync::Arc::clone(&e.state.maintenance);
+
+    // No directory yet: an empty list, not an error.
+    let r = e.get("/v1/admin/backups").await;
+    assert_eq!(r.status, StatusCode::OK);
+    let b = r.json();
+    assert_eq!(
+        (&b["files"], &b["lastRun"], &b["keep"]),
+        (&json!([]), &Value::Null, &json!(14))
+    );
+    assert_eq!(b["dir"], m.backup_dir.display().to_string());
+    assert!(
+        b["diskFreeBytes"].as_u64().unwrap() > 0,
+        "the parent's free space"
+    );
+
+    std::fs::create_dir_all(&m.backup_dir).unwrap();
+    std::fs::write(m.backup_dir.join("riot-proxy-2026-10-01.db"), vec![0u8; 10]).unwrap();
+    std::fs::write(m.backup_dir.join("riot-proxy-2026-10-02.db"), vec![0u8; 20]).unwrap();
+    std::fs::write(m.backup_dir.join("notes.txt"), b"not a backup").unwrap();
+    let b = e.get("/v1/admin/backups").await.json();
+    let files = b["files"].as_array().unwrap();
+    assert_eq!(
+        files
+            .iter()
+            .map(|f| (f["name"].clone(), f["bytes"].clone()))
+            .collect::<Vec<_>>(),
+        [
+            (json!("riot-proxy-2026-10-02.db"), json!(20)),
+            (json!("riot-proxy-2026-10-01.db"), json!(10))
+        ],
+        "newest first, only our names"
+    );
+    assert!(files[0]["modifiedAt"].as_i64().unwrap() > 0);
+
+    // A run is reported in camelCase, as it ran.
+    let now = riot_proxy::clock::Clock::now().unix_ms;
+    let report = m.run_once(now).await.unwrap();
+    let b = e.get("/v1/admin/backups").await.json();
+    let last = &b["lastRun"];
+    assert_eq!((&last["at"], &last["error"]), (&json!(now), &Value::Null));
+    assert!(last["ms"].is_u64());
+    assert_eq!(last["report"]["jobsDeleted"], json!(report.jobs_deleted));
+    assert!(
+        last["report"]["backup"].as_str().unwrap().ends_with(".db"),
+        "{last}"
+    );
+
+    // Run now: queued, then joined.
+    let first = e.post("/v1/admin/maintenance/run", json!({})).await;
+    assert_eq!(first.status, StatusCode::ACCEPTED);
+    let first = first.json();
+    assert_eq!((&first["ok"], &first["status"]), (&json!(true), &json!("queued")));
+    let again = e.post("/v1/admin/maintenance/run", json!({})).await.json();
+    assert_eq!(
+        (&again["status"], &again["jobId"]),
+        (&json!("already-queued"), &first["jobId"])
     );
 }

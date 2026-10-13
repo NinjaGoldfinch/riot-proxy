@@ -660,3 +660,62 @@ fn backup_keep_is_zero_to_a_year() {
         ["BACKUP_KEEP: 'many' is not a whole number"]
     );
 }
+
+/// ADM-03: `GET /v1/admin/info` shows every variable but the Riot key, secrets masked.
+#[test]
+fn redacted_lists_every_variable_but_the_riot_key_and_masks_secrets() {
+    let c = load(env(&[
+        ("BOOTSTRAP_ADMIN_KEY", "rpx_bootstrap_secret_value"),
+        ("LADDER_PLATFORMS", "kr,euw1"),
+        ("JOB_KIND_LIMITS", "aggregate:analytics=2"),
+        ("ENV", "test"),
+    ]));
+    let r = c.redacted();
+    let mut expected: Vec<&str> = VARS.iter().copied().filter(|v| *v != "RIOT_API_KEY").collect();
+    expected.sort_unstable();
+    assert_eq!(r.keys().copied().collect::<Vec<_>>(), expected);
+    assert_eq!(r["BOOTSTRAP_ADMIN_KEY"].as_deref(), Some(REDACTED));
+    let all = format!("{r:?}");
+    assert!(!all.contains(KEY) && !all.contains("rpx_bootstrap"), "{all}");
+    assert_eq!(r["LADDER_PLATFORMS"].as_deref(), Some("kr,euw1"));
+    assert_eq!(r["JOB_KIND_LIMITS"].as_deref(), Some("aggregate:analytics=2"));
+    assert_eq!(r["ENV"].as_deref(), Some("test"));
+    assert_eq!(
+        r["DATABASE_URL"].as_deref(),
+        Some("sqlite://./data/riot-proxy.db")
+    );
+    assert_eq!(r["RIOT_BASE_URL"], None);
+
+    let c = load(env(&[("JOB_KIND_LIMITS", "none")]));
+    assert_eq!(c.redacted()["JOB_KIND_LIMITS"].as_deref(), Some("none"));
+    assert_eq!(c.redacted()["BOOTSTRAP_ADMIN_KEY"], None);
+}
+
+/// ADM-07: exact origins only; `*`, paths and other schemes are refused.
+#[test]
+fn admin_cors_origins_are_exact_origins() {
+    assert!(load(env(&[])).admin_cors_origins.is_empty(), "off by default");
+    let c = load(env(&[(
+        "ADMIN_CORS_ORIGINS",
+        "https://admin.example.com, http://localhost:5173",
+    )]));
+    assert_eq!(
+        c.admin_cors_origins,
+        ["https://admin.example.com", "http://localhost:5173"]
+    );
+    for bad in [
+        "*",
+        "https://admin.example.com/",
+        "https://a.example/x",
+        "ftp://a.example",
+        "admin.example.com",
+        "https://",
+    ] {
+        let errs = errors(env(&[("ADMIN_CORS_ORIGINS", bad)]));
+        assert!(
+            errs.iter().any(|e| e.starts_with("ADMIN_CORS_ORIGINS")),
+            "{bad}: {errs:?}"
+        );
+    }
+    assert!(errors(env(&[("ADMIN_CORS_ORIGINS", "*")]))[0].contains("refused"));
+}

@@ -38,6 +38,20 @@ impl QuotaState {
     }
 }
 
+/// One consumer's quota window right now (the dashboard's `quotas`, ADM-04).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaUse {
+    /// The consumer's id (`GET /v1/admin/consumers`).
+    pub consumer: String,
+    /// Requests per rolling minute.
+    pub limit: u32,
+    /// Requests in the last minute.
+    pub used: u32,
+    /// Seconds until the oldest of them leaves the window; 0 when none is in it.
+    pub reset_secs: u64,
+}
+
 #[derive(Debug, Default)]
 pub struct Quotas {
     windows: DashMap<String, Arc<Mutex<Window>>>,
@@ -50,6 +64,32 @@ fn ceil_secs(d: Duration) -> u64 {
 impl Quotas {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Every consumer metered since the start, busiest first. Read-only: it
+    /// takes no slot.
+    pub fn usage(&self) -> Vec<QuotaUse> {
+        let now = Instant::now();
+        let mut out: Vec<QuotaUse> = self
+            .windows
+            .iter()
+            .map(|e| {
+                let mut w = e.value().lock().unwrap_or_else(PoisonError::into_inner);
+                let used = w.used(now);
+                let oldest_leaves = w
+                    .admitted()
+                    .next()
+                    .map_or(now, |t| t + Duration::from_secs(WINDOW_SECONDS.into()));
+                QuotaUse {
+                    consumer: e.key().clone(),
+                    limit: w.limit,
+                    used,
+                    reset_secs: ceil_secs(oldest_leaves.saturating_duration_since(now)),
+                }
+            })
+            .collect();
+        out.sort_by(|a, b| b.used.cmp(&a.used).then_with(|| a.consumer.cmp(&b.consumer)));
+        out
     }
 
     /// Meter one request for `consumer`. `Err` carries the 429 and the state for

@@ -14,6 +14,8 @@ flowchart LR
 
 Everything the service needs at runtime except `.env` and the data directory is inside the binary: `include_str!` for the two HTML pages, `sqlx::migrate!` for schema, `utoipa` for the OpenAPI document, `rustls` + `webpki-roots` so there is not even a CA bundle to mount.
 
+**Build identity (ADM-03).** `build.rs` embeds the commit (`GIT_SHA` from the environment, else `git rev-parse HEAD`, else `unknown`; 12 characters), `rustc --version` and the build time (`SOURCE_DATE_EPOCH` when set). `GET /v1/admin/info` reports them with the uptime, feature switches and every configuration variable in effect (secrets `[REDACTED]`, `RIOT_API_KEY` left out). The CI, edge and release workflows set `GIT_SHA` from `github.sha` and check the built binary carries it. `Dockerfile`'s context has no `.git`, so pass it: `docker build --build-arg GIT_SHA=$(git rev-parse HEAD) .`, or `GIT_SHA=$(git rev-parse HEAD) docker compose up --build`. `--version` still prints only `riot-proxy <version>`.
+
 ## Option A — Docker, single service
 
 `Dockerfile`:
@@ -117,6 +119,7 @@ Same variable names as v1 where the concept survives; removed variables are list
 | `DATABASE_URL` | `sqlite://$DATA_DIR/riot-proxy.db` | now optional; `postgres://` needs the `postgres` feature |
 | `PORT` / `HOST` | `8080` / `0.0.0.0` | |
 | `TRUST_PROXY` | `false` | **new** — v1 always trusted `X-Forwarded-For` (ADR-068) |
+| `ADMIN_CORS_ORIGINS` | empty | **new** — exact origins allowed to call `/v1/admin/*`, `/v1/ws`, `/healthz` and `/readyz` from a browser; empty sends no CORS headers, `*` is refused (ADM-07, ADR-151) |
 | `ROLE` | `all` | **new** — `api` / `worker` only with Postgres |
 | `JOB_CONCURRENCY` | `8` | **new** — also `--job-concurrency`; see §Sizing for small hosts |
 | `JOB_KIND_LIMITS` | `aggregate:analytics=1` | **new** — `kind=n,…`, the most jobs of a kind running at once, for kinds that don't call Riot; `none` for no caps (OPS-06, ADR-134) |
@@ -167,6 +170,7 @@ The binary's own RSS is dominated by the SQLite page cache (`cache_size`, 64 MB 
 - **Manual:** `./riot-proxy backup /path/out.db` (same statement) — or `sqlite3 riot-proxy.db ".backup out.db"`.
 - **Restore:** stop the service, replace the file, start. There is nothing else to restore; the L1 cache and job heap rebuild themselves and the limiter defaults to conservative on a stale checkpoint.
 - **Off-box:** `rclone`/`restic` the `backups/` directory; it is plain files.
+- **Status (ADM-06):** `GET /v1/admin/backups` lists the backups (name, size, time, from the directory without opening a file), `BACKUP_KEEP`, the free space beside them and what the last `maintenance` run since the process started did, or its error. `POST /v1/admin/maintenance/run` queues the job now under the tick's dedupe key (202); it backs up only if today's (UTC) backup is missing.
 - **Production (ADR-142):** a systemd timer on `ngf-prod-syd1` runs `rclone copy` of `backups/` to R2 every 6 hours, checks the copy and keeps one backup locally; R2 expires backups after 14 days. design/12 §As executed has the details.
 
 ## Reclaiming space
@@ -198,7 +202,7 @@ sqlite3 -readonly riot-proxy.db "SELECT name, SUM(pgsize)/1048576 AS mib FROM db
 - `/metrics` — Prometheus, **same metric names as v1** so `ops/grafana/riot-proxy-dashboard.json` and `ops/prometheus-alerts.yml` import unchanged. Add `jobs_pending{kind}`, `limiter_bulk_waiters`, `sqlite_wal_bytes`; and, for the disk, `sqlite_db_bytes`, `sqlite_freelist_bytes`, `data_dir_free_bytes` (DSK-01, ADR-135), sampled with the metrics history. `GET /v1/admin/stats` shows the same readings with the page geometry.
 - `/healthz` — process up. `/readyz` — SQLite writable and limiter restored; it also reports the SQLite readers, total and idle, without failing on 0 idle (ADR-113).
 - Logs — `tracing` JSON to stdout; every request carries `request_id`, `consumer`, `x_cache`, `upstream_ms`.
-- `/dashboard` — same page, same `metrics` + `firehose` topics.
+- `/dashboard` — the operator page (design/13): `/v1/admin/*` JSON and the `metrics` + `firehose` topics.
 
 **Admin paths behind the tunnel.** The tunnel publishes the proxy as `api.ninjagoldfinch.lol` with path `*`, so `/metrics` (no auth), `/dashboard` and `/v1/admin/*` are reachable there; only the admin key guards the last two. `ADMIN_IP_ALLOWLIST` cannot narrow them: with `TRUST_PROXY=false` every request comes from cloudflared at 127.0.0.1, so it is left empty. ADM-01 serves them on `admin.ninjagoldfinch.lol` behind Cloudflare Access and blocks them on `api.` with a WAF rule (design/12 §Admin hostname behind Access, ADR-144). Prometheus on `ngf-mon-syd1` is planned to scrape `/metrics` over WireGuard, not through the tunnel.
 

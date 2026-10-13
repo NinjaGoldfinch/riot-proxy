@@ -88,6 +88,86 @@ expression: doc
         ],
         "type": "object"
       },
+      "AdminInfo": {
+        "description": "`GET /v1/admin/info` (ADM-03): what is running, since when, and how it is configured.",
+        "properties": {
+          "builtAt": {
+            "description": "Unix ms.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "config": {
+            "additionalProperties": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "description": "Every variable but `RIOT_API_KEY`, with the value in effect, as `.env` would\nspell it. Secrets read `[REDACTED]`; an unset optional value is null.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "env": {
+            "description": "`development`, `test` or `production`.",
+            "type": "string"
+          },
+          "features": {
+            "$ref": "#/components/schemas/Features"
+          },
+          "gitSha": {
+            "description": "The commit it was built from, 12 characters; `unknown` for a build without one.",
+            "type": "string"
+          },
+          "keyScope": {
+            "type": "string"
+          },
+          "role": {
+            "description": "`all`, `api` or `worker`.",
+            "type": "string"
+          },
+          "rustc": {
+            "description": "`rustc --version` of the compiler that built it.",
+            "type": "string"
+          },
+          "startedAt": {
+            "description": "Unix ms.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "uptimeSeconds": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "version": {
+            "description": "As `riot-proxy --version` prints it.",
+            "type": "string"
+          },
+          "workers": {
+            "description": "`JOB_CONCURRENCY`.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "gitSha",
+          "rustc",
+          "builtAt",
+          "startedAt",
+          "uptimeSeconds",
+          "env",
+          "role",
+          "keyScope",
+          "features",
+          "workers",
+          "config"
+        ],
+        "type": "object"
+      },
       "AdminStats": {
         "description": "Archive and tracking counts (v1's three fields, plus archive size).",
         "properties": {
@@ -490,6 +570,122 @@ expression: doc
         ],
         "type": "object"
       },
+      "BackupFile": {
+        "description": "One daily backup on disk.",
+        "properties": {
+          "bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "modifiedAt": {
+            "description": "Unix ms; null where the file system keeps no time.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "`riot-proxy-<YYYY-MM-DD>.db`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "bytes"
+        ],
+        "type": "object"
+      },
+      "Backups": {
+        "description": "`GET /v1/admin/backups` (ADM-06).",
+        "properties": {
+          "dir": {
+            "description": "`$DATA_DIR/backups`.",
+            "type": "string"
+          },
+          "diskFreeBytes": {
+            "description": "Free bytes on the backup directory's file system (its parent's while it\ndoes not exist); null when it cannot be read.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "files": {
+            "description": "Newest first; `[]` when the directory does not exist.",
+            "items": {
+              "$ref": "#/components/schemas/BackupFile"
+            },
+            "type": "array"
+          },
+          "keep": {
+            "description": "`BACKUP_KEEP`; 0 takes none.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lastRun": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LastRun",
+                "description": "The last `maintenance` run since this process started; null before the first."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "dir",
+          "keep",
+          "files"
+        ],
+        "type": "object"
+      },
+      "BlockedMethod": {
+        "description": "A method where bulk work would wait right now, on one scope.",
+        "properties": {
+          "forMs": {
+            "description": "Milliseconds until it frees up.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "method": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope",
+          "method",
+          "forMs"
+        ],
+        "type": "object"
+      },
+      "BlockedScope": {
+        "description": "A scope where bulk work would wait right now.",
+        "properties": {
+          "forMs": {
+            "description": "Milliseconds until it frees up.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "scope": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope",
+          "forMs"
+        ],
+        "type": "object"
+      },
       "BuildItemOption": {
         "description": "One choice at one step of a set build: an item (BLD-03).",
         "properties": {
@@ -678,6 +874,47 @@ expression: doc
           "present",
           "ageSeconds",
           "stale"
+        ],
+        "type": "object"
+      },
+      "CacheStore": {
+        "description": "The cache tiers' sizes (ADM-04).",
+        "properties": {
+          "l1Bytes": {
+            "description": "Keys, bodies and per-entry overhead, as L1 weighs them.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "l1Entries": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "l1MaxBytes": {
+            "description": "`CACHE_L1_MAX_MB` in bytes.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "l2Dropped": {
+            "description": "L2 writes dropped on a full queue since the start (`cache_l2_dropped_total`).",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "l2Rows": {
+            "description": "Rows in the L2 `cache` table, from the slow sample.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "l1Entries",
+          "l1Bytes",
+          "l1MaxBytes",
+          "l2Rows",
+          "l2Dropped"
         ],
         "type": "object"
       },
@@ -1727,6 +1964,45 @@ expression: doc
         ],
         "type": "object"
       },
+      "DiskSection": {
+        "description": "What the database takes on disk, and what is left (DSK-01's readings).",
+        "properties": {
+          "dbBytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "freeBytes": {
+            "description": "Free on the data directory's file system.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "freelistBytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "totalBytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "walBytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "dbBytes",
+          "walBytes",
+          "freelistBytes",
+          "freeBytes",
+          "totalBytes"
+        ],
+        "type": "object"
+      },
       "ErrorBody": {
         "properties": {
           "code": {
@@ -1822,6 +2098,48 @@ expression: doc
         ],
         "type": "object"
       },
+      "Features": {
+        "description": "Feature switches this process runs with (`GET /v1/admin/info`).",
+        "properties": {
+          "archiveTimelines": {
+            "type": "boolean"
+          },
+          "authDisabled": {
+            "type": "boolean"
+          },
+          "dashboardUi": {
+            "type": "boolean"
+          },
+          "devUi": {
+            "description": "`/dev` and `/dev/showcase`; never in production.",
+            "type": "boolean"
+          },
+          "docsUi": {
+            "type": "boolean"
+          },
+          "postgres": {
+            "description": "Built with the `postgres` feature.",
+            "type": "boolean"
+          },
+          "staleWhileRevalidate": {
+            "type": "boolean"
+          },
+          "trustProxy": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "devUi",
+          "docsUi",
+          "dashboardUi",
+          "authDisabled",
+          "archiveTimelines",
+          "staleWhileRevalidate",
+          "trustProxy",
+          "postgres"
+        ],
+        "type": "object"
+      },
       "FinishedView": {
         "description": "A job that finished in this process, newest first.",
         "properties": {
@@ -1889,6 +2207,54 @@ expression: doc
         ],
         "type": "object"
       },
+      "Gates": {
+        "description": "The bulk gate (design/05 §Priorities): its settings and what it holds now.",
+        "properties": {
+          "blockedMethods": {
+            "items": {
+              "$ref": "#/components/schemas/BlockedMethod"
+            },
+            "type": "array"
+          },
+          "blockedScopes": {
+            "items": {
+              "$ref": "#/components/schemas/BlockedScope"
+            },
+            "type": "array"
+          },
+          "bulkIdleAfterS": {
+            "description": "`BULK_IDLE_AFTER_S`.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "bulkIdleCeiling": {
+            "description": "`BULK_IDLE_CEILING`.",
+            "format": "double",
+            "type": "number"
+          },
+          "bulkUsageCeiling": {
+            "description": "`BULK_USAGE_CEILING`.",
+            "format": "double",
+            "type": "number"
+          },
+          "clientWaitBudgetMs": {
+            "description": "`CLIENT_WAIT_BUDGET_MS`.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "bulkUsageCeiling",
+          "bulkIdleCeiling",
+          "bulkIdleAfterS",
+          "clientWaitBudgetMs",
+          "blockedScopes",
+          "blockedMethods"
+        ],
+        "type": "object"
+      },
       "Health": {
         "properties": {
           "ok": {
@@ -1922,7 +2288,7 @@ expression: doc
         "type": "object"
       },
       "HistoryPoint": {
-        "description": "v1 `MetricsHistoryPoint`.",
+        "description": "v1 `MetricsHistoryPoint`, plus what the dashboard draws 24 h rates from\n(ADM-04). Points stored before then lack the additions, which read null.",
         "properties": {
           "analytics": {
             "$ref": "#/components/schemas/HistoryAnalytics"
@@ -1930,8 +2296,27 @@ expression: doc
           "cache": {
             "$ref": "#/components/schemas/CacheCounts"
           },
+          "disk": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DiskSection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "queues": {
             "$ref": "#/components/schemas/HistoryQueues"
+          },
+          "requests": {
+            "description": "`proxy_requests_total` summed over its labels, since the process started.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "t": {
             "description": "Unix ms.",
@@ -1940,6 +2325,15 @@ expression: doc
           },
           "totals": {
             "$ref": "#/components/schemas/Totals"
+          },
+          "upstream": {
+            "description": "`proxy_upstream_requests_total` summed over its labels, since the process started.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
@@ -2372,6 +2766,45 @@ expression: doc
         ],
         "type": "object"
       },
+      "LastRun": {
+        "description": "The last run this process made (ADM-06, `GET /v1/admin/backups`).",
+        "properties": {
+          "at": {
+            "description": "Unix ms when it started.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "error": {
+            "description": "Why it failed; the job is retried like any other.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ms": {
+            "description": "How long it took.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "report": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Report",
+                "description": "What it did; null when it failed."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "at",
+          "ms"
+        ],
+        "type": "object"
+      },
       "LeagueEntryDTO": {
         "description": "league-v4 `LeagueEntryDTO`: one ranked queue's standing.",
         "properties": {
@@ -2448,6 +2881,12 @@ expression: doc
             "minimum": 0,
             "type": "integer"
           },
+          "interactiveWaiters": {
+            "description": "Interactive requests queued on this scope; bulk yields while any wait (ADM-04).",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "kind": {
             "description": "`platform`, `region` or `other`.",
             "type": "string"
@@ -2477,7 +2916,8 @@ expression: doc
           "label",
           "frozenMs",
           "windows",
-          "methods"
+          "methods",
+          "interactiveWaiters"
         ],
         "type": "object"
       },
@@ -3566,6 +4006,13 @@ expression: doc
       "Purge": {
         "description": "`POST /v1/admin/cache/purge` body.",
         "properties": {
+          "dryRun": {
+            "description": "Count what would go, delete nothing (ADM-10). Default false.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "pattern": {
             "description": "A Redis-style glob (`*`, `?`, `[…]`) over cache keys, 1–200 characters. Scoped to the\ncurrent key unless it already starts with a key scope.",
             "type": "string"
@@ -3689,6 +4136,40 @@ expression: doc
         },
         "type": "object"
       },
+      "QuotaUse": {
+        "description": "One consumer's quota window right now (the dashboard's `quotas`, ADM-04).",
+        "properties": {
+          "consumer": {
+            "description": "The consumer's id (`GET /v1/admin/consumers`).",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Requests per rolling minute.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "resetSecs": {
+            "description": "Seconds until the oldest of them leaves the window; 0 when none is in it.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "used": {
+            "description": "Requests in the last minute.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "consumer",
+          "limit",
+          "used",
+          "resetSecs"
+        ],
+        "type": "object"
+      },
       "Ready": {
         "description": "v1 returned `{ok, redis, postgres, keyScope}`. v2 has one store, so `sqlite` replaces\nthe two backend booleans, and `limiter` says the checkpoint was restored\n(design/07). `keyScope` is v1's (ADR-011). `sqliteReaders`/`sqliteReadersFree`\nshow the read pool, so a leak shows before reads fail (ADR-113).",
         "properties": {
@@ -3722,6 +4203,137 @@ expression: doc
           "keyScope",
           "sqliteReaders",
           "sqliteReadersFree"
+        ],
+        "type": "object"
+      },
+      "Recent": {
+        "description": "`GET /v1/admin/recent` (ADM-05): one of the two rings, newest first.",
+        "properties": {
+          "capacity": {
+            "description": "How many the ring keeps: 500 requests, 200 errors.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "errors": {
+            "description": "Set for `kind=errors`.",
+            "items": {
+              "$ref": "#/components/schemas/RecentError"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "kind": {
+            "description": "`requests` or `errors`.",
+            "type": "string"
+          },
+          "requests": {
+            "description": "Set for `kind=requests`.",
+            "items": {
+              "$ref": "#/components/schemas/RecentRequest"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "capacity"
+        ],
+        "type": "object"
+      },
+      "RecentError": {
+        "description": "One error answered with v1's envelope.",
+        "properties": {
+          "at": {
+            "description": "Unix ms.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "code": {
+            "description": "The envelope's `code`, e.g. `NOT_FOUND`.",
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "requestId": {
+            "description": "Null when raised outside a request.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "at",
+          "code",
+          "status",
+          "message"
+        ],
+        "type": "object"
+      },
+      "RecentRequest": {
+        "description": "One answered request.",
+        "properties": {
+          "at": {
+            "description": "Unix ms when the response was ready.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "cache": {
+            "description": "`hit`, `miss`, `neg`, `stale`, `archive`, `bypass` or `none`, from `X-Cache`.",
+            "type": "string"
+          },
+          "consumer": {
+            "description": "The consumer's name; null before authentication or on a public route.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "latencyMs": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "method": {
+            "type": "string"
+          },
+          "path": {
+            "description": "The path as requested, at most 200 characters; no query string.",
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "route": {
+            "description": "The matched route template (`/v1/lol/summoners/by-puuid/:platform/:puuid`),\nor `unmatched`: the `route` label of `proxy_requests_total`.",
+            "type": "string"
+          },
+          "status": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "at",
+          "method",
+          "route",
+          "path",
+          "status",
+          "cache",
+          "latencyMs",
+          "requestId"
         ],
         "type": "object"
       },
@@ -3767,6 +4379,55 @@ expression: doc
         "required": [
           "region",
           "left"
+        ],
+        "type": "object"
+      },
+      "Report": {
+        "description": "What one run did.",
+        "properties": {
+          "backup": {
+            "description": "The backup written, if one was (none when today's already exists, when\n`BACKUP_KEEP` is 0, or when it was skipped or failed).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "backupFailed": {
+            "description": "The error of a copy that was attempted and failed; its partial file is\nremoved and the run goes on.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "backupSkipped": {
+            "description": "Why no backup was attempted today: `BACKUP_KEEP=0`, or the disk's\nfree space against what the copy needs.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "backupsDeleted": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cacheSwept": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "historyDeleted": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "jobsDeleted": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "backupsDeleted",
+          "jobsDeleted",
+          "historyDeleted",
+          "cacheSwept"
         ],
         "type": "object"
       },
@@ -3937,6 +4598,14 @@ expression: doc
           "cache": {
             "$ref": "#/components/schemas/CacheCounts"
           },
+          "cacheStore": {
+            "$ref": "#/components/schemas/CacheStore",
+            "description": "The cache tiers' sizes (ADM-04)."
+          },
+          "disk": {
+            "$ref": "#/components/schemas/DiskSection",
+            "description": "From the slow sample (ADM-04)."
+          },
           "events": {
             "additionalProperties": {
               "format": "int64",
@@ -3951,6 +4620,16 @@ expression: doc
           },
           "flows": {
             "$ref": "#/components/schemas/Flows"
+          },
+          "gates": {
+            "$ref": "#/components/schemas/Gates",
+            "description": "The bulk gate (ADM-04)."
+          },
+          "inflight": {
+            "description": "Riot calls in flight, each shared by every request waiting on it (ADM-04).",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
           },
           "keyScope": {
             "type": "string"
@@ -3976,12 +4655,46 @@ expression: doc
             },
             "type": "object"
           },
+          "quotas": {
+            "description": "Every consumer metered since the start, busiest first (ADM-04).",
+            "items": {
+              "$ref": "#/components/schemas/QuotaUse"
+            },
+            "type": "array"
+          },
+          "requests": {
+            "additionalProperties": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "description": "`route|status|cache` → requests answered since the start\n(`proxy_requests_total`, ADM-05). `|` because routes hold `:`.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
           "sampledAt": {
             "$ref": "#/components/schemas/SampledAt",
             "description": "When `totals`, `queues`, `ladder` and `analytics` (`fast`) and the archive\nand disk readings (`slow`) were read (ADM-02)."
           },
+          "sqlite": {
+            "$ref": "#/components/schemas/SqliteReaders"
+          },
           "totals": {
             "$ref": "#/components/schemas/Totals"
+          },
+          "upstream": {
+            "additionalProperties": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "description": "`region|method|status` → Riot calls since the start\n(`proxy_upstream_requests_total`, ADM-05).",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
           },
           "v": {
             "description": "Bumped only when a field changes meaning.",
@@ -4010,7 +4723,36 @@ expression: doc
           "ladder",
           "analytics",
           "process",
-          "sampledAt"
+          "sampledAt",
+          "cacheStore",
+          "gates",
+          "inflight",
+          "quotas",
+          "sqlite",
+          "disk",
+          "requests",
+          "upstream"
+        ],
+        "type": "object"
+      },
+      "SqliteReaders": {
+        "description": "The SQLite read pool.",
+        "properties": {
+          "readers": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "readersFree": {
+            "description": "Idle right now (`sqlite_readers_free`).",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "readers",
+          "readersFree"
         ],
         "type": "object"
       },
@@ -5190,9 +5932,150 @@ expression: doc
         ]
       }
     },
+    "/v1/admin/backups": {
+      "get": {
+        "description": "The daily `VACUUM INTO` backups in `$DATA_DIR/backups`, newest first, with their sizes and times, read from the directory without opening a file; `BACKUP_KEEP`; the free space beside them; and what the last `maintenance` run since the process started did (design/07 §Backups).",
+        "operationId": "list_backups",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Backups"
+                }
+              }
+            },
+            "description": "The backups",
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region).",
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found.",
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`).",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/Retry-After"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          }
+        },
+        "summary": "Backups and the last maintenance run",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/v1/admin/cache/purge": {
       "post": {
-        "description": "Removes matching entries from memory and from the persisted cache. Keys look like `{keyScope}:{endpointId}:{host}:{params…}`, e.g. `summoner.byPuuid:*`. The match archive is not a cache and is never purged.",
+        "description": "Removes matching entries from memory and from the persisted cache. Keys look like `{keyScope}:{endpointId}:{host}:{params…}`, e.g. `summoner.byPuuid:*`. The match archive is not a cache and is never purged. With `dryRun` it only counts the entries that would go and answers `{ok, pattern, matched, dryRun: true}`.",
         "operationId": "purge_cache",
         "requestBody": {
           "content": {
@@ -5211,7 +6094,7 @@ expression: doc
                 "schema": {}
               }
             },
-            "description": "`{ok, pattern, deleted}`",
+            "description": "`{ok, pattern, deleted}`, or `{ok, pattern, matched, dryRun}`",
             "headers": {
               "X-RateLimit-Limit": {
                 "$ref": "#/components/headers/X-RateLimit-Limit"
@@ -6479,6 +7362,147 @@ expression: doc
           }
         },
         "summary": "Raw Riot passthrough",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/admin/info": {
+      "get": {
+        "description": "The version and commit this binary was built from, when it started, its feature switches and every configuration variable in effect. Secrets read `[REDACTED]`; `RIOT_API_KEY` is not listed.",
+        "operationId": "info",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminInfo"
+                }
+              }
+            },
+            "description": "The process",
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region).",
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found.",
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`).",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/Retry-After"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          }
+        },
+        "summary": "Build, uptime and configuration",
         "tags": [
           "admin"
         ]
@@ -8804,6 +9828,145 @@ expression: doc
         ]
       }
     },
+    "/v1/admin/maintenance/run": {
+      "post": {
+        "description": "Queues the daily `maintenance` job under the same dedupe key as its tick, so it joins one already queued. The run takes a backup only if today's (UTC) does not exist yet; the trims, sweep, statistics and checkpoint always run.",
+        "operationId": "run_maintenance",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "`{ok, jobId, status}`: `queued` or `already-queued`",
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region).",
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found.",
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`).",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/Retry-After"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          }
+        },
+        "summary": "Queue maintenance now",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/v1/admin/metrics": {
       "get": {
         "description": "v1's `MetricsSnapshot`, the same document the `metrics` topic sends: totals, job queues, WebSocket counts, events, cache reads, rate-limit usage, flows, ladder crawls, analytics runs and the process. Counters are cumulative since the process started.",
@@ -9559,6 +10722,168 @@ expression: doc
         ]
       }
     },
+    "/v1/admin/recent": {
+      "get": {
+        "description": "This process's last 500 answered requests (method, route, path, status, cache, latency, consumer, request id) or its last 200 error envelopes, newest first. Kept in memory, so a restart empties them. Health probes, `/metrics` and the dashboard's own polling of `/v1/admin/metrics` and this route are not recorded.",
+        "operationId": "recent",
+        "parameters": [
+          {
+            "description": "requests (default) or errors",
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "1–500, default 100",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Recent"
+                }
+              }
+            },
+            "description": "The ring",
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region).",
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found.",
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`).",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/Retry-After"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          }
+        },
+        "summary": "The last requests or errors",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/v1/admin/stats": {
       "get": {
         "description": "`archivedMatches` counts the whole archive, which is not key-scoped: match ids are not encrypted, so it survives a key rotation. `trackedPlayers` is scoped to the current key and reads zero right after one. The `db*`, `wal*` and `disk*` fields are the SQLite file, its write-ahead log and free list, and the data directory's file system (DSK-01). The match and player counts are read with the request; `archivedTimelines`, the archive's bytes and the disk readings are sampled in the background with each history point (`METRICS_HISTORY_INTERVAL_S`, a minute by default; `sampledAt.slow`).",
@@ -9856,8 +11181,19 @@ expression: doc
     },
     "/v1/admin/tracked-players": {
       "get": {
-        "description": "Every player row for the current `keyScope`, tracked or not: tracking is a flag on the row. Rows written under a previous Riot key are not returned, because PUUIDs are encrypted per key.",
+        "description": "Every player row for the current `keyScope`, tracked or not: tracking is a flag on the row. Rows written under a previous Riot key are not returned, because PUUIDs are encrypted per key. `tracked=true` returns only the tracked rows (ADM-14): the full list can run to tens of thousands of players a crawl discovered.",
         "operationId": "list_players",
+        "parameters": [
+          {
+            "description": "`true`: tracked players only",
+            "in": "query",
+            "name": "tracked",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {

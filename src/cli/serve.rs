@@ -271,7 +271,10 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
     );
     // The dashboard's documents: the `metrics` topic ticks only while someone
     // holds it; the sampler reads the table-scanning parts in the background
-    // and records the history regardless (v1, ADM-02).
+    // and records the history regardless (v1, ADM-02). It reads the quotas
+    // and the cache too (ADM-04), so they are built first.
+    let config = Arc::new(config);
+    let quotas = Arc::new(Quotas::new());
     let stats = Arc::new(crate::stats::Stats {
         hub: hub.clone(),
         db: db.clone(),
@@ -281,6 +284,9 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         mirror: Arc::clone(&mirror),
         started,
         samples: crate::stats::Samples::default(),
+        fetcher: fetcher.clone(),
+        quotas: Arc::clone(&quotas),
+        config: Arc::clone(&config),
     });
     let metrics_topic = crate::ws::metrics::spawn(
         Arc::clone(&stats),
@@ -294,12 +300,12 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
 
     let auth = Arc::new(Auth::new(&config, db.clone()));
     let state = AppState {
-        config: config.into(),
+        config,
         db: db.clone(),
         limiter: Arc::clone(&limiter),
         fetcher,
         auth,
-        quotas: Arc::new(Quotas::new()),
+        quotas,
         limiter_restored: restored,
         refresh: Arc::new(crate::routes::players::RefreshWindows::new()),
         jobs: queue,
@@ -307,6 +313,7 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         hub: hub.clone(),
         ddragon: mirror,
         stats,
+        maintenance,
     };
     let served = app::serve(listener, app::router(state, metrics), shutdown).await;
 

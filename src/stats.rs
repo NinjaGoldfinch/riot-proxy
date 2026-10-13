@@ -27,8 +27,11 @@ use utoipa::ToSchema;
 
 use crate::archive::matches::{self, ArchiveError};
 use crate::clock::Clock;
+use crate::config::Config;
 use crate::db::disk::{self, Usage};
 use crate::db::{Db, DbError};
+use crate::fetcher::Fetcher;
+use crate::http::quota::{QuotaUse, Quotas};
 use crate::riot::limiter::Limiter;
 use crate::riot::routing::{Platform, Region};
 use crate::routes::admin::LadderCrawlSummary;
@@ -72,6 +75,12 @@ pub struct Stats {
     /// The background samples; empty until [`spawn_sampler`] or
     /// [`Stats::record_point`] first runs.
     pub samples: Samples,
+    /// The cache and the single-flight behind it (ADM-04).
+    pub fetcher: Fetcher,
+    /// Per-consumer quota windows (ADM-04).
+    pub quotas: Arc<Quotas>,
+    /// The bulk gate's settings (ADM-04).
+    pub config: Arc<Config>,
 }
 
 /// The fast set: what the dashboard wants to see move (ADM-02).
@@ -92,6 +101,8 @@ pub struct Slow {
     pub at: i64,
     pub archive: matches::Stats,
     pub disk: Usage,
+    /// Rows in the L2 `cache` table (ADM-04).
+    pub l2_rows: i64,
 }
 
 /// The newest of each set. The locks are never held across an await.
@@ -205,6 +216,8 @@ pub struct LimiterScope {
     pub frozen_ms: u64,
     pub windows: Vec<WindowUse>,
     pub methods: Vec<MethodUse>,
+    /// Interactive requests queued on this scope; bulk yields while any wait (ADM-04).
+    pub interactive_waiters: u64,
 }
 
 /// The job workers. They run in this process, so a snapshot that answers is
@@ -298,6 +311,23 @@ pub struct Snapshot {
     /// When `totals`, `queues`, `ladder` and `analytics` (`fast`) and the archive
     /// and disk readings (`slow`) were read (ADM-02).
     pub sampled_at: SampledAt,
+    /// The cache tiers' sizes (ADM-04).
+    pub cache_store: CacheStore,
+    /// The bulk gate (ADM-04).
+    pub gates: Gates,
+    /// Riot calls in flight, each shared by every request waiting on it (ADM-04).
+    pub inflight: u64,
+    /// Every consumer metered since the start, busiest first (ADM-04).
+    pub quotas: Vec<QuotaUse>,
+    pub sqlite: SqliteReaders,
+    /// From the slow sample (ADM-04).
+    pub disk: DiskSection,
+    /// `route|status|cache` → requests answered since the start
+    /// (`proxy_requests_total`, ADM-05). `|` because routes hold `:`.
+    pub requests: BTreeMap<String, u64>,
+    /// `region|method|status` → Riot calls since the start
+    /// (`proxy_upstream_requests_total`, ADM-05).
+    pub upstream: BTreeMap<String, u64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
@@ -317,7 +347,8 @@ pub struct HistoryAnalytics {
     pub age_seconds: Option<i64>,
 }
 
-/// v1 `MetricsHistoryPoint`.
+/// v1 `MetricsHistoryPoint`, plus what the dashboard draws 24 h rates from
+/// (ADM-04). Points stored before then lack the additions, which read null.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct HistoryPoint {
     /// Unix ms.
@@ -326,6 +357,97 @@ pub struct HistoryPoint {
     pub queues: HistoryQueues,
     pub analytics: HistoryAnalytics,
     pub cache: CacheCounts,
+    #[serde(default)]
+    pub disk: Option<DiskSection>,
+    /// `proxy_requests_total` summed over its labels, since the process started.
+    #[serde(default)]
+    pub requests: Option<u64>,
+    /// `proxy_upstream_requests_total` summed over its labels, since the process started.
+    #[serde(default)]
+    pub upstream: Option<u64>,
+}
+
+/// The cache tiers' sizes (ADM-04).
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CacheStore {
+    pub l1_entries: u64,
+    /// Keys, bodies and per-entry overhead, as L1 weighs them.
+    pub l1_bytes: u64,
+    /// `CACHE_L1_MAX_MB` in bytes.
+    pub l1_max_bytes: u64,
+    /// Rows in the L2 `cache` table, from the slow sample.
+    pub l2_rows: i64,
+    /// L2 writes dropped on a full queue since the start (`cache_l2_dropped_total`).
+    pub l2_dropped: u64,
+}
+
+/// A scope where bulk work would wait right now.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockedScope {
+    pub scope: String,
+    /// Milliseconds until it frees up.
+    pub for_ms: u64,
+}
+
+/// A method where bulk work would wait right now, on one scope.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockedMethod {
+    pub scope: String,
+    pub method: String,
+    /// Milliseconds until it frees up.
+    pub for_ms: u64,
+}
+
+/// The bulk gate (design/05 §Priorities): its settings and what it holds now.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Gates {
+    /// `BULK_USAGE_CEILING`.
+    pub bulk_usage_ceiling: f64,
+    /// `BULK_IDLE_CEILING`.
+    pub bulk_idle_ceiling: f64,
+    /// `BULK_IDLE_AFTER_S`.
+    pub bulk_idle_after_s: u32,
+    /// `CLIENT_WAIT_BUDGET_MS`.
+    pub client_wait_budget_ms: u64,
+    pub blocked_scopes: Vec<BlockedScope>,
+    pub blocked_methods: Vec<BlockedMethod>,
+}
+
+/// The SQLite read pool.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SqliteReaders {
+    pub readers: u64,
+    /// Idle right now (`sqlite_readers_free`).
+    pub readers_free: u64,
+}
+
+/// What the database takes on disk, and what is left (DSK-01's readings).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DiskSection {
+    pub db_bytes: u64,
+    pub wal_bytes: u64,
+    pub freelist_bytes: u64,
+    /// Free on the data directory's file system.
+    pub free_bytes: u64,
+    pub total_bytes: u64,
+}
+
+impl From<&Usage> for DiskSection {
+    fn from(u: &Usage) -> Self {
+        Self {
+            db_bytes: u.db_bytes,
+            wal_bytes: u.wal_bytes,
+            freelist_bytes: u.freelist_bytes(),
+            free_bytes: u.disk_free_bytes,
+            total_bytes: u.disk_total_bytes,
+        }
+    }
 }
 
 /// The snapshot's job counts by state and kind: rows, pending and due, failed
@@ -361,13 +483,18 @@ fn kind_of(scope: &str) -> (&'static str, String) {
 
 impl Stats {
     fn counter(&self, name: &str, keys: &[&str]) -> BTreeMap<String, u64> {
+        self.labelled(name, keys, ":")
+    }
+
+    /// A counter's values summed by the `keys` labels, joined with `sep`.
+    fn labelled(&self, name: &str, keys: &[&str], sep: &str) -> BTreeMap<String, u64> {
         let mut out = BTreeMap::new();
         for (labels, value) in crate::telemetry::counter_values(&self.metrics, name) {
             let key = keys
                 .iter()
                 .map(|k| labels.get(*k).map_or("", String::as_str))
                 .collect::<Vec<_>>()
-                .join(":");
+                .join(sep);
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             {
                 *out.entry(key).or_default() += value as u64;
@@ -416,6 +543,8 @@ impl Stats {
                         .frozen_for(&scope)
                         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX)),
                     windows: uses(self.limiter.usage(&scope)),
+                    interactive_waiters: u64::try_from(self.limiter.interactive_waiters(&scope))
+                        .unwrap_or(u64::MAX),
                     methods: self
                         .limiter
                         .method_usage(&scope, &names)
@@ -632,6 +761,48 @@ impl Stats {
         })
     }
 
+    async fn l2_rows(&self) -> Result<i64, DbError> {
+        self.db
+            .read(|c| Ok::<_, DbError>(c.query_row("SELECT COUNT(*) FROM cache", [], |r| r.get(0))?))
+            .await
+    }
+
+    fn total(&self, name: &str) -> u64 {
+        self.counter(name, &[]).values().sum()
+    }
+
+    fn gates(&self) -> Gates {
+        let blocked = self.limiter.bulk_blocked();
+        let now = tokio::time::Instant::now();
+        let ms = |at: tokio::time::Instant| {
+            u64::try_from(at.saturating_duration_since(now).as_millis()).unwrap_or(u64::MAX)
+        };
+        Gates {
+            bulk_usage_ceiling: self.config.bulk_usage_ceiling,
+            bulk_idle_ceiling: self.config.bulk_idle_ceiling,
+            bulk_idle_after_s: self.config.bulk_idle_after_s,
+            client_wait_budget_ms: u64::try_from(self.fetcher.interactive_budget().as_millis())
+                .unwrap_or(u64::MAX),
+            blocked_scopes: blocked
+                .scopes
+                .into_iter()
+                .map(|(scope, at)| BlockedScope {
+                    scope,
+                    for_ms: ms(at),
+                })
+                .collect(),
+            blocked_methods: blocked
+                .methods
+                .into_iter()
+                .map(|(scope, method, at)| BlockedMethod {
+                    scope,
+                    method,
+                    for_ms: ms(at),
+                })
+                .collect(),
+        }
+    }
+
     async fn read_archive_and_disk(&self) -> Result<(matches::Stats, Usage), SampleError> {
         let (archive, disk) = tokio::try_join!(
             async { matches::stats(&self.db).await.map_err(SampleError::from) },
@@ -650,9 +821,16 @@ impl Stats {
     /// Read the slow set and keep it; the disk gauges (DSK-01) move with it.
     pub async fn sample_slow(&self) -> Result<Arc<Slow>, SampleError> {
         let at = Clock::now().unix_ms;
-        let (archive, disk) = self.read_archive_and_disk().await?;
+        let ((archive, disk), l2_rows) = tokio::try_join!(self.read_archive_and_disk(), async {
+            self.l2_rows().await.map_err(SampleError::from)
+        })?;
         disk::record(&disk);
-        let slow = Arc::new(Slow { at, archive, disk });
+        let slow = Arc::new(Slow {
+            at,
+            archive,
+            disk,
+            l2_rows,
+        });
         self.samples.set_slow(Arc::clone(&slow));
         Ok(slow)
     }
@@ -685,7 +863,17 @@ impl Stats {
     /// v1 `buildMetricsSnapshot`: the samples plus what lives in memory.
     pub async fn snapshot(&self) -> Result<Snapshot, DbError> {
         let fast = self.fast().await?;
-        let slow_at = self.samples.slow().map_or_else(|| Clock::now().unix_ms, |s| s.at);
+        let (slow_at, disk, l2_rows) = match self.samples.slow() {
+            Some(s) => (s.at, DiskSection::from(&s.disk), s.l2_rows),
+            None => {
+                let (u, rows) = tokio::try_join!(disk::usage(&self.db), self.l2_rows())?;
+                (Clock::now().unix_ms, DiskSection::from(&u), rows)
+            }
+        };
+        let cache = self.fetcher.cache();
+        // moka counts lazily; settle pending inserts and evictions first.
+        cache.l1.sync().await;
+        let as_u64 = |n: usize| u64::try_from(n).unwrap_or(u64::MAX);
         Ok(Snapshot {
             v: 1,
             key_scope: self.key_scope.clone(),
@@ -716,11 +904,32 @@ impl Stats {
                 fast: fast.at,
                 slow: slow_at,
             },
+            cache_store: CacheStore {
+                l1_entries: cache.l1.entry_count(),
+                l1_bytes: cache.l1.weighted_size(),
+                l1_max_bytes: cache.l1.max_bytes(),
+                l2_rows,
+                l2_dropped: cache.l2_dropped(),
+            },
+            gates: self.gates(),
+            inflight: as_u64(self.fetcher.inflight_count()),
+            quotas: self.quotas.usage(),
+            sqlite: SqliteReaders {
+                readers: as_u64(self.db.readers()),
+                readers_free: as_u64(self.db.readers_free()),
+            },
+            disk,
+            requests: self.labelled(crate::metrics::REQUESTS_TOTAL, &["route", "status", "cache"], "|"),
+            upstream: self.labelled(
+                crate::metrics::UPSTREAM_REQUESTS_TOTAL,
+                &["region", "method", "status"],
+                "|",
+            ),
         })
     }
 
     /// v1 `buildHistoryPoint`, from the two sets.
-    fn history_point(&self, now: i64, fast: &Fast) -> HistoryPoint {
+    fn history_point(&self, now: i64, fast: &Fast, slow: &Slow) -> HistoryPoint {
         let mut totals = fast.totals.clone();
         totals.active_consumers = None;
         let q = fast.queues.values().fold(HistoryQueues::default(), |mut acc, c| {
@@ -739,17 +948,20 @@ impl Stats {
                 age_seconds: runs.first().map(|r| ((now - r.at + 500) / 1000).max(0)),
             },
             cache: self.cache(),
+            disk: Some(DiskSection::from(&slow.disk)),
+            requests: Some(self.total(crate::metrics::REQUESTS_TOTAL)),
+            upstream: Some(self.total(crate::metrics::UPSTREAM_REQUESTS_TOTAL)),
         }
     }
 
     /// Sample both sets, then store a point built from them and keep the
     /// newest [`HISTORY_MAX_POINTS`] (v1 LTRIM).
     pub async fn record_point(&self, now: i64) -> Result<(), SampleError> {
-        let (fast, _) = tokio::try_join!(
+        let (fast, slow) = tokio::try_join!(
             async { self.sample_fast().await.map_err(SampleError::from) },
             self.sample_slow(),
         )?;
-        let point = self.history_point(now, &fast);
+        let point = self.history_point(now, &fast, &slow);
         let json = serde_json::to_string(&point).unwrap_or_default();
         self.db
             .write(move |c| {

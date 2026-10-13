@@ -1,0 +1,2520 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <title>riot-proxy · dashboard</title>
+    <!--
+      The operator dashboard (design/13, ADM series). One self-contained file: no
+      framework, no build step, nothing fetched from another origin. Everything it
+      shows comes from /v1/admin/* JSON and the /v1/ws `metrics` + `firehose`
+      topics, under one base URL (default: this page's origin).
+    -->
+    <style>
+/* tokens:dark — design/13 §Visual tokens */
+:root {
+  --page: #0d0f13;
+  --panel: #151920;
+  --panel-2: #1b2029;
+  --ink: #ffffff;
+  --ink-2: #c3c2b7;
+  --muted: #898781;
+  --grid: #2c2c2a;
+  --border: rgba(255, 255, 255, 0.1);
+  --accent: #3987e5;
+  --s1: #3987e5;
+  --s2: #d95926;
+  --s3: #199e70;
+  --s4: #c98500;
+  --s5: #d55181;
+  --s6: #9085e9;
+  --good: #0ca30c;
+  --warning: #fab219;
+  --serious: #ec835a;
+  --critical: #d03b3b;
+  --focus: #58a6ff;
+  --shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+  color-scheme: dark;
+}
+/* tokens:light */
+:root[data-theme='light'] {
+  --page: #f6f7f9;
+  --panel: #ffffff;
+  --panel-2: #f0f1f4;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #6b6a66;
+  --grid: #e1e0d9;
+  --border: rgba(11, 11, 11, 0.1);
+  --accent: #2a78d6;
+  --s1: #2a78d6;
+  --s2: #eb6834;
+  --s3: #1baf7a;
+  --s4: #eda100;
+  --s5: #e87ba4;
+  --s6: #4a3aa7;
+  --good: #0b8a0b;
+  --warning: #a86f00;
+  --serious: #c2521b;
+  --critical: #d03b3b;
+  --focus: #2a78d6;
+  --shadow: 0 8px 30px rgba(0, 0, 0, 0.12);
+  color-scheme: light;
+}
+/* end tokens */
+
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--page); color: var(--ink); }
+body { font: 13px/1.45 system-ui, -apple-system, 'Segoe UI', sans-serif; }
+button, input, select { font: inherit; color: inherit; }
+a { color: var(--accent); }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+[hidden] { display: none !important; }
+.num, table { font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+svg.i { width: 14px; height: 14px; flex: none; vertical-align: -2px; fill: currentColor; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* ── layout A: rail + main (design/13 §Layout) ── */
+.app { display: grid; grid-template-columns: 196px minmax(0, 1fr); align-content: start; min-height: calc(100vh - 34px); }
+.rail { display: flex; flex-direction: column; gap: 12px; padding: 12px 8px; border-right: 1px solid var(--border); background: var(--panel); position: sticky; top: 34px; height: calc(100vh - 34px); overflow-y: auto; }
+.tabs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.tab { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 10px; border: 0; border-radius: 6px; background: none; color: var(--ink-2); cursor: pointer; text-align: left; white-space: nowrap; }
+.tab:hover { background: var(--panel-2); color: var(--ink); }
+.tab[aria-selected='true'] { background: var(--panel-2); color: var(--ink); box-shadow: inset 2px 0 0 var(--accent); }
+.tab .badge { margin-left: auto; min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--panel); border: 1px solid var(--border); font-size: 11px; text-align: center; color: var(--ink-2); }
+.rail-foot { margin-top: auto; display: flex; flex-direction: column; gap: 6px; padding: 10px 6px 0; border-top: 1px solid var(--border); font-size: 12px; color: var(--ink-2); }
+.rail-foot .row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.rail-foot code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
+.btn { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel-2); color: var(--ink); cursor: pointer; }
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.danger { border-color: var(--critical); }
+.btn.small { padding: 2px 8px; font-size: 12px; }
+.btn:disabled { opacity: 0.5; cursor: default; }
+main { min-width: 0; padding: 0 20px 32px; }
+
+/* ── health strip ── */
+.strip { position: sticky; top: 34px; z-index: 50; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 10px 0; margin-bottom: 14px; background: var(--page); border-bottom: 1px solid var(--border); }
+.pill { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; color: var(--ink-2); }
+.pill b { color: var(--ink); font-weight: 600; }
+[data-level='good'] > svg.i { color: var(--good); }
+[data-level='warning'] > svg.i { color: var(--warning); }
+[data-level='serious'] > svg.i { color: var(--serious); }
+[data-level='critical'] > svg.i { color: var(--critical); }
+[data-level='unknown'] > svg.i { color: var(--muted); }
+.strip .spacer { flex: 1; }
+.strip .build { font-size: 12px; color: var(--muted); }
+
+/* ── panels, tiles ── */
+h1 { font-size: 18px; margin: 0 0 12px; font-weight: 600; }
+h2 { font-size: 13px; margin: 0 0 8px; font-weight: 600; color: var(--ink-2); }
+.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; min-width: 0; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 10px; }
+.tile { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; min-width: 0; }
+.tile .label { font-size: 12px; color: var(--ink-2); display: flex; align-items: center; gap: 5px; }
+.tile .value { font-size: 24px; font-weight: 600; line-height: 1.25; margin: 2px 0; font-variant-numeric: proportional-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tile .sub { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.empty { color: var(--muted); padding: 24px 0; text-align: center; }
+
+/* ── charts (design/13 §Chart rules) ── */
+.charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 10px; margin-top: 10px; }
+.chart { margin: 0; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px 8px; min-width: 0; }
+.chart figcaption { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+.chart figcaption b { font-weight: 600; font-size: 12px; color: var(--ink-2); }
+.chart figcaption .latest { margin-left: auto; font-size: 13px; font-weight: 600; color: var(--ink); white-space: nowrap; }
+.chart figcaption .btn { margin-left: 4px; }
+.plotwrap { position: relative; height: 96px; margin-left: 0; outline-offset: 2px; touch-action: pan-y; }
+.plotwrap svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.plotwrap .grid { stroke: var(--grid); stroke-width: 1; }
+.plotwrap .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.plotwrap .wash { opacity: 0.1; stroke: none; }
+.plotwrap .xh { stroke: var(--muted); stroke-width: 1; }
+.plotwrap .ylab { position: absolute; left: 0; font-size: 11px; color: var(--muted); background: var(--panel); padding: 0 3px 0 0; line-height: 1; pointer-events: none; }
+.plotwrap .ylab.top { top: 0; }
+.plotwrap .ylab.bottom { bottom: 0; }
+.readout { position: absolute; top: 0; padding: 2px 6px; border-radius: 4px; background: var(--panel-2); border: 1px solid var(--border); font-size: 11px; white-space: nowrap; pointer-events: none; transform: translateX(-50%); }
+.xaxis { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin-top: 3px; }
+.legend { display: flex; flex-wrap: wrap; gap: 10px; font-size: 11px; color: var(--ink-2); margin-top: 4px; }
+.legend i { display: inline-block; width: 10px; height: 2px; vertical-align: middle; margin-right: 4px; }
+.chart .tableview { margin-top: 6px; max-height: 220px; overflow: auto; }
+.chart .nodata { height: 96px; display: grid; place-items: center; color: var(--muted); font-size: 12px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 10px; margin-top: 10px; }
+.panel-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; margin-bottom: 8px; }
+.panel-head h2 { margin: 0; white-space: nowrap; }
+.panel-head .end { margin-left: auto; font-size: 12px; }
+.filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; font-size: 12px; }
+.filters input, .filters select { padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--page); min-width: 0; }
+.filters input { flex: 1 1 160px; }
+.filters .group { display: inline-flex; align-items: center; gap: 6px; }
+.trunc { display: inline-block; max-width: 34ch; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+.stat5 { color: var(--ink); font-weight: 600; }
+td .tag { display: inline-flex; align-items: center; gap: 4px; }
+
+/* ── meters: used / limit as text, the fill carries severity ── */
+.meter { display: grid; grid-template-columns: 12em minmax(40px, 1fr) minmax(8.5em, auto); align-items: center; gap: 8px; font-size: 12px; min-width: 0; }
+.meter.bare { grid-template-columns: minmax(40px, 1fr) auto; }
+.meter .ml { color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.meter .track { height: 8px; border-radius: 4px; background: color-mix(in srgb, var(--accent) 16%, transparent); overflow: hidden; }
+.meter .track i { display: block; height: 100%; border-radius: 4px; background: var(--accent); }
+.meter .track i[data-level='warning'] { background: var(--warning); }
+.meter .track i[data-level='critical'] { background: var(--critical); }
+.meter .mt { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--ink); text-align: right; }
+.meter .mt [data-level] { display: inline-flex; vertical-align: -2px; }
+.scopes { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr)); gap: 10px; margin-top: 10px; }
+.scope header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-bottom: 8px; }
+.scope header b { font-size: 14px; }
+.scope .meters { display: flex; flex-direction: column; gap: 5px; }
+.scope h3 { font-size: 12px; font-weight: 600; color: var(--ink-2); margin: 10px 0 5px; }
+.scope details summary { cursor: pointer; font-size: 12px; color: var(--ink-2); margin-top: 6px; }
+.summary { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 12px; color: var(--ink-2); }
+.summary b { color: var(--ink); }
+dl.kv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 12px; margin: 8px 0 0; font-size: 12px; }
+dl.kv dt { color: var(--ink-2); }
+dl.kv dd { margin: 0; overflow-wrap: anywhere; }
+.form-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
+.form-row .btn { padding-top: 7px; padding-bottom: 7px; }
+.form-row .field { flex: 1 1 140px; margin: 0; }
+
+/* ── jobs ── */
+.workers { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 250px), 1fr)); gap: 6px; }
+.worker { padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; min-width: 0; }
+.worker[data-job] { cursor: pointer; }
+.worker[data-job]:hover { border-color: var(--accent); }
+.worker .top { display: flex; gap: 6px; align-items: baseline; min-width: 0; }
+.worker .top .el { margin-left: auto; color: var(--muted); white-space: nowrap; }
+.worker .now { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+ul.groups { list-style: none; margin: 0; padding: 0; font-size: 12px; }
+ul.groups li { display: grid; grid-template-columns: minmax(0, 11em) minmax(0, 1fr) auto; gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--grid); }
+ul.groups li > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+ul.groups .n { color: var(--ink); font-weight: 600; }
+tr[data-job] { cursor: pointer; }
+tr[data-job]:hover td { background: var(--panel-2); }
+ol.timeline { list-style: none; margin: 0; padding: 0; font-size: 12px; max-height: 420px; overflow: auto; }
+ol.timeline li { display: grid; grid-template-columns: 5.5em 3.5em minmax(0, 1fr) auto; gap: 8px; padding: 3px 0; border-bottom: 1px solid var(--grid); }
+ol.timeline li .x { overflow-wrap: anywhere; }
+ol.timeline li.ev-error .x { color: var(--ink); font-weight: 600; }
+pre.payload { margin: 0; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
+
+/* ── ladder ── */
+.crawl { margin-bottom: 10px; }
+.crawl-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-bottom: 8px; }
+.crawl-head .end { margin-left: auto; }
+.stages { display: grid; grid-template-columns: auto auto minmax(60px, 1fr) minmax(0, auto); gap: 5px 10px; align-items: center; font-size: 12px; }
+.stages .st { color: var(--ink-2); }
+.stages .num { overflow-wrap: anywhere; }
+.progress { height: 8px; border-radius: 4px; background: color-mix(in srgb, var(--accent) 16%, transparent); overflow: hidden; }
+.progress i { display: block; height: 100%; background: var(--accent); border-radius: 4px; }
+.totals { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 8px 0 0; font-size: 12px; color: var(--ink-2); }
+.totals b { color: var(--ink); }
+.capped { color: var(--ink); }
+details.more { margin-top: 8px; font-size: 12px; }
+details.more > summary { cursor: pointer; color: var(--ink-2); }
+ul.groups.jl li { grid-template-columns: minmax(0, 1fr) auto auto; }
+.activity h3 { font-size: 12px; margin: 10px 0 4px; color: var(--ink-2); font-weight: 600; }
+.legs { display: flex; flex-wrap: wrap; gap: 4px; max-height: 120px; overflow: auto; }
+.legs span { padding: 1px 6px; border: 1px solid var(--border); border-radius: 4px; white-space: nowrap; }
+tr[data-run] { cursor: pointer; }
+tr[data-run]:hover td, tr[data-run][aria-expanded='true'] td { background: var(--panel-2); }
+details.panel > summary { cursor: pointer; }
+details.panel > summary h2 { display: inline; }
+@media (max-width: 1000px) { #ladderHistory .wide { display: none; } }
+@media (max-width: 480px) { .stages { grid-template-columns: auto auto minmax(40px, 1fr); } .stages .num { grid-column: 1 / -1; } }
+
+/* ── storage ── */
+.stack { display: flex; height: 14px; border-radius: 4px; overflow: hidden; gap: 2px; background: var(--panel); margin: 6px 0; }
+.stack i { display: block; min-width: 2px; }
+.legend.stack-l { font-size: 12px; }
+.note-line { display: flex; gap: 6px; align-items: center; margin: 6px 0; font-size: 12px; }
+.actions-row { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* ── consumers ── */
+.newkey { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--warning); border-radius: 8px; }
+.newkey code { display: block; margin: 6px 0; padding: 6px 8px; background: var(--page); border-radius: 4px; overflow-wrap: anywhere; user-select: all; }
+.checks { display: flex; gap: 12px; align-items: center; font-size: 12px; }
+
+/* ── events, about ── */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chips label { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border: 1px solid var(--border); border-radius: 12px; font-size: 12px; cursor: pointer; }
+ol.events { list-style: none; margin: 0; padding: 0; font-size: 12px; max-height: 70vh; overflow: auto; }
+ol.events li { border-bottom: 1px solid var(--grid); }
+ol.events button { all: unset; box-sizing: border-box; display: grid; grid-template-columns: 6em minmax(0, 11em) minmax(0, 1fr); gap: 8px; width: 100%; padding: 4px 2px; cursor: pointer; }
+ol.events button:focus-visible { outline: 2px solid var(--focus); }
+ol.events button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+ol.events pre { margin: 0 0 6px; padding: 6px 8px; background: var(--page); border-radius: 4px; font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow: auto; }
+
+/* ── palette ── */
+#palette { place-items: start center; padding-top: 12vh; }
+#palInput { width: 100%; padding: 9px 11px; border: 1px solid var(--border); border-radius: 6px; background: var(--page); font-size: 14px; }
+ul.pal { list-style: none; margin: 8px 0 0; padding: 0; max-height: 50vh; overflow: auto; }
+ul.pal li { display: flex; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+ul.pal li[aria-selected='true'] { background: var(--panel-2); box-shadow: inset 2px 0 0 var(--accent); }
+ul.pal li .muted { margin-left: auto; }
+kbd { font: 11px ui-monospace, monospace; padding: 1px 5px; border: 1px solid var(--border); border-radius: 4px; background: var(--panel-2); }
+
+/* ── table helper ── */
+.scroll { overflow-x: auto; position: relative; }
+table { width: 100%; border-collapse: collapse; font-size: 12px; }
+th, td { padding: 5px 8px; border-bottom: 1px solid var(--grid); text-align: left; white-space: nowrap; }
+th { color: var(--ink-2); font-weight: 600; }
+th button { all: unset; cursor: pointer; }
+th button:focus-visible { outline: 2px solid var(--focus); }
+td.n, th.n { text-align: right; }
+.more-rows { margin-top: 6px; font-size: 12px; color: var(--muted); }
+
+/* ── sheets, confirm, toasts ── */
+.scrim { position: fixed; inset: 0; z-index: 200; display: grid; place-items: center; padding: 16px; background: rgba(0, 0, 0, 0.55); }
+.sheet { width: min(520px, 100%); background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); padding: 18px; }
+.sheet h2 { font-size: 15px; color: var(--ink); }
+.sheet p { margin: 0 0 12px; color: var(--ink-2); }
+.field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.field label { font-size: 12px; color: var(--ink-2); }
+.field input, .field select { width: 100%; padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--page); }
+.wraps { display: inline-block; white-space: normal; min-width: 14em; overflow-wrap: anywhere; }
+.sheet .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.sheet .error { color: var(--ink); display: flex; gap: 6px; align-items: center; margin: 0 0 10px; }
+.sheet .error svg { color: var(--critical); }
+.toasts { position: fixed; right: 16px; bottom: 16px; z-index: 300; display: flex; flex-direction: column; gap: 8px; max-width: min(420px, calc(100vw - 32px)); }
+.toast { display: flex; gap: 8px; align-items: flex-start; padding: 9px 12px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); }
+.toast[data-level='good'] svg { color: var(--good); }
+.toast[data-level='critical'] svg { color: var(--critical); }
+.toast[data-level='warning'] svg { color: var(--warning); }
+
+/* ── narrow: the rail becomes a tab strip above the content ── */
+@media (max-width: 480px) { .meter { grid-template-columns: minmax(0, 9em) minmax(40px, 1fr) auto; } }
+@media (max-width: 819px) {
+  .app { grid-template-columns: minmax(0, 1fr); }
+  .rail { position: sticky; top: 34px; z-index: 60; height: auto; flex-direction: row; align-items: center; gap: 8px; padding: 6px 8px; border-right: 0; border-bottom: 1px solid var(--border); overflow: hidden; }
+  .tabs { flex-direction: row; overflow-x: auto; flex: 1; min-width: 0; scrollbar-width: thin; }
+  .tab { width: auto; }
+  .tab[aria-selected='true'] { box-shadow: inset 0 -2px 0 var(--accent); }
+  .rail-foot { margin: 0; padding: 0; border: 0; flex-direction: row; flex: none; }
+  .rail-foot .wide { display: none; }
+  #conn span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .strip { position: static; }
+  main { padding: 0 12px 24px; }
+}
+    </style>
+  </head>
+  <body>
+    <!-- pagebar -->
+    <svg width="0" height="0" style="position: absolute" aria-hidden="true">
+      <symbol id="i-good" viewBox="0 0 16 16"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1Zm3.3 5.2-4 4.3a.8.8 0 0 1-1.1 0L4.7 9a.8.8 0 1 1 1.1-1.1l.9.9 3.5-3.7a.8.8 0 1 1 1.1 1.1Z" /></symbol>
+      <symbol id="i-warning" viewBox="0 0 16 16"><path d="M8.9 1.6a1 1 0 0 0-1.8 0L.6 13.4A1 1 0 0 0 1.5 15h13a1 1 0 0 0 .9-1.6ZM8 5a.8.8 0 0 1 .8.8v3.6a.8.8 0 0 1-1.6 0V5.8A.8.8 0 0 1 8 5Zm0 7.8a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z" /></symbol>
+      <symbol id="i-serious" viewBox="0 0 16 16"><path d="M5.1 1h5.8L15 5.1v5.8L10.9 15H5.1L1 10.9V5.1Zm2.1 3.6v4a.8.8 0 0 0 1.6 0v-4a.8.8 0 0 0-1.6 0ZM8 12.6a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" /></symbol>
+      <symbol id="i-critical" viewBox="0 0 16 16"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1Zm2.8 8.7a.8.8 0 1 1-1.1 1.1L8 9.1l-1.7 1.7a.8.8 0 1 1-1.1-1.1L6.9 8 5.2 6.3a.8.8 0 1 1 1.1-1.1L8 6.9l1.7-1.7a.8.8 0 1 1 1.1 1.1L9.1 8Z" /></symbol>
+      <symbol id="i-unknown" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-dasharray="3 2" /></symbol>
+      <symbol id="i-moon" viewBox="0 0 16 16"><path d="M6.2 1.3a.6.6 0 0 1 .1.7 5.6 5.6 0 0 0 7.7 7.7.6.6 0 0 1 .8.8A6.9 6.9 0 1 1 5.5 1.2a.6.6 0 0 1 .7.1Z" /></symbol>
+      <symbol id="i-traffic" viewBox="0 0 16 16"><path d="M4.5 1.5a.8.8 0 0 1 .8.8v9.5l1.6-1.6a.8.8 0 1 1 1.1 1.1l-3 3a.8.8 0 0 1-1.1 0l-3-3a.8.8 0 0 1 1.1-1.1l1.6 1.6V2.3a.8.8 0 0 1 .9-.8Zm7 0a.8.8 0 0 1 .6.2l3 3a.8.8 0 1 1-1.1 1.1l-1.7-1.6v9.5a.8.8 0 0 1-1.6 0V4.2L9.1 5.8A.8.8 0 0 1 8 4.7l3-3a.8.8 0 0 1 .5-.2Z" /></symbol>
+      <symbol id="i-limiter" viewBox="0 0 16 16"><path d="M8 2a7 7 0 0 0-6.6 9.3.8.8 0 0 0 .8.5h11.6a.8.8 0 0 0 .8-.5A7 7 0 0 0 8 2Zm0 1.6a5.4 5.4 0 0 1 5.2 6.6H2.8A5.4 5.4 0 0 1 8 3.6Zm2.9 1.6a.8.8 0 0 0-1 .3L8.3 8.1a1.2 1.2 0 1 0 1.3.6l1.6-2.5a.8.8 0 0 0-.3-1Z" /></symbol>
+      <symbol id="i-cache" viewBox="0 0 16 16"><path d="M8 1C4.7 1 2 2.1 2 3.5v9C2 13.9 4.7 15 8 15s6-1.1 6-2.5v-9C14 2.1 11.3 1 8 1Zm0 1.6c2.6 0 4.4.8 4.4 1s-1.8 1-4.4 1-4.4-.8-4.4-1 1.8-1 4.4-1ZM3.6 5.6C4.7 6.1 6.3 6.4 8 6.4s3.3-.3 4.4-.8V8c0 .2-1.8 1-4.4 1S3.6 8.2 3.6 8Zm0 4C4.7 10.1 6.3 10.4 8 10.4s3.3-.3 4.4-.8v2.9c0 .2-1.8 1-4.4 1s-4.4-.8-4.4-1Z" /></symbol>
+      <symbol id="i-jobs" viewBox="0 0 16 16"><path d="M2 2.8C2 2.4 2.4 2 2.8 2h10.4c.4 0 .8.4.8.8s-.4.8-.8.8H2.8c-.4 0-.8-.4-.8-.8Zm0 5.2c0-.4.4-.8.8-.8h10.4c.4 0 .8.4.8.8s-.4.8-.8.8H2.8C2.4 8.8 2 8.4 2 8Zm.8 4.4c-.4 0-.8.4-.8.8s.4.8.8.8h6.4c.4 0 .8-.4.8-.8s-.4-.8-.8-.8Z" /></symbol>
+      <symbol id="i-ladder" viewBox="0 0 16 16"><path d="M4 1.5a.8.8 0 0 1 .8.8V4h6.4V2.3a.8.8 0 0 1 1.6 0v11.4a.8.8 0 0 1-1.6 0V12H4.8v1.7a.8.8 0 0 1-1.6 0V2.3A.8.8 0 0 1 4 1.5Zm.8 4.1v1.6h6.4V5.6Zm0 3.2v1.6h6.4V8.8Z" /></symbol>
+      <symbol id="i-archive" viewBox="0 0 16 16"><path d="M1.5 3c0-.6.4-1 1-1h11c.6 0 1 .4 1 1v2c0 .5-.3.9-.8 1v6.5c0 .8-.7 1.5-1.5 1.5H3.8c-.8 0-1.5-.7-1.5-1.5V6c-.5-.1-.8-.5-.8-1Zm1.6.6v.8h9.8v-.8ZM3.9 7v5.4h8.2V7Zm2.3 1.4h3.6a.8.8 0 0 1 0 1.6H6.2a.8.8 0 0 1 0-1.6Z" /></symbol>
+  <symbol id="i-consumers" viewBox="0 0 16 16"><path d="M8 1.5a3 3 0 1 1 0 6 3 3 0 0 1 0-6Zm0 1.6a1.4 1.4 0 1 0 0 2.8 1.4 1.4 0 0 0 0-2.8ZM2 13.2C2 10.9 4.7 9 8 9s6 1.9 6 4.2v.5a.8.8 0 0 1-.8.8H2.8a.8.8 0 0 1-.8-.8Zm1.7-.3h8.6c-.4-1-2.1-2.3-4.3-2.3s-3.9 1.3-4.3 2.3Z" /></symbol>
+  <symbol id="i-events" viewBox="0 0 16 16"><path d="M9.3 1.2a.8.8 0 0 1 .5.9L9 6.4h3.6a.8.8 0 0 1 .6 1.3l-6 7a.8.8 0 0 1-1.4-.7L6.6 9.6H3a.8.8 0 0 1-.6-1.3l6-7a.8.8 0 0 1 .9-.1Z" /></symbol>
+  <symbol id="i-about" viewBox="0 0 16 16"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1Zm0 3a1 1 0 1 1 0 2 1 1 0 0 1 0-2Zm-.8 3.6a.8.8 0 0 1 1.6 0v3.8a.8.8 0 0 1-1.6 0Z" /></symbol>
+  <symbol id="i-overview" viewBox="0 0 16 16"><path d="M1 2.5A1.5 1.5 0 0 1 2.5 1h3A1.5 1.5 0 0 1 7 2.5v3A1.5 1.5 0 0 1 5.5 7h-3A1.5 1.5 0 0 1 1 5.5Zm8 0A1.5 1.5 0 0 1 10.5 1h3A1.5 1.5 0 0 1 15 2.5v3A1.5 1.5 0 0 1 13.5 7h-3A1.5 1.5 0 0 1 9 5.5Zm-8 8A1.5 1.5 0 0 1 2.5 9h3A1.5 1.5 0 0 1 7 10.5v3A1.5 1.5 0 0 1 5.5 15h-3A1.5 1.5 0 0 1 1 13.5Zm8 0A1.5 1.5 0 0 1 10.5 9h3a1.5 1.5 0 0 1 1.5 1.5v3a1.5 1.5 0 0 1-1.5 1.5h-3A1.5 1.5 0 0 1 9 13.5Z" /></symbol>
+    </svg>
+
+    <div id="app" class="app">
+      <aside class="rail" aria-label="Dashboard">
+        <ul class="tabs" id="tabs" role="tablist" aria-orientation="vertical" aria-label="Sections"></ul>
+        <div class="rail-foot">
+          <div class="row" id="conn" aria-live="polite"><svg class="i"><use href="#i-unknown" /></svg><span>connecting…</span></div>
+          <div class="row wide">base <code id="baseLabel"></code></div>
+          <div class="row wide">key <code id="keyLabel">—</code></div>
+          <div class="row">
+            <button class="btn small" id="signOut" type="button">Sign out</button>
+            <button class="btn small" id="theme" type="button" aria-label="Switch to the light theme"><svg class="i"><use href="#i-moon" /></svg></button>
+          </div>
+        </div>
+      </aside>
+      <main>
+        <header class="strip" id="strip" aria-label="Health">
+          <span class="pill" id="sReady" data-level="unknown"><svg class="i"><use href="#i-unknown" /></svg><span>checking…</span></span>
+          <span class="pill" id="sLimiter" data-level="unknown"><svg class="i"><use href="#i-unknown" /></svg><span>limiter —</span></span>
+          <span class="pill" id="sDisk" data-level="unknown"><svg class="i"><use href="#i-unknown" /></svg><span>disk —</span></span>
+          <span class="pill" id="sBackup" data-level="unknown"><svg class="i"><use href="#i-unknown" /></svg><span>backup —</span></span>
+          <span class="pill" id="sScope"><span>scope <b>—</b></span></span>
+          <span class="spacer"></span>
+          <span class="build" id="sBuild"></span>
+        </header>
+        <div id="panels"></div>
+      </main>
+    </div>
+
+    <div class="scrim" id="sheet" hidden>
+      <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+        <h2 id="sheetTitle">Admin key</h2>
+        <p>This page reads <code>/v1/admin/*</code> and the admin WebSocket topics. The key is kept only in this browser.</p>
+        <p class="error" id="sheetError" hidden><svg class="i"><use href="#i-critical" /></svg><span></span></p>
+        <form id="sheetForm">
+          <div class="field">
+            <label for="keyInput">Admin key</label>
+            <input id="keyInput" type="password" autocomplete="off" spellcheck="false" placeholder="rpx_…" />
+          </div>
+          <div class="field">
+            <label for="baseInput">API base</label>
+            <input id="baseInput" type="url" spellcheck="false" />
+          </div>
+          <div class="actions"><button class="btn primary" id="sheetConnect" type="submit">Connect</button></div>
+        </form>
+      </div>
+    </div>
+
+    <div class="scrim" id="palette" hidden>
+      <div class="sheet" role="dialog" aria-modal="true" aria-label="Command palette">
+        <label class="sr-only" for="palInput">Go to or run</label>
+        <input id="palInput" role="combobox" aria-expanded="true" aria-controls="palList" aria-autocomplete="list" autocomplete="off" placeholder="Go to a tab, run an action, or paste a job or crawl id" />
+        <ul id="palList" role="listbox" aria-label="Commands" class="pal"></ul>
+      </div>
+    </div>
+    <div class="scrim" id="help" hidden>
+      <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
+        <h2 id="helpTitle">Keyboard</h2>
+        <dl class="kv"><dt><kbd>/</kbd></dt><dd>command palette</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>1</kbd>–<kbd>9</kbd>, <kbd>0</kbd></dt><dd>the tabs, in rail order</dd><dt><kbd>t</kbd></dt><dd>light or dark theme</dd><dt><kbd>Esc</kbd></dt><dd>close a dialog or the palette</dd><dt><kbd>↑</kbd> <kbd>↓</kbd></dt><dd>move between tabs in the rail; move the readout on a focused chart</dd></dl>
+        <div class="actions"><button class="btn" type="button" id="helpClose">Close</button></div>
+      </div>
+    </div>
+    <div class="scrim" id="confirm" hidden>
+      <div class="sheet" role="alertdialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmText">
+        <h2 id="confirmTitle">Are you sure?</h2>
+        <p id="confirmText"></p>
+        <div class="actions">
+          <button class="btn" id="confirmCancel" type="button">Cancel</button>
+          <button class="btn primary" id="confirmOk" type="button">Confirm</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+    <script type="module">
+// ---------- pure helpers (tests/admin_ui.mjs evaluates this block in node)
+// Riot's league-v4 apex lists stop at this many entries (LAD-01); the Ladder
+// tab (ADM-12) prints it, and tests/ui.rs checks it is the server's.
+const APEX_LIST_CAP = 10000;
+const TAB_IDS = ['overview', 'traffic', 'limiter', 'cache', 'jobs', 'ladder', 'archive', 'consumers', 'events', 'about'];
+/** Every event the hub publishes (src/events.rs). */
+const EVENT_NAMES = ['game.started', 'game.ended', 'rank.changed', 'match.archived', 'patch.new', 'crawl.phase', 'ladder.crawl.completed', 'analytics.updated', 'metrics.snapshot'];
+const RING_CAP = 2000;
+/** A bounded ring: the newest `cap` items, oldest dropped first. */
+const ringPush = (ring, item, cap = RING_CAP) => { ring.push(item); if (ring.length > cap) ring.splice(0, ring.length - cap); return ring; };
+/** Frames shown: names switched on, and the search text anywhere in the frame. */
+const eventFilter = (frames, on, q) => {
+  const needle = String(q ?? '').trim().toLowerCase();
+  return frames.filter((f) => on.has(f.event) && (!needle || JSON.stringify(f).toLowerCase().includes(needle)));
+};
+const fmt = (n) => (n == null || Number.isNaN(Number(n)) ? '—' : Number(n).toLocaleString('en-US'));
+/** 1,284 · 12.9K · 1.13M · 2.1B (the stat-tile contract). */
+const compact = (n) => {
+  if (n == null || Number.isNaN(Number(n))) return '—';
+  const a = Math.abs(n);
+  const cut = (v, u) => `${v >= 100 ? Math.round(v) : v >= 10 ? v.toFixed(1).replace(/\.0$/, '') : v.toFixed(2).replace(/\.?0+$/, '')}${u}`;
+  if (a < 10000) return fmt(Math.round(n));
+  if (a < 1e6) return (n < 0 ? '-' : '') + cut(a / 1e3, 'K');
+  if (a < 1e9) return (n < 0 ? '-' : '') + cut(a / 1e6, 'M');
+  return (n < 0 ? '-' : '') + cut(a / 1e9, 'B');
+};
+const fmtBytes = (b) => {
+  if (b == null) return '—';
+  const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let v = Number(b);
+  let i = 0;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return `${i === 0 ? v : v >= 100 ? Math.round(v) : v.toFixed(1)} ${u[i]}`;
+};
+const fmtDuration = (s) => {
+  if (s == null || s < 0) return '—';
+  s = Math.floor(s);
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : m > 0 ? `${m}m ${s % 60}s` : `${s}s`;
+};
+const pct = (f, digits = 1) => (f == null ? '—' : `${(f * 100).toFixed(digits)} %`);
+/** Everything interpolated into markup goes through this. */
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+/** `t` is unix ms or an ISO string. */
+const relTime = (t, now = Date.now()) => {
+  if (t == null || t === '') return '—';
+  const ms = typeof t === 'number' ? t : Date.parse(t);
+  if (Number.isNaN(ms)) return '—';
+  const s = Math.max(0, (now - ms) / 1000);
+  if (s < 90) return 'just now';
+  if (s < 5400) return `${Math.round(s / 60)}m ago`;
+  if (s < 129600) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+};
+const sumValues = (o) => Object.values(o ?? {}).reduce((n, v) => n + (Number(v) || 0), 0);
+/** Served from cache over all reads: the CacheHitRatioLow alert's ratio. */
+const hitRatio = (c) => {
+  if (!c) return null;
+  const served = (c.hit ?? 0) + (c.neg ?? 0) + (c.stale ?? 0);
+  const all = served + (c.miss ?? 0);
+  return all ? served / all : null;
+};
+/** Per second between two cumulative readings; null without two, or across a restart. */
+const rate = (prev, cur) => {
+  if (!prev || !cur || cur.at <= prev.at || cur.total < prev.total) return null;
+  return (cur.total - prev.total) / ((cur.at - prev.at) / 1000);
+};
+const jobTotals = (queues) => Object.values(queues ?? {}).reduce(
+  (t, q) => ({ running: t.running + (q.active ?? 0), pending: t.pending + (q.waiting ?? 0) + (q.delayed ?? 0), failed: t.failed + (q.failed ?? 0) }),
+  { running: 0, pending: 0, failed: 0 },
+);
+/** design/13: warn at 85 % used, critical at 95 %. */
+const diskLevel = (disk) => {
+  if (!disk || !disk.totalBytes) return { level: 'unknown', used: null };
+  const used = 1 - disk.freeBytes / disk.totalBytes;
+  return { level: used >= 0.95 ? 'critical' : used >= 0.85 ? 'warning' : 'good', used };
+};
+/** A daily backup older than 36 h means a night was missed. */
+const backupLevel = (backups, now = Date.now()) => {
+  if (!backups) return { level: 'unknown', text: 'backup —' };
+  if (backups.keep === 0) return { level: 'warning', text: 'backups off' };
+  const newest = backups.files?.[0];
+  if (!newest?.modifiedAt) return { level: 'serious', text: 'no backup' };
+  const age = (now - newest.modifiedAt) / 1000;
+  return { level: age > 36 * 3600 ? 'warning' : 'good', text: `backup ${fmtDuration(age).split(' ')[0]} ago` };
+};
+const limiterLevel = (snap) => {
+  const frozen = (snap?.limiter ?? []).filter((s) => s.frozenMs > 0).length;
+  const blocked = snap?.gates?.blockedScopes?.length ?? 0;
+  if (frozen) return { level: 'serious', text: `limiter ${frozen} frozen` };
+  if (blocked) return { level: 'warning', text: `bulk held on ${blocked}` };
+  return { level: snap ? 'good' : 'unknown', text: snap ? 'limiter ok' : 'limiter —' };
+};
+/** `#jobs/01J…` → { tab: 'jobs', id: '01J…' }; anything unknown is the overview. */
+const route = (hash, tabs = TAB_IDS) => {
+  const [tab, ...rest] = String(hash ?? '').replace(/^#/, '').split('/');
+  return tabs.includes(tab) ? { tab, id: rest.length ? decodeURIComponent(rest.join('/')) : null } : { tab: tabs[0], id: null };
+};
+const joinUrl = (base, path) => String(base).replace(/\/+$/, '') + path;
+const wsUrl = (base, key) => joinUrl(String(base).replace(/^http/, 'ws'), '/v1/ws') + (key ? `?token=${encodeURIComponent(key)}` : '');
+const maskKey = (k) => (k ? `${k.slice(0, 4)}…${k.slice(-2)}` : '—');
+/** WCAG contrast ratio of two #rrggbb colours. */
+const contrast = (a, b) => {
+  const lum = (h) => {
+    const [r, g, bl] = [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * r + 0.7152 * g + 0.0722 * bl;
+  };
+  const [x, y] = [lum(a), lum(b)];
+  return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+};
+const sortRows = (rows, key, dir = 'desc') => {
+  const k = (r) => (typeof key === 'function' ? key(r) : r[key]);
+  const sign = dir === 'asc' ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    const [x, y] = [k(a), k(b)];
+    if (x == null && y == null) return 0;
+    if (x == null) return 1;
+    if (y == null) return -1;
+    return (typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y))) * sign;
+  });
+};
+const capRows = (rows, cap) => ({ shown: rows.slice(0, cap), more: Math.max(0, rows.length - cap) });
+/** Nearest-rank percentile; null for no values. */
+const percentile = (values, p) => {
+  const v = values.filter((x) => x != null).sort((a, b) => a - b);
+  return v.length ? v[Math.min(v.length - 1, Math.max(0, Math.ceil((p / 100) * v.length) - 1))] : null;
+};
+/** At most `n` points: each bucket's mean at its last time; a bucket of nulls stays a gap. */
+const downsample = (pts, n) => {
+  if (pts.length <= n) return pts;
+  const out = [];
+  const size = pts.length / n;
+  for (let i = 0; i < n; i++) {
+    const b = pts.slice(Math.floor(i * size), Math.floor((i + 1) * size));
+    const vals = b.map((p) => p[1]).filter((v) => v != null);
+    out.push([b[b.length - 1][0], vals.length ? vals.reduce((a, c) => a + c, 0) / vals.length : null]);
+  }
+  return out;
+};
+/** A snapshot as a history point (the shape of GET /v1/admin/metrics/history). */
+const historyPointOf = (s, t) => {
+  const j = jobTotals(s.queues);
+  return { t, totals: s.totals, queues: { active: j.running, pending: j.pending, failed: j.failed }, cache: s.cache, disk: s.disk ?? null, requests: sumValues(s.requests), upstream: sumValues(s.upstream) };
+};
+/** The Overview's six series from history points: values, or rates and ratios between neighbours. */
+const seriesOf = (points) => {
+  const out = { archive: [], backlog: [], hit: [], disk: [], requests: [], upstream: [] };
+  const served = (c) => (c.hit ?? 0) + (c.neg ?? 0) + (c.stale ?? 0);
+  let prev = null;
+  for (const p of points) {
+    out.archive.push([p.t, p.totals?.archivedMatches ?? null]);
+    out.backlog.push([p.t, p.queues?.pending ?? null]);
+    out.disk.push([p.t, p.disk?.freeBytes ?? null]);
+    let hit = null;
+    if (prev?.cache && p.cache) {
+      const ds = served(p.cache) - served(prev.cache);
+      const da = ds + (p.cache.miss ?? 0) - (prev.cache.miss ?? 0);
+      hit = da > 0 && ds >= 0 && ds <= da ? ds / da : null;
+    }
+    const r = (k) => (prev && p[k] != null && prev[k] != null ? rate({ at: prev.t, total: prev[k] }, { at: p.t, total: p[k] }) : null);
+    out.hit.push([p.t, hit]);
+    out.requests.push([p.t, r('requests')]);
+    out.upstream.push([p.t, r('upstream')]);
+    prev = p;
+  }
+  return out;
+};
+const statusClass = (status) => `${String(status)[0]}xx`;
+/** Snapshot `requests` ("route|status|cache" → n) by route, with p50/p95 from the ring's latencies. */
+const routeRows = (requests, recent = []) => {
+  const by = new Map();
+  for (const [k, n] of Object.entries(requests ?? {})) {
+    const [route, status, cache] = k.split('|');
+    const r = by.get(route) ?? { route, total: 0, s2xx: 0, s3xx: 0, s4xx: 0, s5xx: 0, served: 0, cacheable: 0 };
+    r.total += n;
+    r[`s${statusClass(status)}`] = (r[`s${statusClass(status)}`] ?? 0) + n;
+    if (['hit', 'neg', 'stale'].includes(cache)) { r.served += n; r.cacheable += n; }
+    if (cache === 'miss') r.cacheable += n;
+    by.set(route, r);
+  }
+  return [...by.values()].map((r) => {
+    const lat = recent.filter((q) => q.route === r.route).map((q) => q.latencyMs);
+    return { ...r, hitRatio: r.cacheable ? r.served / r.cacheable : null, p50: percentile(lat, 50), p95: percentile(lat, 95), sampled: lat.length };
+  });
+};
+/** Snapshot `upstream` ("region|method|status" → n) as rows. */
+const upstreamRows = (upstream) => Object.entries(upstream ?? {}).map(([k, n]) => {
+  const [region, method, status] = k.split('|');
+  return { region, method, status, count: n };
+});
+/** `20:1` → "20 / 1 s"; `100:120` → "100 / 2 min" (a window as limit:seconds). */
+const windowLabel = (w) => {
+  const secs = Number(String(w).split(':')[1]);
+  return secs >= 60 && secs % 60 === 0 ? `${secs / 60} min` : `${secs} s`;
+};
+/** How full the fullest of `windows` is, 0..1. */
+const fullness = (windows) => (windows ?? []).reduce((m, w) => Math.max(m, w.limit ? w.used / w.limit : 0), 0);
+/** A meter's severity: the accent below 80 %, warning to 95 %, critical above. */
+const meterLevel = (f) => (f >= 0.95 ? 'critical' : f >= 0.8 ? 'warning' : 'ok');
+/** Scopes most in need of a look first: frozen, then held, then the fullest. */
+const scopeOrder = (scopes, blocked = []) => {
+  const held = new Set(blocked.map((b) => b.scope));
+  const rank = (s) => (s.frozenMs > 0 ? 2 : held.has(s.scope) ? 1 : 0);
+  return [...scopes].sort((a, b) => rank(b) - rank(a) || fullness(b.windows) - fullness(a.windows) || a.scope.localeCompare(b.scope));
+};
+/** Unix ms from unix ms or an ISO string; NaN for nothing. */
+const msOf = (t) => (t == null || t === '' ? NaN : typeof t === 'number' ? t : Date.parse(t));
+/** "850 ms", "4.2 s", "3m 05s", "2h 10m" (the jobs page's durations). */
+const dur = (n) => {
+  if (!Number.isFinite(n)) return '—';
+  if (n < 1000) return `${Math.max(0, Math.round(n))} ms`;
+  if (n < 60000) return `${(n / 1000).toFixed(1)} s`;
+  const s = Math.floor(n / 1000);
+  return s < 3600 ? `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s` : `${Math.floor(s / 3600)}h ${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}m`;
+};
+/** "in 4.2 s" or "3m 05s ago". */
+const when = (t, now = Date.now()) => {
+  const d = msOf(t) - now;
+  return Number.isNaN(d) ? '—' : d > 1000 ? `in ${dur(d)}` : `${dur(-d)} ago`;
+};
+/** What a job does, from its kind and payload (design/06). */
+const jobLabel = (j) => {
+  const p = j.payload ?? {};
+  switch (j.kind) {
+    case 'ladder:apex': return `apex ${p.tier} · ${p.platform}`;
+    case 'ladder:walk': return `walk ${p.tier} ${p.division} · ${p.platform}`;
+    case 'ladder:collect': return `match ids for players ${fmt(p.offset)}–${fmt(p.offset + (p.puuids ?? []).length - 1)} · ${p.platform}`;
+    case 'ladder:archive': return `hand ids to the archive · ${p.platform}`;
+    case 'ladder:crawl': return `start crawl · ${p.platform}`;
+    case 'archive:match': return `match ${p.matchId}`;
+    case 'backfill:player': return `history of ${String(p.puuid).slice(0, 10)}… · ${p.platform}`;
+    case 'ranks:lookup': return `ranks of players off the ladder · ${p.platform} ${p.queue}`;
+    default: return j.dedupeKey ?? '';
+  }
+};
+/** ADR-093: alike jobs (kind and platform) as one row, in the order each first appears. */
+const groupJobs = (jobs) => {
+  const g = new Map();
+  for (const j of jobs) {
+    const k = `${j.kind}\u0000${j.payload?.platform ?? ''}`;
+    if (!g.has(k)) g.set(k, []);
+    g.get(k).push(j);
+  }
+  return [...g.values()];
+};
+const groupLabel = (js) => {
+  if (js.length === 1) return jobLabel(js[0]);
+  const p = js[0].payload ?? {};
+  const n = fmt(js.length);
+  switch (js[0].kind) {
+    case 'ladder:collect': {
+      const from = Math.min(...js.map((j) => j.payload.offset));
+      const to = Math.max(...js.map((j) => j.payload.offset + (j.payload.puuids ?? []).length - 1));
+      return `match ids for ${n} batches · players ${fmt(from)}–${fmt(to)} · ${p.platform}`;
+    }
+    case 'archive:match': return `${n} matches · ${p.matchId} …`;
+    case 'backfill:player': return `history of ${n} players · ${p.platform}`;
+    default: return `${n} jobs · ${jobLabel(js[0])} …`;
+  }
+};
+const jobWhen = (j, now = Date.now()) => (j.state === 'running' ? `started ${when(j.claimedAt, now)}` : msOf(j.runAfter) - now > 1000 ? `due ${when(j.runAfter, now)}` : 'ready');
+const groupWhen = (js, now = Date.now()) => {
+  if (js.length === 1) return jobWhen(js[0], now);
+  if (js[0].state === 'running') return `oldest started ${when(js.map((j) => msOf(j.claimedAt)).reduce((a, b) => Math.min(a, b)), now)}`;
+  return js.every((j) => jobWhen(j, now) === 'ready') ? 'ready' : jobWhen(js[0], now);
+};
+const STAGE_UNITS = { legs: 'legs', batches: 'batches of 25 players', ids: 'ids handed on' };
+/** A crawl stage's numbers and pace (ADR-087): "50 / 80 batches of 25 players · 10 in 10m · ~30m 0s left". */
+const stageText = (st) => {
+  const nums = st.total == null ? (st.state === 'waiting' ? 'after the stage before' : '—') : `${st.done == null ? '?' : fmt(st.done)} / ${fmt(st.total)} ${STAGE_UNITS[st.unit] ?? st.unit}`;
+  const pace = st.state !== 'now' ? '' : st.recent ? ` · ${fmt(st.recent)} in 10m${st.etaSeconds != null ? ` · ~${fmtDuration(st.etaSeconds)} left` : ''}` : ' · none finished in 10m';
+  return nums + pace;
+};
+const stagePct = (st) => (st.total ? Math.min(100, (100 * (st.done ?? 0)) / st.total) : st.state === 'done' ? 100 : 0);
+/** An open leg of a crawl: a walk's page, an apex tier, a collect batch. */
+const legName = (l) => {
+  const p = l.leg.split(':');
+  if (p[1] === 'walk') return `${p[2]} ${p[3]}${l.page ? ` · page ${l.page}` : ''}`;
+  if (p[1] === 'apex') return p[2];
+  if (p[1] === 'collect') return `players ${p[2]}+`;
+  return 'archive hand-off';
+};
+const tierName = (t) => t.charAt(0) + t.slice(1).toLowerCase();
+/** "Hide on bush#KR1" → { gameName, tagLine }; anything else is taken as a PUUID. */
+const parsePlayer = (text) => {
+  const t = String(text).trim();
+  const i = t.lastIndexOf('#');
+  return i > 0 && i < t.length - 1 ? { gameName: t.slice(0, i), tagLine: t.slice(i + 1) } : { puuid: t };
+};
+const isHash = (t) => /^[0-9a-f]{64}$/i.test(t);
+/** Palette commands matching `q`: every word of the query in the label, or an id (a ULID) to open. */
+const paletteMatch = (commands, q) => {
+  const t = String(q ?? '').trim();
+  const ids = /^[0-9A-Z]{26}$/i.test(t) ? [{ label: `Open job ${t}`, hash: `jobs/${t}`, hint: 'job' }, { label: `Open crawl ${t}`, hash: `ladder/${t}`, hint: 'crawl' }] : [];
+  const words = t.toLowerCase().split(/\s+/).filter(Boolean);
+  return [...ids, ...commands.filter((c) => words.every((w) => c.label.toLowerCase().includes(w)))];
+};
+/** The tab a digit key opens: 1–9 the first nine in rail order, 0 the tenth. */
+const digitTab = (key, ids) => (/^[0-9]$/.test(key) ? ids[key === '0' ? 9 : Number(key) - 1] ?? null : null);
+/** The data disk split for the storage bar: live pages, free pages, WAL, other files, free (bytes). */
+const storageParts = (st) => {
+  const free = st.freelistBytes ?? (st.dbFreelistPages ?? 0) * (st.dbPageSize ?? 0);
+  const db = st.dbFileBytes ?? st.dbBytes ?? 0;
+  const wal = st.walBytes ?? 0;
+  const total = st.diskTotalBytes ?? st.totalBytes ?? 0;
+  const avail = st.diskFreeBytes ?? st.freeBytes ?? 0;
+  return [['live pages', Math.max(0, db - free)], ['free pages', free], ['WAL', wal], ['other files', Math.max(0, total - avail - db - wal)], ['free', avail]];
+};
+const hhmm = (t) => new Date(t).toTimeString().slice(0, 5);
+const hhmmss = (t) => new Date(t).toTimeString().slice(0, 8);
+// ---------- end pure helpers
+
+const $ = (id) => document.getElementById(id);
+const STORE_KEY = 'rp.dashboard.key';
+const STORE_BASE = 'rp.admin.base';
+const STORE_THEME = 'rp.admin.theme';
+
+const state = {
+  key: localStorage.getItem(STORE_KEY) || '',
+  base: localStorage.getItem(STORE_BASE) || location.origin,
+  tab: null,
+  started: false,
+  ws: null,
+  backoff: 1000,
+  retry: null,
+  prev: null, // { at, requests, upstream } of the snapshot before
+  firstArchived: null,
+};
+
+// ── one store, listeners per section ─────────────────────────────────
+const store = {
+  data: {},
+  subs: {},
+  on(k, fn) { (this.subs[k] ??= []).push(fn); },
+  get(k) { return this.data[k]; },
+  set(k, v) { this.data[k] = v; for (const fn of this.subs[k] ?? []) fn(v); },
+};
+
+// ── icons, levels, toasts ────────────────────────────────────────────
+const icon = (name) => `<svg class="i" aria-hidden="true"><use href="#i-${name}" /></svg>`;
+function pill(el, level, html) {
+  el.dataset.level = level;
+  el.innerHTML = icon(level) + `<span>${html}</span>`;
+}
+function toast(text, level = 'good') {
+  const t = document.createElement('div');
+  t.className = 'toast';
+  t.dataset.level = level;
+  t.innerHTML = icon(level) + `<span>${esc(text)}</span>`;
+  $('toasts').append(t);
+  setTimeout(() => t.remove(), level === 'critical' ? 10000 : 5000);
+}
+
+// ── confirmAction: every write asks first ────────────────────────────
+function confirmAction(text, { title = 'Are you sure?', confirm = 'Confirm', danger = false } = {}) {
+  return new Promise((resolve) => {
+    const box = $('confirm');
+    $('confirmTitle').textContent = title;
+    $('confirmText').textContent = text;
+    const ok = $('confirmOk');
+    ok.textContent = confirm;
+    ok.className = `btn ${danger ? 'danger' : 'primary'}`;
+    const back = document.activeElement;
+    const done = (v) => {
+      box.hidden = true;
+      ok.onclick = $('confirmCancel').onclick = box.onkeydown = null;
+      back?.focus?.();
+      resolve(v);
+    };
+    ok.onclick = () => done(true);
+    $('confirmCancel').onclick = () => done(false);
+    box.onkeydown = (e) => { if (e.key === 'Escape') done(false); };
+    box.hidden = false;
+    $('confirmCancel').focus();
+  });
+}
+
+// ── the sortable table helper, with a row cap ────────────────────────
+/** columns: [{ key, label, num?, format?(value,row) }]; returns an element. */
+function table({ columns, rows, cap = 200, sort = null, empty = 'Nothing here.' }) {
+  const wrap = document.createElement('div');
+  let by = sort ?? { key: null, dir: 'desc' };
+  const draw = () => {
+    const sorted = by.key ? sortRows(rows, by.key, by.dir) : rows;
+    const { shown, more } = capRows(sorted, cap);
+    const head = columns.map((c) => {
+      if (!c.label) return '<th scope="col"><span class="sr-only">Actions</span></th>';
+      const aria = by.key === c.key ? (by.dir === 'asc' ? 'ascending' : 'descending') : 'none';
+      return `<th scope="col" class="${c.num ? 'n' : ''}" aria-sort="${aria}"><button type="button" data-sort="${esc(c.key)}">${esc(c.label)}${by.key === c.key ? (by.dir === 'asc' ? ' ▲' : ' ▼') : ''}</button></th>`;
+    }).join('');
+    const body = shown.length
+      ? shown.map((r) => `<tr>${columns.map((c) => `<td class="${c.num ? 'n' : ''}">${c.format ? c.format(r[c.key], r) : esc(r[c.key])}</td>`).join('')}</tr>`).join('')
+      : `<tr><td colspan="${columns.length}" class="muted">${esc(empty)}</td></tr>`;
+    wrap.innerHTML = `<div class="scroll"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>` +
+      (more ? `<div class="more-rows">showing ${fmt(shown.length)} of ${fmt(rows.length)}</div>` : '');
+  };
+  wrap.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-sort]');
+    if (!b) return;
+    const key = b.dataset.sort;
+    by = { key, dir: by.key === key && by.dir === 'desc' ? 'asc' : 'desc' };
+    draw();
+  });
+  draw();
+  return wrap;
+}
+
+// ── the chart helper: SVG, one <path> per series (design/13 §Chart rules) ──
+/**
+ * series: [{ name, color, points: [[t, v|null]] }]; format(v) for labels.
+ * A crosshair follows the pointer or the arrow keys; "Table" shows the numbers.
+ */
+function chart({ title, series, format = fmt, yMin = null, yMax = null, id = null }) {
+  const fig = document.createElement('figure');
+  fig.className = 'chart';
+  if (id) fig.id = id;
+  const pts = series.map((s) => ({ ...s, points: downsample(s.points, 600) }));
+  const vals = pts.flatMap((s) => s.points.map((p) => p[1])).filter((v) => v != null);
+  const times = pts[0]?.points.map((p) => p[0]) ?? [];
+  // The latest value and the table use every point; the drawing, at most 600.
+  const last = series.map((s) => [...s.points].reverse().find((p) => p[1] != null)?.[1] ?? null);
+  const latest = pts.length === 1 ? (last[0] == null ? '—' : format(last[0])) : '';
+  const head = `<figcaption><b>${esc(title)}</b><span class="latest">${esc(latest)}</span><button class="btn small" type="button" data-table aria-expanded="false">Table</button></figcaption>`;
+  if (vals.length < 2 || times.length < 2) {
+    fig.innerHTML = `${head}<div class="nodata">Not enough history yet.</div>`;
+    fig.querySelector('[data-table]').remove();
+    return fig;
+  }
+  const W = 600;
+  const H = 96;
+  let lo = yMin ?? Math.min(...vals);
+  let hi = yMax ?? Math.max(...vals);
+  if (hi === lo) { hi += Math.abs(hi) * 0.05 || 1; lo -= Math.abs(lo) * 0.05 || 0; }
+  const t0 = times[0];
+  const t1 = times[times.length - 1];
+  const x = (t) => ((t - t0) / (t1 - t0 || 1)) * W;
+  const y = (v) => H - ((v - lo) / (hi - lo)) * (H - 4) - 2;
+  const segs = (points) => {
+    const out = [];
+    let cur = [];
+    for (const [t, v] of points) {
+      if (v == null) { if (cur.length) out.push(cur); cur = []; } else cur.push([x(t), y(v)]);
+    }
+    if (cur.length) out.push(cur);
+    return out;
+  };
+  const paths = pts.map((s) => {
+    const ss = segs(s.points);
+    const line = ss.map((g) => g.map(([a, b], i) => `${i ? 'L' : 'M'}${a.toFixed(1)},${b.toFixed(1)}`).join('')).join('');
+    const wash = pts.length === 1
+      ? `<path class="wash" fill="${s.color}" d="${ss.map((g) => `M${g[0][0].toFixed(1)},${H}${g.map(([a, b]) => `L${a.toFixed(1)},${b.toFixed(1)}`).join('')}L${g[g.length - 1][0].toFixed(1)},${H}Z`).join('')}" />`
+      : '';
+    return `${wash}<path class="line" stroke="${s.color}" vector-effect="non-scaling-stroke" d="${line}" />`;
+  }).join('');
+  const grid = [2, H / 2, H - 2].map((g) => `<line class="grid" x1="0" x2="${W}" y1="${g}" y2="${g}" vector-effect="non-scaling-stroke" />`).join('');
+  const ticks = [0, 1 / 3, 2 / 3, 1].map((f) => `<span>${hhmm(t0 + (t1 - t0) * f)}</span>`).join('');
+  const legend = pts.length > 1 ? `<div class="legend">${pts.map((s, i) => `<span><i style="background:${s.color}"></i>${esc(s.name)} ${esc(last[i] == null ? '—' : format(last[i]))}</span>`).join('')}</div>` : '';
+  const summary = `${title}: ${pts.map((s, i) => `${s.name} ${last[i] == null ? 'no data' : format(last[i])}`).join(', ')}; ${hhmm(t0)} to ${hhmm(t1)}. Arrow keys move the readout.`;
+  fig.innerHTML = `${head}<div class="plotwrap" tabindex="0" role="img" aria-label="${esc(summary)}"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">${grid}${paths}<line class="xh" x1="0" x2="0" y1="0" y2="${H}" vector-effect="non-scaling-stroke" visibility="hidden" /></svg><span class="ylab top">${esc(format(hi))}</span><span class="ylab bottom">${esc(format(lo))}</span><span class="readout" hidden></span></div><div class="xaxis">${ticks}</div>${legend}<div class="tableview" hidden></div>`;
+  const wrap = fig.querySelector('.plotwrap');
+  const xh = fig.querySelector('.xh');
+  const readout = fig.querySelector('.readout');
+  let at = null;
+  const show = (i) => {
+    at = Math.max(0, Math.min(times.length - 1, i));
+    const t = times[at];
+    xh.setAttribute('x1', x(t));
+    xh.setAttribute('x2', x(t));
+    xh.setAttribute('visibility', 'visible');
+    readout.hidden = false;
+    readout.style.left = `${Math.min(88, Math.max(12, (x(t) / W) * 100))}%`;
+    readout.textContent = `${hhmm(t)} · ${pts.map((s) => `${pts.length > 1 ? `${s.name} ` : ''}${s.points[at]?.[1] == null ? '—' : format(s.points[at][1])}`).join(' · ')}`;
+  };
+  const hide = () => { at = null; xh.setAttribute('visibility', 'hidden'); readout.hidden = true; };
+  wrap.addEventListener('pointermove', (e) => {
+    const r = wrap.getBoundingClientRect();
+    if (!r.width) return;
+    const t = t0 + ((e.clientX - r.left) / r.width) * (t1 - t0);
+    let best = 0;
+    for (let i = 1; i < times.length; i++) if (Math.abs(times[i] - t) < Math.abs(times[best] - t)) best = i;
+    show(best);
+  });
+  wrap.addEventListener('pointerleave', hide);
+  wrap.addEventListener('blur', hide);
+  wrap.addEventListener('keydown', (e) => {
+    const step = { ArrowLeft: -1, ArrowRight: 1 }[e.key];
+    if (step) { e.preventDefault(); show(at == null ? times.length - 1 : at + step); }
+    else if (e.key === 'Home') { e.preventDefault(); show(0); }
+    else if (e.key === 'End') { e.preventDefault(); show(times.length - 1); }
+    else if (e.key === 'Escape') hide();
+  });
+  const btn = fig.querySelector('[data-table]');
+  btn.addEventListener('click', () => {
+    const box = fig.querySelector('.tableview');
+    const open = box.hidden;
+    box.hidden = !open;
+    btn.setAttribute('aria-expanded', String(open));
+    if (open && !box.firstChild) {
+      const rows = series[0].points.map(([t], i) => Object.fromEntries([['t', t], ...series.map((s, j) => [`s${j}`, s.points[i]?.[1] ?? null])]));
+      box.append(table({
+        columns: [{ key: 't', label: 'Time', format: (v) => esc(hhmm(v)) }, ...pts.map((s, j) => ({ key: `s${j}`, label: s.name, num: true, format: (v) => esc(v == null ? '—' : format(v)) }))],
+        rows, cap: 200, sort: { key: 't', dir: 'desc' },
+      }));
+    }
+  });
+  return fig;
+}
+
+// ── the API: one base URL, the key from localStorage ─────────────────
+class ApiError extends Error {
+  constructor(status, body) {
+    super(body?.error?.message || `HTTP ${status}`);
+    this.status = status;
+    this.body = body;
+  }
+}
+async function api(path, { method = 'GET', body } = {}) {
+  const headers = {};
+  if (state.key) headers.Authorization = `Bearer ${state.key}`;
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  const res = await fetch(joinUrl(state.base, path), {
+    method, headers, cache: 'no-cache', body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const text = await res.text();
+  let json = null;
+  try { json = text ? JSON.parse(text) : null; } catch { json = null; }
+  if (res.status === 401 || res.status === 403) {
+    openSheet(res.status === 403 ? 'This key has no admin scope.' : json?.error?.message || 'The key was refused.');
+    throw new ApiError(res.status, json);
+  }
+  if (!res.ok) throw new ApiError(res.status, json);
+  return json;
+}
+
+// ── theme: dark by default, the system's light, or a saved choice ─────
+const media = window.matchMedia?.('(prefers-color-scheme: light)');
+function applyTheme() {
+  const saved = localStorage.getItem(STORE_THEME);
+  const light = saved ? saved === 'light' : Boolean(media?.matches);
+  if (light) document.documentElement.dataset.theme = 'light';
+  else delete document.documentElement.dataset.theme;
+  $('theme').setAttribute('aria-label', light ? 'Switch to the dark theme' : 'Switch to the light theme');
+}
+$('theme').addEventListener('click', () => {
+  const light = document.documentElement.dataset.theme === 'light';
+  localStorage.setItem(STORE_THEME, light ? 'dark' : 'light');
+  applyTheme();
+});
+media?.addEventListener?.('change', applyTheme);
+applyTheme();
+
+// ── tabs: hash router, only the active tab renders ───────────────────
+const TABS = [
+  {
+    id: 'overview',
+    label: 'Overview',
+    icon: 'overview',
+    enter() { enterOverview(); },
+  },
+  {
+    id: 'traffic',
+    label: 'Traffic',
+    icon: 'traffic',
+    enter() { renderTraffic(); pollTraffic(); },
+    leave() { clearTimeout(traffic.timer); traffic.timer = null; },
+  },
+  { id: 'limiter', label: 'Limiter', icon: 'limiter', enter() { renderLimiter(); } },
+  { id: 'cache', label: 'Cache', icon: 'cache', enter() { enterCache(); } },
+  { id: 'jobs', label: 'Jobs', icon: 'jobs', enter(id) { enterJobs(id); }, leave() { stopJobs(); } },
+  { id: 'ladder', label: 'Ladder', icon: 'ladder', enter(id) { enterLadder(id); }, leave() { stopLadder(); } },
+  { id: 'archive', label: 'Archive', icon: 'archive', enter() { enterArchive(); }, leave() { clearTimeout(A.timer); } },
+  { id: 'consumers', label: 'Consumers', icon: 'consumers', enter() { enterConsumers(); } },
+{ id: 'events', label: 'Events', icon: 'events', enter() { enterEvents(); } },
+{ id: 'about', label: 'About', icon: 'about', enter() { renderAbout(); } },
+];
+function buildTabs() {
+  $('tabs').innerHTML = TABS.map((t) =>
+    `<li role="presentation"><button class="tab" role="tab" type="button" id="tab-${t.id}" aria-controls="panel-${t.id}" aria-selected="false" tabindex="-1" data-tab="${t.id}">${icon(t.icon)}<span>${esc(t.label)}</span><span class="badge" id="badge-${t.id}" hidden></span></button></li>`,
+  ).join('');
+  $('panels').innerHTML = TABS.map((t) => `<section id="panel-${t.id}" role="tabpanel" aria-labelledby="tab-${t.id}" hidden></section>`).join('');
+}
+function showTab() {
+  const { tab, id } = route(location.hash, TABS.map((t) => t.id));
+  const changed = state.tab !== tab;
+  if (changed) TABS.find((t) => t.id === state.tab)?.leave?.();
+  state.tab = tab;
+  for (const t of TABS) {
+    const on = t.id === tab;
+    const b = $(`tab-${t.id}`);
+    b.setAttribute('aria-selected', String(on));
+    b.tabIndex = on ? 0 : -1;
+    $(`panel-${t.id}`).hidden = !on;
+  }
+  if (state.started) TABS.find((t) => t.id === tab)?.enter?.(id);
+}
+$('tabs').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-tab]');
+  if (b) location.hash = b.dataset.tab;
+});
+$('tabs').addEventListener('keydown', (e) => {
+  const ids = TABS.map((t) => t.id);
+  const i = ids.indexOf(state.tab);
+  const next = { ArrowDown: i + 1, ArrowRight: i + 1, ArrowUp: i - 1, ArrowLeft: i - 1, Home: 0, End: ids.length - 1 }[e.key];
+  if (next == null) return;
+  e.preventDefault();
+  const id = ids[(next + ids.length) % ids.length];
+  location.hash = id;
+  $(`tab-${id}`).focus();
+});
+window.addEventListener('hashchange', showTab);
+
+// ── Overview ─────────────────────────────────────────────────────────
+const tile = (label, value, sub, level) =>
+  `<div class="tile"><div class="label"${level ? ` data-level="${level}"` : ''}>${level ? icon(level) : ''}${esc(label)}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`;
+// History: GET /metrics/history once per entry, then the newest snapshot as
+// a live point, kept once it is an interval newer than the last.
+const hist = { points: [], live: null, intervalMs: 60000, loaded: false };
+function renderOverview() {
+  if (state.tab !== 'overview') return;
+  const panel = $('panel-overview');
+  if (!$('tiles')) {
+    panel.innerHTML = `<h1>Overview</h1><div class="tiles" id="tiles"></div><div class="charts" id="charts"></div>
+      <section class="panel" id="errorsPanel" style="margin-top:10px"><div class="panel-head"><h2>Recent errors</h2><a class="end" href="#traffic">Traffic →</a></div><div id="errors"></div></section>`;
+  }
+  renderTiles();
+  renderCharts();
+}
+function renderTiles() {
+  const s = store.get('snapshot');
+  if (!s || !$('tiles')) {
+    if ($('tiles')) $('tiles').innerHTML = '<div class="empty">Waiting for the first snapshot…</div>';
+    return;
+  }
+  const r = store.get('rates') ?? {};
+  const jobs = jobTotals(s.queues);
+  const ratio = hitRatio(s.cache);
+  const disk = diskLevel(s.disk);
+  const gained = state.firstArchived == null ? null : s.totals.archivedMatches - state.firstArchived;
+  const perSec = (v) => (v == null ? '—' : `${v < 10 ? v.toFixed(2) : v.toFixed(1)} /s`);
+  const errors5xx = Object.entries(s.requests ?? {}).filter(([k]) => /\|5\d\d\|/.test(k)).reduce((n, [, v]) => n + v, 0);
+  $('tiles').innerHTML = [
+    tile('Archived matches', compact(s.totals.archivedMatches), gained == null ? '&nbsp;' : `${gained >= 0 ? '+' : ''}${fmt(gained)} since this page opened`),
+    tile('Jobs pending', compact(jobs.pending), `${fmt(jobs.running)} running · ${fmt(jobs.failed)} failed in 24 h`),
+    tile('Cache hit ratio', pct(ratio), `${compact(sumValues(s.cache))} reads since start`),
+    tile('Requests', perSec(r.requests), `${compact(r.requestsTotal)} since start · ${fmt(errors5xx)} 5xx`),
+    tile('Riot calls', perSec(r.upstream), `${compact(r.upstreamTotal)} since start · ${fmt(s.inflight ?? 0)} in flight`),
+    tile('Disk free', fmtBytes(s.disk?.freeBytes), disk.used == null ? '—' : `${pct(disk.used, 0)} used · database ${fmtBytes(s.disk.dbBytes)}`, disk.level === 'good' ? null : disk.level),
+    tile('Process', fmtBytes(s.process?.rssBytes), `up ${fmtDuration(s.process?.uptimeSeconds)} · ${fmt(s.sqlite?.readersFree)}/${fmt(s.sqlite?.readers)} readers free`),
+  ].join('');
+}
+function renderCharts() {
+  const box = $('charts');
+  if (!box || !hist.loaded) return;
+  const points = hist.live ? [...hist.points, hist.live] : hist.points;
+  const v = seriesOf(points);
+  const total = store.get('snapshot')?.disk?.totalBytes ?? null;
+  const perSec = (n) => `${n < 10 ? n.toFixed(2) : n.toFixed(1)} /s`;
+  const charts = [
+    chart({ id: 'chArchive', title: 'Archive growth · 24 h', series: [{ name: 'Archived matches', color: 'var(--s1)', points: v.archive }], format: compact }),
+    chart({ id: 'chBacklog', title: 'Queue backlog · 24 h', series: [{ name: 'Jobs pending', color: 'var(--s2)', points: v.backlog }], format: compact }),
+    chart({ id: 'chHit', title: 'Cache hit ratio · 24 h', series: [{ name: 'Hit ratio', color: 'var(--s3)', points: v.hit }], format: (n) => pct(n, 0), yMin: 0, yMax: 1 }),
+    chart({ id: 'chDisk', title: 'Disk free · 24 h', series: [{ name: 'Free', color: 'var(--s4)', points: v.disk }], format: fmtBytes, yMin: 0, yMax: total }),
+    chart({ id: 'chRequests', title: 'Requests · per second', series: [{ name: 'Requests', color: 'var(--s5)', points: v.requests }], format: perSec, yMin: 0 }),
+    chart({ id: 'chUpstream', title: 'Riot calls · per second', series: [{ name: 'Riot calls', color: 'var(--s6)', points: v.upstream }], format: perSec, yMin: 0 }),
+  ];
+  // Keep the readout where it was when the next snapshot redraws.
+  const focused = document.activeElement?.closest?.('.chart')?.id;
+  box.replaceChildren(...charts);
+  if (focused) $(focused)?.querySelector('.plotwrap')?.focus();
+}
+let errorCount = null;
+async function loadErrors() {
+  if (state.tab !== 'overview' || !$('errors')) return;
+  try {
+    const r = await api('/v1/admin/recent?kind=errors&limit=10');
+    $('errors').replaceChildren(table({
+      columns: [
+        { key: 'at', label: 'Time', format: (v) => esc(hhmmss(v)) },
+        { key: 'status', label: 'Status', num: true },
+        { key: 'code', label: 'Code' },
+        { key: 'message', label: 'Message', format: (v) => esc(String(v).slice(0, 120)) },
+        { key: 'requestId', label: 'Request', format: (v) => (v ? `<code>${esc(v.slice(-8))}</code>` : '—') },
+      ],
+      rows: r.errors ?? [], cap: 10, empty: 'No errors since the process started.',
+    }));
+  } catch (e) {
+    if (!(e instanceof ApiError)) $('errors').textContent = `Could not load errors: ${e.message}`;
+  }
+}
+/** GET /metrics/history, once per entry of a tab that charts it. */
+async function loadHistory() {
+  try {
+    const h = await api('/v1/admin/metrics/history');
+    hist.points = h.points ?? [];
+    hist.intervalMs = (h.intervalS ?? 60) * 1000;
+    hist.loaded = true;
+    // The stored history ends up to a minute ago; the newest snapshot is the live end.
+    const s = store.get('snapshot');
+    hist.live = s ? historyPointOf(s, Date.now()) : null;
+    return true;
+  } catch (e) {
+    if (!(e instanceof ApiError)) console.warn(e);
+    return false;
+  }
+}
+async function enterOverview() {
+  renderOverview();
+  loadErrors();
+  if (await loadHistory()) renderCharts();
+}
+store.on('snapshot', (s) => {
+  const p = historyPointOf(s, Date.now());
+  const prev = hist.points.at(-1);
+  if (hist.loaded && (!prev || p.t - prev.t >= hist.intervalMs)) {
+    hist.points.push(p);
+    if (hist.points.length > 1440) hist.points.splice(0, hist.points.length - 1440);
+    hist.live = null;
+  } else hist.live = p;
+  if (state.tab === 'limiter') renderLimiter();
+  if (state.tab === 'cache') renderCache();
+  updateBadges(s);
+  if (state.tab !== 'overview') return;
+  renderTiles();
+  renderCharts();
+  // New 4xx or 5xx answers since the last snapshot: the errors panel refreshes.
+  const errs = Object.entries(s.requests ?? {}).filter(([k]) => /\|[45]\d\d\|/.test(k)).reduce((n, [, v]) => n + v, 0);
+  if (errorCount != null && errs !== errorCount) loadErrors();
+  errorCount = errs;
+});
+store.on('rates', () => { if (state.tab === 'overview') renderTiles(); });
+
+// ── Traffic ──────────────────────────────────────────────────────────
+const traffic = { timer: null, recent: [], text: '', status: 'all', cache: 'all' };
+const POLL_MS = 5000;
+function renderTraffic() {
+  if (state.tab !== 'traffic') return;
+  const panel = $('panel-traffic');
+  if (!$('trRoutes')) {
+    panel.innerHTML = `<h1>Traffic</h1>
+      <div class="grid2">
+        <section class="panel"><div class="panel-head"><h2>By route</h2><span class="end muted">since the process started · p50/p95 from the last 500 requests</span></div><div id="trRoutes"></div></section>
+        <section class="panel"><div class="panel-head"><h2>Riot calls</h2><span class="end muted">by region, method and status</span></div><div id="trUpstream"></div></section>
+      </div>
+      <section class="panel" style="margin-top:10px"><div class="panel-head"><h2>Recent requests</h2><span class="end muted" id="trMeta"></span></div>
+        <div class="filters">
+          <label class="sr-only" for="trText">Filter</label><input id="trText" type="search" placeholder="path, route, consumer or request id" />
+          <span class="group"><label for="trStatus">status</label><select id="trStatus"><option>all</option><option>2xx</option><option>3xx</option><option>4xx</option><option>5xx</option></select></span>
+          <span class="group"><label for="trCache">cache</label><select id="trCache"><option>all</option><option>hit</option><option>miss</option><option>stale</option><option>neg</option><option>archive</option><option>bypass</option><option>none</option></select></span>
+        </div>
+        <div id="trRecent"></div></section>`;
+    $('trText').value = traffic.text;
+    $('trStatus').value = traffic.status;
+    $('trCache').value = traffic.cache;
+    $('trText').addEventListener('input', (e) => { traffic.text = e.target.value; renderRecent(); });
+    $('trStatus').addEventListener('change', (e) => { traffic.status = e.target.value; renderRecent(); });
+    $('trCache').addEventListener('change', (e) => { traffic.cache = e.target.value; renderRecent(); });
+  }
+  renderRoutes();
+  renderRecent();
+}
+function renderRoutes() {
+  const s = store.get('snapshot');
+  if (!$('trRoutes') || !s) return;
+  const ms = (v) => (v == null ? '—' : `${fmt(v)} ms`);
+  $('trRoutes').replaceChildren(table({
+    columns: [
+      { key: 'route', label: 'Route', format: (v) => `<code class="trunc" title="${esc(v)}">${esc(v)}</code>` },
+      { key: 'total', label: 'Requests', num: true, format: (v) => fmt(v) },
+      { key: 's2xx', label: '2xx', num: true, format: (v) => fmt(v) },
+      { key: 's4xx', label: '4xx', num: true, format: (v) => fmt(v) },
+      { key: 's5xx', label: '5xx', num: true, format: (v) => (v ? `<span class="stat5">${fmt(v)}</span>` : '0') },
+      { key: 'hitRatio', label: 'Cache hit', num: true, format: (v) => pct(v, 0) },
+      { key: 'p50', label: 'p50', num: true, format: ms },
+      { key: 'p95', label: 'p95', num: true, format: ms },
+    ],
+    rows: routeRows(s.requests, traffic.recent), cap: 100, sort: { key: 'total', dir: 'desc' }, empty: 'No requests yet.',
+  }));
+  $('trUpstream').replaceChildren(table({
+    columns: [
+      { key: 'region', label: 'Region' },
+      { key: 'method', label: 'Method', format: (v) => `<code>${esc(v)}</code>` },
+      { key: 'status', label: 'Status', num: true },
+      { key: 'count', label: 'Calls', num: true, format: (v) => fmt(v) },
+    ],
+    rows: upstreamRows(s.upstream), cap: 100, sort: { key: 'count', dir: 'desc' }, empty: 'No Riot calls yet.',
+  }));
+}
+function renderRecent() {
+  if (!$('trRecent')) return;
+  const q = traffic.text.trim().toLowerCase();
+  const rows = traffic.recent.filter((r) =>
+    (traffic.status === 'all' || statusClass(r.status) === traffic.status) &&
+    (traffic.cache === 'all' || r.cache === traffic.cache) &&
+    (!q || [r.path, r.route, r.consumer, r.requestId].some((f) => String(f ?? '').toLowerCase().includes(q))));
+  $('trMeta').textContent = `${fmt(rows.length)} of the last ${fmt(traffic.recent.length)} · every 5 s`;
+  $('trRecent').replaceChildren(table({
+    columns: [
+      { key: 'at', label: 'Time', format: (v) => esc(hhmmss(v)) },
+      { key: 'status', label: 'Status', num: true, format: (v) => (v >= 500 ? `<span class="tag">${icon('critical')}${v}</span>` : v >= 400 ? `<span class="tag">${icon('warning')}${v}</span>` : esc(v)) },
+      { key: 'method', label: 'Method' },
+      { key: 'path', label: 'Path', format: (v, r) => `<code class="trunc" title="${esc(v)}&#10;${esc(r.route)}">${esc(v)}</code>` },
+      { key: 'cache', label: 'Cache' },
+      { key: 'latencyMs', label: 'ms', num: true, format: (v) => fmt(v) },
+      { key: 'consumer', label: 'Consumer', format: (v) => esc(v ?? '—') },
+      { key: 'requestId', label: 'Request', format: (v) => `<code>${esc(String(v).slice(-8))}</code>` },
+    ],
+    rows, cap: 200, empty: traffic.recent.length ? 'Nothing matches the filter.' : 'No requests recorded yet.',
+  }));
+}
+async function pollTraffic() {
+  clearTimeout(traffic.timer);
+  traffic.timer = null;
+  if (state.tab !== 'traffic' || document.hidden || !state.started) return;
+  try {
+    const r = await api('/v1/admin/recent?kind=requests&limit=500');
+    traffic.recent = r.requests ?? [];
+    renderRoutes();
+    renderRecent();
+  } catch (e) {
+    if (!(e instanceof ApiError)) console.warn(e);
+  }
+  if (state.tab === 'traffic' && !document.hidden && state.started) traffic.timer = setTimeout(pollTraffic, POLL_MS);
+}
+store.on('snapshot', () => { if (state.tab === 'traffic') renderRoutes(); });
+
+// ── rail badges ──────────────────────────────────────────────────────
+function badge(id, n, label) {
+  const b = $(`badge-${id}`);
+  if (!b) return;
+  b.hidden = !n;
+  b.textContent = n ? String(n) : '';
+  if (n) b.setAttribute('aria-label', label); else b.removeAttribute('aria-label');
+}
+function updateBadges(s) {
+  const frozen = (s.limiter ?? []).filter((x) => x.frozenMs > 0).length;
+  badge('limiter', frozen, `${frozen} frozen`);
+  const failed = jobTotals(s.queues).failed;
+  badge('jobs', failed, `${failed} failed in 24 h`);
+  const crawling = s.ladder?.running?.length ?? 0;
+  badge('ladder', crawling, `${crawling} crawl${crawling === 1 ? '' : 's'} running`);
+}
+
+// ── countdowns: frozen scopes count down on the clock, not by refetching ──
+function tickCountdowns() {
+  for (const el of document.querySelectorAll('[data-until]')) {
+    const left = Number(el.dataset.until) - Date.now();
+    el.textContent = left > 0 ? fmtDuration(left / 1000) : 'now';
+  }
+}
+const until = (ms) => `<span data-until="${(state.snapAt ?? Date.now()) + ms}">${esc(fmtDuration(ms / 1000))}</span>`;
+
+// ── meters ───────────────────────────────────────────────────────────
+function meter(label, used, limit, aria, show = fmt) {
+  const f = limit ? Math.min(1, used / limit) : 0;
+  const level = meterLevel(f);
+  const mark = level === 'ok' ? '' : `<span data-level="${level}">${icon(level === 'critical' ? 'critical' : 'warning')}</span> `;
+  return `<div class="meter${label ? '' : ' bare'}" role="meter" aria-label="${esc(aria ?? label)}" aria-valuemin="0" aria-valuemax="${limit}" aria-valuenow="${used}" aria-valuetext="${esc(show(used))} of ${esc(show(limit))}">` +
+    `${label ? `<span class="ml">${esc(label)}</span>` : ''}<span class="track"><i data-level="${level}" style="width:${(f * 100).toFixed(1)}%"></i></span><span class="mt">${mark}${esc(show(used))} / ${esc(show(limit))}</span></div>`;
+}
+
+// ── Limiter ──────────────────────────────────────────────────────────
+const lim = { open: new Set(), live: new Map() };
+function renderLimiter() {
+  if (state.tab !== 'limiter') return;
+  const panel = $('panel-limiter');
+  const s = store.get('snapshot');
+  if (!s) { panel.innerHTML = '<h1>Limiter</h1><div class="empty">Waiting for the first snapshot…</div>'; return; }
+  // Keep folds open across redraws.
+  for (const d of panel.querySelectorAll('details[data-fold]')) {
+    if (d.open) lim.open.add(d.dataset.fold); else lim.open.delete(d.dataset.fold);
+  }
+  const g = s.gates ?? {};
+  const scopes = scopeOrder(s.limiter ?? [], g.blockedScopes);
+  const heldFor = new Map((g.blockedScopes ?? []).map((b) => [b.scope, b.forMs]));
+  const frozen = scopes.filter((x) => x.frozenMs > 0).length;
+  const waiters = scopes.reduce((n, x) => n + (x.interactiveWaiters ?? 0), 0);
+  const summary = `<div class="summary" id="limSummary"><span><b>${fmt(scopes.length)}</b> scopes</span><span><b>${fmt(frozen)}</b> frozen</span><span><b>${fmt(heldFor.size)}</b> holding bulk work</span><span><b>${fmt(waiters)}</b> interactive waiting</span>` +
+    `<span>bulk ceiling <b>${pct(g.bulkUsageCeiling, 0)}</b>, <b>${pct(g.bulkIdleCeiling, 0)}</b> after ${fmt(g.bulkIdleAfterS)} s idle</span><span>client wait budget <b>${fmt(g.clientWaitBudgetMs)} ms</b></span></div>`;
+  const cards = scopes.map((x) => {
+    const methods = [...(x.methods ?? [])].sort((a, b) => fullness(b.windows) - fullness(a.windows));
+    const blockedMethods = new Set((g.blockedMethods ?? []).filter((b) => b.scope === x.scope).map((b) => b.method));
+    const mrow = (m) => `<div class="meters">${m.windows.map((w) => meter(`${m.method} · ${windowLabel(w.window)}`, w.used, w.limit, `${x.scope} ${m.method} ${windowLabel(w.window)}`)).join('')}${blockedMethods.has(m.method) ? `<div class="muted">${icon('warning')} bulk held on this method</div>` : ''}</div>`;
+    const top = methods.slice(0, 4).map(mrow).join('');
+    const rest = methods.slice(4);
+    const state1 = x.frozenMs > 0
+      ? `<span class="pill" data-level="serious">${icon('serious')}<span>frozen ${until(x.frozenMs)}</span></span>`
+      : heldFor.has(x.scope)
+        ? `<span class="pill" data-level="warning">${icon('warning')}<span>bulk held ${until(heldFor.get(x.scope))}</span></span>`
+        : `<span class="pill" data-level="good">${icon('good')}<span>open</span></span>`;
+    return `<article class="panel scope" data-scope="${esc(x.scope)}"><header><b>${esc(x.label)}</b><code>${esc(x.scope)}</code><span class="muted">${esc(x.kind)}</span>${state1}<span class="muted">${fmt(x.interactiveWaiters ?? 0)} waiting</span></header>
+      <div class="meters">${(x.windows ?? []).length ? x.windows.map((w) => meter(`app · ${windowLabel(w.window)}`, w.used, w.limit, `${x.scope} app ${windowLabel(w.window)}`)).join('') : '<span class="muted">Riot has not named its app limits yet.</span>'}</div>
+      ${methods.length ? `<h3>Methods, fullest first</h3>${top}` : ''}
+      ${rest.length ? `<details data-fold="m:${esc(x.scope)}"${lim.open.has(`m:${x.scope}`) ? ' open' : ''}><summary>${rest.length} more method${rest.length === 1 ? '' : 's'}</summary>${rest.map(mrow).join('')}</details>` : ''}
+      <details data-fold="l:${esc(x.scope)}" data-live="${esc(x.scope)}"${lim.open.has(`l:${x.scope}`) ? ' open' : ''}><summary>Live usage</summary><div class="live">${liveHtml(x.scope)}</div></details>
+    </article>`;
+  }).join('');
+  panel.innerHTML = `<h1>Limiter</h1>${summary}<div class="scopes">${cards || '<div class="empty">No rate-limit scope has been used yet.</div>'}</div>`;
+}
+function liveHtml(scope) {
+  const l = lim.live.get(scope);
+  if (!l) return '<span class="muted">Open to read <code>/v1/admin/limits/' + esc(scope) + '</code>.</span>';
+  if (l.error) return `<span class="muted">${esc(l.error)}</span>`;
+  return `<div class="meters">${l.usage.map((w) => meter(`app · ${windowLabel(w.window)}`, w.used, w.limit)).join('') || '<span class="muted">No windows.</span>'}</div><div class="muted">read ${esc(hhmmss(l.at))}${l.frozenMs ? ` · frozen ${esc(fmtDuration(l.frozenMs / 1000))}` : ''}</div>`;
+}
+// "Live usage" reads /v1/admin/limits/{scope} each time it opens.
+document.addEventListener('toggle', async (e) => {
+  const d = e.target;
+  if (!d.matches?.('details[data-live]') || !d.open) return;
+  const scope = d.dataset.live;
+  try {
+    const l = await api(`/v1/admin/limits/${encodeURIComponent(scope)}`);
+    lim.live.set(scope, { ...l, at: Date.now() });
+  } catch (err) {
+    lim.live.set(scope, { error: err.message, at: Date.now() });
+  }
+  const box = [...document.querySelectorAll('details[data-live]')].find((x) => x.dataset.live === scope)?.querySelector('.live');
+  if (box) box.innerHTML = liveHtml(scope);
+}, true);
+
+// ── Cache ────────────────────────────────────────────────────────────
+const cachePurge = { pattern: '', matched: null };
+async function enterCache() {
+  renderCache();
+  if (await loadHistory()) renderCacheChart();
+}
+function renderCache() {
+  if (state.tab !== 'cache') return;
+  const panel = $('panel-cache');
+  const s = store.get('snapshot');
+  if (!$('cacheTiles')) {
+    panel.innerHTML = `<h1>Cache</h1><div class="tiles" id="cacheTiles"></div>
+      <div class="grid2"><div id="cacheChart"></div>
+        <section class="panel"><div class="panel-head"><h2>Probe an entry</h2><span class="end muted">what is cached for a request, without fetching it</span></div>
+          <form id="probeForm" class="form-row">
+            <div class="field"><label for="probeScope">scope</label><input id="probeScope" placeholder="euw1 or europe" required /></div>
+            <div class="field"><label for="probeMethod">endpoint</label><input id="probeMethod" placeholder="summoner.byPuuid" required /></div>
+            <div class="field" style="flex-basis:100%"><label for="probePath">Riot path</label><input id="probePath" placeholder="/lol/summoner/v4/summoners/by-puuid/…" required /></div>
+            <button class="btn" type="submit">Probe</button>
+          </form><div id="probeResult"></div></section></div>
+      <section class="panel" style="margin-top:10px"><div class="panel-head"><h2>Purge</h2><span class="end muted">memory and the persisted cache; the match archive is never touched</span></div>
+        <form id="purgeForm" class="form-row">
+          <div class="field"><label for="purgePattern">key pattern</label><input id="purgePattern" placeholder="summoner.byPuuid:*" maxlength="200" required /></div>
+          <button class="btn" type="submit" id="purgePreview">Count matches</button>
+          <button class="btn danger" type="button" id="purgeGo" disabled>Purge</button>
+        </form><div class="muted" id="purgeMeta" aria-live="polite"></div></section>`;
+    $('probeForm').addEventListener('submit', probe);
+    $('purgeForm').addEventListener('submit', previewPurge);
+    $('purgePattern').addEventListener('input', () => { cachePurge.matched = null; renderPurge(); });
+    $('purgeGo').addEventListener('click', purge);
+    renderPurge();
+    renderCacheChart();
+  }
+  if (!s) return;
+  const c = s.cacheStore ?? {};
+  const reads = s.cache ?? {};
+  $('cacheTiles').innerHTML = [
+    tile('Memory entries', compact(c.l1Entries), `${fmtBytes(c.l1Bytes)} of ${fmtBytes(c.l1MaxBytes)}`),
+    `<div class="tile"><div class="label">Memory used</div><div class="value">${pct(c.l1MaxBytes ? c.l1Bytes / c.l1MaxBytes : null, 0)}</div>${meter('', c.l1Bytes ?? 0, c.l1MaxBytes ?? 0, 'memory cache used', fmtBytes)}</div>`,
+    tile('Persisted rows', compact(c.l2Rows), 'the SQLite cache table, sampled'),
+    tile('Dropped writes', fmt(c.l2Dropped), c.l2Dropped ? 'the write-behind queue was full' : 'none since start', c.l2Dropped ? 'warning' : null),
+    tile('Hit ratio since start', pct(hitRatio(reads)), `${fmt(reads.hit)} hit · ${fmt(reads.miss)} miss · ${fmt(reads.neg)} neg · ${fmt(reads.stale)} stale`),
+  ].join('');
+  if (hist.loaded) renderCacheChart();
+}
+function renderCacheChart() {
+  const box = $('cacheChart');
+  if (!box || !hist.loaded) return;
+  const v = seriesOf(hist.live ? [...hist.points, hist.live] : hist.points);
+  box.replaceChildren(chart({ id: 'chCacheHit', title: 'Cache hit ratio · 24 h', series: [{ name: 'Hit ratio', color: 'var(--s3)', points: v.hit }], format: (n) => pct(n, 0), yMin: 0, yMax: 1 }));
+}
+async function probe(e) {
+  e.preventDefault();
+  const q = new URLSearchParams({ scope: $('probeScope').value.trim(), path: $('probePath').value.trim(), method: $('probeMethod').value.trim() });
+  try {
+    const r = await api(`/v1/admin/debug/cache?${q}`);
+    $('probeResult').innerHTML = `<dl class="kv"><dt>key</dt><dd><code>${esc(r.key)}</code></dd><dt>cached</dt><dd>${r.present ? 'yes' : 'no'}</dd>` +
+      (r.present ? `<dt>age</dt><dd>${esc(fmtDuration(r.ageSeconds))}</dd><dt>state</dt><dd>${r.stale ? 'stale: served as STALE and refreshed' : 'fresh'}</dd>` : '') + '</dl>';
+  } catch (err) {
+    $('probeResult').innerHTML = `<p class="muted">${icon('warning')} ${esc(err.message)}</p>`;
+  }
+}
+function renderPurge() {
+  const n = cachePurge.matched;
+  $('purgeGo').disabled = !n;
+  $('purgeGo').textContent = n ? `Purge ${fmt(n)} entr${n === 1 ? 'y' : 'ies'}` : 'Purge';
+  $('purgeMeta').textContent = n == null ? 'Count the matches first; the purge asks before it deletes.' : `${fmt(n)} entr${n === 1 ? 'y matches' : 'ies match'} ${cachePurge.pattern}.`;
+}
+async function previewPurge(e) {
+  e.preventDefault();
+  const pattern = $('purgePattern').value.trim();
+  try {
+    const r = await api('/v1/admin/cache/purge', { method: 'POST', body: { pattern, dryRun: true } });
+    cachePurge.pattern = pattern;
+    cachePurge.matched = r.matched;
+  } catch (err) {
+    cachePurge.matched = null;
+    toast(err.message, 'critical');
+  }
+  renderPurge();
+}
+async function purge() {
+  const { pattern, matched } = cachePurge;
+  if (!matched || pattern !== $('purgePattern').value.trim()) return;
+  const yes = await confirmAction(`Delete ${fmt(matched)} cached entr${matched === 1 ? 'y' : 'ies'} matching ${pattern}? The next request for each fetches from Riot again.`, { title: 'Purge the cache', confirm: `Purge ${fmt(matched)}`, danger: true });
+  if (!yes) return;
+  try {
+    const r = await api('/v1/admin/cache/purge', { method: 'POST', body: { pattern } });
+    toast(`Purged ${fmt(r.deleted)} entr${r.deleted === 1 ? 'y' : 'ies'} matching ${pattern}.`);
+  } catch (err) {
+    toast(err.message, 'critical');
+  }
+  cachePurge.matched = null;
+  renderPurge();
+}
+
+// ── Jobs (design/10 §Jobs page, folded in from /dev/jobs) ────────────
+const J = { timer: null, tick: 0, live: true, id: null, trace: null, purge: null, kinds: [] };
+const JOB_TICK_MS = 1000;
+const jobRowCols = (extra) => [
+  { key: 'kind', label: 'Kind', format: (v, j) => `<code>${esc(v)}</code><div class="muted">${esc(jobLabel(j))}</div>` },
+  ...extra,
+];
+function enterJobs(id) {
+  J.id = id;
+  J.trace = id ? { next: 0, attempt: null, events: [], job: null, tr: null, missing: false } : null;
+  J.tick = 0;
+  renderJobs();
+  stopJobs();
+  jobsTick();
+}
+function stopJobs() { clearTimeout(J.timer); J.timer = null; }
+async function jobsTick() {
+  J.timer = null;
+  if (state.tab !== 'jobs' || document.hidden || !state.started) return;
+  const t = J.tick++;
+  try {
+    if (J.id) await pollTrace();
+    else {
+      const work = [api('/v1/admin/jobs/activity?limit=20').then(renderWorkers)];
+      if (t % 5 === 0) work.push(api('/v1/admin/jobs/queue?limit=100').then(renderQueue), api('/v1/admin/jobs?state=failed&limit=50').then((r) => renderFailed(r.jobs)));
+      if (t % 15 === 0) work.push(api('/v1/admin/jobs/stats').then(renderKinds));
+      await Promise.all(work);
+    }
+  } catch (e) {
+    if (!(e instanceof ApiError)) console.warn(e);
+  }
+  if (J.live && state.tab === 'jobs' && !document.hidden && state.started) J.timer = setTimeout(jobsTick, JOB_TICK_MS);
+}
+function renderJobs() {
+  if (state.tab !== 'jobs') return;
+  const panel = $('panel-jobs');
+  const live = `<label class="end"><input type="checkbox" id="jobsLive"${J.live ? ' checked' : ''} /> live · every second</label>`;
+  if (J.id) {
+    panel.innerHTML = `<div class="panel-head"><h1 style="margin:0"><a href="#jobs">Jobs</a> / <code id="jtKind">job</code></h1>${live}</div>
+      <section class="panel"><div class="panel-head"><span id="jtState"></span><code class="muted">${esc(J.id)}</code><span class="end"><button class="btn small" id="jtRetry" hidden>Retry now</button> <button class="btn small danger" id="jtCancel" hidden>Cancel</button></span></div><div id="jtNow" class="muted"></div></section>
+      <div class="grid2"><section class="panel"><h2>Job</h2><dl class="kv" id="jtFacts"></dl></section><section class="panel"><h2>Payload</h2><pre class="payload" id="jtPayload">—</pre></section></div>
+      <section class="panel" style="margin-top:10px"><div class="panel-head"><h2>What it did</h2><span class="muted" id="jtRun"></span><label class="end"><input type="checkbox" id="jtFollow" checked /> follow</label></div><ol class="timeline" id="jtTimeline"></ol></section>`;
+    $('jtRetry').addEventListener('click', () => jobAction(J.id, 'retry', J.trace.job?.kind));
+    $('jtCancel').addEventListener('click', () => jobAction(J.id, 'cancel', J.trace.job?.kind));
+  } else {
+    const kinds = J.kinds.map((k) => `<option>${esc(k)}</option>`).join('');
+    panel.innerHTML = `<div class="panel-head"><h1 style="margin:0">Jobs</h1>${live}</div>
+      <section class="panel"><div class="panel-head"><h2>Queues</h2><span class="end muted">from the snapshot · failed in 24 h, done in the last hour</span></div><div id="jQueues"></div></section>
+      <div class="grid2"><section class="panel"><div class="panel-head"><h2>Workers</h2><span class="end muted" id="jWorkersMeta"></span></div><div id="jWorkers" class="workers"></div><h3 class="muted" style="margin:10px 0 4px;font-size:12px">Finished here</h3><div id="jFinished"></div></section>
+        <section class="panel"><div class="panel-head"><h2>Up next</h2><span class="end muted" id="jQueueMeta"></span></div><div id="jNext"></div></section></div>
+      <div class="grid2"><section class="panel"><div class="panel-head"><h2>By kind</h2><span class="end muted">every 15 s</span></div><div id="jKinds"></div></section>
+        <section class="panel"><div class="panel-head"><h2>Failed</h2><span class="end muted" id="jFailedMeta"></span></div><div id="jFailed"></div></section></div>
+      <section class="panel" style="margin-top:10px"><div class="panel-head"><h2>Bulk purge</h2><span class="end muted">pending or failed rows of one kind; count first</span></div>
+        <form id="jPurgeForm" class="form-row">
+          <div class="field"><label for="jpKind">kind</label><select id="jpKind" required><option value="">choose…</option>${kinds}</select></div>
+          <div class="field"><label for="jpState">state</label><select id="jpState"><option>pending</option><option>failed</option></select></div>
+          <div class="field"><label for="jpMin">min priority</label><input id="jpMin" type="number" min="0" value="0" /></div>
+          <button class="btn" type="submit">Dry run</button><button class="btn danger" type="button" id="jpGo" disabled>Delete</button>
+        </form><div class="muted" id="jpMeta" aria-live="polite">A dry run counts the rows; nothing is deleted until you confirm the count.</div></section>`;
+    $('jPurgeForm').addEventListener('submit', jobsDryRun);
+    for (const id of ['jpKind', 'jpState', 'jpMin']) $(id).addEventListener('input', () => { J.purge = null; renderJobPurge(); });
+    $('jpGo').addEventListener('click', jobsPurge);
+    renderJobQueues();
+  }
+  $('jobsLive').addEventListener('change', (e) => { J.live = e.target.checked; stopJobs(); if (J.live) jobsTick(); });
+}
+// Rows and worker cards naming a job open its trace.
+document.addEventListener('click', (e) => {
+  const el = state.tab === 'jobs' && e.target.closest('[data-job]');
+  if (el && !e.target.closest('button')) location.hash = `jobs/${encodeURIComponent(el.dataset.job)}`;
+});
+document.addEventListener('keydown', (e) => {
+  const el = state.tab === 'jobs' && e.key === 'Enter' && e.target.closest?.('[data-job]');
+  if (el) location.hash = `jobs/${encodeURIComponent(el.dataset.job)}`;
+});
+function renderJobQueues() {
+  const s = store.get('snapshot');
+  if (!$('jQueues') || !s) return;
+  const rows = Object.entries(s.queues ?? {}).map(([queue, q]) => ({ queue, ...q }));
+  $('jQueues').replaceChildren(table({
+    columns: [{ key: 'queue', label: 'Queue' }, ...[['active', 'Running'], ['waiting', 'Ready'], ['delayed', 'Delayed'], ['failed', 'Failed 24 h'], ['completed', 'Done 1 h']].map(([key, label]) => ({ key, label, num: true, format: (v) => fmt(v) }))],
+    rows, cap: 20,
+  }));
+}
+store.on('snapshot', () => { if (state.tab === 'jobs' && !J.id) renderJobQueues(); });
+function renderWorkers(a) {
+  if (!$('jWorkers')) return;
+  const ws = a.workers ?? [];
+  $('jWorkersMeta').textContent = ws.length ? `${ws.filter((w) => w.jobId).length} of ${ws.length} busy` : '';
+  $('jWorkers').innerHTML = ws.length
+    ? ws.map((w) => (w.jobId
+      ? `<div class="worker" data-job="${esc(w.jobId)}" tabindex="0" title="open ${esc(w.jobId)}"><div class="top"><b>W${w.worker}</b><code>${esc(w.kind)}</code><span class="el">${esc(dur(Date.now() - msOf(w.since)))}</span></div><div class="now">${esc(w.now ?? '…')}</div></div>`
+      : `<div class="worker"><div class="top"><b>W${w.worker}</b><span class="muted">idle</span><span class="el">${esc(dur(Date.now() - msOf(w.since)))}</span></div></div>`)).join('')
+    : '<div class="empty">No workers in this process.</div>';
+  const fin = (a.finished ?? []).slice(0, 8);
+  $('jFinished').innerHTML = fin.length
+    ? `<ul class="groups">${fin.map((f) => `<li data-job="${esc(f.jobId)}" tabindex="0"><span><code>${esc(f.kind)}</code></span><span>${f.outcome === 'done' ? 'done' : `${icon('critical')} ${esc(f.outcome)}`} · W${f.worker} · took ${esc(dur(msOf(f.finishedAt) - msOf(f.startedAt)))}</span><span class="muted">${esc(when(f.finishedAt))}</span></li>`).join('')}</ul>`
+    : '<div class="muted">Nothing has finished in this process yet.</div>';
+}
+function renderQueue(q) {
+  if (!$('jNext')) return;
+  const parts = [`${fmt(q.ready)} ready`];
+  if (q.heldKinds?.length) parts.push(`held: ${q.heldKinds.join(', ')}`);
+  if (q.delayed) parts.push(`${fmt(q.delayed)} delayed${q.nextDelayedAt ? `, next ${when(q.nextDelayedAt)}` : ''}`);
+  $('jQueueMeta').textContent = parts.join(' · ');
+  const li = (js) => {
+    const pr = js.map((j) => j.priority);
+    const tries = Math.max(...js.map((j) => j.attempts ?? 0));
+    const tip = `${js[0].kind} · priority ${fmt(Math.min(...pr))}${Math.max(...pr) > Math.min(...pr) ? `–${fmt(Math.max(...pr))}` : ''}`;
+    return `<li title="${esc(tip)}"${js.length === 1 ? ` data-job="${esc(js[0].id)}" tabindex="0"` : ''}><span><code>${esc(js[0].kind)}</code>${js.length > 1 ? ` <span class="n">×${fmt(js.length)}</span>` : ''}</span><span>${esc(groupLabel(js))}</span><span class="muted">${esc(groupWhen(js))}${tries > 1 ? ` · try ${tries}` : ''}</span></li>`;
+  };
+  const running = groupJobs(q.running ?? []);
+  const next = groupJobs(q.next ?? []);
+  $('jNext').innerHTML = (running.length ? `<h3 class="muted" style="margin:0 0 4px;font-size:12px">Running</h3><ul class="groups">${running.map(li).join('')}</ul>` : '') +
+    `<h3 class="muted" style="margin:8px 0 4px;font-size:12px">Next to run</h3>` + (next.length ? `<ul class="groups">${next.map(li).join('')}</ul>` : '<div class="muted">Nothing is queued.</div>');
+}
+function renderKinds(st) {
+  if (!$('jKinds')) return;
+  const rows = Object.entries(st.kinds ?? {}).map(([kind, c]) => ({ kind, ...c }));
+  const kinds = rows.filter((r) => r.pending || r.failed).map((r) => r.kind);
+  if (kinds.join() !== J.kinds.join()) {
+    J.kinds = kinds;
+    const sel = $('jpKind');
+    if (sel) {
+      const keep = sel.value;
+      sel.innerHTML = `<option value="">choose…</option>${kinds.map((k) => `<option>${esc(k)}</option>`).join('')}`;
+      sel.value = kinds.includes(keep) ? keep : '';
+    }
+  }
+  $('jKinds').replaceChildren(table({
+    columns: [{ key: 'kind', label: 'Kind', format: (v) => `<code>${esc(v)}</code>` }, ...['running', 'pending', 'failed', 'done'].map((k) => ({ key: k, label: k, num: true, format: (v) => fmt(v) }))],
+    rows: rows.filter((r) => r.pending || r.running || r.failed), sort: { key: 'pending', dir: 'desc' }, empty: 'No pending, running or failed jobs.',
+  }));
+}
+function renderFailed(jobs) {
+  if (!$('jFailed')) return;
+  $('jFailedMeta').textContent = `${fmt(jobs.length)} shown`;
+  const box = table({
+    columns: jobRowCols([
+      { key: 'error', label: 'Error', format: (v) => `<span class="wraps">${esc(String(v ?? '').slice(0, 140))}</span>` },
+      { key: 'finishedAt', label: 'Ended', format: (v) => esc(when(v)) },
+      { key: 'id', label: '', format: (v, j) => `<button class="btn small" type="button" data-retry="${esc(v)}" data-kind="${esc(j.kind)}">Retry</button>` },
+    ]),
+    rows: jobs, cap: 50, empty: 'No failed jobs.',
+  });
+  for (const tr of box.querySelectorAll('tbody tr')) {
+    const b = tr.querySelector('[data-retry]');
+    if (b) { tr.dataset.job = b.dataset.retry; tr.tabIndex = 0; }
+  }
+  box.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-retry]');
+    if (b) jobAction(b.dataset.retry, 'retry', b.dataset.kind);
+  });
+  $('jFailed').replaceChildren(box);
+}
+async function jobAction(id, what, kind = 'job') {
+  const yes = await confirmAction(what === 'retry' ? `Run ${kind} ${id} again now?` : `Cancel ${kind} ${id}? It is deleted from the queue.`, { title: what === 'retry' ? 'Retry a job' : 'Cancel a job', confirm: what === 'retry' ? 'Retry' : 'Cancel the job', danger: what !== 'retry' });
+  if (!yes) return;
+  try {
+    if (what === 'retry') await api(`/v1/admin/jobs/${encodeURIComponent(id)}/retry`, { method: 'POST' });
+    else await api(`/v1/admin/jobs/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    toast(what === 'retry' ? `${kind} queued again.` : `${kind} cancelled.`);
+  } catch (e) {
+    toast(e.message, 'critical');
+  }
+  J.tick = 0;
+  stopJobs();
+  jobsTick();
+}
+function purgeQuery(dry) {
+  const q = new URLSearchParams({ kind: $('jpKind').value, state: $('jpState').value, minPriority: $('jpMin').value || '0' });
+  if (dry) q.set('dryRun', 'true');
+  return q.toString();
+}
+function renderJobPurge() {
+  const p = J.purge;
+  $('jpGo').disabled = !p?.matched;
+  $('jpGo').textContent = p?.matched ? `Delete ${fmt(p.matched)} rows` : 'Delete';
+  $('jpMeta').textContent = p ? `${fmt(p.matched)} ${p.state} ${p.kind} rows at priority ${fmt(p.minPriority)} or more.` : 'A dry run counts the rows; nothing is deleted until you confirm the count.';
+}
+async function jobsDryRun(e) {
+  e.preventDefault();
+  if (!$('jpKind').value) return;
+  try {
+    const r = await api(`/v1/admin/jobs?${purgeQuery(true)}`, { method: 'DELETE' });
+    J.purge = { ...r, query: purgeQuery(false) };
+  } catch (err) {
+    J.purge = null;
+    toast(err.message, 'critical');
+  }
+  renderJobPurge();
+}
+async function jobsPurge() {
+  const p = J.purge;
+  if (!p?.matched || p.query !== purgeQuery(false)) return;
+  const yes = await confirmAction(`Delete ${fmt(p.matched)} ${p.state} ${p.kind} rows? This cannot be undone.`, { title: 'Purge jobs', confirm: `Delete ${fmt(p.matched)} rows`, danger: true });
+  if (!yes) return;
+  try {
+    const r = await api(`/v1/admin/jobs?${p.query}`, { method: 'DELETE' });
+    toast(`Deleted ${fmt(r.deleted)} ${p.kind} rows.`);
+  } catch (err) {
+    toast(err.message, 'critical');
+  }
+  J.purge = null;
+  renderJobPurge();
+}
+// One job: its row and the trace of its latest run, followed with ?after=.
+async function pollTrace() {
+  const t = J.trace;
+  let body;
+  try {
+    body = await api(`/v1/admin/jobs/${encodeURIComponent(J.id)}/activity?after=${t.next}`);
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) { t.missing = true; renderTrace([]); return; }
+    throw e;
+  }
+  t.missing = false;
+  t.job = body.job;
+  const tr = body.trace;
+  let fresh = tr?.events ?? [];
+  // A new attempt replaces the trace: the timeline starts again.
+  if (tr && t.attempt != null && tr.attempt !== t.attempt) {
+    t.events = [];
+    t.next = 0;
+    t.attempt = tr.attempt;
+    return pollTrace();
+  }
+  if (tr) { t.attempt = tr.attempt; t.next = tr.nextSeq; t.events.push(...fresh); }
+  t.tr = tr;
+  renderTrace(fresh);
+}
+function renderTrace(fresh) {
+  if (!$('jtFacts')) return;
+  const t = J.trace;
+  const j = t.job;
+  const tr = t.tr;
+  const st = j?.state ?? (tr ? (tr.finishedAt ? 'done' : 'running') : '');
+  $('jtKind').textContent = j?.kind ?? tr?.kind ?? 'job';
+  const lvl = { failed: 'critical', running: 'good', pending: 'unknown', done: 'good' }[st] ?? 'unknown';
+  $('jtState').innerHTML = st ? `<span class="pill" data-level="${lvl}">${icon(lvl)}<span>${esc(st)}</span></span>` : '';
+  $('jtRetry').hidden = st !== 'failed';
+  $('jtCancel').hidden = st !== 'pending';
+  $('jtNow').textContent = t.missing ? 'No such job.'
+    : tr && !tr.finishedAt ? `${tr.now ?? '…'}${tr.nowSince ? ` · for ${dur(Date.now() - msOf(tr.nowSince))}` : ''}`
+    : st === 'pending' ? `Waiting for a worker: ready ${when(j?.runAfter)}, priority ${j?.priority}.`
+    : tr ? `Ended ${when(tr.finishedAt)}: ${tr.outcome}` : j ? `${st}. No worker in this process has run it since it started.` : '';
+  const facts = [['state', st], ['priority', j?.priority], ['attempts', j?.attempts], ['dedupe key', j?.dedupeKey], ['ready', j?.runAfter && when(j.runAfter)], ['claimed', j?.claimedAt && when(j.claimedAt)], ['finished', j?.finishedAt && when(j.finishedAt)], ['error', j?.error], ['worker', tr && `W${tr.worker}`]]
+    .filter(([, v]) => v != null && v !== '');
+  $('jtFacts').innerHTML = facts.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
+  $('jtPayload').textContent = j ? JSON.stringify(j.payload, null, 2) : '—';
+  $('jtRun').textContent = tr ? `attempt ${tr.attempt} · started ${when(tr.startedAt)}${tr.finishedAt ? ` · took ${dur(msOf(tr.finishedAt) - msOf(tr.startedAt))}` : ''}${tr.dropped ? ` · ${tr.dropped} older events dropped` : ''}` : '';
+  const list = $('jtTimeline');
+  const start = tr ? msOf(tr.startedAt) : 0;
+  const li = (e) => `<li class="ev-${esc(e.kind)}"><span class="muted">+${esc(dur(msOf(e.at) - start))}</span><span>${esc(e.kind)}</span><span class="x">${esc(e.text)}</span><span class="muted">${e.ms != null ? esc(dur(e.ms)) : ''}</span></li>`;
+  if (!t.events.length) list.innerHTML = '<li class="muted" style="display:block">Nothing recorded: the trace lives in the process that runs the job, for its latest run.</li>';
+  else if (list.querySelector('li.muted') || list.children.length !== t.events.length - fresh.length) list.innerHTML = t.events.map(li).join('');
+  else list.insertAdjacentHTML('beforeend', fresh.map(li).join(''));
+  if ($('jtFollow')?.checked) list.scrollTop = list.scrollHeight;
+}
+
+// ── Ladder (ADR-087, ADR-091) ────────────────────────────────────────
+const L = { timer: null, tick: 0, open: null, more: new Set(), act: new Map(), crawls: [], all: false, opts: null, formTouched: false };
+const LADDER_MS = 5000;
+const PAST_SHOWN = 10;
+function enterLadder(id) {
+  if (id && L.open !== id) L.more.add(id);
+  L.open = id;
+  if (!$('ladderRunning')) buildLadder();
+  renderLadder();
+  stopLadder();
+  L.tick = 0;
+  ladderTick();
+}
+function stopLadder() { clearTimeout(L.timer); L.timer = null; }
+async function ladderTick() {
+  L.timer = null;
+  if (state.tab !== 'ladder' || document.hidden || !state.started) return;
+  const t = L.tick++;
+  const live = (store.get('snapshot')?.ladder?.running ?? L.crawls.filter((c) => c.status === 'running')).map((c) => c.id);
+  // Running crawls refresh; an opened finished row is read once.
+  const ids = new Set([...live, ...(L.open && !L.act.has(L.open) ? [L.open] : [])]);
+  const work = [...ids].map(loadActivity);
+  if (t % 6 === 0) work.push(loadCrawls());
+  if (!L.opts) work.push(loadLadderOptions());
+  await Promise.all(work.map((w) => w.catch((e) => { if (!(e instanceof ApiError)) console.warn(e); })));
+  if (state.tab === 'ladder' && !document.hidden && state.started) L.timer = setTimeout(ladderTick, LADDER_MS);
+}
+// crawl.phase and ladder.crawl.completed frames: refresh at once (ADR-058).
+store.on('event', (frame) => {
+  if (state.tab === 'ladder' && (frame.event === 'crawl.phase' || frame.event === 'ladder.crawl.completed')) {
+    stopLadder();
+    L.tick = 0;
+    ladderTick();
+  }
+});
+function buildLadder() {
+  $('panel-ladder').innerHTML = `<div class="panel-head"><h1 style="margin:0">Ladder</h1><span class="end muted" id="ladderMeta"></span></div>
+    <section class="panel"><h2>Running</h2><div id="ladderRunning"></div></section>
+    <details class="panel" id="crawlForm" style="margin-top:10px"><summary><h2>Start a crawl</h2></summary>
+      <form class="form-row" id="crawlStartForm" style="margin-top:8px">
+        <div class="field"><label for="crawlPlatform">platform</label><select id="crawlPlatform"></select></div>
+        <div class="field"><label for="crawlQueue">queue</label><select id="crawlQueue"></select></div>
+        <div class="field"><label for="crawlTierFloor">enumerate down to</label><select id="crawlTierFloor"></select></div>
+        <button class="btn primary" type="submit" id="crawlStart" disabled>Start crawl</button>
+      </form><p class="muted" id="crawlHint"></p></details>
+    <p id="crawlResult" aria-live="polite"></p>
+    <section class="panel" style="margin-top:10px"><div class="panel-head"><h2>Past crawls</h2><span class="end muted" id="ladderHistoryMeta">loading…</span></div>
+      <div class="scroll"><table id="ladderHistory"></table></div><button class="btn small" type="button" id="historyMore" hidden></button></section>
+    <details class="panel" id="analyticsFold" style="margin-top:10px"><summary><h2>Analytics recompute</h2> <span class="muted" id="analyticsMeta"></span></summary>
+      <form class="form-row" id="analyticsForm" style="margin-top:8px">
+        <div class="field"><label for="analyticsPlatform">platform</label><select id="analyticsPlatform"></select></div>
+        <div class="field"><label for="analyticsQueue">queue</label><select id="analyticsQueue"></select></div>
+        <button class="btn" type="submit" id="analyticsStart" disabled>Recompute now</button>
+      </form><p id="analyticsResult" aria-live="polite"></p><div id="analyticsRuns"></div><p class="muted" id="analyticsTop"></p></details>`;
+  $('crawlForm').querySelector('summary').addEventListener('click', () => { L.formTouched = true; });
+  $('crawlStartForm').addEventListener('submit', startCrawl);
+  $('analyticsForm').addEventListener('submit', recompute);
+  for (const id of ['crawlPlatform', 'crawlQueue', 'crawlTierFloor']) $(id).addEventListener('change', () => note('crawlResult', ''));
+  for (const id of ['analyticsPlatform', 'analyticsQueue']) $(id).addEventListener('change', () => note('analyticsResult', ''));
+  $('historyMore').addEventListener('click', () => { L.all = !L.all; renderHistory(); });
+  $('ladderRunning').addEventListener('click', onCancelCrawl);
+  $('ladderHistory').addEventListener('click', (e) => {
+    if (e.target.closest('tr.run-detail')) return;
+    const row = e.target.closest('tr[data-run]');
+    if (row) location.hash = L.open === row.dataset.run ? 'ladder' : `ladder/${row.dataset.run}`;
+  });
+  $('ladderHistory').addEventListener('keydown', (e) => {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('tr[data-run]')) { e.preventDefault(); e.target.click(); }
+  });
+  $('panel-ladder').addEventListener('toggle', (e) => {
+    const id = e.target.dataset?.more;
+    if (id) { if (e.target.open) L.more.add(id); else L.more.delete(id); }
+  }, true);
+}
+function note(id, text, level) {
+  const el = $(id);
+  el.dataset.level = level ?? '';
+  el.className = level ? `pill ${level === 'good' ? 'good' : 'bad'}` : '';
+  el.innerHTML = text ? `${level ? icon(level) : ''}<span>${esc(text)}</span>` : '';
+}
+function renderLadder() {
+  if (state.tab !== 'ladder' || !$('ladderRunning')) return;
+  const snap = store.get('snapshot');
+  const running = snap?.ladder?.running ?? L.crawls.filter((c) => c.status === 'running');
+  $('ladderMeta').textContent = `${running.length ? `${running.length} running` : 'none running'}${snap?.ladder ? ` · ${fmt(snap.ladder.entries)} league entries stored` : ''}`;
+  // Nothing to watch: the start form is what the operator came for, until they fold it.
+  if (!L.formTouched && (snap?.ladder || L.loaded)) $('crawlForm').open = !running.length;
+  const sig = running.map((c) => `${c.id} ${c.phase}`).join('|');
+  if ($('ladderRunning').dataset.sig !== sig) {
+    $('ladderRunning').dataset.sig = sig;
+    $('ladderRunning').innerHTML = running.length ? running.map((c) =>
+      `<article class="crawl"><div class="crawl-head"><b>${esc(c.platform)} · ${esc(c.queue)}</b><span class="muted">down to ${esc(c.tierFloor)}</span>` +
+      `<span class="pill" data-level="good">${icon('good')}<span>${esc(c.phase || 'running')}</span></span><span class="muted">started ${esc(relTime(c.startedAt))}</span>` +
+      `<span class="end"><button class="btn small danger" type="button" data-cancel="${esc(c.id)}">Cancel</button></span></div>` +
+      `<div class="activity" data-activity="${esc(c.id)}">${activityView(c.id, 'loading progress…')}</div></article>`).join('')
+      : '<p class="muted">No crawl running.</p>';
+    // A new card fills in now rather than at the next refresh.
+    for (const c of running) if (!L.act.has(c.id)) loadActivity(c.id).catch((e) => { if (!(e instanceof ApiError)) console.warn(e); });
+  }
+  renderAnalytics(snap);
+}
+store.on('snapshot', () => renderLadder());
+function activityView(id, loading) {
+  const a = L.act.get(id);
+  if (!a) return `<p class="muted">${esc(loading)}</p>`;
+  if (a.error) return `<p>${icon('critical')} ${esc(a.error)}</p>`;
+  const c = a.crawl;
+  const d = a.downloads;
+  const running = c.status === 'running';
+  const capped = (c.apexCapped ?? []).map((t) => `<span class="capped" title="Riot's ${esc(tierName(t))} league lists only its top ${fmt(APEX_LIST_CAP)} players; the rest of the tier is not on this crawl">${icon('warning')} ${esc(tierName(t))}: top ${fmt(APEX_LIST_CAP)} only (Riot API limit)</span>`).join('');
+  const stages = a.stages.map((st) => {
+    const pct = stagePct(st);
+    return `<span>${esc(st.name)}</span><span class="st">${esc(st.state)}</span><div class="progress" role="progressbar" aria-label="${esc(st.name)}" aria-valuenow="${Math.round(pct)}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></div><span class="num">${esc(stageText(st))}</span>`;
+  }).join('');
+  const totals = `<p class="totals"><span><b>${fmt(c.playersDiscovered)}</b> players</span>${capped}<span><b>${fmt(c.matchIdsSeen)}</b> match ids</span><span><b>${fmt(c.matchesQueued)}</b> matches queued</span>${a.failed.length ? `<span>${icon('critical')} <b>${fmt(a.failed.length)}</b> failed</span>` : ''}</p>`;
+  const hint = [running ? `${fmt(a.running.length)} running` : '', a.openLegs.length ? `${fmt(a.openLegs.length)} legs in flight` : '', a.failed.length ? `${fmt(a.failed.length)} failed` : ''].filter(Boolean).join(' · ');
+  const list = (jobs, empty) => (jobs.length ? `<ul class="groups jl">${jobs.map((j) => `<li title="${esc(`${j.kind} · priority ${fmt(j.priority)}`)}"><span>${esc(jobLabel(j))}</span><span class="${j.error ? '' : 'muted'}" title="${esc(j.error ?? '')}">${j.error ? `${icon('critical')} ${esc(j.error)}` : esc(jobWhen(j))}</span><span class="muted">${j.attempts > 1 || j.error ? `try ${j.attempts}` : ''}</span></li>`).join('')}</ul>` : `<p class="muted">${esc(empty)}</p>`);
+  const ahead = a.ahead == null ? '' : a.ahead === 0 ? 'its next job is first in the queue' : `${fmt(a.ahead)} queued job(s) ahead of its next one`;
+  const downloads = d.ready + d.delayed + d.running + d.failed + d.recent === 0 ? 'none queued'
+    : `${fmt(d.ready)} ready · ${fmt(d.delayed)} waiting · ${fmt(d.running)} running · ${fmt(d.failed)} failed · ${fmt(d.recent)} fetched in 10m${d.etaSeconds != null ? ` · ~${fmtDuration(d.etaSeconds)} left` : ''}`;
+  const counters = [['pages fetched', fmt(c.pagesFetched)], ['league entries', fmt(c.entriesSeen)], ['histories queued', fmt(c.backfillsEnqueued)], ...(running ? [['legs left', fmt(c.pendingLegs)]] : []), ['started', new Date(c.startedAt).toLocaleString()], ...(c.finishedAt ? [['finished', new Date(c.finishedAt).toLocaleString()]] : [])];
+  return `<div class="stages">${stages}</div>${totals}<details class="more" data-more="${esc(c.id)}"${L.more.has(c.id) ? ' open' : ''}><summary>details${hint ? ` · ${esc(hint)}` : ''}</summary><div class="body">` +
+    `<dl class="kv">${counters.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>` +
+    (a.openLegs.length ? `<h3>In flight (${fmt(a.openLegs.length)})</h3><div class="legs">${a.openLegs.map((l) => `<span>${esc(legName(l))}</span>`).join('')}</div>` : '') +
+    (running ? `<h3>Running now (${fmt(a.running.length)})</h3>${list(a.running, 'none of its jobs is running')}<h3>Up next</h3>${ahead ? `<p class="muted">${esc(ahead)}</p>` : ''}${list(a.next, 'nothing queued')}` : '') +
+    (a.failed.length ? `<h3>Failed (${fmt(a.failed.length)})</h3>${list(a.failed, '')}` : '') +
+    `<h3>Match downloads · every crawl on ${esc(d.platform)}</h3><p class="muted">${esc(downloads)}</p><p class="muted">as of ${esc(new Date(a.asOf).toLocaleTimeString())} · ${esc(c.id)}</p></div></details>`;
+}
+async function loadActivity(id) {
+  try {
+    L.act.set(id, await api(`/v1/admin/ladder/crawls/${encodeURIComponent(id)}`));
+  } catch (e) {
+    if (e instanceof ApiError && e.status !== 401 && e.status !== 403) L.act.set(id, { error: e.message });
+    else throw e;
+  }
+  for (const el of document.querySelectorAll('[data-activity]')) {
+    if (el.dataset.activity !== id) continue;
+    const legs = el.querySelector('.legs')?.scrollTop ?? 0;
+    el.innerHTML = activityView(id, '');
+    const after = el.querySelector('.legs');
+    if (after) after.scrollTop = legs;
+  }
+}
+async function loadCrawls() {
+  const r = await api('/v1/admin/ladder/crawls?limit=50');
+  L.crawls = r.crawls ?? [];
+  L.loaded = true;
+  // A finished crawl's activity is read again only if its row is opened.
+  const live = new Set(L.crawls.filter((c) => c.status === 'running').map((c) => c.id));
+  for (const id of [...L.act.keys()]) if (!live.has(id) && id !== L.open) L.act.delete(id);
+  renderHistory();
+  renderLadder();
+}
+function renderHistory() {
+  if (!$('ladderHistory')) return;
+  const past = L.crawls.filter((c) => c.status !== 'running');
+  if (!past.length) {
+    $('ladderHistoryMeta').textContent = 'none yet';
+    $('ladderHistory').innerHTML = '';
+    $('historyMore').hidden = true;
+    return;
+  }
+  const failed = past.filter((c) => c.status !== 'completed').length;
+  $('ladderHistoryMeta').textContent = `${fmt(past.length)} run(s)${failed ? ` · ${fmt(failed)} failed or cancelled` : ''}`;
+  const openAt = past.findIndex((c) => c.id === L.open);
+  const shown = L.all || openAt >= PAST_SHOWN ? past : past.slice(0, PAST_SHOWN);
+  const lvl = { completed: 'good', failed: 'critical', cancelled: 'warning' };
+  $('ladderHistory').innerHTML = '<thead><tr><th>Ladder</th><th class="wide">Down to</th><th>Status</th><th class="n wide">Players</th><th class="n wide">Match ids</th><th class="wide">Took</th><th>Finished</th></tr></thead><tbody>' +
+    shown.map((c) => {
+      const open = c.id === L.open;
+      return `<tr data-run="${esc(c.id)}" tabindex="0" aria-expanded="${open}"><td>${esc(c.platform)} · ${esc(c.queue)}</td><td class="muted wide">${esc(c.tierFloor)}</td>` +
+        `<td><span class="pill" data-level="${lvl[c.status] ?? 'unknown'}">${icon(lvl[c.status] ?? 'unknown')}<span>${esc(c.status)}</span></span></td><td class="n wide">${fmt(c.playersDiscovered)}</td><td class="n wide">${fmt(c.matchIdsSeen)}</td>` +
+        `<td class="muted wide">${c.finishedAt ? esc(fmtDuration((msOf(c.finishedAt) - msOf(c.startedAt)) / 1000)) : '—'}</td><td class="muted">${esc(relTime(c.finishedAt || c.startedAt))}</td></tr>` +
+        (open ? `<tr class="run-detail"><td colspan="7" style="white-space:normal"><div class="activity" data-activity="${esc(c.id)}">${activityView(c.id, 'loading…')}</div></td></tr>` : '');
+    }).join('') + '</tbody>';
+  const hidden = past.length - shown.length;
+  $('historyMore').hidden = past.length <= PAST_SHOWN;
+  $('historyMore').textContent = hidden > 0 ? `show ${fmt(hidden)} more` : 'show fewer';
+}
+async function loadLadderOptions() {
+  const o = await api('/v1/admin/ladder/options');
+  L.opts = o;
+  const fill = (id, opts, sel) => { $(id).innerHTML = opts.map(([v, l]) => `<option value="${esc(v)}"${v === sel ? ' selected' : ''}>${esc(l)}</option>`).join(''); };
+  fill('crawlPlatform', o.platforms.map((p) => [p.id, `${p.label} · ${p.id}`]), o.defaults.platform);
+  fill('crawlQueue', o.queues.map((q) => [q, q]), o.defaults.queue);
+  fill('crawlTierFloor', [...o.tiers].reverse().map((t) => [t, t]), o.defaults.tierFloor);
+  $('analyticsPlatform').innerHTML = $('crawlPlatform').innerHTML;
+  $('analyticsQueue').innerHTML = $('crawlQueue').innerHTML;
+  $('crawlHint').textContent = o.defaults.backfillLimit > 0
+    ? `Match histories are walked for every player the crawl enumerates, ${fmt(o.defaults.backfillLimit)} matches per player: every id first, then the matches, so a game shared by ten players is fetched once.`
+    : 'Match histories are not walked (LADDER_BACKFILL_LIMIT=0): the ladder lands, and nothing is fetched from match-v5.';
+  $('crawlStart').disabled = false;
+  $('analyticsStart').disabled = false;
+}
+async function startCrawl(e) {
+  e.preventDefault();
+  const body = { platform: $('crawlPlatform').value, queue: $('crawlQueue').value, tierFloor: $('crawlTierFloor').value };
+  if (!(await confirmAction(`Crawl ${body.platform} · ${body.queue} down to ${body.tierFloor}? It uses the bulk share of the rate limit until it finishes.`, { title: 'Start a crawl', confirm: 'Start crawl' }))) return;
+  $('crawlStart').disabled = true;
+  try {
+    const r = await api('/v1/admin/ladder/crawl', { method: 'POST', body });
+    const ladder = `${r.platform} · ${r.queue}`;
+    note('crawlResult', r.status === 'already-running' ? `${ladder} is already being crawled: ${r.crawlId}` : `Started ${ladder}: ${r.crawlId} · ${fmt(r.legs)} legs`, 'good');
+    refresh();
+    loadCrawls();
+  } catch (err) {
+    note('crawlResult', err.message, 'critical');
+  } finally {
+    $('crawlStart').disabled = false;
+  }
+}
+async function onCancelCrawl(e) {
+  const b = e.target.closest('button[data-cancel]');
+  if (!b) return;
+  const id = b.dataset.cancel;
+  if (!(await confirmAction(`Cancel crawl ${id}? Its queued jobs are dropped; what it archived stays.`, { title: 'Cancel a crawl', confirm: 'Cancel the crawl', danger: true }))) return;
+  b.disabled = true;
+  try {
+    await api(`/v1/admin/ladder/crawls/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    note('crawlResult', `Cancelled ${id}`, 'good');
+  } catch (err) {
+    note('crawlResult', err.message, 'critical');
+  }
+  refresh();
+  loadCrawls();
+}
+async function recompute(e) {
+  e.preventDefault();
+  const body = { platform: $('analyticsPlatform').value, queue: $('analyticsQueue').value };
+  if (!(await confirmAction(`Recompute analytics for ${body.platform} · ${body.queue}? The next free worker runs it, ahead of the queue.`, { title: 'Recompute analytics', confirm: 'Recompute' }))) return;
+  $('analyticsStart').disabled = true;
+  try {
+    const r = await api('/v1/admin/analytics/recompute', { method: 'POST', body });
+    note('analyticsResult', `Queued ${r.platform} · ${r.queue}: the next free worker runs it, ahead of the queue, on the matches archived so far. It shows in the table below.`, 'good');
+  } catch (err) {
+    note('analyticsResult', err.message, 'critical');
+  } finally {
+    $('analyticsStart').disabled = false;
+  }
+}
+function renderAnalytics(snap) {
+  const a = snap?.analytics;
+  if (!a || !$('analyticsRuns')) return;
+  const runs = a.lastRuns ?? [];
+  $('analyticsMeta').textContent = runs.length ? `· last ${relTime(runs[0].at)} · ${runs.length} ladder(s)${runs[0].status === 'failed' ? ' · last run failed part way' : ''}` : '· none yet';
+  $('analyticsRuns').replaceChildren(analyticsTable(runs));
+  $('analyticsTop').textContent = topChampions(a);
+}
+const topChampions = (a) => (a?.topChampions?.length ? `Most played, newest patch: ${a.topChampions.map((c) => `${c.championName ?? c.championId} ${fmt(c.games)}g ${Math.round(c.winRate * 100)}%`).join(' · ')}` : '');
+const analyticsTable = (runs) => table({
+  columns: [
+    { key: 'platform', label: 'Ladder', format: (v, r) => esc(`${v} ${r.queue}`) },
+    { key: 'at', label: 'When', format: (v, r) => `${esc(relTime(v))}${r.status === 'failed' ? ` ${icon('critical')} failed` : ''}` },
+    { key: 'steps', label: 'Steps (s)', format: (v) => esc(Object.entries(v).map(([n, sec]) => `${n} ${sec.toFixed(1)}`).join(' · ') || '—') },
+    { key: 'rows', label: 'Rows', num: true, format: (v) => fmt(sumValues(v)) },
+    { key: 'games', label: 'Games', num: true, format: (v) => fmt(v) },
+  ],
+  rows: runs, empty: 'One is queued when a crawl finishes, every AGGREGATE_INTERVAL_S if that is set, or by Recompute now.',
+});
+
+// ── Archive & Storage ────────────────────────────────────────────────
+const A = { timer: null, stats: null, backups: null, timelines: null };
+const ARCHIVE_MS = 60000;
+async function enterArchive() {
+  clearTimeout(A.timer);
+  if (!$('arTiles')) {
+    $('panel-archive').innerHTML = `<h1>Archive &amp; Storage</h1><div class="tiles" id="arTiles"></div>
+      <section class="panel" style="margin-top:10px"><div class="panel-head"><h2>The data disk</h2><span class="end muted" id="arSampled"></span></div><div id="arDisk"></div></section>
+      <div class="grid2"><section class="panel"><div class="panel-head"><h2>Backups</h2><span class="end"><button class="btn small" type="button" id="arRun">Run maintenance now</button></span></div><div id="arBackups"></div></section>
+        <section class="panel"><div class="panel-head"><h2>Timeline backfill</h2><span class="end muted" id="arTlMeta"></span></div><div id="arTimelines"></div></section></div>
+      <section class="panel" style="margin-top:10px"><div class="panel-head"><h2>Analytics</h2><span class="end actions-row" id="arActions"></span></div><div id="arRuns"></div><p class="muted" id="arTop"></p></section>`;
+    $('arRun').addEventListener('click', runMaintenance);
+    $('arActions').addEventListener('click', archiveAction);
+  }
+  renderArchive();
+  await loadArchive();
+}
+async function loadArchive() {
+  clearTimeout(A.timer);
+  if (state.tab !== 'archive' || document.hidden || !state.started) return;
+  const quiet = (pr) => pr.catch((e) => { if (!(e instanceof ApiError)) console.warn(e); return null; });
+  const [st, bk, tl] = await Promise.all([api('/v1/admin/stats'), api('/v1/admin/backups'), api('/v1/admin/timelines/backfill')].map(quiet));
+  if (st) A.stats = st;
+  if (bk) { A.backups = bk; store.set('backups', bk); }
+  if (tl) A.timelines = tl;
+  renderArchive();
+  if (state.tab === 'archive' && !document.hidden) A.timer = setTimeout(loadArchive, ARCHIVE_MS);
+}
+store.on('snapshot', () => { if (state.tab === 'archive') renderArchive(); });
+function renderArchive() {
+  if (state.tab !== 'archive' || !$('arTiles')) return;
+  const s = store.get('snapshot');
+  const st = A.stats;
+  // The snapshot's disk is fresher than the stats route's; both are samples.
+  const disk = s?.disk ?? (st && { dbBytes: st.dbFileBytes, walBytes: st.walBytes, freelistBytes: st.dbFreelistPages * st.dbPageSize, freeBytes: st.diskFreeBytes, totalBytes: st.diskTotalBytes });
+  const dl = diskLevel(disk);
+  $('arTiles').innerHTML = [
+    tile('Archived matches', compact(st?.archivedMatches ?? s?.totals?.archivedMatches), st ? `${compact(st.archivedTimelines)} timelines` : '&nbsp;'),
+    tile('Stored', fmtBytes(st?.archiveStoredBytes), st?.archiveRawBytes ? `${fmtBytes(st.archiveRawBytes)} raw · ${(st.archiveRawBytes / Math.max(1, st.archiveStoredBytes)).toFixed(1)}× zstd` : '&nbsp;'),
+    tile('Players', compact(st?.knownPlayers ?? s?.totals?.knownPlayers), `${fmt(st?.trackedPlayers ?? s?.totals?.trackedPlayers)} tracked`),
+    tile('Database', fmtBytes(disk?.dbBytes), `${fmtBytes(disk?.freelistBytes)} free pages · WAL ${fmtBytes(disk?.walBytes)}`),
+    tile('Disk free', fmtBytes(disk?.freeBytes), dl.used == null ? '—' : `${pct(dl.used, 0)} used of ${fmtBytes(disk.totalBytes)}`, dl.level === 'good' ? null : dl.level),
+  ].join('');
+  if (disk?.totalBytes) {
+    const parts = storageParts({ dbBytes: disk.dbBytes, freelistBytes: disk.freelistBytes, walBytes: disk.walBytes, totalBytes: disk.totalBytes, freeBytes: disk.freeBytes });
+    const colors = ['var(--s1)', 'var(--s4)', 'var(--s2)', 'var(--s6)', 'transparent'];
+    const warn = dl.level === 'critical' ? `<p class="note-line" data-level="critical">${icon('critical')} Under 5 % of the disk is free: backups skip themselves and writes may fail (design/07 §Reclaiming space).</p>`
+      : dl.level === 'warning' ? `<p class="note-line" data-level="warning">${icon('warning')} Over 85 % of the disk is used.</p>` : '';
+    $('arDisk').innerHTML = `${warn}<div class="stack" role="img" aria-label="${esc(parts.map(([n, b]) => `${n} ${fmtBytes(b)}`).join(', '))}">${parts.map(([n, b], i) => (b > 0 ? `<i title="${esc(n)} ${esc(fmtBytes(b))}" style="flex:${b} 0 0;background:${colors[i]}${i === 4 ? ';box-shadow:inset 0 0 0 1px var(--grid)' : ''}"></i>` : '')).join('')}</div>` +
+      `<div class="legend stack-l">${parts.map(([n, b], i) => `<span><i style="background:${colors[i]};height:8px;width:8px;${i === 4 ? 'box-shadow:inset 0 0 0 1px var(--muted)' : ''}"></i>${esc(n)} ${esc(fmtBytes(b))}</span>`).join('')}</div>`;
+  }
+  $('arSampled').textContent = st?.sampledAt ? `archive bytes sampled ${relTime(st.sampledAt.slow)}` : '';
+  renderBackups();
+  renderTimelines();
+  $('arRuns').replaceChildren(analyticsTable(s?.analytics?.lastRuns ?? []));
+  $('arTop').textContent = topChampions(s?.analytics);
+  const last = s?.analytics?.lastRuns?.[0];
+  $('arActions').innerHTML = `${last ? `<button class="btn small" type="button" data-act="recompute" data-platform="${esc(last.platform)}" data-queue="${esc(last.queue)}">Recompute ${esc(last.platform)} · ${esc(last.queue)}</button>` : '<a href="#ladder">Recompute in Ladder</a>'}` +
+    '<button class="btn small" type="button" data-act="reextract">Re-extract facts</button><button class="btn small" type="button" data-act="ddragon">Sync Data Dragon</button><button class="btn small" type="button" data-act="names">Fill player names</button>';
+}
+function renderBackups() {
+  const b = A.backups;
+  if (!b) return;
+  const lvl = backupLevel(b);
+  const last = b.lastRun;
+  const lastText = !last ? 'No maintenance run since this process started.'
+    : last.error ? `Last maintenance ${relTime(last.at)} failed: ${last.error}`
+      : `Last maintenance ${relTime(last.at)}, took ${dur(last.ms)}: ${last.report.backup ? 'backup written' : last.report.backupSkipped ? `backup skipped (${last.report.backupSkipped})` : last.report.backupFailed ? `backup failed (${last.report.backupFailed})` : "today's backup already there"}; ${fmt(last.report.jobsDeleted)} done jobs and ${fmt(last.report.historyDeleted)} history points trimmed, ${fmt(last.report.cacheSwept)} cache rows swept.`;
+  const box = document.createElement('div');
+  box.innerHTML = `<p class="note-line" data-level="${lvl.level}">${icon(lvl.level)}<span>${esc(lvl.text)}${lvl.level === 'warning' && b.keep ? ': a night was missed' : ''} · keeping ${fmt(b.keep)} · ${fmtBytes(b.diskFreeBytes)} free beside them</span></p><p class="muted">${esc(lastText)}</p>`;
+  box.append(table({
+    columns: [{ key: 'name', label: 'File', format: (v) => `<code>${esc(v)}</code>` }, { key: 'bytes', label: 'Size', num: true, format: (v) => fmtBytes(v) }, { key: 'modifiedAt', label: 'Written', format: (v) => esc(relTime(v)) }],
+    rows: b.files ?? [], empty: b.keep ? 'No backup on this disk yet.' : 'BACKUP_KEEP=0: no backups are kept on this disk.',
+  }));
+  $('arBackups').replaceChildren(box);
+}
+function renderTimelines() {
+  const t = A.timelines;
+  if (!t) return;
+  const tot = t.totals ?? {};
+  $('arTlMeta').textContent = t.configuredPatches ? `newest ${fmt(t.configuredPatches)} patch(es)` : 'off (TIMELINE_BACKFILL_PATCHES=0)';
+  $('arTimelines').innerHTML = `${meter('with a timeline', tot.withTimeline ?? 0, Math.max(1, (tot.matches ?? 0) - (tot.notFound ?? 0)), 'ranked matches with a timeline')}` +
+    `<p class="muted">${fmt(tot.matches)} ranked matches · ${fmt(tot.left)} left · ${fmt(tot.notFound)} Riot does not have</p>` +
+    ((t.regions ?? []).length ? `<ul class="groups">${t.regions.map((r) => `<li><span>${esc(r.region)}</span><span>${fmt(r.left)} left</span><span class="muted">${esc(r.patch ?? '')}</span></li>`).join('')}</ul>` : '');
+}
+async function runMaintenance() {
+  if (!(await confirmAction('Run maintenance now? It backs up only if today’s backup is missing, then trims old jobs and history, sweeps the cache and checkpoints the WAL.', { title: 'Run maintenance', confirm: 'Run now' }))) return;
+  try {
+    const r = await api('/v1/admin/maintenance/run', { method: 'POST' });
+    toast(r.status === 'already-queued' ? 'Maintenance is already queued.' : 'Maintenance queued.');
+  } catch (e) {
+    toast(e.message, 'critical');
+  }
+}
+async function archiveAction(e) {
+  const b = e.target.closest('button[data-act]');
+  if (!b) return;
+  const act = {
+    recompute: ['Recompute analytics', `Recompute analytics for ${b.dataset.platform} · ${b.dataset.queue}?`, '/v1/admin/analytics/recompute', { platform: b.dataset.platform, queue: b.dataset.queue }, () => 'Recompute queued.'],
+    reextract: ['Re-extract facts', 'Re-derive match facts from the archive for every match an older version read? It runs in batches at maintenance priority.', '/v1/admin/analytics/reextract', undefined, (r) => `Re-extract queued: ${fmt(r.stale)} matches to read.`],
+    ddragon: ['Sync Data Dragon', 'Queue a Data Dragon sync? It joins the hourly one if that is queued.', '/v1/admin/ddragon/sync', {}, () => 'Data Dragon sync queued.'],
+    names: ['Fill player names', 'Fill missing player Riot IDs from their archived matches? No Riot call is made.', '/v1/admin/players/names/backfill', undefined, (r) => `Names backfill queued: ${fmt(r.unnamed)} players without a name.`],
+  }[b.dataset.act];
+  if (!act || !(await confirmAction(act[1], { title: act[0], confirm: act[0] }))) return;
+  try {
+    toast(act[4](await api(act[2], { method: 'POST', body: act[3] })));
+  } catch (err) {
+    toast(err.message, 'critical');
+  }
+}
+
+// ── Consumers & Players ──────────────────────────────────────────────
+const C = { consumers: [], players: [] };
+async function enterConsumers() {
+  if (!$('cnList')) {
+    $('panel-consumers').innerHTML = `<h1>Consumers &amp; Players</h1>
+      <section class="panel"><div class="panel-head"><h2>Consumers</h2><span class="end muted" id="cnMeta"></span></div><div id="cnList"></div>
+        <form class="form-row" id="cnCreate" style="margin-top:10px">
+          <div class="field"><label for="cnName">name</label><input id="cnName" maxlength="100" required placeholder="ninjagoldfinch.lol" /></div>
+          <div class="field"><span class="muted">scopes</span><div class="checks"><label><input type="checkbox" id="cnRead" checked /> read</label><label><input type="checkbox" id="cnAdmin" /> admin</label></div></div>
+          <div class="field"><label for="cnQuota">requests per minute</label><input id="cnQuota" type="number" min="1" max="1000000" value="600" /></div>
+          <button class="btn primary" type="submit">Create consumer</button>
+        </form><div id="cnKey"></div></section>
+      <section class="panel" style="margin-top:10px"><div class="panel-head"><h2>Re-check a key</h2><span class="end muted">drops it from the auth cache so the next request is checked against the database</span></div>
+        <form class="form-row" id="cnRecheck"><div class="field"><label for="cnRecheckId">consumer</label><select id="cnRecheckId" required></select></div>
+          <div class="field"><label for="cnRecheckKey">its key, or the key's SHA-256</label><input id="cnRecheckKey" type="password" autocomplete="off" required /></div>
+          <button class="btn" type="submit">Re-check</button></form></section>
+      <section class="panel" style="margin-top:10px"><div class="panel-head"><h2>Tracked players</h2><span class="end muted" id="plMeta"></span></div><div id="plList"></div>
+        <form class="form-row" id="plTrack" style="margin-top:10px">
+          <div class="field"><label for="plPlatform">platform</label><input id="plPlatform" required placeholder="oc1" list="plPlatforms" /><datalist id="plPlatforms"></datalist></div>
+          <div class="field" style="flex-grow:3"><label for="plWho">Riot ID (name#tag) or PUUID</label><input id="plWho" required placeholder="Hide on bush#KR1" /></div>
+          <button class="btn" type="submit">Track</button></form></section>`;
+    $('cnCreate').addEventListener('submit', createConsumer);
+    $('cnRecheck').addEventListener('submit', recheckKey);
+    $('plTrack').addEventListener('submit', trackPlayer);
+    $('cnList').addEventListener('click', (e) => { const b = e.target.closest('[data-revoke]'); if (b) revokeConsumer(b.dataset.revoke, b.dataset.name); });
+    $('plList').addEventListener('click', (e) => { const b = e.target.closest('[data-untrack]'); if (b) untrackPlayer(b.dataset.untrack, b.dataset.name); });
+  }
+  await Promise.all([loadConsumers(), loadPlayers(), L.opts ? null : api('/v1/admin/ladder/options').then((o) => { L.opts = o; }).catch(() => null)]);
+  if (L.opts) $('plPlatforms').innerHTML = L.opts.platforms.map((p) => `<option value="${esc(p.id)}">${esc(p.label)}</option>`).join('');
+}
+async function loadConsumers() {
+  try { C.consumers = (await api('/v1/admin/consumers')).consumers ?? []; } catch (e) { if (!(e instanceof ApiError)) console.warn(e); return; }
+  renderConsumers();
+}
+async function loadPlayers() {
+  try { C.players = (await api('/v1/admin/tracked-players?tracked=true')).players ?? []; } catch (e) { if (!(e instanceof ApiError)) console.warn(e); return; }
+  renderPlayers();
+}
+store.on('snapshot', () => { if (state.tab === 'consumers') { renderConsumers(); renderPlayers(); } });
+function renderConsumers() {
+  if (!$('cnList')) return;
+  const quotas = new Map((store.get('snapshot')?.quotas ?? []).map((q) => [q.consumer, q]));
+  const active = C.consumers.filter((c) => !c.disabledAt);
+  $('cnMeta').textContent = `${fmt(active.length)} active · ${fmt(C.consumers.length - active.length)} revoked`;
+  $('cnList').replaceChildren(table({
+    columns: [
+      { key: 'name', label: 'Name', format: (v, c) => `${esc(v)}<div class="muted"><code>${esc(c.id)}</code></div>` },
+      { key: 'scopes', label: 'Scopes', format: (v) => esc((v ?? []).join(', ')) },
+      { key: 'quotaPerMin', label: 'Quota use', format: (v, c) => { const q = quotas.get(c.id); return q ? meter('', q.used, q.limit, `${c.name} requests this minute`) : `<span class="muted">0 / ${fmt(v)} a minute</span>`; } },
+      { key: 'createdAt', label: 'Created', format: (v) => esc(relTime(v)) },
+      { key: 'disabledAt', label: 'State', format: (v, c) => (v ? `<span class="pill" data-level="unknown">${icon('unknown')}<span>revoked ${esc(relTime(v))}</span></span>` : `<button class="btn small danger" type="button" data-revoke="${esc(c.id)}" data-name="${esc(c.name)}">Revoke</button>`) },
+    ],
+    rows: [...active, ...C.consumers.filter((c) => c.disabledAt)], cap: 200, empty: 'No consumers.',
+  }));
+  $('cnRecheckId').innerHTML = active.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
+}
+function renderPlayers() {
+  if (!$('plList')) return;
+  $('plMeta').textContent = `${fmt(C.players.length)} tracked of ${fmt(store.get('snapshot')?.totals?.knownPlayers)} known`;
+  $('plList').replaceChildren(table({
+    columns: [
+      { key: 'gameName', label: 'Player', format: (v, p) => (v ? `${esc(v)}<span class="muted">#${esc(p.tagLine ?? '')}</span>` : `<code>${esc(p.puuid.slice(0, 12))}…</code>`) },
+      { key: 'platform', label: 'Platform' },
+      { key: 'lastSeenMatchId', label: 'Last match', format: (v) => (v ? `<code>${esc(v)}</code>` : '—') },
+      { key: 'historyBackfilledAt', label: 'History', format: (v, p) => esc(v ? `walked ${relTime(v)}` : p.historyBackfillStartedAt ? 'walking' : 'not walked') },
+      { key: 'puuid', label: '', format: (v, p) => `<button class="btn small" type="button" data-untrack="${esc(v)}" data-name="${esc(p.gameName ?? v.slice(0, 12))}">Untrack</button>` },
+    ],
+    rows: C.players, cap: 200, empty: 'No tracked players.',
+  }));
+}
+async function createConsumer(e) {
+  e.preventDefault();
+  const body = { name: $('cnName').value.trim(), scopes: [['read', $('cnRead').checked], ['admin', $('cnAdmin').checked]].filter(([, on]) => on).map(([k]) => k), quotaPerMin: Number($('cnQuota').value) || 600 };
+  if (!(await confirmAction(`Create ${body.name} with ${body.scopes.join(' and ') || 'no'} scope${body.scopes.length === 1 ? '' : 's'} and ${fmt(body.quotaPerMin)} requests a minute? Its key is shown once.`, { title: 'Create a consumer', confirm: 'Create' }))) return;
+  try {
+    const r = await api('/v1/admin/consumers', { method: 'POST', body });
+    // The key is shown here once and kept nowhere else: not in the store, a toast or localStorage.
+    $('cnKey').innerHTML = `<div class="newkey" role="alert"><b>${icon('warning')} The key for ${esc(r.name)}</b><p class="muted">${esc(r.warning)}</p><code id="cnKeyText">${esc(r.key)}</code><button class="btn small" type="button" id="cnCopy">Copy</button> <button class="btn small" type="button" id="cnDone">Done</button></div>`;
+    $('cnCopy').addEventListener('click', async () => { try { await navigator.clipboard.writeText($('cnKeyText').textContent); toast('Copied.'); } catch { toast('Copy it by hand: the clipboard is not available here.', 'warning'); } });
+    $('cnDone').addEventListener('click', () => { $('cnKey').innerHTML = ''; });
+    $('cnName').value = '';
+    loadConsumers();
+  } catch (err) {
+    toast(err.message, 'critical');
+  }
+}
+async function revokeConsumer(id, name) {
+  if (!(await confirmAction(`Revoke ${name}? Its key stops working at once; the row is kept.`, { title: 'Revoke a consumer', confirm: 'Revoke', danger: true }))) return;
+  try {
+    await api(`/v1/admin/consumers/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    toast(`${name} revoked.`);
+  } catch (err) {
+    if (!(err instanceof ApiError && (err.status === 401 || err.status === 403))) toast(err.message, 'critical');
+    return;
+  }
+  // If that was this page's own key, the next call is refused and the key sheet opens.
+  loadConsumers();
+}
+async function sha256Hex(text) {
+  const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+async function recheckKey(e) {
+  e.preventDefault();
+  const id = $('cnRecheckId').value;
+  const raw = $('cnRecheckKey').value.trim();
+  try {
+    // The key is hashed here; only its hash is sent.
+    const keyHash = isHash(raw) ? raw.toLowerCase() : await sha256Hex(raw);
+    $('cnRecheckKey').value = '';
+    if (!(await confirmAction('Drop this key from the auth cache? Its next request is checked against the database.', { title: 'Re-check a key', confirm: 'Re-check' }))) return;
+    const r = await api(`/v1/admin/consumers/${encodeURIComponent(id)}/revoke-cache`, { method: 'POST', body: { keyHash } });
+    toast(r.stillActive ? 'Dropped from the cache; the key is still active.' : 'Dropped from the cache; the key is revoked.');
+  } catch (err) {
+    toast(err.message, 'critical');
+  }
+}
+async function trackPlayer(e) {
+  e.preventDefault();
+  const body = { platform: $('plPlatform').value.trim(), ...parsePlayer($('plWho').value) };
+  const who = body.gameName ? `${body.gameName}#${body.tagLine}` : `${String(body.puuid).slice(0, 12)}…`;
+  if (!(await confirmAction(`Track ${who} on ${body.platform}? It is polled for live games, rank and new matches, and its history is walked once.`, { title: 'Track a player', confirm: 'Track' }))) return;
+  try {
+    await api('/v1/admin/tracked-players', { method: 'POST', body });
+    toast(`Tracking ${who}.`);
+    $('plWho').value = '';
+    loadPlayers();
+  } catch (err) {
+    toast(err.message, 'critical');
+  }
+}
+async function untrackPlayer(puuid, name) {
+  if (!(await confirmAction(`Stop tracking ${name}? The row and its history stay.`, { title: 'Untrack a player', confirm: 'Untrack' }))) return;
+  try {
+    await api(`/v1/admin/tracked-players/${encodeURIComponent(puuid)}`, { method: 'DELETE' });
+    toast(`${name} is no longer tracked.`);
+    loadPlayers();
+  } catch (err) {
+    toast(err.message, 'critical');
+  }
+}
+
+// ── Events: the firehose ─────────────────────────────────────────────
+const E = { ring: [], on: new Set(EVENT_NAMES.filter((n) => n !== 'metrics.snapshot')), q: '', paused: false, missed: 0, unseen: 0, pending: null, open: new Set() };
+// Every frame is kept, on any tab; drawing is batched and never while paused.
+store.on('event', (f) => {
+  ringPush(E.ring, f);
+  if (E.paused) E.missed++;
+  else if (state.tab !== 'events' && f.event !== 'metrics.snapshot') E.unseen++;
+  if (!E.pending) E.pending = setTimeout(flushEvents, 250);
+});
+function flushEvents() {
+  E.pending = null;
+  badge('events', E.unseen, `${E.unseen} new events`);
+  if (state.tab !== 'events' || !$('evList')) return;
+  if (E.paused) { $('evPause').textContent = `Resume (${fmt(E.missed)} while paused)`; return; }
+  renderEventList();
+}
+function enterEvents() {
+  E.unseen = 0;
+  badge('events', 0);
+  if (!$('evList')) {
+    $('panel-events').innerHTML = `<div class="panel-head"><h1 style="margin:0">Events</h1><span class="end muted" id="evMeta"></span></div>
+      <section class="panel"><div class="filters"><label class="sr-only" for="evSearch">Search</label><input id="evSearch" type="search" placeholder="search the frames" />
+        <button class="btn small" type="button" id="evPause" aria-pressed="false">Pause</button><button class="btn small" type="button" id="evClear">Clear</button></div>
+        <div class="chips" id="evNames" role="group" aria-label="Event names">${EVENT_NAMES.map((n) => `<label><input type="checkbox" value="${n}"${E.on.has(n) ? ' checked' : ''} /> ${n} <span class="muted" data-count="${n}"></span></label>`).join('')}</div></section>
+      <section class="panel" style="margin-top:10px"><ol class="events" id="evList" aria-live="off"></ol></section>`;
+    $('evSearch').addEventListener('input', (e) => { E.q = e.target.value; renderEventList(); });
+    $('evNames').addEventListener('change', (e) => { if (e.target.checked) E.on.add(e.target.value); else E.on.delete(e.target.value); renderEventList(); });
+    $('evPause').addEventListener('click', () => {
+      E.paused = !E.paused;
+      $('evPause').setAttribute('aria-pressed', String(E.paused));
+      $('evPause').textContent = E.paused ? 'Resume (0 while paused)' : 'Pause';
+      if (!E.paused) { E.missed = 0; renderEventList(); }
+    });
+    $('evClear').addEventListener('click', () => { E.ring.length = 0; E.open.clear(); renderEventList(); });
+    $('evList').addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-i]');
+      if (!b) return;
+      // Open views follow the frame, not its place, which moves as the ring trims.
+      const f = E.ring[Number(b.dataset.i)];
+      if (E.open.has(f)) E.open.delete(f); else E.open.add(f);
+      renderEventList();
+    });
+  }
+  renderEventList();
+}
+function renderEventList() {
+  if (!$('evList') || E.paused) return;
+  const counts = {};
+  for (const f of E.ring) counts[f.event] = (counts[f.event] ?? 0) + 1;
+  for (const el of document.querySelectorAll('[data-count]')) el.textContent = counts[el.dataset.count] ? fmt(counts[el.dataset.count]) : '';
+  const shown = eventFilter(E.ring, E.on, E.q);
+  $('evMeta').textContent = `${fmt(shown.length)} shown of the last ${fmt(E.ring.length)} · ring of ${fmt(RING_CAP)}`;
+  // Newest first; `data-i` is the frame's place in the ring, oldest 0.
+  const idx = new Map(E.ring.map((f, i) => [f, i]));
+  $('evList').innerHTML = shown.length ? [...shown].reverse().map((f) => {
+    const i = idx.get(f);
+    const open = E.open.has(f);
+    return `<li><button type="button" data-i="${i}" aria-expanded="${open}"><span class="muted">${esc(hhmmss(f.at ?? Date.now()))}</span><span><code>${esc(f.event)}</code></span><span>${esc(JSON.stringify(f.data ?? {}).slice(0, 200))}</span></button>${open ? `<pre>${esc(JSON.stringify(f, null, 2))}</pre>` : ''}</li>`;
+  }).join('') : `<li class="muted" style="padding:8px 0">${E.ring.length ? 'Nothing matches.' : 'No events since this page opened.'}</li>`;
+}
+
+// ── About ────────────────────────────────────────────────────────────
+function renderAbout() {
+  const i = store.get('info');
+  if (!i) return;
+  const r = store.get('ready');
+  const feats = Object.entries(i.features ?? {});
+  $('panel-about').innerHTML = `<h1>About</h1><div class="grid2">
+    <section class="panel"><h2>Build</h2><dl class="kv"><dt>version</dt><dd>${esc(i.version)}</dd><dt>commit</dt><dd><code>${esc(i.gitSha)}</code></dd><dt>compiler</dt><dd>${esc(i.rustc)}</dd><dt>built</dt><dd>${esc(new Date(i.builtAt).toLocaleString())}</dd>
+      <dt>started</dt><dd>${esc(new Date(i.startedAt).toLocaleString())} · up ${esc(fmtDuration((Date.now() - i.startedAt) / 1000))}</dd><dt>environment</dt><dd>${esc(i.env)} · role ${esc(i.role)} · ${fmt(i.workers)} workers</dd><dt>key scope</dt><dd><code>${esc(i.keyScope)}</code></dd></dl></section>
+    <section class="panel"><h2>Features</h2><ul class="groups">${feats.map(([k, on]) => `<li><span>${esc(k)}</span><span data-level="${on ? 'good' : 'unknown'}">${icon(on ? 'good' : 'unknown')} ${on ? 'on' : 'off'}</span><span></span></li>`).join('')}</ul>
+      <h2 style="margin-top:12px">Readiness</h2><pre class="payload">${esc(JSON.stringify(r ?? {}, null, 2))}</pre>
+      <p><a href="${esc(joinUrl(state.base, '/metrics'))}">/metrics</a>${i.features?.docsUi ? ` · <a href="${esc(joinUrl(state.base, '/docs'))}">/docs</a>` : ''}</p></section></div>
+    <section class="panel" style="margin-top:10px"><div class="panel-head"><h2>Configuration in effect</h2><span class="end muted">secrets read [REDACTED]; RIOT_API_KEY is not shown</span></div>
+      <div class="filters"><label class="sr-only" for="abSearch">Search the configuration</label><input id="abSearch" type="search" placeholder="name or value" /></div><div id="abConfig"></div></section>`;
+  const draw = (q) => {
+    const n = q.trim().toLowerCase();
+    const rows = Object.entries(i.config ?? {}).map(([name, value]) => ({ name, value })).filter((x) => !n || x.name.toLowerCase().includes(n) || String(x.value ?? '').toLowerCase().includes(n));
+    $('abConfig').replaceChildren(table({ columns: [{ key: 'name', label: 'Variable', format: (v) => `<code>${esc(v)}</code>` }, { key: 'value', label: 'Value', format: (v) => (v == null ? '<span class="muted">unset</span>' : `<code>${esc(v)}</code>`) }], rows, cap: 200, sort: { key: 'name', dir: 'asc' }, empty: 'Nothing matches.' }));
+  };
+  $('abSearch').addEventListener('input', (e) => draw(e.target.value));
+  draw('');
+}
+store.on('ready', () => { if (state.tab === 'about') renderAbout(); });
+
+// ── health strip and the rail's foot ─────────────────────────────────
+function renderStrip() {
+  const s = store.get('snapshot');
+  const ready = store.get('ready');
+  const info = store.get('info');
+  if (ready) pill($('sReady'), ready.ok ? 'good' : 'critical', ready.ok ? 'ready' : 'not ready');
+  const lim = limiterLevel(s);
+  pill($('sLimiter'), lim.level, esc(lim.text));
+  const disk = diskLevel(s?.disk);
+  pill($('sDisk'), disk.level, disk.used == null ? 'disk —' : `disk ${pct(disk.used, 0)} · ${esc(fmtBytes(s.disk.freeBytes))} free`);
+  const b = backupLevel(store.get('backups'));
+  pill($('sBackup'), b.level, esc(b.text));
+  $('sScope').innerHTML = `<span>scope <b>${esc((s?.keyScope ?? info?.keyScope ?? '—').slice(0, 8))}</b></span>`;
+  if (info) {
+    const up = (Date.now() - info.startedAt) / 1000;
+    $('sBuild').textContent = `v${info.version} · ${info.gitSha.slice(0, 7)} · ${info.env} · up ${fmtDuration(up)}`;
+  }
+}
+for (const k of ['snapshot', 'ready', 'info', 'backups']) store.on(k, renderStrip);
+function setConn(level, text) {
+  pill($('conn'), level, esc(text));
+}
+function renderFoot() {
+  $('baseLabel').textContent = state.base.replace(/^https?:\/\//, '');
+  $('baseLabel').title = state.base;
+  $('keyLabel').textContent = maskKey(state.key);
+}
+
+// ── snapshots: from the API on entry, then from the metrics topic ────
+function takeSnapshot(s) {
+  const at = Date.now();
+  const cur = { at, requests: sumValues(s.requests), upstream: sumValues(s.upstream) };
+  const p = state.prev;
+  state.prev = cur;
+  state.snapAt = at;
+  if (state.firstArchived == null) state.firstArchived = s.totals?.archivedMatches ?? null;
+  store.set('rates', {
+    requests: rate(p && { at: p.at, total: p.requests }, { at, total: cur.requests }),
+    upstream: rate(p && { at: p.at, total: p.upstream }, { at, total: cur.upstream }),
+    requestsTotal: cur.requests,
+    upstreamTotal: cur.upstream,
+  });
+  store.set('snapshot', s);
+}
+async function refresh() {
+  const jobs = [
+    api('/v1/admin/metrics').then(takeSnapshot),
+    fetch(joinUrl(state.base, '/readyz'), { cache: 'no-cache' }).then((r) => r.json()).then((j) => store.set('ready', j)),
+    api('/v1/admin/backups').then((b) => store.set('backups', b)),
+  ];
+  const results = await Promise.allSettled(jobs);
+  for (const r of results) if (r.status === 'rejected' && !(r.reason instanceof ApiError && r.reason.status < 500 && r.reason.status >= 400)) console.warn(r.reason);
+}
+
+// ── the socket: metrics + firehose, metrics dropped while hidden ─────
+function send(frame) {
+  if (state.ws?.readyState === 1) state.ws.send(JSON.stringify(frame));
+}
+function connect() {
+  clearTimeout(state.retry);
+  const ws = new WebSocket(wsUrl(state.base, state.key));
+  state.ws = ws;
+  setConn('unknown', 'connecting…');
+  ws.onopen = () => {
+    state.backoff = 1000;
+    send({ op: 'subscribe', topics: document.hidden ? ['firehose'] : ['metrics', 'firehose'] });
+    setConn(document.hidden ? 'warning' : 'good', document.hidden ? 'paused' : 'live');
+  };
+  ws.onmessage = (e) => {
+    let frame;
+    try { frame = JSON.parse(e.data); } catch { return; }
+    if (frame.op === 'error' && ['UNAUTHORIZED', 'FORBIDDEN'].includes(frame.error?.code)) {
+      openSheet(frame.error.message || 'The key was refused.');
+      return;
+    }
+    if (frame.op !== 'event') return;
+    if (frame.event === 'metrics.snapshot') takeSnapshot(frame.data);
+    store.set('event', frame);
+  };
+  ws.onclose = (e) => {
+    if (state.ws !== ws) return;
+    state.ws = null;
+    if (e?.code === 4401 || e?.code === 4403) {
+      setConn('critical', 'key refused');
+      openSheet(e.reason || 'The key was refused.');
+      return;
+    }
+    const wait = state.backoff;
+    state.backoff = Math.min(state.backoff * 2, 30000);
+    setConn('warning', `reconnecting in ${Math.round(wait / 1000)}s`);
+    state.retry = setTimeout(connect, wait);
+  };
+}
+function disconnect() {
+  clearTimeout(state.retry);
+  const ws = state.ws;
+  state.ws = null;
+  ws?.close();
+}
+document.addEventListener('visibilitychange', () => {
+  if (!state.started) return;
+  if (document.hidden) {
+    send({ op: 'unsubscribe', topics: ['metrics'] });
+    if (state.ws) setConn('warning', 'paused');
+    TABS.find((t) => t.id === state.tab)?.leave?.();
+  } else {
+    send({ op: 'subscribe', topics: ['metrics'] });
+    if (state.ws?.readyState === 1) setConn('good', 'live');
+    refresh();
+    TABS.find((t) => t.id === state.tab)?.enter?.(route(location.hash).id);
+  }
+});
+
+// ── the key sheet: the probe is GET /v1/admin/info ───────────────────
+function openSheet(message) {
+  state.started = false;
+  disconnect();
+  const err = $('sheetError');
+  err.hidden = !message;
+  err.querySelector('span').textContent = message ?? '';
+  $('keyInput').value = '';
+  $('baseInput').value = state.base;
+  $('sheet').hidden = false;
+  $('keyInput').focus();
+}
+$('sheetForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const key = $('keyInput').value.trim();
+  const base = ($('baseInput').value.trim() || location.origin).replace(/\/+$/, '');
+  state.key = key;
+  state.base = base;
+  if (base === location.origin) localStorage.removeItem(STORE_BASE);
+  else localStorage.setItem(STORE_BASE, base);
+  $('sheet').hidden = true;
+  await boot();
+});
+$('signOut').addEventListener('click', () => {
+  localStorage.removeItem(STORE_KEY);
+  state.key = '';
+  renderFoot();
+  openSheet(null);
+});
+
+// ── the clock: the one timer, ages and uptime ────────────────────────
+setInterval(() => {
+  if (!document.hidden && state.started) {
+    renderStrip();
+    tickCountdowns();
+  }
+}, 1000);
+
+async function boot() {
+  renderFoot();
+  let info;
+  try {
+    info = await api('/v1/admin/info');
+  } catch (e) {
+    if (!(e instanceof ApiError) || (e.status !== 401 && e.status !== 403)) {
+      setConn('critical', 'offline');
+      toast(`Could not reach ${state.base}: ${e.message}`, 'critical');
+    }
+    return;
+  }
+  if (state.key) localStorage.setItem(STORE_KEY, state.key);
+  renderFoot();
+  store.set('info', info);
+  state.started = true;
+  showTab();
+  await refresh();
+  connect();
+}
+
+// For the jsdom tests and the console: the pieces later tabs share.
+// ── keyboard: palette, help, shortcuts; focus kept inside a dialog ─────
+const dialogs = ['sheet', 'confirm', 'palette', 'help'];
+const openDialog = () => dialogs.map($).find((d) => !d.hidden) ?? null;
+const pal = { back: null, list: [], at: 0 };
+function commands() {
+  return [
+    ...TABS.map((t, i) => ({ label: `Go to ${t.label}`, hash: t.id, hint: i < 10 ? String((i + 1) % 10) : '' })),
+    { label: 'Switch theme', run: () => $('theme').click(), hint: 't' },
+    { label: 'Show keyboard help', run: openHelp, hint: '?' },
+    { label: 'Refresh now', run: () => { refresh(); showTab(); } },
+    { label: 'Run maintenance', run: runMaintenance },
+    { label: 'Sign out', run: () => $('signOut').click() },
+  ];
+}
+function openPalette() {
+  pal.back = document.activeElement;
+  $('palInput').value = '';
+  $('palette').hidden = false;
+  drawPalette();
+  $('palInput').focus();
+}
+function closePalette() {
+  $('palette').hidden = true;
+  pal.back?.focus?.();
+}
+function drawPalette() {
+  pal.list = paletteMatch(commands(), $('palInput').value).slice(0, 12);
+  pal.at = Math.min(pal.at, Math.max(0, pal.list.length - 1));
+  $('palList').innerHTML = pal.list.map((c, i) => `<li role="option" id="pal-${i}" data-i="${i}" aria-selected="${i === pal.at}">${esc(c.label)}<span class="muted">${c.hint ? `<kbd>${esc(c.hint)}</kbd>` : ''}</span></li>`).join('') || '<li class="muted" role="option" aria-disabled="true">Nothing matches.</li>';
+  $('palInput').setAttribute('aria-activedescendant', pal.list.length ? `pal-${pal.at}` : '');
+}
+function runCommand(c) {
+  if (!c) return;
+  closePalette();
+  if (c.hash) location.hash = c.hash;
+  else c.run();
+}
+$('palInput').addEventListener('input', () => { pal.at = 0; drawPalette(); });
+$('palInput').addEventListener('keydown', (e) => {
+  const step = { ArrowDown: 1, ArrowUp: -1 }[e.key];
+  if (step) { e.preventDefault(); pal.at = (pal.at + step + pal.list.length) % Math.max(1, pal.list.length); drawPalette(); }
+  else if (e.key === 'Enter') { e.preventDefault(); runCommand(pal.list[pal.at]); }
+});
+$('palList').addEventListener('click', (e) => { const li = e.target.closest('[data-i]'); if (li) runCommand(pal.list[Number(li.dataset.i)]); });
+$('palette').addEventListener('click', (e) => { if (e.target.id === 'palette') closePalette(); });
+function openHelp() { pal.back = document.activeElement; $('help').hidden = false; $('helpClose').focus(); }
+function closeHelp() { $('help').hidden = true; pal.back?.focus?.(); }
+$('helpClose').addEventListener('click', closeHelp);
+document.addEventListener('keydown', (e) => {
+  const d = openDialog();
+  if (d) {
+    if (e.key === 'Escape') { if (d.id === 'palette') closePalette(); else if (d.id === 'help') closeHelp(); }
+    // Tab stays inside the open dialog.
+    if (e.key === 'Tab') {
+      const f = [...d.querySelectorAll('button, input, select, a[href], [tabindex="0"]')].filter((x) => !x.disabled && !x.hidden);
+      if (f.length && (e.shiftKey ? document.activeElement === f[0] : document.activeElement === f.at(-1))) { e.preventDefault(); (e.shiftKey ? f.at(-1) : f[0]).focus(); }
+    }
+    return;
+  }
+  if (e.ctrlKey || e.metaKey || e.altKey || e.target.closest?.('input, select, textarea, [contenteditable]')) return;
+  if (e.key === '/') { e.preventDefault(); openPalette(); }
+  else if (e.key === '?') { e.preventDefault(); openHelp(); }
+  else if (e.key === 't') $('theme').click();
+  else {
+    const id = digitTab(e.key, TABS.map((t) => t.id));
+    if (id) { location.hash = id; $(`tab-${id}`).focus(); }
+  }
+});
+
+window.rpAdmin = { store, state, api, table, confirmAction, toast, route };
+
+buildTabs();
+showTab();
+boot();
+    </script>
+  </body>
+</html>

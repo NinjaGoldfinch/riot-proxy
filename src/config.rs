@@ -69,6 +69,7 @@ pub const VARS: &[&str] = &[
     "DDRAGON_LOCALE",
     "ADMIN_IP_ALLOWLIST",
     "TRUST_PROXY",
+    "ADMIN_CORS_ORIGINS",
     "BOOTSTRAP_ADMIN_KEY",
     "AUTH_DISABLED",
     "DEV_UI",
@@ -148,6 +149,16 @@ pub enum Environment {
     Production,
 }
 
+impl Environment {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Development => "development",
+            Self::Test => "test",
+            Self::Production => "production",
+        }
+    }
+}
+
 impl FromStr for Environment {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -167,6 +178,16 @@ pub enum Role {
     Worker,
 }
 
+impl Role {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Api => "api",
+            Self::Worker => "worker",
+        }
+    }
+}
+
 impl FromStr for Role {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -183,6 +204,15 @@ impl FromStr for Role {
 pub enum LogFormat {
     Json,
     Pretty,
+}
+
+impl LogFormat {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Json => "json",
+            Self::Pretty => "pretty",
+        }
+    }
 }
 
 impl FromStr for LogFormat {
@@ -274,6 +304,10 @@ pub struct Config {
     /// Take the client address from `X-Forwarded-For` (a trusted proxy in front).
     /// Off: the TCP peer, which a caller cannot forge (ADR-068).
     pub trust_proxy: bool,
+    /// Exact origins (`https://host[:port]`) allowed to call the admin API,
+    /// `/v1/ws` and the health routes from a browser; empty sends no CORS
+    /// headers at all (ADM-07, ADR-014's deferral closed).
+    pub admin_cors_origins: Vec<String>,
     pub bootstrap_admin_key: Option<Secret>,
     pub auth_disabled: bool,
     /// `/dev`: never in production, whatever `DEV_UI` says (ADR-071).
@@ -287,6 +321,97 @@ pub struct Config {
     pub riot_base_url: Option<String>,
     /// Fetch Data Dragon and the queue table from here instead. Refused in production.
     pub ddragon_base_url: Option<String>,
+}
+
+/// What a secret reads as in [`Config::redacted`].
+pub const REDACTED: &str = "[REDACTED]";
+
+impl Config {
+    /// Every variable in [`VARS`] but `RIOT_API_KEY`, with the value this
+    /// process runs with, written as it would be in `.env` (ADM-03,
+    /// `GET /v1/admin/info`). Secrets (`BOOTSTRAP_ADMIN_KEY`, a Postgres
+    /// `DATABASE_URL`) read [`REDACTED`]; an optional value left unset is `None`.
+    /// `RIOT_API_KEY` is left out entirely: not even its length is shown.
+    pub fn redacted(&self) -> BTreeMap<&'static str, Option<String>> {
+        fn s(v: impl ToString) -> Option<String> {
+            Some(v.to_string())
+        }
+        let path = |p: &Path| s(p.display());
+        let kind_limits = if self.job_kind_limits.is_empty() {
+            "none".to_string()
+        } else {
+            self.job_kind_limits
+                .iter()
+                .map(|(k, n)| format!("{k}={n}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        let database = match &self.database {
+            Database::Sqlite(p) => format!("sqlite://{}", p.display()),
+            Database::Postgres(_) => REDACTED.to_string(),
+        };
+        let platforms: Vec<&str> = self.ladder_platforms.iter().map(|p| p.as_str()).collect();
+        BTreeMap::from([
+            ("RIOT_USER_AGENT", s(&self.riot_user_agent)),
+            ("ENV", s(self.env.as_str())),
+            ("HOST", s(&self.host)),
+            ("PORT", s(self.port)),
+            ("LOG_LEVEL", s(&self.log_level)),
+            ("LOG_FORMAT", s(self.log_format.as_str())),
+            ("DATA_DIR", path(&self.data_dir)),
+            ("DATABASE_URL", Some(database)),
+            ("ROLE", s(self.role.as_str())),
+            ("JOB_CONCURRENCY", s(self.job_concurrency)),
+            ("JOB_KIND_LIMITS", Some(kind_limits)),
+            ("JOB_YIELD_BUDGET_MS", s(self.job_yield_budget_ms)),
+            ("CACHE_TTL_OVERRIDES", s(&self.cache_ttl_overrides)),
+            ("CACHE_L1_MAX_MB", s(self.cache_l1_max_mb)),
+            ("NEG_TTL_SECONDS", s(self.neg_ttl_seconds)),
+            ("NEG_TTL_ACCOUNT_SECONDS", s(self.neg_ttl_account_seconds)),
+            ("CLIENT_WAIT_BUDGET_MS", s(self.client_wait_budget_ms)),
+            ("BULK_USAGE_CEILING", s(self.bulk_usage_ceiling)),
+            ("BULK_IDLE_CEILING", s(self.bulk_idle_ceiling)),
+            ("BULK_IDLE_AFTER_S", s(self.bulk_idle_after_s)),
+            ("STALE_WHILE_REVALIDATE", s(self.stale_while_revalidate)),
+            ("METRICS_INTERVAL_S", s(self.metrics_interval_s)),
+            ("METRICS_HISTORY_INTERVAL_S", s(self.metrics_history_interval_s)),
+            ("TRACK_POLL_LIVE_S", s(self.track_poll_live_s)),
+            ("TRACK_POLL_RANK_S", s(self.track_poll_rank_s)),
+            ("TRACK_POLL_MATCH_S", s(self.track_poll_match_s)),
+            ("DDRAGON_SYNC_S", s(self.ddragon_sync_s)),
+            ("ARCHIVE_TIMELINES", s(self.archive_timelines)),
+            ("TIMELINE_BACKFILL_PATCHES", s(self.timeline_backfill_patches)),
+            ("BACKUP_KEEP", s(self.backup_keep)),
+            ("LOOKUP_BACKFILL_LIMIT", s(self.lookup_backfill_limit)),
+            ("TRACK_CATCHUP_LIMIT", s(self.track_catchup_limit)),
+            ("LADDER_CRAWL_S", s(self.ladder_crawl_s)),
+            ("LADDER_QUEUES", s(self.ladder_queues.join(","))),
+            ("LADDER_PLATFORMS", s(platforms.join(","))),
+            ("LADDER_TIER_FLOOR", s(&self.ladder_tier_floor)),
+            ("LADDER_BACKFILL_LIMIT", s(self.ladder_backfill_limit)),
+            ("RANK_LOOKUP_LIMIT", s(self.rank_lookup_limit)),
+            ("RANK_LOOKUP_RECHECK_S", s(self.rank_lookup_recheck_s)),
+            ("TIER_LATE_STAMP_DAYS", s(self.tier_late_stamp_days)),
+            ("FACTS_REEXTRACT_BATCH", s(self.facts_reextract_batch)),
+            ("AGGREGATE_PATCH_LIMIT", s(self.aggregate_patch_limit)),
+            ("AGGREGATE_INTERVAL_S", s(self.aggregate_interval_s)),
+            ("DDRAGON_DIR", path(&self.ddragon_dir)),
+            ("DDRAGON_LOCALE", s(&self.ddragon_locale)),
+            ("ADMIN_IP_ALLOWLIST", s(self.admin_ip_allowlist.join(","))),
+            ("TRUST_PROXY", s(self.trust_proxy)),
+            ("ADMIN_CORS_ORIGINS", s(self.admin_cors_origins.join(","))),
+            (
+                "BOOTSTRAP_ADMIN_KEY",
+                self.bootstrap_admin_key.as_ref().map(|_| REDACTED.to_string()),
+            ),
+            ("AUTH_DISABLED", s(self.auth_disabled)),
+            ("DEV_UI", s(self.dev_ui)),
+            ("DOCS_UI", s(self.docs_ui)),
+            ("DASHBOARD_UI", s(self.dashboard_ui)),
+            ("RIOT_BASE_URL", self.riot_base_url.clone()),
+            ("DDRAGON_BASE_URL", self.ddragon_base_url.clone()),
+        ])
+    }
 }
 
 /// Flags that override any variable. Global: accepted before or after any subcommand.
@@ -536,6 +661,7 @@ impl Config {
             ddragon_locale: v.string("DDRAGON_LOCALE", "en_US"),
             admin_ip_allowlist: csv(&v.string("ADMIN_IP_ALLOWLIST", "")),
             trust_proxy: v.bool("TRUST_PROXY", false),
+            admin_cors_origins: v.origins("ADMIN_CORS_ORIGINS"),
             bootstrap_admin_key: v.opt_string("BOOTSTRAP_ADMIN_KEY").map(Secret::new),
             auth_disabled,
             dev_ui: dev_ui && env != Environment::Production,
@@ -676,6 +802,29 @@ struct Vars {
 impl Vars {
     fn push(&mut self, name: &str, message: &str) {
         self.errors.push(format!("{name}: {message}"));
+    }
+
+    /// A CSV of exact browser origins: `http(s)://host[:port]`, no path, no
+    /// wildcard. `*` is refused: the admin API takes a key a page on any
+    /// origin could then use.
+    fn origins(&mut self, name: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        for o in csv(&self.string(name, "")) {
+            let host = o.strip_prefix("https://").or_else(|| o.strip_prefix("http://"));
+            if o == "*" {
+                self.push(name, "'*' is refused; list each origin");
+            } else if host
+                .is_none_or(|h| h.is_empty() || h.contains(['/', '?', '#', '*', ' ']) || !h.is_ascii())
+            {
+                self.push(
+                    name,
+                    &format!("'{o}' is not an origin like https://admin.example.com"),
+                );
+            } else {
+                out.push(o);
+            }
+        }
+        out
     }
 
     /// Record an error and return a placeholder; the config is discarded anyway.

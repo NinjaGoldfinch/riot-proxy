@@ -269,6 +269,16 @@ impl Fetcher {
         &self.inner.scope
     }
 
+    /// Riot calls in flight, each shared by every request waiting on it.
+    pub fn inflight_count(&self) -> usize {
+        self.flight.inflight_count()
+    }
+
+    /// `CLIENT_WAIT_BUDGET_MS`: how long an interactive request waits for the limiter.
+    pub fn interactive_budget(&self) -> Duration {
+        self.inner.interactive_budget
+    }
+
     pub async fn fetch(&self, req: RiotRequest, opts: FetchOptions) -> Result<FetchResult, FetchError> {
         // The job running this fetch, if any, logs what it got (DEV-19).
         let label = activity::tracing_job().then(|| format!("{} {}", req.endpoint.id, req.path));
