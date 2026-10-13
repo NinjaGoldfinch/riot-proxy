@@ -226,8 +226,11 @@ bucket, never the keys.
 
 ## Sizing and cost
 
-Per row: match about 12 KB zstd, timeline 60–80 KB, facts about 1 KB per
-participant (DSK-05 trims that). For the backlog of 1.19 M matches:
+Measured on the VPS on 2026-10-13 (step 0): 230,715 matches hold 2.46 GB of
+bodies (10.7 KB each) and 216,475 timelines hold 13.50 GB (62.3 KB each), so
+16 GB of the 20 GB file is raw bodies. 1,126,303 jobs were pending. Facts are
+about 1 KB per participant (DSK-05 trims that). For a backlog of about 1.1 M
+matches:
 
 | Where | Matches only | With timelines |
 |---|---|---|
@@ -383,7 +386,8 @@ scp ubuntu@old:/etc/systemd/system/ninjagoldfinch-lol.service /tmp/ && sudo inst
 
   `PROXY_URL` stays `http://127.0.0.1:8080`, the proxy is on the same box.
 - **cloudflared** from Cloudflare's apt repository, then the tunnel's
-  credentials from `old`. Token install: stream the unit file
+  credentials from `old`. On the VPS (step 0, 2026-10-13) the unit passes a token and
+  `/etc/cloudflared/` holds a `token` file, so copy both. Token install: stream the unit file
   (`ssh ubuntu@old 'sudo -n cat /etc/systemd/system/cloudflared.service' | sudo sh -c 'umask 077; cat > /etc/systemd/system/cloudflared.service'`,
   then `sudo chmod 0644` it). Config install: stream `/etc/cloudflared/` as a
   tar (`ssh ubuntu@old 'sudo -n tar -C /etc -cf - cloudflared' | sudo tar -C /etc -xf -`)
