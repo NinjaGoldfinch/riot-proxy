@@ -153,7 +153,7 @@ Every handler that hits Riot calls the fetcher with `FetchOptions::JOB` (`Priori
 | `tiers:backfill` | boot when a ranked match has facts and no tier stamps; run inline by `aggregate:analytics` | stamp `match_tiers` for those matches, 500 a batch, from the ladder and league lookups as they are now (ADR-105's tier), in id order; no Riot calls (ADR-127) |
 | `timelines:backfill` | hourly, one per match-v5 region (deduped by region, in its region's lane), only while `TIMELINE_BACKFILL_PATCHES` > 0 | fetch the missing timelines of archived ranked matches (420, 440) in the newest `TIMELINE_BACKFILL_PATCHES` patches, newest patch then newest game first, 25 a turn through the bulk lane; a 404 is marked in `timeline_gaps` and never asked again; a turn that stored any queues `builds:extract`. Progress: `GET /v1/admin/timelines/backfill` (TL-02, ADR-133) |
 | `aggregate:analytics` | crawl end, tick, admin | run `builds:extract` and `tiers:backfill`, then rebuild the analytics tables (v1's shape, ADR-056) for the last `AGGREGATE_PATCH_LIMIT` patches; `analytics.updated` |
-| `maintenance` | daily | trim `jobs`/`metrics_history`, sweep L2, `PRAGMA optimize`, WAL checkpoint, `VACUUM INTO` backup |
+| `maintenance` | daily | `VACUUM INTO` backup (`BACKUP_KEEP` kept; skipped when the disk is short, a failed copy logged, neither stops the rest), trim `jobs`/`metrics_history`, sweep L2, `PRAGMA optimize`, WAL checkpoint |
 
 The three-phase crawl is preserved exactly — it is the reason a ten-participant match is fetched once, and it is a design property, not a queue property.
 

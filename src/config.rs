@@ -51,6 +51,7 @@ pub const VARS: &[&str] = &[
     "DDRAGON_SYNC_S",
     "ARCHIVE_TIMELINES",
     "TIMELINE_BACKFILL_PATCHES",
+    "BACKUP_KEEP",
     "LOOKUP_BACKFILL_LIMIT",
     "TRACK_CATCHUP_LIMIT",
     "LADDER_CRAWL_S",
@@ -246,6 +247,9 @@ pub struct Config {
     /// missing timelines of ranked matches in this many of the newest
     /// patches; 0 turns it off.
     pub timeline_backfill_patches: u32,
+    /// `BACKUP_KEEP` (DSK-02): daily `VACUUM INTO` backups kept in
+    /// `$DATA_DIR/backups`; 0 takes none.
+    pub backup_keep: u32,
     pub lookup_backfill_limit: u32,
     pub track_catchup_limit: u32,
     pub ladder_crawl_s: u32,
@@ -512,6 +516,7 @@ impl Config {
             ddragon_sync_s: v.int("DDRAGON_SYNC_S", 3600, 60, u32::MAX),
             archive_timelines: v.bool("ARCHIVE_TIMELINES", true),
             timeline_backfill_patches: v.int("TIMELINE_BACKFILL_PATCHES", 0, 0, 1000),
+            backup_keep: v.int("BACKUP_KEEP", 14, 0, 365),
             lookup_backfill_limit: v.int("LOOKUP_BACKFILL_LIMIT", u32::MAX, 0, u32::MAX),
             track_catchup_limit: v.int("TRACK_CATCHUP_LIMIT", 500, 0, 10_000),
             ladder_crawl_s: v.int("LADDER_CRAWL_S", 0, 0, 604_800),

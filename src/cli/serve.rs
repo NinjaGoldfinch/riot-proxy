@@ -185,10 +185,11 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         db: db.clone(),
         key_scope: scope.clone(),
     });
-    let maintenance = Arc::new(crate::jobs::maintenance::Maintenance {
-        db: db.clone(),
-        backup_dir: config.data_dir.join("backups"),
-    });
+    let maintenance = Arc::new(crate::jobs::maintenance::Maintenance::new(
+        db.clone(),
+        config.data_dir.join("backups"),
+        config.backup_keep as usize,
+    ));
     let analytics = Arc::new(crate::jobs::analytics::AnalyticsContext {
         queue: queue.clone(),
         hub: hub.clone(),

@@ -132,6 +132,7 @@ Same variable names as v1 where the concept survives; removed variables are list
 | `TIER_LATE_STAMP_DAYS` | `14` | **new** — a rank the ladder or a league lookup returns places that player's `UNKNOWN` tier stamps on matches that ended within this many days; a known tier is never changed; `0` places none (ADR-127) |
 | `LOOKUP_BACKFILL_LIMIT` | `4294967295` (`u32::MAX`) | v1 capped it at 10000; now the walk ends where the player's history does (ADR-081) |
 | `BULK_IDLE_CEILING` / `BULK_IDLE_AFTER_S` | `0.95` / `30` | **new** — bulk's share of a bucket on a region with no interactive request in the last `BULK_IDLE_AFTER_S` seconds. At least `BULK_USAGE_CEILING` (which it follows when unset and lower) and below 1 (ADR-126) |
+| `BACKUP_KEEP` | `14` | **new** — daily `VACUUM INTO` backups kept in `$DATA_DIR/backups`; `0` takes none. A backup is skipped, with a warning, when the disk has under 1.2 × the database's size free (DSK-02, ADR-136) |
 | `BOOTSTRAP_ADMIN_KEY` | — | printed on first `serve`, no separate migrate step |
 | everything else (`CACHE_TTL_OVERRIDES`, `NEG_TTL_*`, `CLIENT_WAIT_BUDGET_MS`, `BULK_USAGE_CEILING`, `STALE_WHILE_REVALIDATE`, `METRICS_*`, `TRACK_POLL_*`, `TRACK_CATCHUP_LIMIT`, `LADDER_*`, `FACTS_REEXTRACT_BATCH`, `AGGREGATE_*`, `ADMIN_IP_ALLOWLIST`, `AUTH_DISABLED`, `DEV_UI`, `DOCS_UI`, `DASHBOARD_UI`, `LOG_LEVEL`) | as v1 | unchanged |
 
@@ -162,7 +163,7 @@ The binary's own RSS is dominated by the SQLite page cache (`cache_size`, 64 MB 
 
 ## Backups & restore
 
-- **Automatic:** `maintenance` runs `VACUUM INTO "$DATA_DIR/backups/riot-proxy-<date>.db"` daily, keeps 14. This is a consistent snapshot taken while the service runs.
+- **Automatic:** `maintenance` runs `VACUUM INTO "$DATA_DIR/backups/riot-proxy-<date>.db"` daily, keeps `BACKUP_KEEP` (14). This is a consistent snapshot taken while the service runs. It is a full copy of the file, so on a box whose disk cannot hold the database twice set `BACKUP_KEEP=0` and copy off-box by hand instead. The step skips itself, with a warning, when the disk has less than 1.2 × the database's size free, and a copy that fails is removed and logged; neither stops the day's trims, sweep and checkpoint (ADR-136).
 - **Manual:** `./riot-proxy backup /path/out.db` (same statement) — or `sqlite3 riot-proxy.db ".backup out.db"`.
 - **Restore:** stop the service, replace the file, start. There is nothing else to restore; the L1 cache and job heap rebuild themselves and the limiter defaults to conservative on a stale checkpoint.
 - **Off-box:** `rclone`/`restic` the `backups/` directory; it is plain files.
