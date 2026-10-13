@@ -133,7 +133,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_fresh_database_has_design_04s_page_size_and_no_free_pages() {
+    async fn a_fresh_database_has_design_04s_page_size_and_a_file_of_whole_pages() {
         let (dir, db) = open();
         // Until a checkpoint the migrations' pages sit in the WAL, not the file.
         db.write(|c| {
@@ -144,8 +144,10 @@ mod tests {
         .expect("checkpoint");
         let u = usage(&db).await.expect("usage");
         assert_eq!(u.page_size, 4096);
-        assert_eq!(u.freelist_pages, 0);
         assert!(u.page_count > 0, "{u:?}");
+        // A migration that drops a table (V0019's `match_tiers`) leaves its
+        // pages on the free list; they are never the whole file.
+        assert!(u.freelist_pages < u.page_count, "{u:?}");
         assert_eq!(u.db_bytes, u.page_count * u.page_size, "{u:?}");
         assert_eq!(u.wal_bytes, 0, "{u:?}");
         assert!(u.disk_total_bytes >= u.disk_free_bytes, "{u:?}");
