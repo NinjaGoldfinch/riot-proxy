@@ -359,6 +359,15 @@ Validated with the dataviz palette script; both modes pass.
 - **Limiter.** A summary (scopes, frozen, holding bulk work, interactive waiting, the bulk ceilings and the client wait budget), then a card per scope from `snapshot.limiter`: frozen first, then held by the bulk gate (`gates.blockedScopes`), then the fullest. Each card: its state (frozen with a countdown, bulk held with a countdown, or open), waiters, app windows, the four fullest method buckets with the rest folded, a held method flagged, and "Live usage", which reads `/v1/admin/limits/{scope}` each time it opens. Countdowns run on the 1 s clock from the snapshot's time, with no refetch. Folds stay open across snapshots. The rail's Limiter badge counts frozen scopes.
 - **Cache.** Tiles for memory entries, memory used (a meter in bytes), persisted rows, dropped writes (flagged when any) and reads since start; the 24 h hit ratio from history; a probe of `/v1/admin/debug/cache`; and a purge that is counted first (`POST /v1/admin/cache/purge` with `dryRun`, ADM-10) and then confirmed, reporting how many entries went. Editing the pattern after a count disarms the purge.
 
+## Jobs (ADM-11)
+
+The Jobs tab folds in `/dev/jobs` (design/10 §Jobs page), which stays until ADM-17.
+
+- **Overview** (`#jobs`): queues from `snapshot.queues` (running, ready, delayed, failed in 24 h, done in the last hour), so no fetch; workers and the jobs finished here from `/jobs/activity` every second; up next from `/jobs/queue?limit=100` every 5 s, running and next grouped by kind and platform as ADR-093 set out (a group says how many, what they cover, when, the highest try; its tooltip the priority range); failed jobs from `/jobs?state=failed` every 5 s, each with Retry; counts by kind from `/jobs/stats` every 15 s. The rail's Jobs badge counts failed jobs in 24 h.
+- **Bulk purge** (DSK-03's route): kind, state and minimum priority; Delete stays disabled until a dry run (`dryRun=true`) for those exact parameters has counted the rows, and its confirm names the count. Editing a parameter disarms it.
+- **A job** (`#jobs/<id>`, opened from any worker, row or group of one): state, the "now" line, facts, payload, and the timeline of its latest run read with `?after=<nextSeq>` each second, appended, with a follow toggle; a new attempt restarts the timeline. Retry for a failed job, Cancel for a pending one, each after `confirmAction()`. A missing job says so.
+- **Polling** is one `setTimeout` chain at 1 s while the tab is open, visible and *live* is ticked; it stops when hidden, unticked or left.
+
 The rail lists only the tabs that exist; each later task adds its own. Until ADM-12 there is no Ladder tab: `/dev/jobs`, `/v1/admin/ladder/*` and the firehose cover it.
 
 ## Chart rules
@@ -375,7 +384,7 @@ Each tab's task fills its row and adds a section below.
 | `#traffic` | Traffic: by route, upstream, live recent requests | snapshot, `/recent` | ADM-09 | built |
 | `#limiter` | Limiter: a card per scope | snapshot, `/limits/{scope}` | ADM-10 | built |
 | `#cache` | Cache: L1/L2, ratios, probe, purge | snapshot, history, `/debug/cache`, `/cache/purge` | ADM-10 | built |
-| `#jobs`, `#jobs/<id>` | Jobs (folds in `/dev/jobs`) | `/jobs/*` | ADM-11 | planned |
+| `#jobs`, `#jobs/<id>` | Jobs (folds in `/dev/jobs`) | snapshot, `/jobs/*` | ADM-11 | built |
 | `#ladder`, `#ladder/<id>` | Ladder | `/ladder/*`, `crawl.phase` frames | ADM-12 | planned |
 | `#archive` | Archive & Storage: counts, disk, backups, actions | `/stats`, `/backups` | ADM-13 | planned |
 | `#consumers` | Consumers & Players | `/consumers`, `/tracked-players`, snapshot quotas | ADM-14 | planned |

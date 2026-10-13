@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs';
 const html = readFileSync(new URL('../src/ui/admin.html', import.meta.url), 'utf8');
 const block = html.match(/\/\/ -{10} pure helpers[^\n]*\n([\s\S]*?)\/\/ -{10} end pure helpers/);
 assert.ok(block, 'the pure helpers block is marked in admin.html');
-const h = new Function(`${block[1]}; return { APEX_LIST_CAP, fmt, compact, fmtBytes, fmtDuration, pct, esc, relTime, sumValues, hitRatio, rate, jobTotals, diskLevel, backupLevel, limiterLevel, route, joinUrl, wsUrl, maskKey, contrast, sortRows, capRows, percentile, downsample, historyPointOf, seriesOf, statusClass, routeRows, upstreamRows, windowLabel, fullness, meterLevel, scopeOrder };`)();
+const h = new Function(`${block[1]}; return { APEX_LIST_CAP, fmt, compact, fmtBytes, fmtDuration, pct, esc, relTime, sumValues, hitRatio, rate, jobTotals, diskLevel, backupLevel, limiterLevel, route, joinUrl, wsUrl, maskKey, contrast, sortRows, capRows, percentile, downsample, historyPointOf, seriesOf, statusClass, routeRows, upstreamRows, windowLabel, fullness, meterLevel, scopeOrder, msOf, dur, when, jobLabel, groupJobs, groupLabel, jobWhen, groupWhen };`)();
 
 const tokens = (name) => {
   const m = html.match(new RegExp(`/\\* tokens:${name}[^*]*\\*/\\s*[^{]+\\{([^}]*)\\}`));
@@ -212,4 +212,31 @@ test('scopes in need of a look come first: frozen, held, then the fullest, then 
   const s = (scope, frozenMs, used) => ({ scope, frozenMs, windows: [{ used, limit: 100 }] });
   const order = h.scopeOrder([s('a', 0, 10), s('b', 0, 90), s('c', 5, 0), s('d', 0, 0), s('e', 0, 10)], [{ scope: 'd' }]);
   assert.deepEqual(order.map((x) => x.scope), ['c', 'd', 'b', 'a', 'e']);
+});
+
+test("the jobs page's durations and times", () => {
+  assert.deepEqual([850, 4200, 185_000, 7_800_000, NaN].map(h.dur), ['850 ms', '4.2 s', '3m 05s', '2h 10m', '—']);
+  const now = 1_800_000_000_000;
+  assert.equal(h.when(now + 30_000, now), 'in 30.0 s');
+  assert.equal(h.when(new Date(now - 90_000).toISOString(), now), '1m 30s ago');
+  assert.equal(h.when(null, now), '—');
+  assert.equal(h.msOf('1970-01-01T00:00:01Z'), 1000);
+  assert.ok(Number.isNaN(h.msOf('')));
+});
+
+test('a job reads as what it does; alike jobs group by kind and platform (ADR-093)', () => {
+  const c = (offset, platform, extra = {}) => ({ kind: 'ladder:collect', state: 'pending', runAfter: 0, payload: { platform, offset, puuids: Array(25).fill('p') }, ...extra });
+  assert.equal(h.jobLabel(c(0, 'kr')), 'match ids for players 0–24 · kr');
+  assert.equal(h.jobLabel({ kind: 'archive:match', payload: { matchId: 'OC1_1' } }), 'match OC1_1');
+  assert.equal(h.jobLabel({ kind: 'names:backfill', dedupeKey: 'names:backfill', payload: {} }), 'names:backfill');
+  const g = h.groupJobs([c(50, 'kr'), c(0, 'euw1'), c(0, 'kr'), { kind: 'archive:match', payload: { matchId: 'A' } }, { kind: 'archive:match', payload: { matchId: 'B' } }]);
+  assert.deepEqual(g.map((x) => x.length), [2, 1, 2]);
+  assert.equal(h.groupLabel(g[0]), 'match ids for 2 batches · players 0–74 · kr');
+  assert.equal(h.groupLabel(g[1]), 'match ids for players 0–24 · euw1');
+  assert.equal(h.groupLabel(g[2]), '2 matches · A …');
+  const now = 1_800_000_000_000;
+  assert.equal(h.groupWhen([c(0, 'kr', { runAfter: now - 1 }), c(25, 'kr', { runAfter: now - 1 })], now), 'ready');
+  assert.equal(h.jobWhen(c(0, 'kr', { runAfter: now + 65_000 }), now), 'due in 1m 05s');
+  const run = (t) => ({ kind: 'ladder:walk', state: 'running', claimedAt: new Date(now - t).toISOString(), payload: {} });
+  assert.equal(h.groupWhen([run(5000), run(60_000)], now), 'oldest started 1m 00s ago');
 });
