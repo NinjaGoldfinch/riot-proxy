@@ -168,6 +168,7 @@ async fn archive_indexes_exist() {
         "cache_hard",
         "jobs_dedupe",
         "jobs_claim",
+        "jobs_state_kind",
     ] {
         assert!(indexes.contains(&ix.to_string()), "{ix} missing from {indexes:?}");
     }
@@ -210,7 +211,7 @@ async fn a_v1_database_upgrades_to_v2_and_keeps_its_data() {
         })
         .await
         .expect("read");
-    assert_eq!((name.as_str(), versions), ("old", 21));
+    assert_eq!((name.as_str(), versions), ("old", 22));
 }
 
 /// V0015 (SITE-08, ADR-123) backfills the slices aggregated before it, as the
@@ -874,11 +875,11 @@ async fn migrations_apply_once_across_reopens() {
         })
         .await
         .expect("insert");
-    assert_eq!(history(first.clone()).await.expect("history"), 21);
+    assert_eq!(history(first.clone()).await.expect("history"), 22);
     drop(first);
 
     let second = Db::open(&path, 1).expect("second open");
-    assert_eq!(history(second.clone()).await.expect("history"), 21, "no re-run");
+    assert_eq!(history(second.clone()).await.expect("history"), 22, "no re-run");
     let name: Option<String> = second
         .read(|c| {
             Ok::<_, DbError>(
@@ -1192,4 +1193,33 @@ async fn optimize_reanalyses_a_table_that_grew_tenfold() {
     // Doubling is within SQLite's margin: the statistics stand.
     assert_eq!(rows(100, 200).await.expect("double"), Some(100));
     assert_eq!(rows(200, 1_000).await.expect("tenfold"), Some(1_000));
+}
+
+/// V0022 (ADM-02): every count over `jobs` reads `jobs_state_kind` alone,
+/// never the table and its payloads.
+#[tokio::test]
+async fn job_counts_read_only_the_state_kind_index() {
+    let (_dir, db) = open_temp(1);
+    for sql in [
+        crate::stats::QUEUE_COUNTS_SQL,
+        crate::jobs::scheduler::STATS_SQL,
+        crate::jobs::scheduler::PENDING_BY_KIND_SQL,
+    ] {
+        let plan: Vec<String> = db
+            .read(move |c| {
+                let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
+                // Any parameters bind as NULL: the plan does not depend on them.
+                let nulls = vec![rusqlite::types::Null; stmt.parameter_count()];
+                let rows = stmt
+                    .query_map(rusqlite::params_from_iter(nulls), |r| r.get(3))?
+                    .collect::<Result<Vec<String>, _>>()?;
+                Ok::<_, DbError>(rows)
+            })
+            .await
+            .expect("plan");
+        assert!(
+            plan.iter().any(|d| d.contains("COVERING INDEX jobs_state_kind")),
+            "{sql}: {plan:?}"
+        );
+    }
 }

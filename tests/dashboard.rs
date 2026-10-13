@@ -164,6 +164,7 @@ async fn the_snapshot_is_v1s_whole_document_from_v2s_sources() {
             "limiter",
             "process",
             "queues",
+            "sampledAt",
             "totals",
             "v",
             "worker",
@@ -331,6 +332,71 @@ async fn history_points_are_sampled_capped_at_1440_and_served_oldest_first() {
         e.get("/v1/admin/metrics/history", &e.reader).await.status,
         StatusCode::FORBIDDEN
     );
+}
+
+/// ADM-02: the table-scanning parts are sampled in the background; a
+/// snapshot and `GET /v1/admin/stats` read the samples, and a history point is
+/// built from the sets it sampled.
+#[tokio::test]
+async fn the_snapshot_and_stats_read_the_samples_until_the_next_one() {
+    let e = env().await;
+    let stats = &e.state.stats;
+    let fast = stats.sample_fast().await.unwrap();
+    let slow = stats.sample_slow().await.unwrap();
+
+    // Written after the samples: not seen until the next one.
+    e.sql(format!(
+        "INSERT INTO jobs (id, kind, priority, payload, state, run_after) VALUES
+           ('x', 'poll:live', 1, '{{}}', 'running', 0);
+         INSERT INTO players (key_scope, puuid, platform, tracked, updated_at) VALUES
+           ('{}', 'p1', 'kr', 1, 0);",
+        e.scope
+    ))
+    .await;
+    let at = json!({"fast": fast.at, "slow": slow.at});
+    let s = e.get("/v1/admin/metrics", &e.admin).await.json();
+    assert_eq!(
+        (&s["queues"]["poll"]["active"], &s["totals"]["trackedPlayers"]),
+        (&json!(0), &json!(0))
+    );
+    assert_eq!(s["sampledAt"], at);
+    let st = e.get("/v1/admin/stats", &e.admin).await.json();
+    assert_eq!(
+        (&st["trackedPlayers"], &st["knownPlayers"]),
+        (&json!(0), &json!(0))
+    );
+    assert_eq!(st["sampledAt"], at);
+    assert_eq!(st["dbFileBytes"], json!(slow.disk.db_bytes));
+    assert_eq!(st["archivedMatches"], json!(slow.archive.matches));
+
+    // The next fast sample sees them; the slow set is unchanged.
+    let next = stats.sample_fast().await.unwrap();
+    let s = e.get("/v1/admin/metrics", &e.admin).await.json();
+    assert_eq!(
+        (&s["queues"]["poll"]["active"], &s["totals"]["trackedPlayers"]),
+        (&json!(1), &json!(1))
+    );
+    assert_eq!(s["sampledAt"], json!({"fast": next.at, "slow": slow.at}));
+    let st = e.get("/v1/admin/stats", &e.admin).await.json();
+    assert_eq!(
+        (&st["trackedPlayers"], &st["knownPlayers"]),
+        (&json!(1), &json!(1))
+    );
+
+    // A history point samples both sets and is built from them.
+    let t = now();
+    stats.record_point(t).await.unwrap();
+    let (f, sl) = (stats.samples.fast().unwrap(), stats.samples.slow().unwrap());
+    assert!(f.at >= next.at && sl.at >= slow.at);
+    let h = e.get("/v1/admin/metrics/history", &e.admin).await.json();
+    let p = h["points"].as_array().unwrap().last().cloned().unwrap();
+    assert_eq!(
+        p["totals"],
+        json!({"archivedMatches": f.totals.archived_matches, "trackedPlayers": f.totals.tracked_players,
+               "knownPlayers": f.totals.known_players})
+    );
+    assert_eq!(p["queues"], json!({"active": 1, "pending": 0, "failed": 0}));
+    assert_eq!(p["t"], json!(t));
 }
 
 #[tokio::test]

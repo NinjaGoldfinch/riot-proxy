@@ -127,6 +127,17 @@ flowchart LR
   STORE --> TABS
 ```
 
+### Sampling (ADM-02)
+
+`spawn_sampler` (`src/stats.rs`) replaces the per-request reads:
+
+| Set | What | When | Feeds |
+|---|---|---|---|
+| fast | totals (matches, players, consumers), queues by state and kind, ladder crawls | at boot, then every 15 s; again with each history point | snapshot `totals`, `queues`, `ladder`; stats player counts |
+| slow | analytics runs and top champions, archive counts and bytes, disk usage and its gauges | at boot, then with each history point (`METRICS_HISTORY_INTERVAL_S`, 60 s) | snapshot `analytics`; `GET /v1/admin/stats` archive and disk fields; the history point |
+
+A snapshot reads both sets and computes live only the limiter, WebSocket counts, event counts, cache counters, flows and the process. `sampledAt {fast, slow}` (unix ms) on the snapshot and on `/v1/admin/stats` tells the page how old the sampled parts are; before the first sample the parts are read live and carry the request's time. The job counts read only the `jobs_state_kind` index (V0022): on 1.19 M rows, about 240 ms instead of 950 ms, once per 15 s in the background instead of once per request.
+
 ## Boot and tab switch
 
 ```mermaid
