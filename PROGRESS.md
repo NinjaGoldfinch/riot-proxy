@@ -198,6 +198,7 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 - [x] Release `v2.0.0`: the first stable release, with everything on main since rc.3 (owner request 2026-10-10)
 - [x] Release `v2.1.0`: BLD-06, TL-02 and OPS-06 since 2.0.0 (owner request 2026-10-11)
 - [x] Release `v2.2.0`: DSK-01 to DSK-06 since 2.1.0, cut from DSK-05 (e684251) on `release/2.2.0` so DSK-07's V0021 waits for DSK-05's `facts:reextract` on production (ADR-141); DSK-07 ships in the next release (owner request 2026-10-13)
+- [x] Release `v2.3.0`: DSK-07, HOST-01 and ME-01 since 2.2.0, from main; deployed after DSK-05's `facts:reextract` finished on production (ADR-141) (owner request 2026-10-13)
 
 ## OPS — dev environment on Proxmox (owner request 2026-10-05)
 - [x] OPS-01 `:edge` image on every push to `main` (#79, ADR-069)
@@ -320,7 +321,7 @@ Before (OVH VPS, 2026-10-13 01:00 UTC): 38 GB disk at 77 %, `riot-proxy.db` 20 G
 
 ## ME — Middle East match ids (owner report 2026-10-13)
 
-- [~] ME-01 `ME1_` match ids archive from `europe` (`feat/ME-01-me1-matches`, ADR-143)
+- [x] ME-01 `ME1_` match ids archive from `europe` (#175, ADR-143)
 - [ ] OBJ-01..05 raw match and timeline bodies in object storage: proposal in design/12 §Tasks, waiting on the owner's answers to its §Open questions
 
 ## PAIR — team pairings (owner request 2026-10-10, outline)
