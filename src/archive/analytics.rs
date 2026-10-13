@@ -272,13 +272,13 @@ pub fn rebuild_builds(c: &mut Connection, s: &Scope) -> Result<Written, DbError>
             "INSERT INTO champion_runes (key_scope, platform, queue, patch, champion_id, role, keystone_id,
                sub_style_id, remake, tier, side, games, wins, computed_at)
              SELECT ?1, ?2, ?3, m.patch, f.champion_id, coalesce(f.position, ''),
-               json_extract(f.runes, '$.keystone'), json_extract(f.runes, '$.subStyle'),
+               json_extract(f.runes, '$[1]'), json_extract(f.runes, '$[2]'),
                coalesce(m.remake, 0), {TIER}, {SIDE}, count(*), sum(f.win), ?6
              {facts}
-               AND json_extract(f.runes, '$.keystone') IS NOT NULL
-               AND json_extract(f.runes, '$.subStyle') IS NOT NULL
-             GROUP BY m.patch, f.champion_id, coalesce(f.position, ''), json_extract(f.runes, '$.keystone'),
-               json_extract(f.runes, '$.subStyle'), coalesce(m.remake, 0), {TIER}, {SIDE}"
+               AND json_extract(f.runes, '$[1]') IS NOT NULL
+               AND json_extract(f.runes, '$[2]') IS NOT NULL
+             GROUP BY m.patch, f.champion_id, coalesce(f.position, ''), json_extract(f.runes, '$[1]'),
+               json_extract(f.runes, '$[2]'), coalesce(m.remake, 0), {TIER}, {SIDE}"
         ),
     )?;
     tx.commit()?;
@@ -339,7 +339,7 @@ pub fn rebuild_builds(c: &mut Connection, s: &Scope) -> Result<Written, DbError>
                    WHEN 'starter' THEN nullif(p.starter, '[]')
                    WHEN 'boots' THEN CAST(p.boots AS TEXT)
                    WHEN 'skill_order' THEN nullif(p.skill_order, '')
-                   WHEN 'runes' THEN json_extract(p.runes, '$.keystone') || ':' || json_extract(p.runes, '$.subStyle')
+                   WHEN 'runes' THEN json_extract(p.runes, '$[1]') || ':' || json_extract(p.runes, '$[2]')
                    WHEN 'spells' THEN
                      min(json_extract(p.summoners, '$[0]'), json_extract(p.summoners, '$[1]')) || ':'
                        || max(json_extract(p.summoners, '$[0]'), json_extract(p.summoners, '$[1]'))

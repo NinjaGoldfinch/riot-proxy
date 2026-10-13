@@ -483,7 +483,8 @@ async fn reextract_rederives_stale_facts_and_stops_when_none_are_left() {
         .write(|c| {
             c.execute_batch(
                 "UPDATE matches SET facts_version = 2, remake = NULL, game_duration = NULL;
-                 UPDATE match_facts SET gold = NULL, damage = NULL, vision = NULL, facts_version = 2;
+                 UPDATE match_facts SET gold = NULL, damage = NULL, vision = NULL, facts_version = 2,
+                   runes = '{\"keystone\":8010,\"subStyle\":8400}', tier = 'MASTER';
                  DELETE FROM match_bans;",
             )?;
             Ok::<_, DbError>(())
@@ -500,22 +501,29 @@ async fn reextract_rederives_stale_facts_and_stops_when_none_are_left() {
         .await
         .unwrap();
     assert_eq!(stale_matches(&e.state.db).await.unwrap(), 0);
-    let (gold, remakes, bans, durations): (i64, i64, i64, i64) = e
+    let (gold, remakes, bans, durations, objects, stamped): (i64, i64, i64, i64, i64, i64) = e
         .state
         .db
         .read(|c| {
             Ok::<_, DbError>(c.query_row(
-                "SELECT (SELECT COUNT(*) FROM match_facts WHERE gold IS NOT NULL AND facts_version = 3),
+                "SELECT (SELECT COUNT(*) FROM match_facts WHERE gold IS NOT NULL AND facts_version = 4),
                         (SELECT COUNT(*) FROM matches WHERE remake = 1),
                         (SELECT COUNT(*) FROM match_bans),
-                        (SELECT COUNT(*) FROM matches WHERE game_duration IS NOT NULL)",
+                        (SELECT COUNT(*) FROM matches WHERE game_duration IS NOT NULL),
+                        (SELECT COUNT(*) FROM match_facts WHERE json_type(runes) = 'object'),
+                        (SELECT COUNT(*) FROM match_facts WHERE tier = 'MASTER')",
                 [],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
             )?)
         })
         .await
         .unwrap();
-    assert_eq!((gold, remakes, bans, durations), (20, 1, 16, 2));
+    // Every row is rewritten in the version-4 shape (DSK-05: no keyed object
+    // is left) and keeps the stamp the old table would have held (DSK-04).
+    assert_eq!(
+        (gold, remakes, bans, durations, objects, stamped),
+        (20, 1, 16, 2, 0, 20)
+    );
 }
 
 #[tokio::test]

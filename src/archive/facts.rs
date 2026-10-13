@@ -15,7 +15,8 @@ use serde::{Deserialize, Serialize};
 ///
 /// 2: `cs` (P5-04, ADR-043).
 /// 3: `gold`, `damage`, `vision`, `match_bans` and `matches.remake` (P7-04, ADR-056).
-pub const FACTS_VERSION: i64 = 3;
+/// 4: `runes` stored as a positional array, the same values in half the bytes (DSK-05, ADR-139).
+pub const FACTS_VERSION: i64 = 4;
 
 /// One `match_facts` row, minus the `match_id` and `key_scope` the caller owns.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -48,8 +49,13 @@ pub struct Fact {
 
 /// The rune page: what v1's rune stats grouped on (keystone, sub-style tree)
 /// plus the rest of the page, so build views need no facts re-extraction.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+///
+/// Stored as a positional array, `[primaryStyle, keystone, subStyle,
+/// [perks…], [offense, flex, defense] | null]` (DSK-05, ADR-139): about 65
+/// bytes for the 122 the keyed object took, over 2.3 M rows on the VPS. SQL
+/// reads the keystone as `json_extract(runes, '$[1]')` and the sub-style as
+/// `'$[2]'`. Nothing outside the archive reads the column.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Runes {
     pub primary_style: Option<i64>,
     /// The primary style's first selection.
@@ -59,6 +65,19 @@ pub struct Runes {
     pub perks: Vec<i64>,
     /// `[offense, flex, defense]`.
     pub stat_perks: Option<[i64; 3]>,
+}
+
+impl Serialize for Runes {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeTuple;
+        let mut t = s.serialize_tuple(5)?;
+        t.serialize_element(&self.primary_style)?;
+        t.serialize_element(&self.keystone)?;
+        t.serialize_element(&self.sub_style)?;
+        t.serialize_element(&self.perks)?;
+        t.serialize_element(&self.stat_perks)?;
+        t.end()
+    }
 }
 
 impl Fact {

@@ -24,11 +24,11 @@ expression: facts
       0,
       0
     ],
-    "runes": {
-      "primaryStyle": 8400,
-      "keystone": 8437,
-      "subStyle": 8300,
-      "perks": [
+    "runes": [
+      8400,
+      8437,
+      8300,
+      [
         8437,
         8446,
         8473,
@@ -36,12 +36,12 @@ expression: facts
         8313,
         8347
       ],
-      "statPerks": [
+      [
         5008,
         5008,
         5011
       ]
-    },
+    ],
     "summoners": [
       12,
       4
@@ -68,11 +68,11 @@ expression: facts
       0,
       0
     ],
-    "runes": {
-      "primaryStyle": 8000,
-      "keystone": 8010,
-      "subStyle": 8300,
-      "perks": [
+    "runes": [
+      8000,
+      8010,
+      8300,
+      [
         8010,
         9111,
         9104,
@@ -80,12 +80,12 @@ expression: facts
         8304,
         8347
       ],
-      "statPerks": [
+      [
         5005,
         5008,
         5001
       ]
-    },
+    ],
     "summoners": [
       11,
       4
@@ -139,11 +139,11 @@ expression: facts
       0,
       0
     ],
-    "runes": {
-      "primaryStyle": 8000,
-      "keystone": 8008,
-      "subStyle": 8300,
-      "perks": [
+    "runes": [
+      8000,
+      8008,
+      8300,
+      [
         8008,
         8009,
         9105,
@@ -151,12 +151,12 @@ expression: facts
         8316,
         8321
       ],
-      "statPerks": [
+      [
         5005,
         5008,
         5011
       ]
-    },
+    ],
     "summoners": null
   },
   {
@@ -180,11 +180,11 @@ expression: facts
       0,
       0
     ],
-    "runes": {
-      "primaryStyle": 8100,
-      "keystone": 8112,
-      "subStyle": 8300,
-      "perks": [
+    "runes": [
+      8100,
+      8112,
+      8300,
+      [
         8112,
         8126,
         8141,
@@ -192,12 +192,12 @@ expression: facts
         8304,
         8347
       ],
-      "statPerks": [
+      [
         5005,
         5010,
         5011
       ]
-    },
+    ],
     "summoners": [
       4,
       7
@@ -224,11 +224,11 @@ expression: facts
       0,
       0
     ],
-    "runes": {
-      "primaryStyle": 8200,
-      "keystone": 8229,
-      "subStyle": 8300,
-      "perks": [
+    "runes": [
+      8200,
+      8229,
+      8300,
+      [
         8229,
         8226,
         8210,
@@ -236,12 +236,12 @@ expression: facts
         8313,
         8347
       ],
-      "statPerks": [
+      [
         5008,
         5008,
         5011
       ]
-    },
+    ],
     "summoners": [
       12,
       4
@@ -268,11 +268,11 @@ expression: facts
       0,
       0
     ],
-    "runes": {
-      "primaryStyle": 8000,
-      "keystone": 8010,
-      "subStyle": 8300,
-      "perks": [
+    "runes": [
+      8000,
+      8010,
+      8300,
+      [
         8010,
         9111,
         9104,
@@ -280,12 +280,12 @@ expression: facts
         8304,
         8347
       ],
-      "statPerks": [
+      [
         5005,
         5008,
         5011
       ]
-    },
+    ],
     "summoners": [
       4,
       11
@@ -312,11 +312,11 @@ expression: facts
       0,
       0
     ],
-    "runes": {
-      "primaryStyle": 8200,
-      "keystone": 8992,
-      "subStyle": 8400,
-      "perks": [
+    "runes": [
+      8200,
+      8992,
+      8400,
+      [
         8992,
         8226,
         8234,
@@ -324,12 +324,12 @@ expression: facts
         8242,
         8473
       ],
-      "statPerks": [
+      [
         5005,
         5010,
         5011
       ]
-    },
+    ],
     "summoners": [
       4,
       12
@@ -356,11 +356,11 @@ expression: facts
       0,
       0
     ],
-    "runes": {
-      "primaryStyle": 8200,
-      "keystone": 8229,
-      "subStyle": 8300,
-      "perks": [
+    "runes": [
+      8200,
+      8229,
+      8300,
+      [
         8229,
         8226,
         8233,
@@ -368,12 +368,12 @@ expression: facts
         8410,
         8313
       ],
-      "statPerks": [
+      [
         5005,
         5008,
         5011
       ]
-    },
+    ],
     "summoners": [
       6,
       4
@@ -400,11 +400,11 @@ expression: facts
       0,
       0
     ],
-    "runes": {
-      "primaryStyle": 8200,
-      "keystone": 8214,
-      "subStyle": 8300,
-      "perks": [
+    "runes": [
+      8200,
+      8214,
+      8300,
+      [
         8214,
         8226,
         8210,
@@ -412,12 +412,12 @@ expression: facts
         8347,
         8304
       ],
-      "statPerks": [
+      [
         5008,
         5008,
         5011
       ]
-    },
+    ],
     "summoners": [
       7,
       4

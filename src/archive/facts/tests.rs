@@ -46,10 +46,17 @@ fn a_remake_with_holes_extracts_without_panicking() {
 fn stored_json_columns() {
     let f = &extract(RANKED).unwrap()[0];
     assert_eq!(f.items_json(), serde_json::to_string(&f.items).unwrap());
+    // The rune page is positional (DSK-05): style, keystone, sub-style, perks, stat perks.
     let runes: serde_json::Value = serde_json::from_str(&f.runes_json().unwrap()).unwrap();
+    let r = f.runes.as_ref().unwrap();
     assert_eq!(
-        runes.as_object().unwrap().keys().collect::<Vec<_>>(),
-        ["keystone", "perks", "primaryStyle", "statPerks", "subStyle"]
+        runes,
+        serde_json::json!([r.primary_style, r.keystone, r.sub_style, r.perks, r.stat_perks])
+    );
+    assert_eq!(
+        runes[1],
+        serde_json::json!(r.keystone.unwrap()),
+        "what the SQL reads at $[1]"
     );
     assert!(f.summoners_json().unwrap().starts_with('['));
 }
