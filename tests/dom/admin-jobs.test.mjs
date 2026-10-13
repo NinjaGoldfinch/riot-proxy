@@ -47,7 +47,8 @@ test('up next groups alike jobs by kind and platform in claim order (ADR-093)', 
     assert.equal(rows[1][2], 'ready · try 2');
     assert.equal(rows[2][1], 'match ids for 2 batches · players 175–249 · euw1');
     assert.equal(rows[2][2], 'ready');
-    assert.match(rows[3][2], /^due in 2\d\.\d s$/, 'a job waiting out a backoff says when it is due');
+    // Due 30 s after the fixture was built; a fast render still reads 30.0 s.
+    assert.match(rows[3][2], /^due in (2\d\.\d|30\.0) s$/, 'a job waiting out a backoff says when it is due');
     assert.equal(p.$$('#jNext ul.groups li')[1].title, 'ladder:collect · priority 20,003');
     assert.ok(p.calls.some((c) => c.url.endsWith('/v1/admin/jobs/queue?limit=100')), 'up next reads 100 jobs');
     assert.equal(p.$$('#jNext ul.groups li')[3].dataset.job, PENDING, 'a group of one opens its job');
