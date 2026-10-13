@@ -85,6 +85,10 @@ async fn every_job_route_needs_the_admin_scope() {
         ("GET", "/v1/admin/jobs/stats".to_string()),
         ("POST", format!("/v1/admin/jobs/{ID}/retry")),
         ("DELETE", format!("/v1/admin/jobs/{ID}")),
+        (
+            "DELETE",
+            "/v1/admin/jobs?kind=archive:match&state=pending".to_string(),
+        ),
         ("POST", "/v1/admin/backfill".to_string()),
     ] {
         let r = e.call(verb, &uri, &e.reader, Some(json!({}))).await;
@@ -327,4 +331,144 @@ async fn the_admin_backfill_route_queues_one_walk_per_player() {
             .await;
         assert_eq!(error(&r), (StatusCode::BAD_REQUEST, message.into()), "{body}");
     }
+}
+
+// ── Purge (DSK-03) ──────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn a_purge_drops_one_kinds_rows_from_the_band_down_and_counts_first() {
+    let e = env().await;
+    // A crawl's backlog at 20 005, a visitor's lookups at 100 and 0, another
+    // kind, and one row a worker holds.
+    for i in 0..7 {
+        let job = NewJob::new("archive:match", 20_005, json!({"matchId": format!("KR_{i}")}))
+            .dedupe(format!("KR_{i}"));
+        e.state.jobs.enqueue(job).await.unwrap();
+    }
+    let lookup = NewJob::new("archive:match", 100, json!({"matchId": "KR_look"})).dedupe("KR_look");
+    e.state.jobs.enqueue(lookup).await.unwrap();
+    let urgent = NewJob::new("archive:match", 0, json!({"matchId": "KR_now"})).dedupe("KR_now");
+    let urgent = e.state.jobs.enqueue(urgent).await.unwrap().id;
+    e.job("poll:live", "p").await;
+    let running = e.scheduler().claim(i64::MAX).await.unwrap().unwrap();
+    assert_eq!(running.id, urgent, "the 0-band row is claimed first");
+
+    let dry = e
+        .call(
+            "DELETE",
+            "/v1/admin/jobs?kind=archive:match&state=pending&minPriority=20000&dryRun=true",
+            &e.admin,
+            None,
+        )
+        .await;
+    assert_eq!(dry.status, StatusCode::OK);
+    assert_eq!(
+        dry.json(),
+        json!({"kind": "archive:match", "state": "pending", "minPriority": 20000,
+               "matched": 7, "deleted": 0, "dryRun": true})
+    );
+    let before = e.get("/v1/admin/jobs/stats").await.json();
+    assert_eq!(
+        before["kinds"]["archive:match"]["pending"], 8,
+        "a dry run deletes nothing"
+    );
+
+    let r = e
+        .call(
+            "DELETE",
+            "/v1/admin/jobs?kind=archive:match&state=pending&minPriority=20000",
+            &e.admin,
+            None,
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.json()["deleted"], 7);
+    let after = e.get("/v1/admin/jobs/stats").await.json();
+    assert_eq!(
+        after["kinds"]["archive:match"],
+        json!({"pending": 1, "running": 1, "done": 0, "failed": 0}),
+        "the lookup and the running row stay"
+    );
+    assert_eq!(after["kinds"]["poll:live"]["pending"], 1, "other kinds stay");
+
+    // Failed rows go through the same door; running ones never do.
+    e.scheduler()
+        .finish(&running, &Err(JobError::Fail("gone".into())), 1)
+        .await
+        .unwrap();
+    let failed = e
+        .call(
+            "DELETE",
+            "/v1/admin/jobs?kind=archive:match&state=failed",
+            &e.admin,
+            None,
+        )
+        .await
+        .json();
+    assert_eq!(
+        (failed["matched"].clone(), failed["deleted"].clone()),
+        (json!(1), json!(1))
+    );
+    assert_eq!(
+        error(
+            &e.call(
+                "DELETE",
+                "/v1/admin/jobs?kind=archive:match&state=running",
+                &e.admin,
+                None
+            )
+            .await
+        ),
+        (
+            StatusCode::BAD_REQUEST,
+            "querystring/state must be equal to one of the allowed values".into()
+        )
+    );
+}
+
+#[tokio::test]
+async fn a_purge_validates_its_query() {
+    let e = env().await;
+    let e = &e;
+    let del = |q: &'static str| async move {
+        error(
+            &e.call("DELETE", &format!("/v1/admin/jobs{q}"), &e.admin, None)
+                .await,
+        )
+    };
+    assert_eq!(
+        del("").await,
+        (
+            StatusCode::BAD_REQUEST,
+            "querystring must have required property 'kind'".into()
+        )
+    );
+    assert_eq!(
+        del("?kind=archive:match").await,
+        (
+            StatusCode::BAD_REQUEST,
+            "querystring must have required property 'state'".into()
+        )
+    );
+    assert_eq!(
+        del("?kind=nope&state=pending").await,
+        (
+            StatusCode::BAD_REQUEST,
+            "querystring/kind must be equal to one of the allowed values".into()
+        )
+    );
+    assert_eq!(
+        del("?kind=archive:match&state=pending&minPriority=-1").await,
+        (
+            StatusCode::BAD_REQUEST,
+            "querystring/minPriority must be >= 0".into()
+        )
+    );
+    assert_eq!(
+        del("?kind=archive:match&state=pending&dryRun=yes").await,
+        (
+            StatusCode::BAD_REQUEST,
+            "querystring/dryRun must be boolean".into()
+        )
+    );
 }
