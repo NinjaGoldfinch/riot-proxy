@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs';
 const html = readFileSync(new URL('../src/ui/admin.html', import.meta.url), 'utf8');
 const block = html.match(/\/\/ -{10} pure helpers[^\n]*\n([\s\S]*?)\/\/ -{10} end pure helpers/);
 assert.ok(block, 'the pure helpers block is marked in admin.html');
-const h = new Function(`${block[1]}; return { APEX_LIST_CAP, fmt, compact, fmtBytes, fmtDuration, pct, esc, relTime, sumValues, hitRatio, rate, jobTotals, diskLevel, backupLevel, limiterLevel, route, joinUrl, wsUrl, maskKey, contrast, sortRows, capRows, percentile, downsample, historyPointOf, seriesOf, statusClass, routeRows, upstreamRows, windowLabel, fullness, meterLevel, scopeOrder, msOf, dur, when, jobLabel, groupJobs, groupLabel, jobWhen, groupWhen, stageText, stagePct, legName, tierName, storageParts, parsePlayer, isHash, EVENT_NAMES, RING_CAP, ringPush, eventFilter };`)();
+const h = new Function(`${block[1]}; return { APEX_LIST_CAP, fmt, compact, fmtBytes, fmtDuration, pct, esc, relTime, sumValues, hitRatio, rate, jobTotals, diskLevel, backupLevel, limiterLevel, route, joinUrl, wsUrl, maskKey, contrast, sortRows, capRows, percentile, downsample, historyPointOf, seriesOf, statusClass, routeRows, upstreamRows, windowLabel, fullness, meterLevel, scopeOrder, msOf, dur, when, jobLabel, groupJobs, groupLabel, jobWhen, groupWhen, stageText, stagePct, legName, tierName, storageParts, parsePlayer, isHash, EVENT_NAMES, RING_CAP, ringPush, eventFilter, paletteMatch, digitTab };`)();
 
 const tokens = (name) => {
   const m = html.match(new RegExp(`/\\* tokens:${name}[^*]*\\*/\\s*[^{]+\\{([^}]*)\\}`));
@@ -288,4 +288,15 @@ test('the event ring keeps the newest 2,000; filters by name and text', () => {
   const frames = [{ event: 'a', data: { x: 'Gold' } }, { event: 'b', data: {} }, { event: 'a', data: { x: 'silver' } }];
   assert.equal(h.eventFilter(frames, new Set(['a']), '').length, 2);
   assert.deepEqual(h.eventFilter(frames, new Set(['a', 'b']), 'gold'), [frames[0]]);
+});
+
+test('palette matches every word of the query; a ULID offers job and crawl; digits map to tabs', () => {
+  const cmds = [{ label: 'Go to Jobs' }, { label: 'Go to Ladder' }, { label: 'Switch theme' }];
+  assert.deepEqual(h.paletteMatch(cmds, 'go la').map((c) => c.label), ['Go to Ladder']);
+  assert.equal(h.paletteMatch(cmds, '').length, 3);
+  assert.deepEqual(h.paletteMatch(cmds, '01J9ZZZZZZZZZZZZZZZZZZZZZZ').map((c) => c.hash), ['jobs/01J9ZZZZZZZZZZZZZZZZZZZZZZ', 'ladder/01J9ZZZZZZZZZZZZZZZZZZZZZZ']);
+  assert.deepEqual(h.paletteMatch(cmds, '01J9ZZZZZZZZZZZZZZZZZZZZZ').map((c) => c.hash), [], '25 characters is no id');
+  const ids = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'];
+  assert.deepEqual(['1', '9', '0', 'x'].map((k) => h.digitTab(k, ids)), ['a', 'i', 'j', null]);
+  assert.equal(h.digitTab('5', ['a']), null);
 });

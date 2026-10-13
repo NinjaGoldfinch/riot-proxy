@@ -400,6 +400,20 @@ Status icons outside the health strip (tile labels, note lines) now carry their 
 - **Events.** Every frame from the socket goes into a ring of the newest 2,000, on any tab. The list shows them newest first, filtered by name (a chip per event in `src/events.rs`, each with its count; `metrics.snapshot` off by default, since one arrives every 5 s) and by text anywhere in the frame; a row opens into the frame's JSON, and stays open as newer frames push it down. Drawing is batched every 250 ms. *Pause* stops all writes to the list and counts what arrives ("Resume (n while paused)"); resuming draws them. *Clear* empties the ring. While the tab is elsewhere the rail's Events badge counts new frames other than snapshots; opening the tab clears it.
 - **About.** `/v1/admin/info` as a page: version, commit, compiler, build time, start time and uptime, environment, role, workers, key scope; the feature switches on or off with an icon; `/readyz`; links to `/metrics` and, when enabled, `/docs`; and the configuration in effect, searchable by name or value, with secrets as the server redacted them and `RIOT_API_KEY` absent (ADM-03).
 
+## Keyboard (ADM-16)
+
+| Key | Does |
+|---|---|
+| `/` | the command palette: every tab, the actions (theme, help, refresh, run maintenance, sign out), and a pasted 26-character id offered as a job (`#jobs/<id>`) or a crawl (`#ladder/<id>`); every word typed must match; ↑ ↓ choose, Enter runs, Esc closes and gives focus back |
+| `?` | the list of keys |
+| `1`–`9`, `0` | the tabs in rail order, `0` the tenth; the tab takes focus |
+| `t` | light or dark theme (saved) |
+| `Esc` | closes the palette, the help, a confirm or a sheet |
+| ↑ ↓ ← → Home End | between tabs in the rail (roving `tabindex`); on a focused chart, the readout |
+| Enter | on a worker, job row or crawl row, opens it |
+
+Shortcuts do nothing while a field has focus, with Ctrl, Alt or ⌘ held, or while a dialog is open. Tab and Shift+Tab stay inside an open dialog. Accessibility checks: every visible button, link, field, tab and focusable row has an accessible name (jsdom on every tab, and Chromium on every view at three widths in both themes); every tab names its panel; status is never colour alone (an icon and words); text tokens are AA in both themes (ADM-08); motion is off under `prefers-reduced-motion`.
+
 The rail lists only the tabs that exist; each later task adds its own. Until ADM-12 there is no Ladder tab: `/dev/jobs`, `/v1/admin/ladder/*` and the firehose cover it.
 
 ## Chart rules
@@ -422,7 +436,7 @@ Each tab's task fills its row and adds a section below.
 | `#consumers` | Consumers & Players | `/consumers`, `/tracked-players?tracked=true`, snapshot quotas | ADM-14 | built |
 | `#events` | Events: firehose ring | `firehose` topic | ADM-15 | built |
 | `#about` | About: build, flags, redacted config | `/info`, `/readyz` | ADM-15 | built |
-| — | Keyboard, palette, accessibility | — | ADM-16 | planned |
+| — | Keyboard, palette, accessibility | — | ADM-16 | built |
 
 Between ADM-08 and ADM-12 the new page has no Ladder tab; `/dev/jobs`, `/v1/admin/ladder/*` and the firehose cover the gap. `/dev/jobs` and `/dashboard/config.json` go in ADM-17.
 

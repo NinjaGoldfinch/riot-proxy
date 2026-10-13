@@ -79,6 +79,18 @@ for (const [device, width] of [['desktop', 1280], ['tablet', 820], ['phone', 390
           }
           await page.screenshot({ path: new URL(`./screenshots/admin-${view.split('/')[0]}${view.includes('/') ? '-trace' : ''}-${device}-${theme}.png`, import.meta.url).pathname, fullPage: true });
           const f = await fits();
+          // Every visible interactive element has an accessible name and the right role (ADM-16).
+          const unnamed = await page.evaluate(() => {
+            const out = [];
+            for (const el of document.querySelectorAll('button, a[href], input, select, [role="tab"], [tabindex="0"]')) {
+              if (!el.getClientRects().length) continue;
+              const name = (el.getAttribute('aria-label') || (el.id && document.querySelector(`label[for="${el.id}"]`)?.textContent) || el.closest('label')?.textContent || el.textContent || el.getAttribute('title') || '').trim();
+              if (!name) out.push(el.outerHTML.slice(0, 80));
+            }
+            for (const t of document.querySelectorAll('[role="tab"]')) if (!document.getElementById(t.getAttribute('aria-controls'))) out.push(`tab without its panel: ${t.id}`);
+            return out;
+          });
+          assert.deepEqual(unnamed, [], `${view}: every control has a name`);
           if (view.startsWith('ladder/')) {
             // Every part of an opened run is on screen, not just inside its scrolling table.
             const off = await page.evaluate(() => [...document.querySelectorAll('#ladderHistory .activity, #ladderHistory .stages, #ladderHistory .totals')]
@@ -89,6 +101,13 @@ for (const [device, width] of [['desktop', 1280], ['tablet', 820], ['phone', 390
           assert.ok(f.page[0] <= f.page[1], `${view}: page scrolls sideways: ${f.page[0]} > ${f.page[1]}`);
           assert.deepEqual(f.overflow, [], `${view}: nothing wider than its box`);
         }
+        // The palette fits too.
+        await page.keyboard.press('/');
+        await page.waitForSelector('#palette:not([hidden]) #palList li');
+        await page.screenshot({ path: new URL(`./screenshots/admin-palette-${device}-${theme}.png`, import.meta.url).pathname });
+        const pal = await page.$eval('#palette .sheet', (el) => { const r = el.getBoundingClientRect(); return [r.left, r.right, innerWidth]; });
+        assert.ok(pal[0] >= 0 && pal[1] <= pal[2], `palette on screen: ${pal}`);
+        await page.keyboard.press('Escape');
         // A chart's crosshair follows the pointer.
         await page.evaluate(() => { location.hash = 'overview'; });
         await page.waitForSelector('#chBacklog .plotwrap');
