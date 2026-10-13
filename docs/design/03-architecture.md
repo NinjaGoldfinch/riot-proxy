@@ -49,7 +49,7 @@ flowchart TB
         sf["Single-flight<br/>in-flight map of futures"]
         limiter["Limiter<br/>header-driven buckets<br/>interactive / bulk"]
         client["Riot client<br/>reqwest · host routing<br/>error policy"]
-        sched["Scheduler<br/>ticks · durable jobs · priority heap"]
+        sched["Scheduler<br/>ticks · durable jobs · claim loop"]
         jobs["Job handlers<br/>poll · archive · backfill<br/>crawl · ddragon · aggregate"]
         archive["Archive<br/>matches · facts · analytics"]
         events["Event bus<br/>tokio broadcast"]
@@ -192,7 +192,7 @@ src/
 │       ├── mod.rs       acquire / observe / freeze / checkpoint
 │       └── priority.rs  interactive vs bulk, ceiling
 ├── jobs/
-│   ├── scheduler.rs     ticks, durable table, claim loop, priority heap
+│   ├── scheduler.rs     ticks, durable table, claim loop (no in-memory copy)
 │   ├── activity.rs      in-memory trace of what each worker's job is doing (DEV-19)
 │   ├── poll.rs          live / rank / matches
 │   ├── archive.rs       archive:match, backfill:player

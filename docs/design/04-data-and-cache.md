@@ -7,14 +7,13 @@ flowchart LR
     subgraph mem["Process memory (lost on restart, rebuilt cheaply)"]
         l1["L1 cache · moka<br/>every TTL'd endpoint<br/>negative entries"]
         sfm["single-flight map"]
-        heap["job priority heap<br/>(mirror of jobs table)"]
         buckets["limiter buckets"]
     end
 
     subgraph sqlite["riot-proxy.db (one file, WAL)"]
         cache_t["cache<br/>L2 · expensive tiers only"]
         limiter_t["limiter_state<br/>checkpoint"]
-        jobs_t["jobs<br/>durable queue"]
+        jobs_t["jobs<br/>durable queue · claimed in place,<br/>no in-memory copy"]
         consumers["consumers<br/>keys · scopes · quotas"]
         players["players<br/>tracked + backfill state"]
         matches["matches<br/>zstd blob · immutable"]
@@ -32,7 +31,6 @@ flowchart LR
     l1 -.->|write-behind| cache_t
     cache_t -.->|warm on boot| l1
     buckets -.->|every 10 s + shutdown| limiter_t
-    heap <-.-> jobs_t
 ```
 
 ## SQLite configuration
