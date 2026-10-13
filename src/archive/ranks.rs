@@ -158,7 +158,8 @@ pub async fn plan(db: &Db, l: &Ladder, limit: u32, recheck_after: i64) -> Result
 }
 
 /// [`plan`]'s read. `CROSS JOIN` keeps the platform's id range (`OC1_…`, on
-/// the primary key) the outer loop, so other platforms' facts are never read,
+/// the primary key) the outer loop, so other platforms' facts are never read
+/// (each fact by its own key: the table is WITHOUT ROWID since V0021),
 /// and `+` keeps `facts_player` (key scope first) from being picked over the
 /// facts' own key. The ladder and the stamps are checked once per player,
 /// after the count.
@@ -409,10 +410,7 @@ mod tests {
             text.contains("SEARCH m USING INDEX sqlite_autoindex_matches_1 (match_id>? AND match_id<?)"),
             "{text}"
         );
-        assert!(
-            text.contains("SEARCH f USING INDEX sqlite_autoindex_match_facts_1 (match_id=?)"),
-            "{text}"
-        );
+        assert!(text.contains("SEARCH f USING PRIMARY KEY (match_id=?)"), "{text}");
         assert!(!text.contains("SCAN m") && !text.contains("SCAN f"), "{text}");
     }
 
