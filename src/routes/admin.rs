@@ -384,12 +384,25 @@ pub struct PlayerList {
     get, path = "/v1/admin/tracked-players", tag = "admin",
     summary = "List known players",
     description = "Every player row for the current `keyScope`, tracked or not: tracking is a flag on the row. \
-                   Rows written under a previous Riot key are not returned, because PUUIDs are encrypted per key.",
+                   Rows written under a previous Riot key are not returned, because PUUIDs are encrypted per key. \
+                   `tracked=true` returns only the tracked rows (ADM-14): the full list can run to tens of \
+                   thousands of players a crawl discovered.",
+    params(("tracked" = Option<String>, Query, description = "`true`: tracked players only")),
     responses((status = 200, description = "The players", body = PlayerList), LocalErrors),
 )]
-async fn list_players(State(state): State<AppState>, Extension(_c): Who) -> Response {
+async fn list_players(State(state): State<AppState>, Extension(_c): Who, Query(q): Q) -> Response {
     let scope = scope_of(&state);
-    match players::list(&state.db, &scope).await {
+    let only_tracked =
+        match validate::query_one_of("tracked", q.get("tracked").map(String::as_str), &["true"]) {
+            Ok(t) => t.is_some(),
+            Err(e) => return e.into_response(),
+        };
+    let rows = if only_tracked {
+        players::list_tracked(&state.db, &scope).await
+    } else {
+        players::list(&state.db, &scope).await
+    };
+    match rows {
         Ok(rows) => ok(&PlayerList {
             players: rows.into_iter().map(|p| PlayerRecord::new(&scope, p)).collect(),
         }),

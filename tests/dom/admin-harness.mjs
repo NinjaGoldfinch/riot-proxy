@@ -28,6 +28,12 @@ export async function page(opts = {}) {
       if (opts.key) w.localStorage.setItem('rp.dashboard.key', opts.key);
       if (opts.base) w.localStorage.setItem('rp.admin.base', opts.base);
       if (opts.theme) w.localStorage.setItem('rp.admin.theme', opts.theme);
+      // jsdom has getRandomValues but no SubtleCrypto; node's stands in.
+      // Its bytes come from jsdom's realm, so they are copied into node's first.
+      const subtle = { digest: (alg, data) => globalThis.crypto.subtle.digest(alg, Uint8Array.from(data)) };
+      if (!w.crypto?.subtle) Object.defineProperty(w, 'crypto', { configurable: true, value: { subtle, getRandomValues: (a) => globalThis.crypto.getRandomValues(a) } });
+      w.TextEncoder ??= TextEncoder;
+      w.navigator.clipboard = { writeText: async (t) => { (w.copied ??= []).push(t); } };
       w.matchMedia = (q) => ({ matches: Boolean(opts.prefersLight) && q.includes('light'), addEventListener() {} });
       w.fetch = async (url, init = {}) => {
         const auth = init.headers?.Authorization ?? null;

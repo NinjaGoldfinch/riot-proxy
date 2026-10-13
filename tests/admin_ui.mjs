@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs';
 const html = readFileSync(new URL('../src/ui/admin.html', import.meta.url), 'utf8');
 const block = html.match(/\/\/ -{10} pure helpers[^\n]*\n([\s\S]*?)\/\/ -{10} end pure helpers/);
 assert.ok(block, 'the pure helpers block is marked in admin.html');
-const h = new Function(`${block[1]}; return { APEX_LIST_CAP, fmt, compact, fmtBytes, fmtDuration, pct, esc, relTime, sumValues, hitRatio, rate, jobTotals, diskLevel, backupLevel, limiterLevel, route, joinUrl, wsUrl, maskKey, contrast, sortRows, capRows, percentile, downsample, historyPointOf, seriesOf, statusClass, routeRows, upstreamRows, windowLabel, fullness, meterLevel, scopeOrder, msOf, dur, when, jobLabel, groupJobs, groupLabel, jobWhen, groupWhen, stageText, stagePct, legName, tierName, storageParts };`)();
+const h = new Function(`${block[1]}; return { APEX_LIST_CAP, fmt, compact, fmtBytes, fmtDuration, pct, esc, relTime, sumValues, hitRatio, rate, jobTotals, diskLevel, backupLevel, limiterLevel, route, joinUrl, wsUrl, maskKey, contrast, sortRows, capRows, percentile, downsample, historyPointOf, seriesOf, statusClass, routeRows, upstreamRows, windowLabel, fullness, meterLevel, scopeOrder, msOf, dur, when, jobLabel, groupJobs, groupLabel, jobWhen, groupWhen, stageText, stagePct, legName, tierName, storageParts, parsePlayer, isHash };`)();
 
 const tokens = (name) => {
   const m = html.match(new RegExp(`/\\* tokens:${name}[^*]*\\*/\\s*[^{]+\\{([^}]*)\\}`));
@@ -261,4 +261,14 @@ test('the data disk splits into live pages, free pages, WAL, other files and fre
   assert.deepEqual(parts, [['live pages', 80], ['free pages', 20], ['WAL', 10], ['other files', 90], ['free', 300]]);
   assert.equal(parts.reduce((n, [, b]) => n + b, 0), 500, 'the parts add up to the disk');
   assert.deepEqual(h.storageParts({ dbBytes: 10, freelistBytes: 2, walBytes: 0, totalBytes: 12, freeBytes: 5 }).map(([, b]) => b), [8, 2, 0, 0, 5], 'other files never go below zero');
+});
+
+test('a Riot ID splits at its last #; anything else is a PUUID; a key hash is 64 hex', () => {
+  assert.deepEqual(h.parsePlayer(' Hide on bush#KR1 '), { gameName: 'Hide on bush', tagLine: 'KR1' });
+  assert.deepEqual(h.parsePlayer('a#b#c'), { gameName: 'a#b', tagLine: 'c' });
+  assert.deepEqual(h.parsePlayer('#KR1'), { puuid: '#KR1' });
+  assert.deepEqual(h.parsePlayer('abc'), { puuid: 'abc' });
+  assert.equal(h.isHash('A'.repeat(64)), true);
+  assert.equal(h.isHash('a'.repeat(63)), false);
+  assert.equal(h.isHash('rpx_' + 'a'.repeat(60)), false);
 });

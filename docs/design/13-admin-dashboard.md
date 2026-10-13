@@ -388,6 +388,13 @@ The v1 page's Ladder tab (ADR-087, ADR-091), moved into layout A.
 
 Status icons outside the health strip (tile labels, note lines) now carry their level's colour too: the rule matches any element with `data-level` whose direct child is the icon.
 
+## Consumers & Players (ADM-14)
+
+- **Consumers** from `/v1/admin/consumers`: active ones first, scopes, quota use this minute as a meter (`snapshot.quotas`, by consumer id), created, and Revoke for active ones (confirm). Revoking the key this page uses makes its next call a 401, which opens the key sheet.
+- **Create** (name, `read`/`admin`, requests a minute; confirm): the response's key is shown once in a warning box with Copy and Done. It is never put in the store, `localStorage`, a toast or a log; Done removes it from the page.
+- **Re-check a key** (`/consumers/{id}/revoke-cache`, which takes the key's SHA-256): paste the key or its hash; a key is hashed in the page with `crypto.subtle` and only the hash is sent; the field is cleared.
+- **Tracked players** from `/v1/admin/tracked-players?tracked=true` (ADM-14 added the filter: unfiltered, the route returns every player a crawl found, 41 K on production): name or PUUID, platform, last match, history state, Untrack (confirm). *Track* takes a platform (suggested from `/ladder/options`) and a Riot ID (`name#tag`) or a PUUID (confirm).
+
 The rail lists only the tabs that exist; each later task adds its own. Until ADM-12 there is no Ladder tab: `/dev/jobs`, `/v1/admin/ladder/*` and the firehose cover it.
 
 ## Chart rules
@@ -407,7 +414,7 @@ Each tab's task fills its row and adds a section below.
 | `#jobs`, `#jobs/<id>` | Jobs (folds in `/dev/jobs`) | snapshot, `/jobs/*` | ADM-11 | built |
 | `#ladder`, `#ladder/<id>` | Ladder | snapshot, `/ladder/*`, `crawl.phase` frames | ADM-12 | built |
 | `#archive` | Archive & Storage: counts, disk, backups, actions | snapshot, `/stats`, `/backups`, `/timelines/backfill` | ADM-13 | built |
-| `#consumers` | Consumers & Players | `/consumers`, `/tracked-players`, snapshot quotas | ADM-14 | planned |
+| `#consumers` | Consumers & Players | `/consumers`, `/tracked-players?tracked=true`, snapshot quotas | ADM-14 | built |
 | `#events` | Events: firehose ring | `firehose` topic | ADM-15 | planned |
 | `#about` | About: build, flags, redacted config | `/info`, `/readyz` | ADM-15 | planned |
 | — | Keyboard, palette, accessibility | — | ADM-16 | planned |

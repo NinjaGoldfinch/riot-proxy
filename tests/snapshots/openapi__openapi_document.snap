@@ -11181,8 +11181,19 @@ expression: doc
     },
     "/v1/admin/tracked-players": {
       "get": {
-        "description": "Every player row for the current `keyScope`, tracked or not: tracking is a flag on the row. Rows written under a previous Riot key are not returned, because PUUIDs are encrypted per key.",
+        "description": "Every player row for the current `keyScope`, tracked or not: tracking is a flag on the row. Rows written under a previous Riot key are not returned, because PUUIDs are encrypted per key. `tracked=true` returns only the tracked rows (ADM-14): the full list can run to tens of thousands of players a crawl discovered.",
         "operationId": "list_players",
+        "parameters": [
+          {
+            "description": "`true`: tracked players only",
+            "in": "query",
+            "name": "tracked",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
