@@ -4,6 +4,7 @@ pub mod auth;
 pub mod body;
 pub mod error;
 pub mod quota;
+pub mod recent;
 pub mod request_id;
 pub mod validate;
 

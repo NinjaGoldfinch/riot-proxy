@@ -179,6 +179,13 @@ impl IntoResponse for ApiError {
         } else {
             tracing::warn!(code = ?self.code, status = self.status.as_u16(), message = %self.message, "request failed");
         }
+        crate::http::recent::push_error(crate::http::recent::RecentError {
+            at: crate::clock::Clock::now().unix_ms,
+            code: self.code.as_str().to_string(),
+            status: self.status.as_u16(),
+            message: self.message.clone(),
+            request_id: request_id::current().map(|id| id.0),
+        });
         let mut res = (self.status, Json(self.envelope())).into_response();
         if let Some(seconds) = self.retry_after {
             res.headers_mut()

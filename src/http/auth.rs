@@ -326,9 +326,12 @@ async fn guard(state: AppState, required: Scope, mut req: Request, next: Next) -
     // The consumer quota runs after authentication, keyed by consumer (P4-02).
     match state.quotas.check(&consumer) {
         Ok(quota) => {
+            let name = consumer.name.clone();
             req.extensions_mut().insert(consumer);
             let mut res = next.run(req).await;
             quota.apply(res.headers_mut());
+            // For the recent-requests ring (ADM-05).
+            res.extensions_mut().insert(crate::http::recent::ServedTo(name));
             res
         }
         Err((err, quota)) => {

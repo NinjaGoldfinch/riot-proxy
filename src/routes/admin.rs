@@ -76,6 +76,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(metrics_snapshot))
         .routes(routes!(metrics_history))
         .routes(routes!(info))
+        .routes(routes!(recent))
 }
 
 fn json<T: Serialize>(status: StatusCode, body: &T) -> Response {
@@ -2429,4 +2430,65 @@ async fn info(State(state): State<AppState>, Extension(_c): Who) -> Response {
             .map(|(k, v)| (k.to_string(), v))
             .collect(),
     })
+}
+
+/// `GET /v1/admin/recent` (ADM-05): one of the two rings, newest first.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Recent {
+    /// `requests` or `errors`.
+    kind: &'static str,
+    /// How many the ring keeps: 500 requests, 200 errors.
+    capacity: usize,
+    /// Set for `kind=requests`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    requests: Option<Vec<crate::http::recent::RecentRequest>>,
+    /// Set for `kind=errors`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    errors: Option<Vec<crate::http::recent::RecentError>>,
+}
+
+#[utoipa::path(
+    get, path = "/v1/admin/recent", tag = "admin",
+    summary = "The last requests or errors",
+    description = "This process's last 500 answered requests (method, route, path, status, cache, latency, \
+        consumer, request id) or its last 200 error envelopes, newest first. Kept in memory, so a restart \
+        empties them. Health probes, `/metrics` and the dashboard's own polling of `/v1/admin/metrics` and \
+        this route are not recorded.",
+    params(("kind" = Option<String>, Query, description = "requests (default) or errors"),
+           ("limit" = Option<i64>, Query, description = "1–500, default 100")),
+    responses((status = 200, description = "The ring", body = Recent), LocalErrors),
+)]
+async fn recent(Extension(_c): Who, Query(query): Q) -> Response {
+    use crate::http::recent;
+    let parsed = (|| {
+        let kind = validate::query_one_of(
+            "kind",
+            query.get("kind").map(String::as_str),
+            &["requests", "errors"],
+        )?
+        .unwrap_or("requests");
+        let limit =
+            validate::int_query("limit", query.get("limit").map(String::as_str), 1, 500)?.unwrap_or(100);
+        Ok::<_, ApiError>((kind, usize::try_from(limit).unwrap_or(100)))
+    })();
+    let (kind, limit) = match parsed {
+        Ok(p) => p,
+        Err(e) => return e.into_response(),
+    };
+    if kind == "errors" {
+        ok(&Recent {
+            kind: "errors",
+            capacity: recent::ERRORS_CAP,
+            requests: None,
+            errors: Some(recent::errors(limit)),
+        })
+    } else {
+        ok(&Recent {
+            kind: "requests",
+            capacity: recent::REQUESTS_CAP,
+            requests: Some(recent::requests(limit)),
+            errors: None,
+        })
+    }
 }

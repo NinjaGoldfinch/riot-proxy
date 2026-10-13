@@ -162,6 +162,8 @@ async fn every_admin_route_needs_the_admin_scope() {
         ("GET", format!("/v1/admin/players/{PUUID}/archive/matches")),
         ("POST", "/v1/admin/cache/purge".to_string()),
         ("GET", "/v1/admin/stats".to_string()),
+        ("GET", "/v1/admin/info".to_string()),
+        ("GET", "/v1/admin/recent".to_string()),
         ("GET", "/v1/admin/limits/euw1".to_string()),
         (
             "GET",
@@ -870,4 +872,137 @@ async fn info_reports_the_build_and_config_without_secrets() {
         get(reader.key.expose().to_string()).await.status,
         StatusCode::FORBIDDEN
     );
+}
+
+/// ADM-05: the last requests and errors, by request id. The rings are global
+/// to this test binary, so the test finds its own entries by the ids it sent
+/// and never asserts on what else is there.
+#[tokio::test]
+async fn recent_requests_and_errors_are_kept_by_request_id() {
+    let e = env().await;
+    let send = |uri: &str, id: &str, key: Option<&str>| {
+        let mut req = Request::get(uri).header("x-request-id", id);
+        if let Some(k) = key {
+            req = req.header("authorization", format!("Bearer {k}"));
+        }
+        common::send(e.router.clone(), req.body(Body::empty()).unwrap())
+    };
+    let tag = ulid::Ulid::generate().to_string();
+    let id = |n: &str| format!("adm05-{tag}-{n}");
+    assert_eq!(
+        send("/v1/admin/stats", &id("ok"), Some(&e.admin)).await.status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        send("/nowhere/at/all", &id("404"), None).await.status,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        send("/v1/admin/stats", &id("403"), Some(&e.reader)).await.status,
+        StatusCode::FORBIDDEN
+    );
+    // Not recorded: probes and the dashboard's own polling.
+    send("/healthz", &id("probe"), None).await;
+    send("/v1/admin/metrics", &id("poll"), Some(&e.admin)).await;
+
+    let all = e.get("/v1/admin/recent?kind=requests&limit=500").await.json();
+    assert_eq!(
+        (&all["kind"], &all["capacity"]),
+        (&json!("requests"), &json!(500))
+    );
+    let mine: Vec<Value> = all["requests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["requestId"].as_str().unwrap_or_default().contains(&tag))
+        .cloned()
+        .collect();
+    let by = |n: &str| mine.iter().find(|r| r["requestId"] == id(n)).cloned();
+    assert_eq!(mine.len(), 3, "{mine:?}");
+    let ok = by("ok").unwrap();
+    assert_eq!(
+        (
+            &ok["method"],
+            &ok["route"],
+            &ok["path"],
+            &ok["status"],
+            &ok["cache"],
+            &ok["consumer"]
+        ),
+        (
+            &json!("GET"),
+            &json!("/v1/admin/stats"),
+            &json!("/v1/admin/stats"),
+            &json!(200),
+            &json!("none"),
+            &json!("ops")
+        )
+    );
+    assert!(ok["latencyMs"].is_u64() && ok["at"].is_i64());
+    let missing = by("404").unwrap();
+    assert_eq!(
+        (&missing["route"], &missing["status"], &missing["consumer"]),
+        (&json!("unmatched"), &json!(404), &Value::Null)
+    );
+    assert_eq!(by("403").unwrap()["status"], 403);
+    assert!(by("probe").is_none() && by("poll").is_none());
+    // Newest first.
+    let order: Vec<&str> = mine.iter().map(|r| r["requestId"].as_str().unwrap()).collect();
+    assert_eq!(order, [id("403"), id("404"), id("ok")]);
+
+    let errs = e.get("/v1/admin/recent?kind=errors&limit=200").await.json();
+    assert_eq!(
+        (&errs["kind"], &errs["capacity"]),
+        (&json!("errors"), &json!(200))
+    );
+    let err = |n: &str| {
+        errs["errors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["requestId"] == id(n))
+            .cloned()
+    };
+    let nf = err("404").unwrap();
+    assert_eq!(
+        (&nf["code"], &nf["status"], &nf["message"]),
+        (
+            &json!("NOT_FOUND"),
+            &json!(404),
+            &json!("No route for GET /nowhere/at/all")
+        )
+    );
+    assert_eq!(err("403").unwrap()["code"], "FORBIDDEN");
+    assert!(err("ok").is_none());
+
+    // A 500, raised the way every handler raises one.
+    let rid = id("500");
+    riot_proxy::http::request_id::CURRENT
+        .scope(riot_proxy::http::request_id::RequestId(rid.clone()), async {
+            axum::response::IntoResponse::into_response(riot_proxy::http::ApiError::internal())
+        })
+        .await;
+    let errs = e.get("/v1/admin/recent?kind=errors").await.json();
+    let five = errs["errors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["requestId"] == rid.as_str())
+        .cloned()
+        .unwrap();
+    assert_eq!(
+        (&five["code"], &five["status"]),
+        (&json!("INTERNAL"), &json!(500))
+    );
+
+    assert_eq!(
+        error(&e.get("/v1/admin/recent?kind=everything").await),
+        bad("querystring/kind must be equal to one of the allowed values")
+    );
+    assert_eq!(
+        error(&e.get("/v1/admin/recent?limit=0").await),
+        bad("querystring/limit must be >= 1")
+    );
+    let one = e.get("/v1/admin/recent?limit=1").await.json();
+    assert_eq!(one["requests"].as_array().unwrap().len(), 1);
 }

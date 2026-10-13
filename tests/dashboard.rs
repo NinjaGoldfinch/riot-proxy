@@ -169,9 +169,11 @@ async fn the_snapshot_is_v1s_whole_document_from_v2s_sources() {
             "process",
             "queues",
             "quotas",
+            "requests",
             "sampledAt",
             "sqlite",
             "totals",
+            "upstream",
             "v",
             "worker",
             "ws"
@@ -270,6 +272,12 @@ async fn the_snapshot_is_v1s_whole_document_from_v2s_sources() {
         "read from /proc on Linux"
     );
     assert_eq!(s["ws"], json!({"connections": 0, "subscriptions": 0}));
+    // ADM-05: requests by `route|status|cache`, cumulative and global to this
+    // binary, so at least the one this test made before.
+    e.get("/v1/admin/stats", &e.admin).await;
+    let s = e.get("/v1/admin/metrics", &e.admin).await.json();
+    assert!(s["requests"]["/v1/admin/stats|200|none"].as_u64().unwrap() >= 1);
+    assert!(s["upstream"].is_object());
 
     assert_eq!(
         e.get("/v1/admin/metrics", &e.reader).await.status,

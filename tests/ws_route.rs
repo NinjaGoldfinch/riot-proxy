@@ -277,9 +277,11 @@ async fn the_metrics_topic_ticks_only_while_held() {
             "process",
             "queues",
             "quotas",
+            "requests",
             "sampledAt",
             "sqlite",
             "totals",
+            "upstream",
             "v",
             "worker",
             "ws"
