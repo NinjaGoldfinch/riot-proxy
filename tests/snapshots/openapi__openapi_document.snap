@@ -2203,6 +2203,45 @@ expression: doc
         ],
         "type": "object"
       },
+      "JobsPurged": {
+        "description": "`DELETE /v1/admin/jobs` (DSK-03).",
+        "properties": {
+          "deleted": {
+            "description": "Rows deleted; 0 on a dry run.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "dryRun": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "matched": {
+            "description": "Rows the filter matched when the purge started.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "minPriority": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "state",
+          "minPriority",
+          "matched",
+          "deleted",
+          "dryRun"
+        ],
+        "type": "object"
+      },
       "LadderCrawlSummary": {
         "description": "One crawl in `GET /v1/admin/ladder/crawls` (v1 `LadderCrawlSummary`).",
         "properties": {
@@ -6417,6 +6456,184 @@ expression: doc
       }
     },
     "/v1/admin/jobs": {
+      "delete": {
+        "description": "Deletes every `pending` or `failed` row of `kind` whose priority is `minPriority` or a larger number (a lower band), in chunks, so a backlog of a million rows never holds the writer. Running rows are never touched; `done` rows are `maintenance`'s. Crawl-found matches are queued at 20 005 and lookups below 10 000, so `minPriority=20000` leaves a visitor's work alone. `dryRun=true` only counts.",
+        "operationId": "purge_jobs",
+        "parameters": [
+          {
+            "description": "A job kind, e.g. archive:match",
+            "in": "query",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "pending or failed",
+            "in": "query",
+            "name": "state",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "0 or more, default 0 (every row of the kind and state)",
+            "in": "query",
+            "name": "minPriority",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Count only",
+            "in": "query",
+            "name": "dryRun",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobsPurged"
+                }
+              }
+            },
+            "description": "`{kind, state, minPriority, matched, deleted, dryRun}`",
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region).",
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found.",
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`).",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/Retry-After"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          }
+        },
+        "summary": "Purge pending or failed jobs of one kind",
+        "tags": [
+          "admin"
+        ]
+      },
       "get": {
         "description": "Rows of the durable job queue, newest first. Filter by `state` and `kind`.",
         "operationId": "list_jobs",

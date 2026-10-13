@@ -280,6 +280,72 @@ async fn for_puuid_counts_a_players_jobs_by_kind_and_state_uncapped() {
 }
 
 #[tokio::test]
+async fn purge_deletes_in_chunks_and_only_what_the_filter_names() {
+    let (_dir, db) = db();
+    let queue = Queue::new(db.clone());
+    // More than two chunks of crawl rows, plus rows the filter must leave.
+    let n = PURGE_CHUNK * 2 + 7;
+    db.write(move |c| {
+        let now = Clock::now().unix_ms;
+        for i in 0..n {
+            let job = NewJob::new("archive:match", 20_005, json!({"i": i})).dedupe(format!("KR_{i}"));
+            enqueue_on(c, &job, now)?;
+        }
+        enqueue_on(
+            c,
+            &NewJob::new("archive:match", 100, json!({})).dedupe("lookup"),
+            now,
+        )?;
+        enqueue_on(
+            c,
+            &NewJob::new("poll:live", 20_005, json!({})).dedupe("poll"),
+            now,
+        )?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    let running = sched(&db).claim(i64::MAX).await.unwrap().unwrap();
+    assert_eq!(running.priority, 100);
+
+    let purge = Purge {
+        kind: "archive:match".into(),
+        state: "pending".into(),
+        min_priority: 20_000,
+        dry_run: true,
+    };
+    assert_eq!(
+        queue.purge(purge.clone()).await.unwrap(),
+        Purged {
+            matched: n as u64,
+            deleted: 0
+        }
+    );
+    let done = queue
+        .purge(Purge {
+            dry_run: false,
+            ..purge
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        done,
+        Purged {
+            matched: n as u64,
+            deleted: n as u64
+        }
+    );
+    let left: Vec<(String, String, i64)> = queue.stats().await.unwrap();
+    assert_eq!(
+        left,
+        vec![
+            ("archive:match".into(), "running".into(), 1),
+            ("poll:live".into(), "pending".into(), 1),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn enqueue_or_promote_lifts_a_pending_duplicate_and_leaves_a_running_one() {
     let (_d, db) = db();
     let s = sched(&db);
