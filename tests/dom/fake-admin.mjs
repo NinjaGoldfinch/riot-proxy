@@ -196,6 +196,92 @@ export function jobsWorld() {
   return { handle, jobs, bulk };
 }
 
+// ── ladder: dashboard.test.mjs's crawls, activity and options (DEV-13, DEV-17) ──
+export const CRAWL = '01K0000000000000000000RUN1';
+export const PAST = '01K0000000000000000000DON1';
+const crawl = (id, status, phase, extra = {}) => ({
+  id, platform: 'oc1', queue: 'RANKED_SOLO_5x5', tierFloor: 'MASTER', status, phase,
+  startedAt: ago(3_600_000), finishedAt: status === 'running' ? null : ago(60_000),
+  pagesFetched: 12, entriesSeen: 1982, playersDiscovered: 1982, backfillsEnqueued: 1982,
+  matchIdsSeen: 21137, matchesQueued: 0, pendingLegs: status === 'running' ? 30 : 0, apexCapped: [], ...extra,
+});
+const OLD = Array.from({ length: 11 }, (_, i) => crawl(`01K00000000000000000000LD${String(i).padStart(2, '0')}`, i === 3 ? 'failed' : 'completed', 'archive', {
+  platform: i % 2 ? 'euw1' : 'oc1', startedAt: ago(86_400_000 * (i + 2)), finishedAt: ago(86_400_000 * (i + 2) - 3_600_000),
+}));
+const ljob = (kind, state, payload, extra = {}) => ({
+  id: `J-${kind}-${state}-${Math.random()}`, kind, dedupeKey: null, priority: 20003, state, attempts: 1,
+  runAfter: ago(1000), claimedAt: state === 'running' ? ago(30_000) : null, finishedAt: null, error: null, payload, ...extra,
+});
+const lcollect = (offset, state, extra) => ljob('ladder:collect', state, { crawlId: CRAWL, platform: 'oc1', queue: 'RANKED_SOLO_5x5', offset, puuids: Array(25).fill('p') }, extra);
+export function ladderWorld() {
+  const activity = {
+    [CRAWL]: {
+      crawl: crawl(CRAWL, 'running', 'collect'), asOf: new Date().toISOString(),
+      stages: [
+        { name: 'enumerate', state: 'done', done: 3, total: 3, unit: 'legs', recent: 0, etaSeconds: null },
+        { name: 'collect', state: 'now', done: 50, total: 80, unit: 'batches', recent: 10, etaSeconds: 1800 },
+        { name: 'archive', state: 'waiting', done: 0, total: null, unit: 'ids', recent: 0, etaSeconds: null },
+      ],
+      openLegs: [{ leg: 'ladder:collect:1250', page: null }, { leg: 'ladder:collect:1275', page: null }],
+      running: [lcollect(1250, 'running')],
+      next: [lcollect(1275, 'pending'), lcollect(1300, 'pending', { runAfter: soon(120_000), attempts: 2 })],
+      ahead: 4,
+      failed: [lcollect(25, 'failed', { error: 'RIOT_UNAVAILABLE: match-v5 503 after 5 tries' })],
+      downloads: { platform: 'oc1', ready: 120, delayed: 3, running: 2, failed: 1, recent: 60, etaSeconds: 1250 },
+    },
+    // A kr-sized run: Riot's Master list came back at its 10,000 cap (LAD-01).
+    [PAST]: {
+      crawl: crawl(PAST, 'completed', 'archive', { playersDiscovered: 11000, apexCapped: ['MASTER'] }), asOf: new Date().toISOString(),
+      stages: [
+        { name: 'enumerate', state: 'done', done: 3, total: 3, unit: 'legs', recent: 0, etaSeconds: null },
+        { name: 'collect', state: 'done', done: 80, total: 80, unit: 'batches', recent: 0, etaSeconds: null },
+        { name: 'archive', state: 'done', done: 21137, total: 21137, unit: 'ids', recent: 0, etaSeconds: null },
+      ],
+      openLegs: [], running: [], next: [], ahead: null, failed: [],
+      downloads: { platform: 'oc1', ready: 0, delayed: 0, running: 0, failed: 0, recent: 0, etaSeconds: null },
+    },
+  };
+  const options = {
+    platforms: [{ id: 'euw1', label: 'Europe West' }, { id: 'oc1', label: 'Oceania' }],
+    queues: ['RANKED_SOLO_5x5', 'RANKED_FLEX_SR'],
+    tiers: ['IRON', 'BRONZE', 'SILVER', 'GOLD', 'PLATINUM', 'EMERALD', 'DIAMOND', 'MASTER', 'GRANDMASTER', 'CHALLENGER'],
+    defaults: { platform: 'oc1', queue: 'RANKED_SOLO_5x5', tierFloor: 'MASTER', backfillLimit: 100 },
+  };
+  const w = { running: true, bodies: [] };
+  w.handle = (url, method, body) => {
+    const u = new URL(url, 'http://x');
+    const p = u.pathname;
+    if (p === '/v1/admin/ladder/crawls') return [200, { crawls: [...(w.running ? [crawl(CRAWL, 'running', 'collect')] : []), crawl(PAST, 'completed', 'archive'), ...OLD] }];
+    const m = p.match(/^\/v1\/admin\/ladder\/crawls\/(\w+)$/);
+    if (m && method === 'DELETE') { w.running = false; return [200, { ok: true, crawlId: m[1], status: 'cancelled', droppedJobs: 3 }]; }
+    if (m) return activity[m[1]] ? [200, activity[m[1]]] : [404, { error: { code: 'NOT_FOUND', message: 'No such ladder crawl' } }];
+    if (p === '/v1/admin/ladder/options') return [200, options];
+    if (p === '/v1/admin/ladder/crawl' && method === 'POST') {
+      const b = JSON.parse(body ?? '{}');
+      w.bodies.push([p, b]);
+      return [202, { crawlId: '01K0000000000000000000NEW1', status: 'started', platform: b.platform, queue: b.queue, legs: 7 }];
+    }
+    if (p === '/v1/admin/analytics/recompute' && method === 'POST') {
+      const b = JSON.parse(body ?? '{}');
+      w.bodies.push([p, b]);
+      if (b.platform === 'euw1') return [400, { error: { code: 'VALIDATION', message: 'not in this test: euw1' } }];
+      return [202, { ok: true, platform: b.platform, queue: b.queue }];
+    }
+    return null;
+  };
+  return w;
+}
+/** A snapshot with the running crawl in its ladder section, and an analytics run. */
+export function ladderSnapshot(running = true) {
+  return snapshot({
+    ladder: { running: running ? [crawl(CRAWL, 'running', 'collect')] : [], lastCompleted: crawl(PAST, 'completed', 'archive'), entries: 48_210 },
+    analytics: {
+      lastRuns: [{ platform: 'oc1', queue: 'RANKED_SOLO_5x5', at: Date.now() - 600_000, status: 'completed', ms: 1234, steps: { champions: 0.5, matchups: 1.25 }, rows: { champion_stats: 3, champion_items: 7 }, games: 30 }],
+      topChampions: [{ championId: 103, championName: 'Ahri', games: 6, winRate: 0.5 }],
+    },
+  });
+}
+
 export const scene = {
   // What GET /v1/admin/info answers without a key: 401, or 200 when AUTH_DISABLED.
   authDisabled: false,
@@ -204,6 +290,7 @@ export const scene = {
   ready: { ok: true, sqlite: true, limiter: true, readers: 6, readersFree: 6 },
   history: history(),
   jobs: jobsWorld(),
+  ladder: ladderWorld(),
   // Cache keys the purge matches against.
   cacheKeys: ['5f3a:summoner.byPuuid:kr:a', '5f3a:summoner.byPuuid:kr:b', '5f3a:league.entries:kr:c'],
   recent: recent(),
@@ -224,6 +311,10 @@ export function api(calls, url, { method = 'GET', auth = null, body = null } = {
   if (path.startsWith('/v1/admin/')) {
     if (!auth && !scene.authDisabled) return unauthorized;
     if (auth && auth !== `Bearer ${KEY}`) return auth === 'Bearer rpx_reader' ? forbidden : unauthorized;
+  }
+  if (path.startsWith('/v1/admin/ladder') || path === '/v1/admin/analytics/recompute') {
+    const r = scene.ladder.handle(url, method, body);
+    if (r) return r;
   }
   if (path.startsWith('/v1/admin/jobs')) {
     const r = scene.jobs.handle(url, method);

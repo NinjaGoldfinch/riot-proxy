@@ -368,6 +368,15 @@ The Jobs tab folds in `/dev/jobs` (design/10 §Jobs page), which stays until ADM
 - **A job** (`#jobs/<id>`, opened from any worker, row or group of one): state, the "now" line, facts, payload, and the timeline of its latest run read with `?after=<nextSeq>` each second, appended, with a follow toggle; a new attempt restarts the timeline. Retry for a failed job, Cancel for a pending one, each after `confirmAction()`. A missing job says so.
 - **Polling** is one `setTimeout` chain at 1 s while the tab is open, visible and *live* is ticked; it stops when hidden, unticked or left.
 
+## Ladder (ADM-12)
+
+The v1 page's Ladder tab (ADR-087, ADR-091), moved into layout A.
+
+- **Running crawls** come from `snapshot.ladder.running` (or the crawl list before the first snapshot). Each is a card: ladder, floor, phase, age, Cancel; one `progressbar` per stage with its numbers and pace; totals (players with any apex-cap note, match ids, matches queued, failures); and folded under *details* the counters, legs in flight, the crawl's own running, next and failed jobs (one row each, not grouped), how much of the queue is ahead, and the platform's match downloads. A new card fills in at once. Open folds and a scrolled leg list survive refreshes.
+- **Past crawls** from `/ladder/crawls?limit=50`, ten shown with *show n more*; a row opens its detail under it at `#ladder/<id>` (read once, it is final). Under 1000 px the history keeps only ladder, status and finish time, so an opened run stays on screen.
+- **Start a crawl** from `/ladder/options` (platforms, queues, tiers and this deployment's defaults; the form is open only while nothing runs, until the operator folds it). **Analytics recompute** in its own fold, with the last runs' steps, rows and games from the snapshot and the newest patch's most played champions. Start, Cancel and Recompute each ask first.
+- **Refresh:** every 5 s while open and visible: running crawls' activity, the crawl list every 30 s, and at once on a `crawl.phase` or `ladder.crawl.completed` frame (ADR-058). The rail's Ladder badge counts running crawls.
+
 The rail lists only the tabs that exist; each later task adds its own. Until ADM-12 there is no Ladder tab: `/dev/jobs`, `/v1/admin/ladder/*` and the firehose cover it.
 
 ## Chart rules
@@ -385,7 +394,7 @@ Each tab's task fills its row and adds a section below.
 | `#limiter` | Limiter: a card per scope | snapshot, `/limits/{scope}` | ADM-10 | built |
 | `#cache` | Cache: L1/L2, ratios, probe, purge | snapshot, history, `/debug/cache`, `/cache/purge` | ADM-10 | built |
 | `#jobs`, `#jobs/<id>` | Jobs (folds in `/dev/jobs`) | snapshot, `/jobs/*` | ADM-11 | built |
-| `#ladder`, `#ladder/<id>` | Ladder | `/ladder/*`, `crawl.phase` frames | ADM-12 | planned |
+| `#ladder`, `#ladder/<id>` | Ladder | snapshot, `/ladder/*`, `crawl.phase` frames | ADM-12 | built |
 | `#archive` | Archive & Storage: counts, disk, backups, actions | `/stats`, `/backups` | ADM-13 | planned |
 | `#consumers` | Consumers & Players | `/consumers`, `/tracked-players`, snapshot quotas | ADM-14 | planned |
 | `#events` | Events: firehose ring | `firehose` topic | ADM-15 | planned |

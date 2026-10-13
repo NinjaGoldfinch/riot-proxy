@@ -10,10 +10,10 @@ import assert from 'node:assert/strict';
 import { mkdirSync } from 'node:fs';
 import { chromium } from 'playwright-core';
 
-import { html, api, KEY, scene, limiterSnapshot } from './fake-admin.mjs';
+import { html, api, KEY, scene, limiterSnapshot, ladderSnapshot } from './fake-admin.mjs';
 
-// Every scope, meter and fold the Limiter and Cache tabs draw.
-scene.snapshot = limiterSnapshot();
+// Every scope, meter and fold the Limiter and Cache tabs draw, and a running crawl.
+scene.snapshot = { ...limiterSnapshot(), ladder: ladderSnapshot().ladder, analytics: ladderSnapshot().analytics };
 
 let browser = null;
 let skip = false;
@@ -54,12 +54,12 @@ for (const [device, width] of [['desktop', 1280], ['tablet', 820], ['phone', 390
         // Each view: nothing sideways, nothing wider than its box (tables scroll inside .scroll).
         const fits = () => page.evaluate(() => {
           const out = { page: [document.documentElement.scrollWidth, innerWidth], overflow: [] };
-          for (const el of document.querySelectorAll('.strip, .tile, .tile .value, .rail-foot, main, .chart, .chart figcaption, .xaxis, .panel, .filters, .meter, .scope header, .form-row, .worker, ul.groups li, ol.timeline li')) {
+          for (const el of document.querySelectorAll('.strip, .tile, .tile .value, .rail-foot, main, .chart, .chart figcaption, .xaxis, .panel, .filters, .meter, .scope header, .form-row, .worker, ul.groups li, ol.timeline li, .crawl, .stages, .totals, .legs')) {
             if (el.scrollWidth > el.clientWidth + 1) out.overflow.push(`${el.id || el.className || el.tagName}: ${el.scrollWidth} > ${el.clientWidth}`);
           }
           return out;
         });
-        const ready = { overview: '#chArchive .plotwrap', traffic: '#trRecent tbody tr', limiter: '.scope[data-scope="oc1"] .meter', cache: '#chCacheHit .plotwrap', jobs: '#jNext ul.groups li', 'jobs/01K00000000000000000000RUN': '#jtTimeline li' };
+        const ready = { overview: '#chArchive .plotwrap', traffic: '#trRecent tbody tr', limiter: '.scope[data-scope="oc1"] .meter', cache: '#chCacheHit .plotwrap', jobs: '#jNext ul.groups li', 'jobs/01K00000000000000000000RUN': '#jtTimeline li', ladder: '[data-activity="01K0000000000000000000RUN1"] .stages', 'ladder/01K0000000000000000000DON1': '#ladderHistory [data-activity="01K0000000000000000000DON1"] .stages' };
         for (const view of Object.keys(ready)) {
           await page.evaluate((v) => { location.hash = v; }, view);
           await page.waitForSelector(ready[view]);
@@ -68,8 +68,18 @@ for (const [device, width] of [['desktop', 1280], ['tablet', 820], ['phone', 390
             for (const s of await page.$$('.scope details summary')) await s.click();
             await page.waitForSelector('details[data-live="kr"] .live .meter');
           }
+          if (view === 'ladder') {
+            for (const s of await page.$$('#ladderRunning details.more summary, #analyticsFold summary')) await s.click();
+          }
           await page.screenshot({ path: new URL(`./screenshots/admin-${view.split('/')[0]}${view.includes('/') ? '-trace' : ''}-${device}-${theme}.png`, import.meta.url).pathname, fullPage: true });
           const f = await fits();
+          if (view.startsWith('ladder/')) {
+            // Every part of an opened run is on screen, not just inside its scrolling table.
+            const off = await page.evaluate(() => [...document.querySelectorAll('#ladderHistory .activity, #ladderHistory .stages, #ladderHistory .totals')]
+              .filter((el) => { const r = el.getBoundingClientRect(); return r.width && (r.left < -1 || r.right > innerWidth + 1); })
+              .map((el) => el.className));
+            assert.deepEqual(off, [], `${view}: the opened run is on screen`);
+          }
           assert.ok(f.page[0] <= f.page[1], `${view}: page scrolls sideways: ${f.page[0]} > ${f.page[1]}`);
           assert.deepEqual(f.overflow, [], `${view}: nothing wider than its box`);
         }
