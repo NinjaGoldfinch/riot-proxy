@@ -164,6 +164,7 @@ src/
 ├── http/
 │   ├── auth.rs          Bearer → consumer (moka-cached sha256 lookup), scopes, IP allowlist
 │   ├── quota.rs         per-consumer sliding window
+│   ├── cors.rs          opt-in CORS for the admin API (ADMIN_CORS_ORIGINS, ADM-07)
 │   ├── recent.rs        last 500 requests and 200 errors, in memory (ADM-05)
 │   ├── error.rs         ApiError → JSON body + status (same codes as v1)
 │   └── headers.rs       X-Cache, X-Cache-Age, X-RateLimit-*, X-Request-Id

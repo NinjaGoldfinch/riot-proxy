@@ -34,6 +34,8 @@ sha2 = "0.11"
 thiserror = "2.0"
 tokio = { version = "1.53", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
+# The CORS middleware calls a layered service (ADM-07); axum already depends on it.
+tower = { version = "0.5.3", features = ["util"] }
 tower-http = { version = "0.7", features = ["catch-panic", "compression-full", "cors", "fs", "limit", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
@@ -57,7 +59,6 @@ proptest = "1.11"
 tempfile = "3.27"
 tokio-test = "0.4"
 tokio-tungstenite = "0.29"
-tower = { version = "0.5.3", features = ["util"] }
 ulid = "3.0"
 wiremock = "0.6"
 

@@ -72,6 +72,7 @@ pub fn router(state: AppState, metrics: PrometheusHandle) -> Router {
     let ddragon = routes::statics::files(Arc::clone(&state.ddragon));
     // `/dev/reset` lives and dies with the dev explorer (design/10, ADR-077).
     let dev_reset = state.config.dev_ui.then(|| routes::dev::router(state.clone()));
+    let cors = crate::http::cors::admin(&state.config.admin_cors_origins);
     let mut router = api
         .with_state(state)
         .merge(telemetry::metrics_router(metrics))
@@ -83,10 +84,19 @@ pub fn router(state: AppState, metrics: PrometheusHandle) -> Router {
     if let Some(dev_reset) = dev_reset {
         router = router.merge(dev_reset);
     }
-    router
+    router = router
         .fallback(not_found)
         // Fastify 404s a known path with the wrong method; so does v2.
-        .method_not_allowed_fallback(not_found)
+        .method_not_allowed_fallback(not_found);
+    // Opt-in CORS for the admin API (ADM-07): outside the routes' auth and the
+    // fallbacks above, so a preflight is answered without a key.
+    if let Some(cors) = cors {
+        router = router.layer(axum::middleware::from_fn_with_state(
+            cors,
+            crate::http::cors::scoped,
+        ));
+    }
+    router
         // Innermost first: metrics → body limit → compression → trace → panic → request id.
         .layer(axum::middleware::from_fn(record_request))
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
