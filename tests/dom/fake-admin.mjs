@@ -282,6 +282,55 @@ export function ladderSnapshot(running = true) {
   });
 }
 
+// ── consumers and tracked players ──
+export const ADMIN_ID = '01K000000000000000000ADMIN';
+export function consumersWorld() {
+  const w = {
+    revokedSelf: false,
+    consumers: [
+      { id: ADMIN_ID, name: 'ops', scopes: ['read', 'admin'], quotaPerMin: 10000, createdAt: ago(86_400_000 * 30), disabledAt: null },
+      { id: '01K0000000000000000000WEB1', name: 'ninjagoldfinch.lol', scopes: ['read'], quotaPerMin: 600, createdAt: ago(86_400_000 * 7), disabledAt: null },
+      { id: '01K0000000000000000000OLD1', name: 'old-site', scopes: ['read'], quotaPerMin: 600, createdAt: ago(86_400_000 * 90), disabledAt: ago(86_400_000 * 60) },
+    ],
+    players: [
+      { puuid: 'P'.repeat(78), keyScope: '5f3a', platform: 'kr', gameName: 'Hide on bush', tagLine: 'KR1', tracked: true, lastSeenMatchId: 'KR_1', historyBackfillStartedAt: ago(3600_000), historyBackfilledAt: ago(3500_000), historyBackfillDepth: 100, updatedAt: ago(60_000) },
+    ],
+    bodies: [],
+  };
+  w.handle = (url, method, body) => {
+    const u = new URL(url, 'http://x');
+    const p = u.pathname;
+    const b = body ? JSON.parse(body) : null;
+    if (p === '/v1/admin/consumers' && method === 'GET') return [200, { consumers: w.consumers }];
+    if (p === '/v1/admin/consumers' && method === 'POST') {
+      w.bodies.push([p, b]);
+      const c = { id: '01K0000000000000000000NEW1', name: b.name, scopes: b.scopes, quotaPerMin: b.quotaPerMin, createdAt: new Date().toISOString(), disabledAt: null };
+      w.consumers.push(c);
+      return [200, { id: c.id, name: c.name, scopes: c.scopes, quotaPerMin: c.quotaPerMin, key: 'rpx_NEWKEY_shown_once_0123456789', warning: 'Store this key now. It cannot be retrieved again.' }];
+    }
+    let m = p.match(/^\/v1\/admin\/consumers\/(\w+)\/revoke-cache$/);
+    if (m) { w.bodies.push([p, b]); return [200, { ok: true, id: m[1], stillActive: true }]; }
+    m = p.match(/^\/v1\/admin\/consumers\/(\w+)$/);
+    if (m && method === 'DELETE') {
+      const c = w.consumers.find((x) => x.id === m[1]);
+      c.disabledAt = new Date().toISOString();
+      if (c.id === ADMIN_ID) w.revokedSelf = true;
+      return [200, { ok: true, id: c.id }];
+    }
+    if (p === '/v1/admin/tracked-players' && method === 'GET') return [200, { players: u.searchParams.get('tracked') === 'true' ? w.players.filter((x) => x.tracked) : w.players }];
+    if (p === '/v1/admin/tracked-players' && method === 'POST') {
+      w.bodies.push([p, b]);
+      const pl = { puuid: b.puuid ?? 'N'.repeat(78), keyScope: '5f3a', platform: b.platform, gameName: b.gameName ?? null, tagLine: b.tagLine ?? null, tracked: true, lastSeenMatchId: null, historyBackfillStartedAt: null, historyBackfilledAt: null, historyBackfillDepth: null, updatedAt: new Date().toISOString() };
+      w.players.push(pl);
+      return [200, { ...pl, backfill: null }];
+    }
+    m = p.match(/^\/v1\/admin\/tracked-players\/(\w+)$/);
+    if (m && method === 'DELETE') { w.players.find((x) => x.puuid === m[1]).tracked = false; return [200, { ok: true, puuid: m[1], tracked: false }]; }
+    return null;
+  };
+  return w;
+}
+
 export const scene = {
   // What GET /v1/admin/info answers without a key: 401, or 200 when AUTH_DISABLED.
   authDisabled: false,
@@ -302,6 +351,7 @@ export const scene = {
     totals: { patch: null, matches: 900, withTimeline: 600, notFound: 20, left: 280 },
   },
   posted: [],
+  consumers: consumersWorld(),
   jobs: jobsWorld(),
   ladder: ladderWorld(),
   // Cache keys the purge matches against.
@@ -322,11 +372,16 @@ export function api(calls, url, { method = 'GET', auth = null, body = null } = {
   const path = new URL(url, 'http://x').pathname;
   if (path === '/readyz') return [200, scene.ready];
   if (path.startsWith('/v1/admin/')) {
+    if (scene.consumers.revokedSelf) return unauthorized;
     if (!auth && !scene.authDisabled) return unauthorized;
     if (auth && auth !== `Bearer ${KEY}`) return auth === 'Bearer rpx_reader' ? forbidden : unauthorized;
   }
   if (path.startsWith('/v1/admin/ladder') || path === '/v1/admin/analytics/recompute') {
     const r = scene.ladder.handle(url, method, body);
+    if (r) return r;
+  }
+  if (path.startsWith('/v1/admin/consumers') || path.startsWith('/v1/admin/tracked-players')) {
+    const r = scene.consumers.handle(url, method, body);
     if (r) return r;
   }
   if (path.startsWith('/v1/admin/jobs')) {

@@ -418,12 +418,21 @@ async fn track_by_riot_id_then_untrack() {
     assert_eq!(again["puuid"], PUUID);
     let list = e.get("/v1/admin/tracked-players").await.json();
     assert_eq!(list["players"].as_array().unwrap().len(), 1);
+    // ADM-14: `tracked=true` lists the tracked rows only.
+    let tracked = e.get("/v1/admin/tracked-players?tracked=true").await.json();
+    assert_eq!(tracked["players"][0]["puuid"], PUUID);
 
     let off = e.delete(&format!("/v1/admin/tracked-players/{PUUID}")).await;
     assert_eq!(off.json(), json!({"ok": true, "puuid": PUUID, "tracked": false}));
     let list = e.get("/v1/admin/tracked-players").await.json();
     assert_eq!(list["players"][0]["tracked"], false, "untracked, not deleted");
     assert_eq!(list["players"][0]["gameName"], "Hide on bush");
+    let tracked = e.get("/v1/admin/tracked-players?tracked=true").await.json();
+    assert_eq!(tracked["players"], json!([]), "untracked rows are left out");
+    assert_eq!(
+        error(&e.get("/v1/admin/tracked-players?tracked=yes").await),
+        bad("querystring/tracked must be equal to one of the allowed values")
+    );
 }
 
 #[tokio::test]
