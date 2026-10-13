@@ -623,12 +623,22 @@ no restart of the proxy.
 The tunnel is token-installed (step 3b), so its routes live in the Cloudflare
 dashboard, not in a file on the box.
 
-1. **Route.** Zero Trust → Networks → Tunnels → the production tunnel →
-   Public hostnames → Add: subdomain `admin`, domain `ninjagoldfinch.lol`,
-   service `HTTP` `127.0.0.1:8080`, path empty. The DNS record is created
-   with it.
-2. **Access application.** Zero Trust → Access → Applications → Add →
-   Self-hosted: domain `admin.ninjagoldfinch.lol`, session 24 h, login method
+1. **Route.** Zero Trust → Networks → Tunnels & Mesh (older dashboards:
+   Networks → Tunnels) → the production tunnel → its published application
+   routes (older: Public hostnames) → Add: subdomain `admin`, domain
+   `ninjagoldfinch.lol`, service type `HTTP`, URL `127.0.0.1:8080`, path
+   empty. The DNS record is created with it. Leave "Enforce Access JWT
+   validation" off: the Access application does not exist yet, and the proxy
+   does not read the JWT (ADM-18 would). The production tunnel is the one
+   already routing `api.ninjagoldfinch.lol` and `ninjagoldfinch.lol`, its one
+   connector on `ngf-prod-syd1`; the repository does not record its name. On
+   the box, its id is in the token (this prints only the id, not the secret):
+
+   ```
+   sudo cat /etc/cloudflared/token | base64 -d | jq -r .t
+   ```
+2. **Access application.** Zero Trust → Access controls (older: Access) →
+   Applications → Add → Self-hosted: domain `admin.ninjagoldfinch.lol`, session 24 h, login method
    One-time PIN only. One policy: action Allow, include Emails = the owner's
    email. Nothing else is allowed in.
 3. **Block the admin paths on `api.`.** Security → WAF → Custom rules on the
