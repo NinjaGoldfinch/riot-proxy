@@ -154,7 +154,7 @@
       td .tag { display: inline-flex; align-items: center; gap: 4px; }
 
       /* ── meters: used / limit as text, the fill carries severity ── */
-      .meter { display: grid; grid-template-columns: 12em minmax(40px, 1fr) 8.5em; align-items: center; gap: 8px; font-size: 12px; min-width: 0; }
+      .meter { display: grid; grid-template-columns: 12em minmax(40px, 1fr) minmax(8.5em, auto); align-items: center; gap: 8px; font-size: 12px; min-width: 0; }
       .meter.bare { grid-template-columns: minmax(40px, 1fr) auto; }
       .meter .ml { color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .meter .track { height: 8px; border-radius: 4px; background: color-mix(in srgb, var(--accent) 16%, transparent); overflow: hidden; }
@@ -205,7 +205,7 @@
       .toast[data-level='warning'] svg { color: var(--warning); }
 
       /* ── narrow: the rail becomes a tab strip above the content ── */
-      @media (max-width: 480px) { .meter { grid-template-columns: 9em minmax(40px, 1fr) 7em; } }
+      @media (max-width: 480px) { .meter { grid-template-columns: minmax(0, 9em) minmax(40px, 1fr) auto; } }
       @media (max-width: 819px) {
         .app { grid-template-columns: minmax(0, 1fr); }
         .rail { position: sticky; top: 34px; z-index: 60; height: auto; flex-direction: row; align-items: center; gap: 8px; padding: 6px 8px; border-right: 0; border-bottom: 1px solid var(--border); overflow: hidden; }
