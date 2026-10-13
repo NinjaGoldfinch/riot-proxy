@@ -420,7 +420,7 @@ backup's row for row.
 |---|---|---|
 | `ARCHIVE_OBJECT_URL` | unset | `s3://riot-proxy-archive`; unset = bodies stay in SQLite, no offload job. `file:///<dir>` uses a directory as the bucket (development, tests; refused in production, and it keeps no object metadata) |
 | `ARCHIVE_OBJECT_ENDPOINT` | unset | `https://s3.ap-southeast-2.onidel.cloud`; required with an `s3://` URL. A host that starts with `<bucket>.` (`https://riot-proxy-archive.s3.ap-southeast-2.onidel.cloud`, the form Onidel documents) is addressed virtual-hosted style; any other host gets `/<bucket>` appended (path style, which R2 accepts). `http://` only outside production |
-| `ARCHIVE_OBJECT_REGION` | `auto` | passed through; Onidel and R2 accept any |
+| `ARCHIVE_OBJECT_REGION` | `auto` | passed through. R2 documents `auto`; for Onidel set `ap-southeast-2`, the region verified on the box (2026-10-14, ADR-162), where both path-style and virtual-hosted addressing worked |
 | `ARCHIVE_OBJECT_ACCESS_KEY` / `ARCHIVE_OBJECT_SECRET_KEY` | unset | in `/etc/riot-proxy/env`, 0600; never logged; `Config` redacts them like the Riot key |
 | `ARCHIVE_BODY_LOCAL_DAYS` | `14` | 0–365; how long SQLite keeps its own copy of a body that is already in the bucket (a read cache; packing does not wait for it) |
 | `ARCHIVE_PACK_TARGET_BYTES` | `67108864` | 64 MiB; a pack closes at this size (1 MiB–1 GiB) |
@@ -707,6 +707,7 @@ Add to `/etc/riot-proxy/env`:
 ```
 ARCHIVE_OBJECT_URL=s3://riot-proxy-archive
 ARCHIVE_OBJECT_ENDPOINT=https://s3.ap-southeast-2.onidel.cloud
+ARCHIVE_OBJECT_REGION=ap-southeast-2
 ARCHIVE_OBJECT_ACCESS_KEY=…
 ARCHIVE_OBJECT_SECRET_KEY=…
 ```
