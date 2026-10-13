@@ -104,17 +104,36 @@ immutable; a pack is never rewritten in place, only replaced by a new one).
 Keys:
 
 ```
-packs/<yyyy>/<mm>/<pack_id>.pack       e.g. packs/2026/10/01JABCDEF….pack
+packs/matches/<yyyy>/<mm>/<pack_id>.pack     e.g. packs/matches/2026/10/01JABCDEF….pack
+packs/timelines/<yyyy>/<mm>/<pack_id>.pack
 ```
 
 `<pack_id>` is a ULID (creation time first, so a listing is in write order);
 year and month are the pack's creation time, so a prefix walk can audit or
-replicate one month. A pack holds matches and timelines of any platform.
+replicate one month.
+
+**Matches and timelines go in separate packs.** They are read separately:
+`facts:reextract`, the names job and the player page read match bodies only;
+`builds:extract` and the timeline route read timelines only. A pack of one
+kind keeps a bulk read dense (a batch of matches is not interleaved with
+62 KB timelines it doesn't want, so merged ranges waste nothing), and lets
+the two be treated differently later: a retention rule that drops old
+timelines deletes whole packs instead of compacting every one. The rare
+reader that wants both makes two ranged GETs.
+
+**Inside a pack, bodies are sorted by match id.** The bulk jobs walk the
+archive `ORDER BY match_id`, and a match id is its platform then Riot's
+sequence number, so neighbouring ids are usually in the same pack and one
+merged ranged GET serves a whole batch. Packs are not partitioned into fixed
+id ranges: the crawl archives old ids long after newer ones (backfills, new
+ladder players), so a fixed range would never close. Each pack covers the
+ids that were eligible together, and `body_locations` finds any id wherever
+it landed.
 
 ### Pack format
 
-A pack is the bodies back to back, then an index of them, then a fixed
-16-byte trailer:
+A pack holds one kind of body. It is the bodies back to back in match-id
+order, then an index of them, then a fixed 16-byte trailer:
 
 ```
 [body 0][body 1] … [body n-1][index][index length: u64 LE][magic "RPXPACK1"]
@@ -131,8 +150,9 @@ A pack is the bodies back to back, then an index of them, then a fixed
 
 A pack closes at `ARCHIVE_PACK_TARGET_BYTES` (default 64 MiB, about 1,000
 timelines or 6,000 matches) or when the offload turn runs out of rows. At
-64 MiB the 16 GB on disk today is about 250 packs, and the archive's growth
-adds a handful a day: years of headroom under 3 M objects.
+64 MiB the 16 GB on disk today is about 40 match packs and 210 timeline packs,
+and the archive's growth adds a handful a day: years of headroom under 3 M
+objects.
 
 ### SQLite
 
@@ -217,15 +237,15 @@ musl build: it uses `reqwest` with rustls, same as the proxy.
 
 `archive:offload`, one job kind, bulk lane, priority 30 000 (beside
 `facts:reextract`), queued hourly by the tick while any eligible row remains
-and once at boot. One turn builds one pack:
+and once at boot. One turn builds one pack of one kind, matches first, then
+timelines:
 
-1. Select rows from `matches` where `offloaded_at IS NULL` and `archived_at <
-   now − ARCHIVE_BODY_LOCAL_DAYS`, oldest first, with each one's timeline if
-   it has one and it is not offloaded, until the bodies reach
-   `ARCHIVE_PACK_TARGET_BYTES`. A match and its timeline sit next to each
-   other in the pack.
-2. Build the pack in memory (64 MiB is nothing on a 12 GB host): bodies,
-   index, trailer; sha256 of each body and of the whole object.
+1. Select rows of that kind where `offloaded_at IS NULL` and the match's
+   `archived_at < now − ARCHIVE_BODY_LOCAL_DAYS`, oldest first, until the
+   bodies reach `ARCHIVE_PACK_TARGET_BYTES`.
+2. Sort them by match id and build the pack in memory (64 MiB is nothing on
+   a 12 GB host): bodies, index, trailer; sha256 of each body and of the
+   whole object.
 3. PUT it (multipart above 8 MiB) with the metadata above, then HEAD it and
    compare the size and `x-amz-meta-sha256`.
 4. One write transaction: insert the `body_packs` row and every
@@ -341,7 +361,7 @@ OBJ-03 land before the offload runs on the VPS; OBJ-04 to OBJ-06 follow it.
 |---|---|---|---|---|
 | OBJ-01 | **Object store client and config.** `archive::objects`: a thin wrapper over `object_store` with `put(key, bytes)` (multipart above 8 MiB), `head(key)`, `get_range(key, range)`, `get_ranges(key, ranges)`, `list(prefix)` and `delete(key)`. Config rows above; `Config` redacts the keys; production refuses a URL without credentials. `object_store` added to `Cargo.toml`. | `src/archive/objects.rs`, `src/config.rs`, `.env.example`, `Cargo.toml`, design/07 config table | unit over `InMemory`: put then ranged get round-trips; several ranges in one call; head gives size and metadata; config validation and redaction | `cargo test`; the musl build still links under the size cap |
 | OBJ-02 | **Pack format and reads.** `archive::pack`: a writer (bodies, index, trailer, digests) and a reader (trailer → index → bodies) independent of any store. Migration `V00NN` above. `matches::get`, `get_many`, `get_timeline` read an offloaded body by its location. The archive's `Stats` gains local vs offloaded counts, bytes and packs; `/v1/admin/stats` and the dashboard show them. | `src/archive/pack.rs`, `src/archive/matches.rs`, `src/archive/mod.rs`, `src/db/migrations/V00NN__body_packs.sql`, `src/stats.rs`, `src/routes/admin.rs`, `src/ui/dashboard.html`, design/04 | unit: a pack round-trips through writer and reader; a truncated or wrong-magic pack is refused; the index alone rebuilds every location; an offloaded row reads from its range; a missing location, a store error and a digest mismatch return `None` and warn; `get_many` mixes local and offloaded ids across packs; the migration on a seeded previous version. Integration: `/v1/match/{id}` on an offloaded match answers `X-Cache: ARCHIVE` with the same body and headers as before; a player page over offloaded matches is byte-identical; the OpenAPI snapshot | all existing archive, analytics and players tests pass unchanged |
-| OBJ-03 | **The offload job.** `archive:offload` as specified; gauges and counters; registered only with a URL; `ARCHIVE_BODY_LOCAL_DAYS=0` for the backlog. Add it to design/06's job catalogue and OPS-06's kind caps (one at a time). | `src/jobs/offload.rs`, `src/jobs/{mod,scheduler,kinds}.rs`, `src/metrics.rs`, `src/cli/serve.rs`, `tests/offload.rs`, design/06, metrics.md | unit (paused time): rows inside the window are not selected; a pack closes at the target size; a match and its timeline land in the same pack; a verified pack's rows are emptied and located in one transaction; a store that fails the PUT stamps nothing and the job fails; a crash after the PUT leaves the rows local and the next turn writes a new pack; `X''` bodies are never returned as a body. Integration over `LocalFileSystem`: 500 seeded matches with timelines offload end to end into several packs and read back | on the dev VM, the archive offloads to a local-filesystem "bucket" and every match still reads |
+| OBJ-03 | **The offload job.** `archive:offload` as specified; gauges and counters; registered only with a URL; `ARCHIVE_BODY_LOCAL_DAYS=0` for the backlog. Add it to design/06's job catalogue and OPS-06's kind caps (one at a time). | `src/jobs/offload.rs`, `src/jobs/{mod,scheduler,kinds}.rs`, `src/metrics.rs`, `src/cli/serve.rs`, `tests/offload.rs`, design/06, metrics.md | unit (paused time): rows inside the window are not selected; a pack closes at the target size; a pack holds one kind, its bodies in match-id order; a verified pack's rows are emptied and located in one transaction; a store that fails the PUT stamps nothing and the job fails; a crash after the PUT leaves the rows local and the next turn writes a new pack; `X''` bodies are never returned as a body. Integration over `LocalFileSystem`: 500 seeded matches with timelines offload end to end into several packs and read back | on the dev VM, the archive offloads to a local-filesystem "bucket" and every match still reads |
 | OBJ-04 | **Reclaim and runbook.** Document the `VACUUM INTO` + swap from DSK-01 for the one-off reclaim; the R2 replica unit and timer under `deploy/`; the restore drill, including rebuilding `body_locations` from the packs' indexes (`riot-proxy packs reindex`). | `deploy/riot-proxy-replica.{service,timer}`, `deploy/README.md`, `src/cli/packs.rs`, design/07 | the unit files parse (`systemd-analyze verify` in CI if available); a shell test runs the rclone command with `--dry-run` against two local directories; `packs reindex` over `LocalFileSystem` rebuilds an emptied `body_locations` exactly | the VPS's `sqlite_db_bytes` is under 8 GB and `sqlite_freelist_bytes` near zero |
 | OBJ-05 | **Drop `body_zstd`.** When every row is offloaded (`archive_offload_pending` is 0 for a week): migration rebuilds `matches` and `timelines` without `body_zstd`; `ARCHIVE_BODY_LOCAL_DAYS` becomes the size of a small local body cache instead. Decide then whether the window is still wanted. | `src/db/migrations/V00NN__drop_bodies.sql`, `src/archive/matches.rs`, design/04 | the migration refuses to run while any `offloaded_at IS NULL`; a seeded file rebuilds and reads | the VPS restarts on the new schema in under a minute |
 | OBJ-06 | **Deletes, compaction and orphans.** Deleting an offloaded body drops its location and lowers `live_bytes`; `archive:compact` (daily) rewrites packs under `ARCHIVE_COMPACT_BELOW` live, repoints locations in one transaction, then deletes the old object; it also deletes empty packs and orphan objects older than a day. | `src/jobs/compact.rs`, `src/archive/pack.rs`, `src/archive/matches.rs`, `tests/compact.rs`, design/06 | unit: a deletion lowers `live_bytes` only; a half-dead pack is rewritten and every live body still reads; a crash between the new PUT and the transaction leaves the old pack authoritative; an orphan younger than a day survives, older is deleted; an empty pack is deleted without a rewrite | a `dev reset` on the dev VM leaves no pack and no orphan behind |
@@ -764,6 +784,8 @@ Rollback: delete the WAF rule; the `admin.` route and Access app can stay.
 
 Still open, with a default the tasks assume unless the owner says otherwise:
 
+- **Layout:** matches and timelines in separate packs, bodies sorted by
+  match id inside each (owner, 2026-10-13).
 - **Pack size:** 64 MiB. Smaller packs mean cheaper compaction; larger ones
   mean fewer objects. Anything from 16 to 256 MiB works.
 - **Names:** service `ngf-objects-syd1`, bucket `riot-proxy-archive` on both
