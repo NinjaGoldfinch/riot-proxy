@@ -10,6 +10,9 @@ COPY Cargo.toml Cargo.lock ./
 RUN mkdir src && echo 'fn main(){}' > src/main.rs && touch src/lib.rs \
     && cargo build --release --locked && rm -rf src
 
+# `.git` is not in the build context: pass the commit for GET /v1/admin/info
+# (`docker build --build-arg GIT_SHA=$(git rev-parse HEAD) .`); unset reads `unknown`.
+ARG GIT_SHA=
 COPY . .
 RUN touch src/main.rs src/lib.rs && cargo build --release --locked
 

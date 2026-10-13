@@ -8,6 +8,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
+  # build.rs embeds it for GET /v1/admin/info (ADM-03).
+  GIT_SHA: ${{ github.sha }}
 
 # Job ids are the required status checks on `main` (fmt, clippy, test, build-musl,
 # acceptance) —
@@ -105,6 +107,7 @@ jobs:
           ls -la "$bin"
           file "$bin" | tee /dev/stderr | grep -qE "static(ally|-pie) linked"
           test "$(stat -c %s "$bin")" -lt $((20 * 1024 * 1024))
+          grep -qa "${GIT_SHA:0:12}" "$bin" || { echo "::error::the binary does not carry its commit"; exit 1; }
       # The image is the binary above in Dockerfile.release's scratch image, the
       # same way edge.yml and release.yml ship it. Recompiling it inside
       # `Dockerfile` here took ten minutes; the `docker` job covers that file (ADR-079).
@@ -143,6 +146,7 @@ jobs:
         with:
           context: .
           file: Dockerfile
+          build-args: GIT_SHA=${{ github.sha }}
           load: true
           tags: ghcr.io/ninjagoldfinch/riot-proxy:2
           cache-from: type=gha,scope=dockerfile

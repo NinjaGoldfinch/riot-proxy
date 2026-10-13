@@ -660,3 +660,33 @@ fn backup_keep_is_zero_to_a_year() {
         ["BACKUP_KEEP: 'many' is not a whole number"]
     );
 }
+
+/// ADM-03: `GET /v1/admin/info` shows every variable but the Riot key, secrets masked.
+#[test]
+fn redacted_lists_every_variable_but_the_riot_key_and_masks_secrets() {
+    let c = load(env(&[
+        ("BOOTSTRAP_ADMIN_KEY", "rpx_bootstrap_secret_value"),
+        ("LADDER_PLATFORMS", "kr,euw1"),
+        ("JOB_KIND_LIMITS", "aggregate:analytics=2"),
+        ("ENV", "test"),
+    ]));
+    let r = c.redacted();
+    let mut expected: Vec<&str> = VARS.iter().copied().filter(|v| *v != "RIOT_API_KEY").collect();
+    expected.sort_unstable();
+    assert_eq!(r.keys().copied().collect::<Vec<_>>(), expected);
+    assert_eq!(r["BOOTSTRAP_ADMIN_KEY"].as_deref(), Some(REDACTED));
+    let all = format!("{r:?}");
+    assert!(!all.contains(KEY) && !all.contains("rpx_bootstrap"), "{all}");
+    assert_eq!(r["LADDER_PLATFORMS"].as_deref(), Some("kr,euw1"));
+    assert_eq!(r["JOB_KIND_LIMITS"].as_deref(), Some("aggregate:analytics=2"));
+    assert_eq!(r["ENV"].as_deref(), Some("test"));
+    assert_eq!(
+        r["DATABASE_URL"].as_deref(),
+        Some("sqlite://./data/riot-proxy.db")
+    );
+    assert_eq!(r["RIOT_BASE_URL"], None);
+
+    let c = load(env(&[("JOB_KIND_LIMITS", "none")]));
+    assert_eq!(c.redacted()["JOB_KIND_LIMITS"].as_deref(), Some("none"));
+    assert_eq!(c.redacted()["BOOTSTRAP_ADMIN_KEY"], None);
+}

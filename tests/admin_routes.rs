@@ -805,3 +805,69 @@ async fn debug_cache_reports_an_entry_without_fetching() {
         bad("querystring must have required property 'method'")
     );
 }
+
+/// ADM-03: `GET /v1/admin/info` names the build and the configuration in
+/// effect, and leaks no key: not the Riot key, not the bootstrap key, not the
+/// caller's own.
+#[tokio::test]
+async fn info_reports_the_build_and_config_without_secrets() {
+    const BOOTSTRAP: &str = "rpx_bootstrap_info_test_secret";
+    let (_dir, state, router) = common::app_with(
+        &[("BOOTSTRAP_ADMIN_KEY", BOOTSTRAP), ("JOB_CONCURRENCY", "3")],
+        "http://127.0.0.1:9",
+    );
+    let mint = |name: &str, scopes: Vec<Scope>| NewConsumer {
+        name: name.into(),
+        scopes,
+        quota_per_min: 10_000,
+        key: None,
+    };
+    let admin = consumers::create(&state.db, mint("ops", vec![Scope::Read, Scope::Admin]))
+        .await
+        .unwrap();
+    let reader = consumers::create(&state.db, mint("web", vec![Scope::Read]))
+        .await
+        .unwrap();
+    let get = |key: String| {
+        let router = router.clone();
+        async move {
+            let req = Request::get("/v1/admin/info")
+                .header("authorization", format!("Bearer {key}"))
+                .body(Body::empty())
+                .unwrap();
+            common::send(router, req).await
+        }
+    };
+
+    let r = get(admin.key.expose().to_string()).await;
+    assert_eq!(r.status, StatusCode::OK);
+    let raw = String::from_utf8(r.body.clone()).unwrap();
+    for secret in ["rpx_", "RGAPI", BOOTSTRAP, common::TEST_KEY] {
+        assert!(!raw.contains(secret), "{secret} in {raw}");
+    }
+    let b = r.json();
+    assert_eq!(b["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(b["gitSha"], riot_proxy::build_info::GIT_SHA);
+    assert!(b["rustc"].as_str().unwrap().starts_with("rustc "));
+    assert!(b["builtAt"].as_i64().unwrap() > 0);
+    let started = b["startedAt"].as_i64().unwrap();
+    assert!(started <= riot_proxy::clock::Clock::now().unix_ms && b["uptimeSeconds"].is_u64());
+    assert_eq!(
+        (&b["env"], &b["role"], &b["workers"]),
+        (&json!("development"), &json!("all"), &json!(3))
+    );
+    assert_eq!(b["keyScope"], state.fetcher.key_scope().as_str());
+    assert_eq!(b["features"]["dashboardUi"], true);
+    assert_eq!(b["features"]["postgres"], cfg!(feature = "postgres"));
+    let config = b["config"].as_object().unwrap();
+    assert!(!config.contains_key("RIOT_API_KEY"));
+    assert_eq!(config.len(), riot_proxy::config::VARS.len() - 1);
+    assert_eq!(config["BOOTSTRAP_ADMIN_KEY"], "[REDACTED]");
+    assert_eq!(config["JOB_CONCURRENCY"], "3");
+    assert_eq!(config["RIOT_BASE_URL"], Value::Null);
+
+    assert_eq!(
+        get(reader.key.expose().to_string()).await.status,
+        StatusCode::FORBIDDEN
+    );
+}

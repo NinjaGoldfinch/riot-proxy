@@ -3,6 +3,7 @@
 
 pub mod app;
 pub mod archive;
+pub mod build_info;
 pub mod cache;
 pub mod cli;
 pub mod clock;

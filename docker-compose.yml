@@ -1,7 +1,10 @@
 services:
   riot-proxy:
     image: ghcr.io/ninjagoldfinch/riot-proxy:2
-    build: .
+    build:
+      context: .
+      # `GIT_SHA=$(git rev-parse HEAD) docker compose up --build` names the commit in /v1/admin/info.
+      args: { GIT_SHA: "${GIT_SHA:-}" }
     restart: unless-stopped
     env_file: .env
     ports: ["8080:8080"]
