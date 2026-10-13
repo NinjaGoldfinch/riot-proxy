@@ -323,22 +323,33 @@ support (or pick BinaryLane); the proxy commits once per archived match.
 sudo useradd --system --home /var/lib/riot-proxy --shell /usr/sbin/nologin riot-proxy
 sudo mkdir -p /var/lib/riot-proxy/data /etc/riot-proxy
 sudo chown -R riot-proxy:riot-proxy /var/lib/riot-proxy
-# from old, same binary version:
-scp ubuntu@old:/usr/local/bin/riot-proxy /tmp/ && sudo install -m 0755 /tmp/riot-proxy /usr/local/bin/
-sudo scp ubuntu@old:/etc/systemd/system/riot-proxy.service /etc/systemd/system/
-sudo scp -p ubuntu@old:/etc/riot-proxy/env /etc/riot-proxy/env && sudo chmod 0600 /etc/riot-proxy/env && sudo chown root:riot-proxy /etc/riot-proxy/env
+# from old, same binary version (as ubuntu; `ssh -A` into new so your key reaches old)
+scp ubuntu@old:/usr/local/bin/riot-proxy ubuntu@old:/etc/systemd/system/riot-proxy.service /tmp/
+sudo install -m 0755 /tmp/riot-proxy /usr/local/bin/
+sudo install -m 0644 /tmp/riot-proxy.service /etc/systemd/system/
+# the env file is root-only on old: stream it through sudo on both ends
+ssh ubuntu@old 'sudo -n cat /etc/riot-proxy/env' | sudo sh -c 'umask 077; cat > /etc/riot-proxy/env'
+sudo test -s /etc/riot-proxy/env && echo "env copied"
 sudo systemctl daemon-reload
 ```
 
-Do not start it yet. Do not paste the env file through a terminal; `scp`
-carries the Riot key without displaying it.
+Do not start it yet. The env file is never displayed: it streams from `sudo
+cat` on `old` into a root-only file on `new`, and systemd reads it as root
+before dropping to `riot-proxy`. `sudo -n` fails instead of prompting if
+`old` wants a sudo password; in that case run the `cat` on `old` into a
+0600 file in your home, `scp` that, and delete it on both ends.
+
+Every `ssh`/`scp`/`rsync` to `old` here runs as you, not through plain
+`sudo`: `sudo` drops your SSH agent. The rsyncs below run as root with
+`--preserve-env=SSH_AUTH_SOCK` so they keep it.
 
 ### 4. Bulk copy while `old` keeps serving
 
 ```
-# on new, as a user that can write the data dir
-sudo -u riot-proxy rsync -a --inplace --partial --info=progress2 \
+# on new (logged in with ssh -A)
+sudo --preserve-env=SSH_AUTH_SOCK rsync -a --inplace --partial --info=progress2 \
   ubuntu@old:/var/lib/riot-proxy/data/ /var/lib/riot-proxy/data/
+sudo chown -R riot-proxy:riot-proxy /var/lib/riot-proxy/data
 ```
 
 This is the long transfer (20 GB), taken while the file is live and therefore
@@ -360,11 +371,12 @@ it; the queue migrates as it is.
 ```
 # old
 sudo systemctl stop riot-proxy
-sqlite3 /var/lib/riot-proxy/data/riot-proxy.db "PRAGMA wal_checkpoint(TRUNCATE);"
+sudo -u riot-proxy sqlite3 /var/lib/riot-proxy/data/riot-proxy.db "PRAGMA wal_checkpoint(TRUNCATE);"
 # new
-sudo -u riot-proxy rsync -a --inplace --partial --delete --info=progress2 \
+sudo --preserve-env=SSH_AUTH_SOCK rsync -a --inplace --partial --delete --info=progress2 \
   ubuntu@old:/var/lib/riot-proxy/data/ /var/lib/riot-proxy/data/
-sqlite3 -readonly /var/lib/riot-proxy/data/riot-proxy.db "PRAGMA integrity_check;"   # must print ok
+sudo chown -R riot-proxy:riot-proxy /var/lib/riot-proxy/data
+sudo -u riot-proxy sqlite3 -readonly /var/lib/riot-proxy/data/riot-proxy.db "PRAGMA integrity_check;"   # must print ok
 sudo systemctl enable --now riot-proxy
 curl -s localhost:8080/healthz; curl -s localhost:8080/readyz
 ```
