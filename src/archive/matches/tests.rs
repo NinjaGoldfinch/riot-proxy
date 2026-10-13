@@ -166,7 +166,8 @@ async fn a_timeline_is_stored_before_its_match() {
 
 async fn facts_rows(db: &Db) -> Vec<(String, String, i64)> {
     db.read(|c| {
-        let mut s = c.prepare("SELECT key_scope, puuid, facts_version FROM match_facts ORDER BY rowid")?;
+        let mut s =
+            c.prepare("SELECT key_scope, puuid, facts_version FROM match_facts ORDER BY match_id, puuid")?;
         let rows = s.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
         rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
     })
@@ -184,11 +185,13 @@ async fn archiving_writes_the_facts_once_per_participant() {
         .await
         .unwrap();
     let rows = facts_rows(&db).await;
-    let expected: Vec<_> = facts::extract(MATCH)
+    let mut expected: Vec<_> = facts::extract(MATCH)
         .unwrap()
         .into_iter()
         .map(|f| (SCOPE.to_string(), f.puuid, facts::FACTS_VERSION))
         .collect();
+    // Read in key order (the table is WITHOUT ROWID since V0021).
+    expected.sort();
     assert_eq!(rows, expected);
 }
 
