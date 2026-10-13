@@ -395,6 +395,11 @@ Status icons outside the health strip (tile labels, note lines) now carry their 
 - **Re-check a key** (`/consumers/{id}/revoke-cache`, which takes the key's SHA-256): paste the key or its hash; a key is hashed in the page with `crypto.subtle` and only the hash is sent; the field is cleared.
 - **Tracked players** from `/v1/admin/tracked-players?tracked=true` (ADM-14 added the filter: unfiltered, the route returns every player a crawl found, 41 K on production): name or PUUID, platform, last match, history state, Untrack (confirm). *Track* takes a platform (suggested from `/ladder/options`) and a Riot ID (`name#tag`) or a PUUID (confirm).
 
+## Events and About (ADM-15)
+
+- **Events.** Every frame from the socket goes into a ring of the newest 2,000, on any tab. The list shows them newest first, filtered by name (a chip per event in `src/events.rs`, each with its count; `metrics.snapshot` off by default, since one arrives every 5 s) and by text anywhere in the frame; a row opens into the frame's JSON, and stays open as newer frames push it down. Drawing is batched every 250 ms. *Pause* stops all writes to the list and counts what arrives ("Resume (n while paused)"); resuming draws them. *Clear* empties the ring. While the tab is elsewhere the rail's Events badge counts new frames other than snapshots; opening the tab clears it.
+- **About.** `/v1/admin/info` as a page: version, commit, compiler, build time, start time and uptime, environment, role, workers, key scope; the feature switches on or off with an icon; `/readyz`; links to `/metrics` and, when enabled, `/docs`; and the configuration in effect, searchable by name or value, with secrets as the server redacted them and `RIOT_API_KEY` absent (ADM-03).
+
 The rail lists only the tabs that exist; each later task adds its own. Until ADM-12 there is no Ladder tab: `/dev/jobs`, `/v1/admin/ladder/*` and the firehose cover it.
 
 ## Chart rules
@@ -415,8 +420,8 @@ Each tab's task fills its row and adds a section below.
 | `#ladder`, `#ladder/<id>` | Ladder | snapshot, `/ladder/*`, `crawl.phase` frames | ADM-12 | built |
 | `#archive` | Archive & Storage: counts, disk, backups, actions | snapshot, `/stats`, `/backups`, `/timelines/backfill` | ADM-13 | built |
 | `#consumers` | Consumers & Players | `/consumers`, `/tracked-players?tracked=true`, snapshot quotas | ADM-14 | built |
-| `#events` | Events: firehose ring | `firehose` topic | ADM-15 | planned |
-| `#about` | About: build, flags, redacted config | `/info`, `/readyz` | ADM-15 | planned |
+| `#events` | Events: firehose ring | `firehose` topic | ADM-15 | built |
+| `#about` | About: build, flags, redacted config | `/info`, `/readyz` | ADM-15 | built |
 | — | Keyboard, palette, accessibility | — | ADM-16 | planned |
 
 Between ADM-08 and ADM-12 the new page has no Ladder tab; `/dev/jobs`, `/v1/admin/ladder/*` and the firehose cover the gap. `/dev/jobs` and `/dashboard/config.json` go in ADM-17.
