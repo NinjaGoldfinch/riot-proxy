@@ -323,7 +323,7 @@ Before (OVH VPS, 2026-10-13 01:00 UTC): 38 GB disk at 77 %, `riot-proxy.db` 20 G
 
 - [x] ME-01 `ME1_` match ids archive from `europe` (#175, ADR-143)
 - [x] OBJ-00 design/12 revised with the owner's answers: Onidel 250 GB primary, R2 replica, 14-day window, `object_store`, bodies packed with a `body_locations` index (ADR-146)
-- [ ] OBJ-01 object store client and config
+- [x] OBJ-01 object store client and config: `archive::objects` over `object_store`, `ARCHIVE_OBJECT_*` with redaction and production checks (#196, ADR-162)
 - [ ] OBJ-02 pack format, `body_locations` and reads
 - [ ] OBJ-03 `archive:offload`
 - [ ] OBJ-04 reclaim, hourly R2 replica and bucket lifecycle rules, daily index snapshot, `packs reindex` / `restore-index`
