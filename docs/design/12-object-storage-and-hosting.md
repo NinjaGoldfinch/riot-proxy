@@ -278,7 +278,11 @@ OBJ-01..03 released. `old` is the current VPS, `new` is the ONI-4.
 ### 0. Before anything, on `old`
 
 ```
-sudo ss -ltnp | grep -E ':80 |:443 |:8080 '          # what fronts the proxy today
+sudo ss -ltnp | grep -E ':80 |:443 |:3000 |:8080 '   # what listens, and on which address
+systemctl is-active riot-proxy ninjagoldfinch-lol cloudflared
+systemctl cat cloudflared | grep -o -- '--token' | head -1   # prints the flag only, never the token
+sudo ls /etc/cloudflared/ 2>/dev/null
+sudo grep -E '^(HOST|PORT|PROXY_URL)=' /etc/ninjagoldfinch-lol/env /etc/riot-proxy/env
 sudo cat /etc/systemd/system/riot-proxy.service
 sudo ls -la /etc/riot-proxy/ /var/lib/riot-proxy/data/
 sqlite3 -readonly /var/lib/riot-proxy/data/riot-proxy.db \
@@ -290,8 +294,17 @@ sqlite3 -readonly /var/lib/riot-proxy/data/riot-proxy.db \
 ```
 
 Record the numbers in PROGRESS.md; they size the bucket and the first offload.
-If `dbstat` is unavailable, skip that query. Lower the DNS TTL of whatever
-hostname points at `old` to 300 s now, so the cut-over propagates in minutes.
+If `dbstat` is unavailable, skip that query.
+
+The same server runs the site (ninjagoldfinch.lol, ADR-038 in that repo):
+`ninjagoldfinch-lol.service` running `node build` on `127.0.0.1:3000`, and
+`cloudflared` as a system service routing the site's hostname to it. The
+tunnel is outbound-only, so no DNS record points at the server's IP and
+there is no DNS change in this move: whichever box runs the tunnel's
+connector serves the site. The `--token` check tells you how cloudflared was
+installed: a token in the unit file (`cloudflared service install <token>`),
+or a config file and credentials JSON under `/etc/cloudflared/`. Either way
+those files are secrets; they are copied below without being printed.
 
 ### 1. Provision
 
@@ -302,9 +315,13 @@ hostname points at `old` to 300 s now, so the cut-over propagates in minutes.
   console).
 - Cloudflare: an R2 bucket `riot-proxy-archive` with an API token limited to
   that bucket. Location hint Oceania if offered.
-- On `new`: `ufw` allowing 22 and whatever step 0 showed (80/443 or 8080),
-  `unattended-upgrades`, timezone UTC, `chrony` (the old box's clock lagged a
-  day; check `timedatectl` on both).
+- Onidel firewall group and `ufw` on `new`: inbound 22 only. The tunnel needs
+  no inbound port. Ports 3000 and 8080 must not be reachable from outside:
+  the site binds `127.0.0.1`, and the proxy's `HOST` defaults to `0.0.0.0`,
+  so set `HOST=127.0.0.1` in its env unless the metrics box will scrape it
+  over WireGuard (then bind the WireGuard address in step 11).
+- `unattended-upgrades`, timezone UTC, `chrony` (the old box's clock lagged a
+  day; check `timedatectl` on both). VPC off: one server.
 
 ### 2. Storage check on `new` (first hour, before copying anything)
 
@@ -343,6 +360,38 @@ Every `ssh`/`scp`/`rsync` to `old` here runs as you, not through plain
 `sudo`: `sudo` drops your SSH agent. The rsyncs below run as root with
 `--preserve-env=SSH_AUTH_SOCK` so they keep it.
 
+### 3b. Install the site and the tunnel on `new`, stopped
+
+Per the site's README and ADR-038:
+
+```
+sudo apt-get install -y nodejs git && sudo corepack enable    # Ubuntu 26.04's Node is new enough
+sudo useradd --system --create-home --home /opt/ninjagoldfinch-lol-home --shell /usr/sbin/nologin ninjagoldfinch-lol
+```
+
+- **Deploy key.** Generate a new read-only key on `new` for the
+  `ninjagoldfinch-lol` user and add its public half to the private repo's
+  Deploy keys on GitHub. Do not copy `old`'s key; it is revoked in step 11.
+- **Checkout and build** as in the README: clone to `/opt/ninjagoldfinch-lol`,
+  `pnpm install --frozen-lockfile`, `env ORIGIN=https://ninjagoldfinch.lol pnpm build`.
+- **Settings and unit,** streamed like the proxy's, never displayed:
+
+```
+ssh ubuntu@old 'sudo -n cat /etc/ninjagoldfinch-lol/env' | sudo sh -c 'mkdir -p /etc/ninjagoldfinch-lol; umask 077; cat > /etc/ninjagoldfinch-lol/env'
+scp ubuntu@old:/etc/systemd/system/ninjagoldfinch-lol.service /tmp/ && sudo install -m 0644 /tmp/ninjagoldfinch-lol.service /etc/systemd/system/
+```
+
+  `PROXY_URL` stays `http://127.0.0.1:8080`, the proxy is on the same box.
+- **cloudflared** from Cloudflare's apt repository, then the tunnel's
+  credentials from `old`. Token install: stream the unit file
+  (`ssh ubuntu@old 'sudo -n cat /etc/systemd/system/cloudflared.service' | sudo sh -c 'umask 077; cat > /etc/systemd/system/cloudflared.service'`,
+  then `sudo chmod 0644` it). Config install: stream `/etc/cloudflared/` as a
+  tar (`ssh ubuntu@old 'sudo -n tar -C /etc -cf - cloudflared' | sudo tar -C /etc -xf -`)
+  and install the service. Then `sudo systemctl daemon-reload`.
+- Do **not** enable or start `cloudflared` or the site yet. Two connectors on
+  one tunnel are load-balanced by Cloudflare, so a site on `new` talking to an
+  empty proxy would serve half the visitors.
+
 ### 4. Bulk copy while `old` keeps serving
 
 ```
@@ -370,7 +419,7 @@ it; the queue migrates as it is.
 
 ```
 # old
-sudo systemctl stop riot-proxy
+sudo systemctl stop cloudflared ninjagoldfinch-lol riot-proxy
 sudo -u riot-proxy sqlite3 /var/lib/riot-proxy/data/riot-proxy.db "PRAGMA wal_checkpoint(TRUNCATE);"
 # new
 sudo --preserve-env=SSH_AUTH_SOCK rsync -a --inplace --partial --delete --info=progress2 \
@@ -379,24 +428,31 @@ sudo chown -R riot-proxy:riot-proxy /var/lib/riot-proxy/data
 sudo -u riot-proxy sqlite3 -readonly /var/lib/riot-proxy/data/riot-proxy.db "PRAGMA integrity_check;"   # must print ok
 sudo systemctl enable --now riot-proxy
 curl -s localhost:8080/healthz; curl -s localhost:8080/readyz
+sudo systemctl enable --now ninjagoldfinch-lol
+curl -s localhost:3000/healthz
+sudo systemctl enable --now cloudflared                         # the site is live from here
 ```
 
 The second rsync moves only the blocks that changed since step 4. Do not
 start the proxy on both boxes: the limiter state is per key and two
-instances would share one Riot budget blind. Then move DNS (or the Cloudflare
-origin) to `new`'s address and watch `journalctl -u riot-proxy -f` for the
-first crawl tick and the `jobs_pending` gauge resuming.
+instances would share one Riot budget blind. No DNS change: the tunnel's
+connector moved, and Cloudflare's dashboard shows it under Zero Trust,
+Networks, Tunnels, with `new`'s address. Watch `journalctl -u riot-proxy -f`
+for the first crawl tick and the `jobs_pending` gauge resuming. Downtime for
+the site is the length of the second rsync.
 
 ### 7. Verify
 
 - `/metrics` from the old Grafana dashboard: `riot_requests_total` moving,
   `limiter` buckets filling, no 429s.
-- A player page and a match page through the public hostname; `X-Cache` and
-  `X-Request-Id` present as before.
+- A player page, a match page and a champion page on https://ninjagoldfinch.lol;
+  `curl -sI localhost:8080/...` on `new` shows `X-Cache` and `X-Request-Id`
+  as before.
 - `sqlite_db_bytes` and `data_dir_free_bytes` (DSK-01) on the new disk.
-- Leave `old` stopped but intact for seven days. Rollback is `systemctl start`
-  on `old` and the DNS change reversed; anything archived on `new` in between
-  is lost to the rollback, which is acceptable for an archive that re-fetches.
+- Leave `old` stopped but intact for seven days. Rollback is stopping the
+  three services on `new` and starting them on `old`; anything archived on
+  `new` in between is lost to the rollback, which is acceptable for an
+  archive that re-fetches.
 
 ### 8. Backups and replica units
 
@@ -438,8 +494,10 @@ skips.
 
 ### 11. Retire `old`
 
-- `sudo shred -u /etc/riot-proxy/env`, `rm -rf /var/lib/riot-proxy`, remove
-  the unit.
+- `sudo shred -u /etc/riot-proxy/env /etc/ninjagoldfinch-lol/env`,
+  `rm -rf /var/lib/riot-proxy /opt/ninjagoldfinch-lol`, remove the three units
+  and `/etc/cloudflared/`, `apt remove cloudflared`.
+- Delete `old`'s deploy key from the site repo's Deploy keys on GitHub.
 - Install Prometheus, Grafana and node_exporter; WireGuard between the two
   boxes; scrape `new`'s `/metrics` over the tunnel only. Import
   `ops/grafana/riot-proxy-dashboard.json` and `ops/prometheus-alerts.yml`.
@@ -457,7 +515,7 @@ skips.
 
 | After step | How |
 |---|---|
-| 6, cut-over | start `old`, revert DNS; lose what `new` archived meanwhile |
+| 6, cut-over | stop `cloudflared`, the site and the proxy on `new`, start them on `old`; lose what `new` archived meanwhile |
 | 9, offload | unset `ARCHIVE_OBJECT_URL`: offloaded rows read `None` and re-fetch from Riot on demand; the bucket keeps everything; re-setting the URL restores reads. The local bodies are gone from SQLite once stamped, by design |
 | 10, reclaim | the pre-swap file is kept until the next nightly backup verifies |
 | 11, retire | none; the key and data are gone from `old` on purpose |
