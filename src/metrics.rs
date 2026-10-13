@@ -52,6 +52,10 @@ pub const JOBS_PENDING: &str = "jobs_pending";
 pub const SQLITE_READERS_FREE: &str = "sqlite_readers_free";
 pub const TIMELINE_BACKFILL_FETCHED_TOTAL: &str = "timeline_backfill_fetched_total";
 pub const TIMELINE_BACKFILL_NOT_FOUND_TOTAL: &str = "timeline_backfill_not_found_total";
+pub const SQLITE_DB_BYTES: &str = "sqlite_db_bytes";
+pub const SQLITE_WAL_BYTES: &str = "sqlite_wal_bytes";
+pub const SQLITE_FREELIST_BYTES: &str = "sqlite_freelist_bytes";
+pub const DATA_DIR_FREE_BYTES: &str = "data_dir_free_bytes";
 
 const UPSTREAM_LATENCY_BUCKETS: &[f64] = &[0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0];
 const RL_WAIT_BUCKETS: &[f64] = &[0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0];
@@ -275,6 +279,35 @@ pub const CATALOGUE: &[MetricDef] = &[
         Kind::Counter,
         &["region"],
         "Timelines timelines:backfill found gone from Riot (404) and marked, by match-v5 region",
+        &[],
+    ),
+    // Disk (DSK-01, ADR-135): sampled with the metrics history, every 60 s by default.
+    def(
+        SQLITE_DB_BYTES,
+        Kind::Gauge,
+        &[],
+        "Size of the SQLite database file",
+        &[],
+    ),
+    def(
+        SQLITE_WAL_BYTES,
+        Kind::Gauge,
+        &[],
+        "Size of the SQLite write-ahead log; 0 after a truncating checkpoint",
+        &[],
+    ),
+    def(
+        SQLITE_FREELIST_BYTES,
+        Kind::Gauge,
+        &[],
+        "Pages freed by deletes and not yet reused, in bytes; a VACUUM returns them to the OS",
+        &[],
+    ),
+    def(
+        DATA_DIR_FREE_BYTES,
+        Kind::Gauge,
+        &[],
+        "Free space on the data directory's file system, as an unprivileged writer sees it",
         &[],
     ),
 ];

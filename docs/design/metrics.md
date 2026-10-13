@@ -49,7 +49,10 @@ Owner decision (2026-09-24, ADR-014): these use the names **exactly as design/07
 | `limiter_interactive_waiters` | gauge | — | Limiter priorities (P2-05), implemented; process-wide total |
 | `jobs_pending` | gauge | kind | Scheduler (P6-03), implemented; sampled every 15 s, a kind with nothing pending reads 0 |
 | `events_published_total` | counter | name | Events (P6-02), implemented; one per event handed to the hub, whether or not anyone holds its topic |
-| `sqlite_wal_bytes` | gauge | — | Maintenance / sampler (P7-05) |
+| `sqlite_wal_bytes` | gauge | — | Disk sampler (DSK-01), implemented; the `-wal` file's size, 0 after a truncating checkpoint. Sampled with the metrics history (`METRICS_HISTORY_INTERVAL_S`, 60 s) and once at start |
+| `sqlite_db_bytes` | gauge | — | Disk sampler (DSK-01), implemented; the database file's size |
+| `sqlite_freelist_bytes` | gauge | — | Disk sampler (DSK-01), implemented; `freelist_count × page_size`, pages freed by deletes and not yet reused. They leave the file only with a `VACUUM` (design/07 §Reclaiming space), so a purge shows here, not in `sqlite_db_bytes` |
+| `data_dir_free_bytes` | gauge | — | Disk sampler (DSK-01), implemented; free space on the data directory's file system as an unprivileged writer sees it (`statvfs` `f_bavail`, `df`'s *Avail*) |
 | `sqlite_readers_free` | gauge | — | SQLite reader pool (INC-01), implemented; idle read connections, set on every borrow and return. A value that stays below the pool size while idle is a leak (ADR-113) |
 | `timeline_backfill_fetched_total` | counter | region | `timelines:backfill` (TL-02), implemented; timelines fetched and archived by the backfill. Left to do: `GET /v1/admin/timelines/backfill` (ADR-133) |
 | `timeline_backfill_not_found_total` | counter | region | `timelines:backfill` (TL-02), implemented; timelines Riot answered 404 for, marked in `timeline_gaps` and never asked for again |

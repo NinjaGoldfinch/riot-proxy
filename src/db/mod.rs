@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use rusqlite::{Connection, OpenFlags};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 
+pub mod disk;
 pub mod store;
 
 mod embedded {
@@ -41,6 +42,8 @@ pub enum DbError {
     Migration(#[from] refinery::Error),
     #[error("could not create {path}: {source}")]
     CreateDir { path: PathBuf, source: std::io::Error },
+    #[error("could not stat {path}: {source}")]
+    Stat { path: PathBuf, source: std::io::Error },
     #[error("the SQLite writer thread has stopped or the write panicked")]
     WriterGone,
     #[error("a SQLite read closure panicked")]
