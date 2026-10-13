@@ -152,9 +152,16 @@ async fn keep_zero_takes_no_backup_prunes_none_and_still_trims() {
         std::fs::write(backup_dir.join(backup_name(NOW - d * DAY_MS)), b"old").unwrap();
     }
     let m = Maintenance::new(db, backup_dir.clone(), 0);
+    assert_eq!(m.last(), None, "no run yet");
     let report = m.run_once(NOW).await.unwrap();
     assert_eq!(report.backup, None);
     assert_eq!(report.backup_skipped.as_deref(), Some("BACKUP_KEEP=0"));
+    // ADM-06: the run is remembered for GET /v1/admin/backups.
+    let last = m.last().unwrap();
+    assert_eq!(
+        (last.at, last.report.as_ref(), last.error.as_ref()),
+        (NOW, Some(&report), None)
+    );
     assert_eq!(report.backups_deleted, 0);
     assert_eq!(
         backups(&backup_dir).await.unwrap().len(),
@@ -186,6 +193,11 @@ async fn no_room_on_the_disk_skips_the_backup_and_the_rest_runs() {
             .is_some_and(|s| s.contains("bytes free")),
         "{report:?}"
     );
+    assert_eq!(
+        m.last().unwrap().report.as_ref(),
+        Some(&report),
+        "the skip is remembered"
+    );
     assert_eq!(report.backup_failed, None);
     assert!(!backup_dir.join("riot-proxy-2026-10-03.db").exists());
     assert!(!backup_dir.join(".riot-proxy-2026-10-03.db.partial").exists());
@@ -213,6 +225,12 @@ async fn a_copy_that_fails_leaves_no_partial_and_the_rest_runs() {
     std::fs::set_permissions(&backup_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
     assert_eq!(report.backup, None);
     assert!(report.backup_failed.is_some(), "{report:?}");
+    let last = m.last().unwrap();
+    assert_eq!(
+        (last.report.as_ref(), last.error.as_ref()),
+        (Some(&report), None),
+        "a failed copy is not a failed run"
+    );
     assert_eq!(report.backup_skipped, None);
     assert!(
         std::fs::read_dir(&backup_dir).unwrap().next().is_none(),
@@ -250,4 +268,21 @@ async fn the_daily_run_refreshes_planner_statistics() {
         "SELECT DISTINCT tbl FROM sqlite_stat1 WHERE tbl = 'jobs'",
     );
     assert_eq!(analysed, ["jobs"]);
+}
+
+/// ADM-06: a run that fails is remembered with its error and no report.
+#[tokio::test]
+async fn a_failed_run_is_remembered_with_its_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    // The backup directory is a file: the copy fails (logged), then listing
+    // the backups to prune fails the run.
+    let backup_dir = dir.path().join("backups");
+    std::fs::write(&backup_dir, b"not a directory").unwrap();
+    let m = Maintenance::new(db, backup_dir, KEEP_BACKUPS).with_disk_free(Arc::new(|_| Ok(u64::MAX)));
+    let err = m.run_once(NOW).await.unwrap_err();
+    let last = m.last().unwrap();
+    assert_eq!(last.at, NOW);
+    assert_eq!(last.report, None);
+    assert_eq!(last.error, Some(err.to_string()));
 }

@@ -169,6 +169,7 @@ The binary's own RSS is dominated by the SQLite page cache (`cache_size`, 64 MB 
 - **Manual:** `./riot-proxy backup /path/out.db` (same statement) — or `sqlite3 riot-proxy.db ".backup out.db"`.
 - **Restore:** stop the service, replace the file, start. There is nothing else to restore; the L1 cache and job heap rebuild themselves and the limiter defaults to conservative on a stale checkpoint.
 - **Off-box:** `rclone`/`restic` the `backups/` directory; it is plain files.
+- **Status (ADM-06):** `GET /v1/admin/backups` lists the backups (name, size, time, from the directory without opening a file), `BACKUP_KEEP`, the free space beside them and what the last `maintenance` run since the process started did, or its error. `POST /v1/admin/maintenance/run` queues the job now under the tick's dedupe key (202); it backs up only if today's (UTC) backup is missing.
 - **Production (ADR-142):** a systemd timer on `ngf-prod-syd1` runs `rclone copy` of `backups/` to R2 every 6 hours, checks the copy and keeps one backup locally; R2 expires backups after 14 days. design/12 §As executed has the details.
 
 ## Reclaiming space

@@ -164,6 +164,8 @@ async fn every_admin_route_needs_the_admin_scope() {
         ("GET", "/v1/admin/stats".to_string()),
         ("GET", "/v1/admin/info".to_string()),
         ("GET", "/v1/admin/recent".to_string()),
+        ("GET", "/v1/admin/backups".to_string()),
+        ("POST", "/v1/admin/maintenance/run".to_string()),
         ("GET", "/v1/admin/limits/euw1".to_string()),
         (
             "GET",
@@ -1005,4 +1007,69 @@ async fn recent_requests_and_errors_are_kept_by_request_id() {
     );
     let one = e.get("/v1/admin/recent?limit=1").await.json();
     assert_eq!(one["requests"].as_array().unwrap().len(), 1);
+}
+
+/// ADM-06: the backups beside the database, the last maintenance run, and a
+/// run queued on demand under the tick's dedupe key.
+#[tokio::test]
+async fn backups_list_the_files_and_the_last_run_and_run_now_dedupes() {
+    let e = env().await;
+    let m = std::sync::Arc::clone(&e.state.maintenance);
+
+    // No directory yet: an empty list, not an error.
+    let r = e.get("/v1/admin/backups").await;
+    assert_eq!(r.status, StatusCode::OK);
+    let b = r.json();
+    assert_eq!(
+        (&b["files"], &b["lastRun"], &b["keep"]),
+        (&json!([]), &Value::Null, &json!(14))
+    );
+    assert_eq!(b["dir"], m.backup_dir.display().to_string());
+    assert!(
+        b["diskFreeBytes"].as_u64().unwrap() > 0,
+        "the parent's free space"
+    );
+
+    std::fs::create_dir_all(&m.backup_dir).unwrap();
+    std::fs::write(m.backup_dir.join("riot-proxy-2026-10-01.db"), vec![0u8; 10]).unwrap();
+    std::fs::write(m.backup_dir.join("riot-proxy-2026-10-02.db"), vec![0u8; 20]).unwrap();
+    std::fs::write(m.backup_dir.join("notes.txt"), b"not a backup").unwrap();
+    let b = e.get("/v1/admin/backups").await.json();
+    let files = b["files"].as_array().unwrap();
+    assert_eq!(
+        files
+            .iter()
+            .map(|f| (f["name"].clone(), f["bytes"].clone()))
+            .collect::<Vec<_>>(),
+        [
+            (json!("riot-proxy-2026-10-02.db"), json!(20)),
+            (json!("riot-proxy-2026-10-01.db"), json!(10))
+        ],
+        "newest first, only our names"
+    );
+    assert!(files[0]["modifiedAt"].as_i64().unwrap() > 0);
+
+    // A run is reported in camelCase, as it ran.
+    let now = riot_proxy::clock::Clock::now().unix_ms;
+    let report = m.run_once(now).await.unwrap();
+    let b = e.get("/v1/admin/backups").await.json();
+    let last = &b["lastRun"];
+    assert_eq!((&last["at"], &last["error"]), (&json!(now), &Value::Null));
+    assert!(last["ms"].is_u64());
+    assert_eq!(last["report"]["jobsDeleted"], json!(report.jobs_deleted));
+    assert!(
+        last["report"]["backup"].as_str().unwrap().ends_with(".db"),
+        "{last}"
+    );
+
+    // Run now: queued, then joined.
+    let first = e.post("/v1/admin/maintenance/run", json!({})).await;
+    assert_eq!(first.status, StatusCode::ACCEPTED);
+    let first = first.json();
+    assert_eq!((&first["ok"], &first["status"]), (&json!(true), &json!("queued")));
+    let again = e.post("/v1/admin/maintenance/run", json!({})).await.json();
+    assert_eq!(
+        (&again["status"], &again["jobId"]),
+        (&json!("already-queued"), &first["jobId"])
+    );
 }

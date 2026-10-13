@@ -570,6 +570,80 @@ expression: doc
         ],
         "type": "object"
       },
+      "BackupFile": {
+        "description": "One daily backup on disk.",
+        "properties": {
+          "bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "modifiedAt": {
+            "description": "Unix ms; null where the file system keeps no time.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "`riot-proxy-<YYYY-MM-DD>.db`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "bytes"
+        ],
+        "type": "object"
+      },
+      "Backups": {
+        "description": "`GET /v1/admin/backups` (ADM-06).",
+        "properties": {
+          "dir": {
+            "description": "`$DATA_DIR/backups`.",
+            "type": "string"
+          },
+          "diskFreeBytes": {
+            "description": "Free bytes on the backup directory's file system (its parent's while it\ndoes not exist); null when it cannot be read.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "files": {
+            "description": "Newest first; `[]` when the directory does not exist.",
+            "items": {
+              "$ref": "#/components/schemas/BackupFile"
+            },
+            "type": "array"
+          },
+          "keep": {
+            "description": "`BACKUP_KEEP`; 0 takes none.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lastRun": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LastRun",
+                "description": "The last `maintenance` run since this process started; null before the first."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "dir",
+          "keep",
+          "files"
+        ],
+        "type": "object"
+      },
       "BlockedMethod": {
         "description": "A method where bulk work would wait right now, on one scope.",
         "properties": {
@@ -2692,6 +2766,45 @@ expression: doc
         ],
         "type": "object"
       },
+      "LastRun": {
+        "description": "The last run this process made (ADM-06, `GET /v1/admin/backups`).",
+        "properties": {
+          "at": {
+            "description": "Unix ms when it started.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "error": {
+            "description": "Why it failed; the job is retried like any other.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ms": {
+            "description": "How long it took.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "report": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Report",
+                "description": "What it did; null when it failed."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "at",
+          "ms"
+        ],
+        "type": "object"
+      },
       "LeagueEntryDTO": {
         "description": "league-v4 `LeagueEntryDTO`: one ranked queue's standing.",
         "properties": {
@@ -4262,6 +4375,55 @@ expression: doc
         ],
         "type": "object"
       },
+      "Report": {
+        "description": "What one run did.",
+        "properties": {
+          "backup": {
+            "description": "The backup written, if one was (none when today's already exists, when\n`BACKUP_KEEP` is 0, or when it was skipped or failed).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "backupFailed": {
+            "description": "The error of a copy that was attempted and failed; its partial file is\nremoved and the run goes on.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "backupSkipped": {
+            "description": "Why no backup was attempted today: `BACKUP_KEEP=0`, or the disk's\nfree space against what the copy needs.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "backupsDeleted": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cacheSwept": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "historyDeleted": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "jobsDeleted": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "backupsDeleted",
+          "jobsDeleted",
+          "historyDeleted",
+          "cacheSwept"
+        ],
+        "type": "object"
+      },
       "RevokeCache": {
         "description": "`POST /v1/admin/consumers/{id}/revoke-cache` body.",
         "properties": {
@@ -5758,6 +5920,147 @@ expression: doc
           }
         },
         "summary": "Queue a history walk",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/admin/backups": {
+      "get": {
+        "description": "The daily `VACUUM INTO` backups in `$DATA_DIR/backups`, newest first, with their sizes and times, read from the directory without opening a file; `BACKUP_KEEP`; the free space beside them; and what the last `maintenance` run since the process started did (design/07 §Backups).",
+        "operationId": "list_backups",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Backups"
+                }
+              }
+            },
+            "description": "The backups",
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region).",
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found.",
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`).",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/Retry-After"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          }
+        },
+        "summary": "Backups and the last maintenance run",
         "tags": [
           "admin"
         ]
@@ -9513,6 +9816,145 @@ expression: doc
           }
         },
         "summary": "Rate-limit bucket usage",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/admin/maintenance/run": {
+      "post": {
+        "description": "Queues the daily `maintenance` job under the same dedupe key as its tick, so it joins one already queued. The run takes a backup only if today's (UTC) does not exist yet; the trims, sweep, statistics and checkpoint always run.",
+        "operationId": "run_maintenance",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "`{ok, jobId, status}`: `queued` or `already-queued`",
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A parameter failed validation (`VALIDATION`, or `BAD_REGION` for a platform or region).",
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid key.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The key lacks a scope, or the admin IP allowlist refused the caller.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found.",
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`).",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/Retry-After"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          }
+        },
+        "summary": "Queue maintenance now",
         "tags": [
           "admin"
         ]
