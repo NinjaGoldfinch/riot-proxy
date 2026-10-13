@@ -10,7 +10,8 @@
 //!
 //! The parts that scan tables (totals, queues, ladder, analytics, archive
 //! bytes, disk) are sampled in the background (ADM-02, design/13): a fast set
-//! every [`FAST_SAMPLE`], a slow set with each history point. A snapshot reads
+//! every [`FAST_SAMPLE`], the archive's byte sums and the disk with each
+//! history point. A snapshot reads
 //! the samples and computes only what lives in memory, so a request or a
 //! `metrics` tick costs no table scan. Before the first sample (a test app, or
 //! the first instant after boot) the parts are read live.
@@ -38,8 +39,8 @@ use crate::ws::Hub;
 /// v1 `METRICS_HISTORY_MAX_POINTS`: 24 hours at 60 s.
 pub const HISTORY_MAX_POINTS: i64 = 1440;
 
-/// How often the fast set (totals, queues, ladder) is sampled. The slow set
-/// (analytics, archive bytes, disk) is sampled with each history point.
+/// How often the fast set (totals, queues, ladder, analytics) is sampled. The
+/// slow set (archive bytes, disk) is sampled with each history point.
 pub const FAST_SAMPLE: Duration = Duration::from_secs(15);
 
 /// v1's six BullMQ queues, which the dashboard draws; every v2 job kind
@@ -81,14 +82,14 @@ pub struct Fast {
     pub totals: Totals,
     pub queues: BTreeMap<String, QueueCounts>,
     pub ladder: LadderSection,
+    pub analytics: AnalyticsSection,
 }
 
-/// The slow set: what changes over minutes, or costs a scan of the archive.
+/// The slow set: what costs a pass over the archive, or changes over minutes.
 #[derive(Debug, Clone)]
 pub struct Slow {
     /// Unix ms the set was read.
     pub at: i64,
-    pub analytics: AnalyticsSection,
     pub archive: matches::Stats,
     pub disk: Usage,
 }
@@ -130,9 +131,9 @@ pub enum SampleError {
 /// live, because nothing was sampled yet, carries the time of the request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
 pub struct SampledAt {
-    /// Totals, queues and the ladder, sampled every 15 s.
+    /// Totals, queues, the ladder and analytics, sampled every 15 s.
     pub fast: i64,
-    /// Analytics, archive bytes and disk, sampled with each history point.
+    /// Archive bytes and disk, sampled with each history point.
     pub slow: i64,
 }
 
@@ -294,7 +295,8 @@ pub struct Snapshot {
     pub ladder: LadderSection,
     pub analytics: AnalyticsSection,
     pub process: ProcessStats,
-    /// When `totals`, `queues`, `ladder` and `analytics` were read (ADM-02).
+    /// When `totals`, `queues`, `ladder` and `analytics` (`fast`) and the archive
+    /// and disk readings (`slow`) were read (ADM-02).
     pub sampled_at: SampledAt,
 }
 
@@ -619,12 +621,14 @@ impl Stats {
     }
 
     async fn read_fast(&self, now: i64) -> Result<Fast, DbError> {
-        let (totals, queues, ladder) = tokio::try_join!(self.totals(), self.queues(now), self.ladder())?;
+        let (totals, queues, ladder, analytics) =
+            tokio::try_join!(self.totals(), self.queues(now), self.ladder(), self.analytics())?;
         Ok(Fast {
             at: now,
             totals,
             queues,
             ladder,
+            analytics,
         })
     }
 
@@ -646,17 +650,9 @@ impl Stats {
     /// Read the slow set and keep it; the disk gauges (DSK-01) move with it.
     pub async fn sample_slow(&self) -> Result<Arc<Slow>, SampleError> {
         let at = Clock::now().unix_ms;
-        let (analytics, (archive, disk)) = tokio::try_join!(
-            async { self.analytics().await.map_err(SampleError::from) },
-            self.read_archive_and_disk(),
-        )?;
+        let (archive, disk) = self.read_archive_and_disk().await?;
         disk::record(&disk);
-        let slow = Arc::new(Slow {
-            at,
-            analytics,
-            archive,
-            disk,
-        });
+        let slow = Arc::new(Slow { at, archive, disk });
         self.samples.set_slow(Arc::clone(&slow));
         Ok(slow)
     }
@@ -689,10 +685,7 @@ impl Stats {
     /// v1 `buildMetricsSnapshot`: the samples plus what lives in memory.
     pub async fn snapshot(&self) -> Result<Snapshot, DbError> {
         let fast = self.fast().await?;
-        let (analytics, slow_at) = match self.samples.slow() {
-            Some(s) => (s.analytics.clone(), s.at),
-            None => (self.analytics().await?, Clock::now().unix_ms),
-        };
+        let slow_at = self.samples.slow().map_or_else(|| Clock::now().unix_ms, |s| s.at);
         Ok(Snapshot {
             v: 1,
             key_scope: self.key_scope.clone(),
@@ -714,7 +707,7 @@ impl Stats {
                 refresh_claims: self.counter(crate::metrics::REFRESH_CLAIMS_TOTAL, &["part", "outcome"]),
             },
             ladder: fast.ladder.clone(),
-            analytics,
+            analytics: fast.analytics.clone(),
             process: ProcessStats {
                 uptime_seconds: self.started.elapsed().as_secs_f64(),
                 rss_bytes: rss_bytes(),
@@ -727,7 +720,7 @@ impl Stats {
     }
 
     /// v1 `buildHistoryPoint`, from the two sets.
-    fn history_point(&self, now: i64, fast: &Fast, slow: &Slow) -> HistoryPoint {
+    fn history_point(&self, now: i64, fast: &Fast) -> HistoryPoint {
         let mut totals = fast.totals.clone();
         totals.active_consumers = None;
         let q = fast.queues.values().fold(HistoryQueues::default(), |mut acc, c| {
@@ -736,7 +729,7 @@ impl Stats {
             acc.failed += c.failed;
             acc
         });
-        let runs = &slow.analytics.last_runs;
+        let runs = &fast.analytics.last_runs;
         HistoryPoint {
             t: now,
             totals,
@@ -752,11 +745,11 @@ impl Stats {
     /// Sample both sets, then store a point built from them and keep the
     /// newest [`HISTORY_MAX_POINTS`] (v1 LTRIM).
     pub async fn record_point(&self, now: i64) -> Result<(), SampleError> {
-        let (fast, slow) = tokio::try_join!(
+        let (fast, _) = tokio::try_join!(
             async { self.sample_fast().await.map_err(SampleError::from) },
             self.sample_slow(),
         )?;
-        let point = self.history_point(now, &fast, &slow);
+        let point = self.history_point(now, &fast);
         let json = serde_json::to_string(&point).unwrap_or_default();
         self.db
             .write(move |c| {

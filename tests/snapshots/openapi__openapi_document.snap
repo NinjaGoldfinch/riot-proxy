@@ -3869,12 +3869,12 @@ expression: doc
         "description": "When a document's sampled parts were read, unix ms (ADM-02). A part read\nlive, because nothing was sampled yet, carries the time of the request.",
         "properties": {
           "fast": {
-            "description": "Totals, queues and the ladder, sampled every 15 s.",
+            "description": "Totals, queues, the ladder and analytics, sampled every 15 s.",
             "format": "int64",
             "type": "integer"
           },
           "slow": {
-            "description": "Analytics, archive bytes and disk, sampled with each history point.",
+            "description": "Archive bytes and disk, sampled with each history point.",
             "format": "int64",
             "type": "integer"
           }
@@ -3978,7 +3978,7 @@ expression: doc
           },
           "sampledAt": {
             "$ref": "#/components/schemas/SampledAt",
-            "description": "When `totals`, `queues`, `ladder` and `analytics` were read (ADM-02)."
+            "description": "When `totals`, `queues`, `ladder` and `analytics` (`fast`) and the archive\nand disk readings (`slow`) were read (ADM-02)."
           },
           "totals": {
             "$ref": "#/components/schemas/Totals"
