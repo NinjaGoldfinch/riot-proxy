@@ -54,7 +54,7 @@ Connection policy:
 - **Reader pool** of `n_cores` connections for the HTTP path. WAL means they see a consistent snapshot without blocking. A read borrows a connection with its semaphore permit and hands both back from inside the blocking closure, connection first, so a caller that stops waiting (`try_join!`, a client gone) can't leave a permit without a connection. `/readyz` and `sqlite_readers_free` show the idle count (ADR-113).
 - `spawn_blocking` at the boundary; no SQLite call inside an async fn.
 
-The daily `maintenance` job runs `VACUUM INTO 'backups/riot-proxy-YYYY-MM-DD.db'`, `PRAGMA optimize` and `PRAGMA wal_checkpoint(TRUNCATE)` — that **is** the backup strategy, replacing `pg-backup` + cron. Keep 14, delete older. (Daily, as design/06, design/07 and the plan have it; ADR-057.)
+The daily `maintenance` job runs `VACUUM INTO 'backups/riot-proxy-YYYY-MM-DD.db'`, `PRAGMA optimize` and `PRAGMA wal_checkpoint(TRUNCATE)` — that **is** the backup strategy, replacing `pg-backup` + cron. Keep `BACKUP_KEEP` (14), delete older; 0 takes none, and a backup the disk has no room for is skipped rather than attempted (ADR-136). (Daily, as design/06, design/07 and the plan have it; ADR-057.)
 
 **Planner statistics.** The writer runs `PRAGMA optimize = 0x10002` when it opens, before each analytics rebuild and in the daily `maintenance`. It runs `ANALYZE` on each table never analysed or grown about tenfold since, within SQLite's own time limit (under a second for a 2-million-row `match_facts`). Readers load the new statistics on their next read. Queries are still written to plan well without statistics, because a new database has none (ADR-101, ADR-102).
 
@@ -144,7 +144,7 @@ CREATE TABLE match_bans (                         -- info.teams[].bans, -1 left 
   match_id TEXT REFERENCES matches(match_id) ON DELETE CASCADE,
   team_id INTEGER, pick_turn INTEGER, champion_id INTEGER,
   PRIMARY KEY (match_id, team_id, pick_turn)
-);
+) WITHOUT ROWID;                                  -- V0020 (DSK-06, ADR-140): the key is the row; no second copy
 CREATE TABLE match_builds (                       -- V0012 (ADR-117): from the timeline + item.json
   match_id TEXT NOT NULL REFERENCES matches(match_id) ON DELETE CASCADE,
   key_scope TEXT NOT NULL,                        -- the scope that owns the match's facts
@@ -156,11 +156,13 @@ CREATE TABLE match_builds (                       -- V0012 (ADR-117): from the t
   skill_order TEXT,                               -- Q, W, E in max order, "QWE"; Udyr adds R (BLD-06)
   builds_version INTEGER NOT NULL,                -- builds:extract rewrites rows below BUILDS_VERSION
   PRIMARY KEY (match_id, key_scope, puuid)
-);
+) WITHOUT ROWID;                                  -- V0020 (DSK-06, ADR-140)
 CREATE INDEX facts_player ON match_facts(key_scope, puuid, match_id);
 CREATE INDEX facts_champ  ON match_facts(champion_id);
 
 -- Analytics (recomputed; safe to TRUNCATE) ── v1's shape, ADR-056 ───────────
+-- Every table here is WITHOUT ROWID since V0020 (DSK-06, ADR-140): the key is
+-- most of the row, so a rowid table held it twice. Rebuilt by DELETE + INSERT.
 -- Every table is keyed by (key_scope, platform, queue, …, patch) and carries
 -- remake (0/1) as a key, so a read excludes remakes (default) or sums both.
 -- Every participant of the platform's archived matches counts (ADR-105), at
