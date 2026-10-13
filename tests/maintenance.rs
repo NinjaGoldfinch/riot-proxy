@@ -1,7 +1,8 @@
 //! `maintenance` and `riot-proxy backup` (plan P7-05): the daily backup is a
-//! database that opens and has the rows, one per day, 14 kept; done jobs and
-//! old metrics history are trimmed, expired L2 rows swept, and the WAL
-//! truncated.
+//! database that opens and has the rows, one per day, `BACKUP_KEEP` kept;
+//! done jobs and old metrics history are trimmed, expired L2 rows swept, and
+//! the WAL truncated. A backup the disk has no room for, or one that fails,
+//! never stops the rest (DSK-02).
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;
@@ -9,6 +10,8 @@ mod common;
 use std::path::Path;
 
 use riot_proxy::db::{Db, DbError};
+use std::sync::Arc;
+
 use riot_proxy::jobs::maintenance::{KEEP_BACKUPS, Maintenance, backup_name, backups, vacuum_into};
 
 const DAY_MS: i64 = 86_400_000;
@@ -62,14 +65,15 @@ async fn the_daily_run_backs_up_first_then_trims_sweeps_and_checkpoints() {
         std::fs::write(backup_dir.join(backup_name(NOW - d * DAY_MS)), b"old").unwrap();
     }
     std::fs::write(backup_dir.join("riot-proxy-notes.db"), b"mine").unwrap();
-    let m = Maintenance {
-        db: db.clone(),
-        backup_dir: backup_dir.clone(),
-    };
+    let m = Maintenance::new(db.clone(), backup_dir.clone(), KEEP_BACKUPS);
 
     let report = m.run_once(NOW).await.unwrap();
     let today = backup_dir.join("riot-proxy-2026-10-03.db");
     assert_eq!(report.backup.as_deref(), Some(today.as_path()));
+    assert_eq!(
+        (report.backup_skipped.clone(), report.backup_failed.clone()),
+        (None, None)
+    );
     // The backup opens and has the rows, as they were before the trims.
     assert_eq!(ids(&today, "SELECT name FROM consumers"), ["keep me"]);
     assert_eq!(ids(&today, "SELECT id FROM jobs ORDER BY id").len(), 4);
@@ -115,14 +119,106 @@ async fn a_backup_cut_short_is_not_taken_for_todays() {
     std::fs::create_dir_all(&backup_dir).unwrap();
     // A crash mid-copy leaves the partial file only.
     std::fs::write(backup_dir.join(".riot-proxy-2026-10-03.db.partial"), b"half").unwrap();
-    let m = Maintenance {
-        db,
-        backup_dir: backup_dir.clone(),
-    };
+    let m = Maintenance::new(db, backup_dir.clone(), KEEP_BACKUPS);
     let report = m.run_once(NOW).await.unwrap();
     let today = report.backup.unwrap();
     assert_eq!(ids(&today, "SELECT name FROM consumers"), ["keep me"]);
     assert!(!backup_dir.join(".riot-proxy-2026-10-03.db.partial").exists());
+}
+
+/// What a run did besides the backup: the trims, the sweep, the checkpoint.
+async fn trimmed(dir: &Path, report: &riot_proxy::jobs::maintenance::Report) {
+    let live = dir.join("riot-proxy.db");
+    assert_eq!(
+        ids(&live, "SELECT id FROM jobs ORDER BY id"),
+        ["new-done", "old-failed", "pending"]
+    );
+    assert_eq!(
+        (report.jobs_deleted, report.history_deleted, report.cache_swept),
+        (1, 1, 1)
+    );
+    let wal = dir.join("riot-proxy.db-wal");
+    assert_eq!(std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0), 0);
+}
+
+#[tokio::test]
+async fn keep_zero_takes_no_backup_prunes_none_and_still_trims() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    seed(&db).await;
+    let backup_dir = dir.path().join("backups");
+    std::fs::create_dir_all(&backup_dir).unwrap();
+    for d in 1..=16 {
+        std::fs::write(backup_dir.join(backup_name(NOW - d * DAY_MS)), b"old").unwrap();
+    }
+    let m = Maintenance::new(db, backup_dir.clone(), 0);
+    let report = m.run_once(NOW).await.unwrap();
+    assert_eq!(report.backup, None);
+    assert_eq!(report.backup_skipped.as_deref(), Some("BACKUP_KEEP=0"));
+    assert_eq!(report.backups_deleted, 0);
+    assert_eq!(
+        backups(&backup_dir).await.unwrap().len(),
+        16,
+        "nothing pruned either"
+    );
+    assert!(!backup_dir.join("riot-proxy-2026-10-03.db").exists());
+    trimmed(dir.path(), &report).await;
+}
+
+#[tokio::test]
+async fn no_room_on_the_disk_skips_the_backup_and_the_rest_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    seed(&db).await;
+    let backup_dir = dir.path().join("backups");
+    // 1.2 x (file + WAL) is what it takes; one byte less is not enough.
+    let size = std::fs::metadata(dir.path().join("riot-proxy.db")).unwrap().len()
+        + std::fs::metadata(dir.path().join("riot-proxy.db-wal")).map_or(0, |m| m.len());
+    let short = (size as f64 * 1.2) as u64 - 1;
+    let m = Maintenance::new(db.clone(), backup_dir.clone(), KEEP_BACKUPS)
+        .with_disk_free(Arc::new(move |_| Ok(short)));
+    let report = m.run_once(NOW).await.unwrap();
+    assert_eq!(report.backup, None);
+    assert!(
+        report
+            .backup_skipped
+            .as_deref()
+            .is_some_and(|s| s.contains("bytes free")),
+        "{report:?}"
+    );
+    assert_eq!(report.backup_failed, None);
+    assert!(!backup_dir.join("riot-proxy-2026-10-03.db").exists());
+    assert!(!backup_dir.join(".riot-proxy-2026-10-03.db.partial").exists());
+    trimmed(dir.path(), &report).await;
+
+    // With room, the same run writes it.
+    let m = Maintenance::new(db, backup_dir.clone(), KEEP_BACKUPS).with_disk_free(Arc::new(|_| Ok(u64::MAX)));
+    let report = m.run_once(NOW).await.unwrap();
+    assert!(report.backup.is_some(), "{report:?}");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_copy_that_fails_leaves_no_partial_and_the_rest_runs() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    seed(&db).await;
+    let backup_dir = dir.path().join("backups");
+    std::fs::create_dir_all(&backup_dir).unwrap();
+    // VACUUM INTO cannot create its file in a directory it may not write to.
+    std::fs::set_permissions(&backup_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let m = Maintenance::new(db, backup_dir.clone(), KEEP_BACKUPS).with_disk_free(Arc::new(|_| Ok(u64::MAX)));
+    let report = m.run_once(NOW).await.unwrap();
+    std::fs::set_permissions(&backup_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(report.backup, None);
+    assert!(report.backup_failed.is_some(), "{report:?}");
+    assert_eq!(report.backup_skipped, None);
+    assert!(
+        std::fs::read_dir(&backup_dir).unwrap().next().is_none(),
+        "no partial left"
+    );
+    trimmed(dir.path(), &report).await;
 }
 
 #[tokio::test]
@@ -146,10 +242,7 @@ async fn the_daily_run_refreshes_planner_statistics() {
     let dir = tempfile::tempdir().unwrap();
     let db = open(dir.path());
     seed(&db).await;
-    let m = Maintenance {
-        db: db.clone(),
-        backup_dir: dir.path().join("backups"),
-    };
+    let m = Maintenance::new(db.clone(), dir.path().join("backups"), KEEP_BACKUPS);
     m.run_once(NOW).await.unwrap();
     // ADR-102: `jobs` gained rows since the open, so it has statistics now.
     let analysed = ids(

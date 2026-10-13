@@ -68,6 +68,7 @@ fn defaults_match_v1_and_design_07() {
         c.timeline_backfill_patches, 0,
         "the timeline backfill is off until the owner sets it (TL-02)"
     );
+    assert_eq!(c.backup_keep, 14, "ADR-057's fourteen daily backups (DSK-02)");
     assert_eq!(
         c.lookup_backfill_limit,
         u32::MAX,
@@ -642,5 +643,20 @@ fn job_kind_limits_cap_kinds_that_never_call_riot() {
             "JOB_KIND_LIMITS: '0' for names:backfill is not a whole number of at least 1",
             "JOB_KIND_LIMITS: 'x' for builds:extract is not a whole number of at least 1",
         ]
+    );
+}
+
+/// DSK-02: `BACKUP_KEEP` is 0 (no on-box backup) to 365.
+#[test]
+fn backup_keep_is_zero_to_a_year() {
+    assert_eq!(load(env(&[("BACKUP_KEEP", "0")])).backup_keep, 0);
+    assert_eq!(load(env(&[("BACKUP_KEEP", "365")])).backup_keep, 365);
+    assert_eq!(
+        errors(env(&[("BACKUP_KEEP", "366")])),
+        ["BACKUP_KEEP: '366' is outside 0..=365"]
+    );
+    assert_eq!(
+        errors(env(&[("BACKUP_KEEP", "many")])),
+        ["BACKUP_KEEP: 'many' is not a whole number"]
     );
 }
