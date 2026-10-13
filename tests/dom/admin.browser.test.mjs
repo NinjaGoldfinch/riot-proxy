@@ -54,12 +54,12 @@ for (const [device, width] of [['desktop', 1280], ['tablet', 820], ['phone', 390
         // Each view: nothing sideways, nothing wider than its box (tables scroll inside .scroll).
         const fits = () => page.evaluate(() => {
           const out = { page: [document.documentElement.scrollWidth, innerWidth], overflow: [] };
-          for (const el of document.querySelectorAll('.strip, .tile, .tile .value, .rail-foot, main, .chart, .chart figcaption, .xaxis, .panel, .filters, .meter, .scope header, .form-row, .worker, ul.groups li, ol.timeline li, .crawl, .stages, .totals, .legs, .stack, .legend, .note-line, .newkey')) {
+          for (const el of document.querySelectorAll('.strip, .tile, .tile .value, .rail-foot, main, .chart, .chart figcaption, .xaxis, .panel, .filters, .meter, .scope header, .form-row, .worker, ul.groups li, ol.timeline li, .crawl, .stages, .totals, .legs, .stack, .legend, .note-line, .newkey, .chips, ol.events li')) {
             if (el.scrollWidth > el.clientWidth + 1) out.overflow.push(`${el.id || el.className || el.tagName}: ${el.scrollWidth} > ${el.clientWidth}`);
           }
           return out;
         });
-        const ready = { overview: '#chArchive .plotwrap', traffic: '#trRecent tbody tr', limiter: '.scope[data-scope="oc1"] .meter', cache: '#chCacheHit .plotwrap', jobs: '#jNext ul.groups li', 'jobs/01K00000000000000000000RUN': '#jtTimeline li', ladder: '[data-activity="01K0000000000000000000RUN1"] .stages', 'ladder/01K0000000000000000000DON1': '#ladderHistory [data-activity="01K0000000000000000000DON1"] .stages', archive: '#arTimelines .meter', consumers: '#plList tbody tr' };
+        const ready = { overview: '#chArchive .plotwrap', traffic: '#trRecent tbody tr', limiter: '.scope[data-scope="oc1"] .meter', cache: '#chCacheHit .plotwrap', jobs: '#jNext ul.groups li', 'jobs/01K00000000000000000000RUN': '#jtTimeline li', ladder: '[data-activity="01K0000000000000000000RUN1"] .stages', 'ladder/01K0000000000000000000DON1': '#ladderHistory [data-activity="01K0000000000000000000DON1"] .stages', archive: '#arTimelines .meter', consumers: '#plList tbody tr', events: '#evList', about: '#abConfig tbody tr' };
         for (const view of Object.keys(ready)) {
           await page.evaluate((v) => { location.hash = v; }, view);
           await page.waitForSelector(ready[view]);
@@ -67,6 +67,12 @@ for (const [device, width] of [['desktop', 1280], ['tablet', 820], ['phone', 390
             // Unfold everything, the live reading included.
             for (const s of await page.$$('.scope details summary')) await s.click();
             await page.waitForSelector('details[data-live="kr"] .live .meter');
+          }
+          if (view === 'events') {
+            // Frames as the firehose sends them, one opened into its JSON.
+            await page.evaluate(() => { for (let i = 0; i < 40; i++) window.rpAdmin.store.set('event', { op: 'event', event: i % 2 ? 'match.archived' : 'crawl.phase', topic: 'firehose', at: Date.now(), data: { matchId: `OC1_${i}`, note: 'x'.repeat(i * 4) } }); });
+            await page.waitForSelector('#evList li button');
+            await page.click('#evList li button');
           }
           if (view === 'ladder') {
             for (const s of await page.$$('#ladderRunning details.more summary, #analyticsFold summary')) await s.click();

@@ -235,6 +235,16 @@ details.panel > summary h2 { display: inline; }
 .newkey code { display: block; margin: 6px 0; padding: 6px 8px; background: var(--page); border-radius: 4px; overflow-wrap: anywhere; user-select: all; }
 .checks { display: flex; gap: 12px; align-items: center; font-size: 12px; }
 
+/* ── events, about ── */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chips label { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border: 1px solid var(--border); border-radius: 12px; font-size: 12px; cursor: pointer; }
+ol.events { list-style: none; margin: 0; padding: 0; font-size: 12px; max-height: 70vh; overflow: auto; }
+ol.events li { border-bottom: 1px solid var(--grid); }
+ol.events button { all: unset; box-sizing: border-box; display: grid; grid-template-columns: 6em minmax(0, 11em) minmax(0, 1fr); gap: 8px; width: 100%; padding: 4px 2px; cursor: pointer; }
+ol.events button:focus-visible { outline: 2px solid var(--focus); }
+ol.events button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+ol.events pre { margin: 0 0 6px; padding: 6px 8px; background: var(--page); border-radius: 4px; font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow: auto; }
+
 /* ── table helper ── */
 .scroll { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 12px; }
@@ -295,6 +305,8 @@ td.n, th.n { text-align: right; }
       <symbol id="i-ladder" viewBox="0 0 16 16"><path d="M4 1.5a.8.8 0 0 1 .8.8V4h6.4V2.3a.8.8 0 0 1 1.6 0v11.4a.8.8 0 0 1-1.6 0V12H4.8v1.7a.8.8 0 0 1-1.6 0V2.3A.8.8 0 0 1 4 1.5Zm.8 4.1v1.6h6.4V5.6Zm0 3.2v1.6h6.4V8.8Z" /></symbol>
       <symbol id="i-archive" viewBox="0 0 16 16"><path d="M1.5 3c0-.6.4-1 1-1h11c.6 0 1 .4 1 1v2c0 .5-.3.9-.8 1v6.5c0 .8-.7 1.5-1.5 1.5H3.8c-.8 0-1.5-.7-1.5-1.5V6c-.5-.1-.8-.5-.8-1Zm1.6.6v.8h9.8v-.8ZM3.9 7v5.4h8.2V7Zm2.3 1.4h3.6a.8.8 0 0 1 0 1.6H6.2a.8.8 0 0 1 0-1.6Z" /></symbol>
   <symbol id="i-consumers" viewBox="0 0 16 16"><path d="M8 1.5a3 3 0 1 1 0 6 3 3 0 0 1 0-6Zm0 1.6a1.4 1.4 0 1 0 0 2.8 1.4 1.4 0 0 0 0-2.8ZM2 13.2C2 10.9 4.7 9 8 9s6 1.9 6 4.2v.5a.8.8 0 0 1-.8.8H2.8a.8.8 0 0 1-.8-.8Zm1.7-.3h8.6c-.4-1-2.1-2.3-4.3-2.3s-3.9 1.3-4.3 2.3Z" /></symbol>
+  <symbol id="i-events" viewBox="0 0 16 16"><path d="M9.3 1.2a.8.8 0 0 1 .5.9L9 6.4h3.6a.8.8 0 0 1 .6 1.3l-6 7a.8.8 0 0 1-1.4-.7L6.6 9.6H3a.8.8 0 0 1-.6-1.3l6-7a.8.8 0 0 1 .9-.1Z" /></symbol>
+  <symbol id="i-about" viewBox="0 0 16 16"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1Zm0 3a1 1 0 1 1 0 2 1 1 0 0 1 0-2Zm-.8 3.6a.8.8 0 0 1 1.6 0v3.8a.8.8 0 0 1-1.6 0Z" /></symbol>
   <symbol id="i-overview" viewBox="0 0 16 16"><path d="M1 2.5A1.5 1.5 0 0 1 2.5 1h3A1.5 1.5 0 0 1 7 2.5v3A1.5 1.5 0 0 1 5.5 7h-3A1.5 1.5 0 0 1 1 5.5Zm8 0A1.5 1.5 0 0 1 10.5 1h3A1.5 1.5 0 0 1 15 2.5v3A1.5 1.5 0 0 1 13.5 7h-3A1.5 1.5 0 0 1 9 5.5Zm-8 8A1.5 1.5 0 0 1 2.5 9h3A1.5 1.5 0 0 1 7 10.5v3A1.5 1.5 0 0 1 5.5 15h-3A1.5 1.5 0 0 1 1 13.5Zm8 0A1.5 1.5 0 0 1 10.5 9h3a1.5 1.5 0 0 1 1.5 1.5v3a1.5 1.5 0 0 1-1.5 1.5h-3A1.5 1.5 0 0 1 9 13.5Z" /></symbol>
     </svg>
 
@@ -362,7 +374,17 @@ td.n, th.n { text-align: right; }
 // Riot's league-v4 apex lists stop at this many entries (LAD-01); the Ladder
 // tab (ADM-12) prints it, and tests/ui.rs checks it is the server's.
 const APEX_LIST_CAP = 10000;
-const TAB_IDS = ['overview', 'traffic', 'limiter', 'cache', 'jobs', 'ladder', 'archive', 'consumers'];
+const TAB_IDS = ['overview', 'traffic', 'limiter', 'cache', 'jobs', 'ladder', 'archive', 'consumers', 'events', 'about'];
+/** Every event the hub publishes (src/events.rs). */
+const EVENT_NAMES = ['game.started', 'game.ended', 'rank.changed', 'match.archived', 'patch.new', 'crawl.phase', 'ladder.crawl.completed', 'analytics.updated', 'metrics.snapshot'];
+const RING_CAP = 2000;
+/** A bounded ring: the newest `cap` items, oldest dropped first. */
+const ringPush = (ring, item, cap = RING_CAP) => { ring.push(item); if (ring.length > cap) ring.splice(0, ring.length - cap); return ring; };
+/** Frames shown: names switched on, and the search text anywhere in the frame. */
+const eventFilter = (frames, on, q) => {
+  const needle = String(q ?? '').trim().toLowerCase();
+  return frames.filter((f) => on.has(f.event) && (!needle || JSON.stringify(f).toLowerCase().includes(needle)));
+};
 const fmt = (n) => (n == null || Number.isNaN(Number(n)) ? '—' : Number(n).toLocaleString('en-US'));
 /** 1,284 · 12.9K · 1.13M · 2.1B (the stat-tile contract). */
 const compact = (n) => {
@@ -912,6 +934,8 @@ const TABS = [
   { id: 'ladder', label: 'Ladder', icon: 'ladder', enter(id) { enterLadder(id); }, leave() { stopLadder(); } },
   { id: 'archive', label: 'Archive', icon: 'archive', enter() { enterArchive(); }, leave() { clearTimeout(A.timer); } },
   { id: 'consumers', label: 'Consumers', icon: 'consumers', enter() { enterConsumers(); } },
+{ id: 'events', label: 'Events', icon: 'events', enter() { enterEvents(); } },
+{ id: 'about', label: 'About', icon: 'about', enter() { renderAbout(); } },
 ];
 function buildTabs() {
   $('tabs').innerHTML = TABS.map((t) =>
@@ -2125,6 +2149,91 @@ async function untrackPlayer(puuid, name) {
     toast(err.message, 'critical');
   }
 }
+
+// ── Events: the firehose ─────────────────────────────────────────────
+const E = { ring: [], on: new Set(EVENT_NAMES.filter((n) => n !== 'metrics.snapshot')), q: '', paused: false, missed: 0, unseen: 0, pending: null, open: new Set() };
+// Every frame is kept, on any tab; drawing is batched and never while paused.
+store.on('event', (f) => {
+  ringPush(E.ring, f);
+  if (E.paused) E.missed++;
+  else if (state.tab !== 'events' && f.event !== 'metrics.snapshot') E.unseen++;
+  if (!E.pending) E.pending = setTimeout(flushEvents, 250);
+});
+function flushEvents() {
+  E.pending = null;
+  badge('events', E.unseen, `${E.unseen} new events`);
+  if (state.tab !== 'events' || !$('evList')) return;
+  if (E.paused) { $('evPause').textContent = `Resume (${fmt(E.missed)} while paused)`; return; }
+  renderEventList();
+}
+function enterEvents() {
+  E.unseen = 0;
+  badge('events', 0);
+  if (!$('evList')) {
+    $('panel-events').innerHTML = `<div class="panel-head"><h1 style="margin:0">Events</h1><span class="end muted" id="evMeta"></span></div>
+      <section class="panel"><div class="filters"><label class="sr-only" for="evSearch">Search</label><input id="evSearch" type="search" placeholder="search the frames" />
+        <button class="btn small" type="button" id="evPause" aria-pressed="false">Pause</button><button class="btn small" type="button" id="evClear">Clear</button></div>
+        <div class="chips" id="evNames" role="group" aria-label="Event names">${EVENT_NAMES.map((n) => `<label><input type="checkbox" value="${n}"${E.on.has(n) ? ' checked' : ''} /> ${n} <span class="muted" data-count="${n}"></span></label>`).join('')}</div></section>
+      <section class="panel" style="margin-top:10px"><ol class="events" id="evList" aria-live="off"></ol></section>`;
+    $('evSearch').addEventListener('input', (e) => { E.q = e.target.value; renderEventList(); });
+    $('evNames').addEventListener('change', (e) => { if (e.target.checked) E.on.add(e.target.value); else E.on.delete(e.target.value); renderEventList(); });
+    $('evPause').addEventListener('click', () => {
+      E.paused = !E.paused;
+      $('evPause').setAttribute('aria-pressed', String(E.paused));
+      $('evPause').textContent = E.paused ? 'Resume (0 while paused)' : 'Pause';
+      if (!E.paused) { E.missed = 0; renderEventList(); }
+    });
+    $('evClear').addEventListener('click', () => { E.ring.length = 0; E.open.clear(); renderEventList(); });
+    $('evList').addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-i]');
+      if (!b) return;
+      // Open views follow the frame, not its place, which moves as the ring trims.
+      const f = E.ring[Number(b.dataset.i)];
+      if (E.open.has(f)) E.open.delete(f); else E.open.add(f);
+      renderEventList();
+    });
+  }
+  renderEventList();
+}
+function renderEventList() {
+  if (!$('evList') || E.paused) return;
+  const counts = {};
+  for (const f of E.ring) counts[f.event] = (counts[f.event] ?? 0) + 1;
+  for (const el of document.querySelectorAll('[data-count]')) el.textContent = counts[el.dataset.count] ? fmt(counts[el.dataset.count]) : '';
+  const shown = eventFilter(E.ring, E.on, E.q);
+  $('evMeta').textContent = `${fmt(shown.length)} shown of the last ${fmt(E.ring.length)} · ring of ${fmt(RING_CAP)}`;
+  // Newest first; `data-i` is the frame's place in the ring, oldest 0.
+  const idx = new Map(E.ring.map((f, i) => [f, i]));
+  $('evList').innerHTML = shown.length ? [...shown].reverse().map((f) => {
+    const i = idx.get(f);
+    const open = E.open.has(f);
+    return `<li><button type="button" data-i="${i}" aria-expanded="${open}"><span class="muted">${esc(hhmmss(f.at ?? Date.now()))}</span><span><code>${esc(f.event)}</code></span><span>${esc(JSON.stringify(f.data ?? {}).slice(0, 200))}</span></button>${open ? `<pre>${esc(JSON.stringify(f, null, 2))}</pre>` : ''}</li>`;
+  }).join('') : `<li class="muted" style="padding:8px 0">${E.ring.length ? 'Nothing matches.' : 'No events since this page opened.'}</li>`;
+}
+
+// ── About ────────────────────────────────────────────────────────────
+function renderAbout() {
+  const i = store.get('info');
+  if (!i) return;
+  const r = store.get('ready');
+  const feats = Object.entries(i.features ?? {});
+  $('panel-about').innerHTML = `<h1>About</h1><div class="grid2">
+    <section class="panel"><h2>Build</h2><dl class="kv"><dt>version</dt><dd>${esc(i.version)}</dd><dt>commit</dt><dd><code>${esc(i.gitSha)}</code></dd><dt>compiler</dt><dd>${esc(i.rustc)}</dd><dt>built</dt><dd>${esc(new Date(i.builtAt).toLocaleString())}</dd>
+      <dt>started</dt><dd>${esc(new Date(i.startedAt).toLocaleString())} · up ${esc(fmtDuration((Date.now() - i.startedAt) / 1000))}</dd><dt>environment</dt><dd>${esc(i.env)} · role ${esc(i.role)} · ${fmt(i.workers)} workers</dd><dt>key scope</dt><dd><code>${esc(i.keyScope)}</code></dd></dl></section>
+    <section class="panel"><h2>Features</h2><ul class="groups">${feats.map(([k, on]) => `<li><span>${esc(k)}</span><span data-level="${on ? 'good' : 'unknown'}">${icon(on ? 'good' : 'unknown')} ${on ? 'on' : 'off'}</span><span></span></li>`).join('')}</ul>
+      <h2 style="margin-top:12px">Readiness</h2><pre class="payload">${esc(JSON.stringify(r ?? {}, null, 2))}</pre>
+      <p><a href="${esc(joinUrl(state.base, '/metrics'))}">/metrics</a>${i.features?.docsUi ? ` · <a href="${esc(joinUrl(state.base, '/docs'))}">/docs</a>` : ''}</p></section></div>
+    <section class="panel" style="margin-top:10px"><div class="panel-head"><h2>Configuration in effect</h2><span class="end muted">secrets read [REDACTED]; RIOT_API_KEY is not shown</span></div>
+      <div class="filters"><label class="sr-only" for="abSearch">Search the configuration</label><input id="abSearch" type="search" placeholder="name or value" /></div><div id="abConfig"></div></section>`;
+  const draw = (q) => {
+    const n = q.trim().toLowerCase();
+    const rows = Object.entries(i.config ?? {}).map(([name, value]) => ({ name, value })).filter((x) => !n || x.name.toLowerCase().includes(n) || String(x.value ?? '').toLowerCase().includes(n));
+    $('abConfig').replaceChildren(table({ columns: [{ key: 'name', label: 'Variable', format: (v) => `<code>${esc(v)}</code>` }, { key: 'value', label: 'Value', format: (v) => (v == null ? '<span class="muted">unset</span>' : `<code>${esc(v)}</code>`) }], rows, cap: 200, sort: { key: 'name', dir: 'asc' }, empty: 'Nothing matches.' }));
+  };
+  $('abSearch').addEventListener('input', (e) => draw(e.target.value));
+  draw('');
+}
+store.on('ready', () => { if (state.tab === 'about') renderAbout(); });
 
 // ── health strip and the rail's foot ─────────────────────────────────
 function renderStrip() {

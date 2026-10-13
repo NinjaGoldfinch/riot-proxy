@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs';
 const html = readFileSync(new URL('../src/ui/admin.html', import.meta.url), 'utf8');
 const block = html.match(/\/\/ -{10} pure helpers[^\n]*\n([\s\S]*?)\/\/ -{10} end pure helpers/);
 assert.ok(block, 'the pure helpers block is marked in admin.html');
-const h = new Function(`${block[1]}; return { APEX_LIST_CAP, fmt, compact, fmtBytes, fmtDuration, pct, esc, relTime, sumValues, hitRatio, rate, jobTotals, diskLevel, backupLevel, limiterLevel, route, joinUrl, wsUrl, maskKey, contrast, sortRows, capRows, percentile, downsample, historyPointOf, seriesOf, statusClass, routeRows, upstreamRows, windowLabel, fullness, meterLevel, scopeOrder, msOf, dur, when, jobLabel, groupJobs, groupLabel, jobWhen, groupWhen, stageText, stagePct, legName, tierName, storageParts, parsePlayer, isHash };`)();
+const h = new Function(`${block[1]}; return { APEX_LIST_CAP, fmt, compact, fmtBytes, fmtDuration, pct, esc, relTime, sumValues, hitRatio, rate, jobTotals, diskLevel, backupLevel, limiterLevel, route, joinUrl, wsUrl, maskKey, contrast, sortRows, capRows, percentile, downsample, historyPointOf, seriesOf, statusClass, routeRows, upstreamRows, windowLabel, fullness, meterLevel, scopeOrder, msOf, dur, when, jobLabel, groupJobs, groupLabel, jobWhen, groupWhen, stageText, stagePct, legName, tierName, storageParts, parsePlayer, isHash, EVENT_NAMES, RING_CAP, ringPush, eventFilter };`)();
 
 const tokens = (name) => {
   const m = html.match(new RegExp(`/\\* tokens:${name}[^*]*\\*/\\s*[^{]+\\{([^}]*)\\}`));
@@ -271,4 +271,21 @@ test('a Riot ID splits at its last #; anything else is a PUUID; a key hash is 64
   assert.equal(h.isHash('A'.repeat(64)), true);
   assert.equal(h.isHash('a'.repeat(63)), false);
   assert.equal(h.isHash('rpx_' + 'a'.repeat(60)), false);
+});
+
+test("the page's event names are the hub's (src/events.rs)", () => {
+  const rs = readFileSync(new URL('../src/events.rs', import.meta.url), 'utf8');
+  const names = [...rs.matchAll(/Self::\w+(?:\s*\{\s*\.\.\s*\}|\(_\))?\s*=>\s*"([a-z.]+)"/g)].map((m) => m[1]);
+  assert.ok(names.length >= 9, names.join());
+  assert.deepEqual([...h.EVENT_NAMES].sort(), [...new Set(names)].sort());
+});
+
+test('the event ring keeps the newest 2,000; filters by name and text', () => {
+  const ring = [];
+  for (let i = 0; i < 2005; i++) h.ringPush(ring, i);
+  assert.equal(ring.length, h.RING_CAP);
+  assert.deepEqual([ring[0], ring.at(-1)], [5, 2004]);
+  const frames = [{ event: 'a', data: { x: 'Gold' } }, { event: 'b', data: {} }, { event: 'a', data: { x: 'silver' } }];
+  assert.equal(h.eventFilter(frames, new Set(['a']), '').length, 2);
+  assert.deepEqual(h.eventFilter(frames, new Set(['a', 'b']), 'gold'), [frames[0]]);
 });
