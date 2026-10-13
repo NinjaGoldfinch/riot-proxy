@@ -346,6 +346,13 @@ Validated with the dataviz palette script; both modes pass.
 - **Serving.** `ETag` (SHA-256 of the rendered page) and `Cache-Control: no-cache`: a reload is a 304. Budget 160 KB, tested.
 - **Tests.** `tests/dom/admin-shell.test.mjs` (jsdom against `fake-admin.mjs`, through `admin-harness.mjs`), `tests/dom/admin.browser.test.mjs` (Chromium at 1280, 820 and 390 px in both themes: no sideways scroll, nothing wider than its box, every tab reachable), `tests/admin_ui.mjs` (helpers and token contrast), `tests/ui.rs` (self-contained, budget, ETag).
 
+## Overview charts and Traffic (ADM-09)
+
+- **Chart helper.** `chart({title, series, format, yMin, yMax})` draws inline SVG: one `<path>` per series (at most 600 points, bucket means; a gap stays a gap), a 10 % wash under a single series, three recessive grid lines, the top and bottom values and four time ticks as HTML text, a crosshair readout on pointer or arrow keys (Home, End, Escape), a description in `aria-label`, a legend from two series up, and a Table toggle listing every point (newest 200 shown). The latest value is read from every point, not the drawing. No dual axis: request and Riot-call rates are two charts.
+- **Overview.** `GET /v1/admin/metrics/history` once per entry; each snapshot is the live end of the series and is kept as a point once it is an interval newer than the last. Six charts: archived matches, jobs pending, cache hit ratio and Riot calls per interval (rates and ratios between neighbouring points, a counter drop read as a restart), disk free (0 to the disk's size; points from before ADM-04 have none and draw as a gap), requests per second. Recent errors: the last 10 from `/recent?kind=errors` on entry, again when a snapshot counts new 4xx or 5xx.
+- **Traffic.** By route from `snapshot.requests`: requests, 2xx, 4xx, 5xx, the cache hit share of cacheable reads, and p50/p95 latency from the recent ring. Riot calls from `snapshot.upstream` by region, method and status. Recent requests from `/recent?kind=requests&limit=500`, on entry and every 5 s while the tab is open and visible (a `setTimeout` chain stopped on leaving or hiding), filtered by text, status class and cache state; status sits next to the time so it stays on a phone screen, and a 4xx or 5xx carries an icon.
+- **Tests.** `tests/dom/admin-overview.test.mjs`, `admin-traffic.test.mjs`, the browser test's overview and traffic views, and the helpers (`percentile`, `downsample`, `historyPointOf`, `seriesOf`, `routeRows`, `upstreamRows`) in `tests/admin_ui.mjs`.
+
 The rail lists only the tabs that exist; each later task adds its own. Until ADM-12 there is no Ladder tab: `/dev/jobs`, `/v1/admin/ladder/*` and the firehose cover it.
 
 ## Chart rules
@@ -358,8 +365,8 @@ Each tab's task fills its row and adds a section below.
 
 | Hash | Tab | Feeds | Task | Status |
 |---|---|---|---|---|
-| `#overview` | Overview: stat tiles, 24 h charts, recent errors | snapshot, history, `/recent` | ADM-08, ADM-09 | tiles built (ADM-08); charts and errors ADM-09 |
-| `#traffic` | Traffic: by route, upstream, live recent requests | snapshot, `/recent` | ADM-09 | planned |
+| `#overview` | Overview: stat tiles, 24 h charts, recent errors | snapshot, history, `/recent` | ADM-08, ADM-09 | built |
+| `#traffic` | Traffic: by route, upstream, live recent requests | snapshot, `/recent` | ADM-09 | built |
 | `#limiter` | Limiter: a card per scope | snapshot, `/limits/{scope}` | ADM-10 | planned |
 | `#cache` | Cache: L1/L2, ratios, probe, purge | snapshot, `/debug/cache`, `/cache/purge` | ADM-10 | planned |
 | `#jobs`, `#jobs/<id>` | Jobs (folds in `/dev/jobs`) | `/jobs/*` | ADM-11 | planned |
