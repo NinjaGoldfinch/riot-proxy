@@ -1,9 +1,12 @@
 # 12 — Raw bodies in object storage, and the move to Onidel
 
 Status, 2026-10-13: **the host move is done** (HOST-01, ADR-142; see §As
-executed). **The object storage half is a proposal**: nothing is built, and
-the task ids `OBJ-nn` below are reserved until the owner answers §Open
-questions. ADR numbers are allocated when each PR lands.
+executed). **The object storage half is designed, not built.** The owner
+answered §Open questions on 2026-10-13: Onidel Sydney is the primary bucket
+(250 GB, upgradable), R2 the replica, a 14-day local window, the
+`object_store` crate, and bodies **packed** many to an object rather than one
+object each (ADR-146). Tasks OBJ-01..06 are in §Tasks and
+docs/IMPLEMENTATION.md; each gets its own ADR as it lands.
 
 ## Why
 
@@ -30,8 +33,9 @@ Hetzner's 2026 repricing is counted. Production moved to Onidel Sydney on
 ## Goals
 
 - Raw match and timeline bodies live in an S3-compatible bucket in the same
-  data centre as the proxy; SQLite keeps their metadata and a short local
-  window of recent bodies.
+  data centre as the proxy, packed thousands to an object; SQLite keeps their
+  metadata, where each body sits in which pack, and a short local window of
+  recent bodies.
 - No change to any HTTP response, header, metric name or `ApiError` code.
 - The archive never fails a request: a bucket outage degrades to a Riot fetch,
   exactly as a failing SQLite archive does today (`SqliteArchive`, ADR in 04).
@@ -76,48 +80,130 @@ drop step, the old SQLite file). Two copies of SQLite (one local backup, R2
 
 ## Storage layout
 
+### Why packs, not one object per body
+
+One object per body was the first draft. Onidel caps a bucket at **3 million
+objects** by default (knowledge base, read 2026-10-13); at two objects per
+match the archive passes that within months (460 k today, 20–40 k more a day
+at the crawl's pace). Packing also makes every whole-bucket operation cheap:
+the R2 replica's writes are billed per object (about US$4.50 per million), a
+`rclone sync` or a later move to another provider copies a few hundred
+objects instead of millions, and a listing fits in one page. It does not
+change the bytes moved: ingress is free on both stores and a read fetches
+only its body's byte range (an HTTP `Range` GET), so egress is the same as
+one object per body.
+
+The cost is an index (SQLite records which pack and which byte range holds
+each body) and a compaction step when bodies are deleted (OBJ-06). Bodies
+are immutable and deletions are rare, so both stay small.
+
 ### Bucket
 
-One bucket, `riot-proxy-archive`, private, versioning off (objects are
-immutable; a re-PUT writes identical bytes). Keys:
+One bucket, `riot-proxy-archive`, private, versioning off (packs are
+immutable; a pack is never rewritten in place, only replaced by a new one).
+Keys:
 
 ```
-matches/<platform>/<match_id>.zst      e.g. matches/OC1/OC1_123456789.zst
-timelines/<platform>/<match_id>.zst
+packs/matches/<yyyy>/<mm>/<pack_id>.pack     e.g. packs/matches/2026/10/01JABCDEF….pack
+packs/timelines/<yyyy>/<mm>/<pack_id>.pack
 ```
 
-`<platform>` is the match id's prefix, so a listing by platform is a prefix
-listing. The object is `body_zstd` byte for byte: the same zstd frame SQLite
-holds today, so the offload is a copy, not a re-encode, and
-`sha256(object) == sha256(body_zstd)` is the verification. Metadata:
-`Content-Type: application/json`, `Content-Encoding: zstd`, and
-`x-amz-meta-sha256` with the hex digest. No dictionary (THR-06d would add a
-`dict_id` to the key suffix if it ever lands; old objects stay readable).
+`<pack_id>` is a ULID (creation time first, so a listing is in write order);
+year and month are the pack's creation time, so a prefix walk can audit or
+replicate one month.
 
-Platform sits before match id so that a per-platform purge or audit is one
-prefix walk. Riot match ids are unique across platforms, so there is no
-collision either way.
+**Matches and timelines go in separate packs.** They are read separately:
+`facts:reextract`, the names job and the player page read match bodies only;
+`builds:extract` and the timeline route read timelines only. A pack of one
+kind keeps a bulk read dense (a batch of matches is not interleaved with
+62 KB timelines it doesn't want, so merged ranges waste nothing), and lets
+the two be treated differently later: a retention rule that drops old
+timelines deletes whole packs instead of compacting every one. The rare
+reader that wants both makes two ranged GETs.
+
+**Inside a pack, bodies are sorted by match id.** The bulk jobs walk the
+archive `ORDER BY match_id`, and a match id is its platform then Riot's
+sequence number, so neighbouring ids are usually in the same pack and one
+merged ranged GET serves a whole batch. Packs are not partitioned into fixed
+id ranges: the crawl archives old ids long after newer ones (backfills, new
+ladder players), so a fixed range would never close. Each pack covers the
+ids that were eligible together, and `body_locations` finds any id wherever
+it landed.
+
+### Pack format
+
+A pack holds one kind of body. It is the bodies back to back in match-id
+order, then an index of them, then a fixed 16-byte trailer:
+
+```
+[body 0][body 1] … [body n-1][index][index length: u64 LE][magic "RPXPACK1"]
+```
+
+- Each body is `body_zstd` byte for byte: the same zstd frame SQLite holds
+  today, so packing is a copy, not a re-encode.
+- The index is zstd-compressed JSON lines, one per body:
+  `{"kind":"match"|"timeline","matchId":…,"offset":…,"len":…,"sha256":…}`.
+  It makes a pack self-describing: if SQLite's index is ever lost, reading
+  every pack's trailer and index (two ranged GETs each) rebuilds it.
+- The object's metadata carries `x-amz-meta-sha256` (of the whole object),
+  `x-amz-meta-bodies` and `Content-Type: application/octet-stream`.
+
+A pack closes at `ARCHIVE_PACK_TARGET_BYTES` (default 64 MiB, about 1,000
+timelines or 6,000 matches). A smaller pack is written only for bodies that
+have reached the end of the local window unpacked, so freeing them is never
+held up (§Offload job). At
+64 MiB the 16 GB on disk today is about 40 match packs and 210 timeline packs,
+and the archive's growth adds a handful a day: years of headroom under 3 M
+objects.
 
 ### SQLite
 
-Migration `V00NN__bodies_offloaded.sql` (`ALTER TABLE … ADD COLUMN`, cheap on
-20 GB, same pattern as V0019):
+Migration `V00NN__body_packs.sql` (new tables and `ALTER TABLE … ADD COLUMN`,
+cheap on 20 GB, same pattern as V0019):
 
 ```sql
-ALTER TABLE matches   ADD COLUMN body_sha256  BLOB;     -- 32 bytes; NULL until computed
-ALTER TABLE matches   ADD COLUMN offloaded_at INTEGER;  -- unix ms; NULL = body is local
-ALTER TABLE timelines ADD COLUMN body_sha256  BLOB;
+CREATE TABLE body_packs (
+  pack_id    TEXT PRIMARY KEY,                -- ULID; object key derives from it
+  bytes      INTEGER NOT NULL,                -- object size
+  bodies     INTEGER NOT NULL,
+  live_bytes INTEGER NOT NULL,                -- bytes of bodies still referenced
+  sha256     BLOB NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE body_locations (                  -- where each offloaded body is
+  match_id TEXT NOT NULL,
+  kind     TEXT NOT NULL,                      -- match | timeline
+  pack_id  TEXT NOT NULL REFERENCES body_packs(pack_id),
+  offset   INTEGER NOT NULL,
+  len      INTEGER NOT NULL,
+  sha256   BLOB NOT NULL,
+  PRIMARY KEY (match_id, kind)
+) WITHOUT ROWID;
+CREATE INDEX body_locations_pack ON body_locations(pack_id);
+ALTER TABLE matches   ADD COLUMN packed_at    INTEGER;  -- unix ms; set once the body is in a verified pack
+ALTER TABLE matches   ADD COLUMN offloaded_at INTEGER;  -- unix ms; set once the local copy is freed
+ALTER TABLE timelines ADD COLUMN packed_at    INTEGER;
 ALTER TABLE timelines ADD COLUMN offloaded_at INTEGER;
-CREATE INDEX matches_offload   ON matches(offloaded_at) WHERE offloaded_at IS NULL;
-CREATE INDEX timelines_offload ON timelines(offloaded_at) WHERE offloaded_at IS NULL;
+CREATE INDEX matches_to_pack   ON matches(archived_at) WHERE packed_at IS NULL;
+CREATE INDEX matches_to_free   ON matches(archived_at) WHERE packed_at IS NOT NULL AND offloaded_at IS NULL;
+CREATE INDEX timelines_to_pack ON timelines(match_id)  WHERE packed_at IS NULL;
+CREATE INDEX timelines_to_free ON timelines(match_id)  WHERE packed_at IS NOT NULL AND offloaded_at IS NULL;
 ```
+
+A body moves through three states: **local** (`packed_at` NULL), **packed**
+(in the bucket and still in SQLite, `packed_at` set), and **offloaded** (in the
+bucket only, `offloaded_at` set). Packing happens within hours of archiving;
+freeing happens at the end of the 14-day window.
+
+`body_locations` is the log of where each match id is: one row per packed
+body, about 60 bytes, so a million matches with timelines cost about 120 MB.
 
 `body_zstd` stays `NOT NULL`. An offloaded row holds the **empty blob** `X''`,
 which the schema allows and which no real body can be (a zstd frame is at
-least nine bytes). `offloaded_at IS NOT NULL` is the truth; the empty blob is
-what frees the pages. Rebuilding the table without the column is deferred to
-OBJ-05, when the column is near-empty and the rebuild is cheap; rebuilding a
-20 GB table first would need 20 GB of spare disk the VPS does not have.
+least nine bytes). `offloaded_at IS NOT NULL` with a `body_locations` row is
+the truth for a freed body; the empty blob is what frees the pages. Rebuilding the tables
+without the column is deferred to OBJ-05, when the column is near-empty and
+the rebuild is cheap.
 
 Freed pages go to the free list. DSK-01's `sqlite_freelist_bytes` shows them;
 design/07 §Reclaiming space (`VACUUM INTO` and swap) returns them to the
@@ -130,61 +216,109 @@ get_timeline}`; every write through `put` and `put_timeline` (`archive/mod.rs`
 is the only caller of the writes; `routes/players.rs`, `jobs/analytics.rs` and
 `jobs/names.rs` call `get_many`). Nothing outside `src/archive` changes.
 
-**Write.** Unchanged. `put` stores the body in SQLite as today and now also
-stores `body_sha256`. New matches are therefore local for a window and never
-depend on the bucket being up. No S3 call on the request path.
+**Write.** Unchanged. `put` stores the body in SQLite as today. New matches
+never depend on the bucket being up, and there is no S3 call on the request
+path; the offload job packs them in the background within hours.
 
-**Read.** `get`: if `body_zstd` is non-empty, return it (today's path). If it
-is empty and `offloaded_at` is set, GET the object, check the sha256, return
-it. A miss, a checksum mismatch or a store error logs a warning and returns
-`None`, so the fetcher goes to Riot (ADR: a failing archive never fails a
-request). `get_many` splits ids into local and offloaded, fetches the
-offloaded set with bounded concurrency (`ARCHIVE_OBJECT_CONCURRENCY`, default
-16) and merges. A body read back from the bucket is not re-written to SQLite.
+**Read.** `get`: if `body_zstd` is non-empty, return it (today's path, which
+also covers packed bodies still inside the window). If it
+is empty and `offloaded_at` is set, look up `body_locations`, GET that byte
+range of the pack, check the body's sha256, return it. A missing location, a
+store error or a checksum mismatch logs a warning and returns `None`, so the
+fetcher goes to Riot (a failing archive never fails a request). `get_many`
+splits ids into local and offloaded, groups the offloaded ones by pack,
+merges ranges in the same pack that are close together (`object_store`'s
+`get_ranges` does this) and fetches packs with bounded concurrency
+(`ARCHIVE_OBJECT_CONCURRENCY`, default 16). A body read back from the bucket
+is not re-written to SQLite.
 
-The 14-day local window (`ARCHIVE_BODY_LOCAL_DAYS`) exists for the hot path:
-`routes/players.rs` reads a player's recent matches, which are almost always
-inside the window, so the player page's latency does not change. Analytics
-re-extraction and the names job read old bodies in batches, where 1–3 ms per
-object in the same data centre, 16 at a time, is well under their current pace
-(`FACTS_REEXTRACT_BATCH` with a 50 ms pause).
+The 14-day local window (`ARCHIVE_BODY_LOCAL_DAYS`) is a read cache, not a
+delay before the bucket: every body is in the bucket within hours, and the
+window only decides how long SQLite keeps its own copy. It exists for the hot
+path: `routes/players.rs` reads a player's recent matches, which are almost
+always inside the window, so the player page's latency does not change.
+Fourteen days also matches League's two-week patch cycle, so the current
+patch's matches, which the analytics and build pages read most, stay local
+(owner, 2026-10-13). Analytics
+re-extraction and the names job read old bodies in batches; a pack holds
+bodies in archive order, so a batch of old matches mostly falls in a few
+packs and costs a few ranged GETs at 1–3 ms each in the same data centre.
 
 **Client.** The `object_store` crate (Apache), `aws` feature: S3-compatible
-with a custom endpoint and path-style addressing, retries and timeouts
+with a custom endpoint, ranged GETs, multipart PUT, retries and timeouts
 built in, and `LocalFileSystem` and `InMemory` back ends so every test runs
-without a network. New dependency; needs the owner's nod per the P0 rule.
-Static musl build: it uses `reqwest` with rustls, same as the proxy.
+without a network. New dependency, approved by the owner 2026-10-13. Static
+musl build: it uses `reqwest` with rustls, same as the proxy.
 
 ## Offload job
 
 `archive:offload`, one job kind, bulk lane, priority 30 000 (beside
-`facts:reextract`), queued hourly by the tick while any eligible row remains
-and once at boot. One turn:
+`facts:reextract`). It is queued **when a pack is full**, not on a timer
+(owner, 2026-10-13): the archive keeps a running total of unpacked bytes per
+kind (an in-memory counter, seeded at boot from the `*_to_pack` indexes and
+raised by every `put`), and when a kind's total reaches
+`ARCHIVE_PACK_TARGET_BYTES` it queues the job (deduplicated, so at most one is
+pending). That is a few times a day at the crawl's pace and costs one
+addition per archived body. The job is also queued once at boot and once a
+day after `maintenance`: the boot run catches a counter lost to a restart,
+and the daily run frees bodies that left the window and packs a partial pack
+whose bodies are already past it. **Uploading
+and freeing are separate steps** (owner, 2026-10-13): a body goes to the
+bucket as soon as a full pack of its kind is ready, and its local copy is
+freed only when it leaves the 14-day window. A run does both:
 
-1. Select up to `ARCHIVE_OFFLOAD_BATCH` (default 200) rows from `matches`, then
-   `timelines`, where `offloaded_at IS NULL` and `archived_at < now −
-   ARCHIVE_BODY_LOCAL_DAYS` (timelines use their match's `archived_at`),
-   oldest first.
-2. For each, compute the sha256 if `body_sha256` is NULL, PUT the object with
-   the metadata above (a re-PUT of an existing key is harmless), then HEAD it
-   and compare `x-amz-meta-sha256` and the content length.
-3. One write transaction: `UPDATE … SET body_zstd = X'', body_sha256 = ?,
-   offloaded_at = ? WHERE match_id = ? AND offloaded_at IS NULL` for the
-   verified rows only.
-4. Pause `ARCHIVE_OFFLOAD_PACE_MS` (default 50), take another turn while rows
-   remain, then finish; the hourly tick re-queues.
+**Pack.** One turn builds one pack of one kind, matches first, then timelines:
+
+1. Select unpacked rows of that kind (`packed_at IS NULL`), oldest
+   `archived_at` first, until the bodies reach `ARCHIVE_PACK_TARGET_BYTES`.
+   If they don't reach it, write a pack only when some of them are already
+   older than the window (so freeing them isn't held up); otherwise stop and
+   wait for the next run. Matches fill a pack in under a day and timelines in
+   a few hours at the crawl's pace, so packs are full-sized and a body is in
+   the bucket as soon as its pack fills, and in R2 within the hour after.
+2. Sort them by match id and build the pack in memory (64 MiB is nothing on
+   a 12 GB host): bodies, index, trailer; sha256 of each body and of the
+   whole object.
+3. PUT it (multipart above 8 MiB) with the metadata above, then HEAD it and
+   compare the size and `x-amz-meta-sha256`.
+4. One write transaction: insert the `body_packs` row and every
+   `body_locations` row, and set `packed_at` on each body. The local copies
+   stay.
+5. Pause `ARCHIVE_OFFLOAD_PACE_MS` (default 50) and take another turn while a
+   pack is due; the run ends when no kind has a full pack left.
+
+**Free.** Then, in batches of a few thousand rows per transaction:
+`UPDATE … SET body_zstd = X'', offloaded_at = ? WHERE packed_at IS NOT NULL
+AND offloaded_at IS NULL` for bodies whose match was archived more than
+`ARCHIVE_BODY_LOCAL_DAYS` ago. No store call is involved: the pack was
+verified when it was written, so this step cannot fail halfway.
 
 A store error ends the turn with the job `failed` and the scheduler's normal
-retry; nothing is marked offloaded that was not verified. The job is
-idempotent and resumable without a cursor, as `reextract` is.
+retry; nothing is marked packed that was not verified, and nothing is freed
+that is not packed. A crash between the PUT and the transaction leaves an
+**orphan pack**: an object no `body_packs` row names. It is harmless (the
+rows are still unpacked and the next turn packs them again into a new pack),
+and OBJ-06's sweep deletes orphans older than a day. The job is idempotent
+and resumable without a cursor, as `reextract` is. A queue that fires while
+a run is in progress is absorbed by the deduplication; the run itself loops
+until nothing is due.
 
-Progress is visible as `archive_offload_pending{kind="match"|"timeline"}`
-gauges, `archive_offload_bytes_total`, and `offloadedMatches` /
-`offloadedTimelines` on `GET /v1/admin/stats`. The dashboard's archive card
-shows local vs offloaded counts.
+**Deleting bodies.** A deletion (a `dev reset`, a future retention rule)
+deletes the `body_locations` row and subtracts its `len` from the pack's
+`live_bytes`. The pack is untouched. OBJ-06's compaction rewrites any pack
+under half live into a new pack of its live bodies, repoints their
+locations in one transaction, then deletes the old object; a pack with no
+live bodies is just deleted.
 
-Setting `ARCHIVE_BODY_LOCAL_DAYS=0` offloads everything eligible immediately,
-which is what the first run on the new host uses for the 20 GB backlog.
+Progress is visible as `archive_offload_pending{kind="match"|"timeline",
+step="pack"|"free"}` gauges, `archive_offload_bytes_total`, `archive_packs` and
+`packedMatches` / `offloadedMatches` / `packedTimelines` / `offloadedTimelines` / `packs` on
+`GET /v1/admin/stats`. The dashboard's archive card shows local vs
+offloaded counts.
+
+The first run packs the 16 GB backlog (all of it is unpacked) and frees
+everything older than 14 days. `ARCHIVE_BODY_LOCAL_DAYS=0` frees every packed
+body at once, for when disk is short.
 
 With no bucket configured (`ARCHIVE_OBJECT_URL` unset), the job kind is not
 registered and the proxy behaves exactly as today. That is also the rollback.
@@ -192,14 +326,48 @@ registered and the proxy behaves exactly as today. That is also the rollback.
 ## Replica and backups
 
 **R2 replica of the bucket.** An ops job, not app code: `rclone sync` from
-the Onidel bucket to an R2 bucket of the same name, nightly, from the VPS,
-`--max-age 48h --no-traverse` so a run lists only the source's recent objects
-and does not walk a million keys on R2; a weekly full `sync` catches anything
-missed. R2's charge is storage (about US$0.015/GB-month, 10 GB free) and
+the Onidel bucket to an R2 bucket of the same name, **hourly**, from the VPS
+(owner, 2026-10-13). The offload empties a body from SQLite as soon as its
+pack is verified on Onidel, so the replica's interval is how long a new pack
+has a single provider; an hour bounds that. With packs the bucket holds
+hundreds of objects and gains a handful a day, so a full `sync` every hour
+lists one page and copies little, and it also carries compaction's
+deletions. R2's charge is storage (about US$0.015/GB-month, 10 GB free) and
 writes (about US$4.50 per million); reads and egress are free. Set R2's
 location hint to Oceania if the dashboard offers it. The replica is for the
 day Onidel's account or bucket is gone; the proxy never reads it. Restoring
 means pointing `ARCHIVE_OBJECT_URL` at it, nothing else.
+
+**Index snapshots in the bucket.** The map of where every body is
+(`body_locations`) lives in SQLite, and each pack carries the index of its
+own bodies. Rebuilding the map from the packs alone means reading every
+pack's trailer and index: two small GETs a pack, minutes even at thousands of
+packs, but the owner asked that a lost or corrupt database (and a lost
+backup) not depend on it (2026-10-13). So the map is also kept in the bucket:
+
+```
+index/locations-<yyyy-mm-dd>.jsonl.zst     one line per body_locations row
+index/packs-<yyyy-mm-dd>.jsonl.zst         one line per body_packs row
+```
+
+`archive:index-snapshot` (OBJ-04) writes both once a day, after
+`maintenance`: a read transaction streams the two tables into zstd-compressed
+JSON lines (about 30–40 MB per million matches with timelines), PUTs them,
+and records the newest `pack_id` it covered in the object's metadata
+(`x-amz-meta-last-pack`). They replicate to R2 with the packs. A bucket
+lifecycle rule on `index/` expires snapshots after 14 days, so a corrupt one
+is never the only copy.
+
+On R2, as a safety net in case the hourly sync stops: a lifecycle rule on
+`index/` expiring after **21 days** (longer than Onidel's 14, so it never
+removes a snapshot the sync still mirrors) and the bucket's
+abort-incomplete-multipart rule at 1 day. **No expiry rule on `packs/`**, on
+either provider: packs are kept forever, and only compaction deletes one.
+
+Recovery is then the newest snapshot (one GET) plus `packs reindex --since
+<last-pack>`, which reads only the packs written after it: ULIDs sort by time,
+so that is a listing and a few packs, not all of them. With neither the
+database nor a snapshot, `packs reindex` over every pack still works.
 
 **SQLite backups.** Out of scope here beyond the effect: after the offload the
 nightly `VACUUM INTO` is a few GB instead of 22, and the existing `rclone`
@@ -209,6 +377,9 @@ raw bodies are not in those backups; they are in the bucket and its replica.
 **Restore drill.** Quarterly: download the latest backup from `ngf-backups` to a scratch
 directory, start a proxy against it with `ARCHIVE_OBJECT_URL` pointing at R2,
 read one old match through `/v1/match/{id}` and confirm `X-Cache: ARCHIVE`.
+Then empty `body_locations` in the scratch copy, run `packs restore-index`
+(newest snapshot plus `reindex --since`) and confirm the table matches the
+backup's row for row.
 
 ## Configuration
 
@@ -218,10 +389,11 @@ read one old match through `/v1/match/{id}` and confirm `X-Cache: ARCHIVE`.
 | `ARCHIVE_OBJECT_ENDPOINT` | unset | `https://s3.ap-southeast-2.onidel.cloud`; required with the URL |
 | `ARCHIVE_OBJECT_REGION` | `auto` | passed through; Onidel and R2 accept any |
 | `ARCHIVE_OBJECT_ACCESS_KEY` / `ARCHIVE_OBJECT_SECRET_KEY` | unset | in `/etc/riot-proxy/env`, 0600; never logged; `Config` redacts them like the Riot key |
-| `ARCHIVE_BODY_LOCAL_DAYS` | `14` | 0–365; bodies younger than this stay in SQLite |
-| `ARCHIVE_OFFLOAD_BATCH` | `200` | rows per turn |
+| `ARCHIVE_BODY_LOCAL_DAYS` | `14` | 0–365; how long SQLite keeps its own copy of a body that is already in the bucket (a read cache; packing does not wait for it) |
+| `ARCHIVE_PACK_TARGET_BYTES` | `67108864` | 64 MiB; a pack closes at this size (1 MiB–1 GiB) |
 | `ARCHIVE_OFFLOAD_PACE_MS` | `50` | pause between turns |
-| `ARCHIVE_OBJECT_CONCURRENCY` | `16` | parallel GETs in `get_many` |
+| `ARCHIVE_OBJECT_CONCURRENCY` | `16` | parallel ranged GETs in `get_many` |
+| `ARCHIVE_COMPACT_BELOW` | `0.5` | OBJ-06: a pack whose live share falls under this is rewritten |
 
 `ENV=production` refuses a URL without credentials. Boot logs the endpoint and
 bucket, never the keys.
@@ -244,7 +416,7 @@ Monthly, AUD, Onidel console prices of 2026-10-13:
 | Item | Cost |
 |---|---|
 | ONI-4, 6 vCPU / 12 GB / 120 GB NVMe / 6 TB | 42.52 |
-| Onidel Object Storage, 1 TB allocation (the knowledge base mentions a 250 GB plan; confirm) | 7.16 (or ~1.80) |
+| Onidel Object Storage, 250 GB (A$0.0072/GB-month, billed annually: A$21.60 a year; upgradable, not downgradable; 3 M objects; egress free to 3× the allocation) | 1.80 |
 | R2 replica, ~100 GB | ~2.30 (US$1.50) |
 | R2 `ngf-backups`, 14 daily SQLite backups (~22 GB each today) | ~4.50 (US$3), falling to well under 1 after the offload |
 | `ngf-mon-syd1` (the old OVH VPS) as the monitoring host | unchanged |
@@ -263,16 +435,16 @@ with `--rw=randwrite --bs=4k --fsync=1`.
 ## Tasks
 
 One task, one branch, one PR, as always. Every task ships tests. OBJ-01 to
-OBJ-03 land before the offload runs on the VPS; OBJ-04 and OBJ-05 follow it.
-The host move (runbook below) needs no code and can happen first.
+OBJ-03 land before the offload runs on the VPS; OBJ-04 to OBJ-06 follow it.
 
 | Id | Task | Files | Tests | Done when |
 |---|---|---|---|---|
-| OBJ-01 | **Object store client and config.** `archive::objects`: a thin wrapper over `object_store` with `put(key, bytes, sha256)`, `head(key)`, `get(key)` checking the sha256, and `key_for(kind, match_id)`. Config rows above; `Config` redacts the keys; production refuses a URL without credentials. `object_store` added to `Cargo.toml` (owner approves the dependency). | `src/archive/objects.rs`, `src/config.rs`, `.env.example`, `Cargo.toml`, design/07 config table | unit over `InMemory`: put then get round-trips; a tampered object fails the digest; key layout; config validation and redaction | `cargo test`; the musl build still links |
-| OBJ-02 | **Reads fall through to the bucket.** Migration `V00NN` above. `matches::get`, `get_many`, `get_timeline` read the object when `offloaded_at` is set; `put`/`put_timeline` store `body_sha256`. `get_many` bounded concurrency. The archive's `Stats` gains local vs offloaded counts and bytes; `/v1/admin/stats` and the dashboard show them. | `src/archive/matches.rs`, `src/archive/mod.rs`, `src/db/migrations/V00NN__bodies_offloaded.sql`, `src/stats.rs`, `src/routes/admin.rs`, `src/ui/admin.html`, design/04 | unit: an offloaded row reads from the store; a missing object returns `None` and warns; a digest mismatch returns `None`; `get_many` mixes local and offloaded ids; the migration on a seeded v-previous file. Integration: `/v1/match/{id}` on an offloaded match answers `X-Cache: ARCHIVE` with the same body and headers as before; a player page over offloaded matches is byte-identical; the OpenAPI snapshot | all existing archive, analytics and players tests pass unchanged |
-| OBJ-03 | **The offload job.** `archive:offload` as specified; gauges and counters; registered only with a URL; `ARCHIVE_BODY_LOCAL_DAYS=0` for the backlog. Add it to design/06's job catalogue and the kind cap of OPS-06. | `src/jobs/offload.rs`, `src/jobs/{mod,scheduler}.rs`, `src/metrics.rs`, `src/cli/serve.rs`, `tests/offload.rs`, design/06, metrics.md | unit (paused time): rows inside the window are not selected; a verified batch is emptied and stamped in one transaction; a store that fails on the third PUT stamps the first two only and the job fails; a re-run after a crash does not re-upload stamped rows; `X''` bodies are never returned as a body. Integration over `LocalFileSystem`: 50 seeded matches offload end to end and read back; the gauges | on the dev VM, the archive offloads to a local-filesystem "bucket" and every match still reads |
-| OBJ-04 | **Reclaim and runbook.** `riot-proxy reclaim` (or document the `VACUUM INTO` + swap from DSK-01 if that suffices), design/07 §Backups gains the rclone replica unit and timer under `deploy/`, and the restore drill. | `deploy/riot-proxy-replica.{service,timer}`, `deploy/README.md`, design/07 | the unit files parse (`systemd-analyze verify` in CI if available); a shell test runs the rclone command with `--dry-run` against two local directories | the VPS's `sqlite_db_bytes` is under 8 GB and `sqlite_freelist_bytes` near zero |
-| OBJ-05 | **Drop `body_zstd`.** When every row is offloaded (`archive_offload_pending` is 0 for a week): migration rebuilds `matches` and `timelines` without `body_zstd` and `body_size` moves to `matches` metadata only if still read; `ARCHIVE_BODY_LOCAL_DAYS` becomes the size of a small local body cache table instead. Decide then whether the window is still wanted; if not, drop it and the flag. | `src/db/migrations/V00NN__drop_bodies.sql`, `src/archive/matches.rs`, design/04 | the migration refuses to run while any `offloaded_at IS NULL`; a seeded file rebuilds and reads | the VPS restarts on the new schema in under a minute |
+| OBJ-01 | **Object store client and config.** `archive::objects`: a thin wrapper over `object_store` with `put(key, bytes)` (multipart above 8 MiB), `head(key)`, `get_range(key, range)`, `get_ranges(key, ranges)`, `list(prefix)` and `delete(key)`. Config rows above; `Config` redacts the keys; production refuses a URL without credentials. `object_store` added to `Cargo.toml`. | `src/archive/objects.rs`, `src/config.rs`, `.env.example`, `Cargo.toml`, design/07 config table | unit over `InMemory`: put then ranged get round-trips; several ranges in one call; head gives size and metadata; config validation and redaction | `cargo test`; the musl build still links under the size cap |
+| OBJ-02 | **Pack format and reads.** `archive::pack`: a writer (bodies, index, trailer, digests) and a reader (trailer → index → bodies) independent of any store. Migration `V00NN` above. `matches::get`, `get_many`, `get_timeline` read an offloaded body by its location. The archive's `Stats` gains local vs offloaded counts, bytes and packs; `/v1/admin/stats` and the dashboard show them. | `src/archive/pack.rs`, `src/archive/matches.rs`, `src/archive/mod.rs`, `src/db/migrations/V00NN__body_packs.sql`, `src/stats.rs`, `src/routes/admin.rs`, `src/ui/admin.html`, design/04 | unit: a pack round-trips through writer and reader; a truncated or wrong-magic pack is refused; the index alone rebuilds every location; an offloaded row reads from its range; a missing location, a store error and a digest mismatch return `None` and warn; `get_many` mixes local and offloaded ids across packs; the migration on a seeded previous version. Integration: `/v1/match/{id}` on an offloaded match answers `X-Cache: ARCHIVE` with the same body and headers as before; a player page over offloaded matches is byte-identical; the OpenAPI snapshot | all existing archive, analytics and players tests pass unchanged |
+| OBJ-03 | **The offload job.** `archive:offload` as specified; gauges and counters; registered only with a URL; packs new bodies within hours and frees local copies past the window. Add it to design/06's job catalogue and OPS-06's kind caps (one at a time). | `src/jobs/offload.rs`, `src/jobs/{mod,scheduler,kinds}.rs`, `src/metrics.rs`, `src/cli/serve.rs`, `tests/offload.rs`, design/06, metrics.md | unit (paused time): archiving bodies past the target queues one offload job, below it none, and a second full pack while one is pending queues no duplicate; the counter is seeded from the database at boot; new bodies are packed once a full pack is ready, without waiting for the window; less than a pack waits unless some of it has left the window; a pack holds one kind, its bodies in match-id order; a verified pack's rows are located and marked packed in one transaction and keep their local copy; bodies inside the window are never freed, packed bodies past it are, and unpacked bodies never are; a store that fails the PUT marks nothing and the job fails; a crash after the PUT leaves the rows unpacked and the next turn writes a new pack; a packed, unfreed body still reads locally; `X''` bodies are never returned as a body. Integration over `LocalFileSystem`: 500 seeded matches with timelines offload end to end into several packs and read back | on the dev VM, the archive offloads to a local-filesystem "bucket" and every match still reads |
+| OBJ-04 | **Reclaim, replica and index recovery.** Document the `VACUUM INTO` + swap from DSK-01 for the one-off reclaim; the hourly R2 replica unit and timer under `deploy/`; the bucket setup in `deploy/README.md` (Onidel `index/` expiry 14 days; R2 `index/` expiry 21 days and multipart abort 1 day; no rule on `packs/`; an R2 token scoped to this bucket); `archive:index-snapshot` (daily, `index/` objects as in §Replica and backups); `riot-proxy packs reindex [--since <pack_id>]` and `packs restore-index`; the restore drill. | `deploy/riot-proxy-replica.{service,timer}`, `deploy/README.md`, `src/jobs/index_snapshot.rs`, `src/cli/packs.rs`, design/06, design/07 | the unit files parse (`systemd-analyze verify` in CI if available); a shell test runs the rclone command with `--dry-run` against two local directories; over `LocalFileSystem`: a snapshot round-trips both tables exactly; `reindex` rebuilds an emptied `body_locations` exactly; `restore-index` from a snapshot plus two newer packs rebuilds it exactly and reads only those two packs; a corrupt newest snapshot falls back to the one before | the VPS's `sqlite_db_bytes` is under 8 GB and `sqlite_freelist_bytes` near zero |
+| OBJ-05 | **Drop `body_zstd`.** When every row outside the window is offloaded and the owner decides the local copy is no longer wanted: migration rebuilds `matches` and `timelines` without `body_zstd`; `ARCHIVE_BODY_LOCAL_DAYS` becomes the size of a small local body cache instead. Decide then whether the window is still wanted. | `src/db/migrations/V00NN__drop_bodies.sql`, `src/archive/matches.rs`, design/04 | the migration refuses to run while any `offloaded_at IS NULL`; a seeded file rebuilds and reads | the VPS restarts on the new schema in under a minute |
+| OBJ-06 | **Deletes, compaction and orphans.** Deleting an offloaded body drops its location and lowers `live_bytes`; `archive:compact` (daily) rewrites packs under `ARCHIVE_COMPACT_BELOW` live, repoints locations in one transaction, then deletes the old object; it also deletes empty packs and orphan objects older than a day. | `src/jobs/compact.rs`, `src/archive/pack.rs`, `src/archive/matches.rs`, `tests/compact.rs`, design/06 | unit: a deletion lowers `live_bytes` only; a half-dead pack is rewritten and every live body still reads; a crash between the new PUT and the transaction leaves the old pack authoritative; an orphan younger than a day survives, older is deleted; an empty pack is deleted without a rewrite | a `dev reset` on the dev VM leaves no pack and no orphan behind |
 
 ## Migration runbook
 
@@ -478,10 +650,18 @@ the site is the length of the second rsync.
 - SQLite backups: as executed, the old box's hand-made `riot-proxy-offsite`
   timer moved across unchanged in shape (§As executed, Backups). The Kopia to
   Backblaze plan considered on 2026-10-13 was not used.
-- Once OBJ-04 lands: `rclone` with two remotes (`onidel:` S3 endpoint above, `r2:` with the R2
-  token) in `/etc/riot-proxy/rclone.conf` (0600), and the OBJ-04 timer. Until
-  OBJ-04 exists, a cron line is fine:
-  `17 3 * * * rclone sync onidel:riot-proxy-archive r2:riot-proxy-archive --max-age 48h --no-traverse --transfers 16`
+- Once OBJ-04 lands: `rclone` with two remotes (`onidel:` S3 endpoint above, `r2:` with an R2
+  token scoped to `riot-proxy-archive` only) in `/etc/riot-proxy/rclone.conf` (0600), and the
+  OBJ-04 timer (hourly). Until OBJ-04 exists, a cron line is fine:
+  `17 * * * * rclone sync onidel:riot-proxy-archive r2:riot-proxy-archive --transfers 16`
+- Bucket lifecycle rules, set by hand in each console when the bucket is created:
+
+  | Bucket | Prefix | Rule |
+  |---|---|---|
+  | Onidel `riot-proxy-archive` | `index/` | expire after 14 days |
+  | R2 `riot-proxy-archive` | `index/` | expire after 21 days (safety net if the sync stops) |
+  | R2 `riot-proxy-archive` | whole bucket | abort incomplete multipart uploads after 1 day |
+  | both | `packs/` | **none**: packs are kept forever; only compaction (OBJ-06) deletes one |
 
 ### 9. Offload the backlog (after OBJ-01..03 are released)
 
@@ -492,18 +672,19 @@ ARCHIVE_OBJECT_URL=s3://riot-proxy-archive
 ARCHIVE_OBJECT_ENDPOINT=https://s3.ap-southeast-2.onidel.cloud
 ARCHIVE_OBJECT_ACCESS_KEY=…
 ARCHIVE_OBJECT_SECRET_KEY=…
-ARCHIVE_BODY_LOCAL_DAYS=0
 ```
 
-Restart, watch `archive_offload_pending` fall. At 200 rows per turn and 50 ms
-pacing, 1.2 M objects take about ten hours; the limiter is untouched because
-no Riot call is involved. Spot-check: pick ten old match ids,
+Restart, watch `archive_offload_pending{step="pack"}` fall, then
+`{step="free"}`. A turn reads about 64 MiB from
+SQLite and PUTs one pack; at Onidel's ~10 MB/s cold random reads the 16 GB
+backlog (about 250 packs) takes roughly half an hour to a few hours. The limiter is untouched because no Riot call is
+involved. Spot-check: pick ten old match ids,
 `GET /v1/match/{id}` each, expect `X-Cache: ARCHIVE` and the same body as
 `old` returns for the same id (`old` can be started briefly on a different
 port with `PORT=8081` and the limiter disabled by a dev key, or just compare
 the sha256 recorded in the row).
 
-Then set `ARCHIVE_BODY_LOCAL_DAYS=14` and restart.
+Bodies archived in the last 14 days stay local, already packed.
 
 ### 10. Reclaim the file
 
@@ -684,21 +865,33 @@ Rollback: delete the WAF rule; the `admin.` route and Access app can stay.
 | 10, reclaim | the pre-swap file is kept until the next nightly backup verifies |
 | 11, retire | none; the key and data are gone from `old` on purpose |
 
-## Open questions for the owner
+## Owner answers (2026-10-13)
 
-1. **Primary bucket: Onidel Sydney or R2?** This design reads from Onidel (same
-   data centre, 1–3 ms) and replicates to R2. Reading from R2 directly would
-   save the A$7.16 allocation but adds a Cloudflare round trip to every
-   out-of-window read; the player page is protected by the 14-day window
-   either way. Recommendation: Onidel primary, R2 replica.
-2. **Window length.** 14 days covers most player-page reads. Ladder analytics
-   read everything anyway. 7 or 30 are fine; 0 after OBJ-05 if the local
-   cache table replaces it.
-3. **Dependency.** `object_store` (Apache). Alternative: `rust-s3`. The
-   former's local and in-memory back ends are why it is proposed.
-4. **Purge the stale queue before the offload?** DSK-03 (#166) adds the purge;
-   it reaches production with the next release. The move went ahead without
-   it, carrying 1.13 M pending jobs.
-5. **DSK migrations before or after the move?** Answered by events: the move
-   happened first, so DSK-06 and DSK-07 rebuild their tables on
-   `ngf-prod-syd1` with the next release.
+1. **Primary bucket:** Onidel Sydney, 250 GB billed annually (A$21.60 a
+   year; Onidel offers no monthly term). It upgrades later; it cannot be
+   downgraded. R2 holds the replica.
+2. **Window length:** 14 days.
+3. **Dependency:** `object_store`.
+4. **Purge the stale queue first:** done. v2.2.0 brought DSK-03's purge, and
+   1,112,033 pending crawl jobs were deleted on production.
+5. **DSK migrations before or after the move:** after. V0019 and V0020 ran on
+   `ngf-prod-syd1` with v2.2.0, V0021 with v2.3.0.
+6. **One object per body or packs:** packs (ADR-146). Onidel's default cap is
+   3 M objects per bucket, which one object per body passes within months;
+   packs also keep the replica and any later move to hundreds of objects.
+
+Still open, with a default the tasks assume unless the owner says otherwise:
+
+- **Layout:** matches and timelines in separate packs, bodies sorted by
+  match id inside each (owner, 2026-10-13).
+- **Upload and free separately:** bodies are packed and uploaded as soon as
+  a pack of their kind is full (the archive queues the job then; boot and a
+  daily run are the safety net); the 14-day window only decides when the local copy is freed. Fourteen
+  days matches the patch cycle (owner, 2026-10-13).
+- **Recovery:** the R2 replica runs hourly, and the location map is
+  snapshotted to `index/` daily so a lost database never needs every pack
+  re-read (owner, 2026-10-13).
+- **Pack size:** 64 MiB. Smaller packs mean cheaper compaction; larger ones
+  mean fewer objects. Anything from 16 to 256 MiB works.
+- **Names:** service `ngf-objects-syd1`, bucket `riot-proxy-archive` on both
+  Onidel and R2.

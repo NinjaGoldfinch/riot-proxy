@@ -499,7 +499,7 @@ Two facts bound the series. SQLite keeps freed pages on its free list (design/07
 
 ### Post-release — HOST: production on Onidel (owner request 2026-10-13)
 
-The OVH VPS was out of disk and its Sydney region out of stock. Production moved to Onidel Sydney the same day; design/12 holds the runbook and what actually ran (§As executed). The object storage half of design/12 is a proposal: OBJ-01..05 get rows here once the owner has answered its open questions.
+The OVH VPS was out of disk and its Sydney region out of stock. Production moved to Onidel Sydney the same day; design/12 holds the runbook and what actually ran (§As executed). The object storage half is in §OBJ below.
 
 | ID | Task | Files | Tests | Accept | Design |
 |---|---|---|---|---|---|
@@ -542,6 +542,19 @@ Rules for every ADM task, on top of §1: branch `feat/ADM-nn-slug` off `origin/m
 | ADM-16 | **Keyboard, command palette, accessibility.** `/` palette (tabs, actions, jump to ids), `?` help, `1`..`9` tabs, `Esc`, `t` theme; focus-visible, roving tabindex, `aria-controls`, reduced motion; every status has text or an icon; light-theme contrast fixes. | `src/ui/admin.html`, `tests/dom/admin-keyboard.test.mjs`, the browser test's name/role audit | keyboard-only use in jsdom; no interactive element without a name | | 13 §Keyboard |
 | ADM-17 | **Retire the old paths.** Remove `/dashboard/config.json`; `/dev/jobs` → 302 `/dashboard#jobs`; delete `src/ui/jobs.html` and `tests/dom/{jobs.test.mjs,fake-jobs.mjs}`; drop Jobs from `pages()`; fix every doc reference (design/03, 06, 07, 10 §Jobs); design/13 → Accepted. | `src/routes/ui.rs`, `tests/ui.rs`, docs | the href list and redirect tests; `grep -r "jobs.html\|dashboard.html" src tests docs` empty but for DECISIONS | the binary shrinks about 25 KB | 03, 06, 07, 10, 13 |
 | ADM-18 | **Optional: Access JWT as admin login** (decide after ADM-17; ask first). `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`, `ACCESS_ADMIN_EMAILS`; verify `Cf-Access-Jwt-Assertion` against the team's certs; a valid JWT for a listed email gets admin scope, so the page needs no key. Honoured only when configured; needs a JWT crate (check the size budget). | `src/http/auth.rs`, `src/config.rs`, `src/ui/admin.html` | signed, unsigned, wrong-audience and expired tokens; unset config ignores the header | | 07, 13 |
+
+### Post-release — OBJ: raw bodies in object storage, packed (owner decisions 2026-10-13)
+
+design/12 is the spec: §Storage layout (packs, `body_locations`), §Read and write paths, §Offload job, §Configuration, and the task table in §Tasks, which these rows summarise. The owner chose Onidel Sydney (250 GB) as primary and R2 as replica, a 14-day local window, `object_store`, and packs over one object per body (ADR-146). OBJ-01..03 land before the offload runs on production.
+
+| ID | Task | Files | Tests | Accept | Design |
+|---|---|---|---|---|---|
+| OBJ-01 | **Object store client and config.** `archive::objects` over `object_store`: put (multipart above 8 MiB), head, ranged get, several ranges, list, delete. `ARCHIVE_OBJECT_*` config, keys redacted, production refuses a URL without credentials. | design/12 §Tasks | design/12 §Tasks | design/12 §Tasks | 12; new ADR |
+| OBJ-02 | **Pack format and reads.** `archive::pack` writer and reader; migration for `body_packs`, `body_locations`, `offloaded_at`; offloaded bodies read by byte range; stats and dashboard counts. | design/12 §Tasks | design/12 §Tasks | design/12 §Tasks | 12, 04; new ADR |
+| OBJ-03 | **The offload job.** `archive:offload` packs and uploads bodies as soon as a full pack is ready (keeping the local copy), and frees local copies once they leave the 14-day window. | design/12 §Tasks | design/12 §Tasks | design/12 §Tasks | 12, 06; new ADR |
+| OBJ-04 | **Reclaim, replica and index recovery.** `VACUUM INTO` runbook, hourly R2 replica unit and timer, bucket lifecycle rules (Onidel `index/` 14 days; R2 `index/` 21 days and multipart abort 1 day; never on `packs/`), daily `archive:index-snapshot` to `index/`, `riot-proxy packs reindex` and `restore-index`. | design/12 §Tasks | design/12 §Tasks | design/12 §Tasks | 12, 07; new ADR |
+| OBJ-05 | **Drop `body_zstd`** once every row is offloaded. | design/12 §Tasks | design/12 §Tasks | design/12 §Tasks | 12, 04; new ADR |
+| OBJ-06 | **Deletes, compaction and orphans.** `archive:compact` rewrites packs under half live and sweeps orphans. | design/12 §Tasks | design/12 §Tasks | design/12 §Tasks | 12, 06; new ADR |
 
 ## 3. Parallelism and ordering
 
