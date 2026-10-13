@@ -1530,3 +1530,12 @@ Accepted (owner decision 2026-10-13, task ADM-00). design/13 §Reach; design/12 
 - **Finding.** The tunnel's `api.ninjagoldfinch.lol` route has path `*`, so `/metrics` (no auth), `/dashboard` and `/v1/admin/*` are public there today, and `ADMIN_IP_ALLOWLIST` is blind behind the tunnel (`TRUST_PROXY=false` sees cloudflared's `127.0.0.1`). ADM-01 blocks `/metrics`, `/dashboard*`, `/dev*` and `/v1/admin*` on `api.` with a WAF custom rule; `/v1/ws` stays, its admin topics already need the admin key.
 - **Consequences.** Between ADM-08 and ADM-12 the new page has no Ladder tab; `/dev/jobs` and the ladder admin routes cover it. `/dev/jobs` and `/dashboard/config.json` are retired in ADM-17.
 - **Tests:** none; documentation only. Each ADM task ships its own.
+
+## ADR-146 — Raw bodies go to object storage in packs (2026-10-13)
+Accepted (owner decisions 2026-10-13, task OBJ-00). design/12 §Storage layout, §Owner answers.
+- **Why.** design/12's first draft stored each match and timeline body as its own object. Onidel's knowledge base caps a bucket at 3 million objects by default; at two objects per match the archive (230 k matches today, 10–20 k more a day) passes that within months. The owner preferred batching in general: fewer objects make the R2 replica (billed per write), any later move between providers and every listing cheap.
+- **What.** Bodies are packed back to back into objects of about 64 MiB (`ARCHIVE_PACK_TARGET_BYTES`), each ending in a zstd-compressed index and a 16-byte trailer, so a pack describes itself. SQLite's `body_locations` (match id, kind → pack, offset, length, sha256) says where each offloaded body is; `body_packs` tracks each pack's size and live bytes. A read is one ranged GET of the body's bytes, checked against its sha256.
+- **Bytes are unchanged.** Ingress is free on both stores and a ranged read fetches only its body, so egress is what one object per body would have cost. The gain is in object and request counts: about 250 packs for today's 16 GB instead of 460 k objects.
+- **Deletes.** A deletion drops the location and lowers the pack's live bytes; compaction (OBJ-06) rewrites packs under half live and deletes the old object. Bodies are immutable and deletions rare.
+- **Also decided.** Onidel Sydney 250 GB as primary (annual billing, A$21.60 a year, upgradable, not downgradable), R2 as replica, a 14-day local window, the `object_store` crate.
+- **Tests:** none; a design change. OBJ-01..06 each ship their own.

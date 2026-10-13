@@ -322,7 +322,13 @@ Before (OVH VPS, 2026-10-13 01:00 UTC): 38 GB disk at 77 %, `riot-proxy.db` 20 G
 ## ME — Middle East match ids (owner report 2026-10-13)
 
 - [x] ME-01 `ME1_` match ids archive from `europe` (#175, ADR-143)
-- [ ] OBJ-01..05 raw match and timeline bodies in object storage: proposal in design/12 §Tasks, waiting on the owner's answers to its §Open questions
+- [x] OBJ-00 design/12 revised with the owner's answers: Onidel 250 GB primary, R2 replica, 14-day window, `object_store`, bodies packed with a `body_locations` index (ADR-146)
+- [ ] OBJ-01 object store client and config
+- [ ] OBJ-02 pack format, `body_locations` and reads
+- [ ] OBJ-03 `archive:offload`
+- [ ] OBJ-04 reclaim, R2 replica unit, `packs reindex`
+- [ ] OBJ-05 drop `body_zstd`
+- [ ] OBJ-06 deletes, compaction and orphan sweep
 
 ## ADM — a better admin dashboard (owner request 2026-10-13)
 `/dashboard` is v1's page ported verbatim: it shows no disk, backups, traffic, errors or build, polls while hidden, and every snapshot scans `matches` and `jobs`. The series samples the aggregates, adds the missing readings as JSON and rebuilds the page as one embedded file reached through `admin.ninjagoldfinch.lol` behind Cloudflare Access. Specs in IMPLEMENTATION.md §Post-release — ADM; design/13.
