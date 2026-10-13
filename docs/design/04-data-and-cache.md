@@ -146,7 +146,7 @@ CREATE TABLE match_bans (                         -- info.teams[].bans, -1 left 
   match_id TEXT REFERENCES matches(match_id) ON DELETE CASCADE,
   team_id INTEGER, pick_turn INTEGER, champion_id INTEGER,
   PRIMARY KEY (match_id, team_id, pick_turn)
-);
+) WITHOUT ROWID;                                  -- V0020 (DSK-06, ADR-140): the key is the row; no second copy
 CREATE TABLE match_builds (                       -- V0012 (ADR-117): from the timeline + item.json
   match_id TEXT NOT NULL REFERENCES matches(match_id) ON DELETE CASCADE,
   key_scope TEXT NOT NULL,                        -- the scope that owns the match's facts
@@ -158,11 +158,13 @@ CREATE TABLE match_builds (                       -- V0012 (ADR-117): from the t
   skill_order TEXT,                               -- Q, W, E in max order, "QWE"; Udyr adds R (BLD-06)
   builds_version INTEGER NOT NULL,                -- builds:extract rewrites rows below BUILDS_VERSION
   PRIMARY KEY (match_id, key_scope, puuid)
-);
+) WITHOUT ROWID;                                  -- V0020 (DSK-06, ADR-140)
 CREATE INDEX facts_player ON match_facts(key_scope, puuid, match_id);
 CREATE INDEX facts_champ  ON match_facts(champion_id);
 
 -- Analytics (recomputed; safe to TRUNCATE) ── v1's shape, ADR-056 ───────────
+-- Every table here is WITHOUT ROWID since V0020 (DSK-06, ADR-140): the key is
+-- most of the row, so a rowid table held it twice. Rebuilt by DELETE + INSERT.
 -- Every table is keyed by (key_scope, platform, queue, …, patch) and carries
 -- remake (0/1) as a key, so a read excludes remakes (default) or sums both.
 -- Every participant of the platform's archived matches counts (ADR-105), at
