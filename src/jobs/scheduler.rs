@@ -845,15 +845,21 @@ impl Queue {
     pub async fn stats(&self) -> Result<Vec<(String, String, i64)>, DbError> {
         self.db
             .read(|c| {
-                let mut s = c.prepare(
-                    "SELECT kind, state, count(*) FROM jobs GROUP BY kind, state ORDER BY kind, state",
-                )?;
+                let mut s = c.prepare(STATS_SQL)?;
                 let rows = s.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
                 rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
             })
             .await
     }
 }
+
+/// `Queue::stats`: rows by kind and state, read from `jobs_state_kind` (V0022).
+pub(crate) const STATS_SQL: &str =
+    "SELECT kind, state, count(*) FROM jobs GROUP BY kind, state ORDER BY kind, state";
+
+/// `jobs_pending{kind}`: a range of `jobs_state_kind` (V0022).
+pub(crate) const PENDING_BY_KIND_SQL: &str =
+    "SELECT kind, count(*) FROM jobs WHERE state = 'pending' GROUP BY kind";
 
 /// The queue and its handlers. Cheap to clone.
 #[derive(Clone)]
@@ -1155,8 +1161,7 @@ impl Scheduler {
     pub async fn pending_by_kind(&self) -> Result<HashMap<String, i64>, DbError> {
         self.db
             .read(|c| {
-                let mut s =
-                    c.prepare("SELECT kind, count(*) FROM jobs WHERE state = 'pending' GROUP BY kind")?;
+                let mut s = c.prepare(PENDING_BY_KIND_SQL)?;
                 let rows = s.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
                 rows.collect::<Result<HashMap<_, _>, _>>().map_err(DbError::from)
             })
