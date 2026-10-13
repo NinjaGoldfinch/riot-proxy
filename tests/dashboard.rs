@@ -335,8 +335,9 @@ async fn history_points_are_sampled_capped_at_1440_and_served_oldest_first() {
 }
 
 /// ADM-02: the table-scanning parts are sampled in the background; a
-/// snapshot and `GET /v1/admin/stats` read the samples, and a history point is
-/// built from the sets it sampled.
+/// snapshot reads the samples, `GET /v1/admin/stats` its archive bytes and
+/// disk (its counts are live), and a history point is built from the sets it
+/// sampled.
 #[tokio::test]
 async fn the_snapshot_and_stats_read_the_samples_until_the_next_one() {
     let e = env().await;
@@ -360,14 +361,20 @@ async fn the_snapshot_and_stats_read_the_samples_until_the_next_one() {
         (&json!(0), &json!(0))
     );
     assert_eq!(s["sampledAt"], at);
+    // The stats' counts are read with the request (callers poll them for
+    // progress); its bytes and disk readings are the slow sample's.
+    let before = now();
     let st = e.get("/v1/admin/stats", &e.admin).await.json();
     assert_eq!(
         (&st["trackedPlayers"], &st["knownPlayers"]),
-        (&json!(0), &json!(0))
+        (&json!(1), &json!(1))
     );
-    assert_eq!(st["sampledAt"], at);
-    assert_eq!(st["dbFileBytes"], json!(slow.disk.db_bytes));
-    assert_eq!(st["archivedMatches"], json!(slow.archive.matches));
+    assert!(st["sampledAt"]["fast"].as_i64().unwrap() >= before);
+    assert_eq!(st["sampledAt"]["slow"], json!(slow.at));
+    assert_eq!(
+        (&st["dbFileBytes"], &st["archiveStoredBytes"]),
+        (&json!(slow.disk.db_bytes), &json!(slow.archive.stored_bytes))
+    );
 
     // The next fast sample sees them; the slow set is unchanged.
     let next = stats.sample_fast().await.unwrap();
@@ -377,11 +384,6 @@ async fn the_snapshot_and_stats_read_the_samples_until_the_next_one() {
         (&json!(1), &json!(1))
     );
     assert_eq!(s["sampledAt"], json!({"fast": next.at, "slow": slow.at}));
-    let st = e.get("/v1/admin/stats", &e.admin).await.json();
-    assert_eq!(
-        (&st["trackedPlayers"], &st["knownPlayers"]),
-        (&json!(1), &json!(1))
-    );
 
     // A history point samples both sets and is built from them.
     let t = now();

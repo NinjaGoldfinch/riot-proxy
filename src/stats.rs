@@ -661,6 +661,12 @@ impl Stats {
         Ok(slow)
     }
 
+    /// Archive and player counts read now, for `GET /v1/admin/stats`: index
+    /// counts, cheap enough per request, and callers poll them for progress.
+    pub async fn live_totals(&self) -> Result<Totals, DbError> {
+        self.totals().await
+    }
+
     /// The fast set: the sample, or a live read before the first one.
     pub async fn fast(&self) -> Result<Arc<Fast>, DbError> {
         match self.samples.fast() {
@@ -669,7 +675,7 @@ impl Stats {
         }
     }
 
-    /// Archive totals and disk usage for `GET /v1/admin/stats`: the slow sample,
+    /// Archive bytes and disk usage for `GET /v1/admin/stats`: the slow sample,
     /// or a live read before the first one. The third value is when they were read.
     pub async fn archive_and_disk(&self) -> Result<(matches::Stats, Usage, i64), SampleError> {
         if let Some(s) = self.samples.slow() {

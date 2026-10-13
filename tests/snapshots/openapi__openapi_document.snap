@@ -153,7 +153,7 @@ expression: doc
           },
           "sampledAt": {
             "$ref": "#/components/schemas/SampledAt",
-            "description": "When the player counts (`fast`) and the archive and disk readings\n(`slow`) were sampled, unix ms (ADM-02)."
+            "description": "When the counts (`fast`, read with the request) and the timelines count,\narchive bytes and disk readings (`slow`, sampled) were read, unix ms (ADM-02)."
           },
           "trackedPlayers": {
             "description": "Scoped to the current key: zero right after a rotation.",
@@ -9561,7 +9561,7 @@ expression: doc
     },
     "/v1/admin/stats": {
       "get": {
-        "description": "`archivedMatches` counts the whole archive, which is not key-scoped: match ids are not encrypted, so it survives a key rotation. `trackedPlayers` is scoped to the current key and reads zero right after one. The `db*`, `wal*` and `disk*` fields are the SQLite file, its write-ahead log and free list, and the data directory's file system (DSK-01). The counts are sampled in the background, the archive and disk with each history point (`METRICS_HISTORY_INTERVAL_S`, a minute by default; `sampledAt`).",
+        "description": "`archivedMatches` counts the whole archive, which is not key-scoped: match ids are not encrypted, so it survives a key rotation. `trackedPlayers` is scoped to the current key and reads zero right after one. The `db*`, `wal*` and `disk*` fields are the SQLite file, its write-ahead log and free list, and the data directory's file system (DSK-01). The match and player counts are read with the request; `archivedTimelines`, the archive's bytes and the disk readings are sampled in the background with each history point (`METRICS_HISTORY_INTERVAL_S`, a minute by default; `sampledAt.slow`).",
         "operationId": "stats",
         "responses": {
           "200": {

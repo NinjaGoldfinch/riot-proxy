@@ -870,8 +870,8 @@ pub struct AdminStats {
     /// Free space on the data directory's file system, as the service sees it.
     disk_free_bytes: u64,
     disk_total_bytes: u64,
-    /// When the player counts (`fast`) and the archive and disk readings
-    /// (`slow`) were sampled, unix ms (ADM-02).
+    /// When the counts (`fast`, read with the request) and the timelines count,
+    /// archive bytes and disk readings (`slow`, sampled) were read, unix ms (ADM-02).
     sampled_at: crate::stats::SampledAt,
 }
 
@@ -881,15 +881,18 @@ pub struct AdminStats {
     description = "`archivedMatches` counts the whole archive, which is not key-scoped: match ids are not \
                    encrypted, so it survives a key rotation. `trackedPlayers` is scoped to the current key and \
                    reads zero right after one. The `db*`, `wal*` and `disk*` fields are the SQLite file, its \
-                   write-ahead log and free list, and the data directory's file system (DSK-01). The counts are \
-                   sampled in the background, the archive and disk with each history point (`METRICS_HISTORY_INTERVAL_S`, a minute by default; `sampledAt`).",
+                   write-ahead log and free list, and the data directory's file system (DSK-01). The match and \
+                   player counts are read with the request; `archivedTimelines`, the archive's bytes and the disk \
+                   readings are sampled in the background with each history point (`METRICS_HISTORY_INTERVAL_S`, \
+                   a minute by default; `sampledAt.slow`).",
     responses((status = 200, description = "The counts", body = AdminStats), LocalErrors),
 )]
 async fn stats(State(state): State<AppState>, Extension(_c): Who) -> Response {
     let scope = scope_of(&state);
-    let fast = match state.stats.fast().await {
-        Ok(f) => f,
-        Err(e) => return internal(&e, "could not count players"),
+    let now = Clock::now().unix_ms;
+    let totals = match state.stats.live_totals().await {
+        Ok(t) => t,
+        Err(e) => return internal(&e, "could not count the archive and players"),
     };
     let (archive, disk, slow_at) = match state.stats.archive_and_disk().await {
         Ok(r) => r,
@@ -897,9 +900,9 @@ async fn stats(State(state): State<AppState>, Extension(_c): Who) -> Response {
     };
     ok(&AdminStats {
         key_scope: scope,
-        archived_matches: archive.matches,
-        tracked_players: fast.totals.tracked_players,
-        known_players: fast.totals.known_players,
+        archived_matches: totals.archived_matches,
+        tracked_players: totals.tracked_players,
+        known_players: totals.known_players,
         archived_timelines: archive.timelines,
         archive_stored_bytes: archive.stored_bytes,
         archive_raw_bytes: archive.raw_bytes,
@@ -911,7 +914,7 @@ async fn stats(State(state): State<AppState>, Extension(_c): Who) -> Response {
         disk_free_bytes: disk.disk_free_bytes,
         disk_total_bytes: disk.disk_total_bytes,
         sampled_at: crate::stats::SampledAt {
-            fast: fast.at,
+            fast: now,
             slow: slow_at,
         },
     })
