@@ -138,6 +138,22 @@ flowchart LR
 
 A snapshot reads both sets and computes live only the limiter, WebSocket counts, event counts, cache counters, flows and the process. `/v1/admin/stats` keeps its match and player counts live (index counts that callers poll for progress). `sampledAt {fast, slow}` (unix ms) on the snapshot and on `/v1/admin/stats` tells the page how old the sampled parts are; before the first sample the parts are read live and carry the request's time. The job counts read only the `jobs_state_kind` index (V0022): on 1.19 M rows, about 240 ms instead of 950 ms, once per 15 s in the background instead of once per request.
 
+### Runtime gauges (ADM-04)
+
+Sections the snapshot gained for the new tabs, all computed per snapshot from memory except where noted:
+
+| Key | What | Source |
+|---|---|---|
+| `cacheStore` | `l1Entries`, `l1Bytes`, `l1MaxBytes`, `l2Rows` (slow sample), `l2Dropped` | moka's counts after a `run_pending_tasks`; the L2 writer's dropped count (`cache_l2_dropped_total`) |
+| `gates` | `bulkUsageCeiling`, `bulkIdleCeiling`, `bulkIdleAfterS`, `clientWaitBudgetMs`, `blockedScopes[{scope, forMs}]`, `blockedMethods[{scope, method, forMs}]` | config; `Limiter::bulk_blocked` (design/05 §Priorities) |
+| `limiter[].interactiveWaiters` | interactive requests queued on the scope | `Limiter::interactive_waiters` |
+| `inflight` | Riot calls in flight, each shared by every waiting request | the fetcher's single-flight |
+| `quotas[{consumer, limit, used, resetSecs}]` | every consumer metered since the start, busiest first; `consumer` is the id | `Quotas::usage`, read-only |
+| `sqlite` | `readers`, `readersFree` | the read pool |
+| `disk` | `dbBytes`, `walBytes`, `freelistBytes`, `freeBytes`, `totalBytes` | the slow sample (DSK-01's readings) |
+
+History points gain `disk`, `requests` and `upstream` (`proxy_requests_total` and `proxy_upstream_requests_total` summed since the start; a rate is the difference between points, and a drop marks a restart). Points stored before ADM-04 read them as null.
+
 ## Boot and tab switch
 
 ```mermaid

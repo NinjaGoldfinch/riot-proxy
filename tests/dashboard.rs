@@ -157,14 +157,20 @@ async fn the_snapshot_is_v1s_whole_document_from_v2s_sources() {
         [
             "analytics",
             "cache",
+            "cacheStore",
+            "disk",
             "events",
             "flows",
+            "gates",
+            "inflight",
             "keyScope",
             "ladder",
             "limiter",
             "process",
             "queues",
+            "quotas",
             "sampledAt",
+            "sqlite",
             "totals",
             "v",
             "worker",
@@ -290,7 +296,16 @@ async fn history_points_are_sampled_capped_at_1440_and_served_oldest_first() {
     // v1's point: no activeConsumers in totals; queues summed.
     assert_eq!(
         points[1].as_object().unwrap().keys().collect::<Vec<_>>(),
-        ["analytics", "cache", "queues", "t", "totals"]
+        [
+            "analytics",
+            "cache",
+            "disk",
+            "queues",
+            "requests",
+            "t",
+            "totals",
+            "upstream"
+        ]
     );
     assert_eq!(
         points[1]["totals"],
@@ -399,6 +414,124 @@ async fn the_snapshot_and_stats_read_the_samples_until_the_next_one() {
     );
     assert_eq!(p["queues"], json!({"active": 1, "pending": 0, "failed": 0}));
     assert_eq!(p["t"], json!(t));
+}
+
+/// ADM-04: the runtime gauges the new dashboard draws: cache tiers, the bulk
+/// gate, quotas, the read pool and the disk.
+#[tokio::test]
+async fn the_snapshot_carries_the_runtime_gauges() {
+    let e = env().await;
+    // An L1 entry, a frozen scope and a consumer's metered requests.
+    let ttls = riot_proxy::riot::endpoints::Ttls {
+        soft: Some(std::time::Duration::from_secs(60)),
+        hard: Some(std::time::Duration::from_secs(60)),
+        negative: None,
+    };
+    e.state
+        .fetcher
+        .cache()
+        .l1
+        .put("probe", bytes::Bytes::from_static(b"{}"), &ttls)
+        .await
+        .unwrap();
+    // Limits Riot named for kr (so the limiter lists it), then a freeze.
+    let mut h = axum::http::HeaderMap::new();
+    h.insert("x-app-rate-limit", "20:1,100:120".parse().unwrap());
+    h.insert("x-app-rate-limit-count", "1:1,1:120".parse().unwrap());
+    e.state.fetcher.limiter().observe(
+        "kr",
+        "match.byId",
+        &riot_proxy::riot::limiter::headers::RateLimitHeaders::from_headers(&h),
+    );
+    e.state.fetcher.limiter().freeze(
+        "kr",
+        std::time::Duration::from_secs(30),
+        riot_proxy::riot::limiter::headers::RateLimitType::Service,
+    );
+    let web = riot_proxy::http::auth::Consumer {
+        id: "c-web".into(),
+        name: "web".into(),
+        scopes: vec![Scope::Read],
+        quota_per_min: 5,
+    };
+    for _ in 0..2 {
+        e.state.quotas.check(&web).unwrap();
+    }
+
+    let s = e.get("/v1/admin/metrics", &e.admin).await.json();
+    let store = &s["cacheStore"];
+    assert_eq!(store["l1Entries"], 1);
+    assert!(store["l1Bytes"].as_u64().unwrap() > 0);
+    // The test app's L1 budget, not CACHE_L1_MAX_MB's default.
+    assert_eq!(store["l1MaxBytes"], e.state.fetcher.cache().l1.max_bytes());
+    assert!(store["l1Bytes"].as_u64().unwrap() < store["l1MaxBytes"].as_u64().unwrap());
+    assert_eq!((&store["l2Rows"], &store["l2Dropped"]), (&json!(0), &json!(0)));
+
+    let g = &s["gates"];
+    assert_eq!(
+        (
+            &g["bulkUsageCeiling"],
+            &g["bulkIdleCeiling"],
+            &g["bulkIdleAfterS"],
+            &g["clientWaitBudgetMs"]
+        ),
+        (&json!(0.8), &json!(0.95), &json!(30), &json!(2000))
+    );
+    assert_eq!(g["blockedScopes"][0]["scope"], "kr");
+    let for_ms = g["blockedScopes"][0]["forMs"].as_u64().unwrap();
+    assert!((25_000..=30_000).contains(&for_ms), "{for_ms}");
+    assert!(g["blockedMethods"].as_array().unwrap().is_empty());
+    let kr = s["limiter"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["scope"] == "kr")
+        .cloned()
+        .unwrap();
+    assert!(kr["frozenMs"].as_u64().unwrap() > 0);
+    assert_eq!(kr["interactiveWaiters"], 0);
+
+    // Busiest first; the admin's own request is metered too.
+    let quotas = s["quotas"].as_array().unwrap();
+    assert_eq!(
+        quotas[0],
+        json!({"consumer": "c-web", "limit": 5, "used": 2, "resetSecs": 60})
+    );
+    assert_eq!(
+        (quotas.len(), &quotas[1]["used"], &quotas[1]["limit"]),
+        (2, &json!(1), &json!(10_000))
+    );
+    assert_eq!(s["inflight"], 0);
+    assert_eq!(s["sqlite"]["readers"], 2);
+    assert!(s["sqlite"]["readersFree"].as_u64().unwrap() <= 2);
+    let disk = &s["disk"];
+    assert!(disk["dbBytes"].as_u64().unwrap() > 0);
+    assert!(disk["totalBytes"].as_u64().unwrap() >= disk["freeBytes"].as_u64().unwrap());
+    for k in ["walBytes", "freelistBytes"] {
+        assert!(disk[k].is_u64(), "disk.{k}");
+    }
+
+    // History points carry the disk and the request totals; points stored
+    // before ADM-04 still parse, with the additions null.
+    e.sql(
+        r#"INSERT INTO metrics_history (at, point) VALUES (5, '{"t":5,
+             "totals":{"archivedMatches":0,"trackedPlayers":0,"knownPlayers":0},
+             "queues":{"active":0,"pending":0,"failed":0},
+             "analytics":{"rows":0,"ageSeconds":null},
+             "cache":{"hit":0,"miss":0,"neg":0,"stale":0}}');"#
+            .into(),
+    )
+    .await;
+    e.state.stats.record_point(now()).await.unwrap();
+    let h = e.get("/v1/admin/metrics/history", &e.admin).await.json();
+    let points = h["points"].as_array().unwrap();
+    assert_eq!(points.len(), 2);
+    assert_eq!(
+        (&points[0]["disk"], &points[0]["requests"], &points[0]["upstream"]),
+        (&Value::Null, &Value::Null, &Value::Null)
+    );
+    assert!(points[1]["disk"]["dbBytes"].as_u64().unwrap() > 0);
+    assert!(points[1]["requests"].is_u64() && points[1]["upstream"].is_u64());
 }
 
 #[tokio::test]

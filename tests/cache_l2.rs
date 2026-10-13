@@ -271,3 +271,26 @@ async fn fetched_at_round_trips_and_defaults_to_content_at() {
         other => panic!("{other:?}"),
     }
 }
+
+/// ADM-04: a full write-behind queue drops the entry, never waits, and counts
+/// it (`cache_l2_dropped_total`, the dashboard's `cacheStore.l2Dropped`).
+#[tokio::test]
+async fn a_full_queue_drops_and_counts_the_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open(&dir.path().join("riot-proxy.db"), 1).unwrap();
+    let writer = L2Writer::spawn_queued(db.clone(), 500, Duration::from_secs(3600), 2);
+    let entry = l1()
+        .put("k", Bytes::from_static(b"{}"), &ttls(60, 60))
+        .await
+        .unwrap();
+    // No await between them: the writer task cannot drain the queue.
+    for i in 0..5 {
+        writer.enqueue(&format!("k{i}"), &entry);
+    }
+    assert_eq!(writer.dropped(), 3);
+    let cache = ResponseCache::new(l1(), Some(writer));
+    assert_eq!(cache.l2_dropped(), 3);
+    cache.shutdown().await;
+    assert_eq!(rows(&db).await, 2, "the two queued writes still land");
+    assert_eq!(ResponseCache::new(l1(), None).l2_dropped(), 0);
+}
