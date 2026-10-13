@@ -326,7 +326,7 @@ Before (OVH VPS, 2026-10-13 01:00 UTC): 38 GB disk at 77 %, `riot-proxy.db` 20 G
 - [ ] OBJ-01 object store client and config
 - [ ] OBJ-02 pack format, `body_locations` and reads
 - [ ] OBJ-03 `archive:offload`
-- [ ] OBJ-04 reclaim, R2 replica unit, `packs reindex`
+- [ ] OBJ-04 reclaim, hourly R2 replica, daily index snapshot, `packs reindex` / `restore-index`
 - [ ] OBJ-05 drop `body_zstd`
 - [ ] OBJ-06 deletes, compaction and orphan sweep
 
