@@ -1,0 +1,740 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <title>riot-proxy · dashboard</title>
+    <!--
+      The operator dashboard (design/13, ADM series). One self-contained file: no
+      framework, no build step, nothing fetched from another origin. Everything it
+      shows comes from /v1/admin/* JSON and the /v1/ws `metrics` + `firehose`
+      topics, under one base URL (default: this page's origin).
+    -->
+    <style>
+      /* tokens:dark — design/13 §Visual tokens */
+      :root {
+        --page: #0d0f13;
+        --panel: #151920;
+        --panel-2: #1b2029;
+        --ink: #ffffff;
+        --ink-2: #c3c2b7;
+        --muted: #898781;
+        --grid: #2c2c2a;
+        --border: rgba(255, 255, 255, 0.1);
+        --accent: #3987e5;
+        --s1: #3987e5;
+        --s2: #d95926;
+        --s3: #199e70;
+        --s4: #c98500;
+        --s5: #d55181;
+        --s6: #9085e9;
+        --good: #0ca30c;
+        --warning: #fab219;
+        --serious: #ec835a;
+        --critical: #d03b3b;
+        --focus: #58a6ff;
+        --shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+        color-scheme: dark;
+      }
+      /* tokens:light */
+      :root[data-theme='light'] {
+        --page: #f6f7f9;
+        --panel: #ffffff;
+        --panel-2: #f0f1f4;
+        --ink: #0b0b0b;
+        --ink-2: #52514e;
+        --muted: #6b6a66;
+        --grid: #e1e0d9;
+        --border: rgba(11, 11, 11, 0.1);
+        --accent: #2a78d6;
+        --s1: #2a78d6;
+        --s2: #eb6834;
+        --s3: #1baf7a;
+        --s4: #eda100;
+        --s5: #e87ba4;
+        --s6: #4a3aa7;
+        --good: #0b8a0b;
+        --warning: #a86f00;
+        --serious: #c2521b;
+        --critical: #d03b3b;
+        --focus: #2a78d6;
+        --shadow: 0 8px 30px rgba(0, 0, 0, 0.12);
+        color-scheme: light;
+      }
+      /* end tokens */
+
+      * { box-sizing: border-box; }
+      html, body { margin: 0; background: var(--page); color: var(--ink); }
+      body { font: 13px/1.45 system-ui, -apple-system, 'Segoe UI', sans-serif; }
+      button, input, select { font: inherit; color: inherit; }
+      a { color: var(--accent); }
+      :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+      [hidden] { display: none !important; }
+      .num, table { font-variant-numeric: tabular-nums; }
+      .muted { color: var(--muted); }
+      .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+      svg.i { width: 14px; height: 14px; flex: none; vertical-align: -2px; fill: currentColor; }
+      @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+      /* ── layout A: rail + main (design/13 §Layout) ── */
+      .app { display: grid; grid-template-columns: 196px minmax(0, 1fr); align-content: start; min-height: calc(100vh - 34px); }
+      .rail { display: flex; flex-direction: column; gap: 12px; padding: 12px 8px; border-right: 1px solid var(--border); background: var(--panel); position: sticky; top: 34px; height: calc(100vh - 34px); overflow-y: auto; }
+      .tabs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+      .tab { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 10px; border: 0; border-radius: 6px; background: none; color: var(--ink-2); cursor: pointer; text-align: left; white-space: nowrap; }
+      .tab:hover { background: var(--panel-2); color: var(--ink); }
+      .tab[aria-selected='true'] { background: var(--panel-2); color: var(--ink); box-shadow: inset 2px 0 0 var(--accent); }
+      .tab .badge { margin-left: auto; min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--panel); border: 1px solid var(--border); font-size: 11px; text-align: center; color: var(--ink-2); }
+      .rail-foot { margin-top: auto; display: flex; flex-direction: column; gap: 6px; padding: 10px 6px 0; border-top: 1px solid var(--border); font-size: 12px; color: var(--ink-2); }
+      .rail-foot .row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+      .rail-foot code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
+      .btn { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel-2); color: var(--ink); cursor: pointer; }
+      .btn:hover { border-color: var(--accent); }
+      .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+      .btn.danger { border-color: var(--critical); }
+      .btn.small { padding: 2px 8px; font-size: 12px; }
+      .btn:disabled { opacity: 0.5; cursor: default; }
+      main { min-width: 0; padding: 0 20px 32px; }
+
+      /* ── health strip ── */
+      .strip { position: sticky; top: 34px; z-index: 50; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 10px 0; margin-bottom: 14px; background: var(--page); border-bottom: 1px solid var(--border); }
+      .pill { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; color: var(--ink-2); }
+      .pill b { color: var(--ink); font-weight: 600; }
+      .pill[data-level='good'] svg { color: var(--good); }
+      .pill[data-level='warning'] svg { color: var(--warning); }
+      .pill[data-level='serious'] svg { color: var(--serious); }
+      .pill[data-level='critical'] svg { color: var(--critical); }
+      .pill[data-level='unknown'] svg { color: var(--muted); }
+      .strip .spacer { flex: 1; }
+      .strip .build { font-size: 12px; color: var(--muted); }
+
+      /* ── panels, tiles ── */
+      h1 { font-size: 18px; margin: 0 0 12px; font-weight: 600; }
+      h2 { font-size: 13px; margin: 0 0 8px; font-weight: 600; color: var(--ink-2); }
+      .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; min-width: 0; }
+      .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 10px; }
+      .tile { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; min-width: 0; }
+      .tile .label { font-size: 12px; color: var(--ink-2); display: flex; align-items: center; gap: 5px; }
+      .tile .value { font-size: 24px; font-weight: 600; line-height: 1.25; margin: 2px 0; font-variant-numeric: proportional-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .tile .sub { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+      .empty { color: var(--muted); padding: 24px 0; text-align: center; }
+
+      /* ── table helper ── */
+      .scroll { overflow-x: auto; }
+      table { width: 100%; border-collapse: collapse; font-size: 12px; }
+      th, td { padding: 5px 8px; border-bottom: 1px solid var(--grid); text-align: left; white-space: nowrap; }
+      th { color: var(--ink-2); font-weight: 600; }
+      th button { all: unset; cursor: pointer; }
+      th button:focus-visible { outline: 2px solid var(--focus); }
+      td.n, th.n { text-align: right; }
+      .more-rows { margin-top: 6px; font-size: 12px; color: var(--muted); }
+
+      /* ── sheets, confirm, toasts ── */
+      .scrim { position: fixed; inset: 0; z-index: 200; display: grid; place-items: center; padding: 16px; background: rgba(0, 0, 0, 0.55); }
+      .sheet { width: min(520px, 100%); background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); padding: 18px; }
+      .sheet h2 { font-size: 15px; color: var(--ink); }
+      .sheet p { margin: 0 0 12px; color: var(--ink-2); }
+      .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+      .field label { font-size: 12px; color: var(--ink-2); }
+      .field input { width: 100%; padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--page); }
+      .sheet .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+      .sheet .error { color: var(--ink); display: flex; gap: 6px; align-items: center; margin: 0 0 10px; }
+      .sheet .error svg { color: var(--critical); }
+      .toasts { position: fixed; right: 16px; bottom: 16px; z-index: 300; display: flex; flex-direction: column; gap: 8px; max-width: min(420px, calc(100vw - 32px)); }
+      .toast { display: flex; gap: 8px; align-items: flex-start; padding: 9px 12px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); }
+      .toast[data-level='good'] svg { color: var(--good); }
+      .toast[data-level='critical'] svg { color: var(--critical); }
+      .toast[data-level='warning'] svg { color: var(--warning); }
+
+      /* ── narrow: the rail becomes a tab strip above the content ── */
+      @media (max-width: 819px) {
+        .app { grid-template-columns: minmax(0, 1fr); }
+        .rail { position: sticky; top: 34px; z-index: 60; height: auto; flex-direction: row; align-items: center; gap: 8px; padding: 6px 8px; border-right: 0; border-bottom: 1px solid var(--border); overflow: hidden; }
+        .tabs { flex-direction: row; overflow-x: auto; flex: 1; min-width: 0; scrollbar-width: thin; }
+        .tab { width: auto; }
+        .tab[aria-selected='true'] { box-shadow: inset 0 -2px 0 var(--accent); }
+        .rail-foot { margin: 0; padding: 0; border: 0; flex-direction: row; flex: none; }
+        .rail-foot .wide { display: none; }
+        .strip { top: 81px; }
+        main { padding: 0 12px 24px; }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- pagebar -->
+    <svg width="0" height="0" style="position: absolute" aria-hidden="true">
+      <symbol id="i-good" viewBox="0 0 16 16"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1Zm3.3 5.2-4 4.3a.8.8 0 0 1-1.1 0L4.7 9a.8.8 0 1 1 1.1-1.1l.9.9 3.5-3.7a.8.8 0 1 1 1.1 1.1Z" /></symbol>
+      <symbol id="i-warning" viewBox="0 0 16 16"><path d="M8.9 1.6a1 1 0 0 0-1.8 0L.6 13.4A1 1 0 0 0 1.5 15h13a1 1 0 0 0 .9-1.6ZM8 5a.8.8 0 0 1 .8.8v3.6a.8.8 0 0 1-1.6 0V5.8A.8.8 0 0 1 8 5Zm0 7.8a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z" /></symbol>
+      <symbol id="i-serious" viewBox="0 0 16 16"><path d="M5.1 1h5.8L15 5.1v5.8L10.9 15H5.1L1 10.9V5.1Zm2.1 3.6v4a.8.8 0 0 0 1.6 0v-4a.8.8 0 0 0-1.6 0ZM8 12.6a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" /></symbol>
+      <symbol id="i-critical" viewBox="0 0 16 16"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1Zm2.8 8.7a.8.8 0 1 1-1.1 1.1L8 9.1l-1.7 1.7a.8.8 0 1 1-1.1-1.1L6.9 8 5.2 6.3a.8.8 0 1 1 1.1-1.1L8 6.9l1.7-1.7a.8.8 0 1 1 1.1 1.1L9.1 8Z" /></symbol>
+      <symbol id="i-unknown" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-dasharray="3 2" /></symbol>
+      <symbol id="i-moon" viewBox="0 0 16 16"><path d="M6.2 1.3a.6.6 0 0 1 .1.7 5.6 5.6 0 0 0 7.7 7.7.6.6 0 0 1 .8.8A6.9 6.9 0 1 1 5.5 1.2a.6.6 0 0 1 .7.1Z" /></symbol>
+      <symbol id="i-overview" viewBox="0 0 16 16"><path d="M1 2.5A1.5 1.5 0 0 1 2.5 1h3A1.5 1.5 0 0 1 7 2.5v3A1.5 1.5 0 0 1 5.5 7h-3A1.5 1.5 0 0 1 1 5.5Zm8 0A1.5 1.5 0 0 1 10.5 1h3A1.5 1.5 0 0 1 15 2.5v3A1.5 1.5 0 0 1 13.5 7h-3A1.5 1.5 0 0 1 9 5.5Zm-8 8A1.5 1.5 0 0 1 2.5 9h3A1.5 1.5 0 0 1 7 10.5v3A1.5 1.5 0 0 1 5.5 15h-3A1.5 1.5 0 0 1 1 13.5Zm8 0A1.5 1.5 0 0 1 10.5 9h3a1.5 1.5 0 0 1 1.5 1.5v3a1.5 1.5 0 0 1-1.5 1.5h-3A1.5 1.5 0 0 1 9 13.5Z" /></symbol>
+    </svg>
+
+    <div id="app" class="app">
+      <aside class="rail" aria-label="Dashboard">
+        <ul class="tabs" id="tabs" role="tablist" aria-orientation="vertical" aria-label="Sections"></ul>
+        <div class="rail-foot">
+          <div class="row" id="conn" aria-live="polite"><svg class="i"><use href="#i-unknown" /></svg><span>connecting…</span></div>
+          <div class="row wide">base <code id="baseLabel"></code></div>
+          <div class="row wide">key <code id="keyLabel">—</code></div>
+          <div class="row">
+            <button class="btn small" id="signOut" type="button">Sign out</button>
+            <button class="btn small" id="theme" type="button" aria-label="Switch to the light theme"><svg class="i"><use href="#i-moon" /></svg></button>
+          </div>
+        </div>
+      </aside>
+      <main>
+        <header class="strip" id="strip" aria-label="Health">
+          <span class="pill" id="sReady" data-level="unknown"><svg class="i"><use href="#i-unknown" /></svg><span>checking…</span></span>
+          <span class="pill" id="sLimiter" data-level="unknown"><svg class="i"><use href="#i-unknown" /></svg><span>limiter —</span></span>
+          <span class="pill" id="sDisk" data-level="unknown"><svg class="i"><use href="#i-unknown" /></svg><span>disk —</span></span>
+          <span class="pill" id="sBackup" data-level="unknown"><svg class="i"><use href="#i-unknown" /></svg><span>backup —</span></span>
+          <span class="pill" id="sScope"><span>scope <b>—</b></span></span>
+          <span class="spacer"></span>
+          <span class="build" id="sBuild"></span>
+        </header>
+        <div id="panels"></div>
+      </main>
+    </div>
+
+    <div class="scrim" id="sheet" hidden>
+      <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+        <h2 id="sheetTitle">Admin key</h2>
+        <p>This page reads <code>/v1/admin/*</code> and the admin WebSocket topics. The key is kept only in this browser.</p>
+        <p class="error" id="sheetError" hidden><svg class="i"><use href="#i-critical" /></svg><span></span></p>
+        <form id="sheetForm">
+          <div class="field">
+            <label for="keyInput">Admin key</label>
+            <input id="keyInput" type="password" autocomplete="off" spellcheck="false" placeholder="rpx_…" />
+          </div>
+          <div class="field">
+            <label for="baseInput">API base</label>
+            <input id="baseInput" type="url" spellcheck="false" />
+          </div>
+          <div class="actions"><button class="btn primary" id="sheetConnect" type="submit">Connect</button></div>
+        </form>
+      </div>
+    </div>
+
+    <div class="scrim" id="confirm" hidden>
+      <div class="sheet" role="alertdialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmText">
+        <h2 id="confirmTitle">Are you sure?</h2>
+        <p id="confirmText"></p>
+        <div class="actions">
+          <button class="btn" id="confirmCancel" type="button">Cancel</button>
+          <button class="btn primary" id="confirmOk" type="button">Confirm</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+    <script type="module">
+      // ---------- pure helpers (tests/admin_ui.mjs evaluates this block in node)
+      // Riot's league-v4 apex lists stop at this many entries (LAD-01); the Ladder
+      // tab (ADM-12) prints it, and tests/ui.rs checks it is the server's.
+      const APEX_LIST_CAP = 10000;
+      const TAB_IDS = ['overview'];
+      const fmt = (n) => (n == null || Number.isNaN(Number(n)) ? '—' : Number(n).toLocaleString('en-US'));
+      /** 1,284 · 12.9K · 1.13M · 2.1B (the stat-tile contract). */
+      const compact = (n) => {
+        if (n == null || Number.isNaN(Number(n))) return '—';
+        const a = Math.abs(n);
+        const cut = (v, u) => `${v >= 100 ? Math.round(v) : v >= 10 ? v.toFixed(1).replace(/\.0$/, '') : v.toFixed(2).replace(/\.?0+$/, '')}${u}`;
+        if (a < 10000) return fmt(Math.round(n));
+        if (a < 1e6) return (n < 0 ? '-' : '') + cut(a / 1e3, 'K');
+        if (a < 1e9) return (n < 0 ? '-' : '') + cut(a / 1e6, 'M');
+        return (n < 0 ? '-' : '') + cut(a / 1e9, 'B');
+      };
+      const fmtBytes = (b) => {
+        if (b == null) return '—';
+        const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+        let v = Number(b);
+        let i = 0;
+        while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+        return `${i === 0 ? v : v >= 100 ? Math.round(v) : v.toFixed(1)} ${u[i]}`;
+      };
+      const fmtDuration = (s) => {
+        if (s == null || s < 0) return '—';
+        s = Math.floor(s);
+        const d = Math.floor(s / 86400);
+        const h = Math.floor((s % 86400) / 3600);
+        const m = Math.floor((s % 3600) / 60);
+        return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m ${s % 60}s`;
+      };
+      const pct = (f, digits = 1) => (f == null ? '—' : `${(f * 100).toFixed(digits)} %`);
+      /** Everything interpolated into markup goes through this. */
+      const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+      /** `t` is unix ms or an ISO string. */
+      const relTime = (t, now = Date.now()) => {
+        if (t == null || t === '') return '—';
+        const ms = typeof t === 'number' ? t : Date.parse(t);
+        if (Number.isNaN(ms)) return '—';
+        const s = Math.max(0, (now - ms) / 1000);
+        if (s < 90) return 'just now';
+        if (s < 5400) return `${Math.round(s / 60)}m ago`;
+        if (s < 129600) return `${Math.round(s / 3600)}h ago`;
+        return `${Math.round(s / 86400)}d ago`;
+      };
+      const sumValues = (o) => Object.values(o ?? {}).reduce((n, v) => n + (Number(v) || 0), 0);
+      /** Served from cache over all reads: the CacheHitRatioLow alert's ratio. */
+      const hitRatio = (c) => {
+        if (!c) return null;
+        const served = (c.hit ?? 0) + (c.neg ?? 0) + (c.stale ?? 0);
+        const all = served + (c.miss ?? 0);
+        return all ? served / all : null;
+      };
+      /** Per second between two cumulative readings; null without two, or across a restart. */
+      const rate = (prev, cur) => {
+        if (!prev || !cur || cur.at <= prev.at || cur.total < prev.total) return null;
+        return (cur.total - prev.total) / ((cur.at - prev.at) / 1000);
+      };
+      const jobTotals = (queues) => Object.values(queues ?? {}).reduce(
+        (t, q) => ({ running: t.running + (q.active ?? 0), pending: t.pending + (q.waiting ?? 0) + (q.delayed ?? 0), failed: t.failed + (q.failed ?? 0) }),
+        { running: 0, pending: 0, failed: 0 },
+      );
+      /** design/13: warn at 85 % used, critical at 95 %. */
+      const diskLevel = (disk) => {
+        if (!disk || !disk.totalBytes) return { level: 'unknown', used: null };
+        const used = 1 - disk.freeBytes / disk.totalBytes;
+        return { level: used >= 0.95 ? 'critical' : used >= 0.85 ? 'warning' : 'good', used };
+      };
+      /** A daily backup older than 36 h means a night was missed. */
+      const backupLevel = (backups, now = Date.now()) => {
+        if (!backups) return { level: 'unknown', text: 'backup —' };
+        if (backups.keep === 0) return { level: 'warning', text: 'backups off' };
+        const newest = backups.files?.[0];
+        if (!newest?.modifiedAt) return { level: 'serious', text: 'no backup' };
+        const age = (now - newest.modifiedAt) / 1000;
+        return { level: age > 36 * 3600 ? 'warning' : 'good', text: `backup ${fmtDuration(age).split(' ')[0]} ago` };
+      };
+      const limiterLevel = (snap) => {
+        const frozen = (snap?.limiter ?? []).filter((s) => s.frozenMs > 0).length;
+        const blocked = snap?.gates?.blockedScopes?.length ?? 0;
+        if (frozen) return { level: 'serious', text: `limiter ${frozen} frozen` };
+        if (blocked) return { level: 'warning', text: `bulk held on ${blocked}` };
+        return { level: snap ? 'good' : 'unknown', text: snap ? 'limiter ok' : 'limiter —' };
+      };
+      /** `#jobs/01J…` → { tab: 'jobs', id: '01J…' }; anything unknown is the overview. */
+      const route = (hash, tabs = TAB_IDS) => {
+        const [tab, ...rest] = String(hash ?? '').replace(/^#/, '').split('/');
+        return tabs.includes(tab) ? { tab, id: rest.length ? decodeURIComponent(rest.join('/')) : null } : { tab: tabs[0], id: null };
+      };
+      const joinUrl = (base, path) => String(base).replace(/\/+$/, '') + path;
+      const wsUrl = (base, key) => joinUrl(String(base).replace(/^http/, 'ws'), '/v1/ws') + (key ? `?token=${encodeURIComponent(key)}` : '');
+      const maskKey = (k) => (k ? `${k.slice(0, 4)}…${k.slice(-2)}` : '—');
+      /** WCAG contrast ratio of two #rrggbb colours. */
+      const contrast = (a, b) => {
+        const lum = (h) => {
+          const [r, g, bl] = [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+          return 0.2126 * r + 0.7152 * g + 0.0722 * bl;
+        };
+        const [x, y] = [lum(a), lum(b)];
+        return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+      };
+      const sortRows = (rows, key, dir = 'desc') => {
+        const k = (r) => (typeof key === 'function' ? key(r) : r[key]);
+        const sign = dir === 'asc' ? 1 : -1;
+        return [...rows].sort((a, b) => {
+          const [x, y] = [k(a), k(b)];
+          if (x == null && y == null) return 0;
+          if (x == null) return 1;
+          if (y == null) return -1;
+          return (typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y))) * sign;
+        });
+      };
+      const capRows = (rows, cap) => ({ shown: rows.slice(0, cap), more: Math.max(0, rows.length - cap) });
+      // ---------- end pure helpers
+
+      const $ = (id) => document.getElementById(id);
+      const STORE_KEY = 'rp.dashboard.key';
+      const STORE_BASE = 'rp.admin.base';
+      const STORE_THEME = 'rp.admin.theme';
+
+      const state = {
+        key: localStorage.getItem(STORE_KEY) || '',
+        base: localStorage.getItem(STORE_BASE) || location.origin,
+        tab: null,
+        started: false,
+        ws: null,
+        backoff: 1000,
+        retry: null,
+        prev: null, // { at, requests, upstream } of the snapshot before
+        firstArchived: null,
+      };
+
+      // ── one store, listeners per section ─────────────────────────────────
+      const store = {
+        data: {},
+        subs: {},
+        on(k, fn) { (this.subs[k] ??= []).push(fn); },
+        get(k) { return this.data[k]; },
+        set(k, v) { this.data[k] = v; for (const fn of this.subs[k] ?? []) fn(v); },
+      };
+
+      // ── icons, levels, toasts ────────────────────────────────────────────
+      const icon = (name) => `<svg class="i" aria-hidden="true"><use href="#i-${name}" /></svg>`;
+      function pill(el, level, html) {
+        el.dataset.level = level;
+        el.innerHTML = icon(level) + `<span>${html}</span>`;
+      }
+      function toast(text, level = 'good') {
+        const t = document.createElement('div');
+        t.className = 'toast';
+        t.dataset.level = level;
+        t.innerHTML = icon(level) + `<span>${esc(text)}</span>`;
+        $('toasts').append(t);
+        setTimeout(() => t.remove(), level === 'critical' ? 10000 : 5000);
+      }
+
+      // ── confirmAction: every write asks first ────────────────────────────
+      function confirmAction(text, { title = 'Are you sure?', confirm = 'Confirm', danger = false } = {}) {
+        return new Promise((resolve) => {
+          const box = $('confirm');
+          $('confirmTitle').textContent = title;
+          $('confirmText').textContent = text;
+          const ok = $('confirmOk');
+          ok.textContent = confirm;
+          ok.className = `btn ${danger ? 'danger' : 'primary'}`;
+          const back = document.activeElement;
+          const done = (v) => {
+            box.hidden = true;
+            ok.onclick = $('confirmCancel').onclick = box.onkeydown = null;
+            back?.focus?.();
+            resolve(v);
+          };
+          ok.onclick = () => done(true);
+          $('confirmCancel').onclick = () => done(false);
+          box.onkeydown = (e) => { if (e.key === 'Escape') done(false); };
+          box.hidden = false;
+          $('confirmCancel').focus();
+        });
+      }
+
+      // ── the sortable table helper, with a row cap ────────────────────────
+      /** columns: [{ key, label, num?, format?(value,row) }]; returns an element. */
+      function table({ columns, rows, cap = 200, sort = null, empty = 'Nothing here.' }) {
+        const wrap = document.createElement('div');
+        let by = sort ?? { key: null, dir: 'desc' };
+        const draw = () => {
+          const sorted = by.key ? sortRows(rows, by.key, by.dir) : rows;
+          const { shown, more } = capRows(sorted, cap);
+          const head = columns.map((c) => {
+            const aria = by.key === c.key ? (by.dir === 'asc' ? 'ascending' : 'descending') : 'none';
+            return `<th scope="col" class="${c.num ? 'n' : ''}" aria-sort="${aria}"><button type="button" data-sort="${esc(c.key)}">${esc(c.label)}${by.key === c.key ? (by.dir === 'asc' ? ' ▲' : ' ▼') : ''}</button></th>`;
+          }).join('');
+          const body = shown.length
+            ? shown.map((r) => `<tr>${columns.map((c) => `<td class="${c.num ? 'n' : ''}">${c.format ? c.format(r[c.key], r) : esc(r[c.key])}</td>`).join('')}</tr>`).join('')
+            : `<tr><td colspan="${columns.length}" class="muted">${esc(empty)}</td></tr>`;
+          wrap.innerHTML = `<div class="scroll"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>` +
+            (more ? `<div class="more-rows">showing ${fmt(shown.length)} of ${fmt(rows.length)}</div>` : '');
+        };
+        wrap.addEventListener('click', (e) => {
+          const b = e.target.closest('[data-sort]');
+          if (!b) return;
+          const key = b.dataset.sort;
+          by = { key, dir: by.key === key && by.dir === 'desc' ? 'asc' : 'desc' };
+          draw();
+        });
+        draw();
+        return wrap;
+      }
+
+      // ── the API: one base URL, the key from localStorage ─────────────────
+      class ApiError extends Error {
+        constructor(status, body) {
+          super(body?.error?.message || `HTTP ${status}`);
+          this.status = status;
+          this.body = body;
+        }
+      }
+      async function api(path, { method = 'GET', body } = {}) {
+        const headers = {};
+        if (state.key) headers.Authorization = `Bearer ${state.key}`;
+        if (body !== undefined) headers['Content-Type'] = 'application/json';
+        const res = await fetch(joinUrl(state.base, path), {
+          method, headers, cache: 'no-cache', body: body === undefined ? undefined : JSON.stringify(body),
+        });
+        const text = await res.text();
+        let json = null;
+        try { json = text ? JSON.parse(text) : null; } catch { json = null; }
+        if (res.status === 401 || res.status === 403) {
+          openSheet(res.status === 403 ? 'This key has no admin scope.' : json?.error?.message || 'The key was refused.');
+          throw new ApiError(res.status, json);
+        }
+        if (!res.ok) throw new ApiError(res.status, json);
+        return json;
+      }
+
+      // ── theme: dark by default, the system's light, or a saved choice ─────
+      const media = window.matchMedia?.('(prefers-color-scheme: light)');
+      function applyTheme() {
+        const saved = localStorage.getItem(STORE_THEME);
+        const light = saved ? saved === 'light' : Boolean(media?.matches);
+        if (light) document.documentElement.dataset.theme = 'light';
+        else delete document.documentElement.dataset.theme;
+        $('theme').setAttribute('aria-label', light ? 'Switch to the dark theme' : 'Switch to the light theme');
+      }
+      $('theme').addEventListener('click', () => {
+        const light = document.documentElement.dataset.theme === 'light';
+        localStorage.setItem(STORE_THEME, light ? 'dark' : 'light');
+        applyTheme();
+      });
+      media?.addEventListener?.('change', applyTheme);
+      applyTheme();
+
+      // ── tabs: hash router, only the active tab renders ───────────────────
+      const TABS = [
+        {
+          id: 'overview',
+          label: 'Overview',
+          icon: 'overview',
+          enter() { renderOverview(); },
+        },
+      ];
+      function buildTabs() {
+        $('tabs').innerHTML = TABS.map((t) =>
+          `<li role="presentation"><button class="tab" role="tab" type="button" id="tab-${t.id}" aria-controls="panel-${t.id}" aria-selected="false" tabindex="-1" data-tab="${t.id}">${icon(t.icon)}<span>${esc(t.label)}</span><span class="badge" id="badge-${t.id}" hidden></span></button></li>`,
+        ).join('');
+        $('panels').innerHTML = TABS.map((t) => `<section id="panel-${t.id}" role="tabpanel" aria-labelledby="tab-${t.id}" hidden></section>`).join('');
+      }
+      function showTab() {
+        const { tab, id } = route(location.hash, TABS.map((t) => t.id));
+        const changed = state.tab !== tab;
+        if (changed) TABS.find((t) => t.id === state.tab)?.leave?.();
+        state.tab = tab;
+        for (const t of TABS) {
+          const on = t.id === tab;
+          const b = $(`tab-${t.id}`);
+          b.setAttribute('aria-selected', String(on));
+          b.tabIndex = on ? 0 : -1;
+          $(`panel-${t.id}`).hidden = !on;
+        }
+        if (state.started) TABS.find((t) => t.id === tab)?.enter?.(id);
+      }
+      $('tabs').addEventListener('click', (e) => {
+        const b = e.target.closest('[data-tab]');
+        if (b) location.hash = b.dataset.tab;
+      });
+      $('tabs').addEventListener('keydown', (e) => {
+        const ids = TABS.map((t) => t.id);
+        const i = ids.indexOf(state.tab);
+        const next = { ArrowDown: i + 1, ArrowRight: i + 1, ArrowUp: i - 1, ArrowLeft: i - 1, Home: 0, End: ids.length - 1 }[e.key];
+        if (next == null) return;
+        e.preventDefault();
+        const id = ids[(next + ids.length) % ids.length];
+        location.hash = id;
+        $(`tab-${id}`).focus();
+      });
+      window.addEventListener('hashchange', showTab);
+
+      // ── Overview ─────────────────────────────────────────────────────────
+      const tile = (label, value, sub, level) =>
+        `<div class="tile"><div class="label">${level ? icon(level) : ''}${esc(label)}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`;
+      function renderOverview() {
+        if (state.tab !== 'overview') return;
+        const panel = $('panel-overview');
+        const s = store.get('snapshot');
+        if (!s) {
+          panel.innerHTML = '<h1>Overview</h1><div class="empty">Waiting for the first snapshot…</div>';
+          return;
+        }
+        const r = store.get('rates') ?? {};
+        const jobs = jobTotals(s.queues);
+        const ratio = hitRatio(s.cache);
+        const disk = diskLevel(s.disk);
+        const gained = state.firstArchived == null ? null : s.totals.archivedMatches - state.firstArchived;
+        const perSec = (v) => (v == null ? '—' : `${v < 10 ? v.toFixed(2) : v.toFixed(1)} /s`);
+        const errors5xx = Object.entries(s.requests ?? {}).filter(([k]) => /\|5\d\d\|/.test(k)).reduce((n, [, v]) => n + v, 0);
+        panel.innerHTML = `<h1>Overview</h1><div class="tiles" id="tiles">${[
+          tile('Archived matches', compact(s.totals.archivedMatches), gained == null ? '&nbsp;' : `${gained >= 0 ? '+' : ''}${fmt(gained)} since this page opened`),
+          tile('Jobs pending', compact(jobs.pending), `${fmt(jobs.running)} running · ${fmt(jobs.failed)} failed in 24 h`),
+          tile('Cache hit ratio', pct(ratio), `${compact(sumValues(s.cache))} reads since start`),
+          tile('Requests', perSec(r.requests), `${compact(r.requestsTotal)} since start · ${fmt(errors5xx)} 5xx`),
+          tile('Riot calls', perSec(r.upstream), `${compact(r.upstreamTotal)} since start · ${fmt(s.inflight ?? 0)} in flight`),
+          tile('Disk free', fmtBytes(s.disk?.freeBytes), disk.used == null ? '—' : `${pct(disk.used, 0)} used · database ${fmtBytes(s.disk.dbBytes)}`, disk.level === 'good' ? null : disk.level),
+          tile('Process', fmtBytes(s.process?.rssBytes), `up ${fmtDuration(s.process?.uptimeSeconds)} · ${fmt(s.sqlite?.readersFree)}/${fmt(s.sqlite?.readers)} readers free`),
+        ].join('')}</div>`;
+      }
+      store.on('snapshot', renderOverview);
+      store.on('rates', renderOverview);
+
+      // ── health strip and the rail's foot ─────────────────────────────────
+      function renderStrip() {
+        const s = store.get('snapshot');
+        const ready = store.get('ready');
+        const info = store.get('info');
+        if (ready) pill($('sReady'), ready.ok ? 'good' : 'critical', ready.ok ? 'ready' : 'not ready');
+        const lim = limiterLevel(s);
+        pill($('sLimiter'), lim.level, esc(lim.text));
+        const disk = diskLevel(s?.disk);
+        pill($('sDisk'), disk.level, disk.used == null ? 'disk —' : `disk ${pct(disk.used, 0)} · ${esc(fmtBytes(s.disk.freeBytes))} free`);
+        const b = backupLevel(store.get('backups'));
+        pill($('sBackup'), b.level, esc(b.text));
+        $('sScope').innerHTML = `<span>scope <b>${esc((s?.keyScope ?? info?.keyScope ?? '—').slice(0, 8))}</b></span>`;
+        if (info) {
+          const up = (Date.now() - info.startedAt) / 1000;
+          $('sBuild').textContent = `v${info.version} · ${info.gitSha.slice(0, 7)} · ${info.env} · up ${fmtDuration(up)}`;
+        }
+      }
+      for (const k of ['snapshot', 'ready', 'info', 'backups']) store.on(k, renderStrip);
+      function setConn(level, text) {
+        pill($('conn'), level, esc(text));
+      }
+      function renderFoot() {
+        $('baseLabel').textContent = state.base.replace(/^https?:\/\//, '');
+        $('baseLabel').title = state.base;
+        $('keyLabel').textContent = maskKey(state.key);
+      }
+
+      // ── snapshots: from the API on entry, then from the metrics topic ────
+      function takeSnapshot(s) {
+        const at = Date.now();
+        const cur = { at, requests: sumValues(s.requests), upstream: sumValues(s.upstream) };
+        const p = state.prev;
+        state.prev = cur;
+        if (state.firstArchived == null) state.firstArchived = s.totals?.archivedMatches ?? null;
+        store.set('rates', {
+          requests: rate(p && { at: p.at, total: p.requests }, { at, total: cur.requests }),
+          upstream: rate(p && { at: p.at, total: p.upstream }, { at, total: cur.upstream }),
+          requestsTotal: cur.requests,
+          upstreamTotal: cur.upstream,
+        });
+        store.set('snapshot', s);
+      }
+      async function refresh() {
+        const jobs = [
+          api('/v1/admin/metrics').then(takeSnapshot),
+          fetch(joinUrl(state.base, '/readyz'), { cache: 'no-cache' }).then((r) => r.json()).then((j) => store.set('ready', j)),
+          api('/v1/admin/backups').then((b) => store.set('backups', b)),
+        ];
+        const results = await Promise.allSettled(jobs);
+        for (const r of results) if (r.status === 'rejected' && !(r.reason instanceof ApiError && r.reason.status < 500 && r.reason.status >= 400)) console.warn(r.reason);
+      }
+
+      // ── the socket: metrics + firehose, metrics dropped while hidden ─────
+      function send(frame) {
+        if (state.ws?.readyState === 1) state.ws.send(JSON.stringify(frame));
+      }
+      function connect() {
+        clearTimeout(state.retry);
+        const ws = new WebSocket(wsUrl(state.base, state.key));
+        state.ws = ws;
+        setConn('unknown', 'connecting…');
+        ws.onopen = () => {
+          state.backoff = 1000;
+          send({ op: 'subscribe', topics: document.hidden ? ['firehose'] : ['metrics', 'firehose'] });
+          setConn(document.hidden ? 'warning' : 'good', document.hidden ? 'paused' : 'live');
+        };
+        ws.onmessage = (e) => {
+          let frame;
+          try { frame = JSON.parse(e.data); } catch { return; }
+          if (frame.op === 'error' && ['UNAUTHORIZED', 'FORBIDDEN'].includes(frame.error?.code)) {
+            openSheet(frame.error.message || 'The key was refused.');
+            return;
+          }
+          if (frame.op !== 'event') return;
+          if (frame.event === 'metrics.snapshot') takeSnapshot(frame.data);
+          store.set('event', frame);
+        };
+        ws.onclose = (e) => {
+          if (state.ws !== ws) return;
+          state.ws = null;
+          if (e?.code === 4401 || e?.code === 4403) {
+            setConn('critical', 'key refused');
+            openSheet(e.reason || 'The key was refused.');
+            return;
+          }
+          const wait = state.backoff;
+          state.backoff = Math.min(state.backoff * 2, 30000);
+          setConn('warning', `reconnecting in ${Math.round(wait / 1000)}s`);
+          state.retry = setTimeout(connect, wait);
+        };
+      }
+      function disconnect() {
+        clearTimeout(state.retry);
+        const ws = state.ws;
+        state.ws = null;
+        ws?.close();
+      }
+      document.addEventListener('visibilitychange', () => {
+        if (!state.started) return;
+        if (document.hidden) {
+          send({ op: 'unsubscribe', topics: ['metrics'] });
+          if (state.ws) setConn('warning', 'paused');
+          TABS.find((t) => t.id === state.tab)?.leave?.();
+        } else {
+          send({ op: 'subscribe', topics: ['metrics'] });
+          if (state.ws?.readyState === 1) setConn('good', 'live');
+          refresh();
+          TABS.find((t) => t.id === state.tab)?.enter?.(route(location.hash).id);
+        }
+      });
+
+      // ── the key sheet: the probe is GET /v1/admin/info ───────────────────
+      function openSheet(message) {
+        state.started = false;
+        disconnect();
+        const err = $('sheetError');
+        err.hidden = !message;
+        err.querySelector('span').textContent = message ?? '';
+        $('keyInput').value = '';
+        $('baseInput').value = state.base;
+        $('sheet').hidden = false;
+        $('keyInput').focus();
+      }
+      $('sheetForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const key = $('keyInput').value.trim();
+        const base = ($('baseInput').value.trim() || location.origin).replace(/\/+$/, '');
+        state.key = key;
+        state.base = base;
+        if (base === location.origin) localStorage.removeItem(STORE_BASE);
+        else localStorage.setItem(STORE_BASE, base);
+        $('sheet').hidden = true;
+        await boot();
+      });
+      $('signOut').addEventListener('click', () => {
+        localStorage.removeItem(STORE_KEY);
+        state.key = '';
+        renderFoot();
+        openSheet(null);
+      });
+
+      // ── the clock: the one timer, ages and uptime ────────────────────────
+      setInterval(() => {
+        if (!document.hidden && state.started) renderStrip();
+      }, 1000);
+
+      async function boot() {
+        renderFoot();
+        let info;
+        try {
+          info = await api('/v1/admin/info');
+        } catch (e) {
+          if (!(e instanceof ApiError) || (e.status !== 401 && e.status !== 403)) {
+            setConn('critical', 'offline');
+            toast(`Could not reach ${state.base}: ${e.message}`, 'critical');
+          }
+          return;
+        }
+        if (state.key) localStorage.setItem(STORE_KEY, state.key);
+        renderFoot();
+        store.set('info', info);
+        state.started = true;
+        showTab();
+        await refresh();
+        connect();
+      }
+
+      // For the jsdom tests and the console: the pieces later tabs share.
+      window.rpAdmin = { store, state, api, table, confirmAction, toast, route };
+
+      buildTabs();
+      showTab();
+      boot();
+    </script>
+  </body>
+</html>

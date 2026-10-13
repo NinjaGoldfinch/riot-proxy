@@ -4,8 +4,9 @@
 //! (design/11, ADR-080) and `/dev/jobs` the live job view (design/10 §Jobs,
 //! DEV-19); none is ever served in production. `DASHBOARD_UI` defaults on (the
 //! page is inert, and everything behind it needs an admin key).
-//! The dashboard is v1's `public/dashboard.html` with its data wired (P7-06); its
-//! only change is following v2's `crawl.phase` event (ADR-058).
+//! The dashboard is `admin.html` (design/13, ADM-08): API-first, everything it
+//! shows read from `/v1/admin/*` and `/v1/ws`. It is sent with an `ETag` and
+//! `Cache-Control: no-cache`, so a reload revalidates and costs a 304.
 //!
 //! Both pages carry a page bar at the top (DEV-10, ADR-078), rendered here once at
 //! startup from the config, so it links only to pages that exist: the dashboard
@@ -14,7 +15,7 @@
 
 use std::sync::Arc;
 
-use axum::http::header;
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
@@ -24,7 +25,7 @@ use crate::config::{Config, Environment};
 use crate::riot::routing::{Platform, Region};
 
 pub const DEV_UI_HTML: &str = include_str!("../ui/dev-ui.html");
-pub const DASHBOARD_HTML: &str = include_str!("../ui/dashboard.html");
+pub const ADMIN_HTML: &str = include_str!("../ui/admin.html");
 pub const SHOWCASE_HTML: &str = include_str!("../ui/showcase.html");
 pub const JOBS_HTML: &str = include_str!("../ui/jobs.html");
 
@@ -102,6 +103,42 @@ fn page(html: String) -> axum::routing::MethodRouter {
                 html.to_string(),
             )
                 .into_response()
+        }
+    })
+}
+
+/// A page rendered once at startup, sent with a strong `ETag` and `no-cache`:
+/// the browser keeps it and asks again each load, and an unchanged page is a
+/// 304 with no body.
+fn cached_page(html: String) -> axum::routing::MethodRouter {
+    use sha2::Digest;
+    let etag: Arc<str> = format!(
+        "\"{}\"",
+        &hex::encode(sha2::Sha256::digest(html.as_bytes()))[..32]
+    )
+    .into();
+    let html: Arc<str> = html.into();
+    get(move |headers: HeaderMap| {
+        let (html, etag) = (Arc::clone(&html), Arc::clone(&etag));
+        async move {
+            let fresh = headers
+                .get(header::IF_NONE_MATCH)
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|v| v.split(',').any(|t| t.trim() == &*etag));
+            let common = [
+                (header::ETAG, etag.to_string()),
+                (header::CACHE_CONTROL, "no-cache".to_string()),
+            ];
+            if fresh {
+                (StatusCode::NOT_MODIFIED, common).into_response()
+            } else {
+                (
+                    common,
+                    [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+                    html.to_string(),
+                )
+                    .into_response()
+            }
         }
     })
 }
@@ -191,7 +228,10 @@ pub fn router(config: &Config, openapi_json: Arc<str>) -> Router {
             auth_disabled: config.auth_disabled,
         };
         router = router
-            .route("/dashboard", page(render(DASHBOARD_HTML, config, "/dashboard")))
+            .route(
+                "/dashboard",
+                cached_page(render(ADMIN_HTML, config, "/dashboard")),
+            )
             .route(
                 "/dashboard/config.json",
                 json_route(serde_json::to_value(dash).unwrap_or_default()),
