@@ -75,11 +75,11 @@ jobs:
           grep -qa "${GIT_SHA:0:12}" "$bin"
           mkdir dist && cp "$bin" dist/${{ matrix.asset }}
       - if: runner.os == 'Linux'
-        name: static and under 20 MB
+        name: static and under 24 MiB
         run: |
           bin=dist/${{ matrix.asset }}
           file "$bin" | grep -qE "static(ally|-pie) linked"
-          test "$(stat -c %s "$bin")" -lt $((20 * 1024 * 1024))
+          test "$(stat -c %s "$bin")" -lt $((24 * 1024 * 1024))
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.asset }}

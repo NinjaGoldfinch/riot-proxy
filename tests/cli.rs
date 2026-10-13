@@ -199,7 +199,12 @@ struct Server {
 
 impl Server {
     fn start(data: &Path, port: u16) -> Self {
+        Self::start_with(data, port, &[])
+    }
+
+    fn start_with(data: &Path, port: u16, env: &[(&str, &str)]) -> Self {
         let mut child = cmd(data)
+            .envs(env.iter().copied())
             .args(["serve", "--host", "127.0.0.1", "--port", &port.to_string()])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -307,6 +312,37 @@ fn serve_prints_the_bootstrap_key_exactly_once_and_healthcheck_passes() {
     assert!(
         list.contains("bootstrap-admin") && list.contains("read,admin"),
         "{list}"
+    );
+}
+
+/// OBJ-01: boot names the bucket and endpoint, never the keys, and makes no
+/// request to it (the endpoint here does not resolve).
+#[test]
+fn serve_logs_the_object_store_without_its_keys() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("data");
+    let server = Server::start_with(
+        &data,
+        free_port(),
+        &[
+            ("ARCHIVE_OBJECT_URL", "s3://riot-proxy-archive"),
+            ("ARCHIVE_OBJECT_ENDPOINT", "https://s3.invalid"),
+            ("ARCHIVE_OBJECT_ACCESS_KEY", "AKIDBOOTLOGTEST"),
+            ("ARCHIVE_OBJECT_SECRET_KEY", "boot-log-secret-value"),
+        ],
+    );
+    let log = server.stop(Vec::new());
+    let line = log
+        .lines()
+        .find(|l| l.contains("object store configured"))
+        .unwrap_or_else(|| panic!("{log}"));
+    assert!(
+        line.contains("s3://riot-proxy-archive at https://s3.invalid"),
+        "{line}"
+    );
+    assert!(
+        !log.contains("AKIDBOOTLOGTEST") && !log.contains("boot-log-secret"),
+        "{log}"
     );
 }
 
