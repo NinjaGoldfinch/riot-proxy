@@ -295,7 +295,7 @@ hostname points at `old` to 300 s now, so the cut-over propagates in minutes.
 
 ### 1. Provision
 
-- Onidel: ONI-4, Sydney, Ubuntu 24.04 LTS, your SSH key, hourly billing.
+- Onidel: ONI-4, Sydney, Ubuntu 26.04 LTS, your SSH key, hourly billing.
   Enable the IPv6 /64. Create the object storage bucket `riot-proxy-archive`
   in Sydney and an access key scoped to it. Note the endpoint
   (`s3.ap-southeast-2.onidel.cloud` per their knowledge base; confirm in the
