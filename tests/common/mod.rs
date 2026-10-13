@@ -52,6 +52,8 @@ pub fn app_with(env: &[(&str, &str)], upstream: &str) -> (tempfile::TempDir, App
     let auth = std::sync::Arc::new(riot_proxy::http::auth::Auth::new(&config, db.clone()));
     let hub = riot_proxy::ws::Hub::new();
     let mirror = std::sync::Arc::new(riot_proxy::r#static::Mirror::new(dir.path().join("ddragon"), cdn));
+    let config = std::sync::Arc::new(config);
+    let quotas = std::sync::Arc::new(riot_proxy::http::quota::Quotas::new());
     let stats = std::sync::Arc::new(riot_proxy::stats::Stats {
         hub: hub.clone(),
         db: db.clone(),
@@ -63,12 +65,15 @@ pub fn app_with(env: &[(&str, &str)], upstream: &str) -> (tempfile::TempDir, App
         mirror: std::sync::Arc::clone(&mirror),
         started: std::time::Instant::now(),
         samples: riot_proxy::stats::Samples::default(),
+        fetcher: fetcher.clone(),
+        quotas: std::sync::Arc::clone(&quotas),
+        config: std::sync::Arc::clone(&config),
     });
     let state = AppState {
-        config: config.into(),
+        config,
         db: db.clone(),
         auth,
-        quotas: std::sync::Arc::new(riot_proxy::http::quota::Quotas::new()),
+        quotas,
         limiter,
         fetcher,
         limiter_restored: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),

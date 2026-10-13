@@ -570,6 +570,48 @@ expression: doc
         ],
         "type": "object"
       },
+      "BlockedMethod": {
+        "description": "A method where bulk work would wait right now, on one scope.",
+        "properties": {
+          "forMs": {
+            "description": "Milliseconds until it frees up.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "method": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope",
+          "method",
+          "forMs"
+        ],
+        "type": "object"
+      },
+      "BlockedScope": {
+        "description": "A scope where bulk work would wait right now.",
+        "properties": {
+          "forMs": {
+            "description": "Milliseconds until it frees up.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "scope": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope",
+          "forMs"
+        ],
+        "type": "object"
+      },
       "BuildItemOption": {
         "description": "One choice at one step of a set build: an item (BLD-03).",
         "properties": {
@@ -758,6 +800,47 @@ expression: doc
           "present",
           "ageSeconds",
           "stale"
+        ],
+        "type": "object"
+      },
+      "CacheStore": {
+        "description": "The cache tiers' sizes (ADM-04).",
+        "properties": {
+          "l1Bytes": {
+            "description": "Keys, bodies and per-entry overhead, as L1 weighs them.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "l1Entries": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "l1MaxBytes": {
+            "description": "`CACHE_L1_MAX_MB` in bytes.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "l2Dropped": {
+            "description": "L2 writes dropped on a full queue since the start (`cache_l2_dropped_total`).",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "l2Rows": {
+            "description": "Rows in the L2 `cache` table, from the slow sample.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "l1Entries",
+          "l1Bytes",
+          "l1MaxBytes",
+          "l2Rows",
+          "l2Dropped"
         ],
         "type": "object"
       },
@@ -1807,6 +1890,45 @@ expression: doc
         ],
         "type": "object"
       },
+      "DiskSection": {
+        "description": "What the database takes on disk, and what is left (DSK-01's readings).",
+        "properties": {
+          "dbBytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "freeBytes": {
+            "description": "Free on the data directory's file system.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "freelistBytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "totalBytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "walBytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "dbBytes",
+          "walBytes",
+          "freelistBytes",
+          "freeBytes",
+          "totalBytes"
+        ],
+        "type": "object"
+      },
       "ErrorBody": {
         "properties": {
           "code": {
@@ -2011,6 +2133,54 @@ expression: doc
         ],
         "type": "object"
       },
+      "Gates": {
+        "description": "The bulk gate (design/05 §Priorities): its settings and what it holds now.",
+        "properties": {
+          "blockedMethods": {
+            "items": {
+              "$ref": "#/components/schemas/BlockedMethod"
+            },
+            "type": "array"
+          },
+          "blockedScopes": {
+            "items": {
+              "$ref": "#/components/schemas/BlockedScope"
+            },
+            "type": "array"
+          },
+          "bulkIdleAfterS": {
+            "description": "`BULK_IDLE_AFTER_S`.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "bulkIdleCeiling": {
+            "description": "`BULK_IDLE_CEILING`.",
+            "format": "double",
+            "type": "number"
+          },
+          "bulkUsageCeiling": {
+            "description": "`BULK_USAGE_CEILING`.",
+            "format": "double",
+            "type": "number"
+          },
+          "clientWaitBudgetMs": {
+            "description": "`CLIENT_WAIT_BUDGET_MS`.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "bulkUsageCeiling",
+          "bulkIdleCeiling",
+          "bulkIdleAfterS",
+          "clientWaitBudgetMs",
+          "blockedScopes",
+          "blockedMethods"
+        ],
+        "type": "object"
+      },
       "Health": {
         "properties": {
           "ok": {
@@ -2044,7 +2214,7 @@ expression: doc
         "type": "object"
       },
       "HistoryPoint": {
-        "description": "v1 `MetricsHistoryPoint`.",
+        "description": "v1 `MetricsHistoryPoint`, plus what the dashboard draws 24 h rates from\n(ADM-04). Points stored before then lack the additions, which read null.",
         "properties": {
           "analytics": {
             "$ref": "#/components/schemas/HistoryAnalytics"
@@ -2052,8 +2222,27 @@ expression: doc
           "cache": {
             "$ref": "#/components/schemas/CacheCounts"
           },
+          "disk": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DiskSection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "queues": {
             "$ref": "#/components/schemas/HistoryQueues"
+          },
+          "requests": {
+            "description": "`proxy_requests_total` summed over its labels, since the process started.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "t": {
             "description": "Unix ms.",
@@ -2062,6 +2251,15 @@ expression: doc
           },
           "totals": {
             "$ref": "#/components/schemas/Totals"
+          },
+          "upstream": {
+            "description": "`proxy_upstream_requests_total` summed over its labels, since the process started.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
@@ -2570,6 +2768,12 @@ expression: doc
             "minimum": 0,
             "type": "integer"
           },
+          "interactiveWaiters": {
+            "description": "Interactive requests queued on this scope; bulk yields while any wait (ADM-04).",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "kind": {
             "description": "`platform`, `region` or `other`.",
             "type": "string"
@@ -2599,7 +2803,8 @@ expression: doc
           "label",
           "frozenMs",
           "windows",
-          "methods"
+          "methods",
+          "interactiveWaiters"
         ],
         "type": "object"
       },
@@ -3811,6 +4016,40 @@ expression: doc
         },
         "type": "object"
       },
+      "QuotaUse": {
+        "description": "One consumer's quota window right now (the dashboard's `quotas`, ADM-04).",
+        "properties": {
+          "consumer": {
+            "description": "The consumer's id (`GET /v1/admin/consumers`).",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Requests per rolling minute.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "resetSecs": {
+            "description": "Seconds until the oldest of them leaves the window; 0 when none is in it.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "used": {
+            "description": "Requests in the last minute.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "consumer",
+          "limit",
+          "used",
+          "resetSecs"
+        ],
+        "type": "object"
+      },
       "Ready": {
         "description": "v1 returned `{ok, redis, postgres, keyScope}`. v2 has one store, so `sqlite` replaces\nthe two backend booleans, and `limiter` says the checkpoint was restored\n(design/07). `keyScope` is v1's (ADR-011). `sqliteReaders`/`sqliteReadersFree`\nshow the read pool, so a leak shows before reads fail (ADR-113).",
         "properties": {
@@ -4059,6 +4298,14 @@ expression: doc
           "cache": {
             "$ref": "#/components/schemas/CacheCounts"
           },
+          "cacheStore": {
+            "$ref": "#/components/schemas/CacheStore",
+            "description": "The cache tiers' sizes (ADM-04)."
+          },
+          "disk": {
+            "$ref": "#/components/schemas/DiskSection",
+            "description": "From the slow sample (ADM-04)."
+          },
           "events": {
             "additionalProperties": {
               "format": "int64",
@@ -4073,6 +4320,16 @@ expression: doc
           },
           "flows": {
             "$ref": "#/components/schemas/Flows"
+          },
+          "gates": {
+            "$ref": "#/components/schemas/Gates",
+            "description": "The bulk gate (ADM-04)."
+          },
+          "inflight": {
+            "description": "Riot calls in flight, each shared by every request waiting on it (ADM-04).",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
           },
           "keyScope": {
             "type": "string"
@@ -4098,9 +4355,19 @@ expression: doc
             },
             "type": "object"
           },
+          "quotas": {
+            "description": "Every consumer metered since the start, busiest first (ADM-04).",
+            "items": {
+              "$ref": "#/components/schemas/QuotaUse"
+            },
+            "type": "array"
+          },
           "sampledAt": {
             "$ref": "#/components/schemas/SampledAt",
             "description": "When `totals`, `queues`, `ladder` and `analytics` (`fast`) and the archive\nand disk readings (`slow`) were read (ADM-02)."
+          },
+          "sqlite": {
+            "$ref": "#/components/schemas/SqliteReaders"
           },
           "totals": {
             "$ref": "#/components/schemas/Totals"
@@ -4132,7 +4399,34 @@ expression: doc
           "ladder",
           "analytics",
           "process",
-          "sampledAt"
+          "sampledAt",
+          "cacheStore",
+          "gates",
+          "inflight",
+          "quotas",
+          "sqlite",
+          "disk"
+        ],
+        "type": "object"
+      },
+      "SqliteReaders": {
+        "description": "The SQLite read pool.",
+        "properties": {
+          "readers": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "readersFree": {
+            "description": "Idle right now (`sqlite_readers_free`).",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "readers",
+          "readersFree"
         ],
         "type": "object"
       },

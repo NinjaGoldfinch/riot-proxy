@@ -26,6 +26,11 @@ impl ResponseCache {
         Self { l1, l2 }
     }
 
+    /// L2 writes dropped on a full queue since the start; 0 without L2.
+    pub fn l2_dropped(&self) -> u64 {
+        self.l2.as_ref().map_or(0, L2Writer::dropped)
+    }
+
     pub async fn get(&self, key: &str) -> Lookup {
         self.l1.get(key).await
     }

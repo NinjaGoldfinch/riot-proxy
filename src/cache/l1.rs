@@ -88,6 +88,7 @@ impl Expiry<String, Arc<CacheEntry>> for HardTtl {
 #[derive(Clone)]
 pub struct L1 {
     cache: Cache<String, Arc<CacheEntry>>,
+    max_bytes: u64,
 }
 
 impl std::fmt::Debug for L1 {
@@ -110,7 +111,7 @@ impl L1 {
             .weigher(|k: &String, v: &Arc<CacheEntry>| weight(k, v))
             .expire_after(HardTtl)
             .build();
-        Self { cache }
+        Self { cache, max_bytes }
     }
 
     pub fn from_config(config: &crate::config::Config) -> Self {
@@ -204,6 +205,11 @@ impl L1 {
 
     pub fn weighted_size(&self) -> u64 {
         self.cache.weighted_size()
+    }
+
+    /// The weight budget it was built with (`CACHE_L1_MAX_MB`).
+    pub fn max_bytes(&self) -> u64 {
+        self.max_bytes
     }
 }
 
