@@ -1,6 +1,7 @@
-// The dashboard in headless Chromium (ADM-08) at a desktop, a tablet and a
-// phone width, in both themes: the page never scrolls sideways, the health
-// strip and the tiles fit their boxes, and every tab can be reached and
+// The dashboard in headless Chromium (ADM-08, ADM-09) at a desktop, a tablet
+// and a phone width, in both themes: no view scrolls sideways, the health
+// strip, tiles, charts and panels fit their boxes, a chart's crosshair follows
+// the pointer, and every tab can be reached and
 // opened (the rail at 820 px and up, a scrolling tab strip below). Screenshots
 // go to screenshots/. Skips without a browser, except under CI (see
 // showcase.browser.test.mjs).
@@ -46,12 +47,30 @@ for (const [device, width] of [['desktop', 1280], ['tablet', 820], ['phone', 390
         });
         await page.goto('http://admin.test/dashboard');
         await page.waitForSelector('#tiles .tile');
-        await page.screenshot({ path: new URL(`./screenshots/admin-${device}-${theme}.png`, import.meta.url).pathname, fullPage: true });
+        await page.waitForSelector('#chUpstream .plotwrap');
+        // Each view: nothing sideways, nothing wider than its box (tables scroll inside .scroll).
+        const fits = () => page.evaluate(() => {
+          const out = { page: [document.documentElement.scrollWidth, innerWidth], overflow: [] };
+          for (const el of document.querySelectorAll('.strip, .tile, .tile .value, .rail-foot, main, .chart, .chart figcaption, .xaxis, .panel, .filters')) {
+            if (el.scrollWidth > el.clientWidth + 1) out.overflow.push(`${el.id || el.className || el.tagName}: ${el.scrollWidth} > ${el.clientWidth}`);
+          }
+          return out;
+        });
+        for (const view of ['overview', 'traffic']) {
+          await page.evaluate((v) => { location.hash = v; }, view);
+          await page.waitForSelector(view === 'traffic' ? '#trRecent tbody tr' : '#chArchive .plotwrap');
+          await page.screenshot({ path: new URL(`./screenshots/admin-${view}-${device}-${theme}.png`, import.meta.url).pathname, fullPage: true });
+          const f = await fits();
+          assert.ok(f.page[0] <= f.page[1], `${view}: page scrolls sideways: ${f.page[0]} > ${f.page[1]}`);
+          assert.deepEqual(f.overflow, [], `${view}: nothing wider than its box`);
+        }
+        // A chart's crosshair follows the pointer.
+        await page.evaluate(() => { location.hash = 'overview'; });
+        await page.waitForSelector('#chBacklog .plotwrap');
+        await page.hover('#chBacklog .plotwrap');
+        assert.match(await page.textContent('#chBacklog .readout'), /^\d\d:\d\d · /);
         const m = await page.evaluate(() => {
           const out = { page: [document.documentElement.scrollWidth, innerWidth], overflow: [], tabs: [] };
-          for (const el of document.querySelectorAll('.strip, .tile, .tile .value, .rail-foot, main')) {
-            if (el.scrollWidth > el.clientWidth + 1) out.overflow.push(`${el.className || el.tagName}: ${el.scrollWidth} > ${el.clientWidth}`);
-          }
           const strip = document.querySelector('#tabs');
           for (const b of document.querySelectorAll('[role="tab"]')) {
             b.scrollIntoView({ block: 'nearest', inline: 'nearest' });
@@ -68,7 +87,8 @@ for (const [device, width] of [['desktop', 1280], ['tablet', 820], ['phone', 390
         assert.deepEqual(m.tabs.filter((x) => !x.visible), [], 'every tab can be scrolled into view');
         for (const { id } of m.tabs) {
           await page.click(`#${id}`);
-          assert.equal(await page.getAttribute(`#${id}`, 'aria-selected'), 'true', id);
+          await page.waitForFunction((tab) => document.getElementById(tab).getAttribute('aria-selected') === 'true', id);
+          assert.equal(await page.isVisible(`#${id.replace('tab-', 'panel-')}`), true, id);
         }
         // The rail is a column on wide screens, a row of tabs on narrow ones.
         const dir = await page.$eval('#tabs', (el) => getComputedStyle(el).flexDirection);

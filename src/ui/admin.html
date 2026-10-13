@@ -119,6 +119,40 @@
       .tile .sub { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
       .empty { color: var(--muted); padding: 24px 0; text-align: center; }
 
+      /* ── charts (design/13 §Chart rules) ── */
+      .charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 10px; margin-top: 10px; }
+      .chart { margin: 0; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px 8px; min-width: 0; }
+      .chart figcaption { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+      .chart figcaption b { font-weight: 600; font-size: 12px; color: var(--ink-2); }
+      .chart figcaption .latest { margin-left: auto; font-size: 13px; font-weight: 600; color: var(--ink); white-space: nowrap; }
+      .chart figcaption .btn { margin-left: 4px; }
+      .plotwrap { position: relative; height: 96px; margin-left: 0; outline-offset: 2px; touch-action: pan-y; }
+      .plotwrap svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+      .plotwrap .grid { stroke: var(--grid); stroke-width: 1; }
+      .plotwrap .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+      .plotwrap .wash { opacity: 0.1; stroke: none; }
+      .plotwrap .xh { stroke: var(--muted); stroke-width: 1; }
+      .plotwrap .ylab { position: absolute; left: 0; font-size: 11px; color: var(--muted); background: var(--panel); padding: 0 3px 0 0; line-height: 1; pointer-events: none; }
+      .plotwrap .ylab.top { top: 0; }
+      .plotwrap .ylab.bottom { bottom: 0; }
+      .readout { position: absolute; top: 0; padding: 2px 6px; border-radius: 4px; background: var(--panel-2); border: 1px solid var(--border); font-size: 11px; white-space: nowrap; pointer-events: none; transform: translateX(-50%); }
+      .xaxis { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin-top: 3px; }
+      .legend { display: flex; flex-wrap: wrap; gap: 10px; font-size: 11px; color: var(--ink-2); margin-top: 4px; }
+      .legend i { display: inline-block; width: 10px; height: 2px; vertical-align: middle; margin-right: 4px; }
+      .chart .tableview { margin-top: 6px; max-height: 220px; overflow: auto; }
+      .chart .nodata { height: 96px; display: grid; place-items: center; color: var(--muted); font-size: 12px; }
+      .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 10px; margin-top: 10px; }
+      .panel-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; margin-bottom: 8px; }
+      .panel-head h2 { margin: 0; white-space: nowrap; }
+      .panel-head .end { margin-left: auto; font-size: 12px; }
+      .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; font-size: 12px; }
+      .filters input, .filters select { padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--page); min-width: 0; }
+      .filters input { flex: 1 1 160px; }
+      .filters .group { display: inline-flex; align-items: center; gap: 6px; }
+      .trunc { display: inline-block; max-width: 34ch; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+      .stat5 { color: var(--ink); font-weight: 600; }
+      td .tag { display: inline-flex; align-items: center; gap: 4px; }
+
       /* ── table helper ── */
       .scroll { overflow-x: auto; }
       table { width: 100%; border-collapse: collapse; font-size: 12px; }
@@ -155,6 +189,7 @@
         .tab[aria-selected='true'] { box-shadow: inset 0 -2px 0 var(--accent); }
         .rail-foot { margin: 0; padding: 0; border: 0; flex-direction: row; flex: none; }
         .rail-foot .wide { display: none; }
+        #conn span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
         .strip { top: 81px; }
         main { padding: 0 12px 24px; }
       }
@@ -169,6 +204,7 @@
       <symbol id="i-critical" viewBox="0 0 16 16"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1Zm2.8 8.7a.8.8 0 1 1-1.1 1.1L8 9.1l-1.7 1.7a.8.8 0 1 1-1.1-1.1L6.9 8 5.2 6.3a.8.8 0 1 1 1.1-1.1L8 6.9l1.7-1.7a.8.8 0 1 1 1.1 1.1L9.1 8Z" /></symbol>
       <symbol id="i-unknown" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-dasharray="3 2" /></symbol>
       <symbol id="i-moon" viewBox="0 0 16 16"><path d="M6.2 1.3a.6.6 0 0 1 .1.7 5.6 5.6 0 0 0 7.7 7.7.6.6 0 0 1 .8.8A6.9 6.9 0 1 1 5.5 1.2a.6.6 0 0 1 .7.1Z" /></symbol>
+      <symbol id="i-traffic" viewBox="0 0 16 16"><path d="M4.5 1.5a.8.8 0 0 1 .8.8v9.5l1.6-1.6a.8.8 0 1 1 1.1 1.1l-3 3a.8.8 0 0 1-1.1 0l-3-3a.8.8 0 0 1 1.1-1.1l1.6 1.6V2.3a.8.8 0 0 1 .9-.8Zm7 0a.8.8 0 0 1 .6.2l3 3a.8.8 0 1 1-1.1 1.1l-1.7-1.6v9.5a.8.8 0 0 1-1.6 0V4.2L9.1 5.8A.8.8 0 0 1 8 4.7l3-3a.8.8 0 0 1 .5-.2Z" /></symbol>
       <symbol id="i-overview" viewBox="0 0 16 16"><path d="M1 2.5A1.5 1.5 0 0 1 2.5 1h3A1.5 1.5 0 0 1 7 2.5v3A1.5 1.5 0 0 1 5.5 7h-3A1.5 1.5 0 0 1 1 5.5Zm8 0A1.5 1.5 0 0 1 10.5 1h3A1.5 1.5 0 0 1 15 2.5v3A1.5 1.5 0 0 1 13.5 7h-3A1.5 1.5 0 0 1 9 5.5Zm-8 8A1.5 1.5 0 0 1 2.5 9h3A1.5 1.5 0 0 1 7 10.5v3A1.5 1.5 0 0 1 5.5 15h-3A1.5 1.5 0 0 1 1 13.5Zm8 0A1.5 1.5 0 0 1 10.5 9h3a1.5 1.5 0 0 1 1.5 1.5v3a1.5 1.5 0 0 1-1.5 1.5h-3A1.5 1.5 0 0 1 9 13.5Z" /></symbol>
     </svg>
 
@@ -236,7 +272,7 @@
       // Riot's league-v4 apex lists stop at this many entries (LAD-01); the Ladder
       // tab (ADM-12) prints it, and tests/ui.rs checks it is the server's.
       const APEX_LIST_CAP = 10000;
-      const TAB_IDS = ['overview'];
+      const TAB_IDS = ['overview', 'traffic'];
       const fmt = (n) => (n == null || Number.isNaN(Number(n)) ? '—' : Number(n).toLocaleString('en-US'));
       /** 1,284 · 12.9K · 1.13M · 2.1B (the stat-tile contract). */
       const compact = (n) => {
@@ -346,6 +382,76 @@
         });
       };
       const capRows = (rows, cap) => ({ shown: rows.slice(0, cap), more: Math.max(0, rows.length - cap) });
+      /** Nearest-rank percentile; null for no values. */
+      const percentile = (values, p) => {
+        const v = values.filter((x) => x != null).sort((a, b) => a - b);
+        return v.length ? v[Math.min(v.length - 1, Math.max(0, Math.ceil((p / 100) * v.length) - 1))] : null;
+      };
+      /** At most `n` points: each bucket's mean at its last time; a bucket of nulls stays a gap. */
+      const downsample = (pts, n) => {
+        if (pts.length <= n) return pts;
+        const out = [];
+        const size = pts.length / n;
+        for (let i = 0; i < n; i++) {
+          const b = pts.slice(Math.floor(i * size), Math.floor((i + 1) * size));
+          const vals = b.map((p) => p[1]).filter((v) => v != null);
+          out.push([b[b.length - 1][0], vals.length ? vals.reduce((a, c) => a + c, 0) / vals.length : null]);
+        }
+        return out;
+      };
+      /** A snapshot as a history point (the shape of GET /v1/admin/metrics/history). */
+      const historyPointOf = (s, t) => {
+        const j = jobTotals(s.queues);
+        return { t, totals: s.totals, queues: { active: j.running, pending: j.pending, failed: j.failed }, cache: s.cache, disk: s.disk ?? null, requests: sumValues(s.requests), upstream: sumValues(s.upstream) };
+      };
+      /** The Overview's six series from history points: values, or rates and ratios between neighbours. */
+      const seriesOf = (points) => {
+        const out = { archive: [], backlog: [], hit: [], disk: [], requests: [], upstream: [] };
+        const served = (c) => (c.hit ?? 0) + (c.neg ?? 0) + (c.stale ?? 0);
+        let prev = null;
+        for (const p of points) {
+          out.archive.push([p.t, p.totals?.archivedMatches ?? null]);
+          out.backlog.push([p.t, p.queues?.pending ?? null]);
+          out.disk.push([p.t, p.disk?.freeBytes ?? null]);
+          let hit = null;
+          if (prev?.cache && p.cache) {
+            const ds = served(p.cache) - served(prev.cache);
+            const da = ds + (p.cache.miss ?? 0) - (prev.cache.miss ?? 0);
+            hit = da > 0 && ds >= 0 && ds <= da ? ds / da : null;
+          }
+          const r = (k) => (prev && p[k] != null && prev[k] != null ? rate({ at: prev.t, total: prev[k] }, { at: p.t, total: p[k] }) : null);
+          out.hit.push([p.t, hit]);
+          out.requests.push([p.t, r('requests')]);
+          out.upstream.push([p.t, r('upstream')]);
+          prev = p;
+        }
+        return out;
+      };
+      const statusClass = (status) => `${String(status)[0]}xx`;
+      /** Snapshot `requests` ("route|status|cache" → n) by route, with p50/p95 from the ring's latencies. */
+      const routeRows = (requests, recent = []) => {
+        const by = new Map();
+        for (const [k, n] of Object.entries(requests ?? {})) {
+          const [route, status, cache] = k.split('|');
+          const r = by.get(route) ?? { route, total: 0, s2xx: 0, s3xx: 0, s4xx: 0, s5xx: 0, served: 0, cacheable: 0 };
+          r.total += n;
+          r[`s${statusClass(status)}`] = (r[`s${statusClass(status)}`] ?? 0) + n;
+          if (['hit', 'neg', 'stale'].includes(cache)) { r.served += n; r.cacheable += n; }
+          if (cache === 'miss') r.cacheable += n;
+          by.set(route, r);
+        }
+        return [...by.values()].map((r) => {
+          const lat = recent.filter((q) => q.route === r.route).map((q) => q.latencyMs);
+          return { ...r, hitRatio: r.cacheable ? r.served / r.cacheable : null, p50: percentile(lat, 50), p95: percentile(lat, 95), sampled: lat.length };
+        });
+      };
+      /** Snapshot `upstream` ("region|method|status" → n) as rows. */
+      const upstreamRows = (upstream) => Object.entries(upstream ?? {}).map(([k, n]) => {
+        const [region, method, status] = k.split('|');
+        return { region, method, status, count: n };
+      });
+      const hhmm = (t) => new Date(t).toTimeString().slice(0, 5);
+      const hhmmss = (t) => new Date(t).toTimeString().slice(0, 8);
       // ---------- end pure helpers
 
       const $ = (id) => document.getElementById(id);
@@ -442,6 +548,107 @@
         return wrap;
       }
 
+      // ── the chart helper: SVG, one <path> per series (design/13 §Chart rules) ──
+      /**
+       * series: [{ name, color, points: [[t, v|null]] }]; format(v) for labels.
+       * A crosshair follows the pointer or the arrow keys; "Table" shows the numbers.
+       */
+      function chart({ title, series, format = fmt, yMin = null, yMax = null, id = null }) {
+        const fig = document.createElement('figure');
+        fig.className = 'chart';
+        if (id) fig.id = id;
+        const pts = series.map((s) => ({ ...s, points: downsample(s.points, 600) }));
+        const vals = pts.flatMap((s) => s.points.map((p) => p[1])).filter((v) => v != null);
+        const times = pts[0]?.points.map((p) => p[0]) ?? [];
+        // The latest value and the table use every point; the drawing, at most 600.
+        const last = series.map((s) => [...s.points].reverse().find((p) => p[1] != null)?.[1] ?? null);
+        const latest = pts.length === 1 ? (last[0] == null ? '—' : format(last[0])) : '';
+        const head = `<figcaption><b>${esc(title)}</b><span class="latest">${esc(latest)}</span><button class="btn small" type="button" data-table aria-expanded="false">Table</button></figcaption>`;
+        if (vals.length < 2 || times.length < 2) {
+          fig.innerHTML = `${head}<div class="nodata">Not enough history yet.</div>`;
+          fig.querySelector('[data-table]').remove();
+          return fig;
+        }
+        const W = 600;
+        const H = 96;
+        let lo = yMin ?? Math.min(...vals);
+        let hi = yMax ?? Math.max(...vals);
+        if (hi === lo) { hi += Math.abs(hi) * 0.05 || 1; lo -= Math.abs(lo) * 0.05 || 0; }
+        const t0 = times[0];
+        const t1 = times[times.length - 1];
+        const x = (t) => ((t - t0) / (t1 - t0 || 1)) * W;
+        const y = (v) => H - ((v - lo) / (hi - lo)) * (H - 4) - 2;
+        const segs = (points) => {
+          const out = [];
+          let cur = [];
+          for (const [t, v] of points) {
+            if (v == null) { if (cur.length) out.push(cur); cur = []; } else cur.push([x(t), y(v)]);
+          }
+          if (cur.length) out.push(cur);
+          return out;
+        };
+        const paths = pts.map((s) => {
+          const ss = segs(s.points);
+          const line = ss.map((g) => g.map(([a, b], i) => `${i ? 'L' : 'M'}${a.toFixed(1)},${b.toFixed(1)}`).join('')).join('');
+          const wash = pts.length === 1
+            ? `<path class="wash" fill="${s.color}" d="${ss.map((g) => `M${g[0][0].toFixed(1)},${H}${g.map(([a, b]) => `L${a.toFixed(1)},${b.toFixed(1)}`).join('')}L${g[g.length - 1][0].toFixed(1)},${H}Z`).join('')}" />`
+            : '';
+          return `${wash}<path class="line" stroke="${s.color}" vector-effect="non-scaling-stroke" d="${line}" />`;
+        }).join('');
+        const grid = [2, H / 2, H - 2].map((g) => `<line class="grid" x1="0" x2="${W}" y1="${g}" y2="${g}" vector-effect="non-scaling-stroke" />`).join('');
+        const ticks = [0, 1 / 3, 2 / 3, 1].map((f) => `<span>${hhmm(t0 + (t1 - t0) * f)}</span>`).join('');
+        const legend = pts.length > 1 ? `<div class="legend">${pts.map((s, i) => `<span><i style="background:${s.color}"></i>${esc(s.name)} ${esc(last[i] == null ? '—' : format(last[i]))}</span>`).join('')}</div>` : '';
+        const summary = `${title}: ${pts.map((s, i) => `${s.name} ${last[i] == null ? 'no data' : format(last[i])}`).join(', ')}; ${hhmm(t0)} to ${hhmm(t1)}. Arrow keys move the readout.`;
+        fig.innerHTML = `${head}<div class="plotwrap" tabindex="0" role="img" aria-label="${esc(summary)}"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">${grid}${paths}<line class="xh" x1="0" x2="0" y1="0" y2="${H}" vector-effect="non-scaling-stroke" visibility="hidden" /></svg><span class="ylab top">${esc(format(hi))}</span><span class="ylab bottom">${esc(format(lo))}</span><span class="readout" hidden></span></div><div class="xaxis">${ticks}</div>${legend}<div class="tableview" hidden></div>`;
+        const wrap = fig.querySelector('.plotwrap');
+        const xh = fig.querySelector('.xh');
+        const readout = fig.querySelector('.readout');
+        let at = null;
+        const show = (i) => {
+          at = Math.max(0, Math.min(times.length - 1, i));
+          const t = times[at];
+          xh.setAttribute('x1', x(t));
+          xh.setAttribute('x2', x(t));
+          xh.setAttribute('visibility', 'visible');
+          readout.hidden = false;
+          readout.style.left = `${Math.min(88, Math.max(12, (x(t) / W) * 100))}%`;
+          readout.textContent = `${hhmm(t)} · ${pts.map((s) => `${pts.length > 1 ? `${s.name} ` : ''}${s.points[at]?.[1] == null ? '—' : format(s.points[at][1])}`).join(' · ')}`;
+        };
+        const hide = () => { at = null; xh.setAttribute('visibility', 'hidden'); readout.hidden = true; };
+        wrap.addEventListener('pointermove', (e) => {
+          const r = wrap.getBoundingClientRect();
+          if (!r.width) return;
+          const t = t0 + ((e.clientX - r.left) / r.width) * (t1 - t0);
+          let best = 0;
+          for (let i = 1; i < times.length; i++) if (Math.abs(times[i] - t) < Math.abs(times[best] - t)) best = i;
+          show(best);
+        });
+        wrap.addEventListener('pointerleave', hide);
+        wrap.addEventListener('blur', hide);
+        wrap.addEventListener('keydown', (e) => {
+          const step = { ArrowLeft: -1, ArrowRight: 1 }[e.key];
+          if (step) { e.preventDefault(); show(at == null ? times.length - 1 : at + step); }
+          else if (e.key === 'Home') { e.preventDefault(); show(0); }
+          else if (e.key === 'End') { e.preventDefault(); show(times.length - 1); }
+          else if (e.key === 'Escape') hide();
+        });
+        const btn = fig.querySelector('[data-table]');
+        btn.addEventListener('click', () => {
+          const box = fig.querySelector('.tableview');
+          const open = box.hidden;
+          box.hidden = !open;
+          btn.setAttribute('aria-expanded', String(open));
+          if (open && !box.firstChild) {
+            const rows = series[0].points.map(([t], i) => Object.fromEntries([['t', t], ...series.map((s, j) => [`s${j}`, s.points[i]?.[1] ?? null])]));
+            box.append(table({
+              columns: [{ key: 't', label: 'Time', format: (v) => esc(hhmm(v)) }, ...pts.map((s, j) => ({ key: `s${j}`, label: s.name, num: true, format: (v) => esc(v == null ? '—' : format(v)) }))],
+              rows, cap: 200, sort: { key: 't', dir: 'desc' },
+            }));
+          }
+        });
+        return fig;
+      }
+
       // ── the API: one base URL, the key from localStorage ─────────────────
       class ApiError extends Error {
         constructor(status, body) {
@@ -491,7 +698,14 @@
           id: 'overview',
           label: 'Overview',
           icon: 'overview',
-          enter() { renderOverview(); },
+          enter() { enterOverview(); },
+        },
+        {
+          id: 'traffic',
+          label: 'Traffic',
+          icon: 'traffic',
+          enter() { renderTraffic(); pollTraffic(); },
+          leave() { clearTimeout(traffic.timer); traffic.timer = null; },
         },
       ];
       function buildTabs() {
@@ -533,12 +747,23 @@
       // ── Overview ─────────────────────────────────────────────────────────
       const tile = (label, value, sub, level) =>
         `<div class="tile"><div class="label">${level ? icon(level) : ''}${esc(label)}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`;
+      // History: GET /metrics/history once per entry, then the newest snapshot as
+      // a live point, kept once it is an interval newer than the last.
+      const hist = { points: [], live: null, intervalMs: 60000, loaded: false };
       function renderOverview() {
         if (state.tab !== 'overview') return;
         const panel = $('panel-overview');
+        if (!$('tiles')) {
+          panel.innerHTML = `<h1>Overview</h1><div class="tiles" id="tiles"></div><div class="charts" id="charts"></div>
+            <section class="panel" id="errorsPanel" style="margin-top:10px"><div class="panel-head"><h2>Recent errors</h2><a class="end" href="#traffic">Traffic →</a></div><div id="errors"></div></section>`;
+        }
+        renderTiles();
+        renderCharts();
+      }
+      function renderTiles() {
         const s = store.get('snapshot');
-        if (!s) {
-          panel.innerHTML = '<h1>Overview</h1><div class="empty">Waiting for the first snapshot…</div>';
+        if (!s || !$('tiles')) {
+          if ($('tiles')) $('tiles').innerHTML = '<div class="empty">Waiting for the first snapshot…</div>';
           return;
         }
         const r = store.get('rates') ?? {};
@@ -548,7 +773,7 @@
         const gained = state.firstArchived == null ? null : s.totals.archivedMatches - state.firstArchived;
         const perSec = (v) => (v == null ? '—' : `${v < 10 ? v.toFixed(2) : v.toFixed(1)} /s`);
         const errors5xx = Object.entries(s.requests ?? {}).filter(([k]) => /\|5\d\d\|/.test(k)).reduce((n, [, v]) => n + v, 0);
-        panel.innerHTML = `<h1>Overview</h1><div class="tiles" id="tiles">${[
+        $('tiles').innerHTML = [
           tile('Archived matches', compact(s.totals.archivedMatches), gained == null ? '&nbsp;' : `${gained >= 0 ? '+' : ''}${fmt(gained)} since this page opened`),
           tile('Jobs pending', compact(jobs.pending), `${fmt(jobs.running)} running · ${fmt(jobs.failed)} failed in 24 h`),
           tile('Cache hit ratio', pct(ratio), `${compact(sumValues(s.cache))} reads since start`),
@@ -556,10 +781,174 @@
           tile('Riot calls', perSec(r.upstream), `${compact(r.upstreamTotal)} since start · ${fmt(s.inflight ?? 0)} in flight`),
           tile('Disk free', fmtBytes(s.disk?.freeBytes), disk.used == null ? '—' : `${pct(disk.used, 0)} used · database ${fmtBytes(s.disk.dbBytes)}`, disk.level === 'good' ? null : disk.level),
           tile('Process', fmtBytes(s.process?.rssBytes), `up ${fmtDuration(s.process?.uptimeSeconds)} · ${fmt(s.sqlite?.readersFree)}/${fmt(s.sqlite?.readers)} readers free`),
-        ].join('')}</div>`;
+        ].join('');
       }
-      store.on('snapshot', renderOverview);
-      store.on('rates', renderOverview);
+      function renderCharts() {
+        const box = $('charts');
+        if (!box || !hist.loaded) return;
+        const points = hist.live ? [...hist.points, hist.live] : hist.points;
+        const v = seriesOf(points);
+        const total = store.get('snapshot')?.disk?.totalBytes ?? null;
+        const perSec = (n) => `${n < 10 ? n.toFixed(2) : n.toFixed(1)} /s`;
+        const charts = [
+          chart({ id: 'chArchive', title: 'Archive growth · 24 h', series: [{ name: 'Archived matches', color: 'var(--s1)', points: v.archive }], format: compact }),
+          chart({ id: 'chBacklog', title: 'Queue backlog · 24 h', series: [{ name: 'Jobs pending', color: 'var(--s2)', points: v.backlog }], format: compact }),
+          chart({ id: 'chHit', title: 'Cache hit ratio · 24 h', series: [{ name: 'Hit ratio', color: 'var(--s3)', points: v.hit }], format: (n) => pct(n, 0), yMin: 0, yMax: 1 }),
+          chart({ id: 'chDisk', title: 'Disk free · 24 h', series: [{ name: 'Free', color: 'var(--s4)', points: v.disk }], format: fmtBytes, yMin: 0, yMax: total }),
+          chart({ id: 'chRequests', title: 'Requests · per second', series: [{ name: 'Requests', color: 'var(--s5)', points: v.requests }], format: perSec, yMin: 0 }),
+          chart({ id: 'chUpstream', title: 'Riot calls · per second', series: [{ name: 'Riot calls', color: 'var(--s6)', points: v.upstream }], format: perSec, yMin: 0 }),
+        ];
+        // Keep the readout where it was when the next snapshot redraws.
+        const focused = document.activeElement?.closest?.('.chart')?.id;
+        box.replaceChildren(...charts);
+        if (focused) $(focused)?.querySelector('.plotwrap')?.focus();
+      }
+      let errorCount = null;
+      async function loadErrors() {
+        if (state.tab !== 'overview' || !$('errors')) return;
+        try {
+          const r = await api('/v1/admin/recent?kind=errors&limit=10');
+          $('errors').replaceChildren(table({
+            columns: [
+              { key: 'at', label: 'Time', format: (v) => esc(hhmmss(v)) },
+              { key: 'status', label: 'Status', num: true },
+              { key: 'code', label: 'Code' },
+              { key: 'message', label: 'Message', format: (v) => esc(String(v).slice(0, 120)) },
+              { key: 'requestId', label: 'Request', format: (v) => (v ? `<code>${esc(v.slice(-8))}</code>` : '—') },
+            ],
+            rows: r.errors ?? [], cap: 10, empty: 'No errors since the process started.',
+          }));
+        } catch (e) {
+          if (!(e instanceof ApiError)) $('errors').textContent = `Could not load errors: ${e.message}`;
+        }
+      }
+      async function enterOverview() {
+        renderOverview();
+        loadErrors();
+        try {
+          const h = await api('/v1/admin/metrics/history');
+          hist.points = h.points ?? [];
+          hist.intervalMs = (h.intervalS ?? 60) * 1000;
+          hist.loaded = true;
+          // The stored history ends up to a minute ago; the newest snapshot is the live end.
+          const s = store.get('snapshot');
+          hist.live = s ? historyPointOf(s, Date.now()) : null;
+          renderCharts();
+        } catch (e) {
+          if (!(e instanceof ApiError)) console.warn(e);
+        }
+      }
+      store.on('snapshot', (s) => {
+        const p = historyPointOf(s, Date.now());
+        const prev = hist.points.at(-1);
+        if (hist.loaded && (!prev || p.t - prev.t >= hist.intervalMs)) {
+          hist.points.push(p);
+          if (hist.points.length > 1440) hist.points.splice(0, hist.points.length - 1440);
+          hist.live = null;
+        } else hist.live = p;
+        if (state.tab !== 'overview') return;
+        renderTiles();
+        renderCharts();
+        // New 4xx or 5xx answers since the last snapshot: the errors panel refreshes.
+        const errs = Object.entries(s.requests ?? {}).filter(([k]) => /\|[45]\d\d\|/.test(k)).reduce((n, [, v]) => n + v, 0);
+        if (errorCount != null && errs !== errorCount) loadErrors();
+        errorCount = errs;
+      });
+      store.on('rates', () => { if (state.tab === 'overview') renderTiles(); });
+
+      // ── Traffic ──────────────────────────────────────────────────────────
+      const traffic = { timer: null, recent: [], text: '', status: 'all', cache: 'all' };
+      const POLL_MS = 5000;
+      function renderTraffic() {
+        if (state.tab !== 'traffic') return;
+        const panel = $('panel-traffic');
+        if (!$('trRoutes')) {
+          panel.innerHTML = `<h1>Traffic</h1>
+            <div class="grid2">
+              <section class="panel"><div class="panel-head"><h2>By route</h2><span class="end muted">since the process started · p50/p95 from the last 500 requests</span></div><div id="trRoutes"></div></section>
+              <section class="panel"><div class="panel-head"><h2>Riot calls</h2><span class="end muted">by region, method and status</span></div><div id="trUpstream"></div></section>
+            </div>
+            <section class="panel" style="margin-top:10px"><div class="panel-head"><h2>Recent requests</h2><span class="end muted" id="trMeta"></span></div>
+              <div class="filters">
+                <label class="sr-only" for="trText">Filter</label><input id="trText" type="search" placeholder="path, route, consumer or request id" />
+                <span class="group"><label for="trStatus">status</label><select id="trStatus"><option>all</option><option>2xx</option><option>3xx</option><option>4xx</option><option>5xx</option></select></span>
+                <span class="group"><label for="trCache">cache</label><select id="trCache"><option>all</option><option>hit</option><option>miss</option><option>stale</option><option>neg</option><option>archive</option><option>bypass</option><option>none</option></select></span>
+              </div>
+              <div id="trRecent"></div></section>`;
+          $('trText').value = traffic.text;
+          $('trStatus').value = traffic.status;
+          $('trCache').value = traffic.cache;
+          $('trText').addEventListener('input', (e) => { traffic.text = e.target.value; renderRecent(); });
+          $('trStatus').addEventListener('change', (e) => { traffic.status = e.target.value; renderRecent(); });
+          $('trCache').addEventListener('change', (e) => { traffic.cache = e.target.value; renderRecent(); });
+        }
+        renderRoutes();
+        renderRecent();
+      }
+      function renderRoutes() {
+        const s = store.get('snapshot');
+        if (!$('trRoutes') || !s) return;
+        const ms = (v) => (v == null ? '—' : `${fmt(v)} ms`);
+        $('trRoutes').replaceChildren(table({
+          columns: [
+            { key: 'route', label: 'Route', format: (v) => `<code class="trunc" title="${esc(v)}">${esc(v)}</code>` },
+            { key: 'total', label: 'Requests', num: true, format: (v) => fmt(v) },
+            { key: 's2xx', label: '2xx', num: true, format: (v) => fmt(v) },
+            { key: 's4xx', label: '4xx', num: true, format: (v) => fmt(v) },
+            { key: 's5xx', label: '5xx', num: true, format: (v) => (v ? `<span class="stat5">${fmt(v)}</span>` : '0') },
+            { key: 'hitRatio', label: 'Cache hit', num: true, format: (v) => pct(v, 0) },
+            { key: 'p50', label: 'p50', num: true, format: ms },
+            { key: 'p95', label: 'p95', num: true, format: ms },
+          ],
+          rows: routeRows(s.requests, traffic.recent), cap: 100, sort: { key: 'total', dir: 'desc' }, empty: 'No requests yet.',
+        }));
+        $('trUpstream').replaceChildren(table({
+          columns: [
+            { key: 'region', label: 'Region' },
+            { key: 'method', label: 'Method', format: (v) => `<code>${esc(v)}</code>` },
+            { key: 'status', label: 'Status', num: true },
+            { key: 'count', label: 'Calls', num: true, format: (v) => fmt(v) },
+          ],
+          rows: upstreamRows(s.upstream), cap: 100, sort: { key: 'count', dir: 'desc' }, empty: 'No Riot calls yet.',
+        }));
+      }
+      function renderRecent() {
+        if (!$('trRecent')) return;
+        const q = traffic.text.trim().toLowerCase();
+        const rows = traffic.recent.filter((r) =>
+          (traffic.status === 'all' || statusClass(r.status) === traffic.status) &&
+          (traffic.cache === 'all' || r.cache === traffic.cache) &&
+          (!q || [r.path, r.route, r.consumer, r.requestId].some((f) => String(f ?? '').toLowerCase().includes(q))));
+        $('trMeta').textContent = `${fmt(rows.length)} of the last ${fmt(traffic.recent.length)} · every 5 s`;
+        $('trRecent').replaceChildren(table({
+          columns: [
+            { key: 'at', label: 'Time', format: (v) => esc(hhmmss(v)) },
+            { key: 'status', label: 'Status', num: true, format: (v) => (v >= 500 ? `<span class="tag">${icon('critical')}${v}</span>` : v >= 400 ? `<span class="tag">${icon('warning')}${v}</span>` : esc(v)) },
+            { key: 'method', label: 'Method' },
+            { key: 'path', label: 'Path', format: (v, r) => `<code class="trunc" title="${esc(v)}&#10;${esc(r.route)}">${esc(v)}</code>` },
+            { key: 'cache', label: 'Cache' },
+            { key: 'latencyMs', label: 'ms', num: true, format: (v) => fmt(v) },
+            { key: 'consumer', label: 'Consumer', format: (v) => esc(v ?? '—') },
+            { key: 'requestId', label: 'Request', format: (v) => `<code>${esc(String(v).slice(-8))}</code>` },
+          ],
+          rows, cap: 200, empty: traffic.recent.length ? 'Nothing matches the filter.' : 'No requests recorded yet.',
+        }));
+      }
+      async function pollTraffic() {
+        clearTimeout(traffic.timer);
+        traffic.timer = null;
+        if (state.tab !== 'traffic' || document.hidden || !state.started) return;
+        try {
+          const r = await api('/v1/admin/recent?kind=requests&limit=500');
+          traffic.recent = r.requests ?? [];
+          renderRoutes();
+          renderRecent();
+        } catch (e) {
+          if (!(e instanceof ApiError)) console.warn(e);
+        }
+        if (state.tab === 'traffic' && !document.hidden && state.started) traffic.timer = setTimeout(pollTraffic, POLL_MS);
+      }
+      store.on('snapshot', () => { if (state.tab === 'traffic') renderRoutes(); });
 
       // ── health strip and the rail's foot ─────────────────────────────────
       function renderStrip() {

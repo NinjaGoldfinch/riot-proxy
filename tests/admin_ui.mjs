@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs';
 const html = readFileSync(new URL('../src/ui/admin.html', import.meta.url), 'utf8');
 const block = html.match(/\/\/ -{10} pure helpers[^\n]*\n([\s\S]*?)\/\/ -{10} end pure helpers/);
 assert.ok(block, 'the pure helpers block is marked in admin.html');
-const h = new Function(`${block[1]}; return { APEX_LIST_CAP, fmt, compact, fmtBytes, fmtDuration, pct, esc, relTime, sumValues, hitRatio, rate, jobTotals, diskLevel, backupLevel, limiterLevel, route, joinUrl, wsUrl, maskKey, contrast, sortRows, capRows };`)();
+const h = new Function(`${block[1]}; return { APEX_LIST_CAP, fmt, compact, fmtBytes, fmtDuration, pct, esc, relTime, sumValues, hitRatio, rate, jobTotals, diskLevel, backupLevel, limiterLevel, route, joinUrl, wsUrl, maskKey, contrast, sortRows, capRows, percentile, downsample, historyPointOf, seriesOf, statusClass, routeRows, upstreamRows };`)();
 
 const tokens = (name) => {
   const m = html.match(new RegExp(`/\\* tokens:${name}[^*]*\\*/\\s*[^{]+\\{([^}]*)\\}`));
@@ -149,4 +149,52 @@ test('status icons are at least 3:1 on the panels, and never a series colour', (
 test('the series order is design/13 §Visual tokens, as validated', () => {
   assert.deepEqual(['s1', 's2', 's3', 's4', 's5', 's6'].map((s) => tokens('dark')[s]), ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#9085e9']);
   assert.deepEqual(['s1', 's2', 's3', 's4', 's5', 's6'].map((s) => tokens('light')[s]), ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#4a3aa7']);
+});
+
+test('percentiles are nearest-rank and skip nulls', () => {
+  const v = [5, 1, 4, 2, 3, null];
+  assert.equal(h.percentile(v, 50), 3);
+  assert.equal(h.percentile(v, 95), 5);
+  assert.equal(h.percentile([7], 95), 7);
+  assert.equal(h.percentile([], 50), null);
+});
+
+test('downsampling keeps at most n points, ends at the last time, and keeps gaps', () => {
+  const pts = Array.from({ length: 1440 }, (_, i) => [i, i < 100 ? null : i]);
+  const d = h.downsample(pts, 600);
+  assert.equal(d.length, 600);
+  assert.equal(d.at(-1)[0], 1439);
+  assert.equal(d[0][1], null, 'a bucket of nulls stays a gap');
+  assert.deepEqual(h.downsample(pts.slice(0, 3), 600), pts.slice(0, 3));
+});
+
+test('a snapshot becomes a history point', () => {
+  const s = { totals: { archivedMatches: 5 }, queues: { a: { active: 1, waiting: 2, delayed: 3, failed: 4 } }, cache: { hit: 1 }, disk: { freeBytes: 9 }, requests: { a: 2, b: 3 }, upstream: { c: 7 } };
+  assert.deepEqual(h.historyPointOf(s, 10), { t: 10, totals: { archivedMatches: 5 }, queues: { active: 1, pending: 5, failed: 4 }, cache: { hit: 1 }, disk: { freeBytes: 9 }, requests: 5, upstream: 7 });
+  assert.equal(h.historyPointOf({ totals: {}, queues: {} }, 1).disk, null);
+});
+
+test('series: values, and rates and hit ratios between neighbours, null across restarts and gaps', () => {
+  const pt = (t, hit, miss, req, disk) => ({ t: t * 60_000, totals: { archivedMatches: t }, queues: { pending: 10 - t }, cache: { hit, miss, neg: 0, stale: 0 }, requests: req, upstream: req, ...(disk == null ? {} : { disk: { freeBytes: disk } }) });
+  const v = h.seriesOf([pt(0, 0, 0, null, null), pt(1, 90, 10, 600, 5), pt(2, 180, 20, 1200, 4), pt(3, 5, 5, 60, 4)]);
+  assert.deepEqual(v.archive.map((p) => p[1]), [0, 1, 2, 3]);
+  assert.deepEqual(v.backlog.map((p) => p[1]), [10, 9, 8, 7]);
+  assert.deepEqual(v.disk.map((p) => p[1]), [null, 5, 4, 4], 'a point without disk is a gap');
+  assert.deepEqual(v.hit.map((p) => p[1]), [null, 0.9, 0.9, null], 'the counters reset at 3: a restart');
+  assert.deepEqual(v.requests.map((p) => p[1]), [null, null, 10, null], 'per second; no rate across a gap or a restart');
+});
+
+test('status classes and the traffic tables', () => {
+  assert.equal(h.statusClass(503), '5xx');
+  assert.equal(h.statusClass('200'), '2xx');
+  const rows = h.routeRows(
+    { '/a|200|hit': 8, '/a|200|miss': 2, '/a|500|none': 1, '/b|404|neg': 3 },
+    [{ route: '/a', latencyMs: 10 }, { route: '/a', latencyMs: 30 }, { route: '/c', latencyMs: 99 }],
+  );
+  const a = rows.find((r) => r.route === '/a');
+  assert.deepEqual([a.total, a.s2xx, a.s5xx, a.hitRatio, a.p50, a.p95, a.sampled], [11, 10, 1, 0.8, 10, 30, 2]);
+  const b = rows.find((r) => r.route === '/b');
+  assert.deepEqual([b.total, b.s4xx, b.hitRatio, b.p50], [3, 3, 1, null]);
+  assert.deepEqual(h.upstreamRows({ 'sea|match.byId|200': 4 }), [{ region: 'sea', method: 'match.byId', status: '200', count: 4 }]);
+  assert.deepEqual(h.routeRows(undefined), []);
 });
