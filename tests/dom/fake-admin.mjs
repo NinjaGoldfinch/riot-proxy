@@ -340,7 +340,9 @@ export const scene = {
   history: history(),
   stats: {
     keyScope: '5f3a9c1e77aa', archivedMatches: 230_715, trackedPlayers: 3, knownPlayers: 41_200, archivedTimelines: 216_475,
-    archiveStoredBytes: 2_470_000_000, archiveRawBytes: 16_000_000_000, dbFileBytes: 22 * 1024 ** 3, walBytes: 64 * 1024 ** 2,
+    archiveStoredBytes: 2_470_000_000, archiveRawBytes: 16_000_000_000,
+    archiveBodies: { matches: { local: 715, packed: 30_000, offloaded: 0 }, timelines: { local: 475, packed: 16_000, offloaded: 0 } },
+    archivePacks: 0, archivePackBytes: 0, archivePackLiveBytes: 0, dbFileBytes: 22 * 1024 ** 3, walBytes: 64 * 1024 ** 2,
     dbPageSize: 4096, dbPageCount: 5_767_168, dbFreelistPages: 262_144, diskFreeBytes: 51 * 1024 ** 3, diskTotalBytes: 115 * 1024 ** 3,
     sampledAt: { fast: NOW, slow: NOW - 30_000 },
   },

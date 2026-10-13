@@ -306,3 +306,83 @@ async fn a_match_whose_timeline_is_archived_queues_nothing() {
     e.get(&format!("/v1/lol/matches/asia/{MATCH_ID}")).await;
     assert_eq!(e.queued().await, []);
 }
+
+/// Pack a stored body into `objects` and free its local copy (OBJ-02).
+async fn offload(
+    e: &Env,
+    objects: &riot_proxy::archive::objects::Objects,
+    kind: riot_proxy::archive::pack::Kind,
+) {
+    use riot_proxy::archive::offload;
+    let ids = vec![MATCH_ID.to_string()];
+    offload::write_pack(&e.state.db, objects, kind, &ids, 1_000)
+        .await
+        .unwrap()
+        .expect("a local body to pack");
+    assert_eq!(offload::free(&e.state.db, kind, &ids, 1_001).await.unwrap(), 1);
+}
+
+/// Every header but the per-request id and the caller's remaining quota,
+/// which move with each request, for comparing two answers.
+fn stable_headers(r: &common::Reply) -> Vec<(String, String)> {
+    let mut h: Vec<(String, String)> = r
+        .headers
+        .iter()
+        .filter(|(k, _)| !matches!(k.as_str(), "x-request-id" | "x-ratelimit-remaining"))
+        .map(|(k, v)| (k.to_string(), v.to_str().unwrap().to_string()))
+        .collect();
+    h.sort();
+    h
+}
+
+/// design/12: an offloaded match and timeline answer exactly as a local one
+/// did, from the bucket, without asking Riot.
+#[tokio::test]
+async fn an_offloaded_match_answers_from_the_archive_with_the_same_body_and_headers() {
+    use riot_proxy::archive::pack::Kind;
+    let e = env(&[]).await;
+    let objects = riot_proxy::archive::objects::Objects::in_memory();
+    assert!(e.state.db.attach_objects(objects.clone()));
+    let uri = format!("/v1/lol/matches/asia/{MATCH_ID}");
+    let tl_uri = format!("{uri}/timeline");
+    e.get(&uri).await;
+    e.get(&tl_uri).await;
+    let local = e.get(&uri).await;
+    let local_tl = e.get(&tl_uri).await;
+    assert_eq!((x_cache(&local), x_cache(&local_tl)), ("ARCHIVE", "ARCHIVE"));
+    let calls = e.upstream_calls().await;
+
+    offload(&e, &objects, Kind::Match).await;
+    offload(&e, &objects, Kind::Timeline).await;
+    let remote = e.get(&uri).await;
+    assert_eq!((remote.status, x_cache(&remote)), (StatusCode::OK, "ARCHIVE"));
+    assert_eq!(remote.body, MATCH);
+    assert_eq!(stable_headers(&remote), stable_headers(&local));
+    let remote_tl = e.get(&tl_uri).await;
+    assert_eq!(x_cache(&remote_tl), "ARCHIVE");
+    assert_eq!(remote_tl.body, TIMELINE.as_bytes());
+    assert_eq!(stable_headers(&remote_tl), stable_headers(&local_tl));
+    assert_eq!(e.upstream_calls().await, calls, "Riot not asked again");
+}
+
+/// A pack the bucket lost costs one Riot call, never a failed request, and
+/// the body is local again afterwards.
+#[tokio::test]
+async fn a_lost_pack_falls_back_to_riot_and_the_body_is_local_again() {
+    use riot_proxy::archive::pack::Kind;
+    let e = env(&[]).await;
+    let objects = riot_proxy::archive::objects::Objects::in_memory();
+    assert!(e.state.db.attach_objects(objects.clone()));
+    let uri = format!("/v1/lol/matches/asia/{MATCH_ID}");
+    e.get(&uri).await;
+    offload(&e, &objects, Kind::Match).await;
+    for o in objects.list("packs/").await.unwrap() {
+        objects.delete(&o.key).await.unwrap();
+    }
+    let calls = e.upstream_calls().await;
+    let r = e.get(&uri).await;
+    assert_eq!((r.status, x_cache(&r)), (StatusCode::OK, "MISS"));
+    assert_eq!(r.body, MATCH);
+    assert_eq!(e.upstream_calls().await, calls + 1);
+    assert_eq!(x_cache(&e.get(&uri).await), "ARCHIVE", "archived locally again");
+}

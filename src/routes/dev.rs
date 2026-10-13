@@ -36,7 +36,11 @@ pub const HALT_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 pub const CONFIRM: &str = "reset";
 
 /// Tables the reset empties, children before parents so foreign keys hold.
+/// The pack rows go with the archive; their objects stay in the bucket as
+/// orphans until OBJ-06's sweep removes them.
 pub const WIPED: &[&str] = &[
+    "body_locations",
+    "body_packs",
     "timelines",
     "timeline_gaps",
     "match_bans",

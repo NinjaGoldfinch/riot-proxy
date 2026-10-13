@@ -6,6 +6,8 @@ pub mod builds;
 pub mod facts;
 pub mod matches;
 pub mod objects;
+pub mod offload;
+pub mod pack;
 pub mod player;
 pub mod pool;
 pub mod ranks;

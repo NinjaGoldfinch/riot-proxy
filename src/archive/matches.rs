@@ -10,12 +10,23 @@
 //! Archiving a match also writes its `match_facts` in the same transaction
 //! (v1 `archiveMatch`), for the key scope whose PUUIDs the body carries, and
 //! a ranked match's participants' tiers (`match_facts.tier`, THR-02, DSK-04).
+//!
+//! A body may live in a pack in object storage instead (design/12, OBJ-02):
+//! its row then holds the empty blob and `body_locations` says where it is.
+//! Reads fetch it by byte range and check its digest; writes always land in
+//! SQLite, and a re-archived body is local again.
+
+use std::collections::{BTreeMap, HashMap};
 
 use bytes::Bytes;
-use rusqlite::{OptionalExtension, params_from_iter};
+use futures_util::StreamExt;
+use rusqlite::params_from_iter;
 use serde::Deserialize;
+use ulid::Ulid;
 
 use crate::archive::facts::{self, Fact};
+use crate::archive::objects::Objects;
+use crate::archive::pack::{self, Kind};
 use crate::db::{Db, DbError};
 
 /// design/04: zstd, level 3.
@@ -146,67 +157,179 @@ fn decompress(blob: &[u8]) -> Result<Bytes, ArchiveError> {
     Ok(Bytes::from(zstd::decode_all(blob)?))
 }
 
-/// The archived match body, byte-identical to what Riot sent.
-pub async fn get(db: &Db, match_id: &str) -> Result<Option<Bytes>, ArchiveError> {
-    let id = match_id.to_string();
-    db.read(move |conn| {
-        let blob: Option<Vec<u8>> = conn
-            .query_row("SELECT body_zstd FROM matches WHERE match_id = ?1", [&id], |r| {
-                r.get(0)
+/// Where an offloaded body is (`body_locations`).
+#[derive(Debug, Clone)]
+struct Located {
+    pack_id: String,
+    offset: u64,
+    len: u64,
+    sha256: Vec<u8>,
+}
+
+/// A row as read: its body, or (when the local copy was freed) where to
+/// fetch it, if anywhere.
+enum Stored {
+    Local(Bytes),
+    Offloaded(Option<Located>),
+}
+
+/// The rows of `ids` in `kind`'s table, bodies decompressed. An empty
+/// `body_zstd` is an offloaded row (design/12 §SQLite): never a body.
+fn read_rows(
+    conn: &rusqlite::Connection,
+    kind: Kind,
+    ids: &[String],
+) -> Result<Vec<(String, Stored)>, ArchiveError> {
+    let mut out = Vec::with_capacity(ids.len());
+    for chunk in ids.chunks(FILTER_CHUNK) {
+        let marks = vec!["?"; chunk.len()].join(",");
+        let mut stmt = conn.prepare(&format!(
+            "SELECT t.match_id, t.body_zstd, l.pack_id, l.offset, l.len, l.sha256
+               FROM {} t LEFT JOIN body_locations l ON l.match_id = t.match_id AND l.kind = '{}'
+              WHERE t.match_id IN ({marks})",
+            kind.table(),
+            kind.as_str()
+        ))?;
+        let mut rows = stmt.query(params_from_iter(chunk))?;
+        while let Some(r) = rows.next()? {
+            let id: String = r.get(0)?;
+            let blob: Vec<u8> = r.get(1)?;
+            let stored = if blob.is_empty() {
+                let pack_id: Option<String> = r.get(2)?;
+                Stored::Offloaded(match pack_id {
+                    Some(pack_id) => Some(Located {
+                        pack_id,
+                        offset: r.get::<_, i64>(3)?.try_into().unwrap_or(0),
+                        len: r.get::<_, i64>(4)?.try_into().unwrap_or(0),
+                        sha256: r.get(5)?,
+                    }),
+                    None => None,
+                })
+            } else {
+                Stored::Local(decompress(&blob)?)
+            };
+            out.push((id, stored));
+        }
+    }
+    Ok(out)
+}
+
+/// Bodies of `ids` in `kind`: local ones from SQLite, offloaded ones by
+/// byte range from their packs. A body that cannot be fetched or fails its
+/// digest is left out with a warning, so the caller goes to Riot.
+async fn read_bodies(db: &Db, kind: Kind, ids: &[String]) -> Result<HashMap<String, Bytes>, ArchiveError> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let wanted = ids.to_vec();
+    let rows = db.read(move |conn| read_rows(conn, kind, &wanted)).await?;
+    let mut found = HashMap::with_capacity(rows.len());
+    let mut away: BTreeMap<String, Vec<(String, Located)>> = BTreeMap::new();
+    for (id, stored) in rows {
+        match stored {
+            Stored::Local(body) => {
+                found.insert(id, body);
+            }
+            Stored::Offloaded(Some(at)) => away.entry(at.pack_id.clone()).or_default().push((id, at)),
+            Stored::Offloaded(None) => {
+                tracing::warn!(match_id = %id, %kind, "offloaded body has no location; reading from Riot");
+            }
+        }
+    }
+    if away.is_empty() {
+        return Ok(found);
+    }
+    let Some(objects) = db.objects() else {
+        tracing::warn!(
+            %kind,
+            bodies = away.values().map(Vec::len).sum::<usize>(),
+            "offloaded bodies but no ARCHIVE_OBJECT_URL; reading from Riot"
+        );
+        return Ok(found);
+    };
+    let fetched: Vec<Vec<(String, Bytes)>> = futures_util::stream::iter(away)
+        .map(|(pack_id, bodies)| fetch_from_pack(objects, kind, pack_id, bodies))
+        .buffer_unordered(objects.concurrency())
+        .collect()
+        .await;
+    found.extend(fetched.into_iter().flatten());
+    Ok(found)
+}
+
+/// One pack's share of a read: one `get_ranges` call (close ranges merged by
+/// `object_store`), each body checked against its digest, then decompressed
+/// off the runtime. Failures are logged and dropped.
+async fn fetch_from_pack(
+    objects: &Objects,
+    kind: Kind,
+    pack_id: String,
+    bodies: Vec<(String, Located)>,
+) -> Vec<(String, Bytes)> {
+    let Ok(id) = Ulid::from_string(&pack_id) else {
+        tracing::warn!(%pack_id, %kind, bodies = bodies.len(), "pack id is not a ULID; reading from Riot");
+        return Vec::new();
+    };
+    let key = pack::key(kind, id);
+    let ranges: Vec<_> = bodies
+        .iter()
+        .map(|(_, at)| at.offset..at.offset + at.len)
+        .collect();
+    let parts = match objects.get_ranges(&key, &ranges).await {
+        Ok(parts) => parts,
+        Err(e) => {
+            tracing::warn!(error = %e, %key, bodies = bodies.len(), "pack read failed; reading from Riot");
+            return Vec::new();
+        }
+    };
+    let checked: Vec<(String, Bytes)> = bodies
+        .into_iter()
+        .zip(parts)
+        .filter_map(|((match_id, at), part)| {
+            if pack::sha256(&part).as_slice() == at.sha256.as_slice() {
+                Some((match_id, part))
+            } else {
+                tracing::warn!(%match_id, %key, "offloaded body failed its sha256; reading from Riot");
+                None
+            }
+        })
+        .collect();
+    let decoded = tokio::task::spawn_blocking(move || {
+        checked
+            .into_iter()
+            .filter_map(|(match_id, part)| match decompress(&part) {
+                Ok(body) => Some((match_id, body)),
+                Err(e) => {
+                    tracing::warn!(%match_id, error = %e, "offloaded body did not decompress; reading from Riot");
+                    None
+                }
             })
-            .optional()?;
-        blob.map(|b| decompress(&b)).transpose()
+            .collect()
     })
-    .await
+    .await;
+    decoded.unwrap_or_else(|e| {
+        tracing::warn!(error = %e, %key, "offloaded body decompression task failed");
+        Vec::new()
+    })
+}
+
+/// The archived match body, byte-identical to what Riot sent, wherever it
+/// is kept.
+pub async fn get(db: &Db, match_id: &str) -> Result<Option<Bytes>, ArchiveError> {
+    let mut found = read_bodies(db, Kind::Match, &[match_id.to_string()]).await?;
+    Ok(found.remove(match_id))
 }
 
 /// The archived bodies among `match_ids`, by id; ids not archived are absent.
 /// One query for a whole page (v1 `getArchivedMatches`, #54) rather than one
-/// archive read per match.
-pub async fn get_many(
-    db: &Db,
-    match_ids: &[String],
-) -> Result<std::collections::HashMap<String, Bytes>, ArchiveError> {
-    bodies(db, "matches", match_ids).await
+/// archive read per match; offloaded ones cost a ranged GET per pack.
+pub async fn get_many(db: &Db, match_ids: &[String]) -> Result<HashMap<String, Bytes>, ArchiveError> {
+    read_bodies(db, Kind::Match, match_ids).await
 }
 
 /// The archived timelines among `match_ids`, by id, as [`get_many`] reads
 /// match bodies (`builds:extract`, BLD-01).
-pub async fn get_timelines(
-    db: &Db,
-    match_ids: &[String],
-) -> Result<std::collections::HashMap<String, Bytes>, ArchiveError> {
-    bodies(db, "timelines", match_ids).await
-}
-
-/// `match_id, body_zstd` rows of `table` (`matches` or `timelines`), decompressed.
-async fn bodies(
-    db: &Db,
-    table: &'static str,
-    match_ids: &[String],
-) -> Result<std::collections::HashMap<String, Bytes>, ArchiveError> {
-    if match_ids.is_empty() {
-        return Ok(std::collections::HashMap::new());
-    }
-    let ids = match_ids.to_vec();
-    db.read(move |conn| {
-        let mut found = std::collections::HashMap::new();
-        for chunk in ids.chunks(FILTER_CHUNK) {
-            let marks = vec!["?"; chunk.len()].join(",");
-            let mut stmt = conn.prepare(&format!(
-                "SELECT match_id, body_zstd FROM {table} WHERE match_id IN ({marks})"
-            ))?;
-            let rows = stmt.query_map(params_from_iter(chunk), |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))
-            })?;
-            for row in rows {
-                let (id, blob) = row?;
-                found.insert(id, decompress(&blob)?);
-            }
-        }
-        Ok::<_, ArchiveError>(found)
-    })
-    .await
+pub async fn get_timelines(db: &Db, match_ids: &[String]) -> Result<HashMap<String, Bytes>, ArchiveError> {
+    read_bodies(db, Kind::Timeline, match_ids).await
 }
 
 /// Archive a match body and its facts. Idempotent: archiving it again rewrites
@@ -245,7 +368,7 @@ pub async fn put(
                region = excluded.region, patch = excluded.patch, queue_id = excluded.queue_id,
                game_end_ms = excluded.game_end_ms, body_zstd = excluded.body_zstd,
                body_size = excluded.body_size, archived_at = excluded.archived_at,
-               game_duration = excluded.game_duration",
+               game_duration = excluded.game_duration, offloaded_at = NULL",
             rusqlite::params![
                 id,
                 region,
@@ -269,20 +392,10 @@ pub async fn put(
     Ok(meta)
 }
 
-/// The archived timeline body, if any.
+/// The archived timeline body, if any, wherever it is kept.
 pub async fn get_timeline(db: &Db, match_id: &str) -> Result<Option<Bytes>, ArchiveError> {
-    let id = match_id.to_string();
-    db.read(move |conn| {
-        let blob: Option<Vec<u8>> = conn
-            .query_row(
-                "SELECT body_zstd FROM timelines WHERE match_id = ?1",
-                [&id],
-                |r| r.get(0),
-            )
-            .optional()?;
-        blob.map(|b| decompress(&b)).transpose()
-    })
-    .await
+    let mut found = read_bodies(db, Kind::Timeline, &[match_id.to_string()]).await?;
+    Ok(found.remove(match_id))
 }
 
 /// Archive a timeline, whether or not its match is archived yet (TL-01): a
@@ -294,12 +407,23 @@ pub async fn put_timeline(db: &Db, match_id: &str, body: Bytes) -> Result<(), Ar
     db.write(move |conn| {
         conn.execute(
             "INSERT INTO timelines (match_id, body_zstd) VALUES (?1, ?2)
-             ON CONFLICT (match_id) DO UPDATE SET body_zstd = excluded.body_zstd",
+             ON CONFLICT (match_id) DO UPDATE SET body_zstd = excluded.body_zstd, offloaded_at = NULL",
             rusqlite::params![id, blob],
         )?;
         Ok::<_, ArchiveError>(())
     })
     .await
+}
+
+/// How many bodies of one kind are in each state (design/12 §SQLite).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BodyStates {
+    /// Only in SQLite.
+    pub local: i64,
+    /// In a verified pack and still in SQLite.
+    pub packed: i64,
+    /// Only in the bucket.
+    pub offloaded: i64,
 }
 
 /// Archive totals for `/v1/admin/stats`. The archive is not key-scoped: match
@@ -308,9 +432,38 @@ pub async fn put_timeline(db: &Db, match_id: &str, body: Bytes) -> Result<(), Ar
 pub struct Stats {
     pub matches: i64,
     pub timelines: i64,
-    /// zstd bytes on disk, and what they decompress to.
+    /// zstd bytes of match bodies in SQLite (freed ones count 0), and what
+    /// every match body decompresses to.
     pub stored_bytes: i64,
     pub raw_bytes: i64,
+    pub match_bodies: BodyStates,
+    pub timeline_bodies: BodyStates,
+    /// Pack objects, their size, and the bytes in them still referenced.
+    pub packs: i64,
+    pub pack_bytes: i64,
+    pub pack_live_bytes: i64,
+}
+
+/// The state counts of `kind` with `total` rows. Each count reads one partial
+/// index (V0023): the state columns sit after the body in the row, so reading
+/// them row by row would read every body.
+fn body_states(c: &rusqlite::Connection, kind: Kind, total: i64) -> Result<BodyStates, ArchiveError> {
+    let table = kind.table();
+    let local: i64 = c.query_row(
+        &format!("SELECT count(*) FROM {table} WHERE packed_at IS NULL"),
+        [],
+        |r| r.get(0),
+    )?;
+    let packed: i64 = c.query_row(
+        &format!("SELECT count(*) FROM {table} WHERE packed_at IS NOT NULL AND offloaded_at IS NULL"),
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(BodyStates {
+        local,
+        packed,
+        offloaded: (total - local - packed).max(0),
+    })
 }
 
 pub async fn stats(db: &Db) -> Result<Stats, ArchiveError> {
@@ -321,11 +474,21 @@ pub async fn stats(db: &Db) -> Result<Stats, ArchiveError> {
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )?;
         let timelines = c.query_row("SELECT count(*) FROM timelines", [], |r| r.get(0))?;
+        let (packs, pack_bytes, pack_live_bytes) = c.query_row(
+            "SELECT count(*), coalesce(sum(bytes), 0), coalesce(sum(live_bytes), 0) FROM body_packs",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?;
         Ok::<_, ArchiveError>(Stats {
             matches,
             timelines,
             stored_bytes,
             raw_bytes,
+            match_bodies: body_states(c, Kind::Match, matches)?,
+            timeline_bodies: body_states(c, Kind::Timeline, timelines)?,
+            packs,
+            pack_bytes,
+            pack_live_bytes,
         })
     })
     .await

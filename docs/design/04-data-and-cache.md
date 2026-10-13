@@ -97,18 +97,49 @@ CREATE TABLE matches (
   patch        TEXT NOT NULL,                     -- "14.18"
   queue_id     INTEGER NOT NULL,
   game_end_ms  INTEGER NOT NULL,
-  body_zstd    BLOB NOT NULL,                     -- match-v5 payload, zstd
+  body_zstd    BLOB NOT NULL,                     -- match-v5 payload, zstd; X'' once offloaded (design/12)
   body_size    INTEGER NOT NULL,                  -- uncompressed, for stats
   archived_at  INTEGER NOT NULL,
-  game_duration INTEGER                           -- seconds; added by V0003 (ADR-043)
+  game_duration INTEGER,                          -- seconds; added by V0003 (ADR-043)
+  packed_at    INTEGER,                           -- V0023: in a verified pack (design/12, ADR-163)
+  offloaded_at INTEGER                            -- V0023: local copy freed
 );
 CREATE INDEX matches_patch_queue ON matches(patch, queue_id);
 CREATE INDEX matches_end        ON matches(game_end_ms);
+CREATE INDEX matches_to_pack    ON matches(archived_at, packed_at) WHERE packed_at IS NULL;
+CREATE INDEX matches_to_free    ON matches(archived_at, packed_at, offloaded_at)
+  WHERE packed_at IS NOT NULL AND offloaded_at IS NULL;
 
 CREATE TABLE timelines (                          -- every fetched timeline, before its match if need be
   match_id  TEXT PRIMARY KEY,                     -- no FK since V0013 (TL-01, ADR-118)
-  body_zstd BLOB NOT NULL
+  body_zstd BLOB NOT NULL,                        -- X'' once offloaded
+  packed_at    INTEGER,                           -- V0023, as on matches
+  offloaded_at INTEGER
 );
+CREATE INDEX timelines_to_pack ON timelines(match_id, packed_at) WHERE packed_at IS NULL;
+CREATE INDEX timelines_to_free ON timelines(match_id, packed_at, offloaded_at)
+  WHERE packed_at IS NOT NULL AND offloaded_at IS NULL;
+
+-- Bodies packed into object storage (V0023, design/12 §SQLite, ADR-163) ─────
+CREATE TABLE body_packs (                         -- one row per pack object
+  pack_id    TEXT PRIMARY KEY,                    -- ULID; key packs/<kind>s/<yyyy>/<mm>/<pack_id>.pack
+  kind       TEXT NOT NULL,                       -- match | timeline
+  bytes      INTEGER NOT NULL,
+  bodies     INTEGER NOT NULL,
+  live_bytes INTEGER NOT NULL,                    -- bytes of bodies still located here
+  sha256     BLOB NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE body_locations (                     -- where each packed body is
+  match_id TEXT NOT NULL,
+  kind     TEXT NOT NULL,
+  pack_id  TEXT NOT NULL REFERENCES body_packs(pack_id),
+  offset   INTEGER NOT NULL,
+  len      INTEGER NOT NULL,
+  sha256   BLOB NOT NULL,                         -- of the body's zstd bytes
+  PRIMARY KEY (match_id, kind)
+) WITHOUT ROWID;
+CREATE INDEX body_locations_pack ON body_locations(pack_id);
 
 CREATE TABLE timeline_gaps (                      -- timelines Riot won't serve (TL-02, ADR-133)
   match_id  TEXT PRIMARY KEY,                     -- no FK, like timelines

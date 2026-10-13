@@ -95,11 +95,13 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
     if config.dev_ui_ignored {
         tracing::warn!("DEV_UI=true ignored: /dev is never served when ENV=production");
     }
-    // OBJ-01: the bucket packed bodies go to. Building the client makes no
-    // request; a bad endpoint stops the boot here rather than at the first pack.
+    // The bucket packed bodies go to (OBJ-01), attached to the database whose
+    // locations point into it (OBJ-02). Building the client makes no request;
+    // a bad endpoint stops the boot here rather than at the first read.
     if config.archive_object_url.is_some() {
         let objects = Objects::from_config(&config).context("ARCHIVE_OBJECT_URL")?;
         tracing::info!(store = objects.describe(), "object store configured");
+        db.attach_objects(objects);
     }
     for key in policy.ineffective_overrides() {
         tracing::warn!(key = %key, "CACHE_TTL_OVERRIDES key matches no cacheable endpoint; ignored");

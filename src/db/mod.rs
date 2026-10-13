@@ -4,10 +4,12 @@
 
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use rusqlite::{Connection, OpenFlags};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
+
+use crate::archive::objects::Objects;
 
 pub mod disk;
 pub mod store;
@@ -76,6 +78,9 @@ struct Inner {
     readers: Mutex<Vec<Connection>>,
     permits: Arc<Semaphore>,
     reader_count: usize,
+    /// The bucket this database's offloaded bodies are in (OBJ-02). Set once,
+    /// at boot; unset, an offloaded body reads as missing.
+    objects: OnceLock<Objects>,
 }
 
 impl Inner {
@@ -156,6 +161,7 @@ impl Db {
                 readers: Mutex::new(pool),
                 permits: Arc::new(Semaphore::new(readers)),
                 reader_count: readers,
+                objects: OnceLock::new(),
             }),
         })
     }
@@ -163,6 +169,17 @@ impl Db {
     /// [`Db::open`] on the blocking pool.
     pub async fn open_async(path: PathBuf, readers: usize) -> Result<Self, DbError> {
         tokio::task::spawn_blocking(move || Self::open(&path, readers)).await?
+    }
+
+    /// Give this database the bucket its offloaded bodies live in (design/12).
+    /// Only the first call takes effect; later ones return `false`.
+    pub fn attach_objects(&self, objects: Objects) -> bool {
+        self.inner.objects.set(objects).is_ok()
+    }
+
+    /// The bucket set by [`Db::attach_objects`], if any.
+    pub fn objects(&self) -> Option<&Objects> {
+        self.inner.objects.get()
     }
 
     /// Reader count used by `serve`: one per core (design 04).

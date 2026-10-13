@@ -1966,9 +1966,12 @@ function renderArchive() {
   // The snapshot's disk is fresher than the stats route's; both are samples.
   const disk = s?.disk ?? (st && { dbBytes: st.dbFileBytes, walBytes: st.walBytes, freelistBytes: st.dbFreelistPages * st.dbPageSize, freeBytes: st.diskFreeBytes, totalBytes: st.diskTotalBytes });
   const dl = diskLevel(disk);
+  // Bodies past the local window live only in packs (design/12).
+  const b = st?.archiveBodies, off = b ? b.matches.offloaded + b.timelines.offloaded : 0;
   $('arTiles').innerHTML = [
     tile('Archived matches', compact(st?.archivedMatches ?? s?.totals?.archivedMatches), st ? `${compact(st.archivedTimelines)} timelines` : '&nbsp;'),
-    tile('Stored', fmtBytes(st?.archiveStoredBytes), st?.archiveRawBytes ? `${fmtBytes(st.archiveRawBytes)} raw · ${(st.archiveRawBytes / Math.max(1, st.archiveStoredBytes)).toFixed(1)}× zstd` : '&nbsp;'),
+    tile('Stored', fmtBytes(st?.archiveStoredBytes), st?.archiveRawBytes ? `${fmtBytes(st.archiveRawBytes)} raw · ${off ? 'rest in packs' : `${(st.archiveRawBytes / Math.max(1, st.archiveStoredBytes)).toFixed(1)}× zstd`}` : '&nbsp;'),
+    tile('Object storage', fmtBytes(st?.archivePackBytes), b ? `${fmt(st.archivePacks)} packs · ${compact(off)} offloaded · ${compact(b.matches.packed + b.timelines.packed)} packed` : '&nbsp;'),
     tile('Players', compact(st?.knownPlayers ?? s?.totals?.knownPlayers), `${fmt(st?.trackedPlayers ?? s?.totals?.trackedPlayers)} tracked`),
     tile('Database', fmtBytes(disk?.dbBytes), `${fmtBytes(disk?.freelistBytes)} free pages · WAL ${fmtBytes(disk?.walBytes)}`),
     tile('Disk free', fmtBytes(disk?.freeBytes), dl.used == null ? '—' : `${pct(dl.used, 0)} used of ${fmtBytes(disk.totalBytes)}`, dl.level === 'good' ? null : dl.level),

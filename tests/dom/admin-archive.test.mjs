@@ -23,6 +23,7 @@ test('tiles, the disk as a stacked bar with every part named, and when the bytes
     assert.deepEqual(tiles, [
       'Archived matches 231K 216K timelines',
       'Stored 2.3 GB 14.9 GB raw · 6.5× zstd',
+      'Object storage 0 B 0 packs · 0 offloaded · 46K packed',
       'Players 41.2K 3 tracked',
       'Database 22.0 GB 0 B free pages · WAL 0 B',
       'Disk free 51.0 GB 56 % used of 115 GB',
@@ -34,6 +35,18 @@ test('tiles, the disk as a stacked bar with every part named, and when the bytes
     assert.equal(p.$('#arDisk .note-line'), null, 'no warning at 56 %');
     assert.equal(p.text('#arSampled'), 'archive bytes sampled just now');
   } finally { p.close(); }
+});
+
+test('once bodies are offloaded: the bucket bytes and packs, and no zstd ratio over what is left', async () => {
+  const saved = scene.stats;
+  scene.stats = { ...scene.stats, archiveStoredBytes: 400 * 1024 ** 2, archivePacks: 250, archivePackBytes: 15 * 1024 ** 3, archivePackLiveBytes: 16_000_000_000,
+    archiveBodies: { matches: { local: 715, packed: 30_000, offloaded: 200_000 }, timelines: { local: 475, packed: 16_000, offloaded: 200_115 } } };
+  const p = await page({ key: KEY, hash: '#archive' });
+  try {
+    const tiles = p.$$('#arTiles .tile').map((t) => [...t.children].map((c) => c.textContent.trim()).join(' '));
+    assert.equal(tiles[1], 'Stored 400 MB 14.9 GB raw · rest in packs');
+    assert.equal(tiles[2], 'Object storage 15.0 GB 250 packs · 400K offloaded · 46K packed');
+  } finally { p.close(); scene.stats = saved; }
 });
 
 test('under 5 % free: a warning with an icon here and in the health strip', async () => {

@@ -108,6 +108,8 @@ async fn migrations_create_exactly_the_design_04_tables() {
             "analytics_runs",
             "analytics_slices",
             "analytics_unsplit",
+            "body_locations",
+            "body_packs",
             "cache",
             "champion_ban_totals",
             "champion_bans",
@@ -169,6 +171,11 @@ async fn archive_indexes_exist() {
         "jobs_dedupe",
         "jobs_claim",
         "jobs_state_kind",
+        "body_locations_pack",
+        "matches_to_pack",
+        "matches_to_free",
+        "timelines_to_pack",
+        "timelines_to_free",
     ] {
         assert!(indexes.contains(&ix.to_string()), "{ix} missing from {indexes:?}");
     }
@@ -211,7 +218,7 @@ async fn a_v1_database_upgrades_to_v2_and_keeps_its_data() {
         })
         .await
         .expect("read");
-    assert_eq!((name.as_str(), versions), ("old", 22));
+    assert_eq!((name.as_str(), versions), ("old", 23));
 }
 
 /// V0015 (SITE-08, ADR-123) backfills the slices aggregated before it, as the
@@ -875,11 +882,11 @@ async fn migrations_apply_once_across_reopens() {
         })
         .await
         .expect("insert");
-    assert_eq!(history(first.clone()).await.expect("history"), 22);
+    assert_eq!(history(first.clone()).await.expect("history"), 23);
     drop(first);
 
     let second = Db::open(&path, 1).expect("second open");
-    assert_eq!(history(second.clone()).await.expect("history"), 22, "no re-run");
+    assert_eq!(history(second.clone()).await.expect("history"), 23, "no re-run");
     let name: Option<String> = second
         .read(|c| {
             Ok::<_, DbError>(
@@ -1222,4 +1229,63 @@ async fn job_counts_read_only_the_state_kind_index() {
             "{sql}: {plan:?}"
         );
     }
+}
+
+/// V0023 (OBJ-02, ADR-163) adds the pack tables and the state columns. Every
+/// existing body is local: unpacked, not offloaded, its blob untouched, and
+/// in the "to pack" indexes.
+#[tokio::test]
+async fn v0023_leaves_every_existing_body_local() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("riot-proxy.db");
+    {
+        let mut conn = Connection::open(&path).expect("open");
+        embedded::migrations::runner()
+            .set_grouped(true)
+            .set_target(refinery::Target::Version(22))
+            .run(&mut conn)
+            .expect("to V0022");
+        conn.execute_batch(
+            "INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size, archived_at)
+               VALUES ('KR_1', 'asia', '14.18', 420, 1, x'28b52ffd0001', 9, 5),
+                      ('KR_2', 'asia', '14.18', 420, 1, x'28b52ffd0002', 9, 6);
+             INSERT INTO timelines (match_id, body_zstd) VALUES ('KR_1', x'28b52ffd0003');",
+        )
+        .expect("seed");
+    }
+    let db = Db::open(&path, 1).expect("migrate");
+    let tables = names(&db, "table").await;
+    assert!(tables.contains(&"body_packs".to_string()) && tables.contains(&"body_locations".to_string()));
+    let (rows, to_pack, to_free, packs, located): (Vec<String>, i64, i64, i64, i64) = db
+        .read(|c| {
+            let mut stmt = c.prepare(
+                "SELECT match_id || ' ' || hex(body_zstd) || ' ' || coalesce(packed_at, '-') || ' '
+                        || coalesce(offloaded_at, '-') FROM matches
+                 UNION ALL
+                 SELECT 't' || match_id || ' ' || hex(body_zstd) || ' ' || coalesce(packed_at, '-') || ' '
+                        || coalesce(offloaded_at, '-') FROM timelines ORDER BY 1",
+            )?;
+            let rows = stmt.query_map([], |r| r.get(0))?.collect::<Result<Vec<String>, _>>()?;
+            let n = |sql: &str| c.query_row(sql, [], |r| r.get::<_, i64>(0));
+            Ok::<_, DbError>((
+                rows,
+                n("SELECT (SELECT count(*) FROM matches WHERE packed_at IS NULL)
+                        + (SELECT count(*) FROM timelines WHERE packed_at IS NULL)")?,
+                n("SELECT (SELECT count(*) FROM matches WHERE packed_at IS NOT NULL AND offloaded_at IS NULL)
+                        + (SELECT count(*) FROM timelines WHERE packed_at IS NOT NULL AND offloaded_at IS NULL)")?,
+                n("SELECT count(*) FROM body_packs")?,
+                n("SELECT count(*) FROM body_locations")?,
+            ))
+        })
+        .await
+        .expect("read");
+    assert_eq!(
+        rows,
+        [
+            "KR_1 28B52FFD0001 - -",
+            "KR_2 28B52FFD0002 - -",
+            "tKR_1 28B52FFD0003 - -"
+        ]
+    );
+    assert_eq!((to_pack, to_free, packs, located), (3, 0, 0, 0));
 }
