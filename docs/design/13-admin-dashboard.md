@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Proposed (owner request 2026-10-13, task ADM-00, ADR-144) |
+| **Status** | Accepted (owner request 2026-10-13; ADM-00 to ADM-17, ADR-144 to ADR-161) |
 | **Date** | 2026-10-13 |
 | **Replaces** | v1's dashboard ported verbatim (P7-06, ADR-038) |
 
@@ -334,7 +334,7 @@ Validated with the dataviz palette script; both modes pass.
 
 ## Shell (ADM-08)
 
-`src/ui/admin.html` replaces v1's `dashboard.html` at `/dashboard`.
+`src/ui/admin.html` replaces v1's ported page at `/dashboard`.
 
 - **Boot.** The probe is `GET /v1/admin/info`, with the key from `localStorage` `rp.dashboard.key` when there is one. 200 starts the page (so `AUTH_DISABLED` needs no key and `/dashboard/config.json` is unused); 401 or 403 opens the key sheet, which also sets the API base (`rp.admin.base`, default `location.origin`). Sign out forgets the key.
 - **One store.** `store.set(section, value)` fans out to that section's listeners: `info`, `snapshot`, `rates` (request and Riot-call rates from consecutive snapshots), `ready`, `backups`, `event`. Only the active tab renders; the health strip and rail always do.
@@ -361,7 +361,7 @@ Validated with the dataviz palette script; both modes pass.
 
 ## Jobs (ADM-11)
 
-The Jobs tab folds in `/dev/jobs` (design/10 §Jobs page), which stays until ADM-17.
+The Jobs tab folds in `/dev/jobs` (design/10 §Jobs page), which redirects here since ADM-17.
 
 - **Overview** (`#jobs`): queues from `snapshot.queues` (running, ready, delayed, failed in 24 h, done in the last hour), so no fetch; workers and the jobs finished here from `/jobs/activity` every second; up next from `/jobs/queue?limit=100` every 5 s, running and next grouped by kind and platform as ADR-093 set out (a group says how many, what they cover, when, the highest try; its tooltip the priority range); failed jobs from `/jobs?state=failed` every 5 s, each with Retry; counts by kind from `/jobs/stats` every 15 s. The rail's Jobs badge counts failed jobs in 24 h.
 - **Bulk purge** (DSK-03's route): kind, state and minimum priority; Delete stays disabled until a dry run (`dryRun=true`) for those exact parameters has counted the rows, and its confirm names the count. Editing a parameter disarms it.
@@ -414,7 +414,7 @@ Status icons outside the health strip (tile labels, note lines) now carry their 
 
 Shortcuts do nothing while a field has focus, with Ctrl, Alt or ⌘ held, or while a dialog is open. Tab and Shift+Tab stay inside an open dialog. Accessibility checks: every visible button, link, field, tab and focusable row has an accessible name (jsdom on every tab, and Chromium on every view at three widths in both themes); every tab names its panel; status is never colour alone (an icon and words); text tokens are AA in both themes (ADM-08); motion is off under `prefers-reduced-motion`.
 
-The rail lists only the tabs that exist; each later task adds its own. Until ADM-12 there is no Ladder tab: `/dev/jobs`, `/v1/admin/ladder/*` and the firehose cover it.
+The rail lists every tab, in the order of the `1`–`0` keys.
 
 ## Chart rules
 
@@ -438,7 +438,6 @@ Each tab's task fills its row and adds a section below.
 | `#about` | About: build, flags, redacted config | `/info`, `/readyz` | ADM-15 | built |
 | — | Keyboard, palette, accessibility | — | ADM-16 | built |
 
-Between ADM-08 and ADM-12 the new page has no Ladder tab; `/dev/jobs`, `/v1/admin/ladder/*` and the firehose cover the gap. `/dev/jobs` and `/dashboard/config.json` go in ADM-17.
 
 ## Task order
 
