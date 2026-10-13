@@ -1,5 +1,5 @@
 //! What each worker is doing right now (DEV-19, design/06 §Live activity): an
-//! in-memory record the `/dev/jobs` page reads through
+//! in-memory record the dashboard's Jobs tab reads through
 //! `GET /v1/admin/jobs/activity` and `GET /v1/admin/jobs/{id}/activity`.
 //!
 //! The scheduler opens a trace when a worker claims a job and closes it with

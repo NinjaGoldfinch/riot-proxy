@@ -202,7 +202,7 @@ sqlite3 -readonly riot-proxy.db "SELECT name, SUM(pgsize)/1048576 AS mib FROM db
 - `/metrics` — Prometheus, **same metric names as v1** so `ops/grafana/riot-proxy-dashboard.json` and `ops/prometheus-alerts.yml` import unchanged. Add `jobs_pending{kind}`, `limiter_bulk_waiters`, `sqlite_wal_bytes`; and, for the disk, `sqlite_db_bytes`, `sqlite_freelist_bytes`, `data_dir_free_bytes` (DSK-01, ADR-135), sampled with the metrics history. `GET /v1/admin/stats` shows the same readings with the page geometry.
 - `/healthz` — process up. `/readyz` — SQLite writable and limiter restored; it also reports the SQLite readers, total and idle, without failing on 0 idle (ADR-113).
 - Logs — `tracing` JSON to stdout; every request carries `request_id`, `consumer`, `x_cache`, `upstream_ms`.
-- `/dashboard` — same page, same `metrics` + `firehose` topics.
+- `/dashboard` — the operator page (design/13): `/v1/admin/*` JSON and the `metrics` + `firehose` topics.
 
 **Admin paths behind the tunnel.** The tunnel publishes the proxy as `api.ninjagoldfinch.lol` with path `*`, so `/metrics` (no auth), `/dashboard` and `/v1/admin/*` are reachable there; only the admin key guards the last two. `ADMIN_IP_ALLOWLIST` cannot narrow them: with `TRUST_PROXY=false` every request comes from cloudflared at 127.0.0.1, so it is left empty. ADM-01 serves them on `admin.ninjagoldfinch.lol` behind Cloudflare Access and blocks them on `api.` with a WAF rule (design/12 §Admin hostname behind Access, ADR-144). Prometheus on `ngf-mon-syd1` is planned to scrape `/metrics` over WireGuard, not through the tunnel.
 

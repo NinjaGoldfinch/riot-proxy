@@ -126,7 +126,7 @@ What a running job is doing is kept in memory by the process that runs the worke
 - **Reads.** `GET /v1/admin/jobs/activity?limit=` lists every worker with its job and latest step, and the jobs that finished in this process. `GET /v1/admin/jobs/{id}/activity?after=` returns the job's row and its trace from event `after` on (`nextSeq` is the cursor). It 404s only when there is neither a row nor a trace.
 - **Scope.** Single process. A `ROLE=api` process has no workers, so it shows none. A cross-process view is a later task, like SCH-01's limiter coordination.
 
-`/dev/jobs` (design/10 §Jobs page) is the page over these reads.
+The dashboard's Jobs tab (design/13 §Jobs) is the page over these reads; `/dev/jobs` redirects to it (ADM-17).
 
 ### Bulk limiter priority
 

@@ -343,7 +343,7 @@ Before (OVH VPS, 2026-10-13 01:00 UTC): 38 GB disk at 77 %, `riot-proxy.db` 20 G
 - [x] ADM-14 Consumers & Players tab: quota use, create (key shown once), revoke, re-check by hash, tracked players; `?tracked=true` on `/v1/admin/tracked-players` (#191, ADR-158)
 - [x] ADM-15 Events (2,000-frame ring, name filters, search, pause, JSON view, unseen badge) and About (build, features, readiness, searchable redacted config) tabs (#192, ADR-159)
 - [x] ADM-16 keyboard: `/` palette, `?` help, `1`–`0` tabs, `t` theme, focus trapped in dialogs; accessible-name audits in jsdom and Chromium (#193, ADR-160)
-- [ ] ADM-17 retire `/dashboard/config.json` and `/dev/jobs`; design/13 Accepted
+- [x] ADM-17 `/dashboard/config.json` removed, `/dev/jobs` → 302 `/dashboard#jobs`, the old jobs page deleted; design/13 Accepted (#194, ADR-161)
 - [ ] ADM-18 optional: Access JWT as admin login (ask the owner first)
 
 ## PAIR — team pairings (owner request 2026-10-10, outline)
@@ -355,7 +355,7 @@ Before (OVH VPS, 2026-10-13 01:00 UTC): 38 GB disk at 77 %, `riot-proxy.db` 20 G
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
 
 ## Notes for the next task
-- **ADM (dashboard):** next is ADM-17 (retire `/dashboard/config.json` and `/dev/jobs`; design/13 Accepted). `admin.html` is about 154 KB of its 160 KB budget: anything more needs the owner to raise it. `meter()` joins `chart()` and `table()` as shared pieces; `admin.html` is about 85 KB of its 160 KB budget, so later tabs stay lean. `chart()` and `table()` in `src/ui/admin.html` are the shared pieces. Tabs register in the `TABS` list of `src/ui/admin.html`; tests build pages with `tests/dom/admin-harness.mjs`. Chromium runs locally with `LD_LIBRARY_PATH=$(cat /home/dev/.local/chromelibs/libpath) FONTCONFIG_FILE=/home/dev/.local/chromelibs/fonts.conf`. `/v1/admin/info` is the key probe the page uses (ADM-08). Since ADM-02 the snapshot reads `Stats::samples`; new table-scanning readings belong in the fast or slow set, not in `snapshot()`. `/dev/jobs` and `/dashboard/config.json` stay until ADM-17. ADM-01 is the owner's (Cloudflare); leave its tick to them.
+- **ADM (dashboard):** ADM-00 and ADM-02 to ADM-17 are done; ADM-01 (Cloudflare) is the owner's, and ADM-18 (Access JWT login) is optional and waits for the owner. `admin.html` is about 154 KB of its 160 KB budget: a new tab needs the budget raised first. Tabs register in `TABS` in `src/ui/admin.html`; DOM tests build pages with `tests/dom/admin-harness.mjs` against `fake-admin.mjs`.
 - **Names backfill:** `names:backfill` and `POST /v1/admin/players/names/backfill` (v1's job that fills Riot IDs from archived matches) landed with P7-03 (#57): `src/jobs/names.rs`, a daily tick, queued when a crawl ends, tests in `tests/ladder.rs`.
 - **Events** keep v1's names plus `crawl.phase` (ADR-045): P7-04 publishes `analytics.updated`; P7-02/03 publish `crawl.phase` and `ladder.crawl.completed`; the dashboard's names already match.
 - Routes: follow `src/routes/riot.rs`, which uses `http::validate::*` for v1 rules and `routes::passthrough::{respond, options}`. Add read routers to `routes::docs::api_router`'s `read` group so they get auth+quota. `tests/common::app_with(env, wiremock_uri)` gives a full app. v1's `/v1/lol` bodies are raw passthrough too (`PassthroughResponse`), so P4-05's "typed" part is request validation.

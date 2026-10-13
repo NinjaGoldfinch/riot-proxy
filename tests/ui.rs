@@ -184,8 +184,11 @@ async fn dashboard_is_on_by_default_including_production() {
     // In production the bar never offers the dev explorer, which does not exist there.
     assert!(body.contains(r#"<a href="/dashboard" aria-current="page">Dashboard</a>"#));
     assert!(!body.contains(r#"href="/dev""#));
-    let cfg = common::get(router, "/dashboard/config.json").await;
-    assert_eq!(cfg.json(), serde_json::json!({"authDisabled": false}));
+    // ADM-17: the page probes /v1/admin/info; its old config route is gone.
+    assert_eq!(
+        common::get(router, "/dashboard/config.json").await.status,
+        StatusCode::NOT_FOUND
+    );
 }
 
 /// ADM-08: one file, nothing from another origin, inside its size budget.
@@ -249,7 +252,7 @@ fn admin_helpers_pass_their_node_tests() {
 #[tokio::test]
 async fn dashboard_ui_false_removes_it() {
     let (_d, router) = app(&[("DASHBOARD_UI", "false")]);
-    for p in ["/dashboard", "/dashboard/config.json"] {
+    for p in ["/dashboard", "/dashboard/config.json", "/dev/jobs"] {
         assert_eq!(
             common::get(router.clone(), p).await.status,
             StatusCode::NOT_FOUND,
@@ -262,11 +265,7 @@ async fn dashboard_ui_false_removes_it() {
 async fn config_reports_auth_disabled() {
     let (_d, router) = app(&[("AUTH_DISABLED", "true")]);
     assert_eq!(
-        common::get(router.clone(), "/dev/config.json").await.json()["authDisabled"],
-        true
-    );
-    assert_eq!(
-        common::get(router, "/dashboard/config.json").await.json()["authDisabled"],
+        common::get(router, "/dev/config.json").await.json()["authDisabled"],
         true
     );
 }
@@ -284,7 +283,6 @@ async fn pages_share_a_bar_with_the_pages_that_exist() {
     for (path, here) in [
         ("/dev", "Dev explorer"),
         ("/dev/showcase", "Showcase"),
-        ("/dev/jobs", "Jobs"),
         ("/dashboard", "Dashboard"),
     ] {
         let html = String::from_utf8(common::get(router.clone(), path).await.body).unwrap();
@@ -301,14 +299,7 @@ async fn pages_share_a_bar_with_the_pages_that_exist() {
             .collect();
         assert_eq!(
             hrefs,
-            [
-                "/dashboard",
-                "/dev",
-                "/dev/showcase",
-                "/dev/jobs",
-                "/docs",
-                "/metrics"
-            ],
+            ["/dashboard", "/dev", "/dev/showcase", "/docs", "/metrics"],
             "{path}"
         );
         assert_eq!(bar.matches("aria-current").count(), 1, "{path}");
@@ -499,30 +490,22 @@ fn showcase_chips_link_to_the_explorer() {
     assert!(html.contains("/dev#explorer?op="));
 }
 
-/// `/dev/jobs` (DEV-19): served without a key beside the explorer, one file
-/// reading only the admin job routes and the explorer's config.
+/// ADM-17: `/dev/jobs` became the dashboard's Jobs tab; its old address
+/// redirects there, and the bar no longer lists it.
 #[tokio::test]
-async fn jobs_page_is_served_and_self_contained() {
+async fn dev_jobs_redirects_to_the_jobs_tab() {
     let (_d, router) = app(&[]);
-    let r = common::get(router, "/dev/jobs").await;
-    assert_eq!(r.status, StatusCode::OK);
-    assert_eq!(r.headers["cache-control"], "no-store");
-    let config = common::config(&[]);
-    assert_eq!(
-        String::from_utf8(r.body).unwrap(),
-        riot_proxy::routes::ui::render(riot_proxy::routes::ui::JOBS_HTML, &config, "/dev/jobs")
-    );
-    let html = riot_proxy::routes::ui::JOBS_HTML;
-    for needle in ["http://", "https://", "<script src", "<link "] {
-        assert!(!html.contains(needle), "jobs.html contains {needle:?}");
-    }
-    for route in [
-        "/dev/config.json",
-        "/v1/admin/jobs/activity",
-        "/v1/admin/jobs/queue",
-        "/v1/admin/jobs/stats",
-        "/activity?after=",
+    let r = common::get(router.clone(), "/dev/jobs").await;
+    assert_eq!(r.status, StatusCode::FOUND);
+    assert_eq!(r.headers["location"], "/dashboard#jobs");
+    let html = String::from_utf8(common::get(router, "/dev").await.body).unwrap();
+    assert!(!bar(&html).contains("/dev/jobs"));
+    // No page reads the retired routes any more.
+    for page in [
+        riot_proxy::routes::ui::ADMIN_HTML,
+        riot_proxy::routes::ui::DEV_UI_HTML,
+        riot_proxy::routes::ui::SHOWCASE_HTML,
     ] {
-        assert!(html.contains(route), "jobs.html reads {route}");
+        assert!(!page.contains("/dashboard/config.json") && !page.contains("href=\"/dev/jobs"));
     }
 }

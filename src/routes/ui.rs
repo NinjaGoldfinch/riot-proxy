@@ -1,9 +1,9 @@
-//! `/dev`, `/dev/showcase`, `/dev/jobs` and `/dashboard`: browser pages embedded
-//! in the binary (design/07 §The artefact) and served without a key. `/dev` is
-//! the dev explorer (design/10, ADR-071), `/dev/showcase` an example frontend
-//! (design/11, ADR-080) and `/dev/jobs` the live job view (design/10 §Jobs,
-//! DEV-19); none is ever served in production. `DASHBOARD_UI` defaults on (the
-//! page is inert, and everything behind it needs an admin key).
+//! `/dev`, `/dev/showcase` and `/dashboard`: browser pages embedded in the
+//! binary (design/07 §The artefact) and served without a key. `/dev` is the dev
+//! explorer (design/10, ADR-071) and `/dev/showcase` an example frontend
+//! (design/11, ADR-080); neither is ever served in production. `/dev/jobs`, the
+//! old job view, redirects to the dashboard's Jobs tab (ADM-17). `DASHBOARD_UI`
+//! defaults on (the page is inert, and everything behind it needs an admin key).
 //! The dashboard is `admin.html` (design/13, ADM-08): API-first, everything it
 //! shows read from `/v1/admin/*` and `/v1/ws`. It is sent with an `ETag` and
 //! `Cache-Control: no-cache`, so a reload revalidates and costs a 304.
@@ -27,7 +27,6 @@ use crate::riot::routing::{Platform, Region};
 pub const DEV_UI_HTML: &str = include_str!("../ui/dev-ui.html");
 pub const ADMIN_HTML: &str = include_str!("../ui/admin.html");
 pub const SHOWCASE_HTML: &str = include_str!("../ui/showcase.html");
-pub const JOBS_HTML: &str = include_str!("../ui/jobs.html");
 
 const NO_STORE: (header::HeaderName, &str) = (header::CACHE_CONTROL, "no-store");
 
@@ -40,7 +39,6 @@ pub fn pages(config: &Config) -> Vec<(&'static str, &'static str)> {
         (config.dashboard_ui, "/dashboard", "Dashboard"),
         (config.dev_ui, "/dev", "Dev explorer"),
         (config.dev_ui, "/dev/showcase", "Showcase"),
-        (config.dev_ui, "/dev/jobs", "Jobs"),
         (config.docs_ui, "/docs", "API docs"),
         (true, "/metrics", "Metrics"),
     ]
@@ -162,12 +160,6 @@ struct PlatformOption {
     region: Region,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DashboardConfig {
-    auth_disabled: bool,
-}
-
 /// A `no-store` JSON response of a body computed once at startup.
 fn json_route(body: serde_json::Value) -> axum::routing::MethodRouter {
     get(move || {
@@ -204,7 +196,6 @@ pub fn router(config: &Config, openapi_json: Arc<str>) -> Router {
                 "/dev/showcase",
                 page(render(SHOWCASE_HTML, config, "/dev/showcase")),
             )
-            .route("/dev/jobs", page(render(JOBS_HTML, config, "/dev/jobs")))
             .route(
                 "/dev/config.json",
                 json_route(serde_json::to_value(dev).unwrap_or_default()),
@@ -224,18 +215,19 @@ pub fn router(config: &Config, openapi_json: Arc<str>) -> Router {
             );
     }
     if config.dashboard_ui {
-        let dash = DashboardConfig {
-            auth_disabled: config.auth_disabled,
-        };
-        router = router
-            .route(
-                "/dashboard",
-                cached_page(render(ADMIN_HTML, config, "/dashboard")),
-            )
-            .route(
-                "/dashboard/config.json",
-                json_route(serde_json::to_value(dash).unwrap_or_default()),
+        router = router.route(
+            "/dashboard",
+            cached_page(render(ADMIN_HTML, config, "/dashboard")),
+        );
+        // The old job view's links land on its successor (ADM-17).
+        if config.dev_ui {
+            router = router.route(
+                "/dev/jobs",
+                get(|| async {
+                    (StatusCode::FOUND, [(header::LOCATION, "/dashboard#jobs")]).into_response()
+                }),
             );
+        }
     }
     router
 }
