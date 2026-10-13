@@ -1,8 +1,9 @@
 # 12 — Raw bodies in object storage, and the move to Onidel
 
-Status: **proposal, 2026-10-13.** Nothing here is built. Task ids `OBJ-nn` are
-reserved below; ADR numbers are allocated when each PR lands (DSK-01..07 hold
-135–141).
+Status, 2026-10-13: **the host move is done** (HOST-01, ADR-142; see §As
+executed). **The object storage half is a proposal**: nothing is built, and
+the task ids `OBJ-nn` below are reserved until the owner answers §Open
+questions. ADR numbers are allocated when each PR lands.
 
 ## Why
 
@@ -23,7 +24,8 @@ makes the VPS plan a choice about RAM and cores rather than disk.
 The hosting move is the other half. OVHcloud Sydney has no stock, the current
 box is 2 cores and 3.7 GB, and the research of 2026-10-13 (overseas vs Sydney,
 sixteen countries) found nothing cheaper than Sydney for this workload once
-Hetzner's 2026 repricing is counted. The owner has chosen Onidel Sydney.
+Hetzner's 2026 repricing is counted. Production moved to Onidel Sydney on
+2026-10-13.
 
 ## Goals
 
@@ -40,9 +42,9 @@ Hetzner's 2026 repricing is counted. The owner has chosen Onidel Sydney.
 
 ## Non-goals
 
-- Off-box backups of the SQLite file. That is the Kopia-to-Backblaze plan
-  (report of 2026-10-13, its own task); this document only shrinks what it
-  backs up.
+- Off-box backups of the SQLite file. Production already has them (an
+  `rclone` timer to R2, §As executed); this document only shrinks what they
+  copy.
 - Serving raw bodies to the public from the bucket. Every read still goes
   through the proxy.
 - Writing bodies to two stores from the app. The replica is an ops job.
@@ -54,23 +56,23 @@ Hetzner's 2026 repricing is counted. The owner has chosen Onidel Sydney.
 ```mermaid
 flowchart LR
     subgraph syd["Onidel Sydney"]
-        app["riot-proxy (ONI-4)<br/>SQLite: facts, cache, jobs,<br/>archive metadata + 14-day body window"]
+        app["ngf-prod-syd1 (ONI-4)<br/>riot-proxy + site + cloudflared<br/>SQLite: facts, cache, jobs,<br/>archive metadata + 14-day body window"]
         bucket[("S3 bucket<br/>riot-proxy-archive<br/>all match + timeline bodies")]
         app -- "GET body on local miss<br/>PUT by offload job" --> bucket
     end
     r2[("Cloudflare R2<br/>riot-proxy-archive replica")]
-    b2[("Backblaze B2 US West<br/>Kopia, Object Lock<br/>SQLite snapshots")]
-    old["old VPS (2 cores)<br/>Prometheus + Grafana"]
+    b2[("Cloudflare R2 ngf-backups<br/>SQLite backups<br/>14-day expiry")]
+    old["ngf-mon-syd1 (the old OVH VPS)<br/>ninja-monitor; later Prometheus + Grafana"]
     bucket -. "rclone sync, nightly" .-> r2
-    app -. "Kopia snapshot of backups/, nightly" .-> b2
+    app -. "rclone copy of backups/, every 6 h" .-> b2
     old -- "scrape /metrics over WireGuard" --> app
     riot["Riot API (Cloudflare edge, Sydney)"]
     app -- "cache miss" --> riot
 ```
 
 Three copies of raw data (Onidel bucket, triple-replicated; R2; and, until the
-drop step, the old SQLite file). Two copies of SQLite (local `backups/`, B2).
-The old box keeps no Riot key and no database.
+drop step, the old SQLite file). Two copies of SQLite (one local backup, R2
+`ngf-backups`). The old box keeps no Riot key and no database.
 
 ## Storage layout
 
@@ -200,11 +202,11 @@ day Onidel's account or bucket is gone; the proxy never reads it. Restoring
 means pointing `ARCHIVE_OBJECT_URL` at it, nothing else.
 
 **SQLite backups.** Out of scope here beyond the effect: after the offload the
-nightly `VACUUM INTO` is a few GB, DSK-02's free-space guard stops the skip,
-and the Kopia snapshot to B2 holds the whole database plus `/etc/riot-proxy/env`.
-The raw bodies are not in those snapshots; they are in the bucket and R2.
+nightly `VACUUM INTO` is a few GB instead of 22, and the existing `rclone`
+timer copies it to R2 `ngf-backups` in seconds instead of ten minutes. The
+raw bodies are not in those backups; they are in the bucket and its replica.
 
-**Restore drill.** Quarterly: restore the latest B2 snapshot to a scratch
+**Restore drill.** Quarterly: download the latest backup from `ngf-backups` to a scratch
 directory, start a proxy against it with `ARCHIVE_OBJECT_URL` pointing at R2,
 read one old match through `/v1/match/{id}` and confirm `X-Cache: ARCHIVE`.
 
@@ -244,8 +246,8 @@ Monthly, AUD, Onidel console prices of 2026-10-13:
 | ONI-4, 6 vCPU / 12 GB / 120 GB NVMe / 6 TB | 42.52 |
 | Onidel Object Storage, 1 TB allocation (the knowledge base mentions a 250 GB plan; confirm) | 7.16 (or ~1.80) |
 | R2 replica, ~100 GB | ~2.30 (US$1.50) |
-| B2 snapshots, ~60 GB | ~0.55 (US$0.35) |
-| Old VPS as metrics host | whatever it costs today |
+| R2 `ngf-backups`, 14 daily SQLite backups (~22 GB each today) | ~4.50 (US$3), falling to well under 1 after the offload |
+| `ngf-mon-syd1` (the old OVH VPS) as the monitoring host | unchanged |
 
 ONI-4 rather than ONI-3 for the 12 GB RAM: the whole SQLite file sits in page
 cache, which is what makes the analytics rebuilds and ladder queries fast.
@@ -473,9 +475,10 @@ the site is the length of the second rsync.
 
 ### 8. Backups and replica units
 
-- Kopia to B2 per the backup plan: `/etc/riot-proxy/backup-env` (0600), the
-  service and timer, a first snapshot, a restore drill.
-- `rclone` with two remotes (`onidel:` S3 endpoint above, `r2:` with the R2
+- SQLite backups: as executed, the old box's hand-made `riot-proxy-offsite`
+  timer moved across unchanged in shape (§As executed, Backups). The Kopia to
+  Backblaze plan considered on 2026-10-13 was not used.
+- Once OBJ-04 lands: `rclone` with two remotes (`onidel:` S3 endpoint above, `r2:` with the R2
   token) in `/etc/riot-proxy/rclone.conf` (0600), and the OBJ-04 timer. Until
   OBJ-04 exists, a cron line is fine:
   `17 3 * * * rclone sync onidel:riot-proxy-archive r2:riot-proxy-archive --max-age 48h --no-traverse --transfers 16`
@@ -522,11 +525,88 @@ skips.
 
 ### 12. Close out
 
-- PROGRESS.md: the step-0 numbers, the dates, the ONI plan chosen.
-- DECISIONS.md: one ADR for the host (Onidel Sydney over BinaryLane, Hetzner
-  and the overseas options, with the one-line reasons), one per OBJ task as
-  they land.
-- Memory note `vps.md`: new host, paths, endpoint names.
+Done for the move in HOST-01: PROGRESS.md (§HOST), ADR-142 for the host, and
+§As executed below. Each OBJ task gets its own ADR as it lands.
+
+## As executed (2026-10-13)
+
+Steps 0–8, 11 and 12 ran on 2026-10-13 between about 00:50 and 02:30 UTC.
+Steps 9 and 10 wait for OBJ-01..03. What differed from the plan:
+
+**Host.** ONI-4 in Sydney, Ubuntu 26.04 LTS, monthly billing (a new
+account's A$25 on-demand limit ruled out hourly for this plan). Hostname
+`ngf-prod-syd1`; login user `ninja` with key-only SSH, root login off, `ufw`
+allowing 22 only. The SSH key lives in 1Password; the owner's
+`~/.ssh/config` names it by its `.pub` file with `IdentitiesOnly yes`.
+
+**Storage check (step 2).** `fio` with an fsync per 4 KiB write: about
+3 ms median and 9 ms p99 per fsync, 326 synced writes a second. That is
+replicated network storage, slower than local NVMe and fine for this
+workload (WAL with `synchronous=NORMAL`, under one archived match a second).
+Cold random reads run at about 10 MB/s; the 12 GB of RAM covers that once
+the page cache is warm (10 GB of it was cache an hour after the move).
+
+**Outbound SSH is blocked by default.** Onidel's per-server toggle "Block
+Outgoing SSH" is on for a new server, so `new` could not reach `old` or
+GitHub on port 22. The owner turned it off (the RDP block stays on). The
+binary, unit, env file and the 22.9 GB seed were pushed from `old` instead,
+into a data directory temporarily owned by the login user.
+
+**Copies.** The seed `rsync` took 9 min 57 s at about 37 MB/s. The final
+`rsync` after the stop and `wal_checkpoint(TRUNCATE)` took 29 s. The
+`quick_check` read at about 10 MB/s cold, so it was cut short during the
+window (the source was healthy, stopped with its WAL flushed, and `rsync`
+checksums every file) and run afterwards at idle I/O priority: `ok`. The
+site was down for a few minutes.
+
+**The site and the tunnel (step 3b).** The site checkout was built at the
+commit `old` ran, with a new read-only deploy key. Ubuntu 26.04's
+`node-corepack` (0.24) cannot load pnpm 12, so pnpm 12.10.1 comes from
+`npm install -g`, as on `old`. `cloudflared` comes from Cloudflare's apt
+repository and reads `--token-file /etc/cloudflared/token`. Cloudflare showed
+the one connector moving to `ngf-prod-syd1`; no DNS changed. The proxy and
+the site listen on `127.0.0.1` only.
+
+**Backups.** `old` already had an off-box job that was not in this
+repository: `riot-proxy-offsite.timer` every 6 hours runs
+`rclone copy` of `$DATA_DIR/backups` to R2, then `rclone check --one-way`,
+then deletes all but the newest local backups. It moved to `new` with these
+changes:
+
+- bucket `ngf-backups`, prefix `riot-proxy/`, with an R2 lifecycle rule
+  deleting objects after 14 days and the bucket's multipart-abort rule at
+  1 day; the old bucket is deleted and the API token is scoped to the new
+  bucket only;
+- one local backup kept instead of three (`tail -n +2`), since the disk
+  holds the 22 GB database and one 22 GB copy;
+- `no_head = true` in the rclone remote: Ubuntu's rclone 1.60.1 sends
+  `HEAD …?versionId=` after each upload, which R2 answers with 501, so every
+  upload failed once and passed on the retry.
+
+Zero-byte placeholder backups that had kept `maintenance` from copying a
+full database on the old 38 GB disk came across in the seed; they were
+removed. The first backup taken on `new` was 21.6 GB (the previous one, on
+2026-10-12, was 10.6 GB) and is in R2, checked by `rclone check`. The
+production binary predates `BACKUP_KEEP` (DSK-02, ADR-136); once a release
+with it is deployed, set `BACKUP_KEEP=1` to match the offsite job's prune.
+
+**Monitoring.** `ninja-monitor` runs on both boxes, each posting to its own
+Discord webhook. On `ngf-prod-syd1` it watches `riot-proxy`,
+`ninjagoldfinch-lol` and `cloudflared` with per-service memory limits
+(2 GiB, 1 GiB, 512 MiB), "down" after 30 s repeating every 30 min, host
+memory below 15 %, disk above 70 % and 85 %, and host CPU above 90 % for
+20 min. Its API, like the proxy's dashboard, is reached over SSH local
+forwards.
+
+**The old box.** The owner wiped it the same day instead of keeping it a
+week, once the backup was in R2: services, units, secrets, data, the site
+checkout, `cloudflared`, Node and `rclone` are gone, and so is its deploy
+key. It is now `ngf-mon-syd1`: login user `ninja`, `ubuntu` locked, key-only
+SSH, `ninja-monitor` watching the host. It is to become the monitoring host.
+
+**Not yet done.** Prometheus and Grafana on `ngf-mon-syd1` (step 11), a
+dead-man's switch across the boxes (the owner plans three monitoring boxes),
+and a newer `rclone`.
 
 ## Rollback
 
@@ -549,7 +629,9 @@ skips.
    cache table replaces it.
 3. **Dependency.** `object_store` (Apache). Alternative: `rust-s3`. The
    former's local and in-memory back ends are why it is proposed.
-4. **Purge before move (step 5)?** Depends on DSK-03 landing first.
-5. **Do the DSK migrations before or after the move?** After, on the faster
-   box: DSK-06 and DSK-07 rebuild tables and want RAM and NVMe. The move
-   itself needs no code.
+4. **Purge the stale queue before the offload?** DSK-03 (#166) adds the purge;
+   it reaches production with the next release. The move went ahead without
+   it, carrying 1.13 M pending jobs.
+5. **DSK migrations before or after the move?** Answered by events: the move
+   happened first, so DSK-06 and DSK-07 rebuild their tables on
+   `ngf-prod-syd1` with the next release.
