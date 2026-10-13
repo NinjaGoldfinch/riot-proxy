@@ -608,6 +608,63 @@ SSH, `ninja-monitor` watching the host. It is to become the monitoring host.
 dead-man's switch across the boxes (the owner plans three monitoring boxes),
 and a newer `rclone`.
 
+## Admin hostname behind Access (ADM-01, owner runbook)
+
+Status: **not yet executed.** Replace this line with the date and anything that differed once it has run.
+
+Why (design/13 §Reach, ADR-144): the tunnel publishes the proxy as
+`api.ninjagoldfinch.lol` with path `*`, so `/metrics` (no auth), `/dashboard`
+and `/v1/admin/*` are public there, and `ADMIN_IP_ALLOWLIST` cannot help
+because every request reaches the proxy from cloudflared at `127.0.0.1`
+(`TRUST_PROXY=false`). The admin surface moves to its own hostname behind
+Cloudflare Access; `api.` keeps only what consumers use. No code changes and
+no restart of the proxy.
+
+The tunnel is token-installed (step 3b), so its routes live in the Cloudflare
+dashboard, not in a file on the box.
+
+1. **Route.** Zero Trust → Networks → Tunnels → the production tunnel →
+   Public hostnames → Add: subdomain `admin`, domain `ninjagoldfinch.lol`,
+   service `HTTP` `127.0.0.1:8080`, path empty. The DNS record is created
+   with it.
+2. **Access application.** Zero Trust → Access → Applications → Add →
+   Self-hosted: domain `admin.ninjagoldfinch.lol`, session 24 h, login method
+   One-time PIN only. One policy: action Allow, include Emails = the owner's
+   email. Nothing else is allowed in.
+3. **Block the admin paths on `api.`.** Security → WAF → Custom rules on the
+   `ninjagoldfinch.lol` zone → Create, action Block:
+
+   ```
+   (http.host eq "api.ninjagoldfinch.lol" and (
+     http.request.uri.path eq "/metrics"
+     or starts_with(http.request.uri.path, "/dashboard")
+     or starts_with(http.request.uri.path, "/dev")
+     or starts_with(http.request.uri.path, "/v1/admin")))
+   ```
+
+   `/v1/ws` stays open on `api.`: consumers use its read topics, and its admin
+   topics (`metrics`, `firehose`, `ladder`) already need an admin key at the
+   handshake. `/healthz`, `/readyz` and `/docs` (when enabled) stay open.
+4. **Leave `ADMIN_IP_ALLOWLIST` empty.** Behind the tunnel it would see only
+   `127.0.0.1`; Access is the network gate now.
+5. **Check** from a machine outside Cloudflare Access:
+
+   ```
+   curl -s -o /dev/null -w '%{http_code}\n' https://api.ninjagoldfinch.lol/metrics          # 403
+   curl -s -o /dev/null -w '%{http_code}\n' https://api.ninjagoldfinch.lol/v1/admin/stats   # 403
+   curl -s -o /dev/null -w '%{http_code}\n' https://api.ninjagoldfinch.lol/healthz          # 200
+   curl -s -o /dev/null -w '%{http_code}\n' https://admin.ninjagoldfinch.lol/dashboard      # 302 to the Access login
+   ```
+
+   Then open `https://admin.ninjagoldfinch.lol/dashboard` in a browser: Access
+   asks for the email and PIN, the page renders, and the admin key works.
+   The site keeps working: it calls the proxy over loopback (`PROXY_URL`), not
+   through `api.`.
+6. **Record** the date here, tick ADM-01 in PROGRESS.md, and note in design/07
+   §Observability that the paths are blocked.
+
+Rollback: delete the WAF rule; the `admin.` route and Access app can stay.
+
 ## Rollback
 
 | After step | How |

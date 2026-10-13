@@ -200,6 +200,8 @@ sqlite3 -readonly riot-proxy.db "SELECT name, SUM(pgsize)/1048576 AS mib FROM db
 - Logs — `tracing` JSON to stdout; every request carries `request_id`, `consumer`, `x_cache`, `upstream_ms`.
 - `/dashboard` — same page, same `metrics` + `firehose` topics.
 
+**Admin paths behind the tunnel.** The tunnel publishes the proxy as `api.ninjagoldfinch.lol` with path `*`, so `/metrics` (no auth), `/dashboard` and `/v1/admin/*` are reachable there; only the admin key guards the last two. `ADMIN_IP_ALLOWLIST` cannot narrow them: with `TRUST_PROXY=false` every request comes from cloudflared at 127.0.0.1, so it is left empty. ADM-01 serves them on `admin.ninjagoldfinch.lol` behind Cloudflare Access and blocks them on `api.` with a WAF rule (design/12 §Admin hostname behind Access, ADR-144). Prometheus on `ngf-mon-syd1` is planned to scrape `/metrics` over WireGuard, not through the tunnel.
+
 The alerts that matter are unchanged: any 401/403 from Riot, any `application`-typed 429, cache hit ratio < 70 %.
 
 ## Upgrade procedure
