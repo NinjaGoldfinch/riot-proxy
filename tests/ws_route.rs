@@ -272,6 +272,7 @@ async fn the_metrics_topic_ticks_only_while_held() {
             "limiter",
             "process",
             "queues",
+            "sampledAt",
             "totals",
             "v",
             "worker",

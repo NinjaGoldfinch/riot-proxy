@@ -270,7 +270,8 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         crate::jobs::ticks::ladders(&config),
     );
     // The dashboard's documents: the `metrics` topic ticks only while someone
-    // holds it, the history is sampled regardless (v1).
+    // holds it; the sampler reads the table-scanning parts in the background
+    // and records the history regardless (v1, ADM-02).
     let stats = Arc::new(crate::stats::Stats {
         hub: hub.clone(),
         db: db.clone(),
@@ -279,13 +280,15 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         metrics: metrics.clone(),
         mirror: Arc::clone(&mirror),
         started,
+        samples: crate::stats::Samples::default(),
     });
     let metrics_topic = crate::ws::metrics::spawn(
         Arc::clone(&stats),
         Duration::from_secs(u64::from(config.metrics_interval_s)),
     );
-    let history = crate::stats::spawn_history(
+    let history = crate::stats::spawn_sampler(
         Arc::clone(&stats),
+        crate::stats::FAST_SAMPLE,
         Duration::from_secs(u64::from(config.metrics_history_interval_s)),
     );
 

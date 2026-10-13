@@ -231,6 +231,10 @@ expression: doc
             "format": "int64",
             "type": "integer"
           },
+          "sampledAt": {
+            "$ref": "#/components/schemas/SampledAt",
+            "description": "When the counts (`fast`, read with the request) and the timelines count,\narchive bytes and disk readings (`slow`, sampled) were read, unix ms (ADM-02)."
+          },
           "trackedPlayers": {
             "description": "Scoped to the current key: zero right after a rotation.",
             "format": "int64",
@@ -257,7 +261,8 @@ expression: doc
           "dbPageCount",
           "dbFreelistPages",
           "diskFreeBytes",
-          "diskTotalBytes"
+          "diskTotalBytes",
+          "sampledAt"
         ],
         "type": "object"
       },
@@ -3982,6 +3987,26 @@ expression: doc
         ],
         "type": "object"
       },
+      "SampledAt": {
+        "description": "When a document's sampled parts were read, unix ms (ADM-02). A part read\nlive, because nothing was sampled yet, carries the time of the request.",
+        "properties": {
+          "fast": {
+            "description": "Totals, queues, the ladder and analytics, sampled every 15 s.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "slow": {
+            "description": "Archive bytes and disk, sampled with each history point.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "fast",
+          "slow"
+        ],
+        "type": "object"
+      },
       "SectionsComputedAt": {
         "description": "Each section's recompute time: they are rebuilt in separate transactions.",
         "properties": {
@@ -4073,6 +4098,10 @@ expression: doc
             },
             "type": "object"
           },
+          "sampledAt": {
+            "$ref": "#/components/schemas/SampledAt",
+            "description": "When `totals`, `queues`, `ladder` and `analytics` (`fast`) and the archive\nand disk readings (`slow`) were read (ADM-02)."
+          },
           "totals": {
             "$ref": "#/components/schemas/Totals"
           },
@@ -4102,7 +4131,8 @@ expression: doc
           "flows",
           "ladder",
           "analytics",
-          "process"
+          "process",
+          "sampledAt"
         ],
         "type": "object"
       },
@@ -9794,7 +9824,7 @@ expression: doc
     },
     "/v1/admin/stats": {
       "get": {
-        "description": "`archivedMatches` counts the whole archive, which is not key-scoped: match ids are not encrypted, so it survives a key rotation. `trackedPlayers` is scoped to the current key and reads zero right after one. The `db*`, `wal*` and `disk*` fields are the SQLite file, its write-ahead log and free list, and the data directory's file system (DSK-01).",
+        "description": "`archivedMatches` counts the whole archive, which is not key-scoped: match ids are not encrypted, so it survives a key rotation. `trackedPlayers` is scoped to the current key and reads zero right after one. The `db*`, `wal*` and `disk*` fields are the SQLite file, its write-ahead log and free list, and the data directory's file system (DSK-01). The match and player counts are read with the request; `archivedTimelines`, the archive's bytes and the disk readings are sampled in the background with each history point (`METRICS_HISTORY_INTERVAL_S`, a minute by default; `sampledAt.slow`).",
         "operationId": "stats",
         "responses": {
           "200": {
