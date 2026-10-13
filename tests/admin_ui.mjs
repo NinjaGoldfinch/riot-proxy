@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs';
 const html = readFileSync(new URL('../src/ui/admin.html', import.meta.url), 'utf8');
 const block = html.match(/\/\/ -{10} pure helpers[^\n]*\n([\s\S]*?)\/\/ -{10} end pure helpers/);
 assert.ok(block, 'the pure helpers block is marked in admin.html');
-const h = new Function(`${block[1]}; return { APEX_LIST_CAP, fmt, compact, fmtBytes, fmtDuration, pct, esc, relTime, sumValues, hitRatio, rate, jobTotals, diskLevel, backupLevel, limiterLevel, route, joinUrl, wsUrl, maskKey, contrast, sortRows, capRows, percentile, downsample, historyPointOf, seriesOf, statusClass, routeRows, upstreamRows, windowLabel, fullness, meterLevel, scopeOrder, msOf, dur, when, jobLabel, groupJobs, groupLabel, jobWhen, groupWhen };`)();
+const h = new Function(`${block[1]}; return { APEX_LIST_CAP, fmt, compact, fmtBytes, fmtDuration, pct, esc, relTime, sumValues, hitRatio, rate, jobTotals, diskLevel, backupLevel, limiterLevel, route, joinUrl, wsUrl, maskKey, contrast, sortRows, capRows, percentile, downsample, historyPointOf, seriesOf, statusClass, routeRows, upstreamRows, windowLabel, fullness, meterLevel, scopeOrder, msOf, dur, when, jobLabel, groupJobs, groupLabel, jobWhen, groupWhen, stageText, stagePct, legName, tierName };`)();
 
 const tokens = (name) => {
   const m = html.match(new RegExp(`/\\* tokens:${name}[^*]*\\*/\\s*[^{]+\\{([^}]*)\\}`));
@@ -239,4 +239,19 @@ test('a job reads as what it does; alike jobs group by kind and platform (ADR-09
   assert.equal(h.jobWhen(c(0, 'kr', { runAfter: now + 65_000 }), now), 'due in 1m 05s');
   const run = (t) => ({ kind: 'ladder:walk', state: 'running', claimedAt: new Date(now - t).toISOString(), payload: {} });
   assert.equal(h.groupWhen([run(5000), run(60_000)], now), 'oldest started 1m 00s ago');
+});
+
+test("a crawl's stages read with their units and pace; legs and tiers by name (ADR-087)", () => {
+  assert.equal(h.stageText({ name: 'collect', state: 'now', done: 50, total: 80, unit: 'batches', recent: 10, etaSeconds: 1800 }), '50 / 80 batches of 25 players · 10 in 10m · ~30m 0s left');
+  assert.equal(h.stageText({ state: 'now', done: 1, total: 3, unit: 'legs', recent: 0 }), '1 / 3 legs · none finished in 10m');
+  assert.equal(h.stageText({ state: 'waiting', total: null }), 'after the stage before');
+  assert.equal(h.stageText({ state: 'done', done: null, total: 9, unit: 'ids' }), '? / 9 ids handed on');
+  assert.equal(h.stagePct({ done: 50, total: 80 }), 62.5);
+  assert.equal(h.stagePct({ state: 'done', total: null }), 100);
+  assert.equal(h.stagePct({ done: 99, total: 10 }), 100);
+  assert.deepEqual(
+    [{ leg: 'ladder:walk:GOLD:II', page: 3 }, { leg: 'ladder:apex:MASTER' }, { leg: 'ladder:collect:1250' }, { leg: 'ladder:archive' }].map(h.legName),
+    ['GOLD II · page 3', 'MASTER', 'players 1250+', 'archive hand-off'],
+  );
+  assert.equal(h.tierName('GRANDMASTER'), 'Grandmaster');
 });

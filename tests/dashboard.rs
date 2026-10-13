@@ -541,3 +541,12 @@ async fn the_snapshot_carries_the_runtime_gauges() {
     assert!(points[1]["disk"]["dbBytes"].as_u64().unwrap() > 0);
     assert!(points[1]["requests"].is_u64() && points[1]["upstream"].is_u64());
 }
+
+/// The Ladder tab redraws at once on a crawl's phase change or its end (ADR-058;
+/// the v1 page's check, lost with it in ADM-08, back with the tab in ADM-12).
+#[tokio::test]
+async fn the_dashboard_follows_crawl_phases() {
+    let page = riot_proxy::routes::ui::ADMIN_HTML;
+    assert!(page.contains("frame.event === 'crawl.phase' || frame.event === 'ladder.crawl.completed'"));
+    assert!(page.contains("/v1/admin/ladder/crawls/"));
+}
