@@ -358,6 +358,12 @@ and records the newest `pack_id` it covered in the object's metadata
 lifecycle rule on `index/` expires snapshots after 14 days, so a corrupt one
 is never the only copy.
 
+On R2, as a safety net in case the hourly sync stops: a lifecycle rule on
+`index/` expiring after **21 days** (longer than Onidel's 14, so it never
+removes a snapshot the sync still mirrors) and the bucket's
+abort-incomplete-multipart rule at 1 day. **No expiry rule on `packs/`**, on
+either provider: packs are kept forever, and only compaction deletes one.
+
 Recovery is then the newest snapshot (one GET) plus `packs reindex --since
 <last-pack>`, which reads only the packs written after it: ULIDs sort by time,
 so that is a listing and a few packs, not all of them. With neither the
