@@ -322,6 +322,12 @@ pub struct Snapshot {
     pub sqlite: SqliteReaders,
     /// From the slow sample (ADM-04).
     pub disk: DiskSection,
+    /// `route|status|cache` → requests answered since the start
+    /// (`proxy_requests_total`, ADM-05). `|` because routes hold `:`.
+    pub requests: BTreeMap<String, u64>,
+    /// `region|method|status` → Riot calls since the start
+    /// (`proxy_upstream_requests_total`, ADM-05).
+    pub upstream: BTreeMap<String, u64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
@@ -477,13 +483,18 @@ fn kind_of(scope: &str) -> (&'static str, String) {
 
 impl Stats {
     fn counter(&self, name: &str, keys: &[&str]) -> BTreeMap<String, u64> {
+        self.labelled(name, keys, ":")
+    }
+
+    /// A counter's values summed by the `keys` labels, joined with `sep`.
+    fn labelled(&self, name: &str, keys: &[&str], sep: &str) -> BTreeMap<String, u64> {
         let mut out = BTreeMap::new();
         for (labels, value) in crate::telemetry::counter_values(&self.metrics, name) {
             let key = keys
                 .iter()
                 .map(|k| labels.get(*k).map_or("", String::as_str))
                 .collect::<Vec<_>>()
-                .join(":");
+                .join(sep);
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             {
                 *out.entry(key).or_default() += value as u64;
@@ -908,6 +919,12 @@ impl Stats {
                 readers_free: as_u64(self.db.readers_free()),
             },
             disk,
+            requests: self.labelled(crate::metrics::REQUESTS_TOTAL, &["route", "status", "cache"], "|"),
+            upstream: self.labelled(
+                crate::metrics::UPSTREAM_REQUESTS_TOTAL,
+                &["region", "method", "status"],
+                "|",
+            ),
         })
     }
 

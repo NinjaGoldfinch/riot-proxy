@@ -105,12 +105,26 @@ pub fn router(state: AppState, metrics: PrometheusHandle) -> Router {
 
 /// `proxy_requests_total{route,status,cache}` (v1's onResponse hook). `route` is the
 /// matched template in v1's `:param` form; unmatched requests are `unmatched`
-/// rather than v1's raw URL, which made the label unbounded (ADR-036).
+/// rather than v1's raw URL, which made the label unbounded (ADR-036). The
+/// request also goes to the recent-requests ring (ADM-05) unless its path is
+/// a probe or the dashboard's own polling.
 async fn record_request(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    let started = std::time::Instant::now();
     let route = req
         .extensions()
         .get::<axum::extract::MatchedPath>()
         .map_or_else(|| "unmatched".to_string(), |m| fastify_style(m.as_str()));
+    let path = req.uri().path();
+    let seen = crate::http::recent::recorded(path).then(|| {
+        (
+            req.method().to_string(),
+            crate::http::recent::clip(path),
+            req.extensions()
+                .get::<RequestId>()
+                .map(|id| id.as_str().to_string())
+                .unwrap_or_default(),
+        )
+    });
     let res = next.run(req).await;
     let cache = match res.headers().get("x-cache").and_then(|v| v.to_str().ok()) {
         Some("HIT-NEG") => "neg",
@@ -121,6 +135,22 @@ async fn record_request(req: axum::extract::Request, next: axum::middleware::Nex
         Some("BYPASS") => "bypass",
         _ => "none",
     };
+    if let Some((method, path, request_id)) = seen {
+        crate::http::recent::push_request(crate::http::recent::RecentRequest {
+            at: crate::clock::Clock::now().unix_ms,
+            method,
+            route: route.clone(),
+            path,
+            status: res.status().as_u16(),
+            cache: cache.to_string(),
+            latency_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            consumer: res
+                .extensions()
+                .get::<crate::http::recent::ServedTo>()
+                .map(|c| c.0.clone()),
+            request_id,
+        });
+    }
     metrics::counter!(crate::metrics::REQUESTS_TOTAL, "route" => route, "status" => res.status().as_str().to_string(), "cache" => cache)
         .increment(1);
     res

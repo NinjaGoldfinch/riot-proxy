@@ -154,6 +154,12 @@ Sections the snapshot gained for the new tabs, all computed per snapshot from me
 
 History points gain `disk`, `requests` and `upstream` (`proxy_requests_total` and `proxy_upstream_requests_total` summed since the start; a rate is the difference between points, and a drop marks a restart). Points stored before ADM-04 read them as null.
 
+### Recent requests and errors (ADM-05)
+
+`GET /v1/admin/recent?kind=requests|errors&limit=` reads two in-memory rings, newest first: the last 500 answered requests (`at`, `method`, `route`, `path` cut to 200 characters, `status`, `cache`, `latencyMs`, `consumer` name, `requestId`) and the last 200 error envelopes (`at`, `code`, `status`, `message`, `requestId`). `app::record_request` and `ApiError::into_response` push them; the auth layer tags the response with the consumer's name. Probes (`/healthz`, `/readyz`), `/metrics` and the page's polling (`/v1/admin/metrics`, `/v1/admin/recent`) are not recorded. A restart empties both. No body, header, query string or key is kept.
+
+The snapshot gains `requests` (`route|status|cache` → count) and `upstream` (`region|method|status` → count), the two request counters by label since the start; `|` separates because routes hold `:`. The Traffic tab draws its by-route table from `requests` and its p50/p95 per route from the ring.
+
 ## Boot and tab switch
 
 ```mermaid
