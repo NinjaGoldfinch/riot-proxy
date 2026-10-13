@@ -326,7 +326,7 @@ Before (OVH VPS, 2026-10-13 01:00 UTC): 38 GB disk at 77 %, `riot-proxy.db` 20 G
 
 ## ADM — a better admin dashboard (owner request 2026-10-13)
 `/dashboard` is v1's page ported verbatim: it shows no disk, backups, traffic, errors or build, polls while hidden, and every snapshot scans `matches` and `jobs`. The series samples the aggregates, adds the missing readings as JSON and rebuilds the page as one embedded file reached through `admin.ninjagoldfinch.lol` behind Cloudflare Access. Specs in IMPLEMENTATION.md §Post-release — ADM; design/13.
-- [ ] ADM-00 series spec, design/13 (Proposed), the ADM-01 runbook in design/12 (ADR-144)
+- [x] ADM-00 series spec, design/13 (Proposed), the ADM-01 runbook in design/12 (#177, ADR-144)
 - [ ] ADM-01 owner runbook: `admin.ninjagoldfinch.lol` behind Access (One-time PIN); WAF rule blocking `/metrics`, `/dashboard*`, `/dev*`, `/v1/admin*` on `api.` (design/12 §Admin hostname behind Access)
 - [ ] ADM-02 sampled aggregates behind the snapshot (`StatsCache`), `jobs(state, kind, run_after, finished_at)` index
 - [ ] ADM-03 `GET /v1/admin/info` and build identity (`build.rs`, `GIT_SHA`)
