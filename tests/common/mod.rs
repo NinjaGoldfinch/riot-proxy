@@ -69,6 +69,11 @@ pub fn app_with(env: &[(&str, &str)], upstream: &str) -> (tempfile::TempDir, App
         quotas: std::sync::Arc::clone(&quotas),
         config: std::sync::Arc::clone(&config),
     });
+    let maintenance = std::sync::Arc::new(riot_proxy::jobs::maintenance::Maintenance::new(
+        db.clone(),
+        dir.path().join("backups"),
+        config.backup_keep as usize,
+    ));
     let state = AppState {
         config,
         db: db.clone(),
@@ -83,6 +88,7 @@ pub fn app_with(env: &[(&str, &str)], upstream: &str) -> (tempfile::TempDir, App
         hub,
         ddragon: mirror,
         stats,
+        maintenance,
     };
     let router = app::router(state.clone(), telemetry::metrics_handle().expect("metrics"));
     (dir, state, router)

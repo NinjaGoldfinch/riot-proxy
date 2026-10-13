@@ -313,6 +313,7 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         hub: hub.clone(),
         ddragon: mirror,
         stats,
+        maintenance,
     };
     let served = app::serve(listener, app::router(state, metrics), shutdown).await;
 

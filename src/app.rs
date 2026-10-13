@@ -59,6 +59,8 @@ pub struct AppState {
     pub ddragon: Arc<crate::r#static::Mirror>,
     /// What the dashboard's snapshot and history are read from.
     pub stats: Arc<crate::stats::Stats>,
+    /// The daily housekeeping, for its backups and last run (ADM-06).
+    pub maintenance: Arc<crate::jobs::maintenance::Maintenance>,
 }
 
 pub fn router(state: AppState, metrics: PrometheusHandle) -> Router {

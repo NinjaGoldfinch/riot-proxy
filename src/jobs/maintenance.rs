@@ -17,7 +17,7 @@
 //! 5. **Checkpoint** the WAL with `PRAGMA wal_checkpoint(TRUNCATE)`.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError, RwLock};
 
 use futures_util::future::BoxFuture;
 use serde::Serialize;
@@ -105,10 +105,12 @@ pub async fn backups(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
 }
 
 /// What one run did.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct Report {
     /// The backup written, if one was (none when today's already exists, when
     /// `BACKUP_KEEP` is 0, or when it was skipped or failed).
+    #[schema(value_type = Option<String>)]
     pub backup: Option<PathBuf>,
     /// Why no backup was attempted today: `BACKUP_KEEP=0`, or the disk's
     /// free space against what the copy needs.
@@ -122,6 +124,20 @@ pub struct Report {
     pub cache_swept: usize,
 }
 
+/// The last run this process made (ADM-06, `GET /v1/admin/backups`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LastRun {
+    /// Unix ms when it started.
+    pub at: i64,
+    /// How long it took.
+    pub ms: u64,
+    /// What it did; null when it failed.
+    pub report: Option<Report>,
+    /// Why it failed; the job is retried like any other.
+    pub error: Option<String>,
+}
+
 /// Free bytes on a directory's file system; [`crate::db::disk::free_bytes`]
 /// unless a test says otherwise.
 pub type DiskFree = Arc<dyn Fn(&Path) -> Result<u64, DbError> + Send + Sync>;
@@ -133,6 +149,8 @@ pub struct Maintenance {
     /// `BACKUP_KEEP`: backups kept, newest first; 0 takes none.
     pub keep: usize,
     pub disk_free: DiskFree,
+    /// The last run since the process started (ADM-06).
+    last: RwLock<Option<LastRun>>,
 }
 
 impl Maintenance {
@@ -142,7 +160,13 @@ impl Maintenance {
             backup_dir,
             keep,
             disk_free: Arc::new(crate::db::disk::free_bytes),
+            last: RwLock::new(None),
         }
+    }
+
+    /// The last run since the process started; `None` before the first.
+    pub fn last(&self) -> Option<LastRun> {
+        self.last.read().unwrap_or_else(PoisonError::into_inner).clone()
     }
 
     /// Replace how free disk space is read (tests).
@@ -151,7 +175,21 @@ impl Maintenance {
         self
     }
 
+    /// One run, remembered for [`Maintenance::last`].
     pub async fn run_once(&self, now_ms: i64) -> Result<Report, JobError> {
+        let started = std::time::Instant::now();
+        let result = self.run_steps(now_ms).await;
+        let run = LastRun {
+            at: now_ms,
+            ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            report: result.as_ref().ok().cloned(),
+            error: result.as_ref().err().map(ToString::to_string),
+        };
+        *self.last.write().unwrap_or_else(PoisonError::into_inner) = Some(run);
+        result
+    }
+
+    async fn run_steps(&self, now_ms: i64) -> Result<Report, JobError> {
         let fail = |e: &dyn std::fmt::Display| JobError::Retry(e.to_string());
         let mut report = Report::default();
 

@@ -77,6 +77,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(metrics_history))
         .routes(routes!(info))
         .routes(routes!(recent))
+        .routes(routes!(list_backups))
+        .routes(routes!(run_maintenance))
 }
 
 fn json<T: Serialize>(status: StatusCode, body: &T) -> Response {
@@ -2490,5 +2492,100 @@ async fn recent(Extension(_c): Who, Query(query): Q) -> Response {
             requests: Some(recent::requests(limit)),
             errors: None,
         })
+    }
+}
+
+/// One daily backup on disk.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupFile {
+    /// `riot-proxy-<YYYY-MM-DD>.db`.
+    name: String,
+    bytes: u64,
+    /// Unix ms; null where the file system keeps no time.
+    modified_at: Option<i64>,
+}
+
+/// `GET /v1/admin/backups` (ADM-06).
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Backups {
+    /// `$DATA_DIR/backups`.
+    dir: String,
+    /// `BACKUP_KEEP`; 0 takes none.
+    keep: usize,
+    /// Newest first; `[]` when the directory does not exist.
+    files: Vec<BackupFile>,
+    /// The last `maintenance` run since this process started; null before the first.
+    last_run: Option<crate::jobs::maintenance::LastRun>,
+    /// Free bytes on the backup directory's file system (its parent's while it
+    /// does not exist); null when it cannot be read.
+    disk_free_bytes: Option<u64>,
+}
+
+#[utoipa::path(
+    get, path = "/v1/admin/backups", tag = "admin",
+    summary = "Backups and the last maintenance run",
+    description = "The daily `VACUUM INTO` backups in `$DATA_DIR/backups`, newest first, with their sizes and \
+        times, read from the directory without opening a file; `BACKUP_KEEP`; the free space beside them; and \
+        what the last `maintenance` run since the process started did (design/07 §Backups).",
+    responses((status = 200, description = "The backups", body = Backups), LocalErrors),
+)]
+async fn list_backups(State(state): State<AppState>, Extension(_c): Who) -> Response {
+    let m = &state.maintenance;
+    let paths = match crate::jobs::maintenance::backups(&m.backup_dir).await {
+        Ok(p) => p,
+        Err(e) => return internal(&e, "could not list the backups"),
+    };
+    let mut files = Vec::with_capacity(paths.len());
+    for path in paths {
+        // Metadata only: a backup is never opened.
+        let Ok(meta) = tokio::fs::metadata(&path).await else {
+            continue;
+        };
+        files.push(BackupFile {
+            name: path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default(),
+            bytes: meta.len(),
+            modified_at: meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .and_then(|d| i64::try_from(d.as_millis()).ok()),
+        });
+    }
+    let disk_free_bytes = [Some(m.backup_dir.as_path()), m.backup_dir.parent()]
+        .into_iter()
+        .flatten()
+        .find_map(|p| (m.disk_free)(p).ok());
+    ok(&Backups {
+        dir: m.backup_dir.display().to_string(),
+        keep: m.keep,
+        files,
+        last_run: m.last(),
+        disk_free_bytes,
+    })
+}
+
+#[utoipa::path(
+    post, path = "/v1/admin/maintenance/run", tag = "admin",
+    summary = "Queue maintenance now",
+    description = "Queues the daily `maintenance` job under the same dedupe key as its tick, so it joins one \
+        already queued. The run takes a backup only if today's (UTC) does not exist yet; the trims, sweep, \
+        statistics and checkpoint always run.",
+    responses((status = 202, description = "`{ok, jobId, status}`: `queued` or `already-queued`", body = serde_json::Value), LocalErrors),
+)]
+async fn run_maintenance(State(state): State<AppState>, Extension(_c): Who) -> Response {
+    use crate::jobs::{NewJob, kinds, priority};
+    let job = NewJob::new(kinds::MAINTENANCE, priority::MAINTENANCE, serde_json::json!({}))
+        .dedupe(kinds::MAINTENANCE);
+    match state.jobs.enqueue(job).await {
+        Ok(q) => json(
+            StatusCode::ACCEPTED,
+            &serde_json::json!({"ok": true, "jobId": q.id, "status": q.status()}),
+        ),
+        Err(e) => internal(&e, "could not queue maintenance"),
     }
 }
