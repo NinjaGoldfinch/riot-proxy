@@ -245,8 +245,17 @@ ol.events button:focus-visible { outline: 2px solid var(--focus); }
 ol.events button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 ol.events pre { margin: 0 0 6px; padding: 6px 8px; background: var(--page); border-radius: 4px; font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow: auto; }
 
+/* ── palette ── */
+#palette { place-items: start center; padding-top: 12vh; }
+#palInput { width: 100%; padding: 9px 11px; border: 1px solid var(--border); border-radius: 6px; background: var(--page); font-size: 14px; }
+ul.pal { list-style: none; margin: 8px 0 0; padding: 0; max-height: 50vh; overflow: auto; }
+ul.pal li { display: flex; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+ul.pal li[aria-selected='true'] { background: var(--panel-2); box-shadow: inset 2px 0 0 var(--accent); }
+ul.pal li .muted { margin-left: auto; }
+kbd { font: 11px ui-monospace, monospace; padding: 1px 5px; border: 1px solid var(--border); border-radius: 4px; background: var(--panel-2); }
+
 /* ── table helper ── */
-.scroll { overflow-x: auto; }
+.scroll { overflow-x: auto; position: relative; }
 table { width: 100%; border-collapse: collapse; font-size: 12px; }
 th, td { padding: 5px 8px; border-bottom: 1px solid var(--grid); text-align: left; white-space: nowrap; }
 th { color: var(--ink-2); font-weight: 600; }
@@ -356,6 +365,20 @@ td.n, th.n { text-align: right; }
       </div>
     </div>
 
+    <div class="scrim" id="palette" hidden>
+      <div class="sheet" role="dialog" aria-modal="true" aria-label="Command palette">
+        <label class="sr-only" for="palInput">Go to or run</label>
+        <input id="palInput" role="combobox" aria-expanded="true" aria-controls="palList" aria-autocomplete="list" autocomplete="off" placeholder="Go to a tab, run an action, or paste a job or crawl id" />
+        <ul id="palList" role="listbox" aria-label="Commands" class="pal"></ul>
+      </div>
+    </div>
+    <div class="scrim" id="help" hidden>
+      <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
+        <h2 id="helpTitle">Keyboard</h2>
+        <dl class="kv"><dt><kbd>/</kbd></dt><dd>command palette</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>1</kbd>–<kbd>9</kbd>, <kbd>0</kbd></dt><dd>the tabs, in rail order</dd><dt><kbd>t</kbd></dt><dd>light or dark theme</dd><dt><kbd>Esc</kbd></dt><dd>close a dialog or the palette</dd><dt><kbd>↑</kbd> <kbd>↓</kbd></dt><dd>move between tabs in the rail; move the readout on a focused chart</dd></dl>
+        <div class="actions"><button class="btn" type="button" id="helpClose">Close</button></div>
+      </div>
+    </div>
     <div class="scrim" id="confirm" hidden>
       <div class="sheet" role="alertdialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmText">
         <h2 id="confirmTitle">Are you sure?</h2>
@@ -662,6 +685,15 @@ const parsePlayer = (text) => {
   return i > 0 && i < t.length - 1 ? { gameName: t.slice(0, i), tagLine: t.slice(i + 1) } : { puuid: t };
 };
 const isHash = (t) => /^[0-9a-f]{64}$/i.test(t);
+/** Palette commands matching `q`: every word of the query in the label, or an id (a ULID) to open. */
+const paletteMatch = (commands, q) => {
+  const t = String(q ?? '').trim();
+  const ids = /^[0-9A-Z]{26}$/i.test(t) ? [{ label: `Open job ${t}`, hash: `jobs/${t}`, hint: 'job' }, { label: `Open crawl ${t}`, hash: `ladder/${t}`, hint: 'crawl' }] : [];
+  const words = t.toLowerCase().split(/\s+/).filter(Boolean);
+  return [...ids, ...commands.filter((c) => words.every((w) => c.label.toLowerCase().includes(w)))];
+};
+/** The tab a digit key opens: 1–9 the first nine in rail order, 0 the tenth. */
+const digitTab = (key, ids) => (/^[0-9]$/.test(key) ? ids[key === '0' ? 9 : Number(key) - 1] ?? null : null);
 /** The data disk split for the storage bar: live pages, free pages, WAL, other files, free (bytes). */
 const storageParts = (st) => {
   const free = st.freelistBytes ?? (st.dbFreelistPages ?? 0) * (st.dbPageSize ?? 0);
@@ -749,6 +781,7 @@ function table({ columns, rows, cap = 200, sort = null, empty = 'Nothing here.' 
     const sorted = by.key ? sortRows(rows, by.key, by.dir) : rows;
     const { shown, more } = capRows(sorted, cap);
     const head = columns.map((c) => {
+      if (!c.label) return '<th scope="col"><span class="sr-only">Actions</span></th>';
       const aria = by.key === c.key ? (by.dir === 'asc' ? 'ascending' : 'descending') : 'none';
       return `<th scope="col" class="${c.num ? 'n' : ''}" aria-sort="${aria}"><button type="button" data-sort="${esc(c.key)}">${esc(c.label)}${by.key === c.key ? (by.dir === 'asc' ? ' ▲' : ' ▼') : ''}</button></th>`;
     }).join('');
@@ -2408,6 +2441,75 @@ async function boot() {
 }
 
 // For the jsdom tests and the console: the pieces later tabs share.
+// ── keyboard: palette, help, shortcuts; focus kept inside a dialog ─────
+const dialogs = ['sheet', 'confirm', 'palette', 'help'];
+const openDialog = () => dialogs.map($).find((d) => !d.hidden) ?? null;
+const pal = { back: null, list: [], at: 0 };
+function commands() {
+  return [
+    ...TABS.map((t, i) => ({ label: `Go to ${t.label}`, hash: t.id, hint: i < 10 ? String((i + 1) % 10) : '' })),
+    { label: 'Switch theme', run: () => $('theme').click(), hint: 't' },
+    { label: 'Show keyboard help', run: openHelp, hint: '?' },
+    { label: 'Refresh now', run: () => { refresh(); showTab(); } },
+    { label: 'Run maintenance', run: runMaintenance },
+    { label: 'Sign out', run: () => $('signOut').click() },
+  ];
+}
+function openPalette() {
+  pal.back = document.activeElement;
+  $('palInput').value = '';
+  $('palette').hidden = false;
+  drawPalette();
+  $('palInput').focus();
+}
+function closePalette() {
+  $('palette').hidden = true;
+  pal.back?.focus?.();
+}
+function drawPalette() {
+  pal.list = paletteMatch(commands(), $('palInput').value).slice(0, 12);
+  pal.at = Math.min(pal.at, Math.max(0, pal.list.length - 1));
+  $('palList').innerHTML = pal.list.map((c, i) => `<li role="option" id="pal-${i}" data-i="${i}" aria-selected="${i === pal.at}">${esc(c.label)}<span class="muted">${c.hint ? `<kbd>${esc(c.hint)}</kbd>` : ''}</span></li>`).join('') || '<li class="muted" role="option" aria-disabled="true">Nothing matches.</li>';
+  $('palInput').setAttribute('aria-activedescendant', pal.list.length ? `pal-${pal.at}` : '');
+}
+function runCommand(c) {
+  if (!c) return;
+  closePalette();
+  if (c.hash) location.hash = c.hash;
+  else c.run();
+}
+$('palInput').addEventListener('input', () => { pal.at = 0; drawPalette(); });
+$('palInput').addEventListener('keydown', (e) => {
+  const step = { ArrowDown: 1, ArrowUp: -1 }[e.key];
+  if (step) { e.preventDefault(); pal.at = (pal.at + step + pal.list.length) % Math.max(1, pal.list.length); drawPalette(); }
+  else if (e.key === 'Enter') { e.preventDefault(); runCommand(pal.list[pal.at]); }
+});
+$('palList').addEventListener('click', (e) => { const li = e.target.closest('[data-i]'); if (li) runCommand(pal.list[Number(li.dataset.i)]); });
+$('palette').addEventListener('click', (e) => { if (e.target.id === 'palette') closePalette(); });
+function openHelp() { pal.back = document.activeElement; $('help').hidden = false; $('helpClose').focus(); }
+function closeHelp() { $('help').hidden = true; pal.back?.focus?.(); }
+$('helpClose').addEventListener('click', closeHelp);
+document.addEventListener('keydown', (e) => {
+  const d = openDialog();
+  if (d) {
+    if (e.key === 'Escape') { if (d.id === 'palette') closePalette(); else if (d.id === 'help') closeHelp(); }
+    // Tab stays inside the open dialog.
+    if (e.key === 'Tab') {
+      const f = [...d.querySelectorAll('button, input, select, a[href], [tabindex="0"]')].filter((x) => !x.disabled && !x.hidden);
+      if (f.length && (e.shiftKey ? document.activeElement === f[0] : document.activeElement === f.at(-1))) { e.preventDefault(); (e.shiftKey ? f.at(-1) : f[0]).focus(); }
+    }
+    return;
+  }
+  if (e.ctrlKey || e.metaKey || e.altKey || e.target.closest?.('input, select, textarea, [contenteditable]')) return;
+  if (e.key === '/') { e.preventDefault(); openPalette(); }
+  else if (e.key === '?') { e.preventDefault(); openHelp(); }
+  else if (e.key === 't') $('theme').click();
+  else {
+    const id = digitTab(e.key, TABS.map((t) => t.id));
+    if (id) { location.hash = id; $(`tab-${id}`).focus(); }
+  }
+});
+
 window.rpAdmin = { store, state, api, table, confirmAction, toast, route };
 
 buildTabs();
