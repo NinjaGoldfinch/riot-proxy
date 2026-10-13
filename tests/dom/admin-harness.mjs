@@ -31,7 +31,7 @@ export async function page(opts = {}) {
       w.matchMedia = (q) => ({ matches: Boolean(opts.prefersLight) && q.includes('light'), addEventListener() {} });
       w.fetch = async (url, init = {}) => {
         const auth = init.headers?.Authorization ?? null;
-        const [status, body] = api(calls, String(url), { method: init.method ?? 'GET', auth });
+        const [status, body] = api(calls, String(url), { method: init.method ?? 'GET', auth, body: init.body ?? null });
         const text = JSON.stringify(body);
         return { ok: status < 300, status, headers: new Map(), text: async () => text, json: async () => JSON.parse(text) };
       };
@@ -62,9 +62,18 @@ export async function page(opts = {}) {
   const $$ = (s) => [...w.document.querySelectorAll(s)];
   const settle = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 5)); };
   const text = (s) => ($(s)?.textContent ?? '').replace(/\s+/g, ' ').trim();
+  // Text as it reads on screen: each text node a word group, joined with spaces.
+  const words = (s) => {
+    const el = $(s);
+    if (!el) return '';
+    const out = [];
+    const walk = w.document.createTreeWalker(el, 4);
+    while (walk.nextNode()) { const t = walk.currentNode.textContent.trim(); if (t) out.push(t); }
+    return out.join(' ').replace(/\s+/g, ' ');
+  };
   await settle();
   return {
-    w, $, $$, text, calls, sockets, intervals, errors, settle,
+    w, $, $$, text, words, calls, sockets, intervals, errors, settle,
     socket: () => sockets.at(-1),
     sent: () => sockets.flatMap((s) => s.sent),
     push: (event, data) => sockets.at(-1).frame({ op: 'event', event, topic: 'firehose', at: Date.now(), data }),

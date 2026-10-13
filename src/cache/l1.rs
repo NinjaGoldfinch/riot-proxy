@@ -194,6 +194,15 @@ impl L1 {
         keys.iter().map(|k| k.as_str().to_string()).collect()
     }
 
+    /// Keys matching `pred`, removing nothing (a purge's dry run, ADM-10).
+    pub fn keys_where(&self, pred: impl Fn(&str) -> bool) -> Vec<String> {
+        self.cache
+            .iter()
+            .filter(|(k, _)| pred(k))
+            .map(|(k, _)| k.as_str().to_string())
+            .collect()
+    }
+
     /// Apply moka's pending evictions (tests and metrics snapshots).
     pub async fn sync(&self) {
         self.cache.run_pending_tasks().await;

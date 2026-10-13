@@ -4006,6 +4006,13 @@ expression: doc
       "Purge": {
         "description": "`POST /v1/admin/cache/purge` body.",
         "properties": {
+          "dryRun": {
+            "description": "Count what would go, delete nothing (ADM-10). Default false.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "pattern": {
             "description": "A Redis-style glob (`*`, `?`, `[…]`) over cache keys, 1–200 characters. Scoped to the\ncurrent key unless it already starts with a key scope.",
             "type": "string"
@@ -6068,7 +6075,7 @@ expression: doc
     },
     "/v1/admin/cache/purge": {
       "post": {
-        "description": "Removes matching entries from memory and from the persisted cache. Keys look like `{keyScope}:{endpointId}:{host}:{params…}`, e.g. `summoner.byPuuid:*`. The match archive is not a cache and is never purged.",
+        "description": "Removes matching entries from memory and from the persisted cache. Keys look like `{keyScope}:{endpointId}:{host}:{params…}`, e.g. `summoner.byPuuid:*`. The match archive is not a cache and is never purged. With `dryRun` it only counts the entries that would go and answers `{ok, pattern, matched, dryRun: true}`.",
         "operationId": "purge_cache",
         "requestBody": {
           "content": {
@@ -6087,7 +6094,7 @@ expression: doc
                 "schema": {}
               }
             },
-            "description": "`{ok, pattern, deleted}`",
+            "description": "`{ok, pattern, deleted}`, or `{ok, pattern, matched, dryRun}`",
             "headers": {
               "X-RateLimit-Limit": {
                 "$ref": "#/components/headers/X-RateLimit-Limit"

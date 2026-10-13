@@ -153,6 +153,30 @@
       .stat5 { color: var(--ink); font-weight: 600; }
       td .tag { display: inline-flex; align-items: center; gap: 4px; }
 
+      /* ── meters: used / limit as text, the fill carries severity ── */
+      .meter { display: grid; grid-template-columns: 12em minmax(40px, 1fr) minmax(8.5em, auto); align-items: center; gap: 8px; font-size: 12px; min-width: 0; }
+      .meter.bare { grid-template-columns: minmax(40px, 1fr) auto; }
+      .meter .ml { color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .meter .track { height: 8px; border-radius: 4px; background: color-mix(in srgb, var(--accent) 16%, transparent); overflow: hidden; }
+      .meter .track i { display: block; height: 100%; border-radius: 4px; background: var(--accent); }
+      .meter .track i[data-level='warning'] { background: var(--warning); }
+      .meter .track i[data-level='critical'] { background: var(--critical); }
+      .meter .mt { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--ink); text-align: right; }
+      .meter .mt [data-level] { display: inline-flex; vertical-align: -2px; }
+      .scopes { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr)); gap: 10px; margin-top: 10px; }
+      .scope header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-bottom: 8px; }
+      .scope header b { font-size: 14px; }
+      .scope .meters { display: flex; flex-direction: column; gap: 5px; }
+      .scope h3 { font-size: 12px; font-weight: 600; color: var(--ink-2); margin: 10px 0 5px; }
+      .scope details summary { cursor: pointer; font-size: 12px; color: var(--ink-2); margin-top: 6px; }
+      .summary { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 12px; color: var(--ink-2); }
+      .summary b { color: var(--ink); }
+      dl.kv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 12px; margin: 8px 0 0; font-size: 12px; }
+      dl.kv dt { color: var(--ink-2); }
+      dl.kv dd { margin: 0; overflow-wrap: anywhere; }
+      .form-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
+      .form-row .field { flex: 1 1 140px; margin: 0; }
+
       /* ── table helper ── */
       .scroll { overflow-x: auto; }
       table { width: 100%; border-collapse: collapse; font-size: 12px; }
@@ -181,6 +205,7 @@
       .toast[data-level='warning'] svg { color: var(--warning); }
 
       /* ── narrow: the rail becomes a tab strip above the content ── */
+      @media (max-width: 480px) { .meter { grid-template-columns: minmax(0, 9em) minmax(40px, 1fr) auto; } }
       @media (max-width: 819px) {
         .app { grid-template-columns: minmax(0, 1fr); }
         .rail { position: sticky; top: 34px; z-index: 60; height: auto; flex-direction: row; align-items: center; gap: 8px; padding: 6px 8px; border-right: 0; border-bottom: 1px solid var(--border); overflow: hidden; }
@@ -190,7 +215,7 @@
         .rail-foot { margin: 0; padding: 0; border: 0; flex-direction: row; flex: none; }
         .rail-foot .wide { display: none; }
         #conn span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-        .strip { top: 81px; }
+        .strip { position: static; }
         main { padding: 0 12px 24px; }
       }
     </style>
@@ -205,6 +230,8 @@
       <symbol id="i-unknown" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-dasharray="3 2" /></symbol>
       <symbol id="i-moon" viewBox="0 0 16 16"><path d="M6.2 1.3a.6.6 0 0 1 .1.7 5.6 5.6 0 0 0 7.7 7.7.6.6 0 0 1 .8.8A6.9 6.9 0 1 1 5.5 1.2a.6.6 0 0 1 .7.1Z" /></symbol>
       <symbol id="i-traffic" viewBox="0 0 16 16"><path d="M4.5 1.5a.8.8 0 0 1 .8.8v9.5l1.6-1.6a.8.8 0 1 1 1.1 1.1l-3 3a.8.8 0 0 1-1.1 0l-3-3a.8.8 0 0 1 1.1-1.1l1.6 1.6V2.3a.8.8 0 0 1 .9-.8Zm7 0a.8.8 0 0 1 .6.2l3 3a.8.8 0 1 1-1.1 1.1l-1.7-1.6v9.5a.8.8 0 0 1-1.6 0V4.2L9.1 5.8A.8.8 0 0 1 8 4.7l3-3a.8.8 0 0 1 .5-.2Z" /></symbol>
+      <symbol id="i-limiter" viewBox="0 0 16 16"><path d="M8 2a7 7 0 0 0-6.6 9.3.8.8 0 0 0 .8.5h11.6a.8.8 0 0 0 .8-.5A7 7 0 0 0 8 2Zm0 1.6a5.4 5.4 0 0 1 5.2 6.6H2.8A5.4 5.4 0 0 1 8 3.6Zm2.9 1.6a.8.8 0 0 0-1 .3L8.3 8.1a1.2 1.2 0 1 0 1.3.6l1.6-2.5a.8.8 0 0 0-.3-1Z" /></symbol>
+      <symbol id="i-cache" viewBox="0 0 16 16"><path d="M8 1C4.7 1 2 2.1 2 3.5v9C2 13.9 4.7 15 8 15s6-1.1 6-2.5v-9C14 2.1 11.3 1 8 1Zm0 1.6c2.6 0 4.4.8 4.4 1s-1.8 1-4.4 1-4.4-.8-4.4-1 1.8-1 4.4-1ZM3.6 5.6C4.7 6.1 6.3 6.4 8 6.4s3.3-.3 4.4-.8V8c0 .2-1.8 1-4.4 1S3.6 8.2 3.6 8Zm0 4C4.7 10.1 6.3 10.4 8 10.4s3.3-.3 4.4-.8v2.9c0 .2-1.8 1-4.4 1s-4.4-.8-4.4-1Z" /></symbol>
       <symbol id="i-overview" viewBox="0 0 16 16"><path d="M1 2.5A1.5 1.5 0 0 1 2.5 1h3A1.5 1.5 0 0 1 7 2.5v3A1.5 1.5 0 0 1 5.5 7h-3A1.5 1.5 0 0 1 1 5.5Zm8 0A1.5 1.5 0 0 1 10.5 1h3A1.5 1.5 0 0 1 15 2.5v3A1.5 1.5 0 0 1 13.5 7h-3A1.5 1.5 0 0 1 9 5.5Zm-8 8A1.5 1.5 0 0 1 2.5 9h3A1.5 1.5 0 0 1 7 10.5v3A1.5 1.5 0 0 1 5.5 15h-3A1.5 1.5 0 0 1 1 13.5Zm8 0A1.5 1.5 0 0 1 10.5 9h3a1.5 1.5 0 0 1 1.5 1.5v3a1.5 1.5 0 0 1-1.5 1.5h-3A1.5 1.5 0 0 1 9 13.5Z" /></symbol>
     </svg>
 
@@ -272,7 +299,7 @@
       // Riot's league-v4 apex lists stop at this many entries (LAD-01); the Ladder
       // tab (ADM-12) prints it, and tests/ui.rs checks it is the server's.
       const APEX_LIST_CAP = 10000;
-      const TAB_IDS = ['overview', 'traffic'];
+      const TAB_IDS = ['overview', 'traffic', 'limiter', 'cache'];
       const fmt = (n) => (n == null || Number.isNaN(Number(n)) ? '—' : Number(n).toLocaleString('en-US'));
       /** 1,284 · 12.9K · 1.13M · 2.1B (the stat-tile contract). */
       const compact = (n) => {
@@ -298,7 +325,7 @@
         const d = Math.floor(s / 86400);
         const h = Math.floor((s % 86400) / 3600);
         const m = Math.floor((s % 3600) / 60);
-        return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m ${s % 60}s`;
+        return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : m > 0 ? `${m}m ${s % 60}s` : `${s}s`;
       };
       const pct = (f, digits = 1) => (f == null ? '—' : `${(f * 100).toFixed(digits)} %`);
       /** Everything interpolated into markup goes through this. */
@@ -450,6 +477,21 @@
         const [region, method, status] = k.split('|');
         return { region, method, status, count: n };
       });
+      /** `20:1` → "20 / 1 s"; `100:120` → "100 / 2 min" (a window as limit:seconds). */
+      const windowLabel = (w) => {
+        const secs = Number(String(w).split(':')[1]);
+        return secs >= 60 && secs % 60 === 0 ? `${secs / 60} min` : `${secs} s`;
+      };
+      /** How full the fullest of `windows` is, 0..1. */
+      const fullness = (windows) => (windows ?? []).reduce((m, w) => Math.max(m, w.limit ? w.used / w.limit : 0), 0);
+      /** A meter's severity: the accent below 80 %, warning to 95 %, critical above. */
+      const meterLevel = (f) => (f >= 0.95 ? 'critical' : f >= 0.8 ? 'warning' : 'ok');
+      /** Scopes most in need of a look first: frozen, then held, then the fullest. */
+      const scopeOrder = (scopes, blocked = []) => {
+        const held = new Set(blocked.map((b) => b.scope));
+        const rank = (s) => (s.frozenMs > 0 ? 2 : held.has(s.scope) ? 1 : 0);
+        return [...scopes].sort((a, b) => rank(b) - rank(a) || fullness(b.windows) - fullness(a.windows) || a.scope.localeCompare(b.scope));
+      };
       const hhmm = (t) => new Date(t).toTimeString().slice(0, 5);
       const hhmmss = (t) => new Date(t).toTimeString().slice(0, 8);
       // ---------- end pure helpers
@@ -707,6 +749,8 @@
           enter() { renderTraffic(); pollTraffic(); },
           leave() { clearTimeout(traffic.timer); traffic.timer = null; },
         },
+        { id: 'limiter', label: 'Limiter', icon: 'limiter', enter() { renderLimiter(); } },
+        { id: 'cache', label: 'Cache', icon: 'cache', enter() { enterCache(); } },
       ];
       function buildTabs() {
         $('tabs').innerHTML = TABS.map((t) =>
@@ -822,9 +866,8 @@
           if (!(e instanceof ApiError)) $('errors').textContent = `Could not load errors: ${e.message}`;
         }
       }
-      async function enterOverview() {
-        renderOverview();
-        loadErrors();
+      /** GET /metrics/history, once per entry of a tab that charts it. */
+      async function loadHistory() {
         try {
           const h = await api('/v1/admin/metrics/history');
           hist.points = h.points ?? [];
@@ -833,10 +876,16 @@
           // The stored history ends up to a minute ago; the newest snapshot is the live end.
           const s = store.get('snapshot');
           hist.live = s ? historyPointOf(s, Date.now()) : null;
-          renderCharts();
+          return true;
         } catch (e) {
           if (!(e instanceof ApiError)) console.warn(e);
+          return false;
         }
+      }
+      async function enterOverview() {
+        renderOverview();
+        loadErrors();
+        if (await loadHistory()) renderCharts();
       }
       store.on('snapshot', (s) => {
         const p = historyPointOf(s, Date.now());
@@ -846,6 +895,9 @@
           if (hist.points.length > 1440) hist.points.splice(0, hist.points.length - 1440);
           hist.live = null;
         } else hist.live = p;
+        if (state.tab === 'limiter') renderLimiter();
+        if (state.tab === 'cache') renderCache();
+        updateBadges(s);
         if (state.tab !== 'overview') return;
         renderTiles();
         renderCharts();
@@ -950,6 +1002,192 @@
       }
       store.on('snapshot', () => { if (state.tab === 'traffic') renderRoutes(); });
 
+      // ── rail badges ──────────────────────────────────────────────────────
+      function badge(id, n, label) {
+        const b = $(`badge-${id}`);
+        if (!b) return;
+        b.hidden = !n;
+        b.textContent = n ? String(n) : '';
+        if (n) b.setAttribute('aria-label', label); else b.removeAttribute('aria-label');
+      }
+      function updateBadges(s) {
+        const frozen = (s.limiter ?? []).filter((x) => x.frozenMs > 0).length;
+        badge('limiter', frozen, `${frozen} frozen`);
+      }
+
+      // ── countdowns: frozen scopes count down on the clock, not by refetching ──
+      function tickCountdowns() {
+        for (const el of document.querySelectorAll('[data-until]')) {
+          const left = Number(el.dataset.until) - Date.now();
+          el.textContent = left > 0 ? fmtDuration(left / 1000) : 'now';
+        }
+      }
+      const until = (ms) => `<span data-until="${(state.snapAt ?? Date.now()) + ms}">${esc(fmtDuration(ms / 1000))}</span>`;
+
+      // ── meters ───────────────────────────────────────────────────────────
+      function meter(label, used, limit, aria, show = fmt) {
+        const f = limit ? Math.min(1, used / limit) : 0;
+        const level = meterLevel(f);
+        const mark = level === 'ok' ? '' : `<span data-level="${level}">${icon(level === 'critical' ? 'critical' : 'warning')}</span> `;
+        return `<div class="meter${label ? '' : ' bare'}" role="meter" aria-label="${esc(aria ?? label)}" aria-valuemin="0" aria-valuemax="${limit}" aria-valuenow="${used}" aria-valuetext="${esc(show(used))} of ${esc(show(limit))}">` +
+          `${label ? `<span class="ml">${esc(label)}</span>` : ''}<span class="track"><i data-level="${level}" style="width:${(f * 100).toFixed(1)}%"></i></span><span class="mt">${mark}${esc(show(used))} / ${esc(show(limit))}</span></div>`;
+      }
+
+      // ── Limiter ──────────────────────────────────────────────────────────
+      const lim = { open: new Set(), live: new Map() };
+      function renderLimiter() {
+        if (state.tab !== 'limiter') return;
+        const panel = $('panel-limiter');
+        const s = store.get('snapshot');
+        if (!s) { panel.innerHTML = '<h1>Limiter</h1><div class="empty">Waiting for the first snapshot…</div>'; return; }
+        // Keep folds open across redraws.
+        for (const d of panel.querySelectorAll('details[data-fold]')) {
+          if (d.open) lim.open.add(d.dataset.fold); else lim.open.delete(d.dataset.fold);
+        }
+        const g = s.gates ?? {};
+        const scopes = scopeOrder(s.limiter ?? [], g.blockedScopes);
+        const heldFor = new Map((g.blockedScopes ?? []).map((b) => [b.scope, b.forMs]));
+        const frozen = scopes.filter((x) => x.frozenMs > 0).length;
+        const waiters = scopes.reduce((n, x) => n + (x.interactiveWaiters ?? 0), 0);
+        const summary = `<div class="summary" id="limSummary"><span><b>${fmt(scopes.length)}</b> scopes</span><span><b>${fmt(frozen)}</b> frozen</span><span><b>${fmt(heldFor.size)}</b> holding bulk work</span><span><b>${fmt(waiters)}</b> interactive waiting</span>` +
+          `<span>bulk ceiling <b>${pct(g.bulkUsageCeiling, 0)}</b>, <b>${pct(g.bulkIdleCeiling, 0)}</b> after ${fmt(g.bulkIdleAfterS)} s idle</span><span>client wait budget <b>${fmt(g.clientWaitBudgetMs)} ms</b></span></div>`;
+        const cards = scopes.map((x) => {
+          const methods = [...(x.methods ?? [])].sort((a, b) => fullness(b.windows) - fullness(a.windows));
+          const blockedMethods = new Set((g.blockedMethods ?? []).filter((b) => b.scope === x.scope).map((b) => b.method));
+          const mrow = (m) => `<div class="meters">${m.windows.map((w) => meter(`${m.method} · ${windowLabel(w.window)}`, w.used, w.limit, `${x.scope} ${m.method} ${windowLabel(w.window)}`)).join('')}${blockedMethods.has(m.method) ? `<div class="muted">${icon('warning')} bulk held on this method</div>` : ''}</div>`;
+          const top = methods.slice(0, 4).map(mrow).join('');
+          const rest = methods.slice(4);
+          const state1 = x.frozenMs > 0
+            ? `<span class="pill" data-level="serious">${icon('serious')}<span>frozen ${until(x.frozenMs)}</span></span>`
+            : heldFor.has(x.scope)
+              ? `<span class="pill" data-level="warning">${icon('warning')}<span>bulk held ${until(heldFor.get(x.scope))}</span></span>`
+              : `<span class="pill" data-level="good">${icon('good')}<span>open</span></span>`;
+          return `<article class="panel scope" data-scope="${esc(x.scope)}"><header><b>${esc(x.label)}</b><code>${esc(x.scope)}</code><span class="muted">${esc(x.kind)}</span>${state1}<span class="muted">${fmt(x.interactiveWaiters ?? 0)} waiting</span></header>
+            <div class="meters">${(x.windows ?? []).length ? x.windows.map((w) => meter(`app · ${windowLabel(w.window)}`, w.used, w.limit, `${x.scope} app ${windowLabel(w.window)}`)).join('') : '<span class="muted">Riot has not named its app limits yet.</span>'}</div>
+            ${methods.length ? `<h3>Methods, fullest first</h3>${top}` : ''}
+            ${rest.length ? `<details data-fold="m:${esc(x.scope)}"${lim.open.has(`m:${x.scope}`) ? ' open' : ''}><summary>${rest.length} more method${rest.length === 1 ? '' : 's'}</summary>${rest.map(mrow).join('')}</details>` : ''}
+            <details data-fold="l:${esc(x.scope)}" data-live="${esc(x.scope)}"${lim.open.has(`l:${x.scope}`) ? ' open' : ''}><summary>Live usage</summary><div class="live">${liveHtml(x.scope)}</div></details>
+          </article>`;
+        }).join('');
+        panel.innerHTML = `<h1>Limiter</h1>${summary}<div class="scopes">${cards || '<div class="empty">No rate-limit scope has been used yet.</div>'}</div>`;
+      }
+      function liveHtml(scope) {
+        const l = lim.live.get(scope);
+        if (!l) return '<span class="muted">Open to read <code>/v1/admin/limits/' + esc(scope) + '</code>.</span>';
+        if (l.error) return `<span class="muted">${esc(l.error)}</span>`;
+        return `<div class="meters">${l.usage.map((w) => meter(`app · ${windowLabel(w.window)}`, w.used, w.limit)).join('') || '<span class="muted">No windows.</span>'}</div><div class="muted">read ${esc(hhmmss(l.at))}${l.frozenMs ? ` · frozen ${esc(fmtDuration(l.frozenMs / 1000))}` : ''}</div>`;
+      }
+      // "Live usage" reads /v1/admin/limits/{scope} each time it opens.
+      document.addEventListener('toggle', async (e) => {
+        const d = e.target;
+        if (!d.matches?.('details[data-live]') || !d.open) return;
+        const scope = d.dataset.live;
+        try {
+          const l = await api(`/v1/admin/limits/${encodeURIComponent(scope)}`);
+          lim.live.set(scope, { ...l, at: Date.now() });
+        } catch (err) {
+          lim.live.set(scope, { error: err.message, at: Date.now() });
+        }
+        const box = [...document.querySelectorAll('details[data-live]')].find((x) => x.dataset.live === scope)?.querySelector('.live');
+        if (box) box.innerHTML = liveHtml(scope);
+      }, true);
+
+      // ── Cache ────────────────────────────────────────────────────────────
+      const cachePurge = { pattern: '', matched: null };
+      async function enterCache() {
+        renderCache();
+        if (await loadHistory()) renderCacheChart();
+      }
+      function renderCache() {
+        if (state.tab !== 'cache') return;
+        const panel = $('panel-cache');
+        const s = store.get('snapshot');
+        if (!$('cacheTiles')) {
+          panel.innerHTML = `<h1>Cache</h1><div class="tiles" id="cacheTiles"></div>
+            <div class="grid2"><div id="cacheChart"></div>
+              <section class="panel"><div class="panel-head"><h2>Probe an entry</h2><span class="end muted">what is cached for a request, without fetching it</span></div>
+                <form id="probeForm" class="form-row">
+                  <div class="field"><label for="probeScope">scope</label><input id="probeScope" placeholder="euw1 or europe" required /></div>
+                  <div class="field"><label for="probeMethod">endpoint</label><input id="probeMethod" placeholder="summoner.byPuuid" required /></div>
+                  <div class="field" style="flex-basis:100%"><label for="probePath">Riot path</label><input id="probePath" placeholder="/lol/summoner/v4/summoners/by-puuid/…" required /></div>
+                  <button class="btn" type="submit">Probe</button>
+                </form><div id="probeResult"></div></section></div>
+            <section class="panel" style="margin-top:10px"><div class="panel-head"><h2>Purge</h2><span class="end muted">memory and the persisted cache; the match archive is never touched</span></div>
+              <form id="purgeForm" class="form-row">
+                <div class="field"><label for="purgePattern">key pattern</label><input id="purgePattern" placeholder="summoner.byPuuid:*" maxlength="200" required /></div>
+                <button class="btn" type="submit" id="purgePreview">Count matches</button>
+                <button class="btn danger" type="button" id="purgeGo" disabled>Purge</button>
+              </form><div class="muted" id="purgeMeta" aria-live="polite"></div></section>`;
+          $('probeForm').addEventListener('submit', probe);
+          $('purgeForm').addEventListener('submit', previewPurge);
+          $('purgePattern').addEventListener('input', () => { cachePurge.matched = null; renderPurge(); });
+          $('purgeGo').addEventListener('click', purge);
+          renderPurge();
+          renderCacheChart();
+        }
+        if (!s) return;
+        const c = s.cacheStore ?? {};
+        const reads = s.cache ?? {};
+        $('cacheTiles').innerHTML = [
+          tile('Memory entries', compact(c.l1Entries), `${fmtBytes(c.l1Bytes)} of ${fmtBytes(c.l1MaxBytes)}`),
+          `<div class="tile"><div class="label">Memory used</div><div class="value">${pct(c.l1MaxBytes ? c.l1Bytes / c.l1MaxBytes : null, 0)}</div>${meter('', c.l1Bytes ?? 0, c.l1MaxBytes ?? 0, 'memory cache used', fmtBytes)}</div>`,
+          tile('Persisted rows', compact(c.l2Rows), 'the SQLite cache table, sampled'),
+          tile('Dropped writes', fmt(c.l2Dropped), c.l2Dropped ? 'the write-behind queue was full' : 'none since start', c.l2Dropped ? 'warning' : null),
+          tile('Hit ratio since start', pct(hitRatio(reads)), `${fmt(reads.hit)} hit · ${fmt(reads.miss)} miss · ${fmt(reads.neg)} neg · ${fmt(reads.stale)} stale`),
+        ].join('');
+        if (hist.loaded) renderCacheChart();
+      }
+      function renderCacheChart() {
+        const box = $('cacheChart');
+        if (!box || !hist.loaded) return;
+        const v = seriesOf(hist.live ? [...hist.points, hist.live] : hist.points);
+        box.replaceChildren(chart({ id: 'chCacheHit', title: 'Cache hit ratio · 24 h', series: [{ name: 'Hit ratio', color: 'var(--s3)', points: v.hit }], format: (n) => pct(n, 0), yMin: 0, yMax: 1 }));
+      }
+      async function probe(e) {
+        e.preventDefault();
+        const q = new URLSearchParams({ scope: $('probeScope').value.trim(), path: $('probePath').value.trim(), method: $('probeMethod').value.trim() });
+        try {
+          const r = await api(`/v1/admin/debug/cache?${q}`);
+          $('probeResult').innerHTML = `<dl class="kv"><dt>key</dt><dd><code>${esc(r.key)}</code></dd><dt>cached</dt><dd>${r.present ? 'yes' : 'no'}</dd>` +
+            (r.present ? `<dt>age</dt><dd>${esc(fmtDuration(r.ageSeconds))}</dd><dt>state</dt><dd>${r.stale ? 'stale: served as STALE and refreshed' : 'fresh'}</dd>` : '') + '</dl>';
+        } catch (err) {
+          $('probeResult').innerHTML = `<p class="muted">${icon('warning')} ${esc(err.message)}</p>`;
+        }
+      }
+      function renderPurge() {
+        const n = cachePurge.matched;
+        $('purgeGo').disabled = !n;
+        $('purgeGo').textContent = n ? `Purge ${fmt(n)} entr${n === 1 ? 'y' : 'ies'}` : 'Purge';
+        $('purgeMeta').textContent = n == null ? 'Count the matches first; the purge asks before it deletes.' : `${fmt(n)} entr${n === 1 ? 'y matches' : 'ies match'} ${cachePurge.pattern}.`;
+      }
+      async function previewPurge(e) {
+        e.preventDefault();
+        const pattern = $('purgePattern').value.trim();
+        try {
+          const r = await api('/v1/admin/cache/purge', { method: 'POST', body: { pattern, dryRun: true } });
+          cachePurge.pattern = pattern;
+          cachePurge.matched = r.matched;
+        } catch (err) {
+          cachePurge.matched = null;
+          toast(err.message, 'critical');
+        }
+        renderPurge();
+      }
+      async function purge() {
+        const { pattern, matched } = cachePurge;
+        if (!matched || pattern !== $('purgePattern').value.trim()) return;
+        const yes = await confirmAction(`Delete ${fmt(matched)} cached entr${matched === 1 ? 'y' : 'ies'} matching ${pattern}? The next request for each fetches from Riot again.`, { title: 'Purge the cache', confirm: `Purge ${fmt(matched)}`, danger: true });
+        if (!yes) return;
+        try {
+          const r = await api('/v1/admin/cache/purge', { method: 'POST', body: { pattern } });
+          toast(`Purged ${fmt(r.deleted)} entr${r.deleted === 1 ? 'y' : 'ies'} matching ${pattern}.`);
+        } catch (err) {
+          toast(err.message, 'critical');
+        }
+        cachePurge.matched = null;
+        renderPurge();
+      }
+
       // ── health strip and the rail's foot ─────────────────────────────────
       function renderStrip() {
         const s = store.get('snapshot');
@@ -984,6 +1222,7 @@
         const cur = { at, requests: sumValues(s.requests), upstream: sumValues(s.upstream) };
         const p = state.prev;
         state.prev = cur;
+        state.snapAt = at;
         if (state.firstArchived == null) state.firstArchived = s.totals?.archivedMatches ?? null;
         store.set('rates', {
           requests: rate(p && { at: p.at, total: p.requests }, { at, total: cur.requests }),
@@ -1094,7 +1333,10 @@
 
       // ── the clock: the one timer, ages and uptime ────────────────────────
       setInterval(() => {
-        if (!document.hidden && state.started) renderStrip();
+        if (!document.hidden && state.started) {
+          renderStrip();
+          tickCountdowns();
+        }
       }, 1000);
 
       async function boot() {

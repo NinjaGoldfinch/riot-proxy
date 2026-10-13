@@ -10,7 +10,10 @@ import assert from 'node:assert/strict';
 import { mkdirSync } from 'node:fs';
 import { chromium } from 'playwright-core';
 
-import { html, api, KEY } from './fake-admin.mjs';
+import { html, api, KEY, scene, limiterSnapshot } from './fake-admin.mjs';
+
+// Every scope, meter and fold the Limiter and Cache tabs draw.
+scene.snapshot = limiterSnapshot();
 
 let browser = null;
 let skip = false;
@@ -51,14 +54,20 @@ for (const [device, width] of [['desktop', 1280], ['tablet', 820], ['phone', 390
         // Each view: nothing sideways, nothing wider than its box (tables scroll inside .scroll).
         const fits = () => page.evaluate(() => {
           const out = { page: [document.documentElement.scrollWidth, innerWidth], overflow: [] };
-          for (const el of document.querySelectorAll('.strip, .tile, .tile .value, .rail-foot, main, .chart, .chart figcaption, .xaxis, .panel, .filters')) {
+          for (const el of document.querySelectorAll('.strip, .tile, .tile .value, .rail-foot, main, .chart, .chart figcaption, .xaxis, .panel, .filters, .meter, .scope header, .form-row')) {
             if (el.scrollWidth > el.clientWidth + 1) out.overflow.push(`${el.id || el.className || el.tagName}: ${el.scrollWidth} > ${el.clientWidth}`);
           }
           return out;
         });
-        for (const view of ['overview', 'traffic']) {
+        const ready = { overview: '#chArchive .plotwrap', traffic: '#trRecent tbody tr', limiter: '.scope[data-scope="oc1"] .meter', cache: '#chCacheHit .plotwrap' };
+        for (const view of Object.keys(ready)) {
           await page.evaluate((v) => { location.hash = v; }, view);
-          await page.waitForSelector(view === 'traffic' ? '#trRecent tbody tr' : '#chArchive .plotwrap');
+          await page.waitForSelector(ready[view]);
+          if (view === 'limiter') {
+            // Unfold everything, the live reading included.
+            for (const s of await page.$$('.scope details summary')) await s.click();
+            await page.waitForSelector('details[data-live="kr"] .live .meter');
+          }
           await page.screenshot({ path: new URL(`./screenshots/admin-${view}-${device}-${theme}.png`, import.meta.url).pathname, fullPage: true });
           const f = await fits();
           assert.ok(f.page[0] <= f.page[1], `${view}: page scrolls sideways: ${f.page[0]} > ${f.page[1]}`);
