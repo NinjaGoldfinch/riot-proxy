@@ -73,7 +73,7 @@ expect_used = "warn"
 panic = "warn"
 
 [profile.release]
-# Fat, not thin: the static binary must stay under 20 MB (P0 exit check).
+# Fat, not thin: the static binary must stay under 24 MiB (CI; 20 MB until ADR-162).
 lto = "fat"
 codegen-units = 1
 strip = true

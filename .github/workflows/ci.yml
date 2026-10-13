@@ -101,12 +101,12 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: sudo apt-get update && sudo apt-get install -y musl-tools
       - run: cargo build --release --target x86_64-unknown-linux-musl
-      - name: static and under 20 MB
+      - name: static and under 24 MiB
         run: |
           bin=target/x86_64-unknown-linux-musl/release/riot-proxy
           ls -la "$bin"
           file "$bin" | tee /dev/stderr | grep -qE "static(ally|-pie) linked"
-          test "$(stat -c %s "$bin")" -lt $((20 * 1024 * 1024))
+          test "$(stat -c %s "$bin")" -lt $((24 * 1024 * 1024))
           grep -qa "${GIT_SHA:0:12}" "$bin" || { echo "::error::the binary does not carry its commit"; exit 1; }
       # The image is the binary above in Dockerfile.release's scratch image, the
       # same way edge.yml and release.yml ship it. Recompiling it inside
