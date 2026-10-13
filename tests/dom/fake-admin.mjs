@@ -289,6 +289,19 @@ export const scene = {
   backups: { dir: '/data/backups', keep: 14, files: [{ name: 'riot-proxy-2026-10-13.db', bytes: 21 * 1024 ** 3, modifiedAt: NOW - 7 * 3_600_000 }], lastRun: null, diskFreeBytes: 51 * 1024 ** 3 },
   ready: { ok: true, sqlite: true, limiter: true, readers: 6, readersFree: 6 },
   history: history(),
+  stats: {
+    keyScope: '5f3a9c1e77aa', archivedMatches: 230_715, trackedPlayers: 3, knownPlayers: 41_200, archivedTimelines: 216_475,
+    archiveStoredBytes: 2_470_000_000, archiveRawBytes: 16_000_000_000, dbFileBytes: 22 * 1024 ** 3, walBytes: 64 * 1024 ** 2,
+    dbPageSize: 4096, dbPageCount: 5_767_168, dbFreelistPages: 262_144, diskFreeBytes: 51 * 1024 ** 3, diskTotalBytes: 115 * 1024 ** 3,
+    sampledAt: { fast: NOW, slow: NOW - 30_000 },
+  },
+  timelines: {
+    configuredPatches: 2,
+    patches: [{ patch: '16.20', matches: 900, withTimeline: 600, notFound: 20, left: 280 }],
+    regions: [{ region: 'sea', left: 200, patch: '16.20' }, { region: 'asia', left: 80, patch: '16.20' }],
+    totals: { patch: null, matches: 900, withTimeline: 600, notFound: 20, left: 280 },
+  },
+  posted: [],
   jobs: jobsWorld(),
   ladder: ladderWorld(),
   // Cache keys the purge matches against.
@@ -324,6 +337,12 @@ export function api(calls, url, { method = 'GET', auth = null, body = null } = {
     case '/v1/admin/info': return [200, INFO];
     case '/v1/admin/metrics': return [200, scene.snapshot];
     case '/v1/admin/backups': return [200, scene.backups];
+    case '/v1/admin/stats': return [200, scene.stats];
+    case '/v1/admin/timelines/backfill': return [200, scene.timelines];
+    case '/v1/admin/maintenance/run': scene.posted.push(path); return [202, { ok: true, jobId: '01KMAINT', status: scene.posted.filter((x) => x === path).length > 1 ? 'already-queued' : 'queued' }];
+    case '/v1/admin/analytics/reextract': scene.posted.push(path); return [202, { ok: true, stale: 1234 }];
+    case '/v1/admin/ddragon/sync': scene.posted.push(path); return [200, { ok: true, jobId: '01KDD' }];
+    case '/v1/admin/players/names/backfill': scene.posted.push(path); return [202, { ok: true, unnamed: 17 }];
     case '/v1/admin/metrics/history': return [200, scene.history];
     case '/v1/admin/debug/cache': {
       const q = new URL(url, 'http://x').searchParams;
