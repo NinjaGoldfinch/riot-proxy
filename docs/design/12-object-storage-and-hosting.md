@@ -385,18 +385,22 @@ backup's row for row.
 
 | Variable | Default | Notes |
 |---|---|---|
-| `ARCHIVE_OBJECT_URL` | unset | `s3://riot-proxy-archive`; unset = bodies stay in SQLite, no offload job |
-| `ARCHIVE_OBJECT_ENDPOINT` | unset | `https://s3.ap-southeast-2.onidel.cloud`; required with the URL |
+| `ARCHIVE_OBJECT_URL` | unset | `s3://riot-proxy-archive`; unset = bodies stay in SQLite, no offload job. `file:///<dir>` uses a directory as the bucket (development, tests; refused in production, and it keeps no object metadata) |
+| `ARCHIVE_OBJECT_ENDPOINT` | unset | `https://s3.ap-southeast-2.onidel.cloud`; required with an `s3://` URL. A host that starts with `<bucket>.` (`https://riot-proxy-archive.s3.ap-southeast-2.onidel.cloud`, the form Onidel documents) is addressed virtual-hosted style; any other host gets `/<bucket>` appended (path style, which R2 accepts). `http://` only outside production |
 | `ARCHIVE_OBJECT_REGION` | `auto` | passed through; Onidel and R2 accept any |
 | `ARCHIVE_OBJECT_ACCESS_KEY` / `ARCHIVE_OBJECT_SECRET_KEY` | unset | in `/etc/riot-proxy/env`, 0600; never logged; `Config` redacts them like the Riot key |
 | `ARCHIVE_BODY_LOCAL_DAYS` | `14` | 0–365; how long SQLite keeps its own copy of a body that is already in the bucket (a read cache; packing does not wait for it) |
 | `ARCHIVE_PACK_TARGET_BYTES` | `67108864` | 64 MiB; a pack closes at this size (1 MiB–1 GiB) |
 | `ARCHIVE_OFFLOAD_PACE_MS` | `50` | pause between turns |
-| `ARCHIVE_OBJECT_CONCURRENCY` | `16` | parallel ranged GETs in `get_many` |
+| `ARCHIVE_OBJECT_CONCURRENCY` | `16` | parallel ranged GETs in `get_many`; 1–256 |
 | `ARCHIVE_COMPACT_BELOW` | `0.5` | OBJ-06: a pack whose live share falls under this is rewritten |
 
-`ENV=production` refuses a URL without credentials. Boot logs the endpoint and
-bucket, never the keys.
+`ENV=production` refuses a URL without credentials (both keys, or neither
+outside production). Keys without a URL are accepted and do nothing, so they
+can go into `/etc/riot-proxy/env` before the bucket exists. Boot logs the
+endpoint and bucket, never the keys. A ranged read that comes back shorter
+than asked (HTTP clamps a range past the end of an object) is an error, never
+a short body (OBJ-01, ADR-162).
 
 ## Sizing and cost
 
