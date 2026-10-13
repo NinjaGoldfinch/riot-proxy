@@ -339,6 +339,18 @@ support (or pick BinaryLane); the proxy commits once per archived match.
 
 ### 3. Install the proxy on `new`
 
+**Onidel blocks outbound TCP 22 on new accounts** (seen 2026-10-13: `nc` to
+the old VPS and to github.com on 22 timed out, 443 worked). Until support
+lifts it, `new` cannot pull, so `old` pushes: the owner connects to `old`
+with `ssh -A` and the new box's key in the agent, `chown`s
+`/var/lib/riot-proxy/data` on `new` to the login user for the copy, and
+runs the `scp`, the env stream (into a 0600 file in the user's home, then
+`sudo install` and `shred` on `new`) and both `rsync`s from `old` with
+`ninja@new:` as the target. The data directory goes back to `riot-proxy`
+just before the proxy starts in step 6. The commands below are the pull
+form, for once the block is lifted.
+
+
 ```
 sudo useradd --system --home /var/lib/riot-proxy --shell /usr/sbin/nologin riot-proxy
 sudo mkdir -p /var/lib/riot-proxy/data /etc/riot-proxy
