@@ -54,7 +54,7 @@ fn on_region(id: &str, region: Region) -> Option<Target> {
 fn match_region(region: &str, match_id: &str) -> Result<Region, ApiError> {
     let declared = validate::region(region)?;
     validate::match_id(match_id)?;
-    match Platform::from_match_id(match_id).map(Platform::region) {
+    match Region::from_match_id(match_id) {
         Some(derived) if derived != declared => Err(ApiError::bad_region(format!(
             "Match {match_id} belongs to region '{derived}', not '{declared}'"
         ))),
@@ -420,6 +420,12 @@ mod tests {
         assert_eq!(
             e.message,
             "Match EUW1_123456 belongs to region 'europe', not 'americas'"
+        );
+        // ME1 is no platform, but its matches live on europe (ME-01).
+        assert_eq!(match_region("europe", "ME1_17228556").unwrap(), Region::Europe);
+        assert_eq!(
+            match_region("sea", "ME1_17228556").unwrap_err().message,
+            "Match ME1_17228556 belongs to region 'europe', not 'sea'"
         );
         // An unknown prefix falls back to the declared region (v1).
         assert_eq!(match_region("asia", "XX9_123456").unwrap(), Region::Asia);

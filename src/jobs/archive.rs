@@ -26,7 +26,7 @@ use crate::jobs::{kinds, priority};
 use crate::metrics::BACKFILLS_QUEUED_TOTAL;
 use crate::players;
 use crate::riot::endpoints::Endpoint;
-use crate::riot::routing::Platform;
+use crate::riot::routing::{Platform, Region};
 use crate::routes::passthrough::request;
 use crate::ws::Hub;
 
@@ -244,8 +244,7 @@ impl ArchiveContext {
 
     pub async fn archive_match(&self, job: &Job) -> Result<(), JobError> {
         let a: ArchiveMatch = job.payload()?;
-        let region = Platform::from_match_id(&a.match_id)
-            .map(Platform::region)
+        let region = Region::from_match_id(&a.match_id)
             .ok_or_else(|| JobError::Fail(format!("cannot derive region from match id '{}'", a.match_id)))?;
         let fetch = |id: &'static str| {
             let target = Endpoint::by_id(id).and_then(|e| e.target_for_region(region));
