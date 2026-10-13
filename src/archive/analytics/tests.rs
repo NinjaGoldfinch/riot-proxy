@@ -277,7 +277,7 @@ async fn rebuild(db: &Db, patch_limit: u32) -> Written {
 /// Stamp every unstamped match from the ladder and lookups as they are now.
 fn stamp_all(c: &Connection) {
     for (id, queue_id) in crate::archive::tiers::unstamped(c, "", 1000).unwrap() {
-        crate::archive::tiers::stamp(c, &id, queue_id, 1).unwrap();
+        crate::archive::tiers::stamp(c, &id, queue_id).unwrap();
     }
 }
 
@@ -1073,18 +1073,21 @@ async fn reads_filter_by_tier_and_side() {
 async fn the_matchups_plan_reaches_the_opponent_by_key() {
     let plan = plan_of(MATCHUPS.to_string()).await;
     assert!(step(&plan, "b").contains("match_id=?"), "{plan:#?}");
-    // And the player's tier stamp (FLT-01).
-    let mt = step(&plan, "mt");
-    assert!(mt.contains("match_id=?") && mt.contains("puuid=?"), "{plan:#?}");
+    // The player's tier is on the fact row: no table to reach (DSK-04).
+    assert!(plan.iter().all(|l| !l.contains("match_tiers")), "{plan:#?}");
 }
 
-/// The facts reach each player's tier stamp by key, not by walking
-/// `match_tiers` per fact (THR-02).
+/// The facts carry their player's tier (THR-02, on the row since DSK-04), so
+/// the ladder's facts are read with their matches and nothing else.
 #[tokio::test]
-async fn the_facts_plan_reaches_the_tier_stamp_by_key() {
+async fn the_facts_plan_joins_nothing_for_the_tier() {
     let plan = plan_of(format!("SELECT {TIER} {}", ladder_facts(""))).await;
-    let mt = step(&plan, "mt");
-    assert!(mt.contains("match_id=?") && mt.contains("puuid=?"), "{plan:#?}");
+    let tables: Vec<&str> = plan
+        .iter()
+        .filter(|l| (l.starts_with("SEARCH") || l.starts_with("SCAN")) && !l.contains("json_each"))
+        .map(|l| l.split_whitespace().nth(1).unwrap_or(""))
+        .collect();
+    assert_eq!(tables, ["f", "m"], "{plan:#?}");
 }
 
 /// `EXPLAIN QUERY PLAN` of `sql` over the fixture, bound as a rebuild binds it.

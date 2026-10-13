@@ -128,7 +128,6 @@ async fn migrations_create_exactly_the_design_04_tables() {
             "match_bans",
             "match_builds",
             "match_facts",
-            "match_tiers",
             "matches",
             "metrics_history",
             "player_ranks",
@@ -212,7 +211,7 @@ async fn a_v1_database_upgrades_to_v2_and_keeps_its_data() {
         })
         .await
         .expect("read");
-    assert_eq!((name.as_str(), versions), ("old", 18));
+    assert_eq!((name.as_str(), versions), ("old", 19));
 }
 
 /// V0015 (SITE-08, ADR-123) backfills the slices aggregated before it, as the
@@ -299,7 +298,7 @@ async fn v0015_backfills_the_totals_of_every_aggregated_slice() {
         c.execute("DELETE FROM matches WHERE match_id = 'KR_9'", [])?;
         // What `tiers:backfill` does before the first rebuild after V0016.
         for (id, queue_id) in crate::archive::tiers::unstamped(c, "", 100)? {
-            crate::archive::tiers::stamp(c, &id, queue_id, 100)?;
+            crate::archive::tiers::stamp(c, &id, queue_id)?;
         }
         let scope = crate::archive::analytics::Scope {
             key_scope: "s".into(),
@@ -314,6 +313,68 @@ async fn v0015_backfills_the_totals_of_every_aggregated_slice() {
     .await
     .expect("rebuild");
     assert_eq!(totals(db).await, (matches, bans));
+}
+
+/// V0019 (DSK-04, ADR-138) moves each stamp onto its fact row and drops
+/// `match_tiers`: a fact with no stamp reads NULL and is what `tiers:backfill`
+/// finds; a match outside solo and flex stays NULL and is not found.
+#[tokio::test]
+async fn v0019_moves_the_stamps_onto_the_facts_and_drops_the_table() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("riot-proxy.db");
+    {
+        let mut conn = Connection::open(&path).expect("open");
+        embedded::migrations::runner()
+            .set_grouped(true)
+            .set_target(refinery::Target::Version(18))
+            .run(&mut conn)
+            .expect("to V0018");
+        conn.execute_batch(
+            "INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size, archived_at)
+               VALUES ('KR_1', 'asia', '14.18', 420, 1, x'00', 1, 1),
+                      ('KR_2', 'asia', '14.18', 420, 1, x'00', 1, 1),
+                      ('KR_3', 'asia', '14.18', 450, 1, x'00', 1, 1);
+             INSERT INTO match_facts (match_id, key_scope, puuid, team_id, champion_id, win, facts_version)
+               VALUES ('KR_1', 's', 'a', 100, 1, 1, 3), ('KR_1', 's', 'b', 200, 2, 0, 3),
+                      ('KR_2', 's', 'a', 100, 1, 1, 3), ('KR_2', 's', 'c', 200, 3, 0, 3),
+                      ('KR_3', 's', 'a', 100, 1, 1, 3);
+             INSERT INTO match_tiers (match_id, key_scope, puuid, platform, queue, tier, stamped_at)
+               VALUES ('KR_1', 's', 'a', 'kr', 'RANKED_SOLO_5x5', 'MASTER', 1),
+                      ('KR_1', 's', 'b', 'kr', 'RANKED_SOLO_5x5', 'UNKNOWN', 1),
+                      ('KR_2', 's', 'a', 'kr', 'RANKED_SOLO_5x5', 'DIAMOND', 1);",
+        )
+        .expect("seed");
+    }
+    let db = Db::open(&path, 1).expect("migrate");
+    assert!(!names(&db, "table").await.contains(&"match_tiers".to_string()));
+    let (tiers, left): (Vec<String>, Vec<(String, i64)>) = db
+        .read(|c| {
+            let mut stmt = c.prepare(
+                "SELECT match_id || ' ' || puuid || ' ' || coalesce(tier, 'NULL') FROM match_facts
+                  ORDER BY match_id, puuid",
+            )?;
+            let tiers = stmt
+                .query_map([], |r| r.get(0))?
+                .collect::<Result<Vec<String>, _>>()?;
+            Ok::<_, DbError>((tiers, crate::archive::tiers::unstamped(c, "", 10)?))
+        })
+        .await
+        .expect("read");
+    assert_eq!(
+        tiers,
+        [
+            "KR_1 a MASTER",
+            "KR_1 b UNKNOWN",
+            "KR_2 a DIAMOND",
+            "KR_2 c NULL",
+            "KR_3 a NULL"
+        ]
+    );
+    assert_eq!(
+        left,
+        [("KR_2".to_string(), 420)],
+        "the ranked match with an unstamped fact"
+    );
 }
 
 /// V0017 (FLT-01, ADR-129) keeps every analytics row, with tier and side ''
@@ -596,11 +657,11 @@ async fn migrations_apply_once_across_reopens() {
         })
         .await
         .expect("insert");
-    assert_eq!(history(first.clone()).await.expect("history"), 18);
+    assert_eq!(history(first.clone()).await.expect("history"), 19);
     drop(first);
 
     let second = Db::open(&path, 1).expect("second open");
-    assert_eq!(history(second.clone()).await.expect("history"), 18, "no re-run");
+    assert_eq!(history(second.clone()).await.expect("history"), 19, "no re-run");
     let name: Option<String> = second
         .read(|c| {
             Ok::<_, DbError>(

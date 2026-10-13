@@ -97,8 +97,8 @@ pub fn tiers_job() -> NewJob {
     NewJob::new(kinds::TIERS_BACKFILL, priority::MAINTENANCE, json!({})).dedupe(kinds::TIERS_BACKFILL)
 }
 
-/// Queue `tiers:backfill` when a ranked match has facts and no tier stamps
-/// (at boot, after V0016). Returns whether one was queued.
+/// Queue `tiers:backfill` when a ranked match has a fact with no tier (at
+/// boot, after V0016). Returns whether one was queued.
 pub async fn backfill_tiers_if_needed(queue: &Queue) -> Result<bool, DbError> {
     if !queue
         .db()
@@ -593,10 +593,9 @@ impl AnalyticsContext {
             let n = todo.last().map(|(id, _)| (id.clone(), todo.len()));
             self.db()
                 .write(move |c| {
-                    let now = Clock::now().unix_ms;
                     let tx = c.transaction()?;
                     for (id, queue_id) in &todo {
-                        tiers::stamp(&tx, id, *queue_id, now)?;
+                        tiers::stamp(&tx, id, *queue_id)?;
                     }
                     tx.commit()?;
                     Ok::<_, DbError>(())

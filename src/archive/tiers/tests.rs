@@ -61,18 +61,16 @@ async fn archive(db: &Db, body: &'static [u8], now: i64) {
         .unwrap();
 }
 
-/// `puuid → (tier, stamped_at)` for the match, with platform and queue checked.
-async fn stamps(db: &Db) -> std::collections::BTreeMap<String, (String, i64)> {
+/// `puuid → tier` for the match's stamped facts (`tier IS NOT NULL`).
+async fn stamps(db: &Db) -> std::collections::BTreeMap<String, String> {
     db.read(|c| {
         let mut stmt = c.prepare(
-            "SELECT puuid, tier, stamped_at, platform, queue, key_scope FROM match_tiers WHERE match_id = ?1",
+            "SELECT puuid, tier, key_scope FROM match_facts WHERE match_id = ?1 AND tier IS NOT NULL",
         )?;
         let rows = stmt
             .query_map([MATCH_ID], |r| {
-                assert_eq!(r.get::<_, String>(3)?, "kr");
-                assert_eq!(r.get::<_, String>(4)?, SOLO);
-                assert_eq!(r.get::<_, String>(5)?, SCOPE);
-                Ok((r.get(0)?, (r.get(1)?, r.get(2)?)))
+                assert_eq!(r.get::<_, String>(2)?, SCOPE);
+                Ok((r.get(0)?, r.get(1)?))
             })?
             .collect::<Result<_, _>>()?;
         Ok::<_, DbError>(rows)
@@ -81,8 +79,8 @@ async fn stamps(db: &Db) -> std::collections::BTreeMap<String, (String, i64)> {
     .unwrap()
 }
 
-fn tier_of<'a>(s: &'a std::collections::BTreeMap<String, (String, i64)>, puuid: &str) -> &'a str {
-    &s[puuid].0
+fn tier_of<'a>(s: &'a std::collections::BTreeMap<String, String>, puuid: &str) -> &'a str {
+    &s[puuid]
 }
 
 #[tokio::test]
@@ -117,7 +115,6 @@ async fn archiving_stamps_every_participant_once() {
     for q in &p[3..] {
         assert_eq!(tier_of(&s, q), "UNKNOWN", "{q}");
     }
-    assert!(s.values().all(|(_, at)| *at == 100));
 
     // Promoted, then archived again: the first stamp stays.
     on_ladder(&db, "kr", SOLO, &p[0], "CHALLENGER", 200).await;
@@ -182,7 +179,7 @@ async fn a_later_rank_places_recent_unknown_stamps_only() {
         .await
         .unwrap();
     let s = stamps(&db).await;
-    assert_eq!(s[&p[1]], ("EMERALD".to_string(), 600));
+    assert_eq!(tier_of(&s, &p[1]), "EMERALD");
     // A known tier, whether stamped on archive or placed late, stays.
     for q in [&p[0], &p[1]] {
         ranks::record(&db, SCOPE, "kr", q, solo("IRON").as_bytes(), 700, 0)
@@ -191,7 +188,7 @@ async fn a_later_rank_places_recent_unknown_stamps_only() {
     }
     let after = stamps(&db).await;
     assert_eq!(tier_of(&after, &p[0]), "MASTER");
-    assert_eq!(after[&p[1]], ("EMERALD".to_string(), 600));
+    assert_eq!(tier_of(&after, &p[1]), "EMERALD");
     // Another queue's or platform's rank doesn't apply.
     ranks::record(
         &db,
@@ -256,7 +253,7 @@ async fn a_ladder_page_places_recent_unknown_stamps() {
     assert_eq!(tier_of(&stamps(&db).await, &p[0]), "UNKNOWN");
     page(&[entry(&p[0], "MASTER"), entry(&p[1], "DIAMOND")], END).await;
     let s = stamps(&db).await;
-    assert_eq!(s[&p[0]], ("MASTER".to_string(), 900));
+    assert_eq!(tier_of(&s, &p[0]), "MASTER");
     assert_eq!(tier_of(&s, &p[1]), "DIAMOND");
     assert_eq!(tier_of(&s, &p[2]), "UNKNOWN");
 }
@@ -279,7 +276,7 @@ async fn unstamped_matches_are_found_and_stamped() {
     on_ladder(&db, "kr", SOLO, &p[0], "MASTER", 1).await;
     archive(&db, MATCH, 100).await;
     db.write(|c| {
-        c.execute("DELETE FROM match_tiers", [])?;
+        c.execute("UPDATE match_facts SET tier = NULL", [])?;
         Ok::<_, DbError>(())
     })
     .await
@@ -296,10 +293,93 @@ async fn unstamped_matches_are_found_and_stamped() {
         .unwrap();
     assert_eq!(found, (true, vec![(MATCH_ID.to_string(), 420)], vec![]));
     let n = db
-        .write(|c| Ok::<_, DbError>(stamp(c, MATCH_ID, 420, 5)?))
+        .write(|c| Ok::<_, DbError>(stamp(c, MATCH_ID, 420)?))
         .await
         .unwrap();
     assert_eq!(n, 10);
     assert_eq!(tier_of(&stamps(&db).await, &p[0]), "MASTER");
     assert!(!db.read(|c| Ok::<_, DbError>(any_unstamped(c)?)).await.unwrap());
+    // One fact left unstamped is enough to bring the match back.
+    let p9 = p[9].clone();
+    db.write(move |c| {
+        c.execute(
+            "UPDATE match_facts SET tier = NULL WHERE match_id = ?1 AND puuid = ?2",
+            rusqlite::params![MATCH_ID, p9],
+        )?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    assert!(db.read(|c| Ok::<_, DbError>(any_unstamped(c)?)).await.unwrap());
+    let n = db
+        .write(|c| Ok::<_, DbError>(stamp(c, MATCH_ID, 420)?))
+        .await
+        .unwrap();
+    assert_eq!(n, 1, "only the unstamped fact");
+}
+
+/// A re-extraction keeps every row's stamp and drops only a participant the
+/// body no longer names (DSK-04: facts are upserted, not replaced).
+#[tokio::test]
+async fn reextracting_drops_only_a_participant_gone_from_the_body() {
+    let (_d, db) = db();
+    let p = puuids();
+    on_ladder(&db, "kr", SOLO, &p[0], "MASTER", 1).await;
+    archive(&db, MATCH, 100).await;
+    let mut derived = matches::derive(MATCH).unwrap();
+    let gone = p[9].clone();
+    derived.1.retain(|f| f.puuid != gone);
+    assert_eq!(derived.1.len(), 9);
+    db.write(move |c| {
+        let tx = c.transaction()?;
+        matches::write_derived(&tx, MATCH_ID, SCOPE, &derived)?;
+        tx.commit()?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    let s = stamps(&db).await;
+    assert_eq!(s.len(), 9);
+    assert!(!s.contains_key(&gone));
+    assert_eq!(tier_of(&s, &p[0]), "MASTER");
+    let rows: i64 = db
+        .read(|c| {
+            Ok::<_, DbError>(c.query_row(
+                "SELECT count(*) FROM match_facts WHERE match_id = ?1",
+                [MATCH_ID],
+                |r| r.get(0),
+            )?)
+        })
+        .await
+        .unwrap();
+    assert_eq!(rows, 9);
+}
+
+/// The late stamp reads one player's facts through `facts_player` and checks
+/// each match by its key: no scan of the archive (DSK-04).
+#[tokio::test]
+async fn the_late_stamp_plan_reads_the_players_facts_by_index() {
+    let (_d, db) = db();
+    let plan = db
+        .read(|c| {
+            let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {LATE_STAMP}"))?;
+            let rows = stmt
+                .query_map(params!["s", "kr", 420, "p", "GOLD", 0], |r| r.get::<_, String>(3))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok::<_, DbError>(rows)
+        })
+        .await
+        .unwrap();
+    let text = plan.join("\n");
+    assert!(
+        text.contains(
+            "SEARCH match_facts USING INDEX facts_player (key_scope=? AND puuid=? AND match_id>? AND match_id<?)"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("SEARCH m USING INDEX sqlite_autoindex_matches_1 (match_id=?)"),
+        "{text}"
+    );
+    assert!(!text.contains("SCAN"), "{text}");
 }

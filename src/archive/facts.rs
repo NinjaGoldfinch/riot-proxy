@@ -303,16 +303,25 @@ fn runes(perks: Perks) -> Runes {
 }
 
 /// Replace this key scope's facts for one match with `facts`, inside the
-/// caller's transaction. Other key scopes' rows are left alone.
+/// caller's transaction. Other key scopes' rows are left alone. Each row is
+/// upserted, never deleted and re-inserted, and `tier` is not in the upsert:
+/// the stamp taken when the match was archived outlives a re-extraction
+/// (ADR-127, ADR-138). A participant no longer in the body loses their row.
 pub fn write(
     conn: &rusqlite::Connection,
     match_id: &str,
     key_scope: &str,
     facts: &[Fact],
 ) -> rusqlite::Result<()> {
+    let kept: Vec<&str> = facts.iter().map(|f| f.puuid.as_str()).collect();
     conn.execute(
-        "DELETE FROM match_facts WHERE match_id = ?1 AND key_scope = ?2",
-        (match_id, key_scope),
+        "DELETE FROM match_facts WHERE match_id = ?1 AND key_scope = ?2
+           AND puuid NOT IN (SELECT value FROM json_each(?3))",
+        (
+            match_id,
+            key_scope,
+            serde_json::to_string(&kept).unwrap_or_default(),
+        ),
     )?;
     let mut stmt = conn.prepare_cached(
         "INSERT INTO match_facts (match_id, key_scope, puuid, team_id, position, champion_id, win,
