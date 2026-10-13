@@ -165,7 +165,6 @@ async fn archive_indexes_exist() {
         "matches_patch_queue",
         "matches_end",
         "facts_player",
-        "facts_champ",
         "cache_hard",
         "jobs_dedupe",
         "jobs_claim",
@@ -211,7 +210,7 @@ async fn a_v1_database_upgrades_to_v2_and_keeps_its_data() {
         })
         .await
         .expect("read");
-    assert_eq!((name.as_str(), versions), ("old", 20));
+    assert_eq!((name.as_str(), versions), ("old", 21));
 }
 
 /// V0015 (SITE-08, ADR-123) backfills the slices aggregated before it, as the
@@ -515,6 +514,86 @@ async fn v0020_rebuilds_the_derived_tables_without_rowid_and_keeps_their_rows() 
     assert_eq!(left, (1, 1));
 }
 
+/// V0021 (DSK-07, ADR-141) rebuilds `match_facts` WITHOUT ROWID in key order,
+/// keeps every row and its tier, recreates `facts_player`, drops `facts_champ`
+/// (no reader), and the foreign key still cascades from `matches`.
+#[tokio::test]
+async fn v0021_rebuilds_match_facts_without_rowid_and_keeps_every_row() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("riot-proxy.db");
+    {
+        let mut conn = Connection::open(&path).expect("open");
+        embedded::migrations::runner()
+            .set_grouped(true)
+            .set_target(refinery::Target::Version(20))
+            .run(&mut conn)
+            .expect("to V0020");
+        conn.execute_batch(
+            "INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size, archived_at)
+               VALUES ('KR_1', 'asia', '14.18', 420, 1, x'00', 1, 1), ('KR_2', 'asia', '14.18', 420, 1, x'00', 1, 1);
+             INSERT INTO match_facts (match_id, key_scope, puuid, team_id, position, champion_id, win, kills, deaths,
+               assists, items, runes, summoners, facts_version, cs, gold, damage, vision, tier)
+               VALUES ('KR_2', 's', 'b', 200, 'MIDDLE', 2, 0, 1, 2, 3, '[3157]', '[8000,8010,8400,[],null]', '[4,14]',
+                         4, 100, 5000, 10000, 10, 'DIAMOND'),
+                      ('KR_1', 's', 'a', 100, NULL, 1, 1, NULL, NULL, NULL, '[]', NULL, NULL, 4, NULL, NULL, NULL,
+                         NULL, NULL),
+                      ('KR_1', 's', 'b', 200, 'TOP', 3, 0, 0, 0, 0, '[1055]', NULL, '[4,12]', 4, 1, 2, 3, 4, 'MASTER');",
+        )
+        .expect("seed");
+    }
+    let db = Db::open(&path, 1).expect("migrate");
+    let indexes = names(&db, "index").await;
+    assert!(indexes.contains(&"facts_player".to_string()), "{indexes:?}");
+    assert!(!indexes.contains(&"facts_champ".to_string()), "{indexes:?}");
+    let (ddl, rows, fks): (String, Vec<String>, i64) = db
+        .read(|c| {
+            let ddl = c.query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'match_facts'",
+                [],
+                |r| r.get(0),
+            )?;
+            let mut stmt = c.prepare(
+                "SELECT match_id || ' ' || puuid || ' ' || team_id || ' ' || coalesce(position, '-') || ' '
+                   || champion_id || ' ' || win || ' ' || coalesce(kills, '-') || ' ' || items || ' '
+                   || coalesce(runes, '-') || ' ' || coalesce(summoners, '-') || ' ' || facts_version || ' '
+                   || coalesce(cs, '-') || ' ' || coalesce(gold, '-') || ' ' || coalesce(tier, '-')
+                   FROM match_facts ORDER BY match_id, puuid",
+            )?;
+            let rows = stmt
+                .query_map([], |r| r.get(0))?
+                .collect::<Result<Vec<String>, _>>()?;
+            let fks = c.query_row(
+                "SELECT count(*) FROM pragma_foreign_key_list('match_facts')",
+                [],
+                |r| r.get(0),
+            )?;
+            Ok::<_, DbError>((ddl, rows, fks))
+        })
+        .await
+        .expect("read");
+    assert!(ddl.trim_end().ends_with("WITHOUT ROWID"), "{ddl}");
+    assert_eq!(
+        rows,
+        [
+            "KR_1 a 100 - 1 1 - [] - - 4 - - -",
+            "KR_1 b 200 TOP 3 0 0 [1055] - [4,12] 4 1 2 MASTER",
+            "KR_2 b 200 MIDDLE 2 0 1 [3157] [8000,8010,8400,[],null] [4,14] 4 100 5000 DIAMOND",
+        ]
+    );
+    assert_eq!(fks, 1);
+    db.write(|c| {
+        c.execute("DELETE FROM matches WHERE match_id = 'KR_1'", [])?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .expect("delete");
+    let left: i64 = db
+        .read(|c| Ok::<_, DbError>(c.query_row("SELECT count(*) FROM match_facts", [], |r| r.get(0))?))
+        .await
+        .expect("count");
+    assert_eq!(left, 1, "the key cascades");
+}
+
 /// V0017 (FLT-01, ADR-129) keeps every analytics row, with tier and side ''
 /// where it has none to give, and lists each ladder that had rows, so its
 /// next rebuild covers every patch. `champion_stats` keeps its tier.
@@ -795,11 +874,11 @@ async fn migrations_apply_once_across_reopens() {
         })
         .await
         .expect("insert");
-    assert_eq!(history(first.clone()).await.expect("history"), 20);
+    assert_eq!(history(first.clone()).await.expect("history"), 21);
     drop(first);
 
     let second = Db::open(&path, 1).expect("second open");
-    assert_eq!(history(second.clone()).await.expect("history"), 20, "no re-run");
+    assert_eq!(history(second.clone()).await.expect("history"), 21, "no re-run");
     let name: Option<String> = second
         .read(|c| {
             Ok::<_, DbError>(

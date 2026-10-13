@@ -137,7 +137,7 @@ CREATE TABLE match_facts (                        -- one row per participant; de
                                                   -- Never restamped; a later rank places an UNKNOWN one on a match that
                                                   -- ended within TIER_LATE_STAMP_DAYS. facts:reextract never writes it.
   PRIMARY KEY (match_id, puuid)
-);
+) WITHOUT ROWID;                                  -- V0021 (DSK-07, ADR-141): the key is stored once
 -- V0005 (ADR-056): matches.remake (Riot's gameEndedInEarlySurrender) and
 -- matches.facts_version (indexed; facts:reextract walks what is below current).
 CREATE TABLE match_bans (                         -- info.teams[].bans, -1 left out
@@ -157,8 +157,8 @@ CREATE TABLE match_builds (                       -- V0012 (ADR-117): from the t
   builds_version INTEGER NOT NULL,                -- builds:extract rewrites rows below BUILDS_VERSION
   PRIMARY KEY (match_id, key_scope, puuid)
 ) WITHOUT ROWID;                                  -- V0020 (DSK-06, ADR-140)
-CREATE INDEX facts_player ON match_facts(key_scope, puuid, match_id);
-CREATE INDEX facts_champ  ON match_facts(champion_id);
+CREATE INDEX facts_player ON match_facts(key_scope, puuid, match_id);  -- holds the key's columns: no growth WITHOUT ROWID
+-- facts_champ (champion_id alone) was dropped by V0021: no reader, and it would carry the key per entry (ADR-141)
 
 -- Analytics (recomputed; safe to TRUNCATE) ── v1's shape, ADR-056 ───────────
 -- Every table here is WITHOUT ROWID since V0020 (DSK-06, ADR-140): the key is
