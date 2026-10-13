@@ -541,11 +541,3 @@ async fn the_snapshot_carries_the_runtime_gauges() {
     assert!(points[1]["disk"]["dbBytes"].as_u64().unwrap() > 0);
     assert!(points[1]["requests"].is_u64() && points[1]["upstream"].is_u64());
 }
-
-#[tokio::test]
-async fn the_dashboard_follows_crawl_phases() {
-    let page = riot_proxy::routes::ui::DASHBOARD_HTML;
-    assert!(page.contains("case 'crawl.phase':"));
-    assert!(page.contains("frame.event === 'crawl.phase' || frame.event === 'ladder.crawl.completed'"));
-    let _ = Value::Null;
-}

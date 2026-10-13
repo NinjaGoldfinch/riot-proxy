@@ -178,7 +178,7 @@ async fn dashboard_is_on_by_default_including_production() {
     assert_eq!(r.status, StatusCode::OK);
     let body = String::from_utf8(r.body).unwrap();
     assert!(
-        body.contains("<div class=\"wrap\">"),
+        body.contains(r#"<div id="app" class="app">"#),
         "the dashboard itself is served"
     );
     // In production the bar never offers the dev explorer, which does not exist there.
@@ -186,6 +186,64 @@ async fn dashboard_is_on_by_default_including_production() {
     assert!(!body.contains(r#"href="/dev""#));
     let cfg = common::get(router, "/dashboard/config.json").await;
     assert_eq!(cfg.json(), serde_json::json!({"authDisabled": false}));
+}
+
+/// ADM-08: one file, nothing from another origin, inside its size budget.
+#[test]
+fn admin_page_is_self_contained_and_within_budget() {
+    let html = riot_proxy::routes::ui::ADMIN_HTML;
+    for needle in ["http://", "https://", "<script src", "<link "] {
+        assert!(!html.contains(needle), "admin.html contains {needle:?}");
+    }
+    assert!(
+        html.len() <= 160 * 1024,
+        "admin.html is {} bytes; the budget is 160 KB (design/13)",
+        html.len()
+    );
+    assert_eq!(html.matches("<script").count(), 1, "one inline module");
+    assert!(html.contains(r#"<script type="module">"#));
+    assert!(html.contains(riot_proxy::routes::ui::PAGEBAR_MARK));
+    assert!(
+        !html.contains("/dashboard/config.json"),
+        "the page probes /v1/admin/info instead"
+    );
+}
+
+/// ADM-08: revalidated on each load, a 304 when unchanged.
+#[tokio::test]
+async fn dashboard_is_sent_with_an_etag_and_no_cache() {
+    let (_d, router) = app(&[]);
+    let r = common::get(router.clone(), "/dashboard").await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.headers["cache-control"], "no-cache");
+    let etag = r.headers["etag"].to_str().unwrap().to_string();
+    assert!(etag.starts_with('"') && etag.len() == 34, "{etag}");
+    let again = common::send(
+        router.clone(),
+        axum::http::Request::get("/dashboard")
+            .header("if-none-match", format!("W/\"x\", {etag}"))
+            .body(axum::body::Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(again.status, StatusCode::NOT_MODIFIED);
+    assert!(again.body.is_empty());
+    assert_eq!(again.headers["etag"], etag.as_str());
+    let stale = common::send(
+        router,
+        axum::http::Request::get("/dashboard")
+            .header("if-none-match", "\"other\"")
+            .body(axum::body::Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(stale.status, StatusCode::OK);
+}
+
+/// The dashboard's pure helpers and its theme tokens' contrast (ADM-08).
+#[test]
+fn admin_helpers_pass_their_node_tests() {
+    node_test("tests/admin_ui.mjs");
 }
 
 #[tokio::test]
@@ -317,15 +375,12 @@ fn showcase_is_self_contained() {
 /// (LAD-01); their copies of it must be the server's.
 #[test]
 fn the_pages_apex_cap_is_the_servers() {
-    use riot_proxy::routes::ui::{DASHBOARD_HTML, SHOWCASE_HTML};
+    use riot_proxy::routes::ui::{ADMIN_HTML, SHOWCASE_HTML};
     let line = format!(
         "const APEX_LIST_CAP = {};",
         riot_proxy::riot::ladder::RIOT_APEX_LIST_CAP
     );
-    for (name, html) in [
-        ("dashboard.html", DASHBOARD_HTML),
-        ("showcase.html", SHOWCASE_HTML),
-    ] {
+    for (name, html) in [("admin.html", ADMIN_HTML), ("showcase.html", SHOWCASE_HTML)] {
         assert!(html.contains(&line), "{name} lacks {line:?}");
     }
 }

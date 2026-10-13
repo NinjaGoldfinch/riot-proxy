@@ -322,13 +322,31 @@ Validated with the dataviz palette script; both modes pass.
 | Role | Dark | Light |
 |---|---|---|
 | Page / panel surface | `#0d0f13` / `#151920` | `#f6f7f9` / `#ffffff` |
-| Primary / secondary / muted ink | `#ffffff` / `#c3c2b7` / `#898781` | `#0b0b0b` / `#52514e` / `#898781` |
+| Primary / secondary / muted ink | `#ffffff` / `#c3c2b7` / `#898781` | `#0b0b0b` / `#52514e` / `#6b6a66` (ADM-08: `#898781` is 3.4:1 on the light page, under AA) |
 | Hairline grid / border | `#2c2c2a` / `rgba(255,255,255,.10)` | `#e1e0d9` / `rgba(11,11,11,.10)` |
 | Series 1..6 (fixed order) | `#3987e5 #d95926 #199e70 #c98500 #d55181 #9085e9` | `#2a78d6 #eb6834 #1baf7a #eda100 #e87ba4 #4a3aa7` |
-| Status good / warning / serious / critical | `#0ca30c #fab219 #ec835a #d03b3b` (icon + label always) | same |
+| Status good / warning / serious / critical | `#0ca30c #fab219 #ec835a #d03b3b` (icon + label always) | `#0b8a0b #a86f00 #c2521b #d03b3b` (ADM-08: the dark steps fall to 1.8–3.4:1 on white; these are ≥ 3:1) |
 | Type | `system-ui` 13 px; `tabular-nums` in tables and axes only | |
 | Marks | lines 2 px, area wash 10 %, bars ≤24 px with a 2 px surface gap, meters show `used / limit` as text | |
 
+
+`tests/admin_ui.mjs` reads both token blocks from the page and asserts every ink on every surface is ≥ 4.5:1 and every status colour ≥ 3:1, in both themes.
+
+## Shell (ADM-08)
+
+`src/ui/admin.html` replaces v1's `dashboard.html` at `/dashboard`.
+
+- **Boot.** The probe is `GET /v1/admin/info`, with the key from `localStorage` `rp.dashboard.key` when there is one. 200 starts the page (so `AUTH_DISABLED` needs no key and `/dashboard/config.json` is unused); 401 or 403 opens the key sheet, which also sets the API base (`rp.admin.base`, default `location.origin`). Sign out forgets the key.
+- **One store.** `store.set(section, value)` fans out to that section's listeners: `info`, `snapshot`, `rates` (request and Riot-call rates from consecutive snapshots), `ready`, `backups`, `event`. Only the active tab renders; the health strip and rail always do.
+- **Data.** On start and on every return to a visible tab: `/v1/admin/metrics`, `/readyz`, `/v1/admin/backups`. Then the socket: `metrics` + `firehose`, with backoff 1, 2, 4 … 30 s, a 4401/4403 close or an `UNAUTHORIZED`/`FORBIDDEN` frame opening the key sheet. While `document.hidden` the page unsubscribes `metrics` (the server then builds no snapshots for it) and its tab stops; the only timer is a 1 s clock for ages and uptime.
+- **Health strip.** Ready (`/readyz`), limiter (frozen scopes, else bulk-held scopes), disk (`snapshot.disk`, warning at 85 % used, critical at 95 %), backup age (`/backups`, warning after 36 h, serious with none), key scope, and version · commit · env · uptime (`/info`). Each status is an icon and words.
+- **Overview tiles.** Archived matches (and the gain since the page opened), jobs pending (running, failed in 24 h), cache hit ratio (hit + neg + stale over all reads, the `CacheHitRatioLow` rule), requests and Riot calls per second, disk free, process RSS and SQLite readers.
+- **Shared pieces.** `table()` (sortable headers with `aria-sort`, a row cap with "showing n of m"), `confirmAction()` (every write), `toast()` (an `aria-live` region), and the pure helpers block tested in node. `window.rpAdmin` exposes them to the jsdom tests and the console.
+- **Theme.** Dark by default, light when the system prefers it, a saved choice (`rp.admin.theme`) over both.
+- **Serving.** `ETag` (SHA-256 of the rendered page) and `Cache-Control: no-cache`: a reload is a 304. Budget 160 KB, tested.
+- **Tests.** `tests/dom/admin-shell.test.mjs` (jsdom against `fake-admin.mjs`, through `admin-harness.mjs`), `tests/dom/admin.browser.test.mjs` (Chromium at 1280, 820 and 390 px in both themes: no sideways scroll, nothing wider than its box, every tab reachable), `tests/admin_ui.mjs` (helpers and token contrast), `tests/ui.rs` (self-contained, budget, ETag).
+
+The rail lists only the tabs that exist; each later task adds its own. Until ADM-12 there is no Ladder tab: `/dev/jobs`, `/v1/admin/ladder/*` and the firehose cover it.
 
 ## Chart rules
 
@@ -340,7 +358,7 @@ Each tab's task fills its row and adds a section below.
 
 | Hash | Tab | Feeds | Task | Status |
 |---|---|---|---|---|
-| `#overview` | Overview: stat tiles, 24 h charts, recent errors | snapshot, history, `/recent` | ADM-08, ADM-09 | planned |
+| `#overview` | Overview: stat tiles, 24 h charts, recent errors | snapshot, history, `/recent` | ADM-08, ADM-09 | tiles built (ADM-08); charts and errors ADM-09 |
 | `#traffic` | Traffic: by route, upstream, live recent requests | snapshot, `/recent` | ADM-09 | planned |
 | `#limiter` | Limiter: a card per scope | snapshot, `/limits/{scope}` | ADM-10 | planned |
 | `#cache` | Cache: L1/L2, ratios, probe, purge | snapshot, `/debug/cache`, `/cache/purge` | ADM-10 | planned |
