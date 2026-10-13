@@ -376,86 +376,6 @@ async fn v0019_moves_the_stamps_onto_the_facts_and_drops_the_table() {
     );
 }
 
-/// V0021 (DSK-07, ADR-141) rebuilds `match_facts` WITHOUT ROWID in key order,
-/// keeps every row and its tier, recreates `facts_player`, drops `facts_champ`
-/// (no reader), and the foreign key still cascades from `matches`.
-#[tokio::test]
-async fn v0021_rebuilds_match_facts_without_rowid_and_keeps_every_row() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir.path().join("riot-proxy.db");
-    {
-        let mut conn = Connection::open(&path).expect("open");
-        embedded::migrations::runner()
-            .set_grouped(true)
-            .set_target(refinery::Target::Version(20))
-            .run(&mut conn)
-            .expect("to V0020");
-        conn.execute_batch(
-            "INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size, archived_at)
-               VALUES ('KR_1', 'asia', '14.18', 420, 1, x'00', 1, 1), ('KR_2', 'asia', '14.18', 420, 1, x'00', 1, 1);
-             INSERT INTO match_facts (match_id, key_scope, puuid, team_id, position, champion_id, win, kills, deaths,
-               assists, items, runes, summoners, facts_version, cs, gold, damage, vision, tier)
-               VALUES ('KR_2', 's', 'b', 200, 'MIDDLE', 2, 0, 1, 2, 3, '[3157]', '[8000,8010,8400,[],null]', '[4,14]',
-                         4, 100, 5000, 10000, 10, 'DIAMOND'),
-                      ('KR_1', 's', 'a', 100, NULL, 1, 1, NULL, NULL, NULL, '[]', NULL, NULL, 4, NULL, NULL, NULL,
-                         NULL, NULL),
-                      ('KR_1', 's', 'b', 200, 'TOP', 3, 0, 0, 0, 0, '[1055]', NULL, '[4,12]', 4, 1, 2, 3, 4, 'MASTER');",
-        )
-        .expect("seed");
-    }
-    let db = Db::open(&path, 1).expect("migrate");
-    let indexes = names(&db, "index").await;
-    assert!(indexes.contains(&"facts_player".to_string()), "{indexes:?}");
-    assert!(!indexes.contains(&"facts_champ".to_string()), "{indexes:?}");
-    let (ddl, rows, fks): (String, Vec<String>, i64) = db
-        .read(|c| {
-            let ddl = c.query_row(
-                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'match_facts'",
-                [],
-                |r| r.get(0),
-            )?;
-            let mut stmt = c.prepare(
-                "SELECT match_id || ' ' || puuid || ' ' || team_id || ' ' || coalesce(position, '-') || ' '
-                   || champion_id || ' ' || win || ' ' || coalesce(kills, '-') || ' ' || items || ' '
-                   || coalesce(runes, '-') || ' ' || coalesce(summoners, '-') || ' ' || facts_version || ' '
-                   || coalesce(cs, '-') || ' ' || coalesce(gold, '-') || ' ' || coalesce(tier, '-')
-                   FROM match_facts ORDER BY match_id, puuid",
-            )?;
-            let rows = stmt
-                .query_map([], |r| r.get(0))?
-                .collect::<Result<Vec<String>, _>>()?;
-            let fks = c.query_row(
-                "SELECT count(*) FROM pragma_foreign_key_list('match_facts')",
-                [],
-                |r| r.get(0),
-            )?;
-            Ok::<_, DbError>((ddl, rows, fks))
-        })
-        .await
-        .expect("read");
-    assert!(ddl.trim_end().ends_with("WITHOUT ROWID"), "{ddl}");
-    assert_eq!(
-        rows,
-        [
-            "KR_1 a 100 - 1 1 - [] - - 4 - - -",
-            "KR_1 b 200 TOP 3 0 0 [1055] - [4,12] 4 1 2 MASTER",
-            "KR_2 b 200 MIDDLE 2 0 1 [3157] [8000,8010,8400,[],null] [4,14] 4 100 5000 DIAMOND",
-        ]
-    );
-    assert_eq!(fks, 1);
-    db.write(|c| {
-        c.execute("DELETE FROM matches WHERE match_id = 'KR_1'", [])?;
-        Ok::<_, DbError>(())
-    })
-    .await
-    .expect("delete");
-    let left: i64 = db
-        .read(|c| Ok::<_, DbError>(c.query_row("SELECT count(*) FROM match_facts", [], |r| r.get(0))?))
-        .await
-        .expect("count");
-    assert_eq!(left, 1, "the key cascades");
-}
-
 /// V0020 (DSK-06, ADR-140) rebuilds the key-only derived tables WITHOUT
 /// ROWID: every row survives with its values, each table says so in its
 /// DDL, `champion_stats_slice` is back, and the foreign keys to `matches`
@@ -592,6 +512,86 @@ async fn v0020_rebuilds_the_derived_tables_without_rowid_and_keeps_their_rows() 
         .await
         .expect("read");
     assert_eq!(left, (1, 1));
+}
+
+/// V0021 (DSK-07, ADR-141) rebuilds `match_facts` WITHOUT ROWID in key order,
+/// keeps every row and its tier, recreates `facts_player`, drops `facts_champ`
+/// (no reader), and the foreign key still cascades from `matches`.
+#[tokio::test]
+async fn v0021_rebuilds_match_facts_without_rowid_and_keeps_every_row() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("riot-proxy.db");
+    {
+        let mut conn = Connection::open(&path).expect("open");
+        embedded::migrations::runner()
+            .set_grouped(true)
+            .set_target(refinery::Target::Version(20))
+            .run(&mut conn)
+            .expect("to V0020");
+        conn.execute_batch(
+            "INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size, archived_at)
+               VALUES ('KR_1', 'asia', '14.18', 420, 1, x'00', 1, 1), ('KR_2', 'asia', '14.18', 420, 1, x'00', 1, 1);
+             INSERT INTO match_facts (match_id, key_scope, puuid, team_id, position, champion_id, win, kills, deaths,
+               assists, items, runes, summoners, facts_version, cs, gold, damage, vision, tier)
+               VALUES ('KR_2', 's', 'b', 200, 'MIDDLE', 2, 0, 1, 2, 3, '[3157]', '[8000,8010,8400,[],null]', '[4,14]',
+                         4, 100, 5000, 10000, 10, 'DIAMOND'),
+                      ('KR_1', 's', 'a', 100, NULL, 1, 1, NULL, NULL, NULL, '[]', NULL, NULL, 4, NULL, NULL, NULL,
+                         NULL, NULL),
+                      ('KR_1', 's', 'b', 200, 'TOP', 3, 0, 0, 0, 0, '[1055]', NULL, '[4,12]', 4, 1, 2, 3, 4, 'MASTER');",
+        )
+        .expect("seed");
+    }
+    let db = Db::open(&path, 1).expect("migrate");
+    let indexes = names(&db, "index").await;
+    assert!(indexes.contains(&"facts_player".to_string()), "{indexes:?}");
+    assert!(!indexes.contains(&"facts_champ".to_string()), "{indexes:?}");
+    let (ddl, rows, fks): (String, Vec<String>, i64) = db
+        .read(|c| {
+            let ddl = c.query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'match_facts'",
+                [],
+                |r| r.get(0),
+            )?;
+            let mut stmt = c.prepare(
+                "SELECT match_id || ' ' || puuid || ' ' || team_id || ' ' || coalesce(position, '-') || ' '
+                   || champion_id || ' ' || win || ' ' || coalesce(kills, '-') || ' ' || items || ' '
+                   || coalesce(runes, '-') || ' ' || coalesce(summoners, '-') || ' ' || facts_version || ' '
+                   || coalesce(cs, '-') || ' ' || coalesce(gold, '-') || ' ' || coalesce(tier, '-')
+                   FROM match_facts ORDER BY match_id, puuid",
+            )?;
+            let rows = stmt
+                .query_map([], |r| r.get(0))?
+                .collect::<Result<Vec<String>, _>>()?;
+            let fks = c.query_row(
+                "SELECT count(*) FROM pragma_foreign_key_list('match_facts')",
+                [],
+                |r| r.get(0),
+            )?;
+            Ok::<_, DbError>((ddl, rows, fks))
+        })
+        .await
+        .expect("read");
+    assert!(ddl.trim_end().ends_with("WITHOUT ROWID"), "{ddl}");
+    assert_eq!(
+        rows,
+        [
+            "KR_1 a 100 - 1 1 - [] - - 4 - - -",
+            "KR_1 b 200 TOP 3 0 0 [1055] - [4,12] 4 1 2 MASTER",
+            "KR_2 b 200 MIDDLE 2 0 1 [3157] [8000,8010,8400,[],null] [4,14] 4 100 5000 DIAMOND",
+        ]
+    );
+    assert_eq!(fks, 1);
+    db.write(|c| {
+        c.execute("DELETE FROM matches WHERE match_id = 'KR_1'", [])?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .expect("delete");
+    let left: i64 = db
+        .read(|c| Ok::<_, DbError>(c.query_row("SELECT count(*) FROM match_facts", [], |r| r.get(0))?))
+        .await
+        .expect("count");
+    assert_eq!(left, 1, "the key cascades");
 }
 
 /// V0017 (FLT-01, ADR-129) keeps every analytics row, with tier and side ''
