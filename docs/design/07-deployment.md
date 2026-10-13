@@ -122,7 +122,7 @@ Same variable names as v1 where the concept survives; removed variables are list
 | `ADMIN_CORS_ORIGINS` | empty | **new** — exact origins allowed to call `/v1/admin/*`, `/v1/ws`, `/healthz` and `/readyz` from a browser; empty sends no CORS headers, `*` is refused (ADM-07, ADR-151) |
 | `ROLE` | `all` | **new** — `api` / `worker` only with Postgres |
 | `JOB_CONCURRENCY` | `8` | **new** — also `--job-concurrency`; see §Sizing for small hosts |
-| `JOB_KIND_LIMITS` | `aggregate:analytics=1` | **new** — `kind=n,…`, the most jobs of a kind running at once, for kinds that don't call Riot; `none` for no caps (OPS-06, ADR-134) |
+| `JOB_KIND_LIMITS` | `aggregate:analytics=1,archive:offload=1` | **new** — `kind=n,…`, the most jobs of a kind running at once, for kinds that don't call Riot; `none` for no caps (OPS-06, ADR-134) |
 | `JOB_YIELD_BUDGET_MS` | `1000` | **new** — how long a job's fetch waits for the rate limiter before the job re-queues itself and frees its worker (SCH-01, ADR-089); `0`–`900000` |
 | `LOG_FORMAT` | `json` (tty → `pretty`) | |
 | `ENV` | `development` | replaces `NODE_ENV`; `production` refuses `AUTH_DISABLED` and always turns `DEV_UI` off (ADR-071) |
@@ -141,6 +141,9 @@ Same variable names as v1 where the concept survives; removed variables are list
 | `ARCHIVE_OBJECT_REGION` | `auto` | **new** — signing region, passed through |
 | `ARCHIVE_OBJECT_ACCESS_KEY` / `ARCHIVE_OBJECT_SECRET_KEY` | unset | **new** — both or neither; production refuses a URL without them; `[REDACTED]` in `/v1/admin/info`, never logged |
 | `ARCHIVE_OBJECT_CONCURRENCY` | `16` | **new** — ranged GETs at once when a batch of offloaded bodies is read; `1`–`256` |
+| `ARCHIVE_BODY_LOCAL_DAYS` | `14` | **new** — how long SQLite keeps its own copy of a body already in the bucket, from when its match was archived (a timeline goes by its match); `0`–`365`, `0` frees every packed body (design/12, OBJ-03, ADR-164) |
+| `ARCHIVE_PACK_TARGET_BYTES` | `67108864` | **new** — a pack closes at this many bytes of bodies, and a kind reaching it queues `archive:offload`; 1 MiB–1 GiB |
+| `ARCHIVE_OFFLOAD_PACE_MS` | `50` | **new** — pause between offload turns; `0`–`60000` |
 | `BOOTSTRAP_ADMIN_KEY` | — | printed on first `serve`, no separate migrate step |
 | everything else (`CACHE_TTL_OVERRIDES`, `NEG_TTL_*`, `CLIENT_WAIT_BUDGET_MS`, `BULK_USAGE_CEILING`, `STALE_WHILE_REVALIDATE`, `METRICS_*`, `TRACK_POLL_*`, `TRACK_CATCHUP_LIMIT`, `LADDER_*`, `FACTS_REEXTRACT_BATCH`, `AGGREGATE_*`, `ADMIN_IP_ALLOWLIST`, `AUTH_DISABLED`, `DEV_UI`, `DOCS_UI`, `DASHBOARD_UI`, `LOG_LEVEL`) | as v1 | unchanged |
 
@@ -165,7 +168,7 @@ No Docker, no Redis, no Postgres, no `npm run migrate`. Mint a consumer key with
 | Master+ crawls, one platform | 1 | 512 MB | 5 GB |
 | Emerald-floor crawl, timelines on | 2 | 1–2 GB | 50+ GB → consider Postgres |
 
-**Workers on a small host.** Each worker runs one job, and the jobs that don't wait on Riot (analytics rebuilds, `builds:extract`, `facts:reextract`) keep a core busy, and they and every job that stores a match take turns on SQLite's single write lock. On a 2-vCPU host, 8 workers left the CPU about 1 % idle with CPU pressure near 48 % (PSI `some avg60`), and four rebuilds started together alongside archiving hadn't finished after 7 minutes where one alone takes about 30 s (OPS-06). With readers always active, the WAL never checkpointed and kept growing. For 2 vCPU set `JOB_CONCURRENCY=2` and keep the default `JOB_KIND_LIMITS=aggregate:analytics=1`. Rebuilds for several ladders then run one after another, each about as fast as on its own. Fewer workers don't lower the API's own throughput: requests are served outside the job pool.
+**Workers on a small host.** Each worker runs one job, and the jobs that don't wait on Riot (analytics rebuilds, `builds:extract`, `facts:reextract`) keep a core busy, and they and every job that stores a match take turns on SQLite's single write lock. On a 2-vCPU host, 8 workers left the CPU about 1 % idle with CPU pressure near 48 % (PSI `some avg60`), and four rebuilds started together alongside archiving hadn't finished after 7 minutes where one alone takes about 30 s (OPS-06). With readers always active, the WAL never checkpointed and kept growing. For 2 vCPU set `JOB_CONCURRENCY=2` and keep the default `JOB_KIND_LIMITS=aggregate:analytics=1,archive:offload=1`. Rebuilds for several ladders then run one after another, each about as fast as on its own. Fewer workers don't lower the API's own throughput: requests are served outside the job pool.
 
 The binary's own RSS is dominated by the SQLite page cache (`cache_size`, 64 MB default) plus L1 (`moka` weight-bounded, `CACHE_L1_MAX_MB`, default 128). Both are tunable down to run in ~50 MB total on a Pi.
 

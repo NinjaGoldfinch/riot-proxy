@@ -343,9 +343,22 @@ pub async fn put(
     body: Bytes,
     now_ms: i64,
 ) -> Result<MatchMeta, ArchiveError> {
+    Ok(put_stored(db, match_id, region, key_scope, body, now_ms).await?.0)
+}
+
+/// [`put`], also giving the zstd bytes stored: what the offload counts
+/// towards a pack (OBJ-03).
+pub async fn put_stored(
+    db: &Db,
+    match_id: &str,
+    region: &str,
+    key_scope: &str,
+    body: Bytes,
+    now_ms: i64,
+) -> Result<(MatchMeta, usize), ArchiveError> {
     let size = body.len();
     let (derived, blob) = prepare(body).await?;
-    let meta = derived.0.clone();
+    let (meta, stored) = (derived.0.clone(), blob.len());
     tracing::debug!(
         match_id,
         raw_bytes = size,
@@ -389,7 +402,7 @@ pub async fn put(
     })
     .await?;
     metrics::counter!(crate::metrics::ARCHIVED_MATCHES_TOTAL).increment(1);
-    Ok(meta)
+    Ok((meta, stored))
 }
 
 /// The archived timeline body, if any, wherever it is kept.
@@ -402,8 +415,13 @@ pub async fn get_timeline(db: &Db, match_id: &str) -> Result<Option<Bytes>, Arch
 /// client that asks for a match and its timeline at once often gets the
 /// timeline first. [`crate::archive::SqliteArchive`] queues the missing match.
 pub async fn put_timeline(db: &Db, match_id: &str, body: Bytes) -> Result<(), ArchiveError> {
+    put_timeline_stored(db, match_id, body).await.map(|_| ())
+}
+
+/// [`put_timeline`], giving the zstd bytes stored.
+pub async fn put_timeline_stored(db: &Db, match_id: &str, body: Bytes) -> Result<usize, ArchiveError> {
     let blob = compress(body).await?;
-    let id = match_id.to_string();
+    let (id, stored) = (match_id.to_string(), blob.len());
     db.write(move |conn| {
         conn.execute(
             "INSERT INTO timelines (match_id, body_zstd) VALUES (?1, ?2)
@@ -412,7 +430,8 @@ pub async fn put_timeline(db: &Db, match_id: &str, body: Bytes) -> Result<(), Ar
         )?;
         Ok::<_, ArchiveError>(())
     })
-    .await
+    .await?;
+    Ok(stored)
 }
 
 /// How many bodies of one kind are in each state (design/12 §SQLite).

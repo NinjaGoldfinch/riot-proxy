@@ -333,10 +333,21 @@ locations in one transaction, then deletes the old object; a pack with no
 live bodies is just deleted.
 
 Progress is visible as `archive_offload_pending{kind="match"|"timeline",
-step="pack"|"free"}` gauges, `archive_offload_bytes_total`, `archive_packs` and
-`packedMatches` / `offloadedMatches` / `packedTimelines` / `offloadedTimelines` / `packs` on
-`GET /v1/admin/stats`. The dashboard's archive card shows local vs
+step="pack"|"free"}` gauges, `archive_offload_bytes_total{kind}`, `archive_packs` and
+`archiveBodies` / `archivePacks` / `archivePackBytes` on
+`GET /v1/admin/stats` (ADR-163). The dashboard's Archive tab shows local vs
 offloaded counts.
+
+As built (OBJ-03, ADR-164): a timeline has no archive time of its own, so
+its window runs from its match's `archived_at`; a timeline whose match is not
+archived yet counts as new. Matches are packed oldest `archived_at` first,
+timelines in match-id order, each streaming its "to pack" index and stopping
+at a full pack, so a turn reads only the rows it packs. V0024 adds
+`matches_archived ON matches(match_id, archived_at)`, so the timeline window
+reads an index, not a match row whose `archived_at` sits after its body. The
+trigger counts zstd bytes as stored and is reset to what is left at the end
+of every run. `JOB_KIND_LIMITS` defaults to `archive:offload=1` too, though
+the dedupe already covers a running job.
 
 The first run packs the 16 GB backlog (all of it is unpacked) and frees
 everything older than 14 days. `ARCHIVE_BODY_LOCAL_DAYS=0` frees every packed

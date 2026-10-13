@@ -346,6 +346,28 @@ fn serve_logs_the_object_store_without_its_keys() {
     );
 }
 
+/// OBJ-03: with a bucket, boot queues `archive:offload` and a worker runs it;
+/// without one, the kind does not exist and nothing is queued.
+#[test]
+fn serve_with_a_bucket_runs_the_offload_at_boot() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("data");
+    let bucket = tmp.path().join("bucket");
+    let url = format!("file://{}", bucket.display());
+    let server = Server::start_with(&data, free_port(), &[("ARCHIVE_OBJECT_URL", &url)]);
+    let seen = server.wait_for("offload done");
+    let log = server.stop(seen);
+    assert!(log.contains("queued archive:offload"), "{log}");
+    assert!(bucket.is_dir(), "the local bucket is created");
+
+    let plain = Server::start(&tmp.path().join("plain"), free_port());
+    let log = plain.stop(Vec::new());
+    assert!(
+        !log.contains("queued archive:offload") && !log.contains("offload done"),
+        "{log}"
+    );
+}
+
 #[test]
 fn healthcheck_fails_when_nothing_listens() {
     let tmp = tempfile::tempdir().unwrap();

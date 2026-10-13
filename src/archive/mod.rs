@@ -13,6 +13,8 @@ pub mod pool;
 pub mod ranks;
 pub mod tiers;
 
+use std::sync::Arc;
+
 use bytes::Bytes;
 use futures_util::future::BoxFuture;
 
@@ -21,6 +23,7 @@ use crate::clock::Clock;
 use crate::db::{Db, DbError};
 use crate::fetcher::Archive;
 use crate::jobs::archive::queue_missing_half_on;
+use crate::jobs::offload::Pending;
 use crate::jobs::{Queue, priority};
 use crate::riot::client::RiotRequest;
 
@@ -36,6 +39,9 @@ pub struct SqliteArchive {
     /// `TIER_LATE_STAMP_DAYS`: how far back a league lookup places a
     /// player's `UNKNOWN` tier stamps (THR-02).
     late_stamp_days: u32,
+    /// Counts stored bytes towards the next pack and queues the offload when
+    /// one is full (OBJ-03); `None` without a bucket.
+    pending: Option<Arc<Pending>>,
 }
 
 #[derive(Debug, Clone)]
@@ -55,7 +61,15 @@ impl SqliteArchive {
             scope,
             halves: None,
             late_stamp_days: tiers::LATE_STAMP_DAYS,
+            pending: None,
         }
+    }
+
+    /// Count every stored body towards the offload's next pack (OBJ-03).
+    #[must_use]
+    pub fn count_unpacked(mut self, pending: Arc<Pending>) -> Self {
+        self.pending = Some(pending);
+        self
     }
 
     /// `TIER_LATE_STAMP_DAYS` (THR-02); 0 places no earlier games.
@@ -135,7 +149,7 @@ impl Archive for SqliteArchive {
         let (id, region) = (id.to_string(), req.target.scope());
         Box::pin(async move {
             let result = match kind {
-                Kind::Match => matches::put(
+                Kind::Match => matches::put_stored(
                     &self.db,
                     &id,
                     region,
@@ -144,11 +158,18 @@ impl Archive for SqliteArchive {
                     Clock::now().unix_ms,
                 )
                 .await
-                .map(|_| ()),
-                Kind::Timeline => matches::put_timeline(&self.db, &id, body).await,
+                .map(|(_, stored)| (pack::Kind::Match, stored)),
+                Kind::Timeline => matches::put_timeline_stored(&self.db, &id, body)
+                    .await
+                    .map(|stored| (pack::Kind::Timeline, stored)),
             };
             match result {
-                Ok(()) => self.queue_missing_half(id).await,
+                Ok((kind, stored)) => {
+                    if let Some(pending) = &self.pending {
+                        pending.add(kind, stored as u64).await;
+                    }
+                    self.queue_missing_half(id).await;
+                }
                 Err(e) => tracing::warn!(error = %e, match_id = %id, "archive write failed"),
             }
         })

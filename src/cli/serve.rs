@@ -106,8 +106,15 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
     for key in policy.ineffective_overrides() {
         tracing::warn!(key = %key, "CACHE_TTL_OVERRIDES key matches no cacheable endpoint; ignored");
     }
-    // The archive queues what a stored match or timeline lacks (TL-01).
+    // The archive queues what a stored match or timeline lacks (TL-01), and
+    // the offload once a full pack of bodies is waiting (OBJ-03).
     let queue = crate::jobs::Queue::new(db.clone()).with_kind_limits(config.job_kind_limits.clone());
+    let pending = db.objects().map(|_| {
+        Arc::new(crate::jobs::offload::Pending::new(
+            queue.clone(),
+            config.archive_pack_target_bytes,
+        ))
+    });
     let fetcher = Fetcher::new(FetcherParts {
         client: match options.riot_base_url.as_ref().or(config.riot_base_url.as_ref()) {
             Some(url) => RiotClient::with_base_url(&config, url)?,
@@ -115,11 +122,15 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         },
         limiter: Arc::clone(&limiter),
         cache: Arc::clone(&cache),
-        archive: Arc::new(
-            SqliteArchive::new(db.clone(), KeyScope::from_key(&config.riot_api_key))
+        archive: Arc::new({
+            let archive = SqliteArchive::new(db.clone(), KeyScope::from_key(&config.riot_api_key))
                 .queue_missing_halves(queue.clone(), config.archive_timelines)
-                .late_stamp_days(config.tier_late_stamp_days),
-        ),
+                .late_stamp_days(config.tier_late_stamp_days);
+            match &pending {
+                Some(p) => archive.count_unpacked(Arc::clone(p)),
+                None => archive,
+            }
+        }),
         scope: KeyScope::from_key(&config.riot_api_key),
         policy,
         interactive_budget: Duration::from_millis(config.client_wait_budget_ms),
@@ -194,11 +205,15 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         db: db.clone(),
         key_scope: scope.clone(),
     });
-    let maintenance = Arc::new(crate::jobs::maintenance::Maintenance::new(
+    let maintenance = crate::jobs::maintenance::Maintenance::new(
         db.clone(),
         config.data_dir.join("backups"),
         config.backup_keep as usize,
-    ));
+    );
+    let maintenance = Arc::new(match &pending {
+        Some(_) => maintenance.then_offload(queue.clone()),
+        None => maintenance,
+    });
     let analytics = Arc::new(crate::jobs::analytics::AnalyticsContext {
         queue: queue.clone(),
         hub: hub.clone(),
@@ -213,21 +228,34 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         patches: config.timeline_backfill_patches,
     });
     let activity = crate::jobs::activity::Activity::new();
-    let scheduler = crate::jobs::Scheduler::with_queue(
-        queue.clone(),
-        crate::jobs::handlers(
-            &poll,
-            &archiving,
-            &ddragon,
-            &ladder,
-            &names,
-            &analytics,
-            &maintenance,
-            &timelines,
-        ),
-    )
-    .with_limiter(Arc::clone(&limiter))
-    .with_activity(activity.clone());
+    let mut handlers = crate::jobs::handlers(
+        &poll,
+        &archiving,
+        &ddragon,
+        &ladder,
+        &names,
+        &analytics,
+        &maintenance,
+        &timelines,
+    );
+    // Only with a bucket: without one the kind does not exist (design/12).
+    if let (Some(objects), Some(pending)) = (db.objects(), &pending) {
+        let offload = Arc::new(crate::jobs::offload::OffloadContext {
+            db: db.clone(),
+            objects: objects.clone(),
+            pending: Arc::clone(pending),
+            local_days: config.archive_body_local_days,
+            target_bytes: config.archive_pack_target_bytes,
+            pace: Duration::from_millis(config.archive_offload_pace_ms),
+        });
+        handlers = handlers.with(
+            crate::jobs::kinds::ARCHIVE_OFFLOAD,
+            crate::jobs::offload::OffloadHandler(offload),
+        );
+    }
+    let scheduler = crate::jobs::Scheduler::with_queue(queue.clone(), handlers)
+        .with_limiter(Arc::clone(&limiter))
+        .with_activity(activity.clone());
     match scheduler.recover().await {
         Ok(0) => {}
         Ok(n) => tracing::info!(jobs = n, "re-queued jobs a previous process left running"),
@@ -265,6 +293,13 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
             "queued analytics rebuilds to split rows by tier and side"
         ),
         Err(e) => tracing::warn!(error = %e, "could not check for analytics rows to split by tier and side"),
+    }
+    // A boot run catches a full pack the lost counter would have queued.
+    if pending.is_some() {
+        match crate::jobs::offload::enqueue(&queue).await {
+            Ok(_) => tracing::info!("queued archive:offload"),
+            Err(e) => tracing::warn!(error = %e, "could not queue archive:offload"),
+        }
     }
     tracing::info!(
         workers = config.job_concurrency,

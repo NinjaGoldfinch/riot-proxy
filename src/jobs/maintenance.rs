@@ -151,6 +151,9 @@ pub struct Maintenance {
     pub disk_free: DiskFree,
     /// The last run since the process started (ADM-06).
     last: RwLock<Option<LastRun>>,
+    /// Where `archive:offload` is queued after each run, with a bucket
+    /// (OBJ-03): the daily pass that frees bodies past the window.
+    offload: Option<crate::jobs::Queue>,
 }
 
 impl Maintenance {
@@ -161,7 +164,15 @@ impl Maintenance {
             keep,
             disk_free: Arc::new(crate::db::disk::free_bytes),
             last: RwLock::new(None),
+            offload: None,
         }
+    }
+
+    /// Queue `archive:offload` on `queue` after every run (OBJ-03).
+    #[must_use]
+    pub fn then_offload(mut self, queue: crate::jobs::Queue) -> Self {
+        self.offload = Some(queue);
+        self
     }
 
     /// The last run since the process started; `None` before the first.
@@ -186,6 +197,12 @@ impl Maintenance {
             error: result.as_ref().err().map(ToString::to_string),
         };
         *self.last.write().unwrap_or_else(PoisonError::into_inner) = Some(run);
+        // Whatever the day's steps did: freeing bodies does not depend on them.
+        if let Some(queue) = &self.offload
+            && let Err(e) = crate::jobs::offload::enqueue(queue).await
+        {
+            tracing::warn!(error = %e, "could not queue the offload after maintenance");
+        }
         result
     }
 

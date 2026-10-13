@@ -169,6 +169,134 @@ pub async fn free(db: &Db, kind: Kind, ids: &[String], now_ms: i64) -> Result<us
     .await
 }
 
+/// Bodies freed per transaction.
+pub const FREE_BATCH: usize = 2_000;
+
+/// The ids of the next pack of `kind`, or `None` when none is due.
+///
+/// Unpacked bodies are taken oldest first (matches by `archived_at`,
+/// timelines in match-id order, each the order of its "to pack" index), up
+/// to `target_bytes`; a single larger body is a pack of its own. That is a
+/// full pack. Fewer bytes than that are packed only when one of them was
+/// archived before `cutoff_ms`, so freeing it is not held up; otherwise they
+/// wait for more. A timeline's archive time is its match's; one with no
+/// match yet counts as new.
+pub async fn next_pack(
+    db: &Db,
+    kind: Kind,
+    target_bytes: u64,
+    cutoff_ms: i64,
+) -> Result<Option<Vec<String>>, ArchiveError> {
+    db.read(move |c| {
+        let sql = match kind {
+            Kind::Match => {
+                "SELECT match_id, length(body_zstd), archived_at FROM matches
+                  WHERE packed_at IS NULL ORDER BY archived_at"
+            }
+            Kind::Timeline => {
+                "SELECT t.match_id, length(t.body_zstd), m.archived_at
+                   FROM timelines t LEFT JOIN matches m ON m.match_id = t.match_id
+                  WHERE t.packed_at IS NULL ORDER BY t.match_id"
+            }
+        };
+        let mut stmt = c.prepare(sql)?;
+        let mut rows = stmt.query([])?;
+        let (mut ids, mut bytes, mut old) = (Vec::new(), 0u64, false);
+        while let Some(r) = rows.next()? {
+            let len = u64::try_from(r.get::<_, i64>(1)?).unwrap_or(0);
+            if len == 0 {
+                continue;
+            }
+            if !ids.is_empty() && bytes + len > target_bytes {
+                return Ok(Some(ids));
+            }
+            ids.push(r.get::<_, String>(0)?);
+            bytes += len;
+            old |= r.get::<_, Option<i64>>(2)?.is_some_and(|at| at < cutoff_ms);
+            if bytes >= target_bytes {
+                return Ok(Some(ids));
+            }
+        }
+        Ok::<_, ArchiveError>((old && !ids.is_empty()).then_some(ids))
+    })
+    .await
+}
+
+/// Up to `limit` packed, located bodies of `kind` still held locally whose
+/// match was archived before `cutoff_ms`: the next batch to [`free`].
+pub async fn next_free(
+    db: &Db,
+    kind: Kind,
+    cutoff_ms: i64,
+    limit: usize,
+) -> Result<Vec<String>, ArchiveError> {
+    db.read(move |c| {
+        let sql = match kind {
+            Kind::Match => {
+                "SELECT m.match_id FROM matches m
+                  WHERE m.packed_at IS NOT NULL AND m.offloaded_at IS NULL AND m.archived_at < ?1
+                    AND EXISTS (SELECT 1 FROM body_locations l WHERE l.match_id = m.match_id AND l.kind = 'match')
+                  LIMIT ?2"
+            }
+            Kind::Timeline => {
+                "SELECT t.match_id FROM timelines t JOIN matches m ON m.match_id = t.match_id
+                  WHERE t.packed_at IS NOT NULL AND t.offloaded_at IS NULL AND m.archived_at < ?1
+                    AND EXISTS (SELECT 1 FROM body_locations l WHERE l.match_id = t.match_id AND l.kind = 'timeline')
+                  LIMIT ?2"
+            }
+        };
+        let mut stmt = c.prepare(sql)?;
+        let ids = stmt
+            .query_map(rusqlite::params![cutoff_ms, limit as i64], |r| r.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok::<_, ArchiveError>(ids)
+    })
+    .await
+}
+
+/// What is left to do, for the `archive_offload_pending` gauges: unpacked
+/// bodies of each kind, and packed ones past `cutoff_ms` not yet freed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Backlog {
+    pub to_pack: i64,
+    pub to_free: i64,
+    /// zstd bytes of the unpacked bodies: the trigger's counter.
+    pub unpacked_bytes: u64,
+}
+
+pub async fn backlog(db: &Db, kind: Kind, cutoff_ms: i64) -> Result<Backlog, ArchiveError> {
+    db.read(move |c| {
+        let table = kind.table();
+        let (to_pack, unpacked): (i64, i64) = c.query_row(
+            &format!(
+                "SELECT count(*), coalesce(sum(length(body_zstd)), 0) FROM {table} WHERE packed_at IS NULL"
+            ),
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        let to_free: i64 = c.query_row(
+            match kind {
+                Kind::Match => {
+                    "SELECT count(*) FROM matches
+                      WHERE packed_at IS NOT NULL AND offloaded_at IS NULL AND archived_at < ?1"
+                }
+                Kind::Timeline => {
+                    "SELECT count(*) FROM timelines t JOIN matches m ON m.match_id = t.match_id
+                      WHERE t.packed_at IS NOT NULL AND t.offloaded_at IS NULL AND m.archived_at < ?1"
+                }
+            },
+            [cutoff_ms],
+            |r| r.get(0),
+        )?;
+        Ok::<_, ArchiveError>(Backlog {
+            to_pack,
+            to_free,
+            unpacked_bytes: u64::try_from(unpacked).unwrap_or(0),
+        })
+    })
+    .await
+}
+
 fn rand_u128() -> u128 {
     let mut buf = [0u8; 16];
     // A ULID's random half only has to make two packs written in the same
