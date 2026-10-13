@@ -128,7 +128,7 @@ CREATE TABLE match_facts (                        -- one row per participant; de
   win          INTEGER NOT NULL,
   kills INTEGER, deaths INTEGER, assists INTEGER,
   items        TEXT,                              -- JSON [int]
-  runes        TEXT,                              -- JSON
+  runes        TEXT,                              -- JSON [primaryStyle, keystone, subStyle, [perks], [stat perks]|null] (V4, ADR-139)
   summoners    TEXT,                              -- JSON [int,int]
   facts_version INTEGER NOT NULL,                 -- bump to trigger facts:reextract
   cs           INTEGER,                           -- lane + jungle minions; V0003 (ADR-043)

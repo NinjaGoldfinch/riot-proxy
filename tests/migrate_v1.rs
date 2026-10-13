@@ -83,7 +83,7 @@ async fn the_v1_archive_and_players_arrive_and_consumers_do_not() {
     // remake flagged, bans written, archive stamps from v1's fetched_at.
     assert_eq!(count(&db, "SELECT COUNT(*) FROM matches").await, 19);
     assert_eq!(
-        count(&db, "SELECT COUNT(*) FROM matches WHERE facts_version = 3").await,
+        count(&db, "SELECT COUNT(*) FROM matches WHERE facts_version = 4").await,
         19
     );
     assert_eq!(

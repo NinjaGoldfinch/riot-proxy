@@ -77,7 +77,7 @@ fn seed(c: &Connection) {
                     Some((5, 2, 3)),
                     200,
                     "[3157,0,3020,0,0,0]",
-                    r#"{"keystone":8112,"subStyle":8300}|[4,14]"#,
+                    r#"[8000,8112,8300,[],null]|[4,14]"#,
                 ),
                 (
                     "C",
@@ -88,7 +88,7 @@ fn seed(c: &Connection) {
                     Some((2, 5, 1)),
                     180,
                     "[3157,3157,0,0,0,0]",
-                    r#"{"keystone":8010,"subStyle":8400}|[14,4]"#,
+                    r#"[8000,8010,8400,[],null]|[14,4]"#,
                 ),
                 (
                     "D",
@@ -120,7 +120,7 @@ fn seed(c: &Connection) {
                     Some((1, 1, 1)),
                     100,
                     "[3157,0,0,0,0,0]",
-                    r#"{"keystone":8112,"subStyle":8300}|[14,4]"#,
+                    r#"[8000,8112,8300,[],null]|[14,4]"#,
                 ),
                 (
                     "B",
@@ -131,7 +131,7 @@ fn seed(c: &Connection) {
                     Some((3, 3, 3)),
                     150,
                     "[0,0,0,0,0,0]",
-                    r#"{"keystone":8010,"subStyle":8400}|[4,14]"#,
+                    r#"[8000,8010,8400,[],null]|[4,14]"#,
                 ),
             ],
             &[(100, 1, 11)],
@@ -152,7 +152,7 @@ fn seed(c: &Connection) {
                     None,
                     10,
                     "[0,0,0,0,0,0]",
-                    r#"{"keystone":8112,"subStyle":8300}|[4,14]"#,
+                    r#"[8000,8112,8300,[],null]|[4,14]"#,
                 ),
                 (
                     "C",
@@ -783,9 +783,9 @@ const BOTH_SIDES: &str = r#"INSERT INTO matches (match_id, region, patch, queue_
              INSERT INTO match_facts (match_id, key_scope, puuid, team_id, position, champion_id, win,
                kills, deaths, assists, cs, gold, damage, vision, items, runes, summoners, facts_version)
                VALUES ('KR_6', 's', 'B', 200, 'MIDDLE', 1, 1, 2, 2, 2, 100, 5000, 10000, 10,
-                         '[3157,3020,0,0,0,0]', '{"keystone":8112,"subStyle":8300}', '[4,14]', 3),
+                         '[3157,3020,0,0,0,0]', '[8000,8112,8300,[],null]', '[4,14]', 3),
                       ('KR_6', 's', 'C', 100, 'MIDDLE', 2, 0, 1, 1, 1, 100, 5000, 10000, 10,
-                         '[3157,0,0,0,0,0]', '{"keystone":8010,"subStyle":8400}', '[14,4]', 3);
+                         '[3157,0,0,0,0,0]', '[8000,8010,8400,[],null]', '[14,4]', 3);
              INSERT INTO match_builds (match_id, key_scope, puuid, starter, boots, items, skills, skill_order,
                builds_version) VALUES ('KR_6', 's', 'B', '[1056]', 3020, '[6655,3157]', 'QWE', 'QWE', 1);"#;
 
