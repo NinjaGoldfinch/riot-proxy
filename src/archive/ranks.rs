@@ -62,7 +62,7 @@ pub async fn record(
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![scope, platform, queue, puuid, tier, division, lp, now],
             )?;
-            tiers::late_stamp(&tx, &scope, &platform, queue, &puuid, tier, late_since, now)?;
+            tiers::late_stamp(&tx, &scope, &platform, queue, &puuid, tier, late_since)?;
         }
         stamp_on(&tx, &scope, &platform, &puuid, now)?;
         tx.commit()?;

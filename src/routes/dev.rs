@@ -41,7 +41,6 @@ pub const WIPED: &[&str] = &[
     "timeline_gaps",
     "match_bans",
     "match_builds",
-    "match_tiers",
     "match_facts",
     "crawl_legs",
     "crawl_match_ids",
