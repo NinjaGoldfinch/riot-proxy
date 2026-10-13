@@ -119,6 +119,7 @@ Same variable names as v1 where the concept survives; removed variables are list
 | `DATABASE_URL` | `sqlite://$DATA_DIR/riot-proxy.db` | now optional; `postgres://` needs the `postgres` feature |
 | `PORT` / `HOST` | `8080` / `0.0.0.0` | |
 | `TRUST_PROXY` | `false` | **new** — v1 always trusted `X-Forwarded-For` (ADR-068) |
+| `ADMIN_CORS_ORIGINS` | empty | **new** — exact origins allowed to call `/v1/admin/*`, `/v1/ws`, `/healthz` and `/readyz` from a browser; empty sends no CORS headers, `*` is refused (ADM-07, ADR-151) |
 | `ROLE` | `all` | **new** — `api` / `worker` only with Postgres |
 | `JOB_CONCURRENCY` | `8` | **new** — also `--job-concurrency`; see §Sizing for small hosts |
 | `JOB_KIND_LIMITS` | `aggregate:analytics=1` | **new** — `kind=n,…`, the most jobs of a kind running at once, for kinds that don't call Riot; `none` for no caps (OPS-06, ADR-134) |

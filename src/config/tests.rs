@@ -690,3 +690,32 @@ fn redacted_lists_every_variable_but_the_riot_key_and_masks_secrets() {
     assert_eq!(c.redacted()["JOB_KIND_LIMITS"].as_deref(), Some("none"));
     assert_eq!(c.redacted()["BOOTSTRAP_ADMIN_KEY"], None);
 }
+
+/// ADM-07: exact origins only; `*`, paths and other schemes are refused.
+#[test]
+fn admin_cors_origins_are_exact_origins() {
+    assert!(load(env(&[])).admin_cors_origins.is_empty(), "off by default");
+    let c = load(env(&[(
+        "ADMIN_CORS_ORIGINS",
+        "https://admin.example.com, http://localhost:5173",
+    )]));
+    assert_eq!(
+        c.admin_cors_origins,
+        ["https://admin.example.com", "http://localhost:5173"]
+    );
+    for bad in [
+        "*",
+        "https://admin.example.com/",
+        "https://a.example/x",
+        "ftp://a.example",
+        "admin.example.com",
+        "https://",
+    ] {
+        let errs = errors(env(&[("ADMIN_CORS_ORIGINS", bad)]));
+        assert!(
+            errs.iter().any(|e| e.starts_with("ADMIN_CORS_ORIGINS")),
+            "{bad}: {errs:?}"
+        );
+    }
+    assert!(errors(env(&[("ADMIN_CORS_ORIGINS", "*")]))[0].contains("refused"));
+}

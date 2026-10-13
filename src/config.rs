@@ -69,6 +69,7 @@ pub const VARS: &[&str] = &[
     "DDRAGON_LOCALE",
     "ADMIN_IP_ALLOWLIST",
     "TRUST_PROXY",
+    "ADMIN_CORS_ORIGINS",
     "BOOTSTRAP_ADMIN_KEY",
     "AUTH_DISABLED",
     "DEV_UI",
@@ -303,6 +304,10 @@ pub struct Config {
     /// Take the client address from `X-Forwarded-For` (a trusted proxy in front).
     /// Off: the TCP peer, which a caller cannot forge (ADR-068).
     pub trust_proxy: bool,
+    /// Exact origins (`https://host[:port]`) allowed to call the admin API,
+    /// `/v1/ws` and the health routes from a browser; empty sends no CORS
+    /// headers at all (ADM-07, ADR-014's deferral closed).
+    pub admin_cors_origins: Vec<String>,
     pub bootstrap_admin_key: Option<Secret>,
     pub auth_disabled: bool,
     /// `/dev`: never in production, whatever `DEV_UI` says (ADR-071).
@@ -394,6 +399,7 @@ impl Config {
             ("DDRAGON_LOCALE", s(&self.ddragon_locale)),
             ("ADMIN_IP_ALLOWLIST", s(self.admin_ip_allowlist.join(","))),
             ("TRUST_PROXY", s(self.trust_proxy)),
+            ("ADMIN_CORS_ORIGINS", s(self.admin_cors_origins.join(","))),
             (
                 "BOOTSTRAP_ADMIN_KEY",
                 self.bootstrap_admin_key.as_ref().map(|_| REDACTED.to_string()),
@@ -655,6 +661,7 @@ impl Config {
             ddragon_locale: v.string("DDRAGON_LOCALE", "en_US"),
             admin_ip_allowlist: csv(&v.string("ADMIN_IP_ALLOWLIST", "")),
             trust_proxy: v.bool("TRUST_PROXY", false),
+            admin_cors_origins: v.origins("ADMIN_CORS_ORIGINS"),
             bootstrap_admin_key: v.opt_string("BOOTSTRAP_ADMIN_KEY").map(Secret::new),
             auth_disabled,
             dev_ui: dev_ui && env != Environment::Production,
@@ -795,6 +802,29 @@ struct Vars {
 impl Vars {
     fn push(&mut self, name: &str, message: &str) {
         self.errors.push(format!("{name}: {message}"));
+    }
+
+    /// A CSV of exact browser origins: `http(s)://host[:port]`, no path, no
+    /// wildcard. `*` is refused: the admin API takes a key a page on any
+    /// origin could then use.
+    fn origins(&mut self, name: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        for o in csv(&self.string(name, "")) {
+            let host = o.strip_prefix("https://").or_else(|| o.strip_prefix("http://"));
+            if o == "*" {
+                self.push(name, "'*' is refused; list each origin");
+            } else if host
+                .is_none_or(|h| h.is_empty() || h.contains(['/', '?', '#', '*', ' ']) || !h.is_ascii())
+            {
+                self.push(
+                    name,
+                    &format!("'{o}' is not an origin like https://admin.example.com"),
+                );
+            } else {
+                out.push(o);
+            }
+        }
+        out
     }
 
     /// Record an error and return a placeholder; the config is discarded anyway.
