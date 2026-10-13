@@ -315,7 +315,7 @@ The VPS (38 GB) hit 97 %: `riot-proxy.db` 20.26 GB (timelines 12.7 GiB, matches 
 
 ## HOST — production on Onidel (owner request 2026-10-13)
 Before (OVH VPS, 2026-10-13 01:00 UTC): 38 GB disk at 77 %, `riot-proxy.db` 20 GB of which raw bodies 16 GB (230,715 matches at 10.7 KB, 216,475 timelines at 62.3 KB), 1,126,303 jobs pending. After (`ngf-prod-syd1`): `quick_check` ok, `/readyz` ok with 6 of 6 SQLite readers free, backup 21.6 GB in R2 `ngf-backups`, about 44 GB of 115 GB used.
-- [x] HOST-01 production moved from the OVH VPS to Onidel Sydney (ONI-4, `ngf-prod-syd1`) with the site and its tunnel; off-box backups to R2 `ngf-backups` every 6 h with 14-day expiry; the old box wiped and renamed `ngf-mon-syd1` for monitoring (#PR, ADR-142, design/12 §As executed)
+- [x] HOST-01 production moved from the OVH VPS to Onidel Sydney (ONI-4, `ngf-prod-syd1`) with the site and its tunnel; off-box backups to R2 `ngf-backups` every 6 h with 14-day expiry; the old box wiped and renamed `ngf-mon-syd1` for monitoring (#172, ADR-142, design/12 §As executed)
 - [ ] OBJ-01..05 raw match and timeline bodies in object storage: proposal in design/12 §Tasks, waiting on the owner's answers to its §Open questions
 
 ## PAIR — team pairings (owner request 2026-10-10, outline)
