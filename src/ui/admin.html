@@ -100,11 +100,11 @@
   .strip { position: sticky; top: 34px; z-index: 50; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 10px 0; margin-bottom: 14px; background: var(--page); border-bottom: 1px solid var(--border); }
   .pill { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; color: var(--ink-2); }
   .pill b { color: var(--ink); font-weight: 600; }
-  .pill[data-level='good'] svg { color: var(--good); }
-  .pill[data-level='warning'] svg { color: var(--warning); }
-  .pill[data-level='serious'] svg { color: var(--serious); }
-  .pill[data-level='critical'] svg { color: var(--critical); }
-  .pill[data-level='unknown'] svg { color: var(--muted); }
+  [data-level='good'] > svg.i { color: var(--good); }
+  [data-level='warning'] > svg.i { color: var(--warning); }
+  [data-level='serious'] > svg.i { color: var(--serious); }
+  [data-level='critical'] > svg.i { color: var(--critical); }
+  [data-level='unknown'] > svg.i { color: var(--muted); }
   .strip .spacer { flex: 1; }
   .strip .build { font-size: 12px; color: var(--muted); }
 
@@ -223,6 +223,13 @@
   @media (max-width: 1000px) { #ladderHistory .wide { display: none; } }
   @media (max-width: 480px) { .stages { grid-template-columns: auto auto minmax(40px, 1fr); } .stages .num { grid-column: 1 / -1; } }
 
+  /* ── storage ── */
+  .stack { display: flex; height: 14px; border-radius: 4px; overflow: hidden; gap: 2px; background: var(--panel); margin: 6px 0; }
+  .stack i { display: block; min-width: 2px; }
+  .legend.stack-l { font-size: 12px; }
+  .note-line { display: flex; gap: 6px; align-items: center; margin: 6px 0; font-size: 12px; }
+  .actions-row { display: flex; flex-wrap: wrap; gap: 8px; }
+
   /* ── table helper ── */
   .scroll { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; font-size: 12px; }
@@ -281,7 +288,8 @@
       <symbol id="i-cache" viewBox="0 0 16 16"><path d="M8 1C4.7 1 2 2.1 2 3.5v9C2 13.9 4.7 15 8 15s6-1.1 6-2.5v-9C14 2.1 11.3 1 8 1Zm0 1.6c2.6 0 4.4.8 4.4 1s-1.8 1-4.4 1-4.4-.8-4.4-1 1.8-1 4.4-1ZM3.6 5.6C4.7 6.1 6.3 6.4 8 6.4s3.3-.3 4.4-.8V8c0 .2-1.8 1-4.4 1S3.6 8.2 3.6 8Zm0 4C4.7 10.1 6.3 10.4 8 10.4s3.3-.3 4.4-.8v2.9c0 .2-1.8 1-4.4 1s-4.4-.8-4.4-1Z" /></symbol>
       <symbol id="i-jobs" viewBox="0 0 16 16"><path d="M2 2.8C2 2.4 2.4 2 2.8 2h10.4c.4 0 .8.4.8.8s-.4.8-.8.8H2.8c-.4 0-.8-.4-.8-.8Zm0 5.2c0-.4.4-.8.8-.8h10.4c.4 0 .8.4.8.8s-.4.8-.8.8H2.8C2.4 8.8 2 8.4 2 8Zm.8 4.4c-.4 0-.8.4-.8.8s.4.8.8.8h6.4c.4 0 .8-.4.8-.8s-.4-.8-.8-.8Z" /></symbol>
       <symbol id="i-ladder" viewBox="0 0 16 16"><path d="M4 1.5a.8.8 0 0 1 .8.8V4h6.4V2.3a.8.8 0 0 1 1.6 0v11.4a.8.8 0 0 1-1.6 0V12H4.8v1.7a.8.8 0 0 1-1.6 0V2.3A.8.8 0 0 1 4 1.5Zm.8 4.1v1.6h6.4V5.6Zm0 3.2v1.6h6.4V8.8Z" /></symbol>
-      <symbol id="i-overview" viewBox="0 0 16 16"><path d="M1 2.5A1.5 1.5 0 0 1 2.5 1h3A1.5 1.5 0 0 1 7 2.5v3A1.5 1.5 0 0 1 5.5 7h-3A1.5 1.5 0 0 1 1 5.5Zm8 0A1.5 1.5 0 0 1 10.5 1h3A1.5 1.5 0 0 1 15 2.5v3A1.5 1.5 0 0 1 13.5 7h-3A1.5 1.5 0 0 1 9 5.5Zm-8 8A1.5 1.5 0 0 1 2.5 9h3A1.5 1.5 0 0 1 7 10.5v3A1.5 1.5 0 0 1 5.5 15h-3A1.5 1.5 0 0 1 1 13.5Zm8 0A1.5 1.5 0 0 1 10.5 9h3a1.5 1.5 0 0 1 1.5 1.5v3a1.5 1.5 0 0 1-1.5 1.5h-3A1.5 1.5 0 0 1 9 13.5Z" /></symbol>
+      <symbol id="i-archive" viewBox="0 0 16 16"><path d="M1.5 3c0-.6.4-1 1-1h11c.6 0 1 .4 1 1v2c0 .5-.3.9-.8 1v6.5c0 .8-.7 1.5-1.5 1.5H3.8c-.8 0-1.5-.7-1.5-1.5V6c-.5-.1-.8-.5-.8-1Zm1.6.6v.8h9.8v-.8ZM3.9 7v5.4h8.2V7Zm2.3 1.4h3.6a.8.8 0 0 1 0 1.6H6.2a.8.8 0 0 1 0-1.6Z" /></symbol>
+  <symbol id="i-overview" viewBox="0 0 16 16"><path d="M1 2.5A1.5 1.5 0 0 1 2.5 1h3A1.5 1.5 0 0 1 7 2.5v3A1.5 1.5 0 0 1 5.5 7h-3A1.5 1.5 0 0 1 1 5.5Zm8 0A1.5 1.5 0 0 1 10.5 1h3A1.5 1.5 0 0 1 15 2.5v3A1.5 1.5 0 0 1 13.5 7h-3A1.5 1.5 0 0 1 9 5.5Zm-8 8A1.5 1.5 0 0 1 2.5 9h3A1.5 1.5 0 0 1 7 10.5v3A1.5 1.5 0 0 1 5.5 15h-3A1.5 1.5 0 0 1 1 13.5Zm8 0A1.5 1.5 0 0 1 10.5 9h3a1.5 1.5 0 0 1 1.5 1.5v3a1.5 1.5 0 0 1-1.5 1.5h-3A1.5 1.5 0 0 1 9 13.5Z" /></symbol>
     </svg>
 
     <div id="app" class="app">
@@ -348,7 +356,7 @@
   // Riot's league-v4 apex lists stop at this many entries (LAD-01); the Ladder
   // tab (ADM-12) prints it, and tests/ui.rs checks it is the server's.
   const APEX_LIST_CAP = 10000;
-  const TAB_IDS = ['overview', 'traffic', 'limiter', 'cache', 'jobs', 'ladder'];
+  const TAB_IDS = ['overview', 'traffic', 'limiter', 'cache', 'jobs', 'ladder', 'archive'];
   const fmt = (n) => (n == null || Number.isNaN(Number(n)) ? '—' : Number(n).toLocaleString('en-US'));
   /** 1,284 · 12.9K · 1.13M · 2.1B (the stat-tile contract). */
   const compact = (n) => {
@@ -619,6 +627,15 @@
     return 'archive hand-off';
   };
   const tierName = (t) => t.charAt(0) + t.slice(1).toLowerCase();
+  /** The data disk split for the storage bar: live pages, free pages, WAL, other files, free (bytes). */
+  const storageParts = (st) => {
+    const free = st.freelistBytes ?? (st.dbFreelistPages ?? 0) * (st.dbPageSize ?? 0);
+    const db = st.dbFileBytes ?? st.dbBytes ?? 0;
+    const wal = st.walBytes ?? 0;
+    const total = st.diskTotalBytes ?? st.totalBytes ?? 0;
+    const avail = st.diskFreeBytes ?? st.freeBytes ?? 0;
+    return [['live pages', Math.max(0, db - free)], ['free pages', free], ['WAL', wal], ['other files', Math.max(0, total - avail - db - wal)], ['free', avail]];
+  };
   const hhmm = (t) => new Date(t).toTimeString().slice(0, 5);
   const hhmmss = (t) => new Date(t).toTimeString().slice(0, 8);
   // ---------- end pure helpers
@@ -880,6 +897,7 @@
     { id: 'cache', label: 'Cache', icon: 'cache', enter() { enterCache(); } },
     { id: 'jobs', label: 'Jobs', icon: 'jobs', enter(id) { enterJobs(id); }, leave() { stopJobs(); } },
     { id: 'ladder', label: 'Ladder', icon: 'ladder', enter(id) { enterLadder(id); }, leave() { stopLadder(); } },
+    { id: 'archive', label: 'Archive', icon: 'archive', enter() { enterArchive(); }, leave() { clearTimeout(A.timer); } },
   ];
   function buildTabs() {
     $('tabs').innerHTML = TABS.map((t) =>
@@ -919,7 +937,7 @@
 
   // ── Overview ─────────────────────────────────────────────────────────
   const tile = (label, value, sub, level) =>
-    `<div class="tile"><div class="label">${level ? icon(level) : ''}${esc(label)}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`;
+    `<div class="tile"><div class="label"${level ? ` data-level="${level}"` : ''}>${level ? icon(level) : ''}${esc(label)}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`;
   // History: GET /metrics/history once per entry, then the newest snapshot as
   // a live point, kept once it is an interval newer than the last.
   const hist = { points: [], live: null, intervalMs: 60000, loaded: false };
@@ -1826,17 +1844,130 @@
     if (!a || !$('analyticsRuns')) return;
     const runs = a.lastRuns ?? [];
     $('analyticsMeta').textContent = runs.length ? `· last ${relTime(runs[0].at)} · ${runs.length} ladder(s)${runs[0].status === 'failed' ? ' · last run failed part way' : ''}` : '· none yet';
-    $('analyticsRuns').replaceChildren(table({
-      columns: [
-        { key: 'platform', label: 'Ladder', format: (v, r) => esc(`${v} ${r.queue}`) },
-        { key: 'at', label: 'When', format: (v, r) => `${esc(relTime(v))}${r.status === 'failed' ? ` ${icon('critical')} failed` : ''}` },
-        { key: 'steps', label: 'Steps (s)', format: (v) => esc(Object.entries(v).map(([n, sec]) => `${n} ${sec.toFixed(1)}`).join(' · ') || '—') },
-        { key: 'rows', label: 'Rows', num: true, format: (v) => fmt(sumValues(v)) },
-        { key: 'games', label: 'Games', num: true, format: (v) => fmt(v) },
-      ],
-      rows: runs, empty: 'One is queued when a crawl finishes, every AGGREGATE_INTERVAL_S if that is set, or by Recompute now.',
+    $('analyticsRuns').replaceChildren(analyticsTable(runs));
+    $('analyticsTop').textContent = topChampions(a);
+  }
+  const topChampions = (a) => (a?.topChampions?.length ? `Most played, newest patch: ${a.topChampions.map((c) => `${c.championName ?? c.championId} ${fmt(c.games)}g ${Math.round(c.winRate * 100)}%`).join(' · ')}` : '');
+  const analyticsTable = (runs) => table({
+    columns: [
+      { key: 'platform', label: 'Ladder', format: (v, r) => esc(`${v} ${r.queue}`) },
+      { key: 'at', label: 'When', format: (v, r) => `${esc(relTime(v))}${r.status === 'failed' ? ` ${icon('critical')} failed` : ''}` },
+      { key: 'steps', label: 'Steps (s)', format: (v) => esc(Object.entries(v).map(([n, sec]) => `${n} ${sec.toFixed(1)}`).join(' · ') || '—') },
+      { key: 'rows', label: 'Rows', num: true, format: (v) => fmt(sumValues(v)) },
+      { key: 'games', label: 'Games', num: true, format: (v) => fmt(v) },
+    ],
+    rows: runs, empty: 'One is queued when a crawl finishes, every AGGREGATE_INTERVAL_S if that is set, or by Recompute now.',
+  });
+
+  // ── Archive & Storage ────────────────────────────────────────────────
+  const A = { timer: null, stats: null, backups: null, timelines: null };
+  const ARCHIVE_MS = 60000;
+  async function enterArchive() {
+    clearTimeout(A.timer);
+    if (!$('arTiles')) {
+      $('panel-archive').innerHTML = `<h1>Archive &amp; Storage</h1><div class="tiles" id="arTiles"></div>
+        <section class="panel" style="margin-top:10px"><div class="panel-head"><h2>The data disk</h2><span class="end muted" id="arSampled"></span></div><div id="arDisk"></div></section>
+        <div class="grid2"><section class="panel"><div class="panel-head"><h2>Backups</h2><span class="end"><button class="btn small" type="button" id="arRun">Run maintenance now</button></span></div><div id="arBackups"></div></section>
+          <section class="panel"><div class="panel-head"><h2>Timeline backfill</h2><span class="end muted" id="arTlMeta"></span></div><div id="arTimelines"></div></section></div>
+        <section class="panel" style="margin-top:10px"><div class="panel-head"><h2>Analytics</h2><span class="end actions-row" id="arActions"></span></div><div id="arRuns"></div><p class="muted" id="arTop"></p></section>`;
+      $('arRun').addEventListener('click', runMaintenance);
+      $('arActions').addEventListener('click', archiveAction);
+    }
+    renderArchive();
+    await loadArchive();
+  }
+  async function loadArchive() {
+    clearTimeout(A.timer);
+    if (state.tab !== 'archive' || document.hidden || !state.started) return;
+    const quiet = (pr) => pr.catch((e) => { if (!(e instanceof ApiError)) console.warn(e); return null; });
+    const [st, bk, tl] = await Promise.all([api('/v1/admin/stats'), api('/v1/admin/backups'), api('/v1/admin/timelines/backfill')].map(quiet));
+    if (st) A.stats = st;
+    if (bk) { A.backups = bk; store.set('backups', bk); }
+    if (tl) A.timelines = tl;
+    renderArchive();
+    if (state.tab === 'archive' && !document.hidden) A.timer = setTimeout(loadArchive, ARCHIVE_MS);
+  }
+  store.on('snapshot', () => { if (state.tab === 'archive') renderArchive(); });
+  function renderArchive() {
+    if (state.tab !== 'archive' || !$('arTiles')) return;
+    const s = store.get('snapshot');
+    const st = A.stats;
+    // The snapshot's disk is fresher than the stats route's; both are samples.
+    const disk = s?.disk ?? (st && { dbBytes: st.dbFileBytes, walBytes: st.walBytes, freelistBytes: st.dbFreelistPages * st.dbPageSize, freeBytes: st.diskFreeBytes, totalBytes: st.diskTotalBytes });
+    const dl = diskLevel(disk);
+    $('arTiles').innerHTML = [
+      tile('Archived matches', compact(st?.archivedMatches ?? s?.totals?.archivedMatches), st ? `${compact(st.archivedTimelines)} timelines` : '&nbsp;'),
+      tile('Stored', fmtBytes(st?.archiveStoredBytes), st?.archiveRawBytes ? `${fmtBytes(st.archiveRawBytes)} raw · ${(st.archiveRawBytes / Math.max(1, st.archiveStoredBytes)).toFixed(1)}× zstd` : '&nbsp;'),
+      tile('Players', compact(st?.knownPlayers ?? s?.totals?.knownPlayers), `${fmt(st?.trackedPlayers ?? s?.totals?.trackedPlayers)} tracked`),
+      tile('Database', fmtBytes(disk?.dbBytes), `${fmtBytes(disk?.freelistBytes)} free pages · WAL ${fmtBytes(disk?.walBytes)}`),
+      tile('Disk free', fmtBytes(disk?.freeBytes), dl.used == null ? '—' : `${pct(dl.used, 0)} used of ${fmtBytes(disk.totalBytes)}`, dl.level === 'good' ? null : dl.level),
+    ].join('');
+    if (disk?.totalBytes) {
+      const parts = storageParts({ dbBytes: disk.dbBytes, freelistBytes: disk.freelistBytes, walBytes: disk.walBytes, totalBytes: disk.totalBytes, freeBytes: disk.freeBytes });
+      const colors = ['var(--s1)', 'var(--s4)', 'var(--s2)', 'var(--s6)', 'transparent'];
+      const warn = dl.level === 'critical' ? `<p class="note-line" data-level="critical">${icon('critical')} Under 5 % of the disk is free: backups skip themselves and writes may fail (design/07 §Reclaiming space).</p>`
+        : dl.level === 'warning' ? `<p class="note-line" data-level="warning">${icon('warning')} Over 85 % of the disk is used.</p>` : '';
+      $('arDisk').innerHTML = `${warn}<div class="stack" role="img" aria-label="${esc(parts.map(([n, b]) => `${n} ${fmtBytes(b)}`).join(', '))}">${parts.map(([n, b], i) => (b > 0 ? `<i title="${esc(n)} ${esc(fmtBytes(b))}" style="flex:${b} 0 0;background:${colors[i]}${i === 4 ? ';box-shadow:inset 0 0 0 1px var(--grid)' : ''}"></i>` : '')).join('')}</div>` +
+        `<div class="legend stack-l">${parts.map(([n, b], i) => `<span><i style="background:${colors[i]};height:8px;width:8px;${i === 4 ? 'box-shadow:inset 0 0 0 1px var(--muted)' : ''}"></i>${esc(n)} ${esc(fmtBytes(b))}</span>`).join('')}</div>`;
+    }
+    $('arSampled').textContent = st?.sampledAt ? `archive bytes sampled ${relTime(st.sampledAt.slow)}` : '';
+    renderBackups();
+    renderTimelines();
+    $('arRuns').replaceChildren(analyticsTable(s?.analytics?.lastRuns ?? []));
+    $('arTop').textContent = topChampions(s?.analytics);
+    const last = s?.analytics?.lastRuns?.[0];
+    $('arActions').innerHTML = `${last ? `<button class="btn small" type="button" data-act="recompute" data-platform="${esc(last.platform)}" data-queue="${esc(last.queue)}">Recompute ${esc(last.platform)} · ${esc(last.queue)}</button>` : '<a href="#ladder">Recompute in Ladder</a>'}` +
+      '<button class="btn small" type="button" data-act="reextract">Re-extract facts</button><button class="btn small" type="button" data-act="ddragon">Sync Data Dragon</button><button class="btn small" type="button" data-act="names">Fill player names</button>';
+  }
+  function renderBackups() {
+    const b = A.backups;
+    if (!b) return;
+    const lvl = backupLevel(b);
+    const last = b.lastRun;
+    const lastText = !last ? 'No maintenance run since this process started.'
+      : last.error ? `Last maintenance ${relTime(last.at)} failed: ${last.error}`
+        : `Last maintenance ${relTime(last.at)}, took ${dur(last.ms)}: ${last.report.backup ? 'backup written' : last.report.backupSkipped ? `backup skipped (${last.report.backupSkipped})` : last.report.backupFailed ? `backup failed (${last.report.backupFailed})` : "today's backup already there"}; ${fmt(last.report.jobsDeleted)} done jobs and ${fmt(last.report.historyDeleted)} history points trimmed, ${fmt(last.report.cacheSwept)} cache rows swept.`;
+    const box = document.createElement('div');
+    box.innerHTML = `<p class="note-line" data-level="${lvl.level}">${icon(lvl.level)}<span>${esc(lvl.text)}${lvl.level === 'warning' && b.keep ? ': a night was missed' : ''} · keeping ${fmt(b.keep)} · ${fmtBytes(b.diskFreeBytes)} free beside them</span></p><p class="muted">${esc(lastText)}</p>`;
+    box.append(table({
+      columns: [{ key: 'name', label: 'File', format: (v) => `<code>${esc(v)}</code>` }, { key: 'bytes', label: 'Size', num: true, format: (v) => fmtBytes(v) }, { key: 'modifiedAt', label: 'Written', format: (v) => esc(relTime(v)) }],
+      rows: b.files ?? [], empty: b.keep ? 'No backup on this disk yet.' : 'BACKUP_KEEP=0: no backups are kept on this disk.',
     }));
-    $('analyticsTop').textContent = a.topChampions?.length ? `Most played, newest patch: ${a.topChampions.map((c) => `${c.championName ?? c.championId} ${fmt(c.games)}g ${Math.round(c.winRate * 100)}%`).join(' · ')}` : '';
+    $('arBackups').replaceChildren(box);
+  }
+  function renderTimelines() {
+    const t = A.timelines;
+    if (!t) return;
+    const tot = t.totals ?? {};
+    $('arTlMeta').textContent = t.configuredPatches ? `newest ${fmt(t.configuredPatches)} patch(es)` : 'off (TIMELINE_BACKFILL_PATCHES=0)';
+    $('arTimelines').innerHTML = `${meter('with a timeline', tot.withTimeline ?? 0, Math.max(1, (tot.matches ?? 0) - (tot.notFound ?? 0)), 'ranked matches with a timeline')}` +
+      `<p class="muted">${fmt(tot.matches)} ranked matches · ${fmt(tot.left)} left · ${fmt(tot.notFound)} Riot does not have</p>` +
+      ((t.regions ?? []).length ? `<ul class="groups">${t.regions.map((r) => `<li><span>${esc(r.region)}</span><span>${fmt(r.left)} left</span><span class="muted">${esc(r.patch ?? '')}</span></li>`).join('')}</ul>` : '');
+  }
+  async function runMaintenance() {
+    if (!(await confirmAction('Run maintenance now? It backs up only if today’s backup is missing, then trims old jobs and history, sweeps the cache and checkpoints the WAL.', { title: 'Run maintenance', confirm: 'Run now' }))) return;
+    try {
+      const r = await api('/v1/admin/maintenance/run', { method: 'POST' });
+      toast(r.status === 'already-queued' ? 'Maintenance is already queued.' : 'Maintenance queued.');
+    } catch (e) {
+      toast(e.message, 'critical');
+    }
+  }
+  async function archiveAction(e) {
+    const b = e.target.closest('button[data-act]');
+    if (!b) return;
+    const act = {
+      recompute: ['Recompute analytics', `Recompute analytics for ${b.dataset.platform} · ${b.dataset.queue}?`, '/v1/admin/analytics/recompute', { platform: b.dataset.platform, queue: b.dataset.queue }, () => 'Recompute queued.'],
+      reextract: ['Re-extract facts', 'Re-derive match facts from the archive for every match an older version read? It runs in batches at maintenance priority.', '/v1/admin/analytics/reextract', undefined, (r) => `Re-extract queued: ${fmt(r.stale)} matches to read.`],
+      ddragon: ['Sync Data Dragon', 'Queue a Data Dragon sync? It joins the hourly one if that is queued.', '/v1/admin/ddragon/sync', {}, () => 'Data Dragon sync queued.'],
+      names: ['Fill player names', 'Fill missing player Riot IDs from their archived matches? No Riot call is made.', '/v1/admin/players/names/backfill', undefined, (r) => `Names backfill queued: ${fmt(r.unnamed)} players without a name.`],
+    }[b.dataset.act];
+    if (!act || !(await confirmAction(act[1], { title: act[0], confirm: act[0] }))) return;
+    try {
+      toast(act[4](await api(act[2], { method: 'POST', body: act[3] })));
+    } catch (err) {
+      toast(err.message, 'critical');
+    }
   }
 
   // ── health strip and the rail's foot ─────────────────────────────────

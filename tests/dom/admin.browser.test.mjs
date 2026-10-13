@@ -54,12 +54,12 @@ for (const [device, width] of [['desktop', 1280], ['tablet', 820], ['phone', 390
         // Each view: nothing sideways, nothing wider than its box (tables scroll inside .scroll).
         const fits = () => page.evaluate(() => {
           const out = { page: [document.documentElement.scrollWidth, innerWidth], overflow: [] };
-          for (const el of document.querySelectorAll('.strip, .tile, .tile .value, .rail-foot, main, .chart, .chart figcaption, .xaxis, .panel, .filters, .meter, .scope header, .form-row, .worker, ul.groups li, ol.timeline li, .crawl, .stages, .totals, .legs')) {
+          for (const el of document.querySelectorAll('.strip, .tile, .tile .value, .rail-foot, main, .chart, .chart figcaption, .xaxis, .panel, .filters, .meter, .scope header, .form-row, .worker, ul.groups li, ol.timeline li, .crawl, .stages, .totals, .legs, .stack, .legend, .note-line')) {
             if (el.scrollWidth > el.clientWidth + 1) out.overflow.push(`${el.id || el.className || el.tagName}: ${el.scrollWidth} > ${el.clientWidth}`);
           }
           return out;
         });
-        const ready = { overview: '#chArchive .plotwrap', traffic: '#trRecent tbody tr', limiter: '.scope[data-scope="oc1"] .meter', cache: '#chCacheHit .plotwrap', jobs: '#jNext ul.groups li', 'jobs/01K00000000000000000000RUN': '#jtTimeline li', ladder: '[data-activity="01K0000000000000000000RUN1"] .stages', 'ladder/01K0000000000000000000DON1': '#ladderHistory [data-activity="01K0000000000000000000DON1"] .stages' };
+        const ready = { overview: '#chArchive .plotwrap', traffic: '#trRecent tbody tr', limiter: '.scope[data-scope="oc1"] .meter', cache: '#chCacheHit .plotwrap', jobs: '#jNext ul.groups li', 'jobs/01K00000000000000000000RUN': '#jtTimeline li', ladder: '[data-activity="01K0000000000000000000RUN1"] .stages', 'ladder/01K0000000000000000000DON1': '#ladderHistory [data-activity="01K0000000000000000000DON1"] .stages', archive: '#arTimelines .meter' };
         for (const view of Object.keys(ready)) {
           await page.evaluate((v) => { location.hash = v; }, view);
           await page.waitForSelector(ready[view]);

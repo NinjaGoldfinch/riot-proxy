@@ -377,6 +377,17 @@ The v1 page's Ladder tab (ADR-087, ADR-091), moved into layout A.
 - **Start a crawl** from `/ladder/options` (platforms, queues, tiers and this deployment's defaults; the form is open only while nothing runs, until the operator folds it). **Analytics recompute** in its own fold, with the last runs' steps, rows and games from the snapshot and the newest patch's most played champions. Start, Cancel and Recompute each ask first.
 - **Refresh:** every 5 s while open and visible: running crawls' activity, the crawl list every 30 s, and at once on a `crawl.phase` or `ladder.crawl.completed` frame (ADR-058). The rail's Ladder badge counts running crawls.
 
+## Archive & Storage (ADM-13)
+
+- **Tiles:** archived matches and timelines, stored bytes against raw (the zstd ratio), players, the database file (free pages, WAL) and disk free, from `/v1/admin/stats` and the snapshot's `disk`.
+- **The data disk** as one stacked bar, split into live pages, free pages, WAL, other files and free space, each named with its size in a legend and in the bar's `aria-label`. At 85 % used a warning line, at 95 % a critical one, each with an icon and words; the health strip says the same.
+- **Backups** from `/v1/admin/backups`: the files with size and age, a newest backup older than 36 h flagged ("a night was missed"), `BACKUP_KEEP=0` said in words, the last maintenance run (written, skipped or failed backup; what was trimmed), and *Run maintenance now* (confirm, then `POST /v1/admin/maintenance/run`).
+- **Timeline backfill** from `/v1/admin/timelines/backfill`: a meter of ranked matches with a timeline, what is left and what Riot does not have, and what is left per region.
+- **Analytics:** the last runs and the newest patch's most played champions (shared with the Ladder tab), with Recompute (the newest run's ladder), Re-extract facts, Sync Data Dragon and Fill player names, each after a confirm, each reported in a toast.
+- **Refresh:** on entry and every 60 s while open and visible (the bytes are sampled every minute anyway); the disk follows the snapshot.
+
+Status icons outside the health strip (tile labels, note lines) now carry their level's colour too: the rule matches any element with `data-level` whose direct child is the icon.
+
 The rail lists only the tabs that exist; each later task adds its own. Until ADM-12 there is no Ladder tab: `/dev/jobs`, `/v1/admin/ladder/*` and the firehose cover it.
 
 ## Chart rules
@@ -395,7 +406,7 @@ Each tab's task fills its row and adds a section below.
 | `#cache` | Cache: L1/L2, ratios, probe, purge | snapshot, history, `/debug/cache`, `/cache/purge` | ADM-10 | built |
 | `#jobs`, `#jobs/<id>` | Jobs (folds in `/dev/jobs`) | snapshot, `/jobs/*` | ADM-11 | built |
 | `#ladder`, `#ladder/<id>` | Ladder | snapshot, `/ladder/*`, `crawl.phase` frames | ADM-12 | built |
-| `#archive` | Archive & Storage: counts, disk, backups, actions | `/stats`, `/backups` | ADM-13 | planned |
+| `#archive` | Archive & Storage: counts, disk, backups, actions | snapshot, `/stats`, `/backups`, `/timelines/backfill` | ADM-13 | built |
 | `#consumers` | Consumers & Players | `/consumers`, `/tracked-players`, snapshot quotas | ADM-14 | planned |
 | `#events` | Events: firehose ring | `firehose` topic | ADM-15 | planned |
 | `#about` | About: build, flags, redacted config | `/info`, `/readyz` | ADM-15 | planned |

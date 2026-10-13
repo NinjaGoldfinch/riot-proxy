@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs';
 const html = readFileSync(new URL('../src/ui/admin.html', import.meta.url), 'utf8');
 const block = html.match(/\/\/ -{10} pure helpers[^\n]*\n([\s\S]*?)\/\/ -{10} end pure helpers/);
 assert.ok(block, 'the pure helpers block is marked in admin.html');
-const h = new Function(`${block[1]}; return { APEX_LIST_CAP, fmt, compact, fmtBytes, fmtDuration, pct, esc, relTime, sumValues, hitRatio, rate, jobTotals, diskLevel, backupLevel, limiterLevel, route, joinUrl, wsUrl, maskKey, contrast, sortRows, capRows, percentile, downsample, historyPointOf, seriesOf, statusClass, routeRows, upstreamRows, windowLabel, fullness, meterLevel, scopeOrder, msOf, dur, when, jobLabel, groupJobs, groupLabel, jobWhen, groupWhen, stageText, stagePct, legName, tierName };`)();
+const h = new Function(`${block[1]}; return { APEX_LIST_CAP, fmt, compact, fmtBytes, fmtDuration, pct, esc, relTime, sumValues, hitRatio, rate, jobTotals, diskLevel, backupLevel, limiterLevel, route, joinUrl, wsUrl, maskKey, contrast, sortRows, capRows, percentile, downsample, historyPointOf, seriesOf, statusClass, routeRows, upstreamRows, windowLabel, fullness, meterLevel, scopeOrder, msOf, dur, when, jobLabel, groupJobs, groupLabel, jobWhen, groupWhen, stageText, stagePct, legName, tierName, storageParts };`)();
 
 const tokens = (name) => {
   const m = html.match(new RegExp(`/\\* tokens:${name}[^*]*\\*/\\s*[^{]+\\{([^}]*)\\}`));
@@ -254,4 +254,11 @@ test("a crawl's stages read with their units and pace; legs and tiers by name (A
     ['GOLD II · page 3', 'MASTER', 'players 1250+', 'archive hand-off'],
   );
   assert.equal(h.tierName('GRANDMASTER'), 'Grandmaster');
+});
+
+test('the data disk splits into live pages, free pages, WAL, other files and free space', () => {
+  const parts = h.storageParts({ dbFileBytes: 100, dbFreelistPages: 5, dbPageSize: 4, walBytes: 10, diskTotalBytes: 500, diskFreeBytes: 300 });
+  assert.deepEqual(parts, [['live pages', 80], ['free pages', 20], ['WAL', 10], ['other files', 90], ['free', 300]]);
+  assert.equal(parts.reduce((n, [, b]) => n + b, 0), 500, 'the parts add up to the disk');
+  assert.deepEqual(h.storageParts({ dbBytes: 10, freelistBytes: 2, walBytes: 0, totalBytes: 12, freeBytes: 5 }).map(([, b]) => b), [8, 2, 0, 0, 5], 'other files never go below zero');
 });
