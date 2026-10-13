@@ -329,7 +329,7 @@ Before (OVH VPS, 2026-10-13 01:00 UTC): 38 GB disk at 77 %, `riot-proxy.db` 20 G
 - [x] ADM-00 series spec, design/13 (Proposed), the ADM-01 runbook in design/12 (#177, ADR-144)
 - [ ] ADM-01 owner runbook: `admin.ninjagoldfinch.lol` behind Access (One-time PIN); WAF rule blocking `/metrics`, `/dashboard*`, `/dev*`, `/v1/admin*` on `api.` (design/12 §Admin hostname behind Access)
 - [ ] ADM-02 sampled aggregates behind the snapshot (`StatsCache`), `jobs(state, kind, run_after, finished_at)` index
-- [ ] ADM-03 `GET /v1/admin/info` and build identity (`build.rs`, `GIT_SHA`)
+- [x] ADM-03 `GET /v1/admin/info` (build, uptime, features, redacted config) and build identity (`build.rs`, `GIT_SHA` in every workflow) (#180, ADR-147)
 - [ ] ADM-04 runtime gauges in the snapshot and history (cache store, gates, quotas, SQLite readers, disk)
 - [ ] ADM-05 recent requests and errors rings, `GET /v1/admin/recent`
 - [ ] ADM-06 backups and maintenance status, `GET /v1/admin/backups`, `POST /v1/admin/maintenance/run`
