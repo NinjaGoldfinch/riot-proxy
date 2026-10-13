@@ -62,6 +62,7 @@ pub fn app_with(env: &[(&str, &str)], upstream: &str) -> (tempfile::TempDir, App
         metrics: telemetry::metrics_handle().expect("metrics"),
         mirror: std::sync::Arc::clone(&mirror),
         started: std::time::Instant::now(),
+        samples: riot_proxy::stats::Samples::default(),
     });
     let state = AppState {
         config: config.into(),
