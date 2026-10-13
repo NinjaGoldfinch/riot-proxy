@@ -111,6 +111,39 @@ expression: doc
             "format": "int64",
             "type": "integer"
           },
+          "dbFileBytes": {
+            "description": "The SQLite file on disk (DSK-01).",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "dbFreelistPages": {
+            "description": "Pages freed by deletes and not yet reused; they leave the file only with a `VACUUM`.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "dbPageCount": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "dbPageSize": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "diskFreeBytes": {
+            "description": "Free space on the data directory's file system, as the service sees it.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "diskTotalBytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "keyScope": {
             "type": "string"
           },
@@ -123,6 +156,12 @@ expression: doc
             "description": "Scoped to the current key: zero right after a rotation.",
             "format": "int64",
             "type": "integer"
+          },
+          "walBytes": {
+            "description": "Its write-ahead log; 0 right after a truncating checkpoint.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
@@ -132,7 +171,14 @@ expression: doc
           "knownPlayers",
           "archivedTimelines",
           "archiveStoredBytes",
-          "archiveRawBytes"
+          "archiveRawBytes",
+          "dbFileBytes",
+          "walBytes",
+          "dbPageSize",
+          "dbPageCount",
+          "dbFreelistPages",
+          "diskFreeBytes",
+          "diskTotalBytes"
         ],
         "type": "object"
       },
@@ -9486,7 +9532,7 @@ expression: doc
     },
     "/v1/admin/stats": {
       "get": {
-        "description": "`archivedMatches` counts the whole archive, which is not key-scoped: match ids are not encrypted, so it survives a key rotation. `trackedPlayers` is scoped to the current key and reads zero right after one.",
+        "description": "`archivedMatches` counts the whole archive, which is not key-scoped: match ids are not encrypted, so it survives a key rotation. `trackedPlayers` is scoped to the current key and reads zero right after one. The `db*`, `wal*` and `disk*` fields are the SQLite file, its write-ahead log and free list, and the data directory's file system (DSK-01).",
         "operationId": "stats",
         "responses": {
           "200": {
@@ -9619,7 +9665,7 @@ expression: doc
             }
           }
         },
-        "summary": "Archive and tracking counts",
+        "summary": "Archive and tracking counts, and what the database takes on disk",
         "tags": [
           "admin"
         ]

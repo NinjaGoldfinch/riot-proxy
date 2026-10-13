@@ -167,9 +167,33 @@ The binary's own RSS is dominated by the SQLite page cache (`cache_size`, 64 MB 
 - **Restore:** stop the service, replace the file, start. There is nothing else to restore; the L1 cache and job heap rebuild themselves and the limiter defaults to conservative on a stale checkpoint.
 - **Off-box:** `rclone`/`restic` the `backups/` directory; it is plain files.
 
+## Reclaiming space
+
+SQLite never gives pages back to the operating system on its own: a delete puts them on the free list (`sqlite_freelist_bytes`, `dbFreelistPages`), where later writes reuse them. So a purge or a dropped table stops the file growing but does not shrink it. `auto_vacuum` is off and stays off: turning it on needs a full `VACUUM` first and makes every later delete do more I/O.
+
+To shrink the file, copy it. `riot-proxy backup <out>` is `VACUUM INTO`, which writes a compact copy while the service runs; it needs free space of about the live data's size (the file minus its free list). Then swap the copy in:
+
+```bash
+riot-proxy backup /var/lib/riot-proxy/data/riot-proxy.compact.db   # while serving
+systemctl stop riot-proxy
+cd /var/lib/riot-proxy/data
+mv riot-proxy.db riot-proxy.old.db && rm -f riot-proxy.db-wal riot-proxy.db-shm
+mv riot-proxy.compact.db riot-proxy.db
+systemctl start riot-proxy                                          # check /readyz and /v1/admin/stats
+rm riot-proxy.old.db
+```
+
+Writes between the copy and the stop are lost, so do it in a quiet moment (crawls off). Prefer this over a plain `VACUUM`, which needs a temporary copy *and* a rollback journal, about twice the live data, and holds the writer for the whole copy.
+
+Where the bytes are, per table and index, is one query on the box (the `sqlite3` CLI has `dbstat`; the binary's SQLite does not):
+
+```bash
+sqlite3 -readonly riot-proxy.db "SELECT name, SUM(pgsize)/1048576 AS mib FROM dbstat GROUP BY name ORDER BY mib DESC LIMIT 30;"
+```
+
 ## Observability
 
-- `/metrics` — Prometheus, **same metric names as v1** so `ops/grafana/riot-proxy-dashboard.json` and `ops/prometheus-alerts.yml` import unchanged. Add `jobs_pending{kind}`, `limiter_bulk_waiters`, `sqlite_wal_bytes`.
+- `/metrics` — Prometheus, **same metric names as v1** so `ops/grafana/riot-proxy-dashboard.json` and `ops/prometheus-alerts.yml` import unchanged. Add `jobs_pending{kind}`, `limiter_bulk_waiters`, `sqlite_wal_bytes`; and, for the disk, `sqlite_db_bytes`, `sqlite_freelist_bytes`, `data_dir_free_bytes` (DSK-01, ADR-135), sampled with the metrics history. `GET /v1/admin/stats` shows the same readings with the page geometry.
 - `/healthz` — process up. `/readyz` — SQLite writable and limiter restored; it also reports the SQLite readers, total and idle, without failing on 0 idle (ADR-113).
 - Logs — `tracing` JSON to stdout; every request carries `request_id`, `consumer`, `x_cache`, `upstream_ms`.
 - `/dashboard` — same page, same `metrics` + `firehose` topics.

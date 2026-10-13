@@ -860,14 +860,26 @@ pub struct AdminStats {
     archive_stored_bytes: i64,
     /// What they decompress to.
     archive_raw_bytes: i64,
+    /// The SQLite file on disk (DSK-01).
+    db_file_bytes: u64,
+    /// Its write-ahead log; 0 right after a truncating checkpoint.
+    wal_bytes: u64,
+    db_page_size: u64,
+    db_page_count: u64,
+    /// Pages freed by deletes and not yet reused; they leave the file only with a `VACUUM`.
+    db_freelist_pages: u64,
+    /// Free space on the data directory's file system, as the service sees it.
+    disk_free_bytes: u64,
+    disk_total_bytes: u64,
 }
 
 #[utoipa::path(
     get, path = "/v1/admin/stats", tag = "admin",
-    summary = "Archive and tracking counts",
+    summary = "Archive and tracking counts, and what the database takes on disk",
     description = "`archivedMatches` counts the whole archive, which is not key-scoped: match ids are not \
                    encrypted, so it survives a key rotation. `trackedPlayers` is scoped to the current key and \
-                   reads zero right after one.",
+                   reads zero right after one. The `db*`, `wal*` and `disk*` fields are the SQLite file, its \
+                   write-ahead log and free list, and the data directory's file system (DSK-01).",
     responses((status = 200, description = "The counts", body = AdminStats), LocalErrors),
 )]
 async fn stats(State(state): State<AppState>, Extension(_c): Who) -> Response {
@@ -880,6 +892,10 @@ async fn stats(State(state): State<AppState>, Extension(_c): Who) -> Response {
         Ok(c) => c,
         Err(e) => return internal(&e, "could not count players"),
     };
+    let disk = match crate::db::disk::usage(&state.db).await {
+        Ok(u) => u,
+        Err(e) => return internal(&e, "could not read disk usage"),
+    };
     ok(&AdminStats {
         key_scope: scope,
         archived_matches: archive.matches,
@@ -888,6 +904,13 @@ async fn stats(State(state): State<AppState>, Extension(_c): Who) -> Response {
         archived_timelines: archive.timelines,
         archive_stored_bytes: archive.stored_bytes,
         archive_raw_bytes: archive.raw_bytes,
+        db_file_bytes: disk.db_bytes,
+        wal_bytes: disk.wal_bytes,
+        db_page_size: disk.page_size,
+        db_page_count: disk.page_count,
+        db_freelist_pages: disk.freelist_pages,
+        disk_free_bytes: disk.disk_free_bytes,
+        disk_total_bytes: disk.disk_total_bytes,
     })
 }
 
