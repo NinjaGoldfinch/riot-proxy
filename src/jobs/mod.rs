@@ -9,6 +9,7 @@ pub mod ladder;
 pub mod lanes;
 pub mod maintenance;
 pub mod names;
+pub mod offload;
 pub mod poll;
 pub mod scheduler;
 pub mod ticks;
@@ -35,6 +36,8 @@ pub mod kinds {
     pub const TIERS_BACKFILL: &str = "tiers:backfill";
     pub const MAINTENANCE: &str = "maintenance";
     pub const TIMELINES_BACKFILL: &str = "timelines:backfill";
+    /// Registered only with `ARCHIVE_OBJECT_URL` (OBJ-03).
+    pub const ARCHIVE_OFFLOAD: &str = "archive:offload";
 
     /// Every kind above.
     pub const ALL: &[&str] = &[
@@ -57,6 +60,7 @@ pub mod kinds {
         TIERS_BACKFILL,
         MAINTENANCE,
         TIMELINES_BACKFILL,
+        ARCHIVE_OFFLOAD,
     ];
 }
 
@@ -70,7 +74,7 @@ pub mod priority {
     /// `backfill:player`, `ladder:*`.
     pub const BACKFILL: i64 = 20_000;
     /// `aggregate:analytics`, `facts:reextract`, `builds:extract`, `tiers:backfill`, `maintenance`,
-    /// `ddragon:sync`.
+    /// `ddragon:sync`, `archive:offload`.
     pub const MAINTENANCE: i64 = 30_000;
     /// `timelines:backfill` (TL-02): below everything, so it only gets a
     /// worker nothing else wants.

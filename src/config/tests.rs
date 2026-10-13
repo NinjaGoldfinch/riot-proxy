@@ -44,7 +44,10 @@ fn defaults_match_v1_and_design_07() {
     assert_eq!(c.job_concurrency, 8);
     assert_eq!(
         c.job_kind_limits,
-        BTreeMap::from([("aggregate:analytics".to_string(), 1)])
+        BTreeMap::from([
+            ("aggregate:analytics".to_string(), 1),
+            ("archive:offload".to_string(), 1)
+        ])
     );
     assert_eq!(c.job_yield_budget_ms, 1000);
     assert_eq!(c.riot_user_agent, DEFAULT_USER_AGENT);

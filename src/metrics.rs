@@ -57,6 +57,9 @@ pub const SQLITE_WAL_BYTES: &str = "sqlite_wal_bytes";
 pub const SQLITE_FREELIST_BYTES: &str = "sqlite_freelist_bytes";
 pub const DATA_DIR_FREE_BYTES: &str = "data_dir_free_bytes";
 pub const CACHE_L2_DROPPED_TOTAL: &str = "cache_l2_dropped_total";
+pub const ARCHIVE_OFFLOAD_PENDING: &str = "archive_offload_pending";
+pub const ARCHIVE_OFFLOAD_BYTES_TOTAL: &str = "archive_offload_bytes_total";
+pub const ARCHIVE_PACKS: &str = "archive_packs";
 
 const UPSTREAM_LATENCY_BUCKETS: &[f64] = &[0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0];
 const RL_WAIT_BUCKETS: &[f64] = &[0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0];
@@ -316,6 +319,28 @@ pub const CATALOGUE: &[MetricDef] = &[
         Kind::Counter,
         &[],
         "L2 cache writes dropped because the write-behind queue was full",
+        &[],
+    ),
+    // Object storage (OBJ-03, design/12): set at the end of each archive:offload run.
+    def(
+        ARCHIVE_OFFLOAD_PENDING,
+        Kind::Gauge,
+        &["kind", "step"],
+        "Bodies left to pack (step=pack) and packed bodies past the local window still held (step=free)",
+        &[],
+    ),
+    def(
+        ARCHIVE_OFFLOAD_BYTES_TOTAL,
+        Kind::Counter,
+        &["kind"],
+        "Bytes of packs uploaded to the bucket",
+        &[],
+    ),
+    def(
+        ARCHIVE_PACKS,
+        Kind::Gauge,
+        &[],
+        "Pack objects recorded in body_packs",
         &[],
     ),
 ];

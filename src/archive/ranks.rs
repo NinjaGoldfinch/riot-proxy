@@ -387,7 +387,7 @@ mod tests {
         assert_eq!(take(&db, &solo()).await.unwrap(), Some(("A".into(), 3)));
     }
 
-    /// The plan reads the platform's id range on the primary key and each
+    /// The plan reads the platform's id range by match id and each
     /// fact by its key, so another platform's archive costs it nothing.
     #[tokio::test]
     async fn the_plan_reads_only_the_platforms_matches() {
@@ -406,8 +406,11 @@ mod tests {
             .await
             .unwrap();
         let text = plan.join("\n");
+        // Either index that starts with `match_id` serves the range: the key's
+        // own, or `matches_archived` (V0024), which SQLite prefers as smaller.
         assert!(
-            text.contains("SEARCH m USING INDEX sqlite_autoindex_matches_1 (match_id>? AND match_id<?)"),
+            text.contains("SEARCH m USING INDEX sqlite_autoindex_matches_1 (match_id>? AND match_id<?)")
+                || text.contains("SEARCH m USING INDEX matches_archived (match_id>? AND match_id<?)"),
             "{text}"
         );
         assert!(text.contains("SEARCH f USING PRIMARY KEY (match_id=?)"), "{text}");

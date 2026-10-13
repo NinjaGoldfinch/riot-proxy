@@ -58,6 +58,9 @@ pub const VARS: &[&str] = &[
     "ARCHIVE_OBJECT_ACCESS_KEY",
     "ARCHIVE_OBJECT_SECRET_KEY",
     "ARCHIVE_OBJECT_CONCURRENCY",
+    "ARCHIVE_BODY_LOCAL_DAYS",
+    "ARCHIVE_PACK_TARGET_BYTES",
+    "ARCHIVE_OFFLOAD_PACE_MS",
     "LOOKUP_BACKFILL_LIMIT",
     "TRACK_CATCHUP_LIMIT",
     "LADDER_CRAWL_S",
@@ -102,7 +105,9 @@ pub const DEFAULT_BULK_IDLE_CEILING: f64 = 0.95;
 /// One analytics rebuild at a time (OPS-06): rebuilds for several ladders
 /// started together run one after another instead of sharing the CPU and
 /// SQLite's write lock.
-pub const DEFAULT_JOB_KIND_LIMITS: &str = "aggregate:analytics=1";
+/// `archive:offload` packs one kind at a time and must never race itself
+/// (OBJ-03).
+pub const DEFAULT_JOB_KIND_LIMITS: &str = "aggregate:analytics=1,archive:offload=1";
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
@@ -317,6 +322,13 @@ pub struct Config {
     pub archive_object_secret_key: Option<Secret>,
     /// Ranged GETs `get_many` runs at once against the bucket.
     pub archive_object_concurrency: u32,
+    /// How long SQLite keeps its own copy of a body already in the bucket,
+    /// counted from when its match was archived; 0 frees every packed body.
+    pub archive_body_local_days: u32,
+    /// A pack closes at this many bytes of bodies.
+    pub archive_pack_target_bytes: u64,
+    /// Pause between offload turns.
+    pub archive_offload_pace_ms: u64,
     pub lookup_backfill_limit: u32,
     pub track_catchup_limit: u32,
     pub ladder_crawl_s: u32,
@@ -438,6 +450,9 @@ impl Config {
                     .map(|_| REDACTED.to_string()),
             ),
             ("ARCHIVE_OBJECT_CONCURRENCY", s(self.archive_object_concurrency)),
+            ("ARCHIVE_BODY_LOCAL_DAYS", s(self.archive_body_local_days)),
+            ("ARCHIVE_PACK_TARGET_BYTES", s(self.archive_pack_target_bytes)),
+            ("ARCHIVE_OFFLOAD_PACE_MS", s(self.archive_offload_pace_ms)),
             ("LOOKUP_BACKFILL_LIMIT", s(self.lookup_backfill_limit)),
             ("TRACK_CATCHUP_LIMIT", s(self.track_catchup_limit)),
             ("LADDER_CRAWL_S", s(self.ladder_crawl_s)),
@@ -706,6 +721,9 @@ impl Config {
             archive_object_access_key: objects.access_key,
             archive_object_secret_key: objects.secret_key,
             archive_object_concurrency: v.int("ARCHIVE_OBJECT_CONCURRENCY", 16, 1, 256),
+            archive_body_local_days: v.int("ARCHIVE_BODY_LOCAL_DAYS", 14, 0, 365),
+            archive_pack_target_bytes: v.int("ARCHIVE_PACK_TARGET_BYTES", 64 << 20, 1 << 20, 1 << 30),
+            archive_offload_pace_ms: v.int("ARCHIVE_OFFLOAD_PACE_MS", 50, 0, 60_000),
             lookup_backfill_limit: v.int("LOOKUP_BACKFILL_LIMIT", u32::MAX, 0, u32::MAX),
             track_catchup_limit: v.int("TRACK_CATCHUP_LIMIT", 500, 0, 10_000),
             ladder_crawl_s: v.int("LADDER_CRAWL_S", 0, 0, 604_800),
