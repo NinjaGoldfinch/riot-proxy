@@ -305,12 +305,12 @@ Order: THR-02 → FLT-01 → FLT-02 → FLT-03 → FLT-04, then PAIR.
 ## DSK — less disk for the derived data (owner alert 2026-10-13)
 The VPS (38 GB) hit 97 %: `riot-proxy.db` 20.26 GB (timelines 12.7 GiB, matches 2.6 GiB, derived tables and their indexes ≈ 3.5 GiB, 1.13 M stale pending `archive:match` rows ≈ 0.4 GiB) plus a 9.9 GiB daily backup. Freed pages stay in the file (no `auto_vacuum`, no room for a `VACUUM`), so each task below defers growth until the raw bodies move off the box and the file is copied compact (design/07 §Reclaiming space). Specs in IMPLEMENTATION.md §Post-release — DSK.
 - [x] DSK-01 disk gauges `sqlite_db_bytes`, `sqlite_wal_bytes`, `sqlite_freelist_bytes`, `data_dir_free_bytes`, sampled with the metrics history; `GET /v1/admin/stats` reports the file, WAL, page geometry, free list and free disk; design/07 §Reclaiming space (#164, ADR-135)
-- [ ] DSK-02 `BACKUP_KEEP` (0 = no on-box backup); the backup step skips itself when free disk is under 1.2 × the file and never fails the rest of `maintenance` (branch `feat/DSK-02-backup-keep`, after DSK-01; ADR-136)
-- [ ] DSK-03 `DELETE /v1/admin/jobs?kind&state&minPriority&dryRun`: pending or failed jobs purged in chunks; used to drop the stale crawl backlog (#165, ADR-137)
-- [ ] DSK-04 `match_facts.tier` replaces `match_tiers` (V0019); `facts:reextract` leaves the tier alone (#166, ADR-138)
-- [ ] DSK-05 rune pages stored as a positional array, `FACTS_VERSION` 4; the boot catch-up rewrites old rows (branch `feat/DSK-05-runes-array`, after DSK-04; ADR-139)
-- [ ] DSK-06 `WITHOUT ROWID` for `match_builds`, `match_bans` and every analytics table (V0020; after DSK-04) (#167, ADR-140)
-- [ ] DSK-07 `match_facts` `WITHOUT ROWID` without `facts_champ` (V0021); after DSK-06, deployed once DSK-05's rewrite has finished (branch `feat/DSK-07-facts-without-rowid`; ADR-141)
+- [x] DSK-02 `BACKUP_KEEP` (0 = no on-box backup); the backup step skips itself when free disk is under 1.2 × the file and never fails the rest of `maintenance` (#168, ADR-136)
+- [x] DSK-03 `DELETE /v1/admin/jobs?kind&state&minPriority&dryRun`: pending or failed jobs purged in chunks; used to drop the stale crawl backlog (#165, ADR-137)
+- [x] DSK-04 `match_facts.tier` replaces `match_tiers` (V0019); `facts:reextract` leaves the tier alone (#166, ADR-138)
+- [x] DSK-05 rune pages stored as a positional array, `FACTS_VERSION` 4; the boot catch-up rewrites old rows (#169, ADR-139)
+- [x] DSK-06 `WITHOUT ROWID` for `match_builds`, `match_bans` and every analytics table (V0020; after DSK-04) (#167, ADR-140)
+- [x] DSK-07 `match_facts` `WITHOUT ROWID` without `facts_champ` (V0021); after DSK-06, deployed once DSK-05's rewrite has finished (#170, ADR-141)
 - Deferred: puuid → integer player id (the next lever, every table and query); timeline sampling and the zstd dictionary belong to the raw-data work (THR-06b/d).
 
 ## PAIR — team pairings (owner request 2026-10-10, outline)
