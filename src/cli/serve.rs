@@ -8,6 +8,7 @@ use anyhow::Context;
 
 use crate::app::{self, AppState};
 use crate::archive::SqliteArchive;
+use crate::archive::objects::Objects;
 use crate::cache::ResponseCache;
 use crate::cache::keys::KeyScope;
 use crate::cache::l1::L1;
@@ -93,6 +94,12 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
     let policy = TtlPolicy::from_config(&config);
     if config.dev_ui_ignored {
         tracing::warn!("DEV_UI=true ignored: /dev is never served when ENV=production");
+    }
+    // OBJ-01: the bucket packed bodies go to. Building the client makes no
+    // request; a bad endpoint stops the boot here rather than at the first pack.
+    if config.archive_object_url.is_some() {
+        let objects = Objects::from_config(&config).context("ARCHIVE_OBJECT_URL")?;
+        tracing::info!(store = objects.describe(), "object store configured");
     }
     for key in policy.ineffective_overrides() {
         tracing::warn!(key = %key, "CACHE_TTL_OVERRIDES key matches no cacheable endpoint; ignored");
