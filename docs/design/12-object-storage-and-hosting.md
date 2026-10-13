@@ -253,7 +253,16 @@ musl build: it uses `reqwest` with rustls, same as the proxy.
 ## Offload job
 
 `archive:offload`, one job kind, bulk lane, priority 30 000 (beside
-`facts:reextract`), queued hourly by the tick and once at boot. **Uploading
+`facts:reextract`). It is queued **when a pack is full**, not on a timer
+(owner, 2026-10-13): the archive keeps a running total of unpacked bytes per
+kind (an in-memory counter, seeded at boot from the `*_to_pack` indexes and
+raised by every `put`), and when a kind's total reaches
+`ARCHIVE_PACK_TARGET_BYTES` it queues the job (deduplicated, so at most one is
+pending). That is a few times a day at the crawl's pace and costs one
+addition per archived body. The job is also queued once at boot and once a
+day after `maintenance`: the boot run catches a counter lost to a restart,
+and the daily run frees bodies that left the window and packs a partial pack
+whose bodies are already past it. **Uploading
 and freeing are separate steps** (owner, 2026-10-13): a body goes to the
 bucket as soon as a full pack of its kind is ready, and its local copy is
 freed only when it leaves the 14-day window. A run does both:
@@ -265,8 +274,8 @@ freed only when it leaves the 14-day window. A run does both:
    If they don't reach it, write a pack only when some of them are already
    older than the window (so freeing them isn't held up); otherwise stop and
    wait for the next run. Matches fill a pack in under a day and timelines in
-   a few hours at the crawl's pace, so packs are full-sized and new bodies
-   are in the bucket within hours, and in R2 within the hour after that.
+   a few hours at the crawl's pace, so packs are full-sized and a body is in
+   the bucket as soon as its pack fills, and in R2 within the hour after.
 2. Sort them by match id and build the pack in memory (64 MiB is nothing on
    a 12 GB host): bodies, index, trailer; sha256 of each body and of the
    whole object.
@@ -276,7 +285,7 @@ freed only when it leaves the 14-day window. A run does both:
    `body_locations` row, and set `packed_at` on each body. The local copies
    stay.
 5. Pause `ARCHIVE_OFFLOAD_PACE_MS` (default 50) and take another turn while a
-   pack is due.
+   pack is due; the run ends when no kind has a full pack left.
 
 **Free.** Then, in batches of a few thousand rows per transaction:
 `UPDATE … SET body_zstd = X'', offloaded_at = ? WHERE packed_at IS NOT NULL
@@ -290,7 +299,9 @@ that is not packed. A crash between the PUT and the transaction leaves an
 **orphan pack**: an object no `body_packs` row names. It is harmless (the
 rows are still unpacked and the next turn packs them again into a new pack),
 and OBJ-06's sweep deletes orphans older than a day. The job is idempotent
-and resumable without a cursor, as `reextract` is.
+and resumable without a cursor, as `reextract` is. A queue that fires while
+a run is in progress is absorbed by the deduplication; the run itself loops
+until nothing is due.
 
 **Deleting bodies.** A deletion (a `dev reset`, a future retention rule)
 deletes the `body_locations` row and subtracts its `len` from the pack's
@@ -424,7 +435,7 @@ OBJ-03 land before the offload runs on the VPS; OBJ-04 to OBJ-06 follow it.
 |---|---|---|---|---|
 | OBJ-01 | **Object store client and config.** `archive::objects`: a thin wrapper over `object_store` with `put(key, bytes)` (multipart above 8 MiB), `head(key)`, `get_range(key, range)`, `get_ranges(key, ranges)`, `list(prefix)` and `delete(key)`. Config rows above; `Config` redacts the keys; production refuses a URL without credentials. `object_store` added to `Cargo.toml`. | `src/archive/objects.rs`, `src/config.rs`, `.env.example`, `Cargo.toml`, design/07 config table | unit over `InMemory`: put then ranged get round-trips; several ranges in one call; head gives size and metadata; config validation and redaction | `cargo test`; the musl build still links under the size cap |
 | OBJ-02 | **Pack format and reads.** `archive::pack`: a writer (bodies, index, trailer, digests) and a reader (trailer → index → bodies) independent of any store. Migration `V00NN` above. `matches::get`, `get_many`, `get_timeline` read an offloaded body by its location. The archive's `Stats` gains local vs offloaded counts, bytes and packs; `/v1/admin/stats` and the dashboard show them. | `src/archive/pack.rs`, `src/archive/matches.rs`, `src/archive/mod.rs`, `src/db/migrations/V00NN__body_packs.sql`, `src/stats.rs`, `src/routes/admin.rs`, `src/ui/dashboard.html`, design/04 | unit: a pack round-trips through writer and reader; a truncated or wrong-magic pack is refused; the index alone rebuilds every location; an offloaded row reads from its range; a missing location, a store error and a digest mismatch return `None` and warn; `get_many` mixes local and offloaded ids across packs; the migration on a seeded previous version. Integration: `/v1/match/{id}` on an offloaded match answers `X-Cache: ARCHIVE` with the same body and headers as before; a player page over offloaded matches is byte-identical; the OpenAPI snapshot | all existing archive, analytics and players tests pass unchanged |
-| OBJ-03 | **The offload job.** `archive:offload` as specified; gauges and counters; registered only with a URL; packs new bodies within hours and frees local copies past the window. Add it to design/06's job catalogue and OPS-06's kind caps (one at a time). | `src/jobs/offload.rs`, `src/jobs/{mod,scheduler,kinds}.rs`, `src/metrics.rs`, `src/cli/serve.rs`, `tests/offload.rs`, design/06, metrics.md | unit (paused time): new bodies are packed once a full pack is ready, without waiting for the window; less than a pack waits unless some of it has left the window; a pack holds one kind, its bodies in match-id order; a verified pack's rows are located and marked packed in one transaction and keep their local copy; bodies inside the window are never freed, packed bodies past it are, and unpacked bodies never are; a store that fails the PUT marks nothing and the job fails; a crash after the PUT leaves the rows unpacked and the next turn writes a new pack; a packed, unfreed body still reads locally; `X''` bodies are never returned as a body. Integration over `LocalFileSystem`: 500 seeded matches with timelines offload end to end into several packs and read back | on the dev VM, the archive offloads to a local-filesystem "bucket" and every match still reads |
+| OBJ-03 | **The offload job.** `archive:offload` as specified; gauges and counters; registered only with a URL; packs new bodies within hours and frees local copies past the window. Add it to design/06's job catalogue and OPS-06's kind caps (one at a time). | `src/jobs/offload.rs`, `src/jobs/{mod,scheduler,kinds}.rs`, `src/metrics.rs`, `src/cli/serve.rs`, `tests/offload.rs`, design/06, metrics.md | unit (paused time): archiving bodies past the target queues one offload job, below it none, and a second full pack while one is pending queues no duplicate; the counter is seeded from the database at boot; new bodies are packed once a full pack is ready, without waiting for the window; less than a pack waits unless some of it has left the window; a pack holds one kind, its bodies in match-id order; a verified pack's rows are located and marked packed in one transaction and keep their local copy; bodies inside the window are never freed, packed bodies past it are, and unpacked bodies never are; a store that fails the PUT marks nothing and the job fails; a crash after the PUT leaves the rows unpacked and the next turn writes a new pack; a packed, unfreed body still reads locally; `X''` bodies are never returned as a body. Integration over `LocalFileSystem`: 500 seeded matches with timelines offload end to end into several packs and read back | on the dev VM, the archive offloads to a local-filesystem "bucket" and every match still reads |
 | OBJ-04 | **Reclaim, replica and index recovery.** Document the `VACUUM INTO` + swap from DSK-01 for the one-off reclaim; the hourly R2 replica unit and timer under `deploy/`; `archive:index-snapshot` (daily, `index/` objects as in §Replica and backups); `riot-proxy packs reindex [--since <pack_id>]` and `packs restore-index`; the restore drill. | `deploy/riot-proxy-replica.{service,timer}`, `deploy/README.md`, `src/jobs/index_snapshot.rs`, `src/cli/packs.rs`, design/06, design/07 | the unit files parse (`systemd-analyze verify` in CI if available); a shell test runs the rclone command with `--dry-run` against two local directories; over `LocalFileSystem`: a snapshot round-trips both tables exactly; `reindex` rebuilds an emptied `body_locations` exactly; `restore-index` from a snapshot plus two newer packs rebuilds it exactly and reads only those two packs; a corrupt newest snapshot falls back to the one before | the VPS's `sqlite_db_bytes` is under 8 GB and `sqlite_freelist_bytes` near zero |
 | OBJ-05 | **Drop `body_zstd`.** When every row outside the window is offloaded and the owner decides the local copy is no longer wanted: migration rebuilds `matches` and `timelines` without `body_zstd`; `ARCHIVE_BODY_LOCAL_DAYS` becomes the size of a small local body cache instead. Decide then whether the window is still wanted. | `src/db/migrations/V00NN__drop_bodies.sql`, `src/archive/matches.rs`, design/04 | the migration refuses to run while any `offloaded_at IS NULL`; a seeded file rebuilds and reads | the VPS restarts on the new schema in under a minute |
 | OBJ-06 | **Deletes, compaction and orphans.** Deleting an offloaded body drops its location and lowers `live_bytes`; `archive:compact` (daily) rewrites packs under `ARCHIVE_COMPACT_BELOW` live, repoints locations in one transaction, then deletes the old object; it also deletes empty packs and orphan objects older than a day. | `src/jobs/compact.rs`, `src/archive/pack.rs`, `src/archive/matches.rs`, `tests/compact.rs`, design/06 | unit: a deletion lowers `live_bytes` only; a half-dead pack is rewritten and every live body still reads; a crash between the new PUT and the transaction leaves the old pack authoritative; an orphan younger than a day survives, older is deleted; an empty pack is deleted without a rewrite | a `dev reset` on the dev VM leaves no pack and no orphan behind |
@@ -849,8 +860,9 @@ Still open, with a default the tasks assume unless the owner says otherwise:
 
 - **Layout:** matches and timelines in separate packs, bodies sorted by
   match id inside each (owner, 2026-10-13).
-- **Upload and free separately:** bodies are packed and uploaded within
-  hours; the 14-day window only decides when the local copy is freed. Fourteen
+- **Upload and free separately:** bodies are packed and uploaded as soon as
+  a pack of their kind is full (the archive queues the job then; boot and a
+  daily run are the safety net); the 14-day window only decides when the local copy is freed. Fourteen
   days matches the patch cycle (owner, 2026-10-13).
 - **Recovery:** the R2 replica runs hourly, and the location map is
   snapshotted to `index/` daily so a lost database never needs every pack
