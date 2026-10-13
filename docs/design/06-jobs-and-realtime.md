@@ -104,7 +104,7 @@ Handlers are idempotent as in v1: `archive:match` upserts; polls diff against st
 
 ### Backoff and failure
 
-`attempts < 5` → `run_after = now + 2^attempts × 30 s ± 20 %`, state back to `pending`. A yield to the rate limiter (§Claiming) is not a failure and uses no attempt. Otherwise `failed` with `error`. `/v1/admin/jobs` lists and retries failed rows; `maintenance` deletes `done` rows older than 7 days.
+`attempts < 5` → `run_after = now + 2^attempts × 30 s ± 20 %`, state back to `pending`. A yield to the rate limiter (§Claiming) is not a failure and uses no attempt. Otherwise `failed` with `error`. `/v1/admin/jobs` lists and retries failed rows; `maintenance` deletes `done` rows older than 7 days. `DELETE /v1/admin/jobs?kind=&state=&minPriority=&dryRun=` deletes the `pending` or `failed` rows of one kind from a priority band down, in chunks of 5 000 with a pause between, so a crawl's backlog of a million rows goes without holding the writer; `running` rows are never touched and `done` rows stay `maintenance`'s. The queue keeps no copy of the table in memory (a claim is one `UPDATE … RETURNING`; `recover` at boot only resets `running` rows), so rows can be deleted under a running scheduler (DSK-03, ADR-137).
 
 ### Activity views
 
@@ -150,7 +150,7 @@ Every handler that hits Riot calls the fetcher with `FetchOptions::JOB` (`Priori
 | `names:backfill` | crawl end, daily, admin | Riot IDs for nameless players from their latest archived matches; no Riot calls (v1, ADR-055) |
 | `facts:reextract` | admin / boot when stale | re-derive facts, bans and `remake` for matches below `FACTS_VERSION`, in batches of `FACTS_REEXTRACT_BATCH`; no Riot calls |
 | `builds:extract` | run inline by `aggregate:analytics` | derive `match_builds` from every archived timeline whose match has facts and no rows at `BUILDS_VERSION`, 25 timelines a batch, with the newest mirrored `item.json` and each player's champion from `match_facts` (BLD-05); does nothing without one; no Riot calls (ADR-117, ADR-131) |
-| `tiers:backfill` | boot when a ranked match has facts and no tier stamps; run inline by `aggregate:analytics` | stamp `match_tiers` for those matches, 500 a batch, from the ladder and league lookups as they are now (ADR-105's tier), in id order; no Riot calls (ADR-127) |
+| `tiers:backfill` | boot when a ranked match has a fact with no tier; run inline by `aggregate:analytics` | stamp `match_facts.tier` for those matches, 500 a batch, from the ladder and league lookups as they are now (ADR-105's tier), in id order; no Riot calls (ADR-127, ADR-138) |
 | `timelines:backfill` | hourly, one per match-v5 region (deduped by region, in its region's lane), only while `TIMELINE_BACKFILL_PATCHES` > 0 | fetch the missing timelines of archived ranked matches (420, 440) in the newest `TIMELINE_BACKFILL_PATCHES` patches, newest patch then newest game first, 25 a turn through the bulk lane; a 404 is marked in `timeline_gaps` and never asked again; a turn that stored any queues `builds:extract`. Progress: `GET /v1/admin/timelines/backfill` (TL-02, ADR-133) |
 | `aggregate:analytics` | crawl end, tick, admin | run `builds:extract` and `tiers:backfill`, then rebuild the analytics tables (v1's shape, ADR-056) for the last `AGGREGATE_PATCH_LIMIT` patches; `analytics.updated` |
 | `maintenance` | daily | trim `jobs`/`metrics_history`, sweep L2, `PRAGMA optimize`, WAL checkpoint, `VACUUM INTO` backup |

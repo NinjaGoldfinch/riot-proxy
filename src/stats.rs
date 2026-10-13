@@ -628,9 +628,12 @@ impl Stats {
 }
 
 /// Sample a history point every `interval`, whether or not anyone watches
-/// (v1 `MetricsHistoryRecorder`); the first after one interval.
+/// (v1 `MetricsHistoryRecorder`); the first after one interval. The disk gauges
+/// (`sqlite_db_bytes` and friends, DSK-01) are sampled on the same tick, and
+/// once at the start so they never read 0 on a running process.
 pub fn spawn_history(stats: Arc<Stats>, interval: Duration) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        sample_disk(&stats.db).await;
         let mut every = tokio::time::interval_at(tokio::time::Instant::now() + interval, interval);
         every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
@@ -638,8 +641,16 @@ pub fn spawn_history(stats: Arc<Stats>, interval: Duration) -> tokio::task::Join
             if let Err(e) = stats.record_point(Clock::now().unix_ms).await {
                 tracing::warn!(error = %e, "metrics history point failed");
             }
+            sample_disk(&stats.db).await;
         }
     })
+}
+
+async fn sample_disk(db: &Db) {
+    match crate::db::disk::usage(db).await {
+        Ok(u) => crate::db::disk::record(&u),
+        Err(e) => tracing::warn!(error = %e, "disk usage sample failed"),
+    }
 }
 
 #[cfg(test)]

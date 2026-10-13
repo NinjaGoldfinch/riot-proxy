@@ -505,6 +505,33 @@ pub struct JobRow {
 /// The four states a row can be in (V0001).
 pub const STATES: [&str; 4] = ["pending", "running", "done", "failed"];
 
+/// The states [`Queue::purge`] accepts: never `running` (a worker holds it)
+/// and not `done` (`maintenance` trims those after seven days).
+pub const PURGEABLE_STATES: [&str; 2] = ["pending", "failed"];
+/// Rows one purge write deletes before giving the writer back.
+pub const PURGE_CHUNK: usize = 5_000;
+/// The pause between two purge chunks.
+pub const PURGE_PACE: Duration = Duration::from_millis(20);
+
+/// What [`Queue::purge`] deletes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Purge {
+    pub kind: String,
+    /// One of [`PURGEABLE_STATES`].
+    pub state: String,
+    /// Rows at this priority or a larger number (a lower band) go; 0 takes
+    /// every row of the kind and state.
+    pub min_priority: i64,
+    pub dry_run: bool,
+}
+
+/// What a purge found and did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Purged {
+    pub matched: u64,
+    pub deleted: u64,
+}
+
 pub(crate) const ROW_COLUMNS: &str =
     "id, kind, dedupe_key, priority, payload, state, attempts, run_after, claimed_at, finished_at, error";
 
@@ -765,6 +792,53 @@ impl Queue {
                 Ok(row)
             })
             .await
+    }
+
+    /// Delete every `pending` or `failed` row of one kind at or below a
+    /// priority band, in chunks of [`PURGE_CHUNK`] with a pause between them,
+    /// so the writer is never held for a backlog of a million rows (DSK-03,
+    /// ADR-137). A row claimed between two chunks is `running` and stays. The
+    /// queue keeps no copy of the table in memory, so nothing else needs
+    /// telling. `dry_run` only counts.
+    pub async fn purge(&self, purge: Purge) -> Result<Purged, DbError> {
+        let (kind, state, min_priority) = (purge.kind.clone(), purge.state.clone(), purge.min_priority);
+        let matched: u64 = self
+            .db
+            .read(move |c| {
+                c.query_row(
+                    "SELECT count(*) FROM jobs WHERE kind = ?1 AND state = ?2 AND priority >= ?3",
+                    params![kind, state, min_priority],
+                    |r| r.get::<_, i64>(0),
+                )
+                .map(|n| n.max(0) as u64)
+                .map_err(DbError::from)
+            })
+            .await?;
+        let mut deleted = 0;
+        if !purge.dry_run {
+            loop {
+                let (kind, state, min_priority) =
+                    (purge.kind.clone(), purge.state.clone(), purge.min_priority);
+                let n = self
+                    .db
+                    .write(move |c| {
+                        c.execute(
+                            "DELETE FROM jobs WHERE id IN (
+                               SELECT id FROM jobs WHERE kind = ?1 AND state = ?2 AND priority >= ?3
+                               LIMIT ?4)",
+                            params![kind, state, min_priority, PURGE_CHUNK as i64],
+                        )
+                        .map_err(DbError::from)
+                    })
+                    .await?;
+                deleted += n as u64;
+                if n < PURGE_CHUNK {
+                    break;
+                }
+                tokio::time::sleep(PURGE_PACE).await;
+            }
+        }
+        Ok(Purged { matched, deleted })
     }
 
     /// Rows by kind and state.

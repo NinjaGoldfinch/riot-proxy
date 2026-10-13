@@ -7,14 +7,13 @@ flowchart LR
     subgraph mem["Process memory (lost on restart, rebuilt cheaply)"]
         l1["L1 cache · moka<br/>every TTL'd endpoint<br/>negative entries"]
         sfm["single-flight map"]
-        heap["job priority heap<br/>(mirror of jobs table)"]
         buckets["limiter buckets"]
     end
 
     subgraph sqlite["riot-proxy.db (one file, WAL)"]
         cache_t["cache<br/>L2 · expensive tiers only"]
         limiter_t["limiter_state<br/>checkpoint"]
-        jobs_t["jobs<br/>durable queue"]
+        jobs_t["jobs<br/>durable queue · claimed in place,<br/>no in-memory copy"]
         consumers["consumers<br/>keys · scopes · quotas"]
         players["players<br/>tracked + backfill state"]
         matches["matches<br/>zstd blob · immutable"]
@@ -32,7 +31,6 @@ flowchart LR
     l1 -.->|write-behind| cache_t
     cache_t -.->|warm on boot| l1
     buckets -.->|every 10 s + shutdown| limiter_t
-    heap <-.-> jobs_t
 ```
 
 ## SQLite configuration
@@ -118,7 +116,7 @@ CREATE TABLE timeline_gaps (                      -- timelines Riot won't serve 
   marked_at INTEGER NOT NULL
 );
 
-CREATE TABLE match_facts (                        -- one row per participant; pure derivation of matches
+CREATE TABLE match_facts (                        -- one row per participant; derived from matches, bar `tier`
   match_id     TEXT NOT NULL REFERENCES matches(match_id) ON DELETE CASCADE,
   key_scope    TEXT NOT NULL,
   puuid        TEXT NOT NULL,
@@ -133,6 +131,11 @@ CREATE TABLE match_facts (                        -- one row per participant; pu
   facts_version INTEGER NOT NULL,                 -- bump to trigger facts:reextract
   cs           INTEGER,                           -- lane + jungle minions; V0003 (ADR-043)
   gold INTEGER, damage INTEGER, vision INTEGER,   -- V0005 (ADR-056)
+  tier         TEXT,                              -- V0019 (DSK-04, ADR-138): the player's tier when their solo/flex
+                                                  -- match was archived (ADR-127): newer of ladder_entries and
+                                                  -- player_ranks then, else 'UNKNOWN'; NULL until stamped (tiers:backfill).
+                                                  -- Never restamped; a later rank places an UNKNOWN one on a match that
+                                                  -- ended within TIER_LATE_STAMP_DAYS. facts:reextract never writes it.
   PRIMARY KEY (match_id, puuid)
 );
 -- V0005 (ADR-056): matches.remake (Riot's gameEndedInEarlySurrender) and
@@ -163,7 +166,7 @@ CREATE INDEX facts_champ  ON match_facts(champion_id);
 -- Every table is keyed by (key_scope, platform, queue, …, patch) and carries
 -- remake (0/1) as a key, so a read excludes remakes (default) or sums both.
 -- Every participant of the platform's archived matches counts (ADR-105), at
--- the tier stamped in match_tiers when the match was archived (ADR-127).
+-- the tier stamped on the fact when the match was archived (ADR-127, ADR-138).
 -- The per-participant tables (stats, matchups, items, runes, spells, builds,
 -- build parts) are keyed by the row's own player's tier and side as well
 -- (V0017, ADR-129): side is 'blue' (team 100) or 'red' (team 200). Their rows
@@ -251,16 +254,7 @@ CREATE TABLE player_ranks (                       -- every league.entriesByPuuid
   tier TEXT, division TEXT, league_points INTEGER, fetched_at INTEGER,
   PRIMARY KEY (key_scope, platform, queue, puuid)
 );                                                -- a lookup replaces the player's rows on that platform
-CREATE TABLE match_tiers (                        -- V0016: each participant's tier when a solo/flex match was archived (ADR-127)
-  match_id TEXT REFERENCES matches(match_id) ON DELETE CASCADE,
-  key_scope TEXT, puuid TEXT, platform TEXT, queue TEXT,  -- platform: the match id's prefix; queue: league-v4's name
-  tier TEXT,                                      -- newer of ladder_entries and player_ranks then, else 'UNKNOWN'
-  stamped_at INTEGER,
-  PRIMARY KEY (match_id, puuid)
-);                                                -- never restamped; a later rank places an UNKNOWN row on a match
-                                                  -- that ended within TIER_LATE_STAMP_DAYS; facts:reextract leaves it
-CREATE INDEX match_tiers_ladder ON match_tiers (key_scope, platform, queue, tier);
-CREATE INDEX match_tiers_unknown ON match_tiers (key_scope, platform, queue, puuid) WHERE tier = 'UNKNOWN';
+-- match_tiers (V0016) held the stamps until V0019 folded them into match_facts.tier (DSK-04, ADR-138).
 CREATE TABLE rank_lookups (                       -- when each player was last looked up, ranked or not (ADR-111)
   key_scope TEXT, platform TEXT, puuid TEXT, looked_up_at INTEGER,
   PRIMARY KEY (key_scope, platform, puuid)

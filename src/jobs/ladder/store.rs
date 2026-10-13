@@ -268,7 +268,7 @@ pub async fn write_page(db: &Db, page: Page<'_>) -> Result<(), DbError> {
                 ])?;
                 player.execute(params![key_scope, e.puuid, platform, now])?;
                 crate::archive::tiers::late_stamp(
-                    &tx, &key_scope, &platform, &queue, &e.puuid, &e.tier, late_since, now,
+                    &tx, &key_scope, &platform, &queue, &e.puuid, &e.tier, late_since,
                 )?;
             }
         }
