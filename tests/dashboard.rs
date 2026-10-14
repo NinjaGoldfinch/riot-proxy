@@ -134,7 +134,12 @@ async fn the_snapshot_is_v1s_whole_document_from_v2s_sources() {
          VALUES ('{s}', 'kr', 'RANKED_SOLO_5x5', 'MASTER', '16.19', 103, 'MIDDLE', 0, 'blue', 4, 3, 4, 4, 0,0,0,0,0,0,0,0, 1),
                 ('{s}', 'kr', 'RANKED_SOLO_5x5', 'DIAMOND', '16.19', 103, 'MIDDLE', 0, 'red', 2, 0, 2, 2, 0,0,0,0,0,0,0,0, 1),
                 ('{s}', 'kr', 'RANKED_SOLO_5x5', 'MASTER', '16.19', 86, 'TOP', 0, 'blue', 5, 1, 5, 5, 0,0,0,0,0,0,0,0, 1),
-                ('{s}', 'kr', 'RANKED_SOLO_5x5', 'MASTER', '16.18', 1, 'TOP', 0, 'red', 99, 1, 5, 5, 0,0,0,0,0,0,0,0, 1);",
+                ('{s}', 'kr', 'RANKED_SOLO_5x5', 'MASTER', '16.18', 1, 'TOP', 0, 'red', 99, 1, 5, 5, 0,0,0,0,0,0,0,0, 1);
+         -- The rebuild writes a slice for every tier and patch it has stats for (PERF-01).
+         INSERT INTO analytics_slices (key_scope, platform, queue, tier, patch, remake, matches, computed_at)
+         VALUES ('{s}', 'kr', 'RANKED_SOLO_5x5', 'MASTER', '16.19', 0, 9, 1),
+                ('{s}', 'kr', 'RANKED_SOLO_5x5', 'DIAMOND', '16.19', 0, 2, 1),
+                ('{s}', 'kr', 'RANKED_SOLO_5x5', 'MASTER', '16.18', 0, 5, 1);",
         s = e.scope
     ))
     .await;
