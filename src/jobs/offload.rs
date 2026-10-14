@@ -10,9 +10,11 @@
 //! `ARCHIVE_OBJECT_URL` is set; unset is the rollback. It calls no Riot route,
 //! so it has no lane; `JOB_KIND_LIMITS` runs one at a time.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
+
+use tokio::time::Instant;
 
 use futures_util::future::BoxFuture;
 use serde_json::json;
@@ -46,6 +48,10 @@ pub async fn enqueue(queue: &Queue) -> Result<Enqueued, DbError> {
         .await
 }
 
+/// How long a trigger whose job the dedupe absorbed (a run was already
+/// pending or running) waits before trying again.
+pub const RETRY_ABSORBED: Duration = Duration::from_secs(60);
+
 /// Unpacked bytes per kind, and the trigger that queues the offload when a
 /// kind has a full pack. The archive raises it with every body it stores; a
 /// run sets it to what it left unpacked. Lost on restart, which is why boot
@@ -54,9 +60,14 @@ pub async fn enqueue(queue: &Queue) -> Result<Enqueued, DbError> {
 pub struct Pending {
     bytes: [AtomicU64; 2],
     target: u64,
-    /// A job was queued since the last run started; stops every later body
-    /// from queueing again (the dedupe would absorb it, at a write each).
+    /// A job was created since the last run started; stops every later body
+    /// from queueing again. Set only when the queue made a new row: a request
+    /// the dedupe absorbs (a run already pending or running) leaves it clear,
+    /// so the next full pack after that run still queues one.
     queued: AtomicBool,
+    /// When the trigger last asked the queue, so an absorbed request is
+    /// repeated at most every [`RETRY_ABSORBED`], not once per body.
+    last_try: Mutex<Option<Instant>>,
     queue: Queue,
 }
 
@@ -66,6 +77,7 @@ impl Pending {
             bytes: [AtomicU64::new(0), AtomicU64::new(0)],
             target: target_bytes,
             queued: AtomicBool::new(false),
+            last_try: Mutex::new(None),
             queue,
         }
     }
@@ -78,15 +90,23 @@ impl Pending {
     /// first time a kind reaches a full pack.
     pub async fn add(&self, kind: Kind, stored: u64) {
         let total = self.bytes[slot(kind)].fetch_add(stored, Ordering::Relaxed) + stored;
-        if total < self.target || self.queued.swap(true, Ordering::AcqRel) {
+        if total < self.target || self.queued.load(Ordering::Acquire) {
             return;
         }
-        match enqueue(&self.queue).await {
-            Ok(_) => tracing::debug!(%kind, total, "a full pack is ready; offload queued"),
-            Err(e) => {
-                self.queued.store(false, Ordering::Release);
-                tracing::warn!(error = %e, "could not queue the offload");
+        {
+            let mut last = self.last_try.lock().unwrap_or_else(PoisonError::into_inner);
+            if last.is_some_and(|at| at.elapsed() < RETRY_ABSORBED) {
+                return;
             }
+            *last = Some(Instant::now());
+        }
+        match enqueue(&self.queue).await {
+            Ok(e) if e.created => {
+                self.queued.store(true, Ordering::Release);
+                tracing::debug!(%kind, total, "a full pack is ready; offload queued");
+            }
+            Ok(_) => tracing::debug!(%kind, total, "offload already pending or running; will ask again"),
+            Err(e) => tracing::warn!(error = %e, "could not queue the offload"),
         }
     }
 
