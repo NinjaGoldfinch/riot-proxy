@@ -360,7 +360,7 @@ ninjagoldfinch.lol's `/champions` data took 3.9 s, all of it the proxy's analyti
 - [x] PERF-00 series spec: tasks, measurements, design/04 §Analytics reads (#207, ADR-166)
 - [x] PERF-01 reads that seek on their keys (#208, ADR-167)
 - [x] PERF-02 `champion_stats_totals`, summed over tier, for tierless reads (#212, ADR-168)
-- [ ] PERF-03 analytics responses cached per aggregate generation, warmed after each rebuild
+- [x] PERF-03 analytics responses cached per aggregate generation, warmed after each rebuild (#213, ADR-169)
 
 ## PAIR — team pairings (owner request 2026-10-10, outline)
 - [ ] PAIR-01 `champion_pairs`: every ally role per player, keyed by tier and side (IMPLEMENTATION.md §Post-release — PAIR)
