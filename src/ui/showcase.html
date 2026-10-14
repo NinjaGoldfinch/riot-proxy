@@ -1336,19 +1336,22 @@ function renderGold(tl, match) {
 
 // ---------- champion view (DEV-08)
 // scrolled: the `#/champion/{id}/builds` hash whose Builds card was last scrolled to (SITE-10).
-// tier and side: the slice the page reads (FLT-02), '' for every tier / both sides; kept across champions.
+// tier and side: the slice the page reads (FLT-02), '' for every tier / both sides, a tier or a range ('DIAMOND+', FLT-03); kept across champions.
 const ch = { id: null, role: '', builds: null, tab: 0, scrolled: '', tier: '', side: '' };
 /** The champion view's platform: the one picked on the page, else the home view's; '' is every platform. */
 const champRegion = () => state.region ?? platform();
-/** The champion view's tier picker and side toggle (FLT-02). UNKNOWN is the players no ladder or lookup placed. */
-const tierSelect = () => `<select data-ctier aria-label="tier"><option value="">All tiers</option>${[...TIERS, 'UNKNOWN'].map((t) => `<option value="${t}" ${t === ch.tier ? 'selected' : ''}>${titleCase(t)}</option>`).join('')}</select>`;
+/** The champion view's tier picker and side toggle (FLT-02). UNKNOWN is the players no ladder or lookup placed.
+ *  The ranges come first (FLT-03): `DIAMOND+` is Diamond and every tier above it, sent as `minTier`; highest first, as the tiers are. */
+const TIER_RANGES = ['MASTER+', 'DIAMOND+', 'EMERALD+'];
+const tierLabel = (t) => (t.endsWith('+') ? `${titleCase(t.slice(0, -1))}+` : titleCase(t));
+const tierSelect = () => `<select data-ctier aria-label="tier"><option value="">All tiers</option>${[...TIER_RANGES, ...TIERS, 'UNKNOWN'].map((t) => `<option value="${t}" ${t === ch.tier ? 'selected' : ''}>${tierLabel(t)}</option>`).join('')}</select>`;
 const SIDE_CHOICES = [['', 'Both'], ['blue', 'Blue'], ['red', 'Red']];
 const sideToggle = () => `<span class="seg" role="group" aria-label="side">${SIDE_CHOICES.map(([v, l]) => `<button data-cside="${v}" class="${v === ch.side ? 'on' : ''}">${l}</button>`).join('')}</span>`;
 /** The slice a champion card shows, named in its header. */
-const sliceLabel = () => `${ch.tier ? titleCase(ch.tier) : 'All tiers'} · ${ch.side ? `${SIDE_CHOICES.find(([v]) => v === ch.side)[1]} side` : 'both sides'}`;
+const sliceLabel = () => `${ch.tier ? tierLabel(ch.tier) : 'All tiers'} · ${ch.side ? `${SIDE_CHOICES.find(([v]) => v === ch.side)[1]} side` : 'both sides'}`;
 const sliceTag = () => `<span class="muted slice">${esc(sliceLabel())}</span>`;
 /** Add the picked tier and side to an analytics query. */
-const withSlice = (q) => { if (ch.tier) q.set('tier', ch.tier); if (ch.side) q.set('side', ch.side); return q; };
+const withSlice = (q) => { if (ch.tier.endsWith('+')) q.set('minTier', ch.tier.slice(0, -1)); else if (ch.tier) q.set('tier', ch.tier); if (ch.side) q.set('side', ch.side); return q; };
 const regionSelect = () => `<select data-region aria-label="region"><option value="">All regions</option>${(cfg?.platforms ?? []).map((p) => `<option value="${esc(p.value)}" ${p.value === champRegion() ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}</select>`;
 
 async function renderChampion({ id, focus }) {

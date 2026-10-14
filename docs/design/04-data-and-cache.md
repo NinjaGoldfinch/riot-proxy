@@ -233,6 +233,20 @@ CREATE TABLE champion_ban_totals (                -- V0015: matches banned in, e
   key_scope, platform, queue, patch, champion_id, remake, bans, computed_at,
   PRIMARY KEY (key_scope, platform, queue, patch, champion_id, remake)
 );
+-- A tier range (`minTier`, FLT-03) can't sum the per-tier slices or bans
+-- either, for the same reason: a match with players in Master and
+-- Grandmaster is in both. V0026 (ADR-170) counts each match once per floor:
+-- in every floor at or below its highest stamped tier, never for UNKNOWN.
+-- floor_tier is a tier's name; it sits before patch, as tier does in the
+-- slices, so a read (one floor, by equality) seeks through the patch.
+CREATE TABLE analytics_floor_totals (             -- V0026: distinct matches with a player at or above floor_tier
+  key_scope, platform, queue, floor_tier, patch, remake, matches, computed_at,
+  PRIMARY KEY (key_scope, platform, queue, floor_tier, patch, remake)
+);
+CREATE TABLE champion_ban_floor_totals (          -- V0026: of those matches, the ones each champion was banned in
+  key_scope, platform, queue, floor_tier, patch, champion_id, remake, bans, computed_at,
+  PRIMARY KEY (key_scope, platform, queue, floor_tier, patch, champion_id, remake)
+);
 CREATE TABLE champion_matchups (                  -- one row per (lane, opponent); tier and side are
   key_scope, platform, queue, patch, champion_id, role, opponent_id, remake,  -- champion_id's player's
   tier, side, games, wins, computed_at,
@@ -403,6 +417,7 @@ The analytics routes read the derived tables only, never `matches` or `match_fac
 
 - **Every read seeks** (PERF-01). A read names the filters it has and nothing else. A filter left open (no platform, no tier, `patch=all`) becomes an `IN` over the values the slice actually has, read from `analytics_slices` (ADR-167). So every read is a range seek on its key, `key_scope, platform, queue[, tier], patch, …`. The `(?N IS NULL OR col = ?N)` form is not used: SQLite cannot seek on it, and with statistics it picked the non-covering `champion_stats_slice` index for a full read.
 - **Reads with no tier use a tier-summed table** (PERF-02, ADR-168). `champion_stats_totals` is `champion_stats` summed over tier, rewritten in `rebuild_champions`' transaction for the same patches, from the rows just written. `/champions` without `tier`, a champion's summed row, `/patches` and the builds route's top role read it; a read that names a tier, and `byTier`, read `champion_stats`. A read across every platform and patch sums about a third of the rows (the synthetic copy), first per platform and patch in key order and then per champion, so its last sort is a few thousand rows.
+- **A tier range is an `IN` over its tiers** (FLT-03, ADR-170). `minTier=DIAMOND` reads the rows of Diamond and every tier above it that the slice has, `tier IN (…)`, on `champion_stats` (never `champion_stats_totals`, which has no tier) and on the facet and build tables; its first sum keeps the key's order (`platform, tier, patch, champion`). Its summed row's pick and ban rates divide by its floor's totals (`analytics_floor_totals`, `champion_ban_floor_totals`), and each `byTier` row by its own tier's slice, as with no range. `/patches` takes no range, as it takes no tier.
 - **Responses are cached by generation** (PERF-03, ADR-169). Each analytics route keeps its serialized 200 and `ETag` in memory, keyed by route, key scope, champion and every parameter as parsed, so two spellings of one query share an entry.
   - **Clearing.** A rebuild clears after its last commit and before it announces `analytics.updated`, and a failed one clears too. A miss that began before a clear doesn't store what it read. An entry is good only for the Data Dragon version it was built at. `/dev/reset` clears with its wipe.
   - **Serving.** A hit, 200 or 304, runs no SQL and sends `X-Cache: HIT`; a computed one sends `MISS`; concurrent misses for one key share one read.

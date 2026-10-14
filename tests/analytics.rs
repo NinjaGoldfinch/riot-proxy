@@ -218,7 +218,7 @@ async fn before_any_recompute_the_routes_answer_empty_documents() {
     assert_eq!(r.status, StatusCode::OK);
     assert_eq!(
         r.json(),
-        json!({"platform": null, "queue": "RANKED_SOLO_5x5", "tier": null, "side": null, "patch": null,
+        json!({"platform": null, "queue": "RANKED_SOLO_5x5", "tier": null, "minTier": null, "side": null, "patch": null,
                "role": null, "computedAt": null, "totalGames": 0, "champions": []})
     );
     let d = e.get("/v1/lol/analytics/champions/134").await.json();
@@ -1069,7 +1069,7 @@ async fn the_builds_route_reads_set_builds_in_the_most_played_role() {
     // Before any recompute: 200, no patch, no role, no builds.
     assert_eq!(
         e.get("/v1/lol/analytics/champions/134/builds").await.json(),
-        json!({"championId": 134, "platform": null, "queue": "RANKED_SOLO_5x5", "tier": null, "side": null,
+        json!({"championId": 134, "platform": null, "queue": "RANKED_SOLO_5x5", "tier": null, "minTier": null, "side": null,
                "patch": null, "role": null, "computedAt": null, "totalGames": 0, "builds": []})
     );
     e.seed().await;
@@ -1616,9 +1616,9 @@ async fn a_rebuild_clears_and_warms_what_sites_open_first() {
     assert_eq!(
         sorted,
         [
-            "champions|<scope>|~|kr|RANKED_SOLO_5x5|~|~|all|~|~|500|exclude",
-            "champions|<scope>|~|~|RANKED_SOLO_5x5|~|~|all|~|0|500|exclude",
-            "champions|<scope>|~|~|RANKED_SOLO_5x5|~|~|~|~|0|500|exclude",
+            "champions|<scope>|~|kr|RANKED_SOLO_5x5|~|~|~|all|~|~|500|exclude",
+            "champions|<scope>|~|~|RANKED_SOLO_5x5|~|~|~|all|~|0|500|exclude",
+            "champions|<scope>|~|~|RANKED_SOLO_5x5|~|~|~|~|~|0|500|exclude",
             "patches|<scope>|~|kr|RANKED_SOLO_5x5|~|~|exclude",
             "patches|<scope>|~|~|RANKED_SOLO_5x5|~|~|exclude",
         ]
@@ -1765,4 +1765,284 @@ async fn concurrent_misses_read_once() {
         assert_eq!((r.status, x_cache(r)), (StatusCode::OK, Some("MISS")));
         assert_eq!(r.body, replies[0].body);
     }
+}
+
+// ─── FLT-03: tier ranges (ADR-170) ──────────────────────────────────────────
+
+impl Env {
+    /// FLT-02's fixture with more tiers: the ranked game's participants
+    /// alternate MASTER (even) and GRANDMASTER (odd), but Braum (4) and Neeko
+    /// (9) are EMERALD and Nidalee (1) CHALLENGER. The remake's other players
+    /// are EMERALD; two of them, Jayce and Syndra's players, played the
+    /// ranked game at GRANDMASTER. So with remakes, CHALLENGER+ is one match
+    /// of two.
+    async fn seed_three_tiers(&self) {
+        let players: Vec<String> =
+            serde_json::from_slice::<Value>(RANKED).unwrap()["metadata"]["participants"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| p.as_str().unwrap().to_string())
+                .collect();
+        self.seed_with(move |p| match players.iter().position(|x| x == p) {
+            Some(1) => "CHALLENGER",
+            Some(4 | 9) | None => "EMERALD",
+            Some(i) if i % 2 == 0 => "MASTER",
+            Some(_) => "GRANDMASTER",
+        })
+        .await;
+        self.seed_builds().await;
+        self.aggregate().await;
+    }
+}
+
+/// A range sums its tiers' rows and divides by its floor's matches, each
+/// once: the ranked game has players in EMERALD, MASTER and GRANDMASTER, so
+/// it is one match at `minTier=DIAMOND`, where its MASTER and GRANDMASTER
+/// slices would make two.
+#[tokio::test]
+async fn tier_ranges_count_a_match_once_on_every_route() {
+    let e = env().await;
+    e.seed_three_tiers().await;
+    let list = |q: &'static str| {
+        let e = &e;
+        async move {
+            e.get(&format!("/v1/lol/analytics/champions?patch=all{q}"))
+                .await
+                .json()
+        }
+    };
+    let ids = |v: &Value| -> Vec<i64> {
+        let mut ids: Vec<i64> = v["champions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["championId"].as_i64().unwrap())
+            .collect();
+        ids.sort_unstable();
+        ids
+    };
+    let (all, range) = (list("").await, list("&minTier=DIAMOND").await);
+    let (m, gm, ch) = (
+        list("&tier=MASTER").await,
+        list("&tier=GRANDMASTER").await,
+        list("&tier=CHALLENGER").await,
+    );
+    assert_eq!(
+        (all["totalGames"].as_i64(), range["totalGames"].as_i64()),
+        (Some(10), Some(8))
+    );
+    let mut tiers = [ids(&m), ids(&gm), ids(&ch)].concat();
+    tiers.sort_unstable();
+    assert_eq!(ids(&range), tiers, "the range is its tiers' rows");
+    assert!(
+        !ids(&range).contains(&201) && !ids(&range).contains(&518),
+        "Braum and Neeko are EMERALD"
+    );
+    assert_eq!(
+        (&range["tier"], &range["minTier"]),
+        (&Value::Null, &json!("DIAMOND"))
+    );
+    assert_eq!(all["minTier"], Value::Null);
+    // Hand count: Syndra (134) was picked in the one DIAMOND+ match. Over
+    // the MASTER, GRANDMASTER and CHALLENGER slices summed it would be 1 / 3.
+    let syndra = |v: &Value| {
+        v["champions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["championId"] == 134)
+            .cloned()
+    };
+    let s = syndra(&range).unwrap();
+    assert_eq!(
+        (&s["tier"], &s["games"], &s["pickRate"], &s["share"]),
+        (&Value::Null, &json!(1), &json!(1), &json!(0.125))
+    );
+    // Every pick rate of every range is at most 1.
+    for q in [
+        "&minTier=EMERALD",
+        "&minTier=DIAMOND",
+        "&minTier=MASTER",
+        "&minTier=GRANDMASTER",
+        "&minTier=GRANDMASTER&remakes=include",
+    ] {
+        for c in list(q).await["champions"].as_array().unwrap() {
+            assert!(c["pickRate"].as_f64().unwrap() <= 1.0, "{q}: {c}");
+        }
+    }
+    // Yasuo (157) is MASTER: not GRANDMASTER and above.
+    let gm_up = list("&minTier=GRANDMASTER").await;
+    assert!(!ids(&gm_up).contains(&157) && ids(&gm_up).contains(&134));
+    // With remakes, Nidalee (76, CHALLENGER) is in the ranked game only: 1 of
+    // the 2 EMERALD+ games, but 1 of 1 CHALLENGER+ game, which the every-tier
+    // total (2) would make 0.5.
+    let nidalee = |v: Value| {
+        v["champions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["championId"] == 76)
+            .unwrap()["pickRate"]
+            .clone()
+    };
+    assert_eq!(
+        nidalee(list("&minTier=EMERALD&remakes=include").await),
+        json!(0.5)
+    );
+    assert_eq!(
+        nidalee(list("&minTier=CHALLENGER&remakes=include").await),
+        json!(1)
+    );
+    assert_eq!(nidalee(list("&remakes=include").await), json!(0.5));
+    assert_eq!(ids(&list("&minTier=CHALLENGER").await), [76]);
+
+    // The detail: the summed row over the floor, byTier the range's tiers.
+    let d = e
+        .get("/v1/lol/analytics/champions/134?patch=all&minTier=DIAMOND")
+        .await
+        .json();
+    assert_eq!((&d["tier"], &d["minTier"]), (&Value::Null, &json!("DIAMOND")));
+    assert_eq!(
+        (&d["stats"][0]["tier"], &d["stats"][0]["pickRate"]),
+        (&Value::Null, &json!(1))
+    );
+    let by_tier: Vec<&Value> = d["byTier"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| &r["tier"])
+        .collect();
+    assert_eq!(by_tier, [&json!("GRANDMASTER")]);
+    let gm_detail = e
+        .get("/v1/lol/analytics/champions/134?patch=all&tier=GRANDMASTER")
+        .await
+        .json();
+    assert_eq!(d["matchups"], gm_detail["matchups"]);
+    assert_eq!(d["items"], gm_detail["items"]);
+    // Matchups and builds: the range's rows, named in the body.
+    let mu = e
+        .get("/v1/lol/analytics/champions/134/matchups?patch=all&minTier=DIAMOND")
+        .await
+        .json();
+    assert_eq!((&mu["tier"], &mu["minTier"]), (&Value::Null, &json!("DIAMOND")));
+    assert_eq!(mu["matchups"][0]["opponentId"], 157);
+    let b = e
+        .get("/v1/lol/analytics/champions/134/builds?patch=all&role=MIDDLE&minTier=DIAMOND")
+        .await
+        .json();
+    assert_eq!(
+        (&b["tier"], &b["minTier"], &b["totalGames"]),
+        (&Value::Null, &json!("DIAMOND"), &json!(1))
+    );
+    let none = e
+        .get("/v1/lol/analytics/champions/134/builds?patch=all&role=MIDDLE&minTier=CHALLENGER")
+        .await
+        .json();
+    assert_eq!((&none["totalGames"], &none["builds"]), (&json!(0), &json!([])));
+
+    // minTier is part of every champion route's ETag; the patch list takes
+    // no tier and ignores it, as it ignores `tier`.
+    for uri in [
+        "/v1/lol/analytics/champions?patch=all",
+        "/v1/lol/analytics/champions/134?patch=all",
+        "/v1/lol/analytics/champions/134/matchups?patch=all",
+        "/v1/lol/analytics/champions/134/builds?patch=all",
+    ] {
+        let (plain, ranged) = (e.get(uri).await, e.get(&format!("{uri}&minTier=DIAMOND")).await);
+        let tier = e.get(&format!("{uri}&tier=DIAMOND")).await;
+        assert_ne!(tag(&plain), tag(&ranged), "{uri}");
+        assert_ne!(tag(&tier), tag(&ranged), "{uri}");
+    }
+    let (plain, ranged) = (
+        e.get("/v1/lol/analytics/patches?championId=134").await,
+        e.get("/v1/lol/analytics/patches?championId=134&minTier=DIAMOND")
+            .await,
+    );
+    assert_eq!(ranged.status, StatusCode::OK);
+    assert_eq!((tag(&plain), plain.json()), (tag(&ranged), ranged.json()));
+    assert!(plain.json().get("minTier").is_none());
+}
+
+/// `minTier` is one of Riot's tiers, never UNKNOWN, in Riot's casing, and
+/// never with `tier`: the routes' usual 400 otherwise, never cached.
+#[tokio::test]
+async fn tier_and_min_tier_are_validated_on_every_route() {
+    let e = env().await;
+    e.seed_three_tiers().await;
+    const ALLOWED: &str = "must be equal to one of the allowed values";
+    for uri in [
+        "/v1/lol/analytics/champions",
+        "/v1/lol/analytics/champions/134",
+        "/v1/lol/analytics/champions/134/matchups",
+        "/v1/lol/analytics/champions/134/builds",
+    ] {
+        for (q, message) in [
+            (
+                "tier=MASTER&minTier=DIAMOND",
+                "querystring/minTier must NOT be sent with tier".to_string(),
+            ),
+            (
+                "tier=UNKNOWN&minTier=DIAMOND",
+                "querystring/minTier must NOT be sent with tier".to_string(),
+            ),
+            ("minTier=UNKNOWN", format!("querystring/minTier {ALLOWED}")),
+            ("minTier=gold", format!("querystring/minTier {ALLOWED}")),
+            ("minTier=Diamond", format!("querystring/minTier {ALLOWED}")),
+            ("minTier=", format!("querystring/minTier {ALLOWED}")),
+            ("tier=gold&minTier=DIAMOND", format!("querystring/tier {ALLOWED}")),
+            (
+                "tier=MASTER&minTier=gold",
+                format!("querystring/minTier {ALLOWED}"),
+            ),
+            (
+                "minTier=DIAMOND&side=green",
+                format!("querystring/side {ALLOWED}"),
+            ),
+        ] {
+            let r = e.get(&format!("{uri}?{q}")).await;
+            assert_eq!(error(&r), (StatusCode::BAD_REQUEST, message), "{uri}?{q}");
+            assert_eq!(r.json()["error"]["code"], "VALIDATION", "{uri}?{q}");
+            assert_eq!(x_cache(&r), None, "{uri}?{q}: errors are not cached");
+        }
+        for floor in ["IRON", "EMERALD", "CHALLENGER"] {
+            assert_eq!(
+                e.get(&format!("{uri}?minTier={floor}")).await.status,
+                StatusCode::OK,
+                "{uri} {floor}"
+            );
+        }
+    }
+    let r = e.get("/v1/lol/analytics/patches?tier=MASTER&minTier=gold").await;
+    assert_eq!(r.status, StatusCode::OK, "the patch list takes no tier");
+}
+
+/// A range, a tier and neither are three cache entries (PERF-03): a range
+/// must not be served a tier's document.
+#[tokio::test]
+async fn a_range_and_a_tier_are_separate_entries() {
+    let e = env().await;
+    e.seed_three_tiers().await;
+    let uris = [
+        format!("{SITE}&minTier=DIAMOND"),
+        format!("{SITE}&tier=DIAMOND"),
+        format!("{SITE}&tier=MASTER"),
+    ];
+    let mut tags = vec![];
+    for uri in &uris {
+        let first = e.get(uri).await;
+        assert_eq!(x_cache(&first), Some("MISS"), "{uri}");
+        let second = e.get(uri).await;
+        assert_eq!(x_cache(&second), Some("HIT"), "{uri}");
+        assert_eq!(first.json(), second.json());
+        tags.push(tag(&first));
+    }
+    // The site's own call was warmed by the rebuild.
+    let site = e.get(SITE).await;
+    assert_eq!(x_cache(&site), Some("HIT"));
+    tags.push(tag(&site));
+    let distinct: std::collections::BTreeSet<_> = tags.iter().collect();
+    assert_eq!(distinct.len(), 4, "{tags:?}");
+    assert_eq!(e.get(&uris[0]).await.json()["minTier"], "DIAMOND");
+    assert_eq!(e.get(&uris[1]).await.json()["tier"], "DIAMOND");
 }

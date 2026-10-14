@@ -167,6 +167,10 @@ function detail(p, u, { noTimeline = false, noAnalytics = false, noBuilds = fals
   if ((m = p.match(/^\/v1\/lol\/analytics\/champions\/(\d+)(\/matchups)?$/))) {
     // 16.19 stands in for a patch too new to clear minGames: listed, but empty.
     if (noAnalytics || u.searchParams.get('patch') === '16.19') return [200, m[2] ? { ...MATCHUPS, matchups: [] } : { ...DETAIL, totalGames: 0, stats: [], byTier: [], items: [], spells: [], runes: [], matchups: [] }];
+    // A range (FLT-03): byTier holds the range's tiers only.
+    const floor = u.searchParams.get('minTier');
+    const ORDER = ['IRON', 'BRONZE', 'SILVER', 'GOLD', 'PLATINUM', 'EMERALD', 'DIAMOND', 'MASTER', 'GRANDMASTER', 'CHALLENGER'];
+    if (floor && !m[2]) return [200, { ...DETAIL, minTier: floor, byTier: DETAIL.byTier.filter((r) => ORDER.indexOf(r.tier) >= ORDER.indexOf(floor)) }];
     return [200, m[2] ? MATCHUPS : DETAIL];
   }
   return null;

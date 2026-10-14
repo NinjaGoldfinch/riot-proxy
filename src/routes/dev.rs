@@ -67,6 +67,8 @@ pub const WIPED: &[&str] = &[
     "champion_spells",
     "analytics_slices",
     "analytics_match_totals",
+    "analytics_floor_totals",
+    "champion_ban_floor_totals",
     "analytics_runs",
     "analytics_unsplit",
     "cache",

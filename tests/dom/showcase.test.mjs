@@ -786,7 +786,7 @@ test('the tier picker and side toggle reload the champion cards with that slice,
   const p = await page({ hash: '#/champion/1' });
   const slices = () => ['#cTiers', '#cBuild', '#cMatchups'].map((s) => p.text(`${s} header .slice`));
   assert.deepEqual(slices(), Array(3).fill('All tiers · both sides'));
-  assert.deepEqual([...p.$('[data-ctier]').options].map((o) => o.value).slice(0, 2), ['', 'CHALLENGER']);
+  assert.deepEqual([...p.$('[data-ctier]').options].map((o) => o.value).slice(0, 5), ['', 'MASTER+', 'DIAMOND+', 'EMERALD+', 'CHALLENGER']);
   assert.equal(p.$('[data-ctier]').options[p.$('[data-ctier]').options.length - 1].value, 'UNKNOWN');
   assert.equal(p.$('[data-cside].on').textContent, 'Both');
 
@@ -812,5 +812,37 @@ test('the tier picker and side toggle reload the champion cards with that slice,
   await p.click('[data-cside=""]');
   assert.ok(p.calls.includes('/v1/lol/analytics/champions/1/builds?queue=RANKED_SOLO_5x5&patch=all&platform=oc1'));
   assert.deepEqual(slices(), Array(3).fill('All tiers · both sides'));
+  assert.deepEqual(p.errors, []);
+});
+
+test('the tier picker offers ranges above the tiers, and Diamond+ sends minTier=DIAMOND (FLT-03)', async () => {
+  const p = await page({ hash: '#/champion/1' });
+  const slices = () => ['#cTiers', '#cBuild', '#cMatchups'].map((s) => p.text(`${s} header .slice`));
+  assert.deepEqual([...p.$('[data-ctier]').options].map((o) => o.textContent),
+    ['All tiers', 'Master+', 'Diamond+', 'Emerald+', 'Challenger', 'Grandmaster', 'Master', 'Diamond', 'Emerald', 'Platinum', 'Gold', 'Silver', 'Bronze', 'Iron', 'Unknown']);
+
+  p.calls.length = 0;
+  await p.pick('[data-ctier]', 'DIAMOND+');
+  assert.ok(p.calls.includes('/v1/lol/analytics/champions/1?queue=RANKED_SOLO_5x5&patch=all&limit=10&platform=oc1&minTier=DIAMOND'));
+  assert.ok(p.calls.includes('/v1/lol/analytics/champions/1/builds?queue=RANKED_SOLO_5x5&patch=all&platform=oc1&minTier=DIAMOND'));
+  assert.ok(p.calls.includes('/v1/lol/analytics/champions/1/matchups?queue=RANKED_SOLO_5x5&patch=all&limit=200&platform=oc1&minTier=DIAMOND'));
+  assert.ok(p.calls.every((c) => !c.includes('tier=') || c.includes('minTier=')), 'a range never sends tier');
+  assert.ok(p.calls.includes('/v1/lol/analytics/patches?queue=RANKED_SOLO_5x5&platform=oc1&championId=1'), 'the patch list takes no slice');
+  assert.deepEqual(slices(), Array(3).fill('Diamond+ · both sides'));
+  // By tier holds the range's tiers only: the fake's GOLD and UNKNOWN rows are gone.
+  assert.deepEqual([...p.w.document.querySelectorAll('#cTiers tbody tr td:first-child')].map((t) => t.textContent), ['CHALLENGER']);
+
+  p.calls.length = 0;
+  await p.click('[data-cside="red"]');
+  assert.ok(p.calls.includes('/v1/lol/analytics/champions/1/matchups?queue=RANKED_SOLO_5x5&patch=all&limit=200&platform=oc1&minTier=DIAMOND&side=red'));
+  assert.deepEqual(slices(), Array(3).fill('Diamond+ · Red side'));
+  assert.equal(p.$('[data-ctier]').value, 'DIAMOND+', 'the picker keeps its choice');
+
+  // A single tier afterwards sends tier, not minTier.
+  p.calls.length = 0;
+  await p.pick('[data-ctier]', 'MASTER');
+  assert.ok(p.calls.includes('/v1/lol/analytics/champions/1/builds?queue=RANKED_SOLO_5x5&patch=all&platform=oc1&tier=MASTER&side=red'));
+  assert.ok(p.calls.every((c) => !c.includes('minTier')));
+  assert.deepEqual(slices(), Array(3).fill('Master · Red side'));
   assert.deepEqual(p.errors, []);
 });

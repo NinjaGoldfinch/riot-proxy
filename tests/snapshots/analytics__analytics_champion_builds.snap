@@ -1,6 +1,5 @@
 ---
 source: tests/analytics.rs
-assertion_line: 1073
 expression: redact(body)
 ---
 {
@@ -76,6 +75,7 @@ expression: redact(body)
   ],
   "championId": 134,
   "computedAt": "<iso>",
+  "minTier": null,
   "patch": "16.19",
   "platform": null,
   "queue": "RANKED_SOLO_5x5",
