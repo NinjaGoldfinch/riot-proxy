@@ -390,6 +390,14 @@ let key_scope = hex::encode(Sha256::digest(riot_api_key.as_bytes()))[..8].to_str
 
 Derived at boot, stored nowhere, included in every L1/L2 key and every `players`/`match_facts`/`ladder_entries` row. Rotate the key → old rows are inert, `matches` (keyed by unencrypted match id) is untouched. Re-resolve tracked players by Riot ID via `POST /v1/admin/tracked-players`, exactly as v1.
 
+## Analytics reads
+
+The analytics routes read the derived tables only, never `matches` or `match_facts`. Those tables change only when `aggregate:analytics` commits, so between rebuilds a read's answer is a constant (PERF series, ADR-166).
+
+- **Every read seeks** (PERF-01). A read names the filters it has and nothing else. A filter left open (no platform, no tier, `patch=all`) becomes an `IN` over the values the slice actually has: platforms and patches from `analytics_match_totals`, tiers from `analytics_slices`. So every read is a range seek on its key, `key_scope, platform, queue[, tier], patch, …`. The `(?N IS NULL OR col = ?N)` form is not used: SQLite cannot seek on it, and with statistics it picked the non-covering `champion_stats_slice` index for a full read.
+- **Reads with no tier use a tier-summed table** (PERF-02). `champion_stats_totals` is `champion_stats` summed over tier, rewritten in the same transaction. A read across every platform and patch then sums about a sixth of the rows.
+- **Responses are cached by generation** (PERF-03). Each analytics route keeps its serialized 200 and `ETag` in memory, keyed by route and normalised query. Everything is dropped when a rebuild commits (`analytics.updated`) or the Data Dragon version changes. A hit, 200 or 304, runs no SQL and sends `X-Cache: HIT`. After each rebuild the job asks for the slices sites open first, so the first visitor after a recompute is served from memory.
+
 ## Sizing
 
 Match-v5 payloads run 80–120 KB raw and ~10–15 KB after zstd. Facts add ~1 KB/match.
