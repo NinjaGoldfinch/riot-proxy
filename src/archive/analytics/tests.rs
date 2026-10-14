@@ -17,6 +17,8 @@
 //! and no starter or boots; C has one finished item in M1, so counts in no
 //! build, and a row under another key scope that doesn't join; D has none.
 
+use std::collections::BTreeMap;
+
 use super::*;
 
 fn db() -> (tempfile::TempDir, Db) {
@@ -1542,6 +1544,7 @@ async fn every_read_seeks_on_its_key() {
         ("analytics_slices", SLICES, "patch=?"),
         ("analytics_match_totals", MATCH_TOTALS, "patch=?"),
         ("champion_stats", STATS, "patch=?"),
+        ("champion_stats_totals", STATS_TOTALS, "patch=?"),
         ("champion_bans", BANS, "patch=?"),
         ("champion_ban_totals", BAN_TOTALS, "patch=?"),
         ("champion_matchups", FACETS, "patch=?"),
@@ -1635,6 +1638,302 @@ async fn an_open_filter_is_the_slices_values() {
             .await
             .unwrap(),
         None
+    );
+}
+
+/// The key and value columns of `champion_stats_totals`, and the same
+/// computed from `champion_stats` summed over tier.
+const TOTALS: &str = "SELECT key_scope, platform, queue, patch, champion_id, role, remake, side, games, wins,
+       matches_picked, stated_games, kills, deaths, assists, cs, gold, damage, vision, duration_s, computed_at
+  FROM champion_stats_totals";
+const SUMMED: &str = "SELECT key_scope, platform, queue, patch, champion_id, role, remake, side, sum(games),
+       sum(wins), sum(matches_picked), sum(stated_games), sum(kills), sum(deaths), sum(assists), sum(cs),
+       sum(gold), sum(damage), sum(vision), sum(duration_s), max(computed_at)
+  FROM champion_stats GROUP BY key_scope, platform, queue, patch, champion_id, role, remake, side";
+
+/// Rows of the totals that differ from `champion_stats` summed over tier, in
+/// either direction, among those on `patch` (or every patch).
+fn totals_drift(c: &Connection, patch: Option<&str>) -> rusqlite::Result<i64> {
+    let on = patch.map_or(String::new(), |p| format!(" WHERE patch = '{p}'"));
+    c.query_row(
+        &format!(
+            "SELECT (SELECT count(*) FROM (SELECT * FROM ({TOTALS}){on} EXCEPT SELECT * FROM ({SUMMED}){on}))
+                  + (SELECT count(*) FROM (SELECT * FROM ({SUMMED}){on} EXCEPT SELECT * FROM ({TOTALS}){on}))"
+        ),
+        [],
+        |r| r.get(0),
+    )
+}
+
+/// After a rebuild, `champion_stats_totals` is `champion_stats` summed over
+/// tier, key for key (PERF-02, ADR-168), including keys more than one tier
+/// shares.
+#[tokio::test]
+async fn the_totals_are_the_stats_summed_over_tier() {
+    let (_d, db) = db();
+    db.write(|c| {
+        seed(c);
+        c.execute_batch(BOTH_SIDES)?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    rebuild(&db, 0).await;
+    let (drift, totals, shared) = db
+        .read(|c| {
+            Ok::<_, DbError>((
+                totals_drift(c, None)?,
+                c.query_row("SELECT count(*) FROM champion_stats_totals", [], |r| {
+                    r.get::<_, i64>(0)
+                })?,
+                c.query_row(
+                    "SELECT count(*) FROM (SELECT 1 FROM champion_stats
+                      GROUP BY key_scope, platform, queue, patch, champion_id, role, remake, side
+                     HAVING count(*) > 1)",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )?,
+            ))
+        })
+        .await
+        .unwrap();
+    assert_eq!(drift, 0);
+    assert!(totals > 0);
+    assert!(shared > 0, "the fixture has a key in two tiers");
+}
+
+/// A rebuild of the newest patch rewrites that patch's totals and leaves the
+/// older patches' rows as they were, as it does `champion_stats` (ADR-094).
+#[tokio::test]
+async fn a_partial_rebuild_leaves_other_patches_totals_alone() {
+    let (_d, db) = db();
+    db.write(|c| {
+        seed(c);
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    rebuild(&db, 0).await;
+    let stamps = |db: Db| async move {
+        rows(
+            &db,
+            "SELECT count(*), min(computed_at), max(computed_at) FROM champion_stats_totals
+              GROUP BY patch ORDER BY patch",
+        )
+        .await
+    };
+    let before = stamps(db.clone()).await;
+    db.write(|c| {
+        c.execute(
+            "UPDATE champion_stats_totals SET computed_at = 1 WHERE patch = '14.17'",
+            [],
+        )?;
+        let s = Scope {
+            now: 99,
+            ..scope(c, 1)
+        };
+        assert_eq!(s.patches.as_deref(), Some(&["14.18".to_string()][..]));
+        rebuild_champions(c, &s)?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    let after = stamps(db.clone()).await;
+    assert_eq!(after, [vec![before[0][0], 1, 1], vec![before[1][0], 99, 99]]);
+    let drift = db
+        .read(|c| Ok::<_, DbError>(totals_drift(c, Some("14.18"))?))
+        .await
+        .unwrap();
+    assert_eq!(drift, 0);
+}
+
+/// A row summed over tier is the sum of the per-tier rows, for every shape
+/// of tierless read; and the patch list's games are `champion_stats`'.
+#[tokio::test]
+async fn tierless_and_tiered_reads_agree() {
+    let (_d, db) = db();
+    db.write(|c| {
+        seed(c);
+        c.execute_batch(BOTH_SIDES)?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    rebuild(&db, 0).await;
+    let open = Read {
+        limit: 500,
+        ..Read::slice("s", None, "RANKED_SOLO_5x5")
+    };
+    let reads = [
+        open.clone(),
+        Read {
+            platform: Some("kr".into()),
+            ..open.clone()
+        },
+        Read {
+            patch: Some("14.18".into()),
+            ..open.clone()
+        },
+        Read {
+            role: Some("MIDDLE".into()),
+            ..open.clone()
+        },
+        Read {
+            side: Some(Side::Blue),
+            ..open.clone()
+        },
+        Read {
+            champion_id: Some(2),
+            ..open.clone()
+        },
+        Read {
+            remakes: true,
+            ..open.clone()
+        },
+    ];
+    for r in reads {
+        let summed = stats(&db, r.clone()).await.unwrap();
+        assert!(!summed.is_empty(), "{r:?}");
+        let mut folded: BTreeMap<i64, StatRow> = BTreeMap::new();
+        for t in stats_by_tier(&db, r.clone()).await.unwrap() {
+            let e = folded.entry(t.champion_id).or_insert(StatRow {
+                tier: None,
+                games: 0,
+                wins: 0,
+                matches_picked: 0,
+                stated_games: 0,
+                kills: 0,
+                deaths: 0,
+                assists: 0,
+                cs: 0,
+                gold: 0,
+                damage: 0,
+                vision: 0,
+                duration_s: 0,
+                computed_at: 0,
+                ..t.clone()
+            });
+            e.games += t.games;
+            e.wins += t.wins;
+            e.matches_picked += t.matches_picked;
+            e.stated_games += t.stated_games;
+            e.kills += t.kills;
+            e.deaths += t.deaths;
+            e.assists += t.assists;
+            e.cs += t.cs;
+            e.gold += t.gold;
+            e.damage += t.damage;
+            e.vision += t.vision;
+            e.duration_s += t.duration_s;
+            e.computed_at = e.computed_at.max(t.computed_at);
+        }
+        let summed: BTreeMap<i64, StatRow> = summed.into_iter().map(|s| (s.champion_id, s)).collect();
+        assert_eq!(summed, folded, "{r:?}");
+    }
+    let listed: Vec<Vec<i64>> = patches(&db, "s", None, "RANKED_SOLO_5x5", None, None, false)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|p| vec![p.patch.replace('.', "").parse().unwrap(), p.games])
+        .collect();
+    let direct = rows(
+        &db,
+        "SELECT CAST(replace(patch, '.', '') AS INTEGER), sum(games) FROM champion_stats
+          WHERE key_scope = 's' AND queue = 'RANKED_SOLO_5x5' AND remake = 0
+          GROUP BY patch ORDER BY patch DESC",
+    )
+    .await;
+    assert_eq!(listed, direct);
+}
+
+/// The tierless reads (`stats` without a tier, `patches`, `top_role`) read
+/// `champion_stats_totals`, and a tiered read never does: with the per-tier
+/// rows gone the first still answer and the others find nothing, and the
+/// other way round.
+#[tokio::test]
+async fn tierless_reads_read_the_totals() {
+    let (_d, db) = db();
+    db.write(|c| {
+        seed(c);
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    rebuild(&db, 0).await;
+    let open = Read {
+        limit: 500,
+        ..Read::slice("s", None, "RANKED_SOLO_5x5")
+    };
+    let tiered = Read {
+        tier: Some("MASTER".into()),
+        ..open.clone()
+    };
+    let one = Read {
+        champion_id: Some(1),
+        ..open.clone()
+    };
+    let answers = |db: Db, open: Read, tiered: Read, one: Read| async move {
+        (
+            !stats(&db, open.clone()).await.unwrap().is_empty(),
+            !patches(&db, "s", None, "RANKED_SOLO_5x5", None, None, false)
+                .await
+                .unwrap()
+                .is_empty(),
+            top_role(&db, one.clone()).await.unwrap().is_some(),
+            !stats(&db, tiered.clone()).await.unwrap().is_empty(),
+            !stats_by_tier(&db, open).await.unwrap().is_empty(),
+            top_role(
+                &db,
+                Read {
+                    tier: tiered.tier,
+                    ..one
+                },
+            )
+            .await
+            .unwrap()
+            .is_some(),
+        )
+    };
+    assert_eq!(
+        answers(db.clone(), open.clone(), tiered.clone(), one.clone()).await,
+        (true, true, true, true, true, true)
+    );
+    let emptied = |table: &'static str| {
+        let db = db.clone();
+        async move {
+            db.write(move |c| {
+                c.execute_batch(&format!(
+                    "CREATE TEMP TABLE kept AS SELECT * FROM {table}; DELETE FROM {table};"
+                ))?;
+                Ok::<_, DbError>(())
+            })
+            .await
+            .unwrap();
+        }
+    };
+    let restore = |table: &'static str| {
+        let db = db.clone();
+        async move {
+            db.write(move |c| {
+                c.execute_batch(&format!(
+                    "INSERT INTO {table} SELECT * FROM temp.kept; DROP TABLE temp.kept;"
+                ))?;
+                Ok::<_, DbError>(())
+            })
+            .await
+            .unwrap();
+        }
+    };
+    emptied("champion_stats").await;
+    assert_eq!(
+        answers(db.clone(), open.clone(), tiered.clone(), one.clone()).await,
+        (true, true, true, false, false, false)
+    );
+    restore("champion_stats").await;
+    emptied("champion_stats_totals").await;
+    assert_eq!(
+        answers(db.clone(), open, tiered, one).await,
+        (false, false, false, true, true, true)
     );
 }
 

@@ -221,6 +221,12 @@ CREATE TABLE champion_stats (                     -- per tier, role and side
   games, wins, matches_picked, stated_games, kills, deaths, assists, cs, gold, damage, vision,
   duration_s, computed_at,
   PRIMARY KEY (key_scope, platform, queue, tier, patch, champion_id, role, remake, side)
+);                                                -- no secondary index since V0025 dropped champion_stats_slice
+CREATE TABLE champion_stats_totals (              -- V0025 (ADR-168): champion_stats summed over tier, for tierless reads
+  key_scope, platform, queue, patch, champion_id, role, remake, side,
+  games, wins, matches_picked, stated_games, kills, deaths, assists, cs, gold, damage, vision,
+  duration_s, computed_at,                        -- computed_at: the newest tier's
+  PRIMARY KEY (key_scope, platform, queue, patch, champion_id, role, remake, side)
 );
 CREATE TABLE champion_bans (key_scope, platform, queue, tier, patch, champion_id, remake, bans, computed_at, …);
 CREATE TABLE champion_ban_totals (                -- V0015: matches banned in, every tier
@@ -394,8 +400,8 @@ Derived at boot, stored nowhere, included in every L1/L2 key and every `players`
 
 The analytics routes read the derived tables only, never `matches` or `match_facts`. Those tables change only when `aggregate:analytics` commits, so between rebuilds a read's answer is a constant (PERF series, ADR-166).
 
-- **Every read seeks** (PERF-01). A read names the filters it has and nothing else. A filter left open (no platform, no tier, `patch=all`) becomes an `IN` over the values the slice actually has: platforms and patches from `analytics_match_totals`, tiers from `analytics_slices`. So every read is a range seek on its key, `key_scope, platform, queue[, tier], patch, …`. The `(?N IS NULL OR col = ?N)` form is not used: SQLite cannot seek on it, and with statistics it picked the non-covering `champion_stats_slice` index for a full read.
-- **Reads with no tier use a tier-summed table** (PERF-02). `champion_stats_totals` is `champion_stats` summed over tier, rewritten in the same transaction. A read across every platform and patch then sums about a sixth of the rows.
+- **Every read seeks** (PERF-01). A read names the filters it has and nothing else. A filter left open (no platform, no tier, `patch=all`) becomes an `IN` over the values the slice actually has, read from `analytics_slices` (ADR-167). So every read is a range seek on its key, `key_scope, platform, queue[, tier], patch, …`. The `(?N IS NULL OR col = ?N)` form is not used: SQLite cannot seek on it, and with statistics it picked the non-covering `champion_stats_slice` index for a full read.
+- **Reads with no tier use a tier-summed table** (PERF-02, ADR-168). `champion_stats_totals` is `champion_stats` summed over tier, rewritten in `rebuild_champions`' transaction for the same patches, from the rows just written. `/champions` without `tier`, a champion's summed row, `/patches` and the builds route's top role read it; a read that names a tier, and `byTier`, read `champion_stats`. A read across every platform and patch sums about a third of the rows (the synthetic copy), first per platform and patch in key order and then per champion, so its last sort is a few thousand rows.
 - **Responses are cached by generation** (PERF-03). Each analytics route keeps its serialized 200 and `ETag` in memory, keyed by route and normalised query. Everything is dropped when a rebuild commits (`analytics.updated`) or the Data Dragon version changes. A hit, 200 or 304, runs no SQL and sends `X-Cache: HIT`. After each rebuild the job asks for the slices sites open first, so the first visitor after a recompute is served from memory.
 
 ## Sizing
