@@ -926,7 +926,9 @@ async function api(path, { method = 'GET', body } = {}) {
   let json = null;
   try { json = text ? JSON.parse(text) : null; } catch { json = null; }
   if (res.status === 401 || res.status === 403) {
-    openSheet(res.status === 403 ? 'This key has no admin scope.' : json?.error?.message || 'The key was refused.');
+    // The server says why: a key without the admin scope, or an address
+    // ADMIN_IP_ALLOWLIST refuses (behind a tunnel with TRUST_PROXY).
+    openSheet(json?.error?.message || (res.status === 403 ? 'This key has no admin scope.' : 'The key was refused.'));
     throw new ApiError(res.status, json);
   }
   if (!res.ok) throw new ApiError(res.status, json);

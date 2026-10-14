@@ -366,7 +366,9 @@ export const scene = {
 };
 
 const unauthorized = [401, { error: { code: 'UNAUTHORIZED', message: 'Missing or invalid API key' } }];
-const forbidden = [403, { error: { code: 'FORBIDDEN', message: 'This key lacks the admin scope' } }];
+// The server's own messages (src/http/auth.rs).
+const forbidden = [403, { error: { code: 'FORBIDDEN', message: "This key lacks the 'admin' scope" } }];
+const farAway = [403, { error: { code: 'FORBIDDEN', message: 'Admin access is not permitted from this address' } }];
 
 /** `[status, body]` for one call; `calls` records `{ url, method, auth }`. */
 export function api(calls, url, { method = 'GET', auth = null, body = null } = {}) {
@@ -376,7 +378,7 @@ export function api(calls, url, { method = 'GET', auth = null, body = null } = {
   if (path.startsWith('/v1/admin/')) {
     if (scene.consumers.revokedSelf) return unauthorized;
     if (!auth && !scene.authDisabled) return unauthorized;
-    if (auth && auth !== `Bearer ${KEY}`) return auth === 'Bearer rpx_reader' ? forbidden : unauthorized;
+    if (auth && auth !== `Bearer ${KEY}`) return { 'Bearer rpx_reader': forbidden, 'Bearer rpx_far': farAway }[auth] ?? unauthorized;
   }
   if (path.startsWith('/v1/admin/ladder') || path === '/v1/admin/analytics/recompute') {
     const r = scene.ladder.handle(url, method, body);
