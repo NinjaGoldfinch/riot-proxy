@@ -354,6 +354,13 @@ Before (OVH VPS, 2026-10-13 01:00 UTC): 38 GB disk at 77 %, `riot-proxy.db` 20 G
 - [x] ADM-17 `/dashboard/config.json` removed, `/dev/jobs` → 302 `/dashboard#jobs`, the old jobs page deleted; design/13 Accepted (#194, ADR-161)
 - [ ] ADM-18 optional: Access JWT as admin login (ask the owner first)
 
+## PERF — a fast first champions read (owner request 2026-10-14)
+ninjagoldfinch.lol's `/champions` data took 3.9 s, all of it the proxy's analytics reads (ADR-166).
+- [x] PERF-00 series spec: tasks, measurements, design/04 §Analytics reads (#PR, ADR-166)
+- [ ] PERF-01 reads that seek on their keys
+- [ ] PERF-02 `champion_stats_totals`, summed over tier, for tierless reads
+- [ ] PERF-03 analytics responses cached per aggregate generation, warmed after each rebuild
+
 ## PAIR — team pairings (owner request 2026-10-10, outline)
 - [ ] PAIR-01 `champion_pairs`: every ally role per player, keyed by tier and side (IMPLEMENTATION.md §Post-release — PAIR)
 - [ ] PAIR-02 the pairings route with `allyRole`, `winRateLow` and `delta` (IMPLEMENTATION.md §Post-release — PAIR)
