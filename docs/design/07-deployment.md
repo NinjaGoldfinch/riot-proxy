@@ -180,6 +180,7 @@ The binary's own RSS is dominated by the SQLite page cache (`cache_size`, 64 MB 
 - **Off-box:** `rclone`/`restic` the `backups/` directory; it is plain files.
 - **Status (ADM-06):** `GET /v1/admin/backups` lists the backups (name, size, time, from the directory without opening a file), `BACKUP_KEEP`, the free space beside them and what the last `maintenance` run since the process started did, or its error. `POST /v1/admin/maintenance/run` queues the job now under the tick's dedupe key (202); it backs up only if today's (UTC) backup is missing.
 - **Production (ADR-142):** a systemd timer on `ngf-prod-syd1` runs `rclone copy` of `backups/` to R2 every 6 hours, checks the copy and keeps one backup locally; R2 expires backups after 14 days. design/12 §As executed has the details.
+- **Archive bucket (OBJ-04, ADR-165):** with `ARCHIVE_OBJECT_URL` set, offloaded bodies are not in these backups; they are in the bucket and its hourly R2 replica (`deploy/riot-proxy-replica.{service,timer}`). The map of where each body is (`body_packs`, `body_locations`) is in the backups, in a daily snapshot under the bucket's `index/`, and in every pack. After restoring a backup, `riot-proxy packs reindex --since <newest pack_id in it>` adds the packs written since; `riot-proxy packs restore-index` rebuilds the map from the newest readable snapshot without any backup. `deploy/README.md` has the commands, the bucket's lifecycle rules and the quarterly restore drill.
 
 ## Reclaiming space
 
@@ -197,7 +198,7 @@ systemctl start riot-proxy                                          # check /rea
 rm riot-proxy.old.db
 ```
 
-Writes between the copy and the stop are lost, so do it in a quiet moment (crawls off). Prefer this over a plain `VACUUM`, which needs a temporary copy *and* a rollback journal, about twice the live data, and holds the writer for the whole copy.
+Writes between the copy and the stop are lost, so do it in a quiet moment (crawls off). After the object-storage offload (design/12 step 10) this is the one-off reclaim of the freed bodies; `deploy/README.md` §Reclaiming the file after the offload has the production commands. Prefer this over a plain `VACUUM`, which needs a temporary copy *and* a rollback journal, about twice the live data, and holds the writer for the whole copy.
 
 Where the bytes are, per table and index, is one query on the box (the `sqlite3` CLI has `dbstat`; the binary's SQLite does not):
 

@@ -4,6 +4,7 @@ pub mod backup;
 pub mod healthcheck;
 pub mod key;
 pub mod migrate_v1;
+pub mod packs;
 #[cfg(feature = "dev-cli")]
 pub mod record;
 #[cfg(feature = "dev-cli")]
@@ -55,6 +56,9 @@ pub enum Command {
         /// Where to write the copy; must not exist.
         out: std::path::PathBuf,
     },
+    /// Recover the map of packed bodies from the bucket (ARCHIVE_OBJECT_URL).
+    #[command(subcommand)]
+    Packs(packs::PacksCommand),
     /// Raw Riot API calls for development (built with --features dev-cli).
     #[cfg(feature = "dev-cli")]
     #[command(subcommand)]
@@ -102,6 +106,7 @@ pub fn run() -> ExitCode {
             Command::Spec => Ok(()),
             Command::Backup { out } => backup::run(&config, &out).await,
             Command::MigrateV1(args) => migrate_v1::run(&config, &args).await,
+            Command::Packs(cmd) => packs::run(&config, cmd).await,
             #[cfg(feature = "dev-cli")]
             Command::Riot(cmd) => riot::run(&config, cmd).await,
         }
