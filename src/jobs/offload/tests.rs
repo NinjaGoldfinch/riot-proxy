@@ -151,6 +151,54 @@ async fn a_full_pack_queues_one_offload_and_less_queues_none() {
     assert_eq!((p.bytes(Kind::Match), p.bytes(Kind::Timeline)), (60_000, 59_999));
 }
 
+/// The bug seen on production (2026-10-14): a full pack reached while a run
+/// was going was absorbed by the dedupe, and the trigger stayed latched, so
+/// no later full pack queued anything until a restart.
+#[tokio::test(start_paused = true)]
+async fn a_trigger_absorbed_by_a_running_job_tries_again_after_it_ends() {
+    let e = env(10_000, 14);
+    let p = &e.ctx.pending;
+    enqueue(&e.ctx.pending.queue).await.unwrap();
+    e.db.write(|c| {
+        Ok::<_, DbError>(
+            c.execute(
+                "UPDATE jobs SET state = 'running' WHERE kind = 'archive:offload'",
+                [],
+            )
+            .map(|_| ())?,
+        )
+    })
+    .await
+    .unwrap();
+    p.add(Kind::Timeline, 20_000).await;
+    assert_eq!(offload_jobs(&e.db).await, 0, "absorbed: the run is going");
+
+    e.db.write(|c| {
+        Ok::<_, DbError>(
+            c.execute(
+                "UPDATE jobs SET state = 'done' WHERE kind = 'archive:offload'",
+                [],
+            )
+            .map(|_| ())?,
+        )
+    })
+    .await
+    .unwrap();
+    p.add(Kind::Timeline, 1).await;
+    assert_eq!(offload_jobs(&e.db).await, 0, "not asked again within a minute");
+    tokio::time::advance(RETRY_ABSORBED).await;
+    p.add(Kind::Timeline, 1).await;
+    assert_eq!(
+        offload_jobs(&e.db).await,
+        1,
+        "the next body after the run queues one"
+    );
+    p.add(Kind::Timeline, 1).await;
+    tokio::time::advance(RETRY_ABSORBED).await;
+    p.add(Kind::Timeline, 1).await;
+    assert_eq!(offload_jobs(&e.db).await, 1, "latched once a job was created");
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_run_reseeds_the_counter_from_the_database() {
     let e = env(1 << 30, 14);

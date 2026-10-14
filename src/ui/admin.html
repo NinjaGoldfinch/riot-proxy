@@ -803,6 +803,8 @@ function table({ columns, rows, cap = 200, sort = null, empty = 'Nothing here.' 
 }
 
 // ── the chart helper: SVG, one <path> per series (design/13 §Chart rules) ──
+// Charts whose table is open, by id: a redraw on new data keeps it open.
+const openTables = new Set();
 /**
  * series: [{ name, color, points: [[t, v|null]] }]; format(v) for labels.
  * A crosshair follows the pointer or the arrow keys; "Table" shows the numbers.
@@ -887,11 +889,11 @@ function chart({ title, series, format = fmt, yMin = null, yMax = null, id = nul
     else if (e.key === 'Escape') hide();
   });
   const btn = fig.querySelector('[data-table]');
-  btn.addEventListener('click', () => {
+  const toggle = (open) => {
     const box = fig.querySelector('.tableview');
-    const open = box.hidden;
     box.hidden = !open;
     btn.setAttribute('aria-expanded', String(open));
+    if (id) openTables[open ? 'add' : 'delete'](id);
     if (open && !box.firstChild) {
       const rows = series[0].points.map(([t], i) => Object.fromEntries([['t', t], ...series.map((s, j) => [`s${j}`, s.points[i]?.[1] ?? null])]));
       box.append(table({
@@ -899,7 +901,9 @@ function chart({ title, series, format = fmt, yMin = null, yMax = null, id = nul
         rows, cap: 200, sort: { key: 't', dir: 'desc' },
       }));
     }
-  });
+  };
+  btn.addEventListener('click', () => toggle(fig.querySelector('.tableview').hidden));
+  if (id && openTables.has(id)) toggle(true);
   return fig;
 }
 
