@@ -201,6 +201,7 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 - [x] Release `v2.3.0`: DSK-07, HOST-01 and ME-01 since 2.2.0, from main; deployed after DSK-05's `facts:reextract` finished on production (ADR-141) (owner request 2026-10-13)
 - [x] Release `v2.4.0`: OBJ-01..03 since 2.3.0 (raw bodies to object storage in packs; offload off until `ARCHIVE_OBJECT_URL` is set), from main (owner request 2026-10-14)
 - [x] Release `v2.4.1`: the offload trigger re-arms after an absorbed enqueue (#202), chart tables stay open on redraw (#201), the key sheet shows the server's 403 reason (#203), ADM-01 recorded (#204) (owner request 2026-10-14)
+- [x] Release `v2.5.0`: OBJ-04 index snapshots, `packs reindex` / `restore-index` / `snapshot` and the R2 replica units (#206, #209), PERF-00 spec (#207), PERF-01 analytics reads seek on their keys (#208) (owner request 2026-10-14)
 
 ## OPS — dev environment on Proxmox (owner request 2026-10-05)
 - [x] OPS-01 `:edge` image on every push to `main` (#79, ADR-069)
