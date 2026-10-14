@@ -59,6 +59,7 @@ type Row = (
 impl Env {
     fn ctx(&self) -> AnalyticsContext {
         AnalyticsContext {
+            cache: Arc::clone(&self.state.analytics),
             queue: Queue::new(self.state.db.clone()),
             hub: self.state.hub.clone(),
             key_scope: self.state.fetcher.key_scope().as_str().to_string(),

@@ -202,6 +202,8 @@ async fn reset(State(state): State<AppState>, bytes: Bytes) -> Response {
     // L1 next, so nothing read between the two steps comes from a dropped row.
     let l1_entries = state.fetcher.cache().l1.invalidate_where(|_| true).await.len();
     let wiped = state.db.write(|c| Ok::<_, DbError>(wipe(c)?)).await;
+    // The analytics responses were read from the tables just emptied (PERF-03).
+    state.analytics.clear();
     let stopped_jobs = halt.stopped;
     drop(halt);
     let (deleted, running_jobs) = match wiped {

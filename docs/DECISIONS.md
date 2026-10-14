@@ -1776,3 +1776,42 @@ Accepted (task PERF-02). design/04 §Schema, §Analytics reads; ADR-123, ADR-166
 - **Migration and rebuild cost** on the copy (this container): V0025 took 1.9 s on 3.46 and 1.4 s on 3.51. It wrote 138,102 rows (13.8 MiB, 35 % of `champion_stats`' 39.9 MiB) and put the slice index's 24.3 MiB on the free list. The rebuild's new `INSERT` takes 95–115 ms for one ladder with every patch (ADR-166 estimated +1.7 s for the whole copy). **On production** (≈ 475 MB of analytics tables, `champion_stats` a part of that), expect the migration to take seconds, not minutes, at the next release's first start. The new table should be 35–70 % of `champion_stats`: a smaller share where keys span many tiers, as on the copy, a larger one where most players sit in few tiers. Dropping the index frees pages of about the same order, so the file barely grows. The freed pages stay on the free list until a reclaim (design/07).
 - **Rejected.** A covering index and summing over platform as well (ADR-166). Filling the totals from `match_facts`: a second pass over the facts, and two derivations that could drift. Folding the summed rows in Rust instead of SQL: unmeasured, and a larger change than the two-step sum.
 - **Tests.** `src/db/tests.rs`: `v0025_sums_champion_stats_over_tier_and_drops_the_slice_index` (seeded at version 24: a key in three tiers, the other side, a remake, another patch and platform; hand-checked rows, `EXCEPT` both ways empty, `WITHOUT ROWID`, the index gone, `champion_stats` kept). V0020's test now expects the index gone. `src/archive/analytics/tests.rs`: `the_totals_are_the_stats_summed_over_tier`, `a_partial_rebuild_leaves_other_patches_totals_alone`, `tierless_and_tiered_reads_agree` (the summed row is the per-tier rows summed, across platform, patch, role, side, champion and remakes; the patch list's games are `champion_stats`'), `tierless_reads_read_the_totals` (with either table emptied, only its reads go blank), and `every_read_seeks_on_its_key` on twelve tables. `tests/dashboard.rs` and `tests/analytics.rs` write the totals beside the stats they write by hand, as a rebuild does.
+
+## ADR-169 — Analytics responses cached per aggregate generation (2026-10-15)
+Accepted (task PERF-03). design/04 §Cache tiers, §Analytics reads; design/11; ADR-099, ADR-166, ADR-168.
+- **What.** The five analytics routes keep each 200's bytes and `ETag` in memory (`routes/analytics/cache.rs`), keyed by route, key scope, `championId` and every query parameter as parsed, with defaults applied. Two spellings of one query, or an unknown extra parameter, share an entry. A hit, 200 or 304, runs no `Db::read` and sends `X-Cache: HIT`; a computed response sends `MISS`; a 4xx or 5xx sends none and is never stored. The handlers are now parse → `serve` → `compute`, and `compute` is the code that ran before. Tags are byte-identical: the site's call tags `W/"r2GM8IHP…"` on the synthetic copy before and after.
+- **Invalidation.**
+  1. `aggregate:analytics` clears after its last commit and `record_run`, and **before** it publishes `analytics.updated`, so whatever acts on the event reads the new rows.
+  2. A rebuild that fails also clears, because a step may already have committed.
+  3. `clear()` bumps a generation under the lock that empties the map. A miss stores only if the generation it started at is still current, so a read that raced the commit can't store old numbers after the clear.
+  4. Each entry records the Data Dragon version its names and tag were built at, and a lookup at another version is a miss. That covers every way the version moves, with no call from the sync.
+  5. `/dev/reset` clears after its wipe. Nothing else writes the aggregates: the admin recompute queues the job, and the CLI has no writer.
+
+  The job holds the same `Arc` as `AppState`. A hub subscriber couldn't order the clear before the warm.
+- **Concurrency.** Misses share one computation through `SingleFlight`, keyed by `(generation, key)`, so a request after a clear never joins a read from before it. Ten concurrent cold requests for the site's call ran 5 reads, not 50.
+- **The warm.** After each rebuild, for every queue in `LADDER_QUEUES`, with `{p}` the platform just rebuilt:
+  - champions `queue&patch=all&minGames=0&limit=500` (the site);
+  - champions `queue&minGames=0&limit=500` (the site's "newest", which sends no `patch`);
+  - champions `platform={p}&queue&patch=all&limit=500` (the showcase home);
+  - `patches?queue` (the site);
+  - `patches?queue&platform={p}` (the showcase home).
+
+  That is 5 entries and 18 reads per queue, 93 ms on the synthetic copy. Every queue is warmed because the clear drops them all. Back-to-back rebuilds each clear and re-warm, (N−1) × ~0.1–0.2 s wasted next to rebuilds of seconds to minutes. Champion pages aren't warmed; they fill on first view.
+- **Size.** `ANALYTICS_CACHE_ENTRIES`, default 512, `0` stores nothing (every response `MISS`), at most 4096. The largest body is the champions list, one row per champion: 40,295 B for 171 rows, whatever `limit` says. So 512 entries is at most about 21 MB and 4096 about 170 MB. The LRU is a map and a use counter under a `std::sync::Mutex`, never held across an `.await`; a full map evicts the least recently used on insert. No new crate.
+- **Visibility.** `X-Cache` feeds `proxy_requests_total{cache}` and the dashboard's recent requests by route, as for the other routes. There is no new metric. Analytics hits don't count in `proxy_cache_reads_total`, which is the Riot cache's hit ratio. No `X-Cache-Age` is sent: `computedAt` dates the body. A debug log line per miss gives its key and the `Db::read`s it ran; `Db::reads()` counts every read for the tests.
+- **Measured** (release build, synthetic copy, 30 requests): the site's call, p50, 41.9 ms → **0.5 ms**; its 304, 41.2 → **0.4 ms**.
+- **Rejected.**
+  - A TTL: the data has none, it changes on commit.
+  - Entries per consumer: the body doesn't depend on the consumer, and the key scope is the process's.
+  - A byte cap: the bodies are bounded by the champion count.
+  - `moka`: TinyLFU admission can refuse a new entry, and batched eviction isn't deterministic to test.
+  - Clearing per ladder: every no-platform entry depends on every platform, so most entries go anyway.
+  - Clearing on `patch.new`: `sync` sets the current version on every run, and a forced re-sync publishes without a new version.
+- **Limits.** The clear is in-process. If `ROLE=api|worker` ever runs on a real shared store (Postgres is a stub, ADR-062), the clear must travel through the hub with a generation in the event.
+- **Tests.** `tests/analytics.rs`:
+  - `a_hit_runs_no_read_and_a_304_comes_from_memory`, `a_miss_is_read_once_then_served_from_memory_with_the_same_tag`;
+  - `a_rebuild_clears_and_warms_what_sites_open_first`, `a_failed_rebuild_still_clears`;
+  - `the_cap_evicts_the_least_recently_used`, `zero_keeps_nothing`;
+  - `reordered_queries_and_other_consumers_share_an_entry`, `errors_are_not_cached`, `concurrent_misses_read_once`.
+
+  Elsewhere: `tests/ddragon.rs` `a_new_patch_misses_the_analytics_cache`; `tests/dev_reset.rs` `a_reset_drops_the_analytics_responses`; unit tests in `cache.rs`, `analytics.rs`, `config/tests.rs` and `db/tests.rs`. Two existing tests that rewrite the tables in SQL now clear the cache after the write, as a rebuild would.

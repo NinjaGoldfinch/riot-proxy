@@ -773,24 +773,36 @@ impl Env {
             )
             .with(
                 kinds::AGGREGATE_ANALYTICS,
-                riot_proxy::jobs::analytics::AggregateHandler(Arc::new(
-                    riot_proxy::jobs::analytics::AnalyticsContext {
+                riot_proxy::jobs::analytics::AggregateHandler({
+                    // No mirror: a crawl's rebuild extracts no builds.
+                    let mirror = Arc::new(riot_proxy::r#static::Mirror::new(
+                        std::path::PathBuf::from("/nonexistent/riot-proxy-ladder-ddragon"),
+                        riot_proxy::jobs::ddragon::Cdn::new(
+                            &config,
+                            riot_proxy::jobs::ddragon::CdnUrls::mock(&self.server.uri()),
+                        )
+                        .expect("cdn"),
+                    ));
+                    Arc::new(riot_proxy::jobs::analytics::AnalyticsContext {
+                        // Nothing here reads the analytics routes: keep none.
+                        cache: Arc::new(riot_proxy::routes::analytics::cache::Analytics::new(
+                            riot_proxy::routes::analytics::Reads::new(
+                                self.db.clone(),
+                                Arc::clone(&mirror),
+                                &self.scope,
+                                &[],
+                            ),
+                            0,
+                            vec![],
+                        )),
                         queue: Queue::new(self.db.clone()),
                         hub: self.hub.clone(),
                         key_scope: self.scope.clone(),
                         patch_limit: 4,
                         reextract_batch: 500,
-                        // No mirror: a crawl's rebuild extracts no builds.
-                        mirror: Arc::new(riot_proxy::r#static::Mirror::new(
-                            std::path::PathBuf::from("/nonexistent/riot-proxy-ladder-ddragon"),
-                            riot_proxy::jobs::ddragon::Cdn::new(
-                                &config,
-                                riot_proxy::jobs::ddragon::CdnUrls::mock(&self.server.uri()),
-                            )
-                            .expect("cdn"),
-                        )),
-                    },
-                )),
+                        mirror,
+                    })
+                }),
             )
     }
 

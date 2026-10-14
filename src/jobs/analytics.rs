@@ -219,6 +219,9 @@ pub async fn runs(db: &Db, key_scope: &str) -> Result<Vec<(Ladder, Run)>, DbErro
 }
 
 pub struct AnalyticsContext {
+    /// The analytics routes' responses: cleared once a rebuild has written,
+    /// then warmed (PERF-03, ADR-169).
+    pub cache: Arc<crate::routes::analytics::cache::Analytics>,
     pub queue: Queue,
     pub hub: Hub,
     pub key_scope: String,
@@ -290,17 +293,24 @@ impl AnalyticsContext {
         if let Err(e) = record_run(self.db(), &self.key_scope, &ladder, &run).await {
             tracing::warn!(error = %e, "could not record the analytics run");
         }
+        // After the last commit and before the announcement, so nobody acting
+        // on `analytics.updated` is served the old numbers. A failed rebuild
+        // may have committed a step, so it clears too (ADR-169).
+        self.cache.clear();
         let tables = result?;
         tracing::info!(platform = %ladder.platform, queue = %ladder.queue, ?tables, games, ms, "analytics recomputed");
         events::publish(
             &self.hub,
             &Event::AnalyticsUpdated {
-                platform: ladder.platform,
+                platform: ladder.platform.clone(),
                 queue: ladder.queue,
                 duration_s: i64::try_from((ms + 500) / 1000).unwrap_or(i64::MAX),
                 tables,
             },
         );
+        // The slices sites open first, so their next call is a hit.
+        let warmed = self.cache.warm(&ladder.platform).await;
+        tracing::debug!(warmed, "analytics responses warmed");
         Ok(())
     }
 

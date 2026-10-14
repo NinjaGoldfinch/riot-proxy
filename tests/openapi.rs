@@ -167,6 +167,7 @@ fn responses_declare_the_headers_they_send() {
         assert!(defined[name]["description"].is_string(), "{name}");
     }
     let mut checked = 0;
+    let mut analytics_cached = 0;
     for (path, item) in doc["paths"].as_object().unwrap() {
         for (method, op) in item.as_object().unwrap() {
             let tags: Vec<&str> = op["tags"]
@@ -204,10 +205,16 @@ fn responses_declare_the_headers_they_send() {
                     assert!(has("X-Cache") && has("X-Cache-Age"), "{at}");
                     checked += 1;
                 }
+                // PERF-03: analytics responses are cached per rebuild, dated by `computedAt`.
+                if path.starts_with("/v1/lol/analytics") && matches!(status.as_str(), "200" | "304") {
+                    assert!(has("X-Cache") && !has("X-Cache-Age"), "{at}");
+                    analytics_cached += 1;
+                }
             }
         }
     }
     assert!(checked >= 20, "only {checked} cached responses found");
+    assert_eq!(analytics_cached, 10, "five analytics routes, 200 and 304 each");
     let pool = &doc["paths"]["/v1/players/{puuid}/champions"]["get"]["responses"]["200"]["headers"];
     assert!(
         pool.get("X-Cache-Fetched-Age").is_none(),

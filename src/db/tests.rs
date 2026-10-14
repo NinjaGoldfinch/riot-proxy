@@ -1386,3 +1386,19 @@ async fn v0025_sums_champion_stats_over_tier_and_drops_the_slice_index() {
     assert_eq!(slice, 0, "champion_stats_slice is dropped");
     assert_eq!(stats, 7, "champion_stats keeps its rows");
 }
+
+/// PERF-03: a cached analytics hit is proven by this counter not moving.
+#[tokio::test]
+async fn the_reads_counter_counts_every_read() {
+    let (_dir, db) = open_temp(2);
+    let before = db.reads();
+    for _ in 0..3 {
+        db.read(|c| Ok::<_, DbError>(c.query_row("SELECT 1", [], |r| r.get::<_, i64>(0))?))
+            .await
+            .unwrap();
+    }
+    db.write(|c| Ok::<_, DbError>(c.execute_batch("SELECT 1")?))
+        .await
+        .unwrap();
+    assert_eq!(db.reads() - before, 3, "writes don't count");
+}

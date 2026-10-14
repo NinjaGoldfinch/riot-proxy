@@ -388,6 +388,7 @@ async fn backfilled_timelines_become_builds() {
     std::fs::write(dir.join("versions.json"), r#"["16.19.1"]"#).unwrap();
 
     let analytics = AnalyticsContext {
+        cache: Arc::clone(&e.state.analytics),
         queue: Queue::new(e.state.db.clone()),
         hub: e.state.hub.clone(),
         key_scope: e.scope.clone(),

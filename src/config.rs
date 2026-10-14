@@ -73,6 +73,7 @@ pub const VARS: &[&str] = &[
     "TIER_LATE_STAMP_DAYS",
     "FACTS_REEXTRACT_BATCH",
     "AGGREGATE_PATCH_LIMIT",
+    "ANALYTICS_CACHE_ENTRIES",
     "AGGREGATE_INTERVAL_S",
     "DDRAGON_DIR",
     "DDRAGON_LOCALE",
@@ -346,6 +347,9 @@ pub struct Config {
     pub tier_late_stamp_days: u32,
     pub facts_reextract_batch: u32,
     pub aggregate_patch_limit: u32,
+    /// Analytics responses kept in memory until the next rebuild (PERF-03,
+    /// ADR-169); 0 keeps none.
+    pub analytics_cache_entries: u32,
     pub aggregate_interval_s: u32,
     pub ddragon_dir: PathBuf,
     pub ddragon_locale: String,
@@ -465,6 +469,7 @@ impl Config {
             ("TIER_LATE_STAMP_DAYS", s(self.tier_late_stamp_days)),
             ("FACTS_REEXTRACT_BATCH", s(self.facts_reextract_batch)),
             ("AGGREGATE_PATCH_LIMIT", s(self.aggregate_patch_limit)),
+            ("ANALYTICS_CACHE_ENTRIES", s(self.analytics_cache_entries)),
             ("AGGREGATE_INTERVAL_S", s(self.aggregate_interval_s)),
             ("DDRAGON_DIR", path(&self.ddragon_dir)),
             ("DDRAGON_LOCALE", s(&self.ddragon_locale)),
@@ -509,6 +514,9 @@ pub struct ConfigArgs {
     /// Background jobs run at once [env: JOB_CONCURRENCY]
     #[arg(long, global = true)]
     pub job_concurrency: Option<u32>,
+    /// Analytics responses kept in memory, 0 none [env: ANALYTICS_CACHE_ENTRIES]
+    #[arg(long, global = true)]
+    pub analytics_cache_entries: Option<u32>,
     /// tracing filter, e.g. info or riot_proxy=debug [env: LOG_LEVEL]
     #[arg(long, global = true)]
     pub log_level: Option<String>,
@@ -530,6 +538,10 @@ impl ConfigArgs {
             ("ENV", self.environment.clone()),
             ("ROLE", self.role.clone()),
             ("JOB_CONCURRENCY", self.job_concurrency.map(|n| n.to_string())),
+            (
+                "ANALYTICS_CACHE_ENTRIES",
+                self.analytics_cache_entries.map(|n| n.to_string()),
+            ),
             ("LOG_LEVEL", self.log_level.clone()),
             ("LOG_FORMAT", self.log_format.clone()),
         ];
@@ -739,6 +751,7 @@ impl Config {
             tier_late_stamp_days: v.int("TIER_LATE_STAMP_DAYS", 14, 0, 365),
             facts_reextract_batch: v.int("FACTS_REEXTRACT_BATCH", 500, 1, 10_000),
             aggregate_patch_limit: v.int("AGGREGATE_PATCH_LIMIT", 4, 0, 100),
+            analytics_cache_entries: v.int("ANALYTICS_CACHE_ENTRIES", 512, 0, 4096),
             aggregate_interval_s: v.int("AGGREGATE_INTERVAL_S", 0, 0, 604_800),
             ddragon_locale: v.string("DDRAGON_LOCALE", "en_US"),
             admin_ip_allowlist: csv(&v.string("ADMIN_IP_ALLOWLIST", "")),

@@ -333,3 +333,27 @@ async fn not_in_the_openapi_document() {
     assert_eq!(doc.status, StatusCode::OK);
     assert!(doc.json()["paths"].get("/dev/reset").is_none());
 }
+
+/// PERF-03: the analytics responses were read from the tables a reset
+/// empties, so it drops them too.
+#[tokio::test]
+async fn a_reset_drops_the_analytics_responses() {
+    let e = env(&[]).await;
+    let get = || async {
+        let req = Request::builder()
+            .uri("/v1/lol/analytics/patches")
+            .header("authorization", format!("Bearer {}", e.reader))
+            .body(Body::empty())
+            .unwrap();
+        let r = common::send(e.router.clone(), req).await;
+        r.headers["x-cache"].to_str().unwrap().to_string()
+    };
+    assert_eq!(get().await, "MISS");
+    assert_eq!(get().await, "HIT");
+    let r = e
+        .call("POST", Some(&e.admin), Some(json!({"confirm": "reset"})))
+        .await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert!(e.state.analytics.responses.is_empty());
+    assert_eq!(get().await, "MISS");
+}

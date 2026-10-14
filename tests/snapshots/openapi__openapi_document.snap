@@ -24,7 +24,7 @@ expression: doc
         }
       },
       "X-Cache": {
-        "description": "Where the body came from: `HIT`, `MISS`, `STALE`, `HIT-NEG` (a cached 404), `ARCHIVE` (the match archive) or `BYPASS` (`?refresh=true`).",
+        "description": "Where the body came from: `HIT`, `MISS`, `STALE`, `HIT-NEG` (a cached 404), `ARCHIVE` (the match archive) or `BYPASS` (`?refresh=true`). On the analytics routes, `HIT` is a response kept in memory since the last recompute and `MISS` one read from the tables.",
         "schema": {
           "type": "string"
         }
@@ -11745,7 +11745,7 @@ expression: doc
     },
     "/v1/lol/analytics/champions": {
       "get": {
-        "description": "Aggregated from every archived match on the platform. Each participant is placed at the tier the ladder crawl or the latest league lookup of that player found them at, whichever is newer, and under `UNKNOWN` when neither has. Without `tier`, one row per champion summed over every tier (`tier: null`): pick and ban rates over every match in the slice (platform, queue, patch), each match counted once however many tiers its players were in, and averages over all the champion's games. With `tier`, a row per champion at that tier, its rates over the matches that had a player at the tier. `minGames` and `limit` apply to the rows returned. Recomputed per (platform, queue) when a crawl completes. Sends an `ETag`; a matching `If-None-Match` gets 304. Games Riot flagged as remakes are left out unless `remakes=include`.",
+        "description": "Aggregated from every archived match on the platform. Each participant is placed at the tier the ladder crawl or the latest league lookup of that player found them at, whichever is newer, and under `UNKNOWN` when neither has. Without `tier`, one row per champion summed over every tier (`tier: null`): pick and ban rates over every match in the slice (platform, queue, patch), each match counted once however many tiers its players were in, and averages over all the champion's games. With `tier`, a row per champion at that tier, its rates over the matches that had a player at the tier. `minGames` and `limit` apply to the rows returned. Recomputed per (platform, queue) when a crawl completes. Sends an `ETag`; a matching `If-None-Match` gets 304. Kept in memory until the next recompute: `X-Cache: HIT` from memory, `MISS` read from the tables. Games Riot flagged as remakes are left out unless `remakes=include`.",
         "operationId": "champions",
         "parameters": [
           {
@@ -11843,6 +11843,9 @@ expression: doc
             },
             "description": "The champions, most played first",
             "headers": {
+              "X-Cache": {
+                "$ref": "#/components/headers/X-Cache"
+              },
               "X-RateLimit-Limit": {
                 "$ref": "#/components/headers/X-RateLimit-Limit"
               },
@@ -11860,6 +11863,9 @@ expression: doc
           "304": {
             "description": "Not modified",
             "headers": {
+              "X-Cache": {
+                "$ref": "#/components/headers/X-Cache"
+              },
               "X-RateLimit-Limit": {
                 "$ref": "#/components/headers/X-RateLimit-Limit"
               },
@@ -11988,7 +11994,7 @@ expression: doc
     },
     "/v1/lol/analytics/champions/{championId}": {
       "get": {
-        "description": "Sends an `ETag`; a matching `If-None-Match` gets 304. The champion's stat row at this slice, its rows per tier, and its top lane matchups, items, runes and summoner spells — one call for a champion page. Without `tier`, `stats` is one row summed over every tier (`tier: null`), its pick and ban rates over every match in the slice, and `byTier` has a row per tier; with `tier`, both hold that tier's row. Each section is independently trimmed by `minGames`/`limit` (`stats` and `byTier` by `minGames` only); a champion nobody has data for yet still returns 200 with empty arrays rather than a 404.",
+        "description": "Sends an `ETag`; a matching `If-None-Match` gets 304. Kept in memory until the next recompute: `X-Cache: HIT` from memory, `MISS` read from the tables. The champion's stat row at this slice, its rows per tier, and its top lane matchups, items, runes and summoner spells — one call for a champion page. Without `tier`, `stats` is one row summed over every tier (`tier: null`), its pick and ban rates over every match in the slice, and `byTier` has a row per tier; with `tier`, both hold that tier's row. Each section is independently trimmed by `minGames`/`limit` (`stats` and `byTier` by `minGames` only); a champion nobody has data for yet still returns 200 with empty arrays rather than a 404.",
         "operationId": "champion_detail",
         "parameters": [
           {
@@ -12096,6 +12102,9 @@ expression: doc
             },
             "description": "The champion's page",
             "headers": {
+              "X-Cache": {
+                "$ref": "#/components/headers/X-Cache"
+              },
               "X-RateLimit-Limit": {
                 "$ref": "#/components/headers/X-RateLimit-Limit"
               },
@@ -12113,6 +12122,9 @@ expression: doc
           "304": {
             "description": "Not modified",
             "headers": {
+              "X-Cache": {
+                "$ref": "#/components/headers/X-Cache"
+              },
               "X-RateLimit-Limit": {
                 "$ref": "#/components/headers/X-RateLimit-Limit"
               },
@@ -12241,7 +12253,7 @@ expression: doc
     },
     "/v1/lol/analytics/champions/{championId}/builds": {
       "get": {
-        "description": "The item paths players take on this champion: each build is the first two finished items, with the most common 3rd, 4th and 5th items, starter, boots, skill order, runes and spells of the players who built it (at most three each). Worked out from archived match timelines, so matches archived without one aren't counted, nor are players who finished fewer than two items. Without `role`, the champion's most-played role in the slice (its `tier` and `side` included), named in `role`. Sends an `ETag`; a matching `If-None-Match` gets 304. A champion nobody has builds for yet still returns 200 with an empty `builds`.",
+        "description": "The item paths players take on this champion: each build is the first two finished items, with the most common 3rd, 4th and 5th items, starter, boots, skill order, runes and spells of the players who built it (at most three each). Worked out from archived match timelines, so matches archived without one aren't counted, nor are players who finished fewer than two items. Without `role`, the champion's most-played role in the slice (its `tier` and `side` included), named in `role`. Sends an `ETag`; a matching `If-None-Match` gets 304. Kept in memory until the next recompute: `X-Cache: HIT` from memory, `MISS` read from the tables. A champion nobody has builds for yet still returns 200 with an empty `builds`.",
         "operationId": "champion_builds",
         "parameters": [
           {
@@ -12349,6 +12361,9 @@ expression: doc
             },
             "description": "The champion's builds, most played first",
             "headers": {
+              "X-Cache": {
+                "$ref": "#/components/headers/X-Cache"
+              },
               "X-RateLimit-Limit": {
                 "$ref": "#/components/headers/X-RateLimit-Limit"
               },
@@ -12366,6 +12381,9 @@ expression: doc
           "304": {
             "description": "Not modified",
             "headers": {
+              "X-Cache": {
+                "$ref": "#/components/headers/X-Cache"
+              },
               "X-RateLimit-Limit": {
                 "$ref": "#/components/headers/X-RateLimit-Limit"
               },
@@ -12494,7 +12512,7 @@ expression: doc
     },
     "/v1/lol/analytics/champions/{championId}/matchups": {
       "get": {
-        "description": "Sends an `ETag`; a matching `If-None-Match` gets 304. Every lane matchup this champion has archived data for, at the tier and side of this champion's player (`tier`, `side`); the opponent may have been in another tier. Mirror lanes are excluded — their win rate is 50% by construction. Every archived lane is recorded from both sides, so the opposite champion's view of the same lane mirrors this one.",
+        "description": "Sends an `ETag`; a matching `If-None-Match` gets 304. Kept in memory until the next recompute: `X-Cache: HIT` from memory, `MISS` read from the tables. Every lane matchup this champion has archived data for, at the tier and side of this champion's player (`tier`, `side`); the opponent may have been in another tier. Mirror lanes are excluded — their win rate is 50% by construction. Every archived lane is recorded from both sides, so the opposite champion's view of the same lane mirrors this one.",
         "operationId": "champion_matchups",
         "parameters": [
           {
@@ -12602,6 +12620,9 @@ expression: doc
             },
             "description": "The matchups, most played first",
             "headers": {
+              "X-Cache": {
+                "$ref": "#/components/headers/X-Cache"
+              },
               "X-RateLimit-Limit": {
                 "$ref": "#/components/headers/X-RateLimit-Limit"
               },
@@ -12619,6 +12640,9 @@ expression: doc
           "304": {
             "description": "Not modified",
             "headers": {
+              "X-Cache": {
+                "$ref": "#/components/headers/X-Cache"
+              },
               "X-RateLimit-Limit": {
                 "$ref": "#/components/headers/X-RateLimit-Limit"
               },
@@ -12747,7 +12771,7 @@ expression: doc
     },
     "/v1/lol/analytics/patches": {
       "get": {
-        "description": "The patches the analytics tables hold for a ladder, newest first, with each one's games: what a client offers as `patch` choices on the other analytics routes (`all` sums them). With `championId`, only the patches that champion was played on, each with its games. Sends an `ETag`; a matching `If-None-Match` gets 304.",
+        "description": "The patches the analytics tables hold for a ladder, newest first, with each one's games: what a client offers as `patch` choices on the other analytics routes (`all` sums them). With `championId`, only the patches that champion was played on, each with its games. Sends an `ETag`; a matching `If-None-Match` gets 304. Kept in memory until the next recompute: `X-Cache: HIT` from memory, `MISS` read from the tables.",
         "operationId": "patches",
         "parameters": [
           {
@@ -12808,6 +12832,9 @@ expression: doc
             },
             "description": "The patches, newest first",
             "headers": {
+              "X-Cache": {
+                "$ref": "#/components/headers/X-Cache"
+              },
               "X-RateLimit-Limit": {
                 "$ref": "#/components/headers/X-RateLimit-Limit"
               },
@@ -12825,6 +12852,9 @@ expression: doc
           "304": {
             "description": "Not modified",
             "headers": {
+              "X-Cache": {
+                "$ref": "#/components/headers/X-Cache"
+              },
               "X-RateLimit-Limit": {
                 "$ref": "#/components/headers/X-RateLimit-Limit"
               },

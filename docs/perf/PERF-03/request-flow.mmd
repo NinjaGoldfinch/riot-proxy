@@ -1,0 +1,33 @@
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant MW as record_request (app.rs:123)
+    participant H as handler (champions)
+    participant K as cache.rs (Cache)
+    participant SF as SingleFlight
+    participant DB as Db::read ×5
+
+    C->>MW: GET /v1/lol/analytics/champions?queue=RANKED_SOLO_5x5&patch=all&minGames=0&limit=500
+    MW->>H: next.run(req)
+    H->>H: common() — bad input → 400 (no X-Cache, never cached)
+    H->>K: get(key, ddragon version)
+    alt (a) cold miss
+        K-->>H: None (generation g)
+        H->>SF: run((g, key), compute)
+        SF->>DB: stats + rates (5 reads)
+        DB-->>SF: rows
+        SF->>K: insert(key, entry) if generation still g
+        SF-->>H: Arc<Entry>
+        H-->>MW: 200 body · ETag · Cache-Control · X-Cache: MISS
+    else (b) hit, no If-None-Match
+        K-->>H: Arc<Entry>
+        H-->>MW: 200 cached bytes · same ETag · X-Cache: HIT (0 reads)
+    else (c) hit, If-None-Match = entry ETag
+        K-->>H: Arc<Entry>
+        H-->>MW: 304 · ETag · Cache-Control · X-Cache: HIT (0 reads)
+    else (d) hit, stale If-None-Match
+        K-->>H: Arc<Entry>
+        H-->>MW: 200 cached bytes · new ETag · X-Cache: HIT (0 reads)
+    end
+    MW->>MW: x-cache → cache label "hit"/"miss", recent-requests ring, proxy_requests_total
+    MW-->>C: response
