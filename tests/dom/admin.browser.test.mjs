@@ -91,6 +91,12 @@ for (const [device, width] of [['desktop', 1280], ['tablet', 820], ['phone', 390
             return out;
           });
           assert.deepEqual(unnamed, [], `${view}: every control has a name`);
+          // A dropdown is as wide as its choices need, not the whole row (its picker opens at that width), with a drawn chevron.
+          const wide = await page.evaluate(() => [...document.querySelectorAll('.form-row select, .filters select')]
+            .filter((el) => el.getClientRects().length)
+            .filter((el) => el.getBoundingClientRect().width > 240 || !getComputedStyle(el).backgroundImage.includes('gradient'))
+            .map((el) => `${el.id}: ${Math.round(el.getBoundingClientRect().width)} px`));
+          assert.deepEqual(wide, [], `${view}: dropdowns stay narrow`);
           if (view.startsWith('ladder/')) {
             // Every part of an opened run is on screen, not just inside its scrolling table.
             const off = await page.evaluate(() => [...document.querySelectorAll('#ladderHistory .activity, #ladderHistory .stages, #ladderHistory .totals')]
