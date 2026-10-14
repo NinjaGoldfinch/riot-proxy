@@ -334,7 +334,7 @@ Before (OVH VPS, 2026-10-13 01:00 UTC): 38 GB disk at 77 %, `riot-proxy.db` 20 G
 ## ADM — a better admin dashboard (owner request 2026-10-13)
 `/dashboard` is v1's page ported verbatim: it shows no disk, backups, traffic, errors or build, polls while hidden, and every snapshot scans `matches` and `jobs`. The series samples the aggregates, adds the missing readings as JSON and rebuilds the page as one embedded file reached through `admin.ninjagoldfinch.lol` behind Cloudflare Access. Specs in IMPLEMENTATION.md §Post-release — ADM; design/13.
 - [x] ADM-00 series spec, design/13 (Proposed), the ADM-01 runbook in design/12 (#177, ADR-144)
-- [ ] ADM-01 owner runbook: `admin.ninjagoldfinch.lol` behind Access (One-time PIN); WAF rule blocking `/metrics`, `/dashboard*`, `/dev*`, `/v1/admin*` on `api.` (design/12 §Admin hostname behind Access)
+- [x] ADM-01 owner runbook: `admin.ninjagoldfinch.lol` behind Access (One-time PIN); WAF rule blocking `/metrics`, `/dashboard*`, `/dev*`, `/v1/admin*` (and `/docs`) on `api.`; `ADMIN_IP_ALLOWLIST` removed. Executed by the owner 2026-10-14 (design/12 §Admin hostname behind Access)
 - [x] ADM-02 sampled aggregates behind the snapshot and `/v1/admin/stats` (fast 15 s, slow with each history point), `sampledAt`; V0022 `jobs_state_kind` index (#178, ADR-145)
 - [x] ADM-03 `GET /v1/admin/info` (build, uptime, features, redacted config) and build identity (`build.rs`, `GIT_SHA` in every workflow) (#180, ADR-147)
 - [x] ADM-04 runtime gauges in the snapshot (cache store, gates, inflight, quotas, SQLite readers, disk, interactive waiters) and history (disk, request totals); `cache_l2_dropped_total` (#181, ADR-148)
@@ -362,7 +362,7 @@ Before (OVH VPS, 2026-10-13 01:00 UTC): 38 GB disk at 77 %, `riot-proxy.db` 20 G
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
 
 ## Notes for the next task
-- **ADM (dashboard):** ADM-00 and ADM-02 to ADM-17 are done; ADM-01 (Cloudflare) is the owner's, and ADM-18 (Access JWT login) is optional and waits for the owner. `admin.html` is about 154 KB of its 160 KB budget: a new tab needs the budget raised first. Tabs register in `TABS` in `src/ui/admin.html`; DOM tests build pages with `tests/dom/admin-harness.mjs` against `fake-admin.mjs`.
+- **ADM (dashboard):** ADM-00 to ADM-17 are done (ADM-01 by the owner, 2026-10-14); ADM-18 (Access JWT login) is optional and waits for the owner. `admin.html` is about 154 KB of its 160 KB budget: a new tab needs the budget raised first. Tabs register in `TABS` in `src/ui/admin.html`; DOM tests build pages with `tests/dom/admin-harness.mjs` against `fake-admin.mjs`.
 - **Names backfill:** `names:backfill` and `POST /v1/admin/players/names/backfill` (v1's job that fills Riot IDs from archived matches) landed with P7-03 (#57): `src/jobs/names.rs`, a daily tick, queued when a crawl ends, tests in `tests/ladder.rs`.
 - **Events** keep v1's names plus `crawl.phase` (ADR-045): P7-04 publishes `analytics.updated`; P7-02/03 publish `crawl.phase` and `ladder.crawl.completed`; the dashboard's names already match.
 - Routes: follow `src/routes/riot.rs`, which uses `http::validate::*` for v1 rules and `routes::passthrough::{respond, options}`. Add read routers to `routes::docs::api_router`'s `read` group so they get auth+quota. `tests/common::app_with(env, wiremock_uri)` gives a full app. v1's `/v1/lol` bodies are raw passthrough too (`PassthroughResponse`), so P4-05's "typed" part is request validation.

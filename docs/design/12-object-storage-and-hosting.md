@@ -829,7 +829,28 @@ and a newer `rclone`.
 
 ## Admin hostname behind Access (ADM-01, owner runbook)
 
-Status: **not yet executed.** Replace this line with the date and anything that differed once it has run.
+Status: **executed 2026-10-14** by the owner, on v2.4.0. Checks from outside:
+`api.…/metrics` 403, `api.…/v1/admin/stats` 403, `api.…/healthz` 200,
+`admin.…/dashboard` 302 to the Access login; the dashboard loads after the
+PIN with the `admin-main` key. What differed from the steps below:
+
+- **One-time PIN had to be added** as a login method (Zero Trust →
+  Integrations → Identity providers → Add → One-time PIN). The account
+  already had a "Cloudflare" identity provider, so the PIN is not the
+  default; the application's providers are set to One-time PIN only.
+- **The policy** is named "Owner only" and includes the owner's two
+  addresses. Global MFA stays off.
+- **The WAF rule already existed** ("Block riot-proxy internal pages"). It
+  also blocks `/docs` on `api.`, which the step below leaves open; the docs
+  stay reachable on `admin.` behind Access. Zone level on the free plan
+  (Security rules → Custom rules); the account-level WAF is an Enterprise
+  add-on and is not used.
+- **`ADMIN_IP_ALLOWLIST=127.0.0.1` had to be removed** (step 4). With it set,
+  every admin call through the tunnel answered 403 `Admin access is not
+  permitted from this address`: the address the proxy saw was not loopback,
+  which is what `TRUST_PROXY=true` does (the client address from
+  `X-Forwarded-For`). The dashboard showed that as "no admin scope" until
+  #203.
 
 Why (design/13 §Reach, ADR-144): the tunnel publishes the proxy as
 `api.ninjagoldfinch.lol` with path `*`, so `/metrics` (no auth), `/dashboard`
