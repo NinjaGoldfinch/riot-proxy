@@ -28,8 +28,12 @@ test('without a key the probe is refused and the key sheet asks for one', async 
   } finally { p.close(); }
 });
 
-test('a refused key, or one without the admin scope, reopens the sheet with why', async () => {
-  for (const [key, why] of [['rpx_wrong', 'Missing or invalid API key'], ['rpx_reader', 'This key has no admin scope.']]) {
+test('a refused key, one without the admin scope, or a refused address reopens the sheet with the server\'s reason', async () => {
+  for (const [key, why] of [
+    ['rpx_wrong', 'Missing or invalid API key'],
+    ['rpx_reader', "This key lacks the 'admin' scope"],
+    ['rpx_far', 'Admin access is not permitted from this address'],
+  ]) {
     const p = await page({ key });
     try {
       assert.equal(p.$('#sheet').hidden, false, key);
