@@ -120,6 +120,7 @@ async fn migrations_create_exactly_the_design_04_tables() {
             "champion_runes",
             "champion_spells",
             "champion_stats",
+            "champion_stats_totals",
             "consumers",
             "crawl_legs",
             "crawl_match_ids",
@@ -219,7 +220,7 @@ async fn a_v1_database_upgrades_to_v2_and_keeps_its_data() {
         })
         .await
         .expect("read");
-    assert_eq!((name.as_str(), versions), ("old", 24));
+    assert_eq!((name.as_str(), versions), ("old", 25));
 }
 
 /// V0015 (SITE-08, ADR-123) backfills the slices aggregated before it, as the
@@ -387,8 +388,8 @@ async fn v0019_moves_the_stamps_onto_the_facts_and_drops_the_table() {
 
 /// V0020 (DSK-06, ADR-140) rebuilds the key-only derived tables WITHOUT
 /// ROWID: every row survives with its values, each table says so in its
-/// DDL, `champion_stats_slice` is back, and the foreign keys to `matches`
-/// still cascade.
+/// DDL, and the foreign keys to `matches` still cascade. It recreated
+/// `champion_stats_slice`, which V0025 then drops (PERF-02).
 #[tokio::test]
 async fn v0020_rebuilds_the_derived_tables_without_rowid_and_keeps_their_rows() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -502,7 +503,11 @@ async fn v0020_rebuilds_the_derived_tables_without_rowid_and_keeps_their_rows() 
             "KR_2 b [1056] 3020 [6655,3157] QWE QWE"
         ]
     );
-    assert_eq!(cascade, (1, 2), "the slice index and both foreign keys are back");
+    assert_eq!(
+        cascade,
+        (0, 2),
+        "both foreign keys are back; V0025 dropped the slice index"
+    );
     // The keys still cascade from matches.
     db.write(|c| {
         c.execute("DELETE FROM matches WHERE match_id = 'KR_1'", [])?;
@@ -883,11 +888,11 @@ async fn migrations_apply_once_across_reopens() {
         })
         .await
         .expect("insert");
-    assert_eq!(history(first.clone()).await.expect("history"), 24);
+    assert_eq!(history(first.clone()).await.expect("history"), 25);
     drop(first);
 
     let second = Db::open(&path, 1).expect("second open");
-    assert_eq!(history(second.clone()).await.expect("history"), 24, "no re-run");
+    assert_eq!(history(second.clone()).await.expect("history"), 25, "no re-run");
     let name: Option<String> = second
         .read(|c| {
             Ok::<_, DbError>(
@@ -1289,4 +1294,95 @@ async fn v0023_leaves_every_existing_body_local() {
         ]
     );
     assert_eq!((to_pack, to_free, packs, located), (3, 0, 0, 0));
+}
+
+/// V0025 (PERF-02, ADR-168) fills `champion_stats_totals` with
+/// `champion_stats` summed over tier, key for key, `matches_picked` a plain
+/// sum and `computed_at` the newest; the table is WITHOUT ROWID,
+/// `champion_stats` keeps its rows, and `champion_stats_slice` is gone.
+#[tokio::test]
+async fn v0025_sums_champion_stats_over_tier_and_drops_the_slice_index() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("riot-proxy.db");
+    {
+        let mut conn = Connection::open(&path).expect("open");
+        embedded::migrations::runner()
+            .set_grouped(true)
+            .set_target(refinery::Target::Version(24))
+            .run(&mut conn)
+            .expect("to V0024");
+        // One key in three tiers; the same key on the other side; a remake;
+        // another patch; another platform.
+        conn.execute_batch(
+            "INSERT INTO champion_stats (key_scope, platform, queue, tier, patch, champion_id, role, remake, side,
+               games, wins, matches_picked, stated_games, kills, deaths, assists, cs, gold, damage, vision,
+               duration_s, computed_at) VALUES
+               ('s', 'kr', 'RANKED_SOLO_5x5', 'MASTER',  '14.18', 1, 'MIDDLE', 0, 'blue', 3, 2, 3, 3, 1, 2, 3, 4, 5, 6, 7, 8, 100),
+               ('s', 'kr', 'RANKED_SOLO_5x5', 'DIAMOND', '14.18', 1, 'MIDDLE', 0, 'blue', 2, 1, 2, 1, 10, 20, 30, 40, 50, 60, 70, 80, 300),
+               ('s', 'kr', 'RANKED_SOLO_5x5', 'UNKNOWN', '14.18', 1, 'MIDDLE', 0, 'blue', 1, 0, 1, 1, 100, 200, 300, 400, 500, 600, 700, 800, 200),
+               ('s', 'kr', 'RANKED_SOLO_5x5', 'MASTER',  '14.18', 1, 'MIDDLE', 0, 'red', 4, 4, 4, 4, 1, 1, 1, 1, 1, 1, 1, 1, 100),
+               ('s', 'kr', 'RANKED_SOLO_5x5', 'MASTER',  '14.18', 1, 'MIDDLE', 1, 'blue', 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 100),
+               ('s', 'kr', 'RANKED_SOLO_5x5', 'DIAMOND', '14.17', 1, 'MIDDLE', 0, 'blue', 5, 2, 5, 5, 2, 2, 2, 2, 2, 2, 2, 2, 50),
+               ('s', 'oc1', 'RANKED_SOLO_5x5', 'MASTER', '14.18', 1, 'MIDDLE', 0, 'blue', 6, 3, 6, 6, 3, 3, 3, 3, 3, 3, 3, 3, 100);",
+        )
+        .expect("seed");
+    }
+    let db = Db::open(&path, 1).expect("migrate");
+    let (rows, drift, ddl, slice, stats): (Vec<String>, i64, String, i64, i64) = db
+        .read(|c| {
+            let mut stmt = c.prepare(
+                "SELECT platform || ' ' || patch || ' ' || side || ' ' || remake || ': ' || games || ' ' || wins
+                        || ' ' || matches_picked || ' ' || stated_games || ' ' || kills || ' ' || deaths || ' '
+                        || assists || ' ' || cs || ' ' || gold || ' ' || damage || ' ' || vision || ' '
+                        || duration_s || ' @' || computed_at
+                   FROM champion_stats_totals ORDER BY key_scope, platform, queue, patch, champion_id, role, remake, side",
+            )?;
+            let rows = stmt.query_map([], |r| r.get(0))?.collect::<Result<Vec<String>, _>>()?;
+            const KEY: &str = "key_scope, platform, queue, patch, champion_id, role, remake, side";
+            let summed = format!(
+                "SELECT {KEY}, sum(games), sum(wins), sum(matches_picked), sum(stated_games), sum(kills),
+                        sum(deaths), sum(assists), sum(cs), sum(gold), sum(damage), sum(vision), sum(duration_s),
+                        max(computed_at) FROM champion_stats GROUP BY {KEY}"
+            );
+            let totals = format!(
+                "SELECT {KEY}, games, wins, matches_picked, stated_games, kills, deaths, assists, cs, gold, damage,
+                        vision, duration_s, computed_at FROM champion_stats_totals"
+            );
+            let drift = c.query_row(
+                &format!(
+                    "SELECT (SELECT count(*) FROM ({totals} EXCEPT {summed}))
+                          + (SELECT count(*) FROM ({summed} EXCEPT {totals}))"
+                ),
+                [],
+                |r| r.get(0),
+            )?;
+            let ddl: String = c.query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'champion_stats_totals'",
+                [],
+                |r| r.get(0),
+            )?;
+            let slice = c.query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name = 'champion_stats_slice'",
+                [],
+                |r| r.get(0),
+            )?;
+            let stats = c.query_row("SELECT count(*) FROM champion_stats", [], |r| r.get(0))?;
+            Ok::<_, DbError>((rows, drift, ddl, slice, stats))
+        })
+        .await
+        .expect("read");
+    assert_eq!(
+        rows,
+        [
+            "kr 14.17 blue 0: 5 2 5 5 2 2 2 2 2 2 2 2 @50",
+            "kr 14.18 blue 0: 6 3 6 5 111 222 333 444 555 666 777 888 @300",
+            "kr 14.18 red 0: 4 4 4 4 1 1 1 1 1 1 1 1 @100",
+            "kr 14.18 blue 1: 1 1 1 0 0 0 0 0 0 0 0 0 @100",
+            "oc1 14.18 blue 0: 6 3 6 6 3 3 3 3 3 3 3 3 @100",
+        ]
+    );
+    assert_eq!(drift, 0);
+    assert!(ddl.trim_end().ends_with("WITHOUT ROWID"), "{ddl}");
+    assert_eq!(slice, 0, "champion_stats_slice is dropped");
+    assert_eq!(stats, 7, "champion_stats keeps its rows");
 }

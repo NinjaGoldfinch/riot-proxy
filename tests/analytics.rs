@@ -667,6 +667,7 @@ async fn without_a_platform_the_routes_sum_every_platform() {
         .write(|c| {
             for table in [
                 "champion_stats",
+                "champion_stats_totals",
                 "champion_bans",
                 "champion_ban_totals",
                 "analytics_slices",
@@ -720,6 +721,7 @@ async fn patch_all_sums_every_patch_and_the_patch_list_offers_them() {
         .write(|c| {
             for table in [
                 "champion_stats",
+                "champion_stats_totals",
                 "champion_bans",
                 "champion_ban_totals",
                 "analytics_slices",

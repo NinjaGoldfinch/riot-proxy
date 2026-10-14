@@ -9,8 +9,9 @@
 //! `champion_ban_totals` count it once, for rows summed over every tier
 //! (ADR-123). The per-participant tables (stats, matchups, items, runes,
 //! spells, set builds) are keyed by the row's own player's tier and side as
-//! well (FLT-01, ADR-129), so a read sums over whichever it doesn't name.
-//! Every table is
+//! well (FLT-01, ADR-129), so a read sums over whichever it doesn't name;
+//! `champion_stats_totals` holds the stats already summed over tier, for the
+//! reads that name none (PERF-02, ADR-168). Every table is
 //! rebuilt wholesale for the newest `AGGREGATE_PATCH_LIMIT` patches (0: all)
 //! and keeps older patches' rows. Every row carries `remake`, so a read can
 //! leave remakes out (the default) or add them back.
@@ -128,7 +129,7 @@ fn ladder_facts(join: &str) -> String {
 pub type Written = Vec<(&'static str, i64)>;
 
 /// Slices, champion stats and bans, and their totals over every tier
-/// (SITE-08), in one transaction (v1's champion step).
+/// (SITE-08, PERF-02), in one transaction (v1's champion step).
 pub fn rebuild_champions(c: &mut Connection, s: &Scope) -> Result<Written, DbError> {
     let facts = ladder_facts("");
     let tx = c.transaction()?;
@@ -136,6 +137,7 @@ pub fn rebuild_champions(c: &mut Connection, s: &Scope) -> Result<Written, DbErr
         "analytics_slices",
         "analytics_match_totals",
         "champion_stats",
+        "champion_stats_totals",
         "champion_bans",
         "champion_ban_totals",
     ] {
@@ -176,6 +178,22 @@ pub fn rebuild_champions(c: &mut Connection, s: &Scope) -> Result<Written, DbErr
              {facts}
              GROUP BY {TIER}, m.patch, f.champion_id, coalesce(f.position, ''), coalesce(m.remake, 0), {SIDE}"
         ),
+    )?;
+    // The same rows summed over tier, for the reads that name none (PERF-02,
+    // ADR-168). From the rows just written, not the facts again, so the two
+    // can't drift; every one of them carries ?6.
+    s.insert(
+        &tx,
+        "INSERT INTO champion_stats_totals (key_scope, platform, queue, patch, champion_id, role, remake, side,
+           games, wins, matches_picked, stated_games, kills, deaths, assists, cs, gold, damage, vision,
+           duration_s, computed_at)
+         SELECT key_scope, platform, queue, patch, champion_id, role, remake, side,
+           sum(games), sum(wins), sum(matches_picked), sum(stated_games), sum(kills), sum(deaths), sum(assists),
+           sum(cs), sum(gold), sum(damage), sum(vision), sum(duration_s), ?6
+           FROM champion_stats
+          WHERE key_scope = ?1 AND platform = ?2 AND queue = ?3
+            AND (?5 IS NULL OR patch IN (SELECT value FROM json_each(?5)))
+          GROUP BY patch, champion_id, role, remake, side",
     )?;
     // A ban counts once per match, in every tier the match had a player in (v1).
     let facts = ladder_facts("JOIN match_bans b ON b.match_id = f.match_id");
@@ -518,9 +536,10 @@ pub async fn patches(
         ..Read::slice(key_scope, platform, queue)
     };
     db.read(move |c| {
-        let w = Filter::new(&r, &domain(c, &r)?, STATS);
+        let (table, keys) = stats_source(&r, false);
+        let w = Filter::new(&r, &domain(c, &r)?, keys);
         let mut stmt = c.prepare(&format!(
-            "SELECT patch, sum(games), max(computed_at) FROM champion_stats WHERE {}
+            "SELECT patch, sum(games), max(computed_at) FROM {table} WHERE {}
               GROUP BY patch ORDER BY {PATCH_DESC}",
             w.sql
         ))?;
@@ -634,6 +653,13 @@ const STATS: Keys = Keys {
     role: true,
     champion: true,
 };
+/// `champion_stats` summed over tier (PERF-02, ADR-168): no tier column.
+const STATS_TOTALS: Keys = Keys {
+    tier: TierKey::None,
+    side: true,
+    role: true,
+    champion: true,
+};
 const BANS: Keys = Keys {
     tier: TierKey::BeforePatch,
     side: false,
@@ -653,6 +679,18 @@ const FACETS: Keys = Keys {
     role: true,
     champion: true,
 };
+
+/// The table a stats read sums and its keys: `champion_stats_totals` when the
+/// read names no tier and wants no row per tier (PERF-02, ADR-168), else
+/// `champion_stats`. The totals have no tier, so a tiered read must never
+/// reach them.
+pub(crate) fn stats_source(r: &Read, by_tier: bool) -> (&'static str, Keys) {
+    if by_tier || r.tier.is_some() {
+        ("champion_stats", STATS)
+    } else {
+        ("champion_stats_totals", STATS_TOTALS)
+    }
+}
 
 /// A read's `WHERE` and its arguments, in order (PERF-01, ADR-167). A filter
 /// that is set is an equality; one left open is an `IN` over the slice's
@@ -770,16 +808,33 @@ async fn stat_rows(db: &Db, r: Read, by_tier: bool) -> Result<Vec<StatRow>, DbEr
         ("NULL", "champion_id")
     };
     db.read(move |c| {
-        let w = Filter::new(&r, &domain(c, &r)?, STATS);
+        let (table, keys) = stats_source(&r, by_tier);
+        let w = Filter::new(&r, &domain(c, &r)?, keys);
+        // Summed over tier, the rows are first summed per platform and patch
+        // in key order, which needs no sort, so the final GROUP BY sorts a
+        // few thousand rows instead of every role and side's (ADR-168). The
+        // same integers, so the same answer.
+        let source = if by_tier {
+            format!("{table} WHERE {}", w.sql)
+        } else {
+            format!(
+                "(SELECT platform, patch, champion_id, sum(games) AS games, sum(wins) AS wins,
+                         sum(matches_picked) AS matches_picked, sum(stated_games) AS stated_games,
+                         sum(kills) AS kills, sum(deaths) AS deaths, sum(assists) AS assists, sum(cs) AS cs,
+                         sum(gold) AS gold, sum(damage) AS damage, sum(vision) AS vision,
+                         sum(duration_s) AS duration_s, max(computed_at) AS computed_at
+                    FROM {table} WHERE {} GROUP BY platform, patch, champion_id)",
+                w.sql
+            )
+        };
         let patch = r.patch.clone().unwrap_or_else(|| "all".into());
         let mut stmt = c.prepare(&format!(
             "SELECT champion_id, {tier}, sum(games), sum(wins), sum(matches_picked),
                     sum(stated_games), sum(kills), sum(deaths), sum(assists), sum(cs), sum(gold), sum(damage),
                     sum(vision), sum(duration_s), max(computed_at)
-               FROM champion_stats WHERE {}
+               FROM {source}
               GROUP BY {group} HAVING sum(games) >= ?
-              ORDER BY sum(games) DESC, {group} LIMIT ?",
-            w.sql
+              ORDER BY sum(games) DESC, {group} LIMIT ?"
         ))?;
         let rows = stmt
             .query_map(
@@ -1014,16 +1069,17 @@ pub async fn build_totals(db: &Db, r: Read) -> Result<(i64, Option<i64>), DbErro
 }
 
 /// The role one champion was played in most in the slice, every tier summed
-/// (`champion_stats`); `None` when it has no games. A tie goes to a lane
+/// (`champion_stats_totals`) or the named tier's; `None` when it has no games. A tie goes to a lane
 /// over the roleless rows, then to the role that sorts first.
 pub async fn top_role(db: &Db, r: Read) -> Result<Option<String>, DbError> {
     db.read(move |c| {
         use rusqlite::OptionalExtension;
         let r = Read { role: None, ..r };
-        let w = Filter::new(&r, &domain(c, &r)?, STATS);
+        let (table, keys) = stats_source(&r, false);
+        let w = Filter::new(&r, &domain(c, &r)?, keys);
         Ok(c.query_row(
             &format!(
-                "SELECT role FROM champion_stats WHERE {}
+                "SELECT role FROM {table} WHERE {}
                   GROUP BY role ORDER BY sum(games) DESC, role = '', role LIMIT 1",
                 w.sql
             ),
