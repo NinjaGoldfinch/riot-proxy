@@ -100,6 +100,8 @@ It runs at 17 past each hour, catches up a run missed while the box was down
 runs as a throwaway user that can read nothing else. If a temporary cron line
 was set up before this unit existed (design/12 step 8), remove it.
 
+`--metadata` copies each pack's `x-amz-meta-sha256`, which `packs reindex` reads instead of hashing the whole object. `rclone check` reports "hashes could not be checked" for packs uploaded in parts (their ETags aren't MD5) and compares sizes; that is expected.
+
 To check the replica is whole: `sudo rclone --config /etc/riot-proxy/rclone.conf check onidel:riot-proxy-archive r2:riot-proxy-archive --one-way`.
 
 ## Index snapshots and recovery
