@@ -79,6 +79,7 @@ impl Env {
 
     fn ctx_with(&self, patch_limit: u32) -> AnalyticsContext {
         AnalyticsContext {
+            cache: Arc::clone(&self.state.analytics),
             queue: Queue::new(self.state.db.clone()),
             hub: self.state.hub.clone(),
             key_scope: self.scope.clone(),
@@ -742,6 +743,8 @@ async fn patch_all_sums_every_patch_and_the_patch_list_offers_them() {
         })
         .await
         .unwrap();
+    // Written behind the rebuild's back: drop what it warmed, as it would (PERF-03).
+    e.state.analytics.clear();
 
     let newest = e.get("/v1/lol/analytics/champions").await.json();
     let all = e.get("/v1/lol/analytics/champions?patch=all").await.json();
@@ -1339,6 +1342,9 @@ async fn rows_v0017_could_not_split_are_rebuilt_over_every_patch_once() {
         })
         .await
         .unwrap();
+    // Written behind the rebuild's back: drop what was cached, so the reads
+    // below are of the rewritten rows (PERF-03).
+    e.state.analytics.clear();
     let (rows, listed) = unsplit(e.state.db.clone()).await;
     assert!(rows > 0);
     assert_eq!(listed, 1);
@@ -1507,5 +1513,256 @@ async fn tier_and_side_slice_every_route_and_add_up_to_the_total() {
         );
         // The routes' usual 400, as a bad `tier` or `remakes` gets.
         assert_eq!(bad.json()["error"]["code"], "VALIDATION", "{uri}");
+    }
+}
+
+// ─── PERF-03: responses cached per aggregate generation (ADR-169) ───────────
+
+/// The site's call (ninjagoldfinch.lol), warmed by every rebuild.
+const SITE: &str = "/v1/lol/analytics/champions?queue=RANKED_SOLO_5x5&patch=all&minGames=0&limit=500";
+
+fn x_cache(r: &common::Reply) -> Option<&str> {
+    r.headers.get("x-cache").map(|v| v.to_str().unwrap())
+}
+
+fn tag(r: &common::Reply) -> String {
+    r.headers["etag"].to_str().unwrap().to_string()
+}
+
+impl Env {
+    fn reads(&self) -> u64 {
+        self.state.db.reads()
+    }
+
+    /// Resolve both consumers' keys once (a 400 reads no analytics), so the
+    /// key lookup's own `Db::read` isn't counted against a route.
+    async fn keys_resolved(&self) {
+        for key in [&self.reader, &self.admin] {
+            let r = self
+                .call("GET", "/v1/lol/analytics/patches?queue=X", key, None, None)
+                .await;
+            assert_eq!(r.status, StatusCode::BAD_REQUEST);
+        }
+    }
+
+    /// `uri`'s response and the `Db::read`s it ran.
+    async fn read_counted(&self, uri: &str, etag: Option<&str>) -> (common::Reply, u64) {
+        let before = self.reads();
+        let r = self.call("GET", uri, &self.reader, etag, None).await;
+        (r, self.reads() - before)
+    }
+}
+
+#[tokio::test]
+async fn a_hit_runs_no_read_and_a_304_comes_from_memory() {
+    let e = env().await;
+    e.seed().await;
+    e.aggregate().await;
+    e.keys_resolved().await;
+    let (r, reads) = e.read_counted(SITE, None).await;
+    assert_eq!((r.status, x_cache(&r), reads), (StatusCode::OK, Some("HIT"), 0));
+    assert_eq!(r.json()["totalGames"], 10);
+    let (r304, reads) = e.read_counted(SITE, Some(&tag(&r))).await;
+    assert_eq!(
+        (r304.status, x_cache(&r304), reads),
+        (StatusCode::NOT_MODIFIED, Some("HIT"), 0)
+    );
+    assert_eq!(tag(&r304), tag(&r));
+    assert_eq!(r304.headers["cache-control"], "private, max-age=300");
+    assert!(r304.body.is_empty());
+}
+
+#[tokio::test]
+async fn a_miss_is_read_once_then_served_from_memory_with_the_same_tag() {
+    let e = env().await;
+    e.seed().await;
+    e.aggregate().await;
+    e.keys_resolved().await;
+    // A slice the rebuild doesn't warm.
+    let uri = "/v1/lol/analytics/champions?patch=16.19&role=MIDDLE";
+    let (miss, reads) = e.read_counted(uri, None).await;
+    assert_eq!(
+        (miss.status, x_cache(&miss), reads),
+        (StatusCode::OK, Some("MISS"), 5)
+    );
+    let (hit, reads) = e.read_counted(uri, None).await;
+    assert_eq!((x_cache(&hit), reads), (Some("HIT"), 0));
+    assert_eq!((tag(&hit), &hit.body), (tag(&miss), &miss.body));
+    // Read again from the same tables, the tag is the one served from memory.
+    e.state.analytics.clear();
+    let (again, reads) = e.read_counted(uri, None).await;
+    assert_eq!((x_cache(&again), reads), (Some("MISS"), 5));
+    assert_eq!((tag(&again), &again.body), (tag(&hit), &hit.body));
+}
+
+#[tokio::test]
+async fn a_rebuild_clears_and_warms_what_sites_open_first() {
+    let e = env().await;
+    e.seed().await;
+    e.aggregate().await;
+    e.keys_resolved().await;
+    // The warm: the site's two champions calls and patch list, the showcase's
+    // champions and patch list for the ladder just rebuilt.
+    let keys: Vec<String> = e
+        .state
+        .analytics
+        .responses
+        .keys()
+        .iter()
+        .map(|k| k.as_str().replace(&e.scope, "<scope>"))
+        .collect();
+    let mut sorted = keys.clone();
+    sorted.sort();
+    assert_eq!(
+        sorted,
+        [
+            "champions|<scope>|~|kr|RANKED_SOLO_5x5|~|~|all|~|~|500|exclude",
+            "champions|<scope>|~|~|RANKED_SOLO_5x5|~|~|all|~|0|500|exclude",
+            "champions|<scope>|~|~|RANKED_SOLO_5x5|~|~|~|~|0|500|exclude",
+            "patches|<scope>|~|kr|RANKED_SOLO_5x5|~|~|exclude",
+            "patches|<scope>|~|~|RANKED_SOLO_5x5|~|~|exclude",
+        ]
+    );
+    let first = e.get(SITE).await;
+    assert_eq!(x_cache(&first), Some("HIT"));
+    let stamp = first.json()["computedAt"].as_str().unwrap().to_string();
+
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    e.aggregate().await;
+    let (r, reads) = e.read_counted(SITE, None).await;
+    assert_eq!((x_cache(&r), reads), (Some("HIT"), 0), "warmed again");
+    assert!(
+        r.json()["computedAt"].as_str().unwrap() > stamp.as_str(),
+        "the new rows"
+    );
+    // The old validator no longer matches.
+    let (stale, reads) = e.read_counted(SITE, Some(&tag(&first))).await;
+    assert_eq!(
+        (stale.status, x_cache(&stale), reads),
+        (StatusCode::OK, Some("HIT"), 0)
+    );
+    assert_ne!(tag(&stale), tag(&first));
+}
+
+/// A rebuild that fails after a step committed has changed the tables too.
+#[tokio::test]
+async fn a_failed_rebuild_still_clears() {
+    let e = env().await;
+    e.seed().await;
+    e.aggregate().await;
+    e.keys_resolved().await;
+    assert_eq!(x_cache(&e.get(SITE).await), Some("HIT"));
+    // Champions commit; matchups then fail.
+    e.state
+        .db
+        .write(|c| Ok::<_, DbError>(c.execute_batch("DROP TABLE champion_matchups")?))
+        .await
+        .unwrap();
+    let failed = e
+        .ctx()
+        .aggregate(&job(
+            "aggregate:analytics",
+            json!({"platform": "kr", "queue": "RANKED_SOLO_5x5"}),
+        ))
+        .await;
+    assert!(failed.is_err());
+    let (r, reads) = e.read_counted(SITE, None).await;
+    assert_eq!((x_cache(&r), reads), (Some("MISS"), 5));
+}
+
+/// Design §6: at `ANALYTICS_CACHE_ENTRIES=2`, A, B, C evicts A; A again
+/// evicts B; C is still there.
+#[tokio::test]
+async fn the_cap_evicts_the_least_recently_used() {
+    let e = env_with(&[("ANALYTICS_CACHE_ENTRIES", "2")]).await;
+    e.seed().await;
+    e.aggregate().await;
+    e.keys_resolved().await;
+    let (a, b, c) = (
+        "/v1/lol/analytics/champions?patch=16.19",
+        "/v1/lol/analytics/champions?patch=all&limit=100",
+        "/v1/lol/analytics/patches?remakes=include",
+    );
+    let mut seen = vec![];
+    for uri in [a, b, c, a, c] {
+        let (r, reads) = e.read_counted(uri, None).await;
+        seen.push((x_cache(&r).unwrap().to_string(), reads));
+    }
+    let want: Vec<(String, u64)> = [("MISS", 5), ("MISS", 5), ("MISS", 1), ("MISS", 5), ("HIT", 0)]
+        .iter()
+        .map(|(x, n)| ((*x).to_string(), *n))
+        .collect();
+    assert_eq!(seen, want);
+    assert_eq!(e.state.analytics.responses.len(), 2);
+}
+
+#[tokio::test]
+async fn zero_keeps_nothing() {
+    let e = env_with(&[("ANALYTICS_CACHE_ENTRIES", "0")]).await;
+    e.seed().await;
+    e.aggregate().await;
+    e.keys_resolved().await;
+    for _ in 0..2 {
+        let (r, reads) = e.read_counted(SITE, None).await;
+        assert_eq!((r.status, x_cache(&r), reads), (StatusCode::OK, Some("MISS"), 5));
+    }
+    assert!(e.state.analytics.responses.is_empty());
+}
+
+/// One query however it is spelled, and for every consumer: the key scope
+/// is the process's, not the caller's (ADR-169).
+#[tokio::test]
+async fn reordered_queries_and_other_consumers_share_an_entry() {
+    let e = env().await;
+    e.seed().await;
+    e.aggregate().await;
+    let r = e
+        .call(
+            "GET",
+            "/v1/lol/analytics/champions?queue=RANKED_SOLO_5x5&limit=7&patch=16.19",
+            &e.reader,
+            None,
+            None,
+        )
+        .await;
+    assert_eq!(x_cache(&r), Some("MISS"));
+    let again = e
+        .call(
+            "GET",
+            "/v1/lol/analytics/champions?patch=16.19&limit=7&queue=RANKED_SOLO_5x5&remakes=exclude",
+            &e.admin,
+            None,
+            None,
+        )
+        .await;
+    assert_eq!(x_cache(&again), Some("HIT"));
+    assert_eq!(again.body, r.body);
+}
+
+#[tokio::test]
+async fn errors_are_not_cached() {
+    let e = env().await;
+    e.keys_resolved().await;
+    for _ in 0..2 {
+        let (r, reads) = e.read_counted("/v1/lol/analytics/champions?queue=X", None).await;
+        assert_eq!((r.status, x_cache(&r), reads), (StatusCode::BAD_REQUEST, None, 0));
+    }
+    assert!(e.state.analytics.responses.is_empty());
+}
+
+/// Design §6: ten concurrent cold requests for one slice read it once.
+#[tokio::test]
+async fn concurrent_misses_read_once() {
+    let e = env().await;
+    e.seed().await;
+    e.aggregate().await;
+    e.keys_resolved().await;
+    e.state.analytics.clear();
+    let before = e.reads();
+    let replies = futures_util::future::join_all((0..10).map(|_| e.get(SITE))).await;
+    assert_eq!(e.reads() - before, 5);
+    for r in &replies {
+        assert_eq!((r.status, x_cache(r)), (StatusCode::OK, Some("MISS")));
+        assert_eq!(r.body, replies[0].body);
     }
 }

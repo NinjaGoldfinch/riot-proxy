@@ -959,3 +959,26 @@ async fn the_admin_route_queues_a_sync() {
         (StatusCode::BAD_REQUEST, "body/force must be boolean".into())
     );
 }
+
+/// PERF-03 (ADR-169): an analytics response is kept for the Data Dragon
+/// version its names and tag were built at; once a sync moves the version,
+/// the next request is computed again.
+#[tokio::test]
+async fn a_new_patch_misses_the_analytics_cache() {
+    let e = env().await;
+    e.publish(OLD, &DATA_FILES).await;
+    e.queues().await;
+    e.sync(false).await;
+    let uri = "/v1/lol/analytics/champions?patch=all";
+    let cache = |r: &common::Reply| r.headers["x-cache"].to_str().unwrap().to_string();
+    assert_eq!(cache(&e.get(uri).await), "MISS");
+    assert_eq!(cache(&e.get(uri).await), "HIT");
+
+    e.server.reset().await;
+    e.publish(NEW, &DATA_FILES).await;
+    e.queues().await;
+    assert!(e.sync(false).await.changed);
+    let r = e.get(uri).await;
+    assert_eq!((r.status, cache(&r)), (StatusCode::OK, "MISS".to_string()));
+    assert_eq!(cache(&e.get(uri).await), "HIT");
+}

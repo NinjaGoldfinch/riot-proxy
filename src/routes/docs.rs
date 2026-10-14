@@ -151,7 +151,8 @@ const HEADERS: [(&str, Type, &str); 10] = [
         "X-Cache",
         Type::String,
         "Where the body came from: `HIT`, `MISS`, `STALE`, `HIT-NEG` (a cached 404), \
-         `ARCHIVE` (the match archive) or `BYPASS` (`?refresh=true`).",
+         `ARCHIVE` (the match archive) or `BYPASS` (`?refresh=true`). On the analytics routes, `HIT` is \
+         a response kept in memory since the last recompute and `MISS` one read from the tables.",
     ),
     (
         "X-Cache-Age",
@@ -220,9 +221,15 @@ fn headers_for(path: &str, op: &Operation, status: &str) -> Vec<&'static str> {
     if matches!(status, "429" | "503") {
         out.push("Retry-After");
     }
-    // The analytics routes revalidate with `ETag` instead of a cache tier.
-    let cached = tagged(&READ_TAGS) && !path.starts_with("/v1/lol/analytics");
+    // The analytics routes keep their responses in memory per rebuild
+    // (PERF-03, ADR-169): `X-Cache` on a 200 or 304, and no age, since the
+    // body's `computedAt` dates it.
+    let analytics = path.starts_with("/v1/lol/analytics");
+    let cached = tagged(&READ_TAGS) && !analytics;
     let ok = status.starts_with('2');
+    if analytics && (ok || status == "304") {
+        out.push("X-Cache");
+    }
     if cached && ok {
         out.extend(["X-Cache", "X-Cache-Age"]);
         // Static files and the archive-built champion pool are never read from Riot.

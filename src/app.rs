@@ -61,6 +61,9 @@ pub struct AppState {
     pub stats: Arc<crate::stats::Stats>,
     /// The daily housekeeping, for its backups and last run (ADM-06).
     pub maintenance: Arc<crate::jobs::maintenance::Maintenance>,
+    /// The analytics routes' reads and their responses cache (PERF-03), shared
+    /// with `aggregate:analytics`, which clears and warms it.
+    pub analytics: Arc<crate::routes::analytics::cache::Analytics>,
 }
 
 pub fn router(state: AppState, metrics: PrometheusHandle) -> Router {

@@ -4,6 +4,7 @@
 
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use rusqlite::{Connection, OpenFlags};
@@ -81,6 +82,9 @@ struct Inner {
     /// The bucket this database's offloaded bodies are in (OBJ-02). Set once,
     /// at boot; unset, an offloaded body reads as missing.
     objects: OnceLock<Objects>,
+    /// Calls to [`Db::read`] since open: what a cached analytics hit must not
+    /// add to (PERF-03).
+    reads: AtomicU64,
 }
 
 impl Inner {
@@ -162,6 +166,7 @@ impl Db {
                 permits: Arc::new(Semaphore::new(readers)),
                 reader_count: readers,
                 objects: OnceLock::new(),
+                reads: AtomicU64::new(0),
             }),
         })
     }
@@ -194,6 +199,11 @@ impl Db {
     /// Read connections in the pool, idle or not.
     pub fn readers(&self) -> usize {
         self.inner.reader_count
+    }
+
+    /// Calls to [`Db::read`] since the database was opened.
+    pub fn reads(&self) -> u64 {
+        self.inner.reads.load(Ordering::Relaxed)
     }
 
     /// Read connections idle right now (`/readyz`, `sqlite_readers_free`).
@@ -233,6 +243,7 @@ impl Db {
         T: Send + 'static,
         E: From<DbError> + Send + 'static,
     {
+        self.inner.reads.fetch_add(1, Ordering::Relaxed);
         // The semaphore is never closed, so acquire cannot fail in practice.
         let permit = Arc::clone(&self.inner.permits)
             .acquire_owned()

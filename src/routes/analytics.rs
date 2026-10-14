@@ -7,13 +7,20 @@
 //! query and the mirrored Data Dragon version (names come from it); a matching
 //! `If-None-Match` (or `*`) gets 304. v2 adds `?remakes=exclude|include`
 //! (default exclude, ADR-056), which is part of the `ETag` too.
+//!
+//! Each route's 200 and `ETag` are kept in memory until the next rebuild or
+//! Data Dragon version (`cache`, PERF-03, ADR-169): a hit, 200 or 304, runs
+//! no read and sends `X-Cache: HIT`; a computed response sends `MISS`.
+
+pub mod cache;
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use axum::Extension;
 use axum::extract::rejection::PathRejection;
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use serde::Serialize;
@@ -27,12 +34,16 @@ use crate::archive::analytics::{
     self, BuildPartRow, BuildRow, Facet, FacetRow, PatchRow, Read, Side, StatRow,
 };
 use crate::clock::iso_ms;
-use crate::db::DbError;
+use crate::db::{Db, DbError};
+use crate::fetcher::XCache;
 use crate::http::{ApiError, validate};
 use crate::riot::ladder::RANKED_QUEUES;
 use crate::routes::passthrough::{JSON, LocalErrors};
 use crate::routes::players::{js_number, js_opt_number, round4};
 use crate::routes::riot::bad_path;
+use crate::r#static::Mirror;
+
+use self::cache::{Entry, Failed, Key};
 
 type Q = Query<HashMap<String, String>>;
 type Who = Extension<std::sync::Arc<crate::http::auth::Consumer>>;
@@ -392,8 +403,35 @@ const ALL_PATCHES: &str = "all";
 /// and added `side` to every body.
 const STATS_SHAPE: &str = "tier-side";
 
+/// What the analytics reads need, built once at boot and shared by the
+/// routes and the rebuild's warm (PERF-03).
+#[derive(Clone)]
+pub struct Reads {
+    pub db: Db,
+    pub mirror: Arc<Mirror>,
+    /// The process's key scope (`RIOT_API_KEY`'s), the same for every consumer.
+    pub key_scope: String,
+    /// `queue`'s default: the first of `LADDER_QUEUES`.
+    pub default_queue: String,
+}
+
+impl Reads {
+    pub fn new(db: Db, mirror: Arc<Mirror>, key_scope: &str, ladder_queues: &[String]) -> Self {
+        Self {
+            db,
+            mirror,
+            key_scope: key_scope.to_string(),
+            default_queue: ladder_queues
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "RANKED_SOLO_5x5".into()),
+        }
+    }
+}
+
 /// What every analytics query names, validated in v1's property order.
-struct Common {
+#[derive(Debug)]
+pub struct Common {
     /// `None`: every platform (ADR-065).
     platform: Option<String>,
     queue: String,
@@ -416,12 +454,12 @@ fn q<'a>(query: &'a HashMap<String, String>, name: &str) -> Option<&'a str> {
 /// `roles` and the limit bounds differ by route (v1's three query schemas).
 /// Every route takes `tier` and `side` (FLT-02).
 fn common(
-    state: &AppState,
+    reads: &Reads,
     query: &HashMap<String, String>,
     roles: &[&'static str],
     limit: (i64, i64, i64),
 ) -> Result<Common, ApiError> {
-    let ladder = ladder_query(state, query)?;
+    let ladder = ladder_query(reads, query)?;
     let tiers: Vec<&'static str> = crate::riot::ladder::tiers()
         .chain([analytics::UNKNOWN_TIER])
         .collect();
@@ -457,27 +495,18 @@ fn side_query(query: &HashMap<String, String>) -> Result<Option<Side>, ApiError>
 
 /// The ladder a query names: platform (`None`: every platform) and queue
 /// (default the first of `LADDER_QUEUES`), validated in that order (v1).
+#[derive(Debug)]
 struct LadderQuery {
     platform: Option<String>,
     queue: String,
 }
 
-fn ladder_query(state: &AppState, query: &HashMap<String, String>) -> Result<LadderQuery, ApiError> {
+fn ladder_query(reads: &Reads, query: &HashMap<String, String>) -> Result<LadderQuery, ApiError> {
     let platform = validate::query_platform(q(query, "platform"))?;
     let queue = validate::query_one_of("queue", q(query, "queue"), &RANKED_QUEUES)?;
     Ok(LadderQuery {
         platform: platform.map(|p| p.as_str().to_string()),
-        queue: queue.map_or_else(
-            || {
-                state
-                    .config
-                    .ladder_queues
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| "RANKED_SOLO_5x5".into())
-            },
-            str::to_string,
-        ),
+        queue: queue.map_or_else(|| reads.default_queue.clone(), str::to_string),
     })
 }
 
@@ -516,22 +545,42 @@ fn not_modified(headers: &HeaderMap, etag: &str) -> bool {
         .is_some_and(|v| v.split(',').map(str::trim).any(|t| t == etag || t == "*"))
 }
 
-/// The document, or 304, with the ETag and v1's cache header either way.
-fn respond<T: Serialize>(headers: &HeaderMap, etag: &str, body: &T) -> Response {
-    let mut res = if not_modified(headers, etag) {
+/// The document, or 304, with the ETag, v1's cache header and `X-Cache`
+/// either way.
+fn reply(headers: &HeaderMap, entry: &Entry, x_cache: XCache) -> Response {
+    let mut res = if not_modified(headers, &entry.etag) {
         StatusCode::NOT_MODIFIED.into_response()
     } else {
-        match serde_json::to_vec(body) {
-            Ok(b) => (StatusCode::OK, [(header::CONTENT_TYPE, JSON)], b).into_response(),
-            Err(_) => return ApiError::internal().into_response(),
-        }
+        (StatusCode::OK, [(header::CONTENT_TYPE, JSON)], entry.body.clone()).into_response()
     };
     let h = res.headers_mut();
     h.insert(header::CACHE_CONTROL, HeaderValue::from_static(CACHE_CONTROL));
-    if let Ok(v) = HeaderValue::from_str(etag) {
+    if let Ok(v) = HeaderValue::from_str(&entry.etag) {
         h.insert(header::ETAG, v);
     }
+    h.insert(
+        HeaderName::from_static("x-cache"),
+        HeaderValue::from_static(x_cache.as_str()),
+    );
     res
+}
+
+/// A validated query's response: from memory, else computed and stored.
+async fn serve(state: &AppState, headers: &HeaderMap, query: Result<Request, ApiError>) -> Response {
+    let query = match query {
+        Ok(q) => q,
+        Err(e) => return e.into_response(),
+    };
+    match state.analytics.get_or_compute(query).await {
+        Ok((entry, true)) => reply(headers, &entry, XCache::Hit),
+        Ok((entry, false)) => reply(headers, &entry, XCache::Miss),
+        Err(Failed) => ApiError::internal().into_response(),
+    }
+}
+
+/// The document's bytes and tag.
+fn document<T: Serialize>(tag: String, body: &T) -> Result<(String, Vec<u8>), Failed> {
+    Ok((tag, serde_json::to_vec(body).map_err(|e| failed(&e))?))
 }
 
 fn some<T: ToString>(v: T) -> Option<String> {
@@ -627,37 +676,36 @@ fn newest(stamps: impl IntoIterator<Item = i64>) -> Option<String> {
     stamps.into_iter().max().and_then(iso_ms)
 }
 
-fn internal(e: &dyn std::fmt::Display) -> Response {
+fn failed(e: &dyn std::fmt::Display) -> Failed {
     tracing::error!(error = %e, "analytics read failed");
-    ApiError::internal().into_response()
+    Failed
 }
 
-async fn patch_or_latest(state: &AppState, c: &Common) -> Result<Option<String>, DbError> {
+async fn patch_or_latest(reads: &Reads, c: &Common) -> Result<Option<String>, DbError> {
     if c.patch.is_some() {
         return Ok(c.patch.clone());
     }
-    let scope = state.fetcher.key_scope().as_str().to_string();
-    analytics::latest_patch(&state.db, &scope, c.platform.as_deref(), &c.queue).await
+    analytics::latest_patch(&reads.db, &reads.key_scope, c.platform.as_deref(), &c.queue).await
 }
 
 /// The denominators of `read`'s stat rows, per tier and over every tier.
 /// Bans and matches have no role: a pick rate in one role is still over every
 /// match.
-async fn rates(state: &AppState, read: Read) -> Result<Rates, DbError> {
+async fn rates(db: &Db, read: Read) -> Result<Rates, DbError> {
     let read = Read { role: None, ..read };
     let (slices, bans, totals, ban_totals) = tokio::try_join!(
-        analytics::slices(&state.db, read.clone()),
-        analytics::bans(&state.db, read.clone()),
-        analytics::match_totals(&state.db, read.clone()),
-        analytics::ban_totals(&state.db, read),
+        analytics::slices(db, read.clone()),
+        analytics::bans(db, read.clone()),
+        analytics::match_totals(db, read.clone()),
+        analytics::ban_totals(db, read),
     )?;
     Ok(Rates::new(slices, bans, totals, ban_totals))
 }
 
 impl Common {
-    fn read(&self, state: &AppState, patch: &str) -> Read {
+    fn read(&self, reads: &Reads, patch: &str) -> Read {
         Read {
-            key_scope: state.fetcher.key_scope().as_str().to_string(),
+            key_scope: reads.key_scope.clone(),
             platform: self.platform.clone(),
             queue: self.queue.clone(),
             patch: (patch != ALL_PATCHES).then(|| patch.to_string()),
@@ -678,6 +726,154 @@ impl Common {
     fn remakes_part(&self) -> Option<String> {
         some(if self.remakes { "include" } else { "exclude" })
     }
+
+    /// Every parameter as parsed, for the cache key.
+    fn parts(&self) -> Vec<Option<String>> {
+        vec![
+            self.platform.clone(),
+            some(&self.queue),
+            self.tier.clone(),
+            self.side_part(),
+            self.patch.clone(),
+            self.role.clone(),
+            self.min_games.map(|n| n.to_string()),
+            some(self.limit),
+            self.remakes_part(),
+        ]
+    }
+}
+
+/// Which analytics route a query is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Route {
+    Champions,
+    Detail,
+    Matchups,
+    Builds,
+    Patches,
+}
+
+impl Route {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Champions => "champions",
+            Self::Detail => "detail",
+            Self::Matchups => "matchups",
+            Self::Builds => "builds",
+            Self::Patches => "patches",
+        }
+    }
+}
+
+/// `/patches`' query.
+#[derive(Debug)]
+pub struct PatchesQuery {
+    ladder: LadderQuery,
+    champion_id: Option<i64>,
+    side: Option<Side>,
+    remakes: bool,
+}
+
+/// A validated analytics query: the route, the path's champion and the
+/// parameters with their defaults applied, so two spellings of one query are
+/// one [`Request`] and one cache [`Key`].
+#[derive(Debug)]
+pub enum Request {
+    Champions(Common),
+    Detail(i64, Common),
+    Matchups(i64, Common),
+    Builds(i64, Common),
+    Patches(PatchesQuery),
+}
+
+impl Request {
+    /// Validate `query` (and `id`, the path's `championId`) as `route` does,
+    /// with the same 400s in the same order.
+    pub fn parse(
+        route: Route,
+        id: Option<&str>,
+        query: &HashMap<String, String>,
+        reads: &Reads,
+    ) -> Result<Self, ApiError> {
+        let id = || champion_id(id.unwrap_or_default());
+        Ok(match route {
+            Route::Champions => Self::Champions(common(reads, query, &TEAM_POSITIONS, (1, 500, 200))?),
+            Route::Detail => {
+                let id = id()?;
+                Self::Detail(id, common(reads, query, &TEAM_POSITIONS, (1, 50, 10))?)
+            }
+            Route::Matchups => {
+                let id = id()?;
+                Self::Matchups(id, common(reads, query, &LANE_POSITIONS, (1, 200, 50))?)
+            }
+            Route::Builds => {
+                let id = id()?;
+                Self::Builds(id, common(reads, query, &TEAM_POSITIONS, (1, 10, 3))?)
+            }
+            Route::Patches => {
+                let ladder = ladder_query(reads, query)?;
+                let champion_id = validate::int_query("championId", q(query, "championId"), 1, i64::MAX)?;
+                let remakes = validate::remakes_query(q(query, "remakes"))?;
+                Self::Patches(PatchesQuery {
+                    ladder,
+                    champion_id,
+                    side: side_query(query)?,
+                    remakes,
+                })
+            }
+        })
+    }
+
+    /// The cache key: the route, `key_scope`, the champion and every
+    /// parameter as parsed. `minGames` is kept as sent: the matchups `ETag`
+    /// tells an omitted one from `0`.
+    pub fn key(&self, key_scope: &str) -> Key {
+        let (route, id, parts): (Route, Option<i64>, Vec<Option<String>>) = match self {
+            Self::Champions(c) => (Route::Champions, None, c.parts()),
+            Self::Detail(id, c) => (Route::Detail, Some(*id), c.parts()),
+            Self::Matchups(id, c) => (Route::Matchups, Some(*id), c.parts()),
+            Self::Builds(id, c) => (Route::Builds, Some(*id), c.parts()),
+            Self::Patches(p) => (
+                Route::Patches,
+                None,
+                vec![
+                    p.ladder.platform.clone(),
+                    some(&p.ladder.queue),
+                    p.champion_id.map(|id| id.to_string()),
+                    p.side.map(|s| s.as_str().to_string()),
+                    some(if p.remakes { "include" } else { "exclude" }),
+                ],
+            ),
+        };
+        let mut key = format!(
+            "{}|{key_scope}|{}",
+            route.as_str(),
+            id.map_or_else(|| "~".to_string(), |i| i.to_string())
+        );
+        for part in parts {
+            key.push('|');
+            key.push_str(part.as_deref().unwrap_or("~"));
+        }
+        Key(key)
+    }
+}
+
+/// `query`'s document, read from the tables: a cache miss's work.
+pub(crate) async fn compute(reads: &Reads, query: &Request) -> Result<Entry, Failed> {
+    // Names and the tag are built at this version; the entry is good for it only.
+    let version = reads.mirror.current_version().await;
+    let (etag, body) = match query {
+        Request::Champions(c) => champions_doc(reads, c, version.clone()).await,
+        Request::Detail(id, c) => detail_doc(reads, *id, c, version.clone()).await,
+        Request::Matchups(id, c) => matchups_doc(reads, *id, c, version.clone()).await,
+        Request::Builds(id, c) => builds_doc(reads, *id, c, version.clone()).await,
+        Request::Patches(p) => patches_doc(reads, p).await,
+    }?;
+    Ok(Entry {
+        body: body.into(),
+        etag,
+        version,
+    })
 }
 
 #[utoipa::path(
@@ -690,7 +886,8 @@ impl Common {
         many tiers its players were in, and averages over all the champion's games. With `tier`, a row per champion \
         at that tier, its rates over the matches that had a player at the tier. `minGames` and `limit` apply to the \
         rows returned. Recomputed per (platform, queue) when a crawl completes. Sends an `ETag`; a matching \
-        `If-None-Match` gets 304. Games Riot flagged as remakes are left out unless `remakes=include`.",
+        `If-None-Match` gets 304. Kept in memory until the next recompute: `X-Cache: HIT` from memory, `MISS` read from the tables. Games Riot flagged as \
+        remakes are left out unless `remakes=include`.",
     params(
         ("platform" = Option<String>, Query, description = "Only this platform's ladder. Omitted sums every platform"),
         ("queue" = Option<String>, Query, description = "RANKED_SOLO_5x5 or RANKED_FLEX_SR; default the first of `LADDER_QUEUES`"),
@@ -711,40 +908,45 @@ async fn champions(
     headers: HeaderMap,
     Query(query): Q,
 ) -> Response {
-    let c = match common(&state, &query, &TEAM_POSITIONS, (1, 500, 200)) {
-        Ok(c) => c,
-        Err(e) => return e.into_response(),
-    };
+    let q = Request::parse(Route::Champions, None, &query, &state.analytics.reads);
+    serve(&state, &headers, q).await
+}
+
+async fn champions_doc(
+    reads: &Reads,
+    c: &Common,
+    version: Option<String>,
+) -> Result<(String, Vec<u8>), Failed> {
     let min_games = c.min_games.unwrap_or(0);
-    let patch = match patch_or_latest(&state, &c).await {
+    let patch = match patch_or_latest(reads, c).await {
         Ok(p) => p,
-        Err(e) => return internal(&e),
+        Err(e) => return Err(failed(&e)),
     };
     let (rows, rates) = match &patch {
         Some(p) => {
             let read = Read {
                 min_games,
-                ..c.read(&state, p)
+                ..c.read(reads, p)
             };
             // Without a tier, a row per champion summed over every tier, its
             // rates over the totals (ADR-123).
-            let got = tokio::try_join!(analytics::stats(&state.db, read.clone()), rates(&state, read));
+            let got = tokio::try_join!(analytics::stats(&reads.db, read.clone()), rates(&reads.db, read));
             match got {
                 Ok(g) => g,
-                Err(e) => return internal(&e),
+                Err(e) => return Err(failed(&e)),
             }
         }
         None => (vec![], Rates::default()),
     };
     let computed_at = newest(rows.iter().map(|r| r.computed_at));
     let ids: Vec<i64> = rows.iter().map(|r| r.champion_id).collect();
-    let names = state.ddragon.champion_names(&ids).await;
+    let names = reads.mirror.champion_names(&ids).await;
     let (total_games, champions) = enrich(rows, &rates, &names);
     let tag = etag(&[
         some("champions"),
         some(STATS_SHAPE),
         computed_at.clone(),
-        state.ddragon.current_version().await,
+        version,
         c.platform.clone(),
         some(&c.queue),
         c.tier.clone(),
@@ -755,16 +957,15 @@ async fn champions(
         some(c.limit),
         c.remakes_part(),
     ]);
-    respond(
-        &headers,
-        &tag,
+    document(
+        tag,
         &ChampionStatsResponse {
             side: c.side_part(),
-            platform: c.platform,
-            queue: c.queue,
-            tier: c.tier,
+            platform: c.platform.clone(),
+            queue: c.queue.clone(),
+            tier: c.tier.clone(),
             patch,
-            role: c.role,
+            role: c.role.clone(),
             computed_at,
             total_games,
             champions,
@@ -775,7 +976,8 @@ async fn champions(
 #[utoipa::path(
     get, path = "/v1/lol/analytics/champions/{championId}/matchups", tag = "lol",
     summary = "A champion's lane matchups",
-    description = "Sends an `ETag`; a matching `If-None-Match` gets 304. Every lane matchup this champion has archived \
+    description = "Sends an `ETag`; a matching `If-None-Match` gets 304. Kept in memory until the next recompute: `X-Cache: HIT` from memory, `MISS` read from the tables. \
+        Every lane matchup this champion has archived \
         data for, at the tier and side of this champion's player (`tier`, `side`); the opponent may have been in \
         another tier. Mirror lanes are excluded — their win rate is 50% by construction. \
         Every archived lane is recorded from both sides, so the opposite champion's view of the same lane mirrors \
@@ -806,39 +1008,43 @@ async fn champion_matchups(
         Ok(p) => p,
         Err(e) => return bad_path(&e).into_response(),
     };
-    let checked =
-        champion_id(&raw).and_then(|id| Ok((id, common(&state, &query, &LANE_POSITIONS, (1, 200, 50))?)));
-    let (id, c) = match checked {
-        Ok(v) => v,
-        Err(e) => return e.into_response(),
-    };
-    let patch = match patch_or_latest(&state, &c).await {
+    let q = Request::parse(Route::Matchups, Some(&raw), &query, &state.analytics.reads);
+    serve(&state, &headers, q).await
+}
+
+async fn matchups_doc(
+    reads: &Reads,
+    id: i64,
+    c: &Common,
+    version: Option<String>,
+) -> Result<(String, Vec<u8>), Failed> {
+    let patch = match patch_or_latest(reads, c).await {
         Ok(p) => p,
-        Err(e) => return internal(&e),
+        Err(e) => return Err(failed(&e)),
     };
     let rows = match &patch {
         Some(p) => {
             let read = Read {
                 champion_id: Some(id),
                 min_games: c.min_games.unwrap_or(0),
-                ..c.read(&state, p)
+                ..c.read(reads, p)
             };
-            match analytics::facet(&state.db, Facet::Matchups, read).await {
+            match analytics::facet(&reads.db, Facet::Matchups, read).await {
                 Ok(r) => r,
-                Err(e) => return internal(&e),
+                Err(e) => return Err(failed(&e)),
             }
         }
         None => vec![],
     };
     let mut ids = vec![id];
     ids.extend(rows.iter().filter_map(|r| r.ids.first().copied()));
-    let names = state.ddragon.champion_names(&ids).await;
+    let names = reads.mirror.champion_names(&ids).await;
     let computed_at = newest(rows.iter().map(|r| r.computed_at));
     let tag = etag(&[
         some("matchups"),
         some(STATS_SHAPE),
         computed_at.clone(),
-        state.ddragon.current_version().await,
+        version,
         c.platform.clone(),
         some(&c.queue),
         c.tier.clone(),
@@ -850,18 +1056,17 @@ async fn champion_matchups(
         some(c.limit),
         c.remakes_part(),
     ]);
-    respond(
-        &headers,
-        &tag,
+    document(
+        tag,
         &ChampionMatchupsResponse {
             champion_id: id,
             champion_name: names.get(&id).cloned(),
             side: c.side_part(),
-            platform: c.platform,
-            queue: c.queue,
-            tier: c.tier,
+            platform: c.platform.clone(),
+            queue: c.queue.clone(),
+            tier: c.tier.clone(),
             patch,
-            role: c.role,
+            role: c.role.clone(),
             computed_at,
             matchups: rows.iter().map(|r| matchup(r, &names)).collect(),
         },
@@ -871,7 +1076,8 @@ async fn champion_matchups(
 #[utoipa::path(
     get, path = "/v1/lol/analytics/champions/{championId}", tag = "lol",
     summary = "Champion detail composite",
-    description = "Sends an `ETag`; a matching `If-None-Match` gets 304. The champion's stat row at this slice, its \
+    description = "Sends an `ETag`; a matching `If-None-Match` gets 304. Kept in memory until the next recompute: `X-Cache: HIT` from memory, `MISS` read from the tables. \
+        The champion's stat row at this slice, its \
         rows per tier, and its top lane matchups, items, runes and summoner spells — one call for a champion page. \
         Without `tier`, `stats` is one row summed over every tier (`tier: null`), its pick and ban rates over every \
         match in the slice, and `byTier` has a row per tier; with `tier`, both hold that tier's row. Each section is \
@@ -903,16 +1109,20 @@ async fn champion_detail(
         Ok(p) => p,
         Err(e) => return bad_path(&e).into_response(),
     };
-    let checked =
-        champion_id(&raw).and_then(|id| Ok((id, common(&state, &query, &TEAM_POSITIONS, (1, 50, 10))?)));
-    let (id, c) = match checked {
-        Ok(v) => v,
-        Err(e) => return e.into_response(),
-    };
+    let q = Request::parse(Route::Detail, Some(&raw), &query, &state.analytics.reads);
+    serve(&state, &headers, q).await
+}
+
+async fn detail_doc(
+    reads: &Reads,
+    id: i64,
+    c: &Common,
+    version: Option<String>,
+) -> Result<(String, Vec<u8>), Failed> {
     let min_games = c.min_games.unwrap_or(0);
-    let patch = match patch_or_latest(&state, &c).await {
+    let patch = match patch_or_latest(reads, c).await {
         Ok(p) => p,
-        Err(e) => return internal(&e),
+        Err(e) => return Err(failed(&e)),
     };
     type Sections = (
         Vec<StatRow>,
@@ -928,7 +1138,7 @@ async fn champion_detail(
             let base = Read {
                 champion_id: Some(id),
                 min_games,
-                ..c.read(&state, p)
+                ..c.read(reads, p)
             };
             // The stats section is not limited (v1: its default, 500).
             let stats = Read {
@@ -940,24 +1150,24 @@ async fn champion_detail(
             // tier's and side's, or summed over them (FLT-02).
             let facets = base.clone();
             let got = tokio::try_join!(
-                analytics::stats(&state.db, stats.clone()),
-                analytics::stats_by_tier(&state.db, stats),
-                rates(&state, base.clone()),
-                analytics::facet(&state.db, Facet::Matchups, facets.clone()),
-                analytics::facet(&state.db, Facet::Items, facets.clone()),
-                analytics::facet(&state.db, Facet::Runes, facets.clone()),
-                analytics::facet(&state.db, Facet::Spells, facets),
+                analytics::stats(&reads.db, stats.clone()),
+                analytics::stats_by_tier(&reads.db, stats),
+                rates(&reads.db, base.clone()),
+                analytics::facet(&reads.db, Facet::Matchups, facets.clone()),
+                analytics::facet(&reads.db, Facet::Items, facets.clone()),
+                analytics::facet(&reads.db, Facet::Runes, facets.clone()),
+                analytics::facet(&reads.db, Facet::Spells, facets),
             );
             match got {
                 Ok(g) => g,
-                Err(e) => return internal(&e),
+                Err(e) => return Err(failed(&e)),
             }
         }
         None => Default::default(),
     };
     let mut ids = vec![id];
     ids.extend(matchups.iter().filter_map(|r| r.ids.first().copied()));
-    let names = state.ddragon.champion_names(&ids).await;
+    let names = reads.mirror.champion_names(&ids).await;
     let stamp = |rows: &[FacetRow]| newest(rows.iter().map(|r| r.computed_at));
     let sections = SectionsComputedAt {
         stats: newest(stats.iter().chain(&by_tier).map(|r| r.computed_at)),
@@ -986,7 +1196,7 @@ async fn champion_detail(
     let mut parts = vec![some("detail"), some(STATS_SHAPE)];
     parts.extend(section_stamps);
     parts.extend([
-        state.ddragon.current_version().await,
+        version,
         c.platform.clone(),
         some(&c.queue),
         c.tier.clone(),
@@ -999,18 +1209,17 @@ async fn champion_detail(
         c.remakes_part(),
     ]);
     let tag = etag(&parts);
-    respond(
-        &headers,
-        &tag,
+    document(
+        tag,
         &ChampionDetailResponse {
             champion_id: id,
             champion_name: names.get(&id).cloned(),
             side: c.side_part(),
-            platform: c.platform,
-            queue: c.queue,
-            tier: c.tier,
+            platform: c.platform.clone(),
+            queue: c.queue.clone(),
+            tier: c.tier.clone(),
             patch,
-            role: c.role,
+            role: c.role.clone(),
             computed_at,
             sections_computed_at: sections,
             total_games,
@@ -1134,7 +1343,8 @@ fn build_entry(b: &BuildRow, parts: &[BuildPartRow], total: i64) -> ChampionBuil
         built it (at most three each). Worked out from archived match timelines, so matches archived without one \
         aren't counted, nor are players who finished fewer than two items. Without `role`, the champion's \
         most-played role in the slice (its `tier` and `side` included), named in `role`. Sends an `ETag`; a \
-        matching `If-None-Match` gets 304. A champion nobody has builds for yet still returns 200 with an empty \
+        matching `If-None-Match` gets 304. Kept in memory until the next recompute: `X-Cache: HIT` from memory, `MISS` read from the tables. A champion nobody has \
+        builds for yet still returns 200 with an empty \
         `builds`.",
     params(
         ("championId" = i64, Path, description = "Champion id, ≥ 1"),
@@ -1162,16 +1372,20 @@ async fn champion_builds(
         Ok(p) => p,
         Err(e) => return bad_path(&e).into_response(),
     };
-    let checked =
-        champion_id(&raw).and_then(|id| Ok((id, common(&state, &query, &TEAM_POSITIONS, (1, 10, 3))?)));
-    let (id, c) = match checked {
-        Ok(v) => v,
-        Err(e) => return e.into_response(),
-    };
+    let q = Request::parse(Route::Builds, Some(&raw), &query, &state.analytics.reads);
+    serve(&state, &headers, q).await
+}
+
+async fn builds_doc(
+    reads: &Reads,
+    id: i64,
+    c: &Common,
+    version: Option<String>,
+) -> Result<(String, Vec<u8>), Failed> {
     let min_games = c.min_games.unwrap_or(0);
-    let patch = match patch_or_latest(&state, &c).await {
+    let patch = match patch_or_latest(reads, c).await {
         Ok(p) => p,
-        Err(e) => return internal(&e),
+        Err(e) => return Err(failed(&e)),
     };
     let mut role = c.role.clone();
     let mut builds = vec![];
@@ -1181,13 +1395,13 @@ async fn champion_builds(
         let base = Read {
             champion_id: Some(id),
             min_games,
-            ..c.read(&state, p)
+            ..c.read(reads, p)
         };
         // Builds differ by role, so they are never summed across roles.
         if role.is_none() {
-            role = match analytics::top_role(&state.db, base.clone()).await {
+            role = match analytics::top_role(&reads.db, base.clone()).await {
                 Ok(r) => r,
-                Err(e) => return internal(&e),
+                Err(e) => return Err(failed(&e)),
             };
         }
         if role.is_some() {
@@ -1196,30 +1410,30 @@ async fn champion_builds(
                 ..base
             };
             let got = tokio::try_join!(
-                analytics::builds(&state.db, read.clone()),
-                analytics::build_totals(&state.db, read.clone()),
+                analytics::builds(&reads.db, read.clone()),
+                analytics::build_totals(&reads.db, read.clone()),
             );
             (builds, (total_games, computed)) = match got {
                 Ok(g) => g,
-                Err(e) => return internal(&e),
+                Err(e) => return Err(failed(&e)),
             };
             if !builds.is_empty() {
-                parts = match analytics::build_parts(&state.db, read, builds.iter().map(|b| b.core).collect())
+                parts = match analytics::build_parts(&reads.db, read, builds.iter().map(|b| b.core).collect())
                     .await
                 {
                     Ok(p) => p,
-                    Err(e) => return internal(&e),
+                    Err(e) => return Err(failed(&e)),
                 };
             }
         }
     }
-    let names = state.ddragon.champion_names(&[id]).await;
+    let names = reads.mirror.champion_names(&[id]).await;
     let computed_at = computed.and_then(iso_ms);
     let tag = etag(&[
         some("builds"),
         some(STATS_SHAPE),
         computed_at.clone(),
-        state.ddragon.current_version().await,
+        version,
         c.platform.clone(),
         some(&c.queue),
         c.tier.clone(),
@@ -1232,16 +1446,15 @@ async fn champion_builds(
         some(c.limit),
         c.remakes_part(),
     ]);
-    respond(
-        &headers,
-        &tag,
+    document(
+        tag,
         &ChampionBuildsResponse {
             champion_id: id,
             champion_name: names.get(&id).cloned(),
             side: c.side_part(),
-            platform: c.platform,
-            queue: c.queue,
-            tier: c.tier,
+            platform: c.platform.clone(),
+            queue: c.queue.clone(),
+            tier: c.tier.clone(),
             patch,
             role,
             computed_at,
@@ -1260,7 +1473,7 @@ async fn champion_builds(
     description = "The patches the analytics tables hold for a ladder, newest first, with each one's games: what \
         a client offers as `patch` choices on the other analytics routes (`all` sums them). With `championId`, \
         only the patches that champion was played on, each with its games. Sends an `ETag`; a matching \
-        `If-None-Match` gets 304.",
+        `If-None-Match` gets 304. Kept in memory until the next recompute: `X-Cache: HIT` from memory, `MISS` read from the tables.",
     params(
         ("platform" = Option<String>, Query, description = "Only this platform's ladder. Omitted sums every platform"),
         ("queue" = Option<String>, Query, description = "RANKED_SOLO_5x5 or RANKED_FLEX_SR; default the first of `LADDER_QUEUES`"),
@@ -1277,19 +1490,15 @@ async fn patches(
     headers: HeaderMap,
     Query(query): Q,
 ) -> Response {
-    let checked = ladder_query(&state, &query).and_then(|l| {
-        let champion = validate::int_query("championId", q(&query, "championId"), 1, i64::MAX)?;
-        let remakes = validate::remakes_query(q(&query, "remakes"))?;
-        Ok((l, champion, remakes, side_query(&query)?))
-    });
-    let (c, champion_id, remakes, side) = match checked {
-        Ok(v) => v,
-        Err(e) => return e.into_response(),
-    };
-    let scope = state.fetcher.key_scope().as_str().to_string();
+    let q = Request::parse(Route::Patches, None, &query, &state.analytics.reads);
+    serve(&state, &headers, q).await
+}
+
+async fn patches_doc(reads: &Reads, p: &PatchesQuery) -> Result<(String, Vec<u8>), Failed> {
+    let (c, champion_id, side, remakes) = (&p.ladder, p.champion_id, p.side, p.remakes);
     let rows: Vec<PatchRow> = match analytics::patches(
-        &state.db,
-        &scope,
+        &reads.db,
+        &reads.key_scope,
         c.platform.as_deref(),
         &c.queue,
         champion_id,
@@ -1299,7 +1508,7 @@ async fn patches(
     .await
     {
         Ok(r) => r,
-        Err(e) => return internal(&e),
+        Err(e) => return Err(failed(&e)),
     };
     let tag = etag(&[
         some("patches"),
@@ -1311,12 +1520,11 @@ async fn patches(
         side.map(|s| s.as_str().to_string()),
         some(if remakes { "include" } else { "exclude" }),
     ]);
-    respond(
-        &headers,
-        &tag,
+    document(
+        tag,
         &AnalyticsPatchesResponse {
-            platform: c.platform,
-            queue: c.queue,
+            platform: c.platform.clone(),
+            queue: c.queue.clone(),
             champion_id,
             side: side.map(|s| s.as_str().to_string()),
             patches: rows
@@ -1507,6 +1715,46 @@ mod tests {
             duration_s: 0,
             computed_at: 0,
         }
+    }
+
+    fn common_of(platform: Option<&str>, min_games: Option<i64>) -> Common {
+        Common {
+            platform: platform.map(str::to_string),
+            queue: "RANKED_SOLO_5x5".into(),
+            tier: None,
+            side: None,
+            patch: Some(ALL_PATCHES.into()),
+            role: None,
+            min_games,
+            limit: 500,
+            remakes: false,
+        }
+    }
+
+    /// The key: route, key scope, champion and every parameter as parsed.
+    #[test]
+    fn the_cache_key_names_everything_that_shapes_the_answer() {
+        let site = Request::Champions(common_of(None, Some(0)));
+        assert_eq!(
+            site.key("aaaa").as_str(),
+            "champions|aaaa|~|~|RANKED_SOLO_5x5|~|~|all|~|0|500|exclude"
+        );
+        assert_ne!(site.key("aaaa"), site.key("bbbb"), "two scopes, two keys");
+        assert_ne!(
+            Request::Champions(common_of(Some("oc1"), Some(0))).key("aaaa"),
+            site.key("aaaa")
+        );
+        // The matchups tag tells an omitted minGames from 0, so the key does too.
+        assert_ne!(
+            Request::Matchups(103, common_of(None, None)).key("aaaa"),
+            Request::Matchups(103, common_of(None, Some(0))).key("aaaa")
+        );
+        assert_eq!(
+            Request::Detail(103, common_of(None, Some(0)))
+                .key("aaaa")
+                .as_str(),
+            "detail|aaaa|103|~|RANKED_SOLO_5x5|~|~|all|~|0|500|exclude"
+        );
     }
 
     #[test]

@@ -74,6 +74,17 @@ pub fn app_with(env: &[(&str, &str)], upstream: &str) -> (tempfile::TempDir, App
         dir.path().join("backups"),
         config.backup_keep as usize,
     ));
+    // As `serve` builds it (PERF-03).
+    let analytics = std::sync::Arc::new(riot_proxy::routes::analytics::cache::Analytics::new(
+        riot_proxy::routes::analytics::Reads::new(
+            db.clone(),
+            std::sync::Arc::clone(&mirror),
+            fetcher.key_scope().as_str(),
+            &config.ladder_queues,
+        ),
+        config.analytics_cache_entries,
+        config.ladder_queues.clone(),
+    ));
     let state = AppState {
         config,
         db: db.clone(),
@@ -89,6 +100,7 @@ pub fn app_with(env: &[(&str, &str)], upstream: &str) -> (tempfile::TempDir, App
         ddragon: mirror,
         stats,
         maintenance,
+        analytics,
     };
     let router = app::router(state.clone(), telemetry::metrics_handle().expect("metrics"));
     (dir, state, router)

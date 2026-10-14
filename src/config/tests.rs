@@ -148,12 +148,14 @@ fn every_flag_overrides_its_variable() {
         log_level: Some("warn".into()),
         log_format: Some("pretty".into()),
         job_concurrency: Some(2),
+        analytics_cache_entries: Some(3),
     };
     let c = load(Sources {
         args,
         ..env(&[("ENV", "production"), ("JOB_CONCURRENCY", "8")])
     });
     assert_eq!(c.job_concurrency, 2);
+    assert_eq!(c.analytics_cache_entries, 3);
     assert_eq!(c.host, "127.0.0.1");
     assert_eq!(c.port, 9000);
     assert_eq!(c.data_dir, PathBuf::from("/srv/rp"));
@@ -908,4 +910,31 @@ fn archive_object_keys_are_redacted() {
     let r = load(env(&[])).redacted();
     assert_eq!(r["ARCHIVE_OBJECT_URL"], None);
     assert_eq!(r["ARCHIVE_OBJECT_ACCESS_KEY"], None);
+}
+
+/// PERF-03 (ADR-169): 512 by default, 0 keeps none, 4096 at most.
+#[test]
+fn analytics_cache_entries_defaults_and_bounds() {
+    assert_eq!(load(env(&[])).analytics_cache_entries, 512);
+    for (value, want) in [("0", 0), ("2", 2), ("4096", 4096)] {
+        assert_eq!(
+            load(env(&[("ANALYTICS_CACHE_ENTRIES", value)])).analytics_cache_entries,
+            want
+        );
+    }
+    for value in ["4097", "-1", "x"] {
+        let errs = errors(env(&[("ANALYTICS_CACHE_ENTRIES", value)]));
+        assert!(
+            errs.iter().any(|e| e.starts_with("ANALYTICS_CACHE_ENTRIES:")),
+            "{value}: {errs:#?}"
+        );
+    }
+    let c = load(Sources {
+        args: ConfigArgs {
+            analytics_cache_entries: Some(7),
+            ..ConfigArgs::default()
+        },
+        ..env(&[("ANALYTICS_CACHE_ENTRIES", "9")])
+    });
+    assert_eq!(c.analytics_cache_entries, 7, "the flag wins");
 }

@@ -214,7 +214,14 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         Some(_) => maintenance.then_bucket_jobs(queue.clone()),
         None => maintenance,
     });
+    // One per process: the routes serve from it, the rebuild clears and warms it.
+    let analytics_cache = Arc::new(crate::routes::analytics::cache::Analytics::new(
+        crate::routes::analytics::Reads::new(db.clone(), Arc::clone(&mirror), &scope, &config.ladder_queues),
+        config.analytics_cache_entries,
+        config.ladder_queues.clone(),
+    ));
     let analytics = Arc::new(crate::jobs::analytics::AnalyticsContext {
+        cache: Arc::clone(&analytics_cache),
         queue: queue.clone(),
         hub: hub.clone(),
         key_scope: scope.clone(),
@@ -366,6 +373,7 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         ddragon: mirror,
         stats,
         maintenance,
+        analytics: analytics_cache,
     };
     let served = app::serve(listener, app::router(state, metrics), shutdown).await;
 
