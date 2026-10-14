@@ -183,12 +183,23 @@ drill() { sudo systemd-run --quiet --wait --pipe -p EnvironmentFile="$d/env" \
 The fake Riot key means anything not in the archive fails; nothing reaches
 Riot with the real key, and the live limiter is untouched.
 
-1. **A body reads from R2.**
+1. **A body reads from R2.** Use an offloaded match. Before the first bodies
+   are freed (14 days after the offload starts), the backup has none, so
+   free a packed one in the scratch copy by hand (the row keeps its
+   location, so the read must go to the bucket):
 
    ```bash
-   id=$(sudo sqlite3 -readonly data/riot-proxy.db "SELECT match_id FROM matches WHERE offloaded_at IS NOT NULL LIMIT 1")
+   read -r region id < <(sudo sqlite3 -readonly -separator ' ' data/riot-proxy.db \
+     "SELECT region, match_id FROM matches WHERE offloaded_at IS NOT NULL LIMIT 1")
+   if [ -z "$id" ]; then
+     read -r region id < <(sudo sqlite3 -readonly -separator ' ' data/riot-proxy.db \
+       "SELECT m.region, m.match_id FROM matches m JOIN body_locations l ON l.match_id = m.match_id AND l.kind = 'match' LIMIT 1")
+     sudo sqlite3 data/riot-proxy.db "UPDATE matches SET body_zstd = X'', offloaded_at = 1 WHERE match_id = '$id'"
+   fi
+   echo "$region $id"
    sudo systemd-run --unit=restore-drill -p EnvironmentFile="$d/env" /usr/local/bin/riot-proxy --data-dir "$d/data" serve
-   sleep 5; curl -s -D - -o /dev/null "localhost:8081/v1/match/$id" | grep -i '^x-cache'   # X-Cache: ARCHIVE
+   until curl -sf localhost:8081/healthz >/dev/null; do sleep 2; done
+   curl -s -D - -o /dev/null "localhost:8081/v1/lol/matches/$region/$id" | grep -iE '^(HTTP|x-cache)'   # 200, X-Cache: ARCHIVE
    sudo systemctl stop restore-drill
    ```
 
@@ -196,17 +207,17 @@ Riot with the real key, and the live limiter is untouched.
 
    ```bash
    q="SELECT * FROM body_locations WHERE pack_id <= (SELECT max(pack_id) FROM body_packs) ORDER BY 1, 2"
-   sudo sqlite3 -readonly data/riot-proxy.db "$q" | sha256sum > before
+   sudo sqlite3 -readonly data/riot-proxy.db "$q" | sha256sum > /tmp/drill-before   # $d is root's
    sudo sqlite3 data/riot-proxy.db "DELETE FROM body_locations; DELETE FROM body_packs;"
    drill packs restore-index
-   sudo sqlite3 -readonly data/riot-proxy.db "$q" | sha256sum | diff - before && echo "map restored"
+   sudo sqlite3 -readonly data/riot-proxy.db "$q" | sha256sum | diff - /tmp/drill-before && echo "map restored"
    ```
 
    `before` is taken while the backup's own map is there, so its
    `max(pack_id)` is the backup's newest pack. The restore also brings back
    packs written after the backup; the query leaves them out of the
    comparison.
-3. `cd /; sudo rm -rf /var/tmp/restore-drill`, and note the date in PROGRESS.md.
+3. `cd /; sudo rm -rf /var/tmp/restore-drill /tmp/drill-before`, and note the date in PROGRESS.md.
 
 ## Reclaiming the file after the offload
 
@@ -215,15 +226,43 @@ list; the file does not shrink. Once `archive_offload_pending{step="free"}`
 is 0 for both kinds, copy the database compactly and swap it in, as
 design/07 §Reclaiming space describes. On production:
 
+Three steps, each checked before the next. Run them in `tmux` (or `screen`):
+the copy takes a long time on a 20+ GB file, and a dropped SSH session must
+not leave a half-written copy behind for the swap to pick up.
+
 ```bash
-rp backup /var/lib/riot-proxy/data/riot-proxy.compact.db   # while serving; needs free space ≈ the live data (rp: §Index snapshots and recovery)
-sudo systemctl stop riot-proxy
+# 1. The copy, while serving; it needs free space about the size of the live data.
+#    rp: §Index snapshots and recovery. Wait for it to return.
+tmux new -s reclaim
+rp backup /var/lib/riot-proxy/data/riot-proxy.compact.db
 cd /var/lib/riot-proxy/data
-sudo -u riot-proxy mv riot-proxy.db riot-proxy.old.db && sudo rm -f riot-proxy.db-wal riot-proxy.db-shm
+
+# 2. The copy is finished: nothing has it open, and it starts with a SQLite header
+#    (a copy still being written has a blank first page).
+sudo fuser -v riot-proxy.compact.db && echo "STOP: the copy is still being written"
+sudo head -c 16 riot-proxy.compact.db | grep -q 'SQLite format 3' && echo "header ok" || echo "STOP: not a finished copy"
+sudo -u riot-proxy ionice -c3 sqlite3 -readonly riot-proxy.compact.db "PRAGMA quick_check;"   # ok (tens of minutes)
+
+# 3. The swap. The old file's WAL is folded in first, never deleted.
+sudo systemctl stop riot-proxy
+sudo fuser -v riot-proxy.db* && echo "STOP: something still has the database open"
+sudo -u riot-proxy sqlite3 -cmd '.timeout 10000' riot-proxy.db "PRAGMA wal_checkpoint(TRUNCATE);"   # 0|0|0
+ls -la riot-proxy.db*                                   # riot-proxy.db-wal absent or 0 bytes
+sudo -u riot-proxy mv riot-proxy.db riot-proxy.old.db
+[ ! -s riot-proxy.db-wal ] && sudo rm -f riot-proxy.db-wal riot-proxy.db-shm   # only an empty WAL
 sudo -u riot-proxy mv riot-proxy.compact.db riot-proxy.db
 sudo systemctl start riot-proxy
 curl -s localhost:8080/readyz
 ```
+
+Any `STOP` line, a `quick_check` that isn't `ok`, or a WAL that is still
+non-empty after the checkpoint: do not go on. Start the service on the
+untouched `riot-proxy.db` and find out why first. A `-wal` file holds
+committed writes not yet in the main file; deleting it, or leaving it beside
+a different file, loses or corrupts them (2026-10-14: a swap made while the
+copy was still being written left an unfinished copy as `riot-proxy.db` and
+the original's 1.5 GB WAL beside it; the original and its WAL were put back
+together and nothing was lost).
 
 Expect `sqlite_db_bytes` under 8 GB and `sqlite_freelist_bytes` near zero
 (OBJ-04's done-when). Keep `riot-proxy.old.db` until the next nightly backup

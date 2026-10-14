@@ -189,14 +189,19 @@ SQLite never gives pages back to the operating system on its own: a delete puts 
 To shrink the file, copy it. `riot-proxy backup <out>` is `VACUUM INTO`, which writes a compact copy while the service runs; it needs free space of about the live data's size (the file minus its free list). Then swap the copy in:
 
 ```bash
-riot-proxy backup /var/lib/riot-proxy/data/riot-proxy.compact.db   # while serving
-systemctl stop riot-proxy
+riot-proxy backup /var/lib/riot-proxy/data/riot-proxy.compact.db   # while serving; wait for it to return
 cd /var/lib/riot-proxy/data
-mv riot-proxy.db riot-proxy.old.db && rm -f riot-proxy.db-wal riot-proxy.db-shm
+head -c 16 riot-proxy.compact.db | grep -q 'SQLite format 3' || echo "STOP: not a finished copy"
+systemctl stop riot-proxy
+sqlite3 riot-proxy.db "PRAGMA wal_checkpoint(TRUNCATE);"            # fold the WAL in; never delete a non-empty one
+mv riot-proxy.db riot-proxy.old.db
+[ ! -s riot-proxy.db-wal ] && rm -f riot-proxy.db-wal riot-proxy.db-shm
 mv riot-proxy.compact.db riot-proxy.db
 systemctl start riot-proxy                                          # check /readyz and /v1/admin/stats
-rm riot-proxy.old.db
+rm riot-proxy.old.db                                                # once the next backup has run
 ```
+
+The copy is finished only when the command returns and the file starts with the SQLite header: a `VACUUM INTO` copy still being written has a blank first page (seen on production, 2026-10-14), so a copy swapped in early is not a database. A `-wal` file left after the stop holds committed writes; fold it in, never delete it. deploy/README.md has the production version with every check.
 
 Writes between the copy and the stop are lost, so do it in a quiet moment (crawls off). After the object-storage offload (design/12 step 10) this is the one-off reclaim of the freed bodies; `deploy/README.md` §Reclaiming the file after the offload has the production commands. Prefer this over a plain `VACUUM`, which needs a temporary copy *and* a rollback journal, about twice the live data, and holds the writer for the whole copy.
 
