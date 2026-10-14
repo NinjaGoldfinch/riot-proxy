@@ -1,0 +1,23 @@
+sequenceDiagram
+    autonumber
+    participant J as aggregate (jobs/analytics.rs:244)
+    participant W as Db::write (writer thread)
+    participant K as Cache
+    participant R as racing request
+    participant HUB as Hub (analytics.updated)
+
+    J->>W: PRAGMA optimize
+    J->>W: extract builds, stamp tiers (facts only)
+    J->>W: tx 1 — champions (slices, stats, totals, bans) COMMIT
+    R->>K: get → miss at generation g
+    R->>R: compute: reads may see tx1-new / tx2-old
+    J->>W: tx 2 — matchups COMMIT
+    J->>W: tx 3 — builds COMMIT
+    J->>W: record_run
+    Note over J,K: CLEAR HERE — after the last commit, before publish (F1)<br/>also when rebuild failed after a commit (F2)
+    J->>K: clear() → generation g+1, map emptied
+    R->>K: insert(key, entry, g) → dropped, g ≠ g+1 (F3)
+    R-->>R: still answers its client (MISS), not stored
+    J->>HUB: publish AnalyticsUpdated
+    J->>K: warm(): compute + insert at g+1 (§4)
+    Note over K: first site request after this → HIT

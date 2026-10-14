@@ -1,0 +1,18 @@
+sequenceDiagram
+    participant C1 as request 1
+    participant C2_10 as requests 2–10
+    participant K as Cache
+    participant SF as SingleFlight (g, A)
+    participant DB as Db
+
+    par all ten
+        C1->>K: get A → miss (g)
+        C2_10->>K: get A → miss (g)
+    end
+    C1->>SF: run((g, A)) — leader, spawns compute
+    C2_10->>SF: run((g, A)) — join the shared future
+    SF->>DB: 5 reads, once
+    SF->>K: insert A (g unchanged)
+    SF-->>C1: entry → 200 MISS
+    SF-->>C2_10: same entry → 200 MISS ×9
+    Note over DB: with singleflight: 5 reads. Without: 10 × 5 = 50 reads.

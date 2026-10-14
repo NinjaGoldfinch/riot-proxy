@@ -1,0 +1,13 @@
+sequenceDiagram
+    autonumber
+    participant S as ddragon:sync (jobs/ddragon.rs:213)
+    participant M as Mirror (static/mod.rs)
+    participant K as Cache
+    participant C as Client
+
+    C->>K: get(key, "16.19.1") → HIT (entry.version = 16.19.1)
+    S->>M: set_current("16.20.1")
+    S-->>S: publish PatchNew (changed only)
+    C->>M: current_version() → 16.20.1
+    C->>K: get(key, "16.20.1") → entry.version ≠ → miss (F12)
+    K-->>C: compute, store over the old entry, X-Cache: MISS
