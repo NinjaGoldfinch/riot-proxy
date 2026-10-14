@@ -43,6 +43,7 @@ fi
 check "the timer runs hourly" grep -qx 'OnCalendar=\*-\*-\* \*:17:00' "$timer"
 check "the timer catches up after downtime" grep -qx 'Persistent=true' "$timer"
 check "the sync runs from Onidel to R2" bash -c "grep -qx 'Environment=REPLICA_SOURCE=onidel:riot-proxy-archive' '$unit' && grep -qx 'Environment=REPLICA_DEST=r2:riot-proxy-archive' '$unit'"
+check "the sync carries object metadata" grep -q '^ExecStart=.* --metadata ' "$unit"
 check "rclone.conf comes in as a credential" grep -qx 'LoadCredential=rclone.conf:/etc/riot-proxy/rclone.conf' "$unit"
 
 # --- the unit's rclone command against two local directories ----------------
