@@ -177,6 +177,7 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; }
 .form-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
 .form-row .btn { padding-top: 7px; padding-bottom: 7px; }
 .form-row .field { flex: 1 1 140px; margin: 0; }
+.form-row .field:has(> select) { flex: 0 1 220px; }
 
 /* ── jobs ── */
 .workers { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 250px), 1fr)); gap: 6px; }
@@ -272,6 +273,15 @@ td.n, th.n { text-align: right; }
 .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
 .field label { font-size: 12px; color: var(--ink-2); }
 .field input, .field select { width: 100%; padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--page); }
+.field select, .filters select { appearance: none; cursor: pointer; padding-right: 26px; background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: calc(100% - 14px) 50%, calc(100% - 9px) 50%; background-size: 5px 5px; background-repeat: no-repeat; }
+@supports (appearance: base-select) {
+  .field select, .filters select, ::picker(select) { appearance: base-select; }
+  select::picker-icon, option::checkmark { display: none; }
+  ::picker(select) { margin-top: 4px; padding: 4px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); box-shadow: var(--shadow); max-height: 320px; }
+  option { padding: 5px 8px; border-radius: 4px; }
+  option:hover, option:focus-visible { background: var(--panel-2); outline: none; }
+  option:checked { color: var(--accent); }
+}
 .wraps { display: inline-block; white-space: normal; min-width: 14em; overflow-wrap: anywhere; }
 .sheet .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 .sheet .error { color: var(--ink); display: flex; gap: 6px; align-items: center; margin: 0 0 10px; }
