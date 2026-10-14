@@ -1507,3 +1507,140 @@ async fn the_set_builds_plan_reaches_the_build_by_key() {
     let plan = plan_of(format!("{} SELECT * FROM p", set_build_players())).await;
     assert!(step(&plan, "b").contains("match_id=?"), "{plan:#?}");
 }
+
+/// Every read seeks on its key (PERF-01, ADR-167): a filter that is set is an
+/// equality and one left open an `IN` over the slice's values, so the key is
+/// followed through the patch (and, for one champion, to it), with or
+/// without `ANALYZE` statistics (ADR-102). With `(? IS NULL OR …)` terms
+/// every read sought on `key_scope` alone.
+#[tokio::test]
+async fn every_read_seeks_on_its_key() {
+    let (_d, db) = db();
+    db.write(|c| {
+        seed(c);
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    rebuild(&db, 0).await;
+    let open = Read {
+        min_games: 0,
+        limit: 500,
+        ..Read::slice("s", None, "RANKED_SOLO_5x5")
+    };
+    let one = Read {
+        platform: Some("kr".into()),
+        patch: Some("14.18".into()),
+        tier: Some("MASTER".into()),
+        role: Some("MIDDLE".into()),
+        side: Some(Side::Blue),
+        champion_id: Some(1),
+        ..open.clone()
+    };
+    // (table, its keys, the key column a seek must reach)
+    let tables = [
+        ("analytics_slices", SLICES, "patch=?"),
+        ("analytics_match_totals", MATCH_TOTALS, "patch=?"),
+        ("champion_stats", STATS, "patch=?"),
+        ("champion_bans", BANS, "patch=?"),
+        ("champion_ban_totals", BAN_TOTALS, "patch=?"),
+        ("champion_matchups", FACETS, "patch=?"),
+        ("champion_items", FACETS, "patch=?"),
+        ("champion_runes", FACETS, "patch=?"),
+        ("champion_spells", FACETS, "patch=?"),
+        ("champion_builds", FACETS, "patch=?"),
+        ("champion_build_parts", FACETS, "patch=?"),
+    ];
+    for analyze in [false, true] {
+        let (open, one) = (open.clone(), one.clone());
+        let failures = db
+            .write(move |c| {
+                if analyze {
+                    c.execute_batch("ANALYZE")?;
+                }
+                let mut failures = vec![];
+                for (table, keys, reach) in tables {
+                    for (name, r) in [("open", &open), ("one", &one)] {
+                        let w = Filter::new(r, &domain(c, r)?, keys);
+                        let sql = format!("EXPLAIN QUERY PLAN SELECT count(*) FROM {table} WHERE {}", w.sql);
+                        let plan = c
+                            .prepare(&sql)?
+                            .query_map(params_from_iter(w.args), |x| x.get::<_, String>(3))?
+                            .collect::<Result<Vec<_>, _>>()?;
+                        let line = plan
+                            .iter()
+                            .find(|l| l.contains(table))
+                            .cloned()
+                            .unwrap_or_default();
+                        // The fixture's statistics describe a few rows, and
+                        // with them SQLite may stop early on the smallest
+                        // tables; it still never reads the whole key scope.
+                        let seeks = line.starts_with(&format!("SEARCH {table} "))
+                            && line.contains("(key_scope=? AND platform=? AND queue=?")
+                            && (analyze || line.contains(reach));
+                        let to_champion =
+                            !analyze && keys.champion && name == "one" && keys.tier != TierKey::BeforePatch;
+                        if !seeks || (to_champion && !line.contains("champion_id=?")) {
+                            failures.push(format!("analyze={analyze} {table} {name}: {plan:?}"));
+                        }
+                    }
+                }
+                Ok::<_, DbError>(failures)
+            })
+            .await
+            .unwrap();
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+}
+
+/// An open filter stands for the values the slice has, and only those: a
+/// platform that has rows counts whether or not it is still crawled, and a
+/// slice with nothing reads nothing.
+#[tokio::test]
+async fn an_open_filter_is_the_slices_values() {
+    let (_d, db) = db();
+    db.write(|c| {
+        seed(c);
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    rebuild(&db, 0).await;
+    let d = db
+        .read(|c| domain(c, &Read::slice("s", None, "RANKED_SOLO_5x5")))
+        .await
+        .unwrap();
+    assert_eq!(d.platforms, ["kr"]);
+    assert_eq!(d.patches, ["14.17", "14.18"]);
+    assert_eq!(d.tiers, ["DIAMOND", "MASTER", "UNKNOWN"]);
+    let none = db
+        .read(|c| domain(c, &Read::slice("s", Some("euw1"), "RANKED_SOLO_5x5")))
+        .await
+        .unwrap();
+    assert!(none.platforms.is_empty() && none.patches.is_empty());
+    let r = Read {
+        limit: 500,
+        ..Read::slice("s", Some("euw1"), "RANKED_SOLO_5x5")
+    };
+    assert!(stats(&db, r).await.unwrap().is_empty());
+    assert_eq!(
+        latest_patch(&db, "s", None, "RANKED_SOLO_5x5")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("14.18")
+    );
+    assert_eq!(
+        latest_patch(&db, "s", Some("euw1"), "RANKED_SOLO_5x5")
+            .await
+            .unwrap(),
+        None
+    );
+}
+
+#[test]
+fn the_newest_patch_compares_numbers() {
+    let p = |v: &[&str]| newest_patch(v.iter().map(|s| s.to_string()).collect());
+    assert_eq!(p(&["16.9", "16.10", "15.24"]).as_deref(), Some("16.10"));
+    assert_eq!(p(&[]), None);
+}

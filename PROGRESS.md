@@ -357,7 +357,7 @@ Before (OVH VPS, 2026-10-13 01:00 UTC): 38 GB disk at 77 %, `riot-proxy.db` 20 G
 ## PERF — a fast first champions read (owner request 2026-10-14)
 ninjagoldfinch.lol's `/champions` data took 3.9 s, all of it the proxy's analytics reads (ADR-166).
 - [x] PERF-00 series spec: tasks, measurements, design/04 §Analytics reads (#207, ADR-166)
-- [ ] PERF-01 reads that seek on their keys
+- [x] PERF-01 reads that seek on their keys (#208, ADR-167)
 - [ ] PERF-02 `champion_stats_totals`, summed over tier, for tierless reads
 - [ ] PERF-03 analytics responses cached per aggregate generation, warmed after each rebuild
 

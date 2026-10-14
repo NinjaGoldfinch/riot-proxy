@@ -15,7 +15,10 @@
 //! and keeps older patches' rows. Every row carries `remake`, so a read can
 //! leave remakes out (the default) or add them back.
 
-use rusqlite::{Connection, params};
+use std::collections::BTreeSet;
+
+use rusqlite::types::Value;
+use rusqlite::{Connection, params, params_from_iter};
 
 use crate::db::{Db, DbError};
 
@@ -465,32 +468,25 @@ pub struct Read {
     pub remakes: bool,
 }
 
-/// The newest patch this ladder has stats for (v1 `latestPatch`).
+/// The newest patch this ladder has stats for (v1 `latestPatch`): the slices'
+/// patches, which are the stats' (ADR-167).
 pub async fn latest_patch(
     db: &Db,
     key_scope: &str,
     platform: Option<&str>,
     queue: &str,
 ) -> Result<Option<String>, DbError> {
-    let (scope, platform, queue) = (
-        key_scope.to_string(),
-        platform.map(str::to_string),
-        queue.to_string(),
-    );
-    db.read(move |c| {
-        use rusqlite::OptionalExtension;
-        Ok(c.query_row(
-            &format!(
-                "SELECT patch FROM (SELECT DISTINCT patch FROM champion_stats
-                  WHERE key_scope = ?1 AND (?2 IS NULL OR platform = ?2) AND queue = ?3)
-                 ORDER BY {PATCH_DESC} LIMIT 1"
-            ),
-            params![scope, platform, queue],
-            |r| r.get(0),
-        )
-        .optional()?)
-    })
-    .await
+    let r = Read::slice(key_scope, platform, queue);
+    db.read(move |c| Ok(newest_patch(domain(c, &r)?.patches))).await
+}
+
+/// The newest of `patches`, compared as `major.minor` numbers.
+fn newest_patch(patches: Vec<String>) -> Option<String> {
+    let num = |p: &str| -> (i64, i64) {
+        let (a, b) = p.split_once('.').unwrap_or((p, ""));
+        (a.parse().unwrap_or(0), b.parse().unwrap_or(0))
+    };
+    patches.into_iter().max_by_key(|p| num(p))
 }
 
 /// One aggregated patch: its games (participant rows, as `totalGames`) and
@@ -515,21 +511,21 @@ pub async fn patches(
     side: Option<Side>,
     remakes: bool,
 ) -> Result<Vec<PatchRow>, DbError> {
-    let side = side.map_or(String::new(), |s| format!(" AND side = '{}'", s.as_str()));
-    let (scope, platform, queue) = (
-        key_scope.to_string(),
-        platform.map(str::to_string),
-        queue.to_string(),
-    );
+    let r = Read {
+        champion_id,
+        side,
+        remakes,
+        ..Read::slice(key_scope, platform, queue)
+    };
     db.read(move |c| {
+        let w = Filter::new(&r, &domain(c, &r)?, STATS);
         let mut stmt = c.prepare(&format!(
-            "SELECT patch, sum(games), max(computed_at) FROM champion_stats
-              WHERE key_scope = ?1 AND (?2 IS NULL OR platform = ?2) AND queue = ?3 AND (?4 OR remake = 0)
-                AND (?5 IS NULL OR champion_id = ?5){side}
-              GROUP BY patch ORDER BY {PATCH_DESC}"
+            "SELECT patch, sum(games), max(computed_at) FROM champion_stats WHERE {}
+              GROUP BY patch ORDER BY {PATCH_DESC}",
+            w.sql
         ))?;
         let rows = stmt
-            .query_map(params![scope, platform, queue, remakes, champion_id], |r| {
+            .query_map(params_from_iter(w.args), |r| {
                 Ok(PatchRow {
                     patch: r.get(0)?,
                     games: r.get(1)?,
@@ -542,30 +538,192 @@ pub async fn patches(
     .await
 }
 
-/// The filter a read uses: `?1`–`?4` scope/platform/queue/patch (NULL platform
-/// or patch: all) and `?8`
-/// whether remakes count always; `?5` tier, `?6` role and `?7` champion for
-/// the tables that have those columns. Unused numbers are bound but unread.
-/// A side is written into the SQL: it is one of two constants, and the
-/// per-match tables, which have none, pass `None`.
-fn read_where(tier: bool, side: Option<Side>, role: bool, champion: bool) -> String {
-    let mut w = String::from(
-        "key_scope = ?1 AND (?2 IS NULL OR platform = ?2) AND queue = ?3 AND (?4 IS NULL OR patch = ?4)
-           AND (?8 OR remake = 0)",
-    );
-    if tier {
-        w.push_str(" AND (?5 IS NULL OR tier = ?5)");
+impl Read {
+    /// Every patch, tier, side and role of one queue's slice, remakes left
+    /// out: the base the patch reads fill in.
+    fn slice(key_scope: &str, platform: Option<&str>, queue: &str) -> Self {
+        Self {
+            key_scope: key_scope.to_string(),
+            platform: platform.map(str::to_string),
+            queue: queue.to_string(),
+            patch: None,
+            tier: None,
+            side: None,
+            role: None,
+            champion_id: None,
+            min_games: 0,
+            limit: 0,
+            remakes: false,
+        }
     }
-    if let Some(side) = side {
-        w.push_str(&format!(" AND side = '{}'", side.as_str()));
+}
+
+/// The platforms, tiers and patches a slice has rows for (PERF-01, ADR-167):
+/// what a filter a read leaves open stands for. Read from `analytics_slices`,
+/// a few hundred rows: every row of the other tables comes from a fact whose
+/// match is counted there, at the same platform, tier and patch, and the
+/// slices are rewritten first, in the stats' transaction.
+#[derive(Debug, Default)]
+pub(crate) struct Domain {
+    platforms: Vec<String>,
+    tiers: Vec<String>,
+    patches: Vec<String>,
+}
+
+pub(crate) fn domain(c: &Connection, r: &Read) -> Result<Domain, DbError> {
+    let platform = if r.platform.is_some() {
+        " AND platform = ?3"
+    } else {
+        ""
+    };
+    let mut stmt = c.prepare_cached(&format!(
+        "SELECT DISTINCT platform, tier, patch FROM analytics_slices WHERE key_scope = ?1 AND queue = ?2{platform}"
+    ))?;
+    let (mut platforms, mut tiers, mut patches) = (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
+    let mut args: Vec<Value> = vec![r.key_scope.clone().into(), r.queue.clone().into()];
+    args.extend(r.platform.clone().map(Value::from));
+    let mut rows = stmt.query(params_from_iter(args))?;
+    while let Some(row) = rows.next()? {
+        platforms.insert(row.get::<_, String>(0)?);
+        tiers.insert(row.get::<_, String>(1)?);
+        patches.insert(row.get::<_, String>(2)?);
     }
-    if role {
-        w.push_str(" AND (?6 IS NULL OR role = ?6)");
+    Ok(Domain {
+        platforms: platforms.into_iter().collect(),
+        tiers: tiers.into_iter().collect(),
+        patches: patches.into_iter().collect(),
+    })
+}
+
+/// Where a table keeps its tier, if it has one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TierKey {
+    /// No tier column: the totals over every tier.
+    None,
+    /// `(…, queue, tier, patch, …)`: an open tier is an `IN`, so the key
+    /// still reaches the patch.
+    BeforePatch,
+    /// After the champion, role and facet: an open tier is left out.
+    AfterPatch,
+}
+
+/// The filter columns a table has besides `key_scope, platform, queue, patch, remake`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Keys {
+    tier: TierKey,
+    side: bool,
+    role: bool,
+    champion: bool,
+}
+
+const SLICES: Keys = Keys {
+    tier: TierKey::BeforePatch,
+    side: false,
+    role: false,
+    champion: false,
+};
+const MATCH_TOTALS: Keys = Keys {
+    tier: TierKey::None,
+    side: false,
+    role: false,
+    champion: false,
+};
+const STATS: Keys = Keys {
+    tier: TierKey::BeforePatch,
+    side: true,
+    role: true,
+    champion: true,
+};
+const BANS: Keys = Keys {
+    tier: TierKey::BeforePatch,
+    side: false,
+    role: false,
+    champion: true,
+};
+const BAN_TOTALS: Keys = Keys {
+    tier: TierKey::None,
+    side: false,
+    role: false,
+    champion: true,
+};
+/// Matchups, items, runes, spells, set builds and their parts.
+const FACETS: Keys = Keys {
+    tier: TierKey::AfterPatch,
+    side: true,
+    role: true,
+    champion: true,
+};
+
+/// A read's `WHERE` and its arguments, in order (PERF-01, ADR-167). A filter
+/// that is set is an equality; one left open is an `IN` over the slice's
+/// values where the key needs it to reach the columns after it, and
+/// otherwise absent. Never `(? IS NULL OR col = ?)`: SQLite can't seek on
+/// it, so every read scanned its key scope. A side is written into the SQL:
+/// it is one of two constants.
+pub(crate) struct Filter {
+    pub(crate) sql: String,
+    pub(crate) args: Vec<Value>,
+}
+
+impl Filter {
+    pub(crate) fn new(r: &Read, d: &Domain, k: Keys) -> Self {
+        let mut f = Self {
+            sql: String::new(),
+            args: vec![],
+        };
+        f.eq("key_scope", r.key_scope.clone().into());
+        f.one_of("platform", r.platform.as_ref(), &d.platforms);
+        f.eq("queue", r.queue.clone().into());
+        match (k.tier, &r.tier) {
+            (TierKey::None, _) | (TierKey::AfterPatch, None) => {}
+            (TierKey::BeforePatch, None) => f.one_of("tier", None, &d.tiers),
+            (_, Some(t)) => f.eq("tier", t.clone().into()),
+        }
+        f.one_of("patch", r.patch.as_ref(), &d.patches);
+        if !r.remakes {
+            f.push("remake = 0");
+        }
+        if let (true, Some(side)) = (k.side, r.side) {
+            f.push(&format!("side = '{}'", side.as_str()));
+        }
+        if let (true, Some(role)) = (k.role, &r.role) {
+            f.eq("role", role.clone().into());
+        }
+        if let (true, Some(id)) = (k.champion, r.champion_id) {
+            f.eq("champion_id", id.into());
+        }
+        f
     }
-    if champion {
-        w.push_str(" AND (?7 IS NULL OR champion_id = ?7)");
+
+    fn push(&mut self, term: &str) {
+        if !self.sql.is_empty() {
+            self.sql.push_str(" AND ");
+        }
+        self.sql.push_str(term);
     }
-    w
+
+    fn eq(&mut self, col: &str, v: Value) {
+        self.push(&format!("{col} = ?"));
+        self.args.push(v);
+    }
+
+    /// `col = ?` when set, else `col IN (…)` over `all` (`IN ()` when the
+    /// slice has nothing: no rows, as before).
+    fn one_of(&mut self, col: &str, set: Option<&String>, all: &[String]) {
+        if let Some(v) = set {
+            return self.eq(col, v.clone().into());
+        }
+        let marks = vec!["?"; all.len()].join(", ");
+        self.push(&format!("{col} IN ({marks})"));
+        self.args.extend(all.iter().map(|v| Value::from(v.clone())));
+    }
+
+    /// The arguments with `more` after them, for the `?`s that follow the
+    /// `WHERE`.
+    fn with(mut self, more: impl IntoIterator<Item = Value>) -> Vec<Value> {
+        self.args.extend(more);
+        self.args
+    }
 }
 
 /// One champion at one tier, or summed over every tier (`tier` `None`), its
@@ -612,47 +770,38 @@ async fn stat_rows(db: &Db, r: Read, by_tier: bool) -> Result<Vec<StatRow>, DbEr
         ("NULL", "champion_id")
     };
     db.read(move |c| {
+        let w = Filter::new(&r, &domain(c, &r)?, STATS);
+        let patch = r.patch.clone().unwrap_or_else(|| "all".into());
         let mut stmt = c.prepare(&format!(
-            "SELECT champion_id, {tier}, coalesce(?4, 'all'), sum(games), sum(wins), sum(matches_picked),
+            "SELECT champion_id, {tier}, sum(games), sum(wins), sum(matches_picked),
                     sum(stated_games), sum(kills), sum(deaths), sum(assists), sum(cs), sum(gold), sum(damage),
                     sum(vision), sum(duration_s), max(computed_at)
                FROM champion_stats WHERE {}
-              GROUP BY {group} HAVING sum(games) >= ?9
-              ORDER BY sum(games) DESC, {group} LIMIT ?10",
-            read_where(true, r.side, true, true)
+              GROUP BY {group} HAVING sum(games) >= ?
+              ORDER BY sum(games) DESC, {group} LIMIT ?",
+            w.sql
         ))?;
         let rows = stmt
             .query_map(
-                params![
-                    r.key_scope,
-                    r.platform,
-                    r.queue,
-                    r.patch,
-                    r.tier,
-                    r.role,
-                    r.champion_id,
-                    r.remakes,
-                    r.min_games,
-                    r.limit
-                ],
+                params_from_iter(w.with([r.min_games.into(), r.limit.into()])),
                 |x| {
                     Ok(StatRow {
                         champion_id: x.get(0)?,
                         tier: x.get(1)?,
-                        patch: x.get(2)?,
-                        games: x.get(3)?,
-                        wins: x.get(4)?,
-                        matches_picked: x.get(5)?,
-                        stated_games: x.get(6)?,
-                        kills: x.get(7)?,
-                        deaths: x.get(8)?,
-                        assists: x.get(9)?,
-                        cs: x.get(10)?,
-                        gold: x.get(11)?,
-                        damage: x.get(12)?,
-                        vision: x.get(13)?,
-                        duration_s: x.get(14)?,
-                        computed_at: x.get(15)?,
+                        patch: patch.clone(),
+                        games: x.get(2)?,
+                        wins: x.get(3)?,
+                        matches_picked: x.get(4)?,
+                        stated_games: x.get(5)?,
+                        kills: x.get(6)?,
+                        deaths: x.get(7)?,
+                        assists: x.get(8)?,
+                        cs: x.get(9)?,
+                        gold: x.get(10)?,
+                        damage: x.get(11)?,
+                        vision: x.get(12)?,
+                        duration_s: x.get(13)?,
+                        computed_at: x.get(14)?,
                     })
                 },
             )?
@@ -665,24 +814,13 @@ async fn stat_rows(db: &Db, r: Read, by_tier: bool) -> Result<Vec<StatRow>, DbEr
 /// Matches per tier: pick- and ban-rate denominators (v1 `listAnalyticsSlices`).
 pub async fn slices(db: &Db, r: Read) -> Result<Vec<(String, i64)>, DbError> {
     db.read(move |c| {
+        let w = Filter::new(&r, &domain(c, &r)?, SLICES);
         let mut stmt = c.prepare(&format!(
             "SELECT tier, sum(matches) FROM analytics_slices WHERE {} GROUP BY tier",
-            read_where(true, None, false, false)
+            w.sql
         ))?;
         let rows = stmt
-            .query_map(
-                params![
-                    r.key_scope,
-                    r.platform,
-                    r.queue,
-                    r.patch,
-                    r.tier,
-                    None::<String>,
-                    None::<i64>,
-                    r.remakes
-                ],
-                |x| Ok((x.get(0)?, x.get(1)?)),
-            )?
+            .query_map(params_from_iter(w.args), |x| Ok((x.get(0)?, x.get(1)?)))?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
     })
@@ -692,24 +830,15 @@ pub async fn slices(db: &Db, r: Read) -> Result<Vec<(String, i64)>, DbError> {
 /// Bans per (tier, champion) (v1 `listChampionBans`).
 pub async fn bans(db: &Db, r: Read) -> Result<Vec<(String, i64, i64)>, DbError> {
     db.read(move |c| {
+        let w = Filter::new(&r, &domain(c, &r)?, BANS);
         let mut stmt = c.prepare(&format!(
             "SELECT tier, champion_id, sum(bans) FROM champion_bans WHERE {} GROUP BY tier, champion_id",
-            read_where(true, None, false, true)
+            w.sql
         ))?;
         let rows = stmt
-            .query_map(
-                params![
-                    r.key_scope,
-                    r.platform,
-                    r.queue,
-                    r.patch,
-                    r.tier,
-                    None::<String>,
-                    r.champion_id,
-                    r.remakes
-                ],
-                |x| Ok((x.get(0)?, x.get(1)?, x.get(2)?)),
-            )?
+            .query_map(params_from_iter(w.args), |x| {
+                Ok((x.get(0)?, x.get(1)?, x.get(2)?))
+            })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
     })
@@ -720,21 +849,13 @@ pub async fn bans(db: &Db, r: Read) -> Result<Vec<(String, i64, i64)>, DbError> 
 /// ban-rate denominator of a row summed over every tier.
 pub async fn match_totals(db: &Db, r: Read) -> Result<i64, DbError> {
     db.read(move |c| {
+        let w = Filter::new(&r, &domain(c, &r)?, MATCH_TOTALS);
         Ok(c.query_row(
             &format!(
                 "SELECT coalesce(sum(matches), 0) FROM analytics_match_totals WHERE {}",
-                read_where(false, None, false, false)
+                w.sql
             ),
-            params![
-                r.key_scope,
-                r.platform,
-                r.queue,
-                r.patch,
-                None::<String>,
-                None::<String>,
-                None::<i64>,
-                r.remakes
-            ],
+            params_from_iter(w.args),
             |x| x.get(0),
         )?)
     })
@@ -744,24 +865,13 @@ pub async fn match_totals(db: &Db, r: Read) -> Result<i64, DbError> {
 /// Bans per champion over every tier, a match once (ADR-123): `(champion, bans)`.
 pub async fn ban_totals(db: &Db, r: Read) -> Result<Vec<(i64, i64)>, DbError> {
     db.read(move |c| {
+        let w = Filter::new(&r, &domain(c, &r)?, BAN_TOTALS);
         let mut stmt = c.prepare(&format!(
             "SELECT champion_id, sum(bans) FROM champion_ban_totals WHERE {} GROUP BY champion_id",
-            read_where(false, None, false, true)
+            w.sql
         ))?;
         let rows = stmt
-            .query_map(
-                params![
-                    r.key_scope,
-                    r.platform,
-                    r.queue,
-                    r.patch,
-                    None::<String>,
-                    None::<String>,
-                    r.champion_id,
-                    r.remakes
-                ],
-                |x| Ok((x.get(0)?, x.get(1)?)),
-            )?
+            .query_map(params_from_iter(w.args), |x| Ok((x.get(0)?, x.get(1)?)))?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
     })
@@ -815,27 +925,17 @@ impl Facet {
 pub async fn facet(db: &Db, facet: Facet, r: Read) -> Result<Vec<FacetRow>, DbError> {
     db.read(move |c| {
         let cols = facet.columns();
+        let w = Filter::new(&r, &domain(c, &r)?, FACETS);
         let mut stmt = c.prepare(&format!(
             "SELECT {cols}, sum(games), sum(wins), max(computed_at) FROM {} WHERE {}
-              GROUP BY {cols} HAVING sum(games) >= ?9
-              ORDER BY sum(games) DESC, {cols} LIMIT ?10",
+              GROUP BY {cols} HAVING sum(games) >= ?
+              ORDER BY sum(games) DESC, {cols} LIMIT ?",
             facet.table(),
-            read_where(true, r.side, true, true)
+            w.sql
         ))?;
         let rows = stmt
             .query_map(
-                params![
-                    r.key_scope,
-                    r.platform,
-                    r.queue,
-                    r.patch,
-                    r.tier,
-                    r.role,
-                    r.champion_id,
-                    r.remakes,
-                    r.min_games,
-                    r.limit
-                ],
+                params_from_iter(w.with([r.min_games.into(), r.limit.into()])),
                 |x| {
                     let (role, ids, at) = match facet {
                         Facet::Matchups => (x.get::<_, String>(0)?, vec![x.get(1)?], 2),
@@ -870,27 +970,17 @@ pub struct BuildRow {
 /// played first.
 pub async fn builds(db: &Db, r: Read) -> Result<Vec<BuildRow>, DbError> {
     db.read(move |c| {
+        let w = Filter::new(&r, &domain(c, &r)?, FACETS);
         let mut stmt = c.prepare(&format!(
             "SELECT json_extract(core, '$[0]'), json_extract(core, '$[1]'), sum(games), sum(wins), max(computed_at)
                FROM champion_builds WHERE {}
-              GROUP BY core HAVING sum(games) >= ?9
-              ORDER BY sum(games) DESC, core LIMIT ?10",
-            read_where(true, r.side, true, true)
+              GROUP BY core HAVING sum(games) >= ?
+              ORDER BY sum(games) DESC, core LIMIT ?",
+            w.sql
         ))?;
         let rows = stmt
             .query_map(
-                params![
-                    r.key_scope,
-                    r.platform,
-                    r.queue,
-                    r.patch,
-                    r.tier,
-                    r.role,
-                    r.champion_id,
-                    r.remakes,
-                    r.min_games,
-                    r.limit
-                ],
+                params_from_iter(w.with([r.min_games.into(), r.limit.into()])),
                 |x| {
                     Ok(BuildRow {
                         core: [x.get(0)?, x.get(1)?],
@@ -910,21 +1000,13 @@ pub async fn builds(db: &Db, r: Read) -> Result<Vec<BuildRow>, DbError> {
 /// and the newest recompute time of those rows: `pickRate`'s denominator.
 pub async fn build_totals(db: &Db, r: Read) -> Result<(i64, Option<i64>), DbError> {
     db.read(move |c| {
+        let w = Filter::new(&r, &domain(c, &r)?, FACETS);
         Ok(c.query_row(
             &format!(
                 "SELECT coalesce(sum(games), 0), max(computed_at) FROM champion_builds WHERE {}",
-                read_where(true, r.side, true, true)
+                w.sql
             ),
-            params![
-                r.key_scope,
-                r.platform,
-                r.queue,
-                r.patch,
-                r.tier,
-                r.role,
-                r.champion_id,
-                r.remakes
-            ],
+            params_from_iter(w.args),
             |x| Ok((x.get(0)?, x.get(1)?)),
         )?)
     })
@@ -937,22 +1019,15 @@ pub async fn build_totals(db: &Db, r: Read) -> Result<(i64, Option<i64>), DbErro
 pub async fn top_role(db: &Db, r: Read) -> Result<Option<String>, DbError> {
     db.read(move |c| {
         use rusqlite::OptionalExtension;
+        let r = Read { role: None, ..r };
+        let w = Filter::new(&r, &domain(c, &r)?, STATS);
         Ok(c.query_row(
             &format!(
                 "SELECT role FROM champion_stats WHERE {}
                   GROUP BY role ORDER BY sum(games) DESC, role = '', role LIMIT 1",
-                read_where(true, r.side, false, true)
+                w.sql
             ),
-            params![
-                r.key_scope,
-                r.platform,
-                r.queue,
-                r.patch,
-                r.tier,
-                None::<String>,
-                r.champion_id,
-                r.remakes
-            ],
+            params_from_iter(w.args),
             |x| x.get(0),
         )
         .optional()?)
@@ -979,37 +1054,25 @@ pub async fn build_parts(db: &Db, r: Read, cores: Vec<[i64; 2]>) -> Result<Vec<B
     // gives back for each inner array.
     let cores = serde_json::to_string(&cores).unwrap_or_else(|_| "[]".into());
     db.read(move |c| {
+        let w = Filter::new(&r, &domain(c, &r)?, FACETS);
         let mut stmt = c.prepare(&format!(
             "SELECT json_extract(core, '$[0]'), json_extract(core, '$[1]'), part, value, sum(games), sum(wins)
                FROM champion_build_parts WHERE {}
-                AND core IN (SELECT j.value FROM json_each(?9) j)
+                AND core IN (SELECT j.value FROM json_each(?) j)
               GROUP BY core, part, value
               ORDER BY core, part, sum(games) DESC, value",
-            read_where(true, r.side, true, true)
+            w.sql
         ))?;
         let rows = stmt
-            .query_map(
-                params![
-                    r.key_scope,
-                    r.platform,
-                    r.queue,
-                    r.patch,
-                    r.tier,
-                    r.role,
-                    r.champion_id,
-                    r.remakes,
-                    cores
-                ],
-                |x| {
-                    Ok(BuildPartRow {
-                        core: [x.get(0)?, x.get(1)?],
-                        part: x.get(2)?,
-                        value: x.get(3)?,
-                        games: x.get(4)?,
-                        wins: x.get(5)?,
-                    })
-                },
-            )?
+            .query_map(params_from_iter(w.with([cores.into()])), |x| {
+                Ok(BuildPartRow {
+                    core: [x.get(0)?, x.get(1)?],
+                    part: x.get(2)?,
+                    value: x.get(3)?,
+                    games: x.get(4)?,
+                    wins: x.get(5)?,
+                })
+            })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
     })
