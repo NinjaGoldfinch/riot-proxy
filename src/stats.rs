@@ -705,7 +705,7 @@ impl Stats {
                     platform: Some(platform),
                     queue,
                     patch: Some(p),
-                    tier: None,
+                    tier: crate::archive::analytics::TierFilter::Any,
                     side: None,
                     role: None,
                     champion_id: None,
