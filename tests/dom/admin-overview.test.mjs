@@ -75,6 +75,26 @@ test('the readout follows the arrow keys; the table toggle shows the numbers', a
   } finally { p.close(); }
 });
 
+test('an open table stays open when new data redraws the chart, and a closed one stays closed', async () => {
+  const p = await page({ key: KEY });
+  try {
+    p.$('#chBacklog [data-table]').click();
+    p.push('metrics.snapshot', snapshot());
+    await p.settle();
+    const btn = p.$('#chBacklog [data-table]');
+    assert.equal(btn.getAttribute('aria-expanded'), 'true', 'still open after the redraw');
+    assert.equal(p.$('#chBacklog .tableview').hidden, false);
+    assert.equal(p.$$('#chBacklog .tableview tbody tr').length, 200);
+    assert.equal(p.$('#chArchive [data-table]').getAttribute('aria-expanded'), 'false', 'only the one opened');
+
+    btn.click();
+    p.push('metrics.snapshot', snapshot());
+    await p.settle();
+    assert.equal(p.$('#chBacklog [data-table]').getAttribute('aria-expanded'), 'false', 'closed stays closed');
+    assert.equal(p.$('#chBacklog .tableview').hidden, true);
+  } finally { p.close(); }
+});
+
 test('recent errors on entry, refreshed when a snapshot counts new 4xx or 5xx', async () => {
   const p = await page({ key: KEY });
   try {
