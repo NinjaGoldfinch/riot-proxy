@@ -402,6 +402,25 @@ Recovery is then the newest snapshot (one GET) plus `packs reindex --since
 so that is a listing and a few packs, not all of them. With neither the
 database nor a snapshot, `packs reindex` over every pack still works.
 
+As built (OBJ-04, ADR-165): the snapshot's lines are the two tables' rows
+(`packId`, `kind`, `bytes`, `bodies`, `liveBytes`, `sha256` in hex,
+`createdAt`; `matchId`, `kind`, `packId`, `offset`, `len`, `sha256`), each
+object one zstd frame with a content checksum, so a flipped byte fails the
+decode. `x-amz-meta-rows` rides along with `last-pack`. `restore-index` takes
+the newest date with both objects that decode, parse, and agree (every
+location in a listed pack of its kind, each pack's `liveBytes` the sum of
+its locations); `--since` is that snapshot's newest
+`pack_id`, read from the snapshot itself, since a local-directory bucket
+keeps no metadata. A reindex records each pack in its own transaction,
+oldest first: its `body_packs` row if missing (created at its ULID's time,
+the whole-object digest from `x-amz-meta-sha256`, or by reading the object
+where there is no metadata), then its locations, a body in two packs ending
+in the newer one; live bytes follow. A pack that cannot be read is reported
+and the rest go on. Restoring a map also sets `packed_at` on any located
+body whose row lacks it. `riot-proxy packs snapshot` writes one on demand.
+The replica unit, the lifecycle rules, the drill and the reclaim commands
+are in `deploy/README.md`.
+
 **SQLite backups.** Out of scope here beyond the effect: after the offload the
 nightly `VACUUM INTO` is a few GB instead of 22, and the existing `rclone`
 timer copies it to R2 `ngf-backups` in seconds instead of ten minutes. The
@@ -687,9 +706,10 @@ the site is the length of the second rsync.
 - SQLite backups: as executed, the old box's hand-made `riot-proxy-offsite`
   timer moved across unchanged in shape (§As executed, Backups). The Kopia to
   Backblaze plan considered on 2026-10-13 was not used.
-- Once OBJ-04 lands: `rclone` with two remotes (`onidel:` S3 endpoint above, `r2:` with an R2
-  token scoped to `riot-proxy-archive` only) in `/etc/riot-proxy/rclone.conf` (0600), and the
-  OBJ-04 timer (hourly). Until OBJ-04 exists, a cron line is fine:
+- Since OBJ-04: `rclone` with two remotes (`onidel:` S3 endpoint above, `r2:` with an R2
+  token scoped to `riot-proxy-archive` only) in `/etc/riot-proxy/rclone.conf` (0600), and
+  `deploy/riot-proxy-replica.timer` (hourly); `deploy/README.md` §Archive bucket and replica
+  has the steps. Before it, a cron line was enough:
   `17 * * * * rclone sync onidel:riot-proxy-archive r2:riot-proxy-archive --transfers 16`
 - Bucket lifecycle rules, set by hand in each console when the bucket is created:
 

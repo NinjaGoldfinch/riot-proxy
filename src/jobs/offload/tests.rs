@@ -454,21 +454,35 @@ async fn the_gauges_and_the_counter_describe_what_is_left() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn maintenance_queues_the_offload_after_each_run() {
+async fn maintenance_queues_the_offload_and_the_index_snapshot_after_each_run() {
+    async fn snapshot_jobs(db: &Db) -> i64 {
+        db.read(|c| {
+            Ok::<_, DbError>(c.query_row(
+                "SELECT count(*) FROM jobs WHERE kind = 'archive:index-snapshot' AND state = 'pending'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .await
+        .unwrap()
+    }
     let (dir, db) = db();
     let queue = Queue::new(db.clone());
     let m = crate::jobs::maintenance::Maintenance::new(db.clone(), dir.path().join("backups"), 0)
-        .then_offload(queue.clone());
+        .then_bucket_jobs(queue.clone());
     m.run_once(NOW).await.unwrap();
     assert_eq!(offload_jobs(&db).await, 1);
+    assert_eq!(snapshot_jobs(&db).await, 1);
     m.run_once(NOW + DAY).await.unwrap();
     assert_eq!(offload_jobs(&db).await, 1, "deduped while pending");
+    assert_eq!(snapshot_jobs(&db).await, 1, "deduped while pending");
 
     // Without a bucket, maintenance queues nothing.
     let (dir2, db2) = self::db();
     let plain = crate::jobs::maintenance::Maintenance::new(db2.clone(), dir2.path().join("backups"), 0);
     plain.run_once(NOW).await.unwrap();
     assert_eq!(offload_jobs(&db2).await, 0);
+    assert_eq!(snapshot_jobs(&db2).await, 0);
 }
 
 /// The two "to free" lookups read indexes only: matches by its partial index,
