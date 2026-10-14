@@ -207,17 +207,17 @@ Riot with the real key, and the live limiter is untouched.
 
    ```bash
    q="SELECT * FROM body_locations WHERE pack_id <= (SELECT max(pack_id) FROM body_packs) ORDER BY 1, 2"
-   sudo sqlite3 -readonly data/riot-proxy.db "$q" | sha256sum > before
+   sudo sqlite3 -readonly data/riot-proxy.db "$q" | sha256sum > /tmp/drill-before   # $d is root's
    sudo sqlite3 data/riot-proxy.db "DELETE FROM body_locations; DELETE FROM body_packs;"
    drill packs restore-index
-   sudo sqlite3 -readonly data/riot-proxy.db "$q" | sha256sum | diff - before && echo "map restored"
+   sudo sqlite3 -readonly data/riot-proxy.db "$q" | sha256sum | diff - /tmp/drill-before && echo "map restored"
    ```
 
    `before` is taken while the backup's own map is there, so its
    `max(pack_id)` is the backup's newest pack. The restore also brings back
    packs written after the backup; the query leaves them out of the
    comparison.
-3. `cd /; sudo rm -rf /var/tmp/restore-drill`, and note the date in PROGRESS.md.
+3. `cd /; sudo rm -rf /var/tmp/restore-drill /tmp/drill-before`, and note the date in PROGRESS.md.
 
 ## Reclaiming the file after the offload
 
