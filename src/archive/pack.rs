@@ -281,11 +281,9 @@ pub fn verify(pack: &[u8], entries: &[Entry]) -> bool {
     })
 }
 
-/// Record a verified pack (OBJ-03 calls this after the upload and HEAD; a
-/// reindex from a pack's own index uses it too): its `body_packs` row, a
-/// location per body, and `packed_at` on each body's row. A body already
-/// located elsewhere moves here, and its old pack's live bytes drop. The
-/// local copies stay. Run inside the caller's transaction.
+/// Record a verified pack (OBJ-03 calls this after the upload and HEAD): its
+/// `body_packs` row, then [`locate_on`] its bodies. Run inside the caller's
+/// transaction.
 pub fn record_on(
     tx: &rusqlite::Connection,
     id: Ulid,
@@ -295,13 +293,12 @@ pub fn record_on(
     entries: &[Entry],
     now_ms: i64,
 ) -> rusqlite::Result<()> {
-    let pack_id = id.to_string();
     let live: u64 = entries.iter().map(|e| e.len).sum();
     tx.execute(
         "INSERT INTO body_packs (pack_id, kind, bytes, bodies, live_bytes, sha256, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         rusqlite::params![
-            pack_id,
+            id.to_string(),
             kind.as_str(),
             bytes as i64,
             entries.len() as i64,
@@ -310,6 +307,22 @@ pub fn record_on(
             now_ms
         ],
     )?;
+    locate_on(tx, id, kind, entries, now_ms)
+}
+
+/// Point each entry's body at pack `id` (whose `body_packs` row exists) and
+/// set `packed_at` on its row if unset. A body already located elsewhere
+/// moves here, and its old pack's live bytes drop; one already located here
+/// is left as it is. The local copies stay. A reindex from a pack's own index
+/// uses this too (OBJ-04).
+pub fn locate_on(
+    tx: &rusqlite::Connection,
+    id: Ulid,
+    kind: Kind,
+    entries: &[Entry],
+    packed_at_ms: i64,
+) -> rusqlite::Result<()> {
+    let pack_id = id.to_string();
     let mut moved = tx.prepare_cached(
         "UPDATE body_packs SET live_bytes = live_bytes - l.len
            FROM (SELECT pack_id, len FROM body_locations WHERE match_id = ?1 AND kind = ?2) AS l
@@ -335,9 +348,22 @@ pub fn record_on(
             e.len as i64,
             e.sha256.as_slice()
         ])?;
-        packed.execute(rusqlite::params![e.match_id, now_ms])?;
+        packed.execute(rusqlite::params![e.match_id, packed_at_ms])?;
     }
     Ok(())
+}
+
+/// The kind and id of a pack's object key, the inverse of [`key`]; `None`
+/// for any other key.
+pub fn parse_key(key: &str) -> Option<(Kind, Ulid)> {
+    let rest = key.strip_prefix("packs/")?;
+    let (table, rest) = rest.split_once('/')?;
+    let kind = [Kind::Match, Kind::Timeline]
+        .into_iter()
+        .find(|k| k.table() == table)?;
+    let name = rest.rsplit_once('/')?.1.strip_suffix(".pack")?;
+    let id = Ulid::from_string(name).ok()?;
+    (self::key(kind, id) == key).then_some((kind, id))
 }
 
 #[cfg(test)]

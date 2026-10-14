@@ -1,0 +1,33 @@
+# Hourly copy of the archive bucket to its R2 replica (design/12 §Replica and
+# backups, OBJ-04). Install with deploy/README.md §Bucket replica. rclone reads
+# its remotes from /etc/riot-proxy/rclone.conf (0600, root), handed to the
+# unit as a credential so the sync itself runs as an unprivileged user.
+[Unit]
+Description=riot-proxy: sync the archive bucket to its R2 replica
+Documentation=https://github.com/NinjaGoldfinch/riot-proxy/blob/main/deploy/README.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=REPLICA_SOURCE=onidel:riot-proxy-archive
+Environment=REPLICA_DEST=r2:riot-proxy-archive
+LoadCredential=rclone.conf:/etc/riot-proxy/rclone.conf
+ExecStart=/usr/bin/rclone sync ${REPLICA_SOURCE} ${REPLICA_DEST} --config %d/rclone.conf --transfers 16 --stats-one-line -v
+DynamicUser=yes
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=50min
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native

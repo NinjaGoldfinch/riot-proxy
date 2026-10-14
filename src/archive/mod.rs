@@ -11,6 +11,7 @@ pub mod pack;
 pub mod player;
 pub mod pool;
 pub mod ranks;
+pub mod recovery;
 pub mod tiers;
 
 use std::sync::Arc;

@@ -211,7 +211,7 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         config.backup_keep as usize,
     );
     let maintenance = Arc::new(match &pending {
-        Some(_) => maintenance.then_offload(queue.clone()),
+        Some(_) => maintenance.then_bucket_jobs(queue.clone()),
         None => maintenance,
     });
     let analytics = Arc::new(crate::jobs::analytics::AnalyticsContext {
@@ -248,10 +248,18 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
             target_bytes: config.archive_pack_target_bytes,
             pace: Duration::from_millis(config.archive_offload_pace_ms),
         });
-        handlers = handlers.with(
-            crate::jobs::kinds::ARCHIVE_OFFLOAD,
-            crate::jobs::offload::OffloadHandler(offload),
-        );
+        handlers = handlers
+            .with(
+                crate::jobs::kinds::ARCHIVE_OFFLOAD,
+                crate::jobs::offload::OffloadHandler(offload),
+            )
+            .with(
+                crate::jobs::kinds::ARCHIVE_INDEX_SNAPSHOT,
+                crate::jobs::index_snapshot::IndexSnapshotHandler {
+                    db: db.clone(),
+                    objects: objects.clone(),
+                },
+            );
     }
     let scheduler = crate::jobs::Scheduler::with_queue(queue.clone(), handlers)
         .with_limiter(Arc::clone(&limiter))

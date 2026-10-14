@@ -71,6 +71,10 @@ fn every_subcommand_has_help() {
         vec!["healthcheck", "--help"],
         vec!["spec", "--help"],
         vec!["backup", "--help"],
+        vec!["packs", "--help"],
+        vec!["packs", "reindex", "--help"],
+        vec!["packs", "restore-index", "--help"],
+        vec!["packs", "snapshot", "--help"],
     ] {
         let out = Command::new(BIN).args(&args).output().unwrap();
         assert!(out.status.success(), "{args:?}");
@@ -501,4 +505,98 @@ fn backup_writes_a_copy_that_opens_and_never_overwrites() {
         "{}",
         String::from_utf8_lossy(&again.stderr)
     );
+}
+
+/// OBJ-04: `packs snapshot` writes today's index snapshot, `packs
+/// restore-index` brings an emptied map back from it, and `packs reindex`
+/// rebuilds it from the packs; all three need a bucket.
+#[tokio::test]
+async fn packs_snapshot_restore_and_reindex_rebuild_the_map() {
+    use riot_proxy::archive::objects::Objects;
+    use riot_proxy::archive::pack::Kind;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("data");
+    let bucket = tmp.path().join("bucket");
+    let url = format!("file://{}", bucket.display());
+    let packs = |args: &[&str]| {
+        let out = cmd(&data)
+            .env("ARCHIVE_OBJECT_URL", &url)
+            .arg("packs")
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        stdout(&out)
+    };
+
+    run(&data, &["migrate"]);
+    let db = riot_proxy::db::Db::open(&data.join("riot-proxy.db"), 1).unwrap();
+    std::fs::create_dir_all(&bucket).unwrap();
+    let objects = Objects::from_store(
+        std::sync::Arc::new(object_store::local::LocalFileSystem::new_with_prefix(&bucket).unwrap()),
+        false,
+        "file://bucket",
+    );
+    let body = zstd::encode_all(&b"{\"metadata\":{}}"[..], 3).unwrap();
+    db.write(move |c| {
+        c.execute(
+            "INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size, archived_at)
+             VALUES ('OC1_1', 'sea', '16.19', 420, 1, ?1, 1, 1)",
+            [body],
+        )?;
+        Ok::<_, riot_proxy::db::DbError>(())
+    })
+    .await
+    .unwrap();
+    riot_proxy::archive::offload::write_pack(
+        &db,
+        &objects,
+        Kind::Match,
+        &["OC1_1".to_string()],
+        1_791_000_000_000,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let before = riot_proxy::archive::recovery::tables(&db).await.unwrap();
+    let locations = || {
+        rusqlite::Connection::open(data.join("riot-proxy.db"))
+            .unwrap()
+            .query_row("SELECT count(*) FROM body_locations", [], |r| r.get::<_, i64>(0))
+            .unwrap()
+    };
+    let empty = || {
+        rusqlite::Connection::open(data.join("riot-proxy.db"))
+            .unwrap()
+            .execute_batch("DELETE FROM body_locations; DELETE FROM body_packs;")
+            .unwrap();
+    };
+
+    let text = packs(&["snapshot"]);
+    assert!(text.contains("1 packs, 1 locations"), "{text}");
+    empty();
+    let text = packs(&["restore-index"]);
+    assert!(
+        text.contains("restored the snapshot of") && text.contains("reindexed 0 newer packs"),
+        "{text}"
+    );
+    assert_eq!(locations(), 1);
+    assert_eq!(riot_proxy::archive::recovery::tables(&db).await.unwrap(), before);
+
+    empty();
+    let text = packs(&["reindex"]);
+    assert!(text.contains("reindexed 1 packs, 1 bodies"), "{text}");
+    assert_eq!(riot_proxy::archive::recovery::tables(&db).await.unwrap(), before);
+    let since = &before.packs[0].pack_id;
+    let text = packs(&["reindex", "--since", since]);
+    assert!(text.contains("reindexed 0 packs"), "{text}");
+
+    let out = cmd(&data).args(["packs", "reindex"]).output().unwrap();
+    assert!(!out.status.success(), "no bucket, no reindex");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("ARCHIVE_OBJECT_URL"));
 }
