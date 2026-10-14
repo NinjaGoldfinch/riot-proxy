@@ -183,12 +183,23 @@ drill() { sudo systemd-run --quiet --wait --pipe -p EnvironmentFile="$d/env" \
 The fake Riot key means anything not in the archive fails; nothing reaches
 Riot with the real key, and the live limiter is untouched.
 
-1. **A body reads from R2.**
+1. **A body reads from R2.** Use an offloaded match. Before the first bodies
+   are freed (14 days after the offload starts), the backup has none, so
+   free a packed one in the scratch copy by hand (the row keeps its
+   location, so the read must go to the bucket):
 
    ```bash
-   id=$(sudo sqlite3 -readonly data/riot-proxy.db "SELECT match_id FROM matches WHERE offloaded_at IS NOT NULL LIMIT 1")
+   read -r region id < <(sudo sqlite3 -readonly -separator ' ' data/riot-proxy.db \
+     "SELECT region, match_id FROM matches WHERE offloaded_at IS NOT NULL LIMIT 1")
+   if [ -z "$id" ]; then
+     read -r region id < <(sudo sqlite3 -readonly -separator ' ' data/riot-proxy.db \
+       "SELECT m.region, m.match_id FROM matches m JOIN body_locations l ON l.match_id = m.match_id AND l.kind = 'match' LIMIT 1")
+     sudo sqlite3 data/riot-proxy.db "UPDATE matches SET body_zstd = X'', offloaded_at = 1 WHERE match_id = '$id'"
+   fi
+   echo "$region $id"
    sudo systemd-run --unit=restore-drill -p EnvironmentFile="$d/env" /usr/local/bin/riot-proxy --data-dir "$d/data" serve
-   sleep 5; curl -s -D - -o /dev/null "localhost:8081/v1/match/$id" | grep -i '^x-cache'   # X-Cache: ARCHIVE
+   until curl -sf localhost:8081/healthz >/dev/null; do sleep 2; done
+   curl -s -D - -o /dev/null "localhost:8081/v1/lol/matches/$region/$id" | grep -iE '^(HTTP|x-cache)'   # 200, X-Cache: ARCHIVE
    sudo systemctl stop restore-drill
    ```
 
