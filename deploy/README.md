@@ -226,15 +226,43 @@ list; the file does not shrink. Once `archive_offload_pending{step="free"}`
 is 0 for both kinds, copy the database compactly and swap it in, as
 design/07 §Reclaiming space describes. On production:
 
+Three steps, each checked before the next. Run them in `tmux` (or `screen`):
+the copy takes a long time on a 20+ GB file, and a dropped SSH session must
+not leave a half-written copy behind for the swap to pick up.
+
 ```bash
-rp backup /var/lib/riot-proxy/data/riot-proxy.compact.db   # while serving; needs free space ≈ the live data (rp: §Index snapshots and recovery)
-sudo systemctl stop riot-proxy
+# 1. The copy, while serving; it needs free space about the size of the live data.
+#    rp: §Index snapshots and recovery. Wait for it to return.
+tmux new -s reclaim
+rp backup /var/lib/riot-proxy/data/riot-proxy.compact.db
 cd /var/lib/riot-proxy/data
-sudo -u riot-proxy mv riot-proxy.db riot-proxy.old.db && sudo rm -f riot-proxy.db-wal riot-proxy.db-shm
+
+# 2. The copy is finished: nothing has it open, and it starts with a SQLite header
+#    (a copy still being written has a blank first page).
+sudo fuser -v riot-proxy.compact.db && echo "STOP: the copy is still being written"
+sudo head -c 16 riot-proxy.compact.db | grep -q 'SQLite format 3' && echo "header ok" || echo "STOP: not a finished copy"
+sudo -u riot-proxy ionice -c3 sqlite3 -readonly riot-proxy.compact.db "PRAGMA quick_check;"   # ok (tens of minutes)
+
+# 3. The swap. The old file's WAL is folded in first, never deleted.
+sudo systemctl stop riot-proxy
+sudo fuser -v riot-proxy.db* && echo "STOP: something still has the database open"
+sudo -u riot-proxy sqlite3 -cmd '.timeout 10000' riot-proxy.db "PRAGMA wal_checkpoint(TRUNCATE);"   # 0|0|0
+ls -la riot-proxy.db*                                   # riot-proxy.db-wal absent or 0 bytes
+sudo -u riot-proxy mv riot-proxy.db riot-proxy.old.db
+[ ! -s riot-proxy.db-wal ] && sudo rm -f riot-proxy.db-wal riot-proxy.db-shm   # only an empty WAL
 sudo -u riot-proxy mv riot-proxy.compact.db riot-proxy.db
 sudo systemctl start riot-proxy
 curl -s localhost:8080/readyz
 ```
+
+Any `STOP` line, a `quick_check` that isn't `ok`, or a WAL that is still
+non-empty after the checkpoint: do not go on. Start the service on the
+untouched `riot-proxy.db` and find out why first. A `-wal` file holds
+committed writes not yet in the main file; deleting it, or leaving it beside
+a different file, loses or corrupts them (2026-10-14: a swap made while the
+copy was still being written left an unfinished copy as `riot-proxy.db` and
+the original's 1.5 GB WAL beside it; the original and its WAL were put back
+together and nothing was lost).
 
 Expect `sqlite_db_bytes` under 8 GB and `sqlite_freelist_bytes` near zero
 (OBJ-04's done-when). Keep `riot-proxy.old.db` until the next nightly backup
