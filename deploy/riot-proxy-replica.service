@@ -13,7 +13,7 @@ Type=oneshot
 Environment=REPLICA_SOURCE=onidel:riot-proxy-archive
 Environment=REPLICA_DEST=r2:riot-proxy-archive
 LoadCredential=rclone.conf:/etc/riot-proxy/rclone.conf
-ExecStart=/usr/bin/rclone sync ${REPLICA_SOURCE} ${REPLICA_DEST} --config %d/rclone.conf --transfers 16 --stats-one-line -v
+ExecStart=/usr/bin/rclone sync ${REPLICA_SOURCE} ${REPLICA_DEST} --config %d/rclone.conf --metadata --transfers 16 --stats-one-line -v
 DynamicUser=yes
 Nice=10
 IOSchedulingClass=idle
