@@ -328,7 +328,7 @@ Before (OVH VPS, 2026-10-13 01:00 UTC): 38 GB disk at 77 %, `riot-proxy.db` 20 G
 - [x] OBJ-01 object store client and config: `archive::objects` over `object_store`, `ARCHIVE_OBJECT_*` with redaction and production checks (#196, ADR-162)
 - [x] OBJ-02 pack format, `body_locations` and reads: `archive::pack`, V0023, reads by byte range, `archive::offload` write and free steps, stats and dashboard counts (#197, ADR-163)
 - [x] OBJ-03 `archive:offload`: packs when a kind has a full pack, at boot and after maintenance; frees past `ARCHIVE_BODY_LOCAL_DAYS`; V0024; gauges (#198, ADR-164)
-- [ ] OBJ-04 reclaim, hourly R2 replica and bucket lifecycle rules, daily index snapshot, `packs reindex` / `restore-index`
+- [x] OBJ-04 reclaim runbook, hourly R2 replica unit and timer, bucket lifecycle rules, daily `archive:index-snapshot`, `packs reindex` / `restore-index` / `snapshot` (#206, ADR-165); done-when (`sqlite_db_bytes` < 8 GB) waits for the reclaim on the VPS
 - [ ] OBJ-05 drop `body_zstd`
 - [ ] OBJ-06 deletes, compaction and orphan sweep
 
@@ -353,6 +353,13 @@ Before (OVH VPS, 2026-10-13 01:00 UTC): 38 GB disk at 77 %, `riot-proxy.db` 20 G
 - [x] ADM-16 keyboard: `/` palette, `?` help, `1`–`0` tabs, `t` theme, focus trapped in dialogs; accessible-name audits in jsdom and Chromium (#193, ADR-160)
 - [x] ADM-17 `/dashboard/config.json` removed, `/dev/jobs` → 302 `/dashboard#jobs`, the old jobs page deleted; design/13 Accepted (#194, ADR-161)
 - [ ] ADM-18 optional: Access JWT as admin login (ask the owner first)
+
+## PERF — a fast first champions read (owner request 2026-10-14)
+ninjagoldfinch.lol's `/champions` data took 3.9 s, all of it the proxy's analytics reads (ADR-166).
+- [x] PERF-00 series spec: tasks, measurements, design/04 §Analytics reads (#207, ADR-166)
+- [x] PERF-01 reads that seek on their keys (#208, ADR-167)
+- [ ] PERF-02 `champion_stats_totals`, summed over tier, for tierless reads
+- [ ] PERF-03 analytics responses cached per aggregate generation, warmed after each rebuild
 
 ## PAIR — team pairings (owner request 2026-10-10, outline)
 - [ ] PAIR-01 `champion_pairs`: every ally role per player, keyed by tier and side (IMPLEMENTATION.md §Post-release — PAIR)

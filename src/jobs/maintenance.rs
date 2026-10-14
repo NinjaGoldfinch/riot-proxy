@@ -151,9 +151,10 @@ pub struct Maintenance {
     pub disk_free: DiskFree,
     /// The last run since the process started (ADM-06).
     last: RwLock<Option<LastRun>>,
-    /// Where `archive:offload` is queued after each run, with a bucket
-    /// (OBJ-03): the daily pass that frees bodies past the window.
-    offload: Option<crate::jobs::Queue>,
+    /// Where `archive:offload` and `archive:index-snapshot` are queued after
+    /// each run, with a bucket: the daily pass that frees bodies past the
+    /// window (OBJ-03), and the day's index snapshot (OBJ-04).
+    bucket_jobs: Option<crate::jobs::Queue>,
 }
 
 impl Maintenance {
@@ -164,14 +165,15 @@ impl Maintenance {
             keep,
             disk_free: Arc::new(crate::db::disk::free_bytes),
             last: RwLock::new(None),
-            offload: None,
+            bucket_jobs: None,
         }
     }
 
-    /// Queue `archive:offload` on `queue` after every run (OBJ-03).
+    /// Queue `archive:offload` (OBJ-03) and `archive:index-snapshot`
+    /// (OBJ-04) on `queue` after every run.
     #[must_use]
-    pub fn then_offload(mut self, queue: crate::jobs::Queue) -> Self {
-        self.offload = Some(queue);
+    pub fn then_bucket_jobs(mut self, queue: crate::jobs::Queue) -> Self {
+        self.bucket_jobs = Some(queue);
         self
     }
 
@@ -197,11 +199,15 @@ impl Maintenance {
             error: result.as_ref().err().map(ToString::to_string),
         };
         *self.last.write().unwrap_or_else(PoisonError::into_inner) = Some(run);
-        // Whatever the day's steps did: freeing bodies does not depend on them.
-        if let Some(queue) = &self.offload
-            && let Err(e) = crate::jobs::offload::enqueue(queue).await
-        {
-            tracing::warn!(error = %e, "could not queue the offload after maintenance");
+        // Whatever the day's steps did: freeing bodies and the snapshot do
+        // not depend on them.
+        if let Some(queue) = &self.bucket_jobs {
+            if let Err(e) = crate::jobs::offload::enqueue(queue).await {
+                tracing::warn!(error = %e, "could not queue the offload after maintenance");
+            }
+            if let Err(e) = crate::jobs::index_snapshot::enqueue(queue).await {
+                tracing::warn!(error = %e, "could not queue the index snapshot after maintenance");
+            }
         }
         result
     }

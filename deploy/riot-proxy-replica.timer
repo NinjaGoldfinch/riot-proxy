@@ -1,0 +1,11 @@
+# Runs riot-proxy-replica.service at 17 past every hour (OBJ-04).
+[Unit]
+Description=riot-proxy: hourly sync of the archive bucket to R2
+
+[Timer]
+OnCalendar=*-*-* *:17:00
+RandomizedDelaySec=2min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
