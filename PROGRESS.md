@@ -209,7 +209,7 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 - [x] OPS-02 Proxmox dev VM (#80; `deploy/proxmox/`, CI job `ops`, ADR-070)
 - [x] OPS-03 `create-vm.sh --generate-key`: a unique login keypair per VM (#82, ADR-072)
 - [x] OPS-04 faster CI: `build-musl` packages its own binary, the source `Dockerfile` builds in a cached `docker` job, caches saved from `main` only (#93, ADR-079)
-- [ ] OPS-05 each image's GHCR description lists the commits since the image before it (`:edge` and releases); release notes list the PRs (ADR-107)
+- [x] OPS-05 each image's GHCR description lists the commits since the image before it (`:edge` and releases), via `scripts/image-description.sh` and index-level annotations; release notes list the PRs (#129, ADR-107)
 - [x] OPS-06 `JOB_KIND_LIMITS` (default `aggregate:analytics=1`): the most jobs of a kind that doesn't call Riot running at once, enforced in the claim; `--job-concurrency`; the queue view's `heldKinds`/`held`; a 2-vCPU sizing note in design/07 (#162, owner issue 2026-10-11, ADR-134)
 
 ## DEV — dev explorer (owner request 2026-10-05)
