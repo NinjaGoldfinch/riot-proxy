@@ -22,6 +22,7 @@ use rusqlite::types::Value;
 use rusqlite::{Connection, params, params_from_iter};
 
 use crate::db::{Db, DbError};
+use crate::riot::ladder;
 
 /// One ladder's rebuild.
 #[derive(Debug, Clone)]
@@ -128,8 +129,9 @@ fn ladder_facts(join: &str) -> String {
 /// Rows written per table by one rebuild step.
 pub type Written = Vec<(&'static str, i64)>;
 
-/// Slices, champion stats and bans, and their totals over every tier
-/// (SITE-08, PERF-02), in one transaction (v1's champion step).
+/// Slices, champion stats and bans, their totals over every tier (SITE-08,
+/// PERF-02) and per tier floor (FLT-03), in one transaction (v1's champion
+/// step).
 pub fn rebuild_champions(c: &mut Connection, s: &Scope) -> Result<Written, DbError> {
     let facts = ladder_facts("");
     let tx = c.transaction()?;
@@ -140,6 +142,8 @@ pub fn rebuild_champions(c: &mut Connection, s: &Scope) -> Result<Written, DbErr
         "champion_stats_totals",
         "champion_bans",
         "champion_ban_totals",
+        "analytics_floor_totals",
+        "champion_ban_floor_totals",
     ] {
         s.clear(&tx, t)?;
     }
@@ -216,8 +220,76 @@ pub fn rebuild_champions(c: &mut Connection, s: &Scope) -> Result<Written, DbErr
              GROUP BY m.patch, b.champion_id, coalesce(m.remake, 0)"
         ),
     )?;
+    insert_floors(&tx, s)?;
     tx.commit()?;
     Ok(vec![("champion_stats", stats)])
+}
+
+/// Riot's tiers with their rank, lowest first, as an SQL `floors(rank, tier)`
+/// table: the floors of a tier range (FLT-03). Code constants from
+/// [`ladder::tiers`], not caller text; `UNKNOWN` is no floor.
+pub(crate) fn floors() -> String {
+    let rows = ladder::tiers()
+        .enumerate()
+        .map(|(i, t)| format!("({i}, '{t}')"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("floors(rank, tier) AS (VALUES {rows})")
+}
+
+/// The pick- and ban-rate denominators of a tier range (FLT-03, ADR-170): a
+/// match counts once in every floor at or below its highest stamped tier,
+/// so a range's matches aren't the sum of its tiers' slices. Each match is
+/// reduced to that tier once (`floor_top`), counted per tier, and only then
+/// spread over the floors below it: grouping per floor first sorted every
+/// match up to ten times over (about 4× slower, ADR-170). A match whose
+/// players are all `UNKNOWN` or unstamped is in no floor.
+fn insert_floors(c: &Connection, s: &Scope) -> Result<(), DbError> {
+    let floors = floors();
+    let facts = ladder_facts("JOIN floors fl ON fl.tier = f.tier");
+    // Each statement names ?6, so it takes all six of `insert`'s parameters
+    // (SQLite counts them to the highest index).
+    s.insert(
+        c,
+        &format!(
+            "CREATE TEMP TABLE floor_top AS WITH {floors}
+             SELECT m.match_id, m.patch, coalesce(m.remake, 0) AS remake, max(fl.rank) AS rank, ?6 AS computed_at
+             {facts}
+             GROUP BY m.match_id"
+        ),
+    )?;
+    s.insert(
+        c,
+        &format!(
+            "WITH {floors},
+               g AS MATERIALIZED (SELECT patch, remake, rank, count(*) AS n FROM temp.floor_top
+                                   GROUP BY patch, remake, rank)
+             INSERT INTO analytics_floor_totals (key_scope, platform, queue, floor_tier, patch, remake, matches,
+               computed_at)
+             SELECT ?1, ?2, ?3, fl.tier, g.patch, g.remake, sum(g.n), ?6
+               FROM g JOIN floors fl ON fl.rank <= g.rank
+              GROUP BY fl.tier, g.patch, g.remake"
+        ),
+    )?;
+    // A champion banned by both teams counts once per match, as in
+    // champion_ban_totals; a match has one highest tier, so the per-tier
+    // counts are disjoint and their sum over a floor is exact.
+    s.insert(
+        c,
+        &format!(
+            "WITH {floors},
+               g AS MATERIALIZED (SELECT t.patch, b.champion_id, t.remake, t.rank, count(DISTINCT t.match_id) AS n
+                                    FROM temp.floor_top t JOIN match_bans b ON b.match_id = t.match_id
+                                   GROUP BY t.patch, b.champion_id, t.remake, t.rank)
+             INSERT INTO champion_ban_floor_totals (key_scope, platform, queue, floor_tier, patch, champion_id,
+               remake, bans, computed_at)
+             SELECT ?1, ?2, ?3, fl.tier, g.patch, g.champion_id, g.remake, sum(g.n), ?6
+               FROM g JOIN floors fl ON fl.rank <= g.rank
+              GROUP BY fl.tier, g.patch, g.champion_id, g.remake"
+        ),
+    )?;
+    c.execute_batch("DROP TABLE temp.floor_top")?;
+    Ok(())
 }
 
 /// Lane matchups (v1): two players of opposite teams in the same lane, each
@@ -463,6 +535,37 @@ impl Side {
     }
 }
 
+/// Which tiers a read sums (FLT-03): one of these, so a read can't name a
+/// tier and a range at once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TierFilter {
+    /// Every tier, summed (ADR-123).
+    Any,
+    /// One tier: Riot's, or [`UNKNOWN_TIER`].
+    One(String),
+    /// This tier and every one above it, in [`ladder::tiers`]'s order;
+    /// `UNKNOWN` is never in a range.
+    AtOrAbove(&'static str),
+}
+
+impl TierFilter {
+    /// The one tier asked for, if that is what was asked.
+    pub fn one(&self) -> Option<&str> {
+        match self {
+            Self::One(t) => Some(t),
+            _ => None,
+        }
+    }
+
+    /// The floor of the range asked for, if that is what was asked.
+    pub fn floor(&self) -> Option<&'static str> {
+        match self {
+            Self::AtOrAbove(f) => Some(f),
+            _ => None,
+        }
+    }
+}
+
 /// Which slice a read asks for.
 #[derive(Debug, Clone)]
 pub struct Read {
@@ -472,8 +575,8 @@ pub struct Read {
     pub queue: String,
     /// `None`: every patch summed (`?patch=all`, ADR-094).
     pub patch: Option<String>,
-    /// `None`: every tier, summed by every read (ADR-123).
-    pub tier: Option<String>,
+    /// Every tier, one, or a range (ADR-123, FLT-03).
+    pub tier: TierFilter,
     /// `None`: both sides summed (FLT-02). The per-match tables (slices,
     /// bans, totals) have no side and ignore it.
     pub side: Option<Side>,
@@ -566,7 +669,7 @@ impl Read {
             platform: platform.map(str::to_string),
             queue: queue.to_string(),
             patch: None,
-            tier: None,
+            tier: TierFilter::Any,
             side: None,
             role: None,
             champion_id: None,
@@ -624,6 +727,9 @@ pub(crate) enum TierKey {
     BeforePatch,
     /// After the champion, role and facet: an open tier is left out.
     AfterPatch,
+    /// `(…, queue, floor_tier, patch, …)`: the floor totals (FLT-03), read
+    /// only for a range, by its floor.
+    Floor,
 }
 
 /// The filter columns a table has besides `key_scope, platform, queue, patch, remake`.
@@ -672,6 +778,20 @@ const BAN_TOTALS: Keys = Keys {
     role: false,
     champion: true,
 };
+/// Distinct matches per floor (FLT-03, V0026).
+const FLOOR_TOTALS: Keys = Keys {
+    tier: TierKey::Floor,
+    side: false,
+    role: false,
+    champion: false,
+};
+/// Bans per floor (FLT-03, V0026).
+const BAN_FLOOR_TOTALS: Keys = Keys {
+    tier: TierKey::Floor,
+    side: false,
+    role: false,
+    champion: true,
+};
 /// Matchups, items, runes, spells, set builds and their parts.
 const FACETS: Keys = Keys {
     tier: TierKey::AfterPatch,
@@ -682,10 +802,10 @@ const FACETS: Keys = Keys {
 
 /// The table a stats read sums and its keys: `champion_stats_totals` when the
 /// read names no tier and wants no row per tier (PERF-02, ADR-168), else
-/// `champion_stats`. The totals have no tier, so a tiered read must never
-/// reach them.
+/// `champion_stats`. The totals have no tier, so a read of one tier or of a
+/// range (FLT-03) must never reach them.
 pub(crate) fn stats_source(r: &Read, by_tier: bool) -> (&'static str, Keys) {
-    if by_tier || r.tier.is_some() {
+    if by_tier || r.tier != TierFilter::Any {
         ("champion_stats", STATS)
     } else {
         ("champion_stats_totals", STATS_TOTALS)
@@ -713,9 +833,26 @@ impl Filter {
         f.one_of("platform", r.platform.as_ref(), &d.platforms);
         f.eq("queue", r.queue.clone().into());
         match (k.tier, &r.tier) {
-            (TierKey::None, _) | (TierKey::AfterPatch, None) => {}
-            (TierKey::BeforePatch, None) => f.one_of("tier", None, &d.tiers),
-            (_, Some(t)) => f.eq("tier", t.clone().into()),
+            (TierKey::None, _) | (TierKey::AfterPatch, TierFilter::Any) => {}
+            (TierKey::BeforePatch, TierFilter::Any) => f.one_of("tier", None, &d.tiers),
+            (TierKey::BeforePatch | TierKey::AfterPatch, TierFilter::One(t)) => {
+                f.eq("tier", t.clone().into())
+            }
+            // A range is its tiers the slice has: a set, so the key still
+            // reaches the patch where tier comes before it.
+            (TierKey::BeforePatch | TierKey::AfterPatch, TierFilter::AtOrAbove(floor)) => {
+                let range = ladder::tiers_at_or_above(floor);
+                let tiers: Vec<String> = d
+                    .tiers
+                    .iter()
+                    .filter(|t| range.contains(&t.as_str()))
+                    .cloned()
+                    .collect();
+                f.one_of("tier", None, &tiers);
+            }
+            (TierKey::Floor, TierFilter::AtOrAbove(floor)) => f.eq("floor_tier", floor.to_string().into()),
+            // The floor totals answer a range only.
+            (TierKey::Floor, _) => f.push("0"),
         }
         f.one_of("patch", r.patch.as_ref(), &d.patches);
         if !r.remakes {
@@ -791,7 +928,7 @@ pub struct StatRow {
 /// tier when the read names none (ADR-123), else that tier's rows (v1
 /// `listChampionStats`). `minGames` and `limit` apply to the rows returned.
 pub async fn stats(db: &Db, r: Read) -> Result<Vec<StatRow>, DbError> {
-    let by_tier = r.tier.is_some();
+    let by_tier = matches!(r.tier, TierFilter::One(_));
     stat_rows(db, r, by_tier).await
 }
 
@@ -813,17 +950,24 @@ async fn stat_rows(db: &Db, r: Read, by_tier: bool) -> Result<Vec<StatRow>, DbEr
         // Summed over tier, the rows are first summed per platform and patch
         // in key order, which needs no sort, so the final GROUP BY sorts a
         // few thousand rows instead of every role and side's (ADR-168). The
-        // same integers, so the same answer.
+        // same integers, so the same answer. A range sums champion_stats,
+        // whose key has the tier before the patch, so its first sum keeps
+        // the tier too (FLT-03: 121 ms instead of 190 on the synthetic copy).
+        let keyed = if table == "champion_stats_totals" {
+            "platform, patch, champion_id"
+        } else {
+            "platform, tier, patch, champion_id"
+        };
         let source = if by_tier {
             format!("{table} WHERE {}", w.sql)
         } else {
             format!(
-                "(SELECT platform, patch, champion_id, sum(games) AS games, sum(wins) AS wins,
+                "(SELECT {keyed}, sum(games) AS games, sum(wins) AS wins,
                          sum(matches_picked) AS matches_picked, sum(stated_games) AS stated_games,
                          sum(kills) AS kills, sum(deaths) AS deaths, sum(assists) AS assists, sum(cs) AS cs,
                          sum(gold) AS gold, sum(damage) AS damage, sum(vision) AS vision,
                          sum(duration_s) AS duration_s, max(computed_at) AS computed_at
-                    FROM {table} WHERE {} GROUP BY platform, patch, champion_id)",
+                    FROM {table} WHERE {} GROUP BY {keyed})",
                 w.sql
             )
         };
@@ -923,6 +1067,41 @@ pub async fn ban_totals(db: &Db, r: Read) -> Result<Vec<(i64, i64)>, DbError> {
         let w = Filter::new(&r, &domain(c, &r)?, BAN_TOTALS);
         let mut stmt = c.prepare(&format!(
             "SELECT champion_id, sum(bans) FROM champion_ban_totals WHERE {} GROUP BY champion_id",
+            w.sql
+        ))?;
+        let rows = stmt
+            .query_map(params_from_iter(w.args), |x| Ok((x.get(0)?, x.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    })
+    .await
+}
+
+/// Distinct matches in the slice with a player at or above the read's floor,
+/// each once (FLT-03, V0026): the pick- and ban-rate denominator of a row
+/// summed over a tier range. 0 for a read that names no range.
+pub async fn floor_totals(db: &Db, r: Read) -> Result<i64, DbError> {
+    db.read(move |c| {
+        let w = Filter::new(&r, &domain(c, &r)?, FLOOR_TOTALS);
+        Ok(c.query_row(
+            &format!(
+                "SELECT coalesce(sum(matches), 0) FROM analytics_floor_totals WHERE {}",
+                w.sql
+            ),
+            params_from_iter(w.args),
+            |x| x.get(0),
+        )?)
+    })
+    .await
+}
+
+/// Bans per champion among the read's floor's matches, a match once (FLT-03):
+/// `(champion, bans)`.
+pub async fn ban_floor_totals(db: &Db, r: Read) -> Result<Vec<(i64, i64)>, DbError> {
+    db.read(move |c| {
+        let w = Filter::new(&r, &domain(c, &r)?, BAN_FLOOR_TOTALS);
+        let mut stmt = c.prepare(&format!(
+            "SELECT champion_id, sum(bans) FROM champion_ban_floor_totals WHERE {} GROUP BY champion_id",
             w.sql
         ))?;
         let rows = stmt

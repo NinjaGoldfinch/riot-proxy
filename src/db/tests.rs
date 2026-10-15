@@ -104,6 +104,7 @@ async fn migrations_create_exactly_the_design_04_tables() {
     assert_eq!(
         tables,
         [
+            "analytics_floor_totals",
             "analytics_match_totals",
             "analytics_runs",
             "analytics_slices",
@@ -111,6 +112,7 @@ async fn migrations_create_exactly_the_design_04_tables() {
             "body_locations",
             "body_packs",
             "cache",
+            "champion_ban_floor_totals",
             "champion_ban_totals",
             "champion_bans",
             "champion_build_parts",
@@ -220,7 +222,7 @@ async fn a_v1_database_upgrades_to_v2_and_keeps_its_data() {
         })
         .await
         .expect("read");
-    assert_eq!((name.as_str(), versions), ("old", 25));
+    assert_eq!((name.as_str(), versions), ("old", 26));
 }
 
 /// V0015 (SITE-08, ADR-123) backfills the slices aggregated before it, as the
@@ -888,11 +890,11 @@ async fn migrations_apply_once_across_reopens() {
         })
         .await
         .expect("insert");
-    assert_eq!(history(first.clone()).await.expect("history"), 25);
+    assert_eq!(history(first.clone()).await.expect("history"), 26);
     drop(first);
 
     let second = Db::open(&path, 1).expect("second open");
-    assert_eq!(history(second.clone()).await.expect("history"), 25, "no re-run");
+    assert_eq!(history(second.clone()).await.expect("history"), 26, "no re-run");
     let name: Option<String> = second
         .read(|c| {
             Ok::<_, DbError>(
@@ -1385,6 +1387,146 @@ async fn v0025_sums_champion_stats_over_tier_and_drops_the_slice_index() {
     assert!(ddl.trim_end().ends_with("WITHOUT ROWID"), "{ddl}");
     assert_eq!(slice, 0, "champion_stats_slice is dropped");
     assert_eq!(stats, 7, "champion_stats keeps its rows");
+}
+
+/// V0026 (FLT-03, ADR-170) backfills each aggregated slice's floor totals as
+/// a rebuild counts them: a match once in every floor at or below its best
+/// stamped player, none for a match of UNKNOWN or unstamped players, a ban
+/// by both teams once, only matches archived by the slice's recompute, only
+/// slices that exist.
+#[tokio::test]
+async fn v0026_backfills_the_floors_of_every_aggregated_slice() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("riot-proxy.db");
+    {
+        let mut conn = Connection::open(&path).expect("open");
+        embedded::migrations::runner()
+            .set_grouped(true)
+            .set_target(refinery::Target::Version(25))
+            .run(&mut conn)
+            .expect("to V0025");
+        let mut sql = String::from(
+            "INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size, archived_at,
+               game_duration, remake, facts_version) VALUES
+               ('KR_1', 'asia', '14.18', 420, 1, x'00', 1, 50, 1500, 0, 3),
+               ('KR_2', 'asia', '14.18', 420, 1, x'00', 1, 50, 1500, 0, 3),
+               ('KR_3', 'asia', '14.18', 420, 1, x'00', 1, 50, 1500, 0, 3),
+               ('KR_4', 'asia', '14.18', 420, 1, x'00', 1, 50, 200, 1, 3),
+               ('KR_5', 'asia', '14.18', 440, 1, x'00', 1, 50, 1500, 0, 3),
+               ('KR_6', 'asia', '14.17', 420, 1, x'00', 1, 50, 1500, 0, 3),
+               ('KR_9', 'asia', '14.18', 420, 1, x'00', 1, 200, 1500, 0, 3),
+               ('OC1_1', 'sea', '14.18', 420, 1, x'00', 1, 50, 1500, 0, 3);
+             INSERT INTO match_bans (match_id, team_id, pick_turn, champion_id) VALUES
+               ('KR_1', 100, 1, 9), ('KR_1', 200, 6, 9), ('KR_2', 100, 1, 10), ('KR_3', 100, 1, 11);
+             INSERT INTO analytics_slices (key_scope, platform, queue, tier, patch, remake, matches, computed_at) VALUES
+               ('s', 'kr', 'RANKED_SOLO_5x5', 'MASTER', '14.18', 0, 1, 100),
+               ('s', 'kr', 'RANKED_SOLO_5x5', 'EMERALD', '14.18', 1, 1, 100),
+               ('s', 'oc1', 'RANKED_SOLO_5x5', 'MASTER', '14.18', 0, 1, 100);
+             INSERT INTO match_facts (match_id, key_scope, puuid, team_id, champion_id, win, facts_version, tier) VALUES
+               ('KR_1', 's', 'A', 100, 1, 1, 3, 'MASTER'), ('KR_1', 's', 'B', 200, 2, 0, 3, 'GRANDMASTER'),
+               ('KR_1', 's', 'C', 200, 3, 0, 3, 'UNKNOWN'), ('KR_1', 's', 'D', 100, 4, 1, 3, NULL),
+               ('KR_3', 's', 'U1', 100, 1, 1, 3, 'UNKNOWN'), ('KR_3', 's', 'U2', 200, 2, 0, 3, NULL),
+               ('KR_4', 's', 'E', 100, 1, 1, 3, 'EMERALD'),
+               ('KR_5', 's', 'F', 100, 1, 1, 3, 'GOLD'),
+               ('KR_6', 's', 'F', 100, 1, 1, 3, 'GOLD'),
+               ('KR_9', 's', 'A', 100, 1, 1, 3, 'MASTER'),
+               ('OC1_1', 's', 'O', 100, 1, 1, 3, 'MASTER')",
+        );
+        // KR_2 has a player in every tier, so it is in every floor.
+        for (i, t) in crate::riot::ladder::tiers().enumerate() {
+            sql.push_str(&format!(
+                ", ('KR_2', 's', 'T{i}', {}, {}, 1, 3, '{t}')",
+                100 + 100 * (i % 2),
+                20 + i
+            ));
+        }
+        sql.push(';');
+        conn.execute_batch(&sql).expect("seed");
+    }
+    let db = Db::open(&path, 1).expect("migrate");
+    let read = |db: Db| async move {
+        db.read(|c| {
+            let rows = |sql: &str| -> Result<Vec<String>, DbError> {
+                let mut stmt = c.prepare(sql)?;
+                let out = stmt.query_map([], |r| r.get(0))?.collect::<Result<Vec<String>, _>>()?;
+                Ok(out)
+            };
+            Ok::<_, DbError>((
+                rows(
+                    "SELECT platform || ' ' || patch || ' ' || remake || ' ' || group_concat(floor_tier || '=' || matches, ',')
+                       || ' @' || max(computed_at)
+                       FROM (SELECT * FROM analytics_floor_totals ORDER BY floor_tier)
+                      GROUP BY platform, queue, patch, remake ORDER BY platform, remake",
+                )?,
+                rows(
+                    "SELECT champion_id || ' ' || group_concat(floor_tier || '=' || bans, ',')
+                       FROM (SELECT * FROM champion_ban_floor_totals ORDER BY floor_tier)
+                      GROUP BY champion_id ORDER BY champion_id",
+                )?,
+            ))
+        })
+        .await
+        .expect("read")
+    };
+    let (floors, bans) = read(db.clone()).await;
+    assert_eq!(
+        floors,
+        [
+            "kr 14.18 0 BRONZE=2,CHALLENGER=1,DIAMOND=2,EMERALD=2,GOLD=2,GRANDMASTER=2,IRON=2,MASTER=2,PLATINUM=2,SILVER=2 @100",
+            "kr 14.18 1 BRONZE=1,EMERALD=1,GOLD=1,IRON=1,PLATINUM=1,SILVER=1 @100",
+            "oc1 14.18 0 BRONZE=1,DIAMOND=1,EMERALD=1,GOLD=1,IRON=1,MASTER=1,PLATINUM=1,SILVER=1 @100",
+        ]
+    );
+    assert_eq!(
+        bans,
+        [
+            "9 BRONZE=1,DIAMOND=1,EMERALD=1,GOLD=1,GRANDMASTER=1,IRON=1,MASTER=1,PLATINUM=1,SILVER=1",
+            "10 BRONZE=1,CHALLENGER=1,DIAMOND=1,EMERALD=1,GOLD=1,GRANDMASTER=1,IRON=1,MASTER=1,PLATINUM=1,SILVER=1",
+        ]
+    );
+    let (ddl, temp): (Vec<String>, i64) = db
+        .read(|c| {
+            let mut stmt = c.prepare(
+                "SELECT sql FROM sqlite_master WHERE type = 'table'
+                   AND name IN ('analytics_floor_totals', 'champion_ban_floor_totals')",
+            )?;
+            let ddl = stmt
+                .query_map([], |r| r.get(0))?
+                .collect::<Result<Vec<String>, _>>()?;
+            let temp = c.query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name = 'v26_top'",
+                [],
+                |r| r.get(0),
+            )?;
+            Ok::<_, DbError>((ddl, temp))
+        })
+        .await
+        .expect("ddl");
+    assert_eq!(ddl.len(), 2);
+    assert!(
+        ddl.iter().all(|d| d.trim_end().ends_with("WITHOUT ROWID")),
+        "{ddl:?}"
+    );
+    assert_eq!(temp, 0);
+
+    // A rebuild of the kr ladder at the slices' time counts the same, once
+    // KR_9 (archived after that recompute) is gone.
+    db.write(|c| {
+        c.execute("DELETE FROM matches WHERE match_id = 'KR_9'", [])?;
+        let s = crate::archive::analytics::Scope {
+            key_scope: "s".into(),
+            platform: "kr".into(),
+            queue: "RANKED_SOLO_5x5".into(),
+            queue_id: 420,
+            patches: Some(vec!["14.18".into()]),
+            now: 100,
+        };
+        crate::archive::analytics::rebuild_champions(c, &s)?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .expect("rebuild");
+    assert_eq!(read(db.clone()).await, (floors, bans));
 }
 
 /// PERF-03: a cached analytics hit is proven by this counter not moving.

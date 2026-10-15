@@ -1090,6 +1090,13 @@ expression: doc
               "null"
             ]
           },
+          "minTier": {
+            "description": "The floor asked for (`minTier`, FLT-03): that tier and every tier above\nit, summed, and `tier` is `null`; `null` when no range was asked for.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "patch": {
             "type": [
               "string",
@@ -1138,6 +1145,7 @@ expression: doc
           "platform",
           "queue",
           "tier",
+          "minTier",
           "side",
           "patch",
           "role",
@@ -1185,6 +1193,13 @@ expression: doc
               "$ref": "#/components/schemas/ChampionMatchupEntry"
             },
             "type": "array"
+          },
+          "minTier": {
+            "description": "The floor asked for (`minTier`, FLT-03): that tier and every tier above\nit, summed, and `tier` is `null`; `null` when no range was asked for.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "patch": {
             "type": [
@@ -1254,6 +1269,7 @@ expression: doc
           "platform",
           "queue",
           "tier",
+          "minTier",
           "side",
           "patch",
           "role",
@@ -1438,6 +1454,13 @@ expression: doc
             },
             "type": "array"
           },
+          "minTier": {
+            "description": "The floor asked for (`minTier`, FLT-03): that tier and every tier above\nit, summed, and `tier` is `null`; `null` when no range was asked for.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "patch": {
             "type": [
               "string",
@@ -1480,6 +1503,7 @@ expression: doc
           "platform",
           "queue",
           "tier",
+          "minTier",
           "side",
           "patch",
           "role",
@@ -1671,6 +1695,13 @@ expression: doc
               "null"
             ]
           },
+          "minTier": {
+            "description": "The floor asked for (`minTier`, FLT-03): that tier and every tier above\nit, summed, and `tier` is `null`; `null` when no range was asked for.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "patch": {
             "type": [
               "string",
@@ -1715,6 +1746,7 @@ expression: doc
           "platform",
           "queue",
           "tier",
+          "minTier",
           "side",
           "patch",
           "role",
@@ -11776,6 +11808,15 @@ expression: doc
             }
           },
           {
+            "description": "IRON … CHALLENGER: that tier and every tier above it, summed; `UNKNOWN` is never in a range. Pick and ban rates count each match once, over the matches with a player at or above it. Not with `tier`",
+            "in": "query",
+            "name": "minTier",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "description": "`blue` or `red`: only the champion's games on that side, its pick rate over every match in the slice. Omitted: both sides summed",
             "in": "query",
             "name": "side",
@@ -12029,6 +12070,15 @@ expression: doc
             "description": "IRON … CHALLENGER, or UNKNOWN: `stats` and `byTier` are that tier's row, and the matchups, items, runes and spells that tier's players'. Omitted: `stats` is one row summed over every tier, pick and ban rates over every match in the slice, `byTier` a row per tier, and the other sections every tier summed",
             "in": "query",
             "name": "tier",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "IRON … CHALLENGER: every section summed over that tier and every tier above it, `byTier` a row per tier of the range; `UNKNOWN` is never in a range. `stats`' pick and ban rates count each match once, over the matches with a player at or above it. Not with `tier`",
+            "in": "query",
+            "name": "minTier",
             "required": false,
             "schema": {
               "type": "string"
@@ -12294,6 +12344,15 @@ expression: doc
             }
           },
           {
+            "description": "IRON … CHALLENGER: only builds of players at that tier or above, summed; `UNKNOWN` is never in a range. Not with `tier`",
+            "in": "query",
+            "name": "minTier",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "description": "`blue` or `red`: only builds of players on that side. Omitted: both sides summed",
             "in": "query",
             "name": "side",
@@ -12547,6 +12606,15 @@ expression: doc
             "description": "IRON … CHALLENGER, or UNKNOWN: only games where this champion's player was at that tier; the opponent may have been in another. Omitted: every tier summed",
             "in": "query",
             "name": "tier",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "IRON … CHALLENGER: only games where this champion's player was at that tier or above, summed; `UNKNOWN` is never in a range. Not with `tier`",
+            "in": "query",
+            "name": "minTier",
             "required": false,
             "schema": {
               "type": "string"

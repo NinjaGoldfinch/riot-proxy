@@ -491,7 +491,7 @@ async fn reads_leave_remakes_out_unless_asked_and_sum_roles() {
         platform: Some("kr".into()),
         queue: "RANKED_SOLO_5x5".into(),
         patch: Some("14.18".into()),
-        tier: None,
+        tier: TierFilter::Any,
         side: None,
         role: None,
         champion_id: None,
@@ -543,7 +543,7 @@ async fn reads_leave_remakes_out_unless_asked_and_sum_roles() {
     );
     // minGames and tier: a named tier gives its rows, from either read.
     let r = Read {
-        tier: Some("MASTER".into()),
+        tier: TierFilter::One("MASTER".into()),
         side: None,
         min_games: 2,
         ..read(false)
@@ -653,7 +653,7 @@ async fn every_patch_sums_and_the_patch_list_is_newest_first() {
         platform: Some("kr".into()),
         queue: "RANKED_SOLO_5x5".into(),
         patch: patch.map(str::to_string),
-        tier: None,
+        tier: TierFilter::Any,
         side: None,
         role: None,
         champion_id: Some(1),
@@ -951,7 +951,7 @@ async fn reads_filter_by_tier_and_side() {
         platform: Some("kr".into()),
         queue: "RANKED_SOLO_5x5".into(),
         patch: Some("14.18".into()),
-        tier: tier.map(str::to_string),
+        tier: tier.map_or(TierFilter::Any, |t| TierFilter::One(t.to_string())),
         side,
         role: None,
         champion_id: Some(champion),
@@ -1191,7 +1191,7 @@ async fn summed_reads_count_each_match_once() {
         platform: Some("kr".into()),
         queue: "RANKED_SOLO_5x5".into(),
         patch: patch.map(str::to_string),
-        tier: None,
+        tier: TierFilter::Any,
         side: None,
         role: None,
         champion_id: None,
@@ -1382,7 +1382,7 @@ async fn build_reads_sum_patches_and_roles_and_leave_remakes_out() {
         platform: Some("kr".into()),
         queue: "RANKED_SOLO_5x5".into(),
         patch: patch.map(str::to_string),
-        tier: None,
+        tier: TierFilter::Any,
         side: None,
         role: role.map(str::to_string),
         champion_id: Some(1),
@@ -1533,10 +1533,16 @@ async fn every_read_seeks_on_its_key() {
     let one = Read {
         platform: Some("kr".into()),
         patch: Some("14.18".into()),
-        tier: Some("MASTER".into()),
+        tier: TierFilter::One("MASTER".into()),
         role: Some("MIDDLE".into()),
         side: Some(Side::Blue),
         champion_id: Some(1),
+        ..open.clone()
+    };
+    // A range (FLT-03): an IN over its tiers where the key has tier before
+    // the patch, and the floor tables' one floor.
+    let range = Read {
+        tier: TierFilter::AtOrAbove("DIAMOND"),
         ..open.clone()
     };
     // (table, its keys, the key column a seek must reach)
@@ -1553,9 +1559,11 @@ async fn every_read_seeks_on_its_key() {
         ("champion_spells", FACETS, "patch=?"),
         ("champion_builds", FACETS, "patch=?"),
         ("champion_build_parts", FACETS, "patch=?"),
+        ("analytics_floor_totals", FLOOR_TOTALS, "patch=?"),
+        ("champion_ban_floor_totals", BAN_FLOOR_TOTALS, "patch=?"),
     ];
     for analyze in [false, true] {
-        let (open, one) = (open.clone(), one.clone());
+        let (open, one, range) = (open.clone(), one.clone(), range.clone());
         let failures = db
             .write(move |c| {
                 if analyze {
@@ -1563,7 +1571,11 @@ async fn every_read_seeks_on_its_key() {
                 }
                 let mut failures = vec![];
                 for (table, keys, reach) in tables {
-                    for (name, r) in [("open", &open), ("one", &one)] {
+                    for (name, r) in [("open", &open), ("one", &one), ("range", &range)] {
+                        // The floor tables answer a range only.
+                        if keys.tier == TierKey::Floor && name != "range" {
+                            continue;
+                        }
                         let w = Filter::new(r, &domain(c, r)?, keys);
                         let sql = format!("EXPLAIN QUERY PLAN SELECT count(*) FROM {table} WHERE {}", w.sql);
                         let plan = c
@@ -1580,13 +1592,27 @@ async fn every_read_seeks_on_its_key() {
                         // tables; it still never reads the whole key scope.
                         let seeks = line.starts_with(&format!("SEARCH {table} "))
                             && line.contains("(key_scope=? AND platform=? AND queue=?")
-                            && (analyze || line.contains(reach));
+                            && (analyze || line.contains(reach))
+                            && (keys.tier != TierKey::Floor || line.contains("floor_tier=?"));
                         let to_champion =
                             !analyze && keys.champion && name == "one" && keys.tier != TierKey::BeforePatch;
                         if !seeks || (to_champion && !line.contains("champion_id=?")) {
                             failures.push(format!("analyze={analyze} {table} {name}: {plan:?}"));
                         }
                     }
+                }
+                // A range's first sum follows champion_stats' key: no sort.
+                let w = Filter::new(&range, &domain(c, &range)?, STATS);
+                let plan = c
+                    .prepare(&format!(
+                        "EXPLAIN QUERY PLAN SELECT platform, tier, patch, champion_id, sum(games)
+                           FROM champion_stats WHERE {} GROUP BY platform, tier, patch, champion_id",
+                        w.sql
+                    ))?
+                    .query_map(params_from_iter(w.args), |x| x.get::<_, String>(3))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                if plan.iter().any(|l| l.contains("TEMP B-TREE")) {
+                    failures.push(format!("analyze={analyze} range sum sorts: {plan:?}"));
                 }
                 Ok::<_, DbError>(failures)
             })
@@ -1865,7 +1891,7 @@ async fn tierless_reads_read_the_totals() {
         ..Read::slice("s", None, "RANKED_SOLO_5x5")
     };
     let tiered = Read {
-        tier: Some("MASTER".into()),
+        tier: TierFilter::One("MASTER".into()),
         ..open.clone()
     };
     let one = Read {
@@ -1942,4 +1968,387 @@ fn the_newest_patch_compares_numbers() {
     let p = |v: &[&str]| newest_patch(v.iter().map(|s| s.to_string()).collect());
     assert_eq!(p(&["16.9", "16.10", "15.24"]).as_deref(), Some("16.10"));
     assert_eq!(p(&[]), None);
+}
+
+// ── FLT-03: tier ranges (ADR-170) ───────────────────────────────────────────
+
+/// KR_7 (14.18 solo): G (GRANDMASTER) on champion 3 for red against M
+/// (MASTER) on champion 4 for blue, champion 9 banned by both teams. KR_8
+/// (14.18 solo): two UNKNOWN players, champion 9 banned. Stamped as written,
+/// so `stamp_all` leaves them.
+const FLOOR_MATCHES: &str = r#"INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size,
+               archived_at, game_duration, remake, facts_version)
+               VALUES ('KR_7', 'asia', '14.18', 420, 1, x'00', 1, 1, 1500, 0, 3),
+                      ('KR_8', 'asia', '14.18', 420, 1, x'00', 1, 1, 1500, 0, 3);
+             INSERT INTO match_facts (match_id, key_scope, puuid, team_id, position, champion_id, win,
+               kills, deaths, assists, cs, gold, damage, vision, items, runes, summoners, facts_version, tier)
+               VALUES ('KR_7', 's', 'G', 200, 'TOP', 3, 1, 2, 2, 2, 100, 5000, 10000, 10,
+                         '[3157,0,0,0,0,0]', '[8000,8112,8300,[],null]', '[4,14]', 3, 'GRANDMASTER'),
+                      ('KR_7', 's', 'M', 100, 'TOP', 4, 0, 1, 1, 1, 100, 5000, 10000, 10,
+                         '[3157,0,0,0,0,0]', '[8000,8010,8400,[],null]', '[14,4]', 3, 'MASTER'),
+                      ('KR_8', 's', 'U1', 100, 'TOP', 5, 1, 1, 1, 1, 100, 5000, 10000, 10,
+                         '[3157,0,0,0,0,0]', '[8000,8010,8400,[],null]', '[14,4]', 3, 'UNKNOWN'),
+                      ('KR_8', 's', 'U2', 200, 'TOP', 6, 0, 1, 1, 1, 100, 5000, 10000, 10,
+                         '[3157,0,0,0,0,0]', '[8000,8010,8400,[],null]', '[14,4]', 3, 'UNKNOWN');
+             INSERT INTO match_bans (match_id, team_id, pick_turn, champion_id)
+               VALUES ('KR_7', 100, 1, 9), ('KR_7', 200, 6, 9), ('KR_8', 100, 1, 9);"#;
+
+async fn floor_db() -> (tempfile::TempDir, Db) {
+    let (d, db) = db();
+    db.write(|c| {
+        seed(c);
+        c.execute_batch(BOTH_SIDES)?;
+        c.execute_batch(FLOOR_MATCHES)?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    rebuild(&db, 0).await;
+    (d, db)
+}
+
+/// A match counts once in every floor at or below its best player's tier,
+/// and in none above it; a match of UNKNOWN players is in no floor but in
+/// the every-tier total. At 14.18 (solo, no remakes) KR_1 (MASTER, DIAMOND,
+/// UNKNOWN), KR_2 and KR_6 (MASTER, DIAMOND) and KR_7 (MASTER, GRANDMASTER)
+/// have a MASTER player or better; only KR_7 a GRANDMASTER; KR_8 none.
+#[tokio::test]
+async fn a_match_counts_once_in_each_floor_at_or_below_its_best_player() {
+    let (_d, db) = floor_db().await;
+    let floors = text_rows(
+        &db,
+        "SELECT floor_tier || ' ' || matches FROM analytics_floor_totals
+          WHERE patch = '14.18' AND queue = 'RANKED_SOLO_5x5' AND remake = 0 ORDER BY matches DESC, floor_tier",
+    )
+    .await;
+    assert_eq!(
+        floors,
+        [
+            "BRONZE 4",
+            "DIAMOND 4",
+            "EMERALD 4",
+            "GOLD 4",
+            "IRON 4",
+            "MASTER 4",
+            "PLATINUM 4",
+            "SILVER 4",
+            "GRANDMASTER 1",
+        ]
+    );
+    // The slices count KR_7 in two tiers: summed over MASTER+ they overcount.
+    let slices = rows(
+        &db,
+        "SELECT sum(matches) FROM analytics_slices WHERE patch = '14.18' AND queue = 'RANKED_SOLO_5x5'
+            AND remake = 0 AND tier IN ('MASTER', 'GRANDMASTER', 'CHALLENGER')",
+    )
+    .await;
+    assert_eq!(slices, [vec![5]]);
+    // KR_8 is in the every-tier total, five matches, and no floor.
+    let totals = rows(
+        &db,
+        "SELECT matches FROM analytics_match_totals WHERE patch = '14.18' AND queue = 'RANKED_SOLO_5x5'
+            AND remake = 0",
+    )
+    .await;
+    assert_eq!(totals, [vec![5]]);
+    // Champion 9: once in KR_7 though both teams banned it; KR_8 counts in
+    // the total only.
+    let bans = text_rows(
+        &db,
+        "SELECT floor_tier || ' ' || bans FROM champion_ban_floor_totals
+          WHERE champion_id = 9 AND floor_tier IN ('DIAMOND', 'MASTER', 'GRANDMASTER', 'CHALLENGER')
+          ORDER BY floor_tier",
+    )
+    .await;
+    assert_eq!(bans, ["DIAMOND 1", "GRANDMASTER 1", "MASTER 1"]);
+    let total = rows(&db, "SELECT bans FROM champion_ban_totals WHERE champion_id = 9").await;
+    assert_eq!(total, [vec![2]]);
+    // The reads: one floor, by its name.
+    let read = |tier: TierFilter| Read {
+        patch: Some("14.18".into()),
+        tier,
+        ..Read::slice("s", Some("kr"), "RANKED_SOLO_5x5")
+    };
+    assert_eq!(
+        floor_totals(&db, read(TierFilter::AtOrAbove("MASTER")))
+            .await
+            .unwrap(),
+        4
+    );
+    assert_eq!(
+        floor_totals(&db, read(TierFilter::AtOrAbove("GRANDMASTER")))
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        floor_totals(&db, read(TierFilter::AtOrAbove("CHALLENGER")))
+            .await
+            .unwrap(),
+        0
+    );
+    // A floor table answers a range only.
+    assert_eq!(floor_totals(&db, read(TierFilter::Any)).await.unwrap(), 0);
+    assert_eq!(
+        floor_totals(&db, read(TierFilter::One("MASTER".into())))
+            .await
+            .unwrap(),
+        0
+    );
+    let nine = |r: Vec<(i64, i64)>| r.into_iter().find(|(c, _)| *c == 9).map(|(_, b)| b);
+    assert_eq!(
+        nine(
+            ban_floor_totals(&db, read(TierFilter::AtOrAbove("MASTER")))
+                .await
+                .unwrap()
+        ),
+        Some(1)
+    );
+    assert_eq!(
+        nine(ban_floor_totals(&db, read(TierFilter::Any)).await.unwrap()),
+        None
+    );
+}
+
+/// Every per-participant read of a range is the sum of the same read for
+/// each tier in it.
+#[tokio::test]
+async fn range_reads_sum_the_named_tiers() {
+    let (_d, db) = floor_db().await;
+    let range = ladder::tiers_at_or_above("DIAMOND");
+    for champion in [1, 2, 3, 4] {
+        let read = |tier: TierFilter| Read {
+            tier,
+            champion_id: Some(champion),
+            limit: 500,
+            ..Read::slice("s", None, "RANKED_SOLO_5x5")
+        };
+        let ranged = read(TierFilter::AtOrAbove("DIAMOND"));
+        let each: Vec<Read> = range
+            .iter()
+            .map(|t| read(TierFilter::One((*t).to_string())))
+            .collect();
+
+        // stats: the one summed row against the tiers' rows.
+        let sum = |rows: Vec<StatRow>| {
+            rows.iter().fold([0; 12], |mut a, r| {
+                for (i, v) in [
+                    r.games,
+                    r.wins,
+                    r.matches_picked,
+                    r.stated_games,
+                    r.kills,
+                    r.deaths,
+                    r.assists,
+                    r.cs,
+                    r.gold,
+                    r.damage,
+                    r.vision,
+                    r.duration_s,
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    a[i] += v;
+                }
+                a
+            })
+        };
+        let got = stats(&db, ranged.clone()).await.unwrap();
+        assert!(got.len() <= 1 && got.iter().all(|r| r.tier.is_none()), "{got:?}");
+        let mut want = vec![];
+        for r in &each {
+            want.extend(stats(&db, r.clone()).await.unwrap());
+        }
+        assert_eq!(sum(got), sum(want.clone()), "stats of {champion}");
+        // byTier: the range's tiers' rows, each as its own read gives it.
+        let mut by_tier = stats_by_tier(&db, ranged.clone()).await.unwrap();
+        by_tier.sort_by(|a, b| a.tier.cmp(&b.tier));
+        want.sort_by(|a, b| a.tier.cmp(&b.tier));
+        assert_eq!(by_tier, want, "byTier of {champion}");
+
+        for facet_kind in [Facet::Matchups, Facet::Items, Facet::Runes, Facet::Spells] {
+            let fold = |rows: Vec<FacetRow>, into: &mut BTreeMap<(String, Vec<i64>), (i64, i64)>| {
+                for r in rows {
+                    let e = into.entry((r.role, r.ids)).or_default();
+                    e.0 += r.games;
+                    e.1 += r.wins;
+                }
+            };
+            let mut got = BTreeMap::new();
+            fold(facet(&db, facet_kind, ranged.clone()).await.unwrap(), &mut got);
+            let mut want = BTreeMap::new();
+            for r in &each {
+                fold(facet(&db, facet_kind, r.clone()).await.unwrap(), &mut want);
+            }
+            assert_eq!(got, want, "{facet_kind:?} of {champion}");
+        }
+
+        let middle = |r: Read| Read {
+            role: Some("MIDDLE".into()),
+            ..r
+        };
+        let mut got = BTreeMap::new();
+        for b in builds(&db, middle(ranged.clone())).await.unwrap() {
+            *got.entry(b.core).or_insert(0) += b.games;
+        }
+        let mut want = BTreeMap::new();
+        let mut total = 0;
+        for r in &each {
+            for b in builds(&db, middle(r.clone())).await.unwrap() {
+                *want.entry(b.core).or_insert(0) += b.games;
+            }
+            total += build_totals(&db, middle(r.clone())).await.unwrap().0;
+        }
+        assert_eq!(got, want, "builds of {champion}");
+        assert_eq!(build_totals(&db, middle(ranged.clone())).await.unwrap().0, total);
+        let cores: Vec<[i64; 2]> = got.keys().copied().collect();
+        let mut got = BTreeMap::new();
+        for p in build_parts(&db, middle(ranged.clone()), cores.clone())
+            .await
+            .unwrap()
+        {
+            *got.entry((p.core, p.part, p.value)).or_insert(0) += p.games;
+        }
+        let mut want = BTreeMap::new();
+        for r in &each {
+            for p in build_parts(&db, middle(r.clone()), cores.clone()).await.unwrap() {
+                *want.entry((p.core, p.part, p.value)).or_insert(0) += p.games;
+            }
+        }
+        assert_eq!(got, want, "build parts of {champion}");
+    }
+    // A range with none of its tiers in the slice reads nothing.
+    let none = Read {
+        tier: TierFilter::AtOrAbove("CHALLENGER"),
+        limit: 500,
+        ..Read::slice("s", None, "RANKED_SOLO_5x5")
+    };
+    assert!(stats(&db, none).await.unwrap().is_empty());
+}
+
+/// `champion_stats_totals` has no tier, so a range must read
+/// `champion_stats`, whatever else it asks.
+#[tokio::test]
+async fn range_reads_never_read_the_stats_totals() {
+    let (_d, db) = floor_db().await;
+    let range = Read {
+        tier: TierFilter::AtOrAbove("DIAMOND"),
+        limit: 500,
+        ..Read::slice("s", None, "RANKED_SOLO_5x5")
+    };
+    assert_eq!(stats_source(&range, false).0, "champion_stats");
+    assert_eq!(stats_source(&range, true).0, "champion_stats");
+    let one = Read {
+        champion_id: Some(1),
+        ..range.clone()
+    };
+    let before = (
+        stats(&db, range.clone()).await.unwrap(),
+        top_role(&db, one.clone()).await.unwrap(),
+    );
+    assert!(!before.0.is_empty() && before.1.is_some());
+    db.write(|c| Ok::<_, DbError>(c.execute("DELETE FROM champion_stats_totals", [])?))
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            stats(&db, range.clone()).await.unwrap(),
+            top_role(&db, one.clone()).await.unwrap()
+        ),
+        before
+    );
+    db.write(|c| Ok::<_, DbError>(c.execute("DELETE FROM champion_stats", [])?))
+        .await
+        .unwrap();
+    assert!(stats(&db, range).await.unwrap().is_empty());
+    assert_eq!(top_role(&db, one).await.unwrap(), None);
+}
+
+/// A rebuild of the newest patch leaves older patches' floor rows as they
+/// were (ADR-094), as it does the V0015 totals.
+#[tokio::test]
+async fn a_partial_rebuild_leaves_other_patches_floor_rows_alone() {
+    let (_d, db) = db();
+    db.write(|c| {
+        seed(c);
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    rebuild(&db, 0).await;
+    let stamps = |db: Db| async move {
+        rows(
+            &db,
+            "SELECT count(*), min(computed_at), max(computed_at) FROM analytics_floor_totals
+              GROUP BY patch ORDER BY patch",
+        )
+        .await
+    };
+    let before = stamps(db.clone()).await;
+    db.write(|c| {
+        c.execute(
+            "UPDATE analytics_floor_totals SET computed_at = 1 WHERE patch = '14.17'",
+            [],
+        )?;
+        c.execute(
+            "UPDATE champion_ban_floor_totals SET computed_at = 1 WHERE patch = '14.17'",
+            [],
+        )?;
+        let s = Scope {
+            now: 99,
+            ..scope(c, 1)
+        };
+        rebuild_champions(c, &s)?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        stamps(db.clone()).await,
+        [vec![before[0][0], 1, 1], vec![before[1][0], 99, 99]]
+    );
+    // The temp table is gone after the transaction's step.
+    let temp = rows(
+        &db,
+        "SELECT count(*) FROM temp.sqlite_master WHERE name = 'floor_top'",
+    )
+    .await;
+    assert_eq!(temp, [vec![0]]);
+}
+
+/// The floors the rebuild spreads a match over are Riot's tiers, lowest
+/// first, without UNKNOWN; V0026 lists the same.
+#[test]
+fn the_floor_list_is_riots_tiers() {
+    let c = Connection::open_in_memory().unwrap();
+    let mut stmt = c
+        .prepare(&format!(
+            "WITH {} SELECT rank, tier FROM floors ORDER BY rank",
+            floors()
+        ))
+        .unwrap();
+    let got: Vec<(i64, String)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let want: Vec<(i64, String)> = ladder::tiers()
+        .enumerate()
+        .map(|(i, t)| (i64::try_from(i).unwrap(), t.to_string()))
+        .collect();
+    assert_eq!(got, want);
+    let v0026 = include_str!("../../db/migrations/V0026__floor_totals.sql");
+    assert_eq!(
+        v0026.matches(&floors()).count(),
+        0,
+        "V0026 writes its list on two lines"
+    );
+    for (i, t) in ladder::tiers().enumerate() {
+        assert_eq!(
+            v0026.matches(&format!("({i}, '{t}')")).count(),
+            3,
+            "{t} in each of V0026's statements"
+        );
+    }
 }

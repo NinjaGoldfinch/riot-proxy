@@ -1,6 +1,5 @@
 ---
 source: tests/analytics.rs
-assertion_line: 354
 expression: redact(detail.json())
 ---
 {
@@ -71,6 +70,7 @@ expression: redact(detail.json())
       "wins": 1
     }
   ],
+  "minTier": null,
   "patch": "16.19",
   "platform": null,
   "queue": "RANKED_SOLO_5x5",

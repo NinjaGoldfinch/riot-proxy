@@ -1815,3 +1815,42 @@ Accepted (task PERF-03). design/04 §Cache tiers, §Analytics reads; design/11; 
   - `reordered_queries_and_other_consumers_share_an_entry`, `errors_are_not_cached`, `concurrent_misses_read_once`.
 
   Elsewhere: `tests/ddragon.rs` `a_new_patch_misses_the_analytics_cache`; `tests/dev_reset.rs` `a_reset_drops_the_analytics_responses`; unit tests in `cache.rs`, `analytics.rs`, `config/tests.rs` and `db/tests.rs`. Two existing tests that rewrite the tables in SQL now clear the cache after the write, as a rebuild would.
+
+## ADR-170 — Tier ranges count each match once per floor (2026-10-15)
+Accepted (owner request 2026-10-10, task FLT-03; owner answers 2026-10-15). design/04 §Schema, §Analytics reads; design/11 §Page map. Builds on ADR-123 and ADR-130; ADR-167/168/169 unchanged.
+- **What.** `minTier=<TIER>` on `champions`, the detail, `matchups` and `builds` reads that tier and every one above it, in `riot::ladder::tiers()`' order. `UNKNOWN` is never in a range and isn't a floor.
+  - The per-participant rows of the range's tiers are summed, which is exact because they are disjoint across tiers (FLT intro).
+  - `Read.tier` is a `TierFilter`: `Any`, `One(tier)` or `AtOrAbove(floor)`. A read can't name a tier and a range at once.
+  - A range is `tier IN (range ∩ the slice's tiers)` on `champion_stats` and on the facet and build tables. `stats_source` never sends a range to `champion_stats_totals`, which has no tier column.
+- **Denominators: V0026.** `analytics_slices` and `champion_bans` count a match once in each tier it had a player in, so summed over a range they overcount. One Diamond player, three Master and two Unknown give a `DIAMOND+` pick rate of 0.5 instead of 1. Add a ten-Diamond match without the champion and summing gives 0.3333 instead of 0.5, while the ban rate comes out at 0.6667 instead of 0.5. So the error goes both ways; it is not the "above 1" the brief feared.
+  - `analytics_floor_totals` and `champion_ban_floor_totals` count a match once in every floor at or below its highest stamped tier. Both are `WITHOUT ROWID` and keyed `(key_scope, platform, queue, floor_tier, patch[, champion_id], remake)`, with `floor_tier` stored as the tier's name: a read names one floor by equality and seeks through the patch.
+  - A match whose players are all `UNKNOWN` or unstamped is in no floor, though it is in the V0015 totals.
+  - `rebuild_champions` fills both in its transaction. A temp table holds each match's highest floor once; counts are taken per that tier and then spread over the floors below it.
+  - The floor list is a `VALUES` built from `tiers()`, code constants like ADR-130's `Side`.
+  - V0026 backfills every aggregated slice the same way, V0015's pattern: platform from the match id, only matches archived by the slice's `computed_at`. It was checked equal to a rebuild on a hand-built fixture, on the FLT-02 fixture and on two synthetic archives.
+- **Rates.** The floor's totals go under `Rates`' `None` key when the read is a range, so `Rates::new` and `enrich` are unchanged. The summed row (`tier: null`) divides by its floor. Each `byTier` row, now only the range's tiers, divides by its own tier's slice.
+- **`/patches` takes no range** (owner, 2026-10-15), as it takes no `tier` (ADR-130). Its games label the picker, and the champion page's patch list stays the champion's every game. Like any unknown parameter it is ignored, not refused.
+- **Validation.** `minTier` is checked after `tier`, against Riot's tiers in Riot's casing. `tier` with `minTier` is a 400 `VALIDATION`, `querystring/minTier must NOT be sent with tier`, in ADR-130's house shape.
+- **Bodies and ETags.**
+  - Every body except `/patches` has `minTier` (`null` without one) beside `tier`, which is `null` under a range.
+  - `minTier` is a part of every ETag and of the cache key (ADR-169), right after `tier`, so `tier=DIAMOND` and `minTier=DIAMOND` are separate entries.
+  - The shape marker becomes `tier-side-range`. The extra part alone already moves every tag, but the marker records why, as ADR-130's did.
+  - The warm list is unchanged: neither the site nor the showcase home sends a range.
+- **Showcase.** The champion page's tier picker offers *Master+*, *Diamond+* and *Emerald+* above the single tiers, highest first (owner, 2026-10-15). `ch.tier = 'DIAMOND+'` is sent as `minTier=DIAMOND`, and the cards read `Diamond+ · Red side`. The header's tool row keeps its rows at 1280, 820 and 390 px, and the select its 113 px.
+- **Measured** (this container; `docs/flt/FLT-03-plan.md` §9 has the scripts). `scripts/perf-synthetic.py`'s copy has no facts, so the rebuild and the backfill were timed on a facts-backed synthetic archive (seed 1, 10.7 KB bodies, players around a base tier from Emerald to Challenger, a quarter `UNKNOWN`).
+  - **V0026:** 1.36 s at 200,000 facts and 3.70 s at 600,000; V0015's own backfill took 1.32 s on the same 200,000. Extrapolated to production's ~2.3 M facts, about 14 s here and 25–30 s at the next release's first start (V0025 ran about 1.6–2× slower there than here).
+  - **Rebuild:** +4.7 s on the 36.2 s champion step (4 ladders, every patch, 600,000 facts), i.e. +13 %.
+  - **Rows:** `champion_ban_floor_totals` is 9.6× `champion_ban_totals` (83,602 rows, 4.3 MiB) and `analytics_floor_totals` 10× `analytics_match_totals`. They are bounded by ladders × patches × 2 × 10 (× 171 champions), well under 1 % of production's 475 MB.
+  - **Reads** on the PERF copy (SQLite 3.51, cold): the site slice at `minTier=EMERALD` is 121 ms, against 40 ms with no tier and 34 ms at `tier=EMERALD`. A range sums 5/6 of `champion_stats`, which the tierless read avoids. One champion's range read is 2–3 ms, and the floor reads match the V0015 reads (2.5 ms). Keeping the tier in the first sum's `GROUP BY` saved 190 → 121 ms.
+- **Rejected.**
+  - Summing the per-tier slices: wrong both ways, as above.
+  - Floor totals worked out at read time from `match_facts`: design/04 keeps analytics reads off the facts.
+  - Storing a rank instead of the tier's name: a read only ever looks up one floor by equality.
+  - A `json_each` floor list: it would need a seventh parameter in `Scope::insert`.
+  - One insert grouping per floor over facts × floors: 17.5 s instead of 4.7 s, because it sorts every match up to ten times.
+  - A floor-summed stats table for range reads over the whole list: nothing sends one yet (finding PERF-05).
+- **Tests.**
+  - `src/archive/analytics/tests.rs`: `a_match_counts_once_in_each_floor_at_or_below_its_best_player`, `range_reads_sum_the_named_tiers`, `range_reads_never_read_the_stats_totals`, `a_partial_rebuild_leaves_other_patches_floor_rows_alone`, `the_floor_list_is_riots_tiers`. `every_read_seeks_on_its_key` adds a range read and the two floor tables, and checks that a range's first sum needs no sort.
+  - `src/db/tests.rs`: `v0026_backfills_the_floors_of_every_aggregated_slice`.
+  - `tests/analytics.rs`: `tier_ranges_count_a_match_once_on_every_route` (hand counts: Syndra 1/1, not 1/3; Nidalee at `CHALLENGER+` with remakes 1/1, where the every-tier total gives 0.5), `tier_and_min_tier_are_validated_on_every_route`, `a_range_and_a_tier_are_separate_entries`.
+  - The OpenAPI and route snapshots; `tests/dom/showcase.test.mjs` (*Diamond+* sends `minTier=DIAMOND`).
