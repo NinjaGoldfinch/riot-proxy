@@ -209,7 +209,7 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 - [x] OPS-02 Proxmox dev VM (#80; `deploy/proxmox/`, CI job `ops`, ADR-070)
 - [x] OPS-03 `create-vm.sh --generate-key`: a unique login keypair per VM (#82, ADR-072)
 - [x] OPS-04 faster CI: `build-musl` packages its own binary, the source `Dockerfile` builds in a cached `docker` job, caches saved from `main` only (#93, ADR-079)
-- [ ] OPS-05 each image's GHCR description lists the commits since the image before it (`:edge` and releases); release notes list the PRs (ADR-107)
+- [x] OPS-05 each image's GHCR description lists the commits since the image before it (`:edge` and releases), via `scripts/image-description.sh` and index-level annotations; release notes list the PRs (#129, ADR-107)
 - [x] OPS-06 `JOB_KIND_LIMITS` (default `aggregate:analytics=1`): the most jobs of a kind that doesn't call Riot running at once, enforced in the claim; `--job-concurrency`; the queue view's `heldKinds`/`held`; a 2-vCPU sizing note in design/07 (#162, owner issue 2026-10-11, ADR-134)
 
 ## DEV — dev explorer (owner request 2026-10-05)
@@ -304,7 +304,7 @@ The site's backfill question (item 3) needs no task: the unbounded lookup backfi
 ## FLT — builds and matchups by rank, opponent and side (owner request 2026-10-10)
 Order: THR-02 → FLT-01 → FLT-02 → FLT-03 → FLT-04, then PAIR.
 - [x] FLT-01 `tier` and `side` keys on matchups and every build table, `side` on `champion_stats` (V0017), the row's own player's stamped tier and side; reads sum over them, output unchanged; rows from before V0017 kept with tier and side `''` until one rebuild over every patch of their ladder (`analytics_unsplit`, queued at boot) (#155, design/04, ADR-129)
-- [ ] FLT-02 `tier` and `side` on the matchups, builds and detail routes; the champion page's tier picker and side toggle drive the build and matchup cards (IMPLEMENTATION.md §Post-release — FLT)
+- [x] FLT-02 `tier` and `side` on the matchups, builds and detail routes; `side=green` and the like are 400; the ETag shape marker is `tier-side`; the champion page's tier picker and *Both · Blue · Red* toggle drive the By tier, Builds and Matchups cards, each naming its slice (#157, design/11, ADR-130)
 - [x] FLT-03 `minTier` ranges on the champions, detail, matchups and builds routes (`/patches` ignores it, as it ignores `tier`), with per-floor match and ban totals (V0026); *Master+*, *Diamond+*, *Emerald+* in the picker (#217, design/04, design/11, ADR-170, plan in docs/flt/FLT-03-plan.md)
 - [ ] FLT-04 builds against a lane opponent: `champion_matchup_builds`, `opponentId` on the builds route, a *vs* picker (IMPLEMENTATION.md §Post-release — FLT)
 
