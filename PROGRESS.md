@@ -126,7 +126,7 @@ The response shape of `/v1/players/by-riot-id/{gameName}/{tagLine}/profile` matc
 - [x] P6-08 admin routes (jobs) (#53)
 
 Exit check (2026-09-30, `main` @ `bc15e98` + the exit-check test): **passed.**
-`tests/p6_exit.rs` runs the real `serve` pipeline in-process against wiremock (`ServeOptions::riot_base_url`); "kill" aborts the task, so nothing shuts down gracefully. Run with `cargo test --test p6_exit -- --ignored --nocapture`.
+`tests/p6_exit.rs` runs the real `serve` pipeline in-process against wiremock (`ServeOptions::riot_base_url`); "kill" aborts the task, so nothing shuts down gracefully. Run with `cargo test --test it p6_exit:: -- --ignored --nocapture`.
 ```
 1. game.started on /v1/ws 9.9 s after the spectator flip: {"championId":134,"gameId":77,"platform":"kr","puuid":"NkQRx…","queueId":420}
 2. killed serve: backfill cursor 100 of 150, backfill row still running (1), 100 archive:match rows
@@ -143,7 +143,7 @@ The player was tracked through `POST /v1/admin/tracked-players`, which queued th
 - [x] P7-06 dashboard wiring (#60; screenshots in `docs/img/p7-06-*.png`)
 
 Exit check (2026-10-03, `main` @ `0a3e4bf` + the exit-check test): **passed.**
-`tests/p7_exit.rs` runs the real `serve` in-process against a wiremock ladder of 30 players (`LADDER_QUEUES=RANKED_SOLO_5x5 LADDER_TIER_FLOOR=MASTER`), 12 matches each shared by 10 of them. The crawl is started with `POST /v1/admin/ladder/crawl` and watched on `/v1/ws` (`ladder` and `metrics` topics). Run with `cargo test --test p7_exit -- --ignored --nocapture`.
+`tests/p7_exit.rs` runs the real `serve` in-process against a wiremock ladder of 30 players (`LADDER_QUEUES=RANKED_SOLO_5x5 LADDER_TIER_FLOOR=MASTER`), 12 matches each shared by 10 of them. The crawl is started with `POST /v1/admin/ladder/crawl` and watched on `/v1/ws` (`ladder` and `metrics` topics). Run with `cargo test --test it p7_exit:: -- --ignored --nocapture`.
 ```
 crawl: "completed" in 78.8ms
 ladder events: crawl.phase collect → archive → completed, ladder.crawl.completed, analytics.updated
@@ -368,10 +368,10 @@ ninjagoldfinch.lol's `/champions` data took 3.9 s, all of it the proxy's analyti
 ## CI — a faster pull request (owner request 2026-10-19)
 
 - [x] CI-01 the source `Dockerfile` builds on `main` and on PRs that can change it (#221, ADR-173)
-- [ ] CI-02 tests in parallel with nextest; coverage in its own job
-- [ ] CI-03 the DOM and browser suites in their own `ui` job
-- [ ] CI-04 one integration-test binary
-- [ ] CI-05 less debug info in dev and test builds
+- [x] CI-02 tests in parallel with nextest; coverage in its own job (#222, ADR-174)
+- [x] CI-03 the DOM and browser suites in their own `ui` job (#223, ADR-175)
+- [x] CI-04 one integration-test binary (#224, ADR-176)
+- [x] CI-05 less debug info in dev and test builds (#225, ADR-177)
 
 ## PAIR — team pairings (owner request 2026-10-10, outline)
 - [ ] PAIR-01 `champion_pairs`: every ally role per player, keyed by tier and side (IMPLEMENTATION.md §Post-release — PAIR)
@@ -386,7 +386,7 @@ ninjagoldfinch.lol's `/champions` data took 3.9 s, all of it the proxy's analyti
 - **Names backfill:** `names:backfill` and `POST /v1/admin/players/names/backfill` (v1's job that fills Riot IDs from archived matches) landed with P7-03 (#57): `src/jobs/names.rs`, a daily tick, queued when a crawl ends, tests in `tests/ladder.rs`.
 - **Events** keep v1's names plus `crawl.phase` (ADR-045): P7-04 publishes `analytics.updated`; P7-02/03 publish `crawl.phase` and `ladder.crawl.completed`; the dashboard's names already match.
 - Routes: follow `src/routes/riot.rs`, which uses `http::validate::*` for v1 rules and `routes::passthrough::{respond, options}`. Add read routers to `routes::docs::api_router`'s `read` group so they get auth+quota. `tests/common::app_with(env, wiremock_uri)` gives a full app. v1's `/v1/lol` bodies are raw passthrough too (`PassthroughResponse`), so P4-05's "typed" part is request validation.
-- OpenAPI: add routes to `routes::docs::api_router()` as `OpenApiRouter`s with `#[utoipa::path]` handlers. `just`/CI check: `cargo run -- spec > /tmp/spec.json && scripts/compare-openapi.py docs/contract/v1-openapi.json /tmp/spec.json --prefix /v1/riot/ --prefix /v1/lol/` (16 missing at P4-03). The `tests/snapshots/openapi__openapi_document.snap` changes with every documented route; review it.
+- OpenAPI: add routes to `routes::docs::api_router()` as `OpenApiRouter`s with `#[utoipa::path]` handlers. `just`/CI check: `cargo run -- spec > /tmp/spec.json && scripts/compare-openapi.py docs/contract/v1-openapi.json /tmp/spec.json --prefix /v1/riot/ --prefix /v1/lol/` (16 missing at P4-03). The `tests/snapshots/it__openapi__openapi_document.snap` changes with every documented route; review it.
 - Disk: `target/` reached ~26 GB with debug, release and feature builds and hit the session's disk allowance. `rm -rf target/release target/debug/incremental` frees ~10 GB.
 - Auth: protect routers with `.route_layer(axum::middleware::from_fn_with_state(state.clone(), http::auth::require_read))` (or `require_admin`); handlers take `Extension<Arc<http::auth::Consumer>>` (has `quota_per_min` for P4-02). `AppState.auth: Arc<Auth>`; admin revoke calls `auth.invalidate(hash)` (done in P5-05).
 - Replay: `tests/replay.rs` + `tests/fixtures/replay/` (README documents re-recording). Since P5-02, pass-2 matches in `replay__replay_cold_summoner_lookup.snap` are `ARCHIVE`.

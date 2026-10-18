@@ -4,7 +4,7 @@
 //! sockets, and the `metrics` topic ticking only while held.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-mod common;
+use crate::common;
 
 use std::net::SocketAddr;
 use std::time::Duration;

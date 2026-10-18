@@ -3,7 +3,7 @@
 //! keeps the newest 1440 points for `GET /v1/admin/metrics/history`.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-mod common;
+use crate::common;
 
 use std::collections::BTreeMap;
 

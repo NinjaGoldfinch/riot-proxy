@@ -3,7 +3,7 @@
 //! and the error mapping. Plan P3-05 / P3 exit check. Real time, short TTLs.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-mod common;
+use crate::common;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

@@ -2,7 +2,7 @@
 //! AUTH_DISABLED, and v1's 401/403 bodies (snapshots).
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-mod common;
+use crate::common;
 
 use std::net::SocketAddr;
 use std::sync::Arc;

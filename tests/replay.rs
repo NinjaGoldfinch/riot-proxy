@@ -4,7 +4,7 @@
 //! Fixtures and how to re-record them: tests/fixtures/replay/README.md.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-mod common;
+use crate::common;
 
 use std::path::Path;
 use std::sync::Arc;
