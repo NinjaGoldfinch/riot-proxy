@@ -118,6 +118,8 @@ async fn migrations_create_exactly_the_design_04_tables() {
             "champion_build_parts",
             "champion_builds",
             "champion_items",
+            "champion_matchup_build_parts",
+            "champion_matchup_builds",
             "champion_matchups",
             "champion_runes",
             "champion_spells",
@@ -222,7 +224,7 @@ async fn a_v1_database_upgrades_to_v2_and_keeps_its_data() {
         })
         .await
         .expect("read");
-    assert_eq!((name.as_str(), versions), ("old", 26));
+    assert_eq!((name.as_str(), versions), ("old", 27));
 }
 
 /// V0015 (SITE-08, ADR-123) backfills the slices aggregated before it, as the
@@ -890,11 +892,11 @@ async fn migrations_apply_once_across_reopens() {
         })
         .await
         .expect("insert");
-    assert_eq!(history(first.clone()).await.expect("history"), 26);
+    assert_eq!(history(first.clone()).await.expect("history"), 27);
     drop(first);
 
     let second = Db::open(&path, 1).expect("second open");
-    assert_eq!(history(second.clone()).await.expect("history"), 26, "no re-run");
+    assert_eq!(history(second.clone()).await.expect("history"), 27, "no re-run");
     let name: Option<String> = second
         .read(|c| {
             Ok::<_, DbError>(
@@ -1527,6 +1529,44 @@ async fn v0026_backfills_the_floors_of_every_aggregated_slice() {
     .await
     .expect("rebuild");
     assert_eq!(read(db.clone()).await, (floors, bans));
+}
+
+/// V0027 (FLT-04, ADR-171) creates the set builds against a lane opponent,
+/// empty (no backfill: the next rebuild fills them), WITHOUT ROWID, keyed as
+/// champion_matchups up to the opponent and champion_builds after it.
+#[tokio::test]
+async fn v0027_creates_the_matchup_build_tables() {
+    let (_dir, db) = open_temp(1);
+    let got: Vec<(String, String, i64, Vec<String>)> = db
+        .read(|c| {
+            let mut out = vec![];
+            for t in ["champion_matchup_builds", "champion_matchup_build_parts"] {
+                let ddl: String =
+                    c.query_row("SELECT sql FROM sqlite_master WHERE name = ?1", [t], |r| r.get(0))?;
+                let rows: i64 = c.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get(0))?;
+                let mut stmt = c.prepare(&format!(
+                    "SELECT name FROM pragma_table_info('{t}') WHERE pk > 0 ORDER BY pk"
+                ))?;
+                let key = stmt
+                    .query_map([], |r| r.get(0))?
+                    .collect::<Result<Vec<String>, _>>()?;
+                out.push((t.to_string(), ddl, rows, key));
+            }
+            Ok::<_, DbError>(out)
+        })
+        .await
+        .expect("ddl");
+    let head = "key_scope platform queue patch champion_id role opponent_id remake core";
+    for (t, ddl, rows, key) in got {
+        assert!(ddl.trim_end().ends_with("WITHOUT ROWID"), "{t}: {ddl}");
+        assert_eq!(rows, 0, "{t} is not backfilled");
+        let want = if t == "champion_matchup_builds" {
+            format!("{head} tier side")
+        } else {
+            format!("{head} part value tier side")
+        };
+        assert_eq!(key.join(" "), want, "{t}");
+    }
 }
 
 /// PERF-03: a cached analytics hit is proven by this counter not moving.

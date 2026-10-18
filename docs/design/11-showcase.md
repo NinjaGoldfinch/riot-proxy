@@ -112,6 +112,8 @@ Failure cases:
 
 **Set builds on the champion page (BLD-03).** These come from the server, `GET /v1/lol/analytics/champions/{championId}/builds`, aggregated over archived timelines. Send no `role` and the route picks the champion's most-played one and names it. Show up to 3 tabs, each labelled with its two core items. If `builds` is empty or the call fails, fall back to the detail route's per-item, rune and spell lists.
 
+**Builds against a lane opponent (FLT-04).** Add `opponentId={id}` to the same call for the builds of the games in a lane against that champion, one player per team, as the matchups route counts them. `role` must then be a lane (`TOP`…`UTILITY`, not empty); without it the route picks the lane the two met in most and names it. Each build then has its 3rd item (`next[0]`), boots, runes and spells; `next[1]`, `next[2]`, `starter` and `skillOrder` are empty lists. An opponent never met, or the champion itself, gives `totalGames: 0` and an empty `builds`. Every build, with or without an opponent, carries `winRateLow`, the lower bound of its win rate's 95 % Wilson interval: small samples sit low. The page doesn't send `opponentId` yet; the *vs* picker is FLT-05.
+
 ## The coverage rule
 
 The page holds a JSON block, `<script type="application/json" id="coverage">`, with two maps:

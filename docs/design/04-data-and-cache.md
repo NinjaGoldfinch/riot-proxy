@@ -268,6 +268,17 @@ CREATE TABLE champion_build_parts (               -- what a build's players chos
   tier, side, games, wins, computed_at,
   PRIMARY KEY (key_scope, platform, queue, patch, champion_id, role, remake, core, part, value, tier, side)
 );
+CREATE TABLE champion_matchup_builds (            -- V0027 (ADR-171): set builds against one lane opponent,
+  key_scope, platform, queue, patch, champion_id, -- one-on-one lanes as champion_matchups counts them;
+  role, opponent_id, remake, core,                -- role is a lane, never ''
+  tier, side, games, wins, computed_at,
+  PRIMARY KEY (key_scope, platform, queue, patch, champion_id, role, opponent_id, remake, core, tier, side)
+);
+CREATE TABLE champion_matchup_build_parts (       -- item3 | boots | runes | spells only
+  key_scope, platform, queue, patch, champion_id, role, opponent_id, remake, core, part, value,
+  tier, side, games, wins, computed_at,
+  PRIMARY KEY (key_scope, platform, queue, patch, champion_id, role, opponent_id, remake, core, part, value, tier, side)
+);
 CREATE TABLE analytics_unsplit (                  -- V0017: ladders whose next rebuild covers every patch
   key_scope, platform, queue, PRIMARY KEY (key_scope, platform, queue)
 );
@@ -418,6 +429,7 @@ The analytics routes read the derived tables only, never `matches` or `match_fac
 - **Every read seeks** (PERF-01). A read names the filters it has and nothing else. A filter left open (no platform, no tier, `patch=all`) becomes an `IN` over the values the slice actually has, read from `analytics_slices` (ADR-167). So every read is a range seek on its key, `key_scope, platform, queue[, tier], patch, …`. The `(?N IS NULL OR col = ?N)` form is not used: SQLite cannot seek on it, and with statistics it picked the non-covering `champion_stats_slice` index for a full read.
 - **Reads with no tier use a tier-summed table** (PERF-02, ADR-168). `champion_stats_totals` is `champion_stats` summed over tier, rewritten in `rebuild_champions`' transaction for the same patches, from the rows just written. `/champions` without `tier`, a champion's summed row, `/patches` and the builds route's top role read it; a read that names a tier, and `byTier`, read `champion_stats`. A read across every platform and patch sums about a third of the rows (the synthetic copy), first per platform and patch in key order and then per champion, so its last sort is a few thousand rows.
 - **A tier range is an `IN` over its tiers** (FLT-03, ADR-170). `minTier=DIAMOND` reads the rows of Diamond and every tier above it that the slice has, `tier IN (…)`, on `champion_stats` (never `champion_stats_totals`, which has no tier) and on the facet and build tables; its first sum keeps the key's order (`platform, tier, patch, champion`). Its summed row's pick and ban rates divide by its floor's totals (`analytics_floor_totals`, `champion_ban_floor_totals`), and each `byTier` row by its own tier's slice, as with no range. `/patches` takes no range, as it takes no tier.
+- **Builds against an opponent read their own tables** (FLT-04, ADR-171). `opponentId` on the builds route reads `champion_matchup_builds` and `_parts`, keyed as `champion_matchups` up to the opponent; a role left open is an `IN` over the five lanes, so the seek reaches `opponent_id` either way. Without a role the route takes the lane with the most of those builds. `build_source` is the only way a read reaches these tables. Their rows are close to one per laned player-game (about 1.3–1.45 GiB with the parts on production's archive in October 2026, accepted).
 - **Responses are cached by generation** (PERF-03, ADR-169). Each analytics route keeps its serialized 200 and `ETag` in memory, keyed by route, key scope, champion and every parameter as parsed, so two spellings of one query share an entry.
   - **Clearing.** A rebuild clears after its last commit and before it announces `analytics.updated`, and a failed one clears too. A miss that began before a clear doesn't store what it read. An entry is good only for the Data Dragon version it was built at. `/dev/reset` clears with its wipe.
   - **Serving.** A hit, 200 or 304, runs no SQL and sends `X-Cache: HIT`; a computed one sends `MISS`; concurrent misses for one key share one read.

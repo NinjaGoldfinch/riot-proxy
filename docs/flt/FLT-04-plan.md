@@ -8,7 +8,54 @@ Written 2026-10-18 against `origin/main` **e4a98df** (FLT-03 #217 and the PROGRE
 - MU-01 has not started, so `winRateLow` and its helper come with this task (§12, Q5).
 - Branch `feat/FLT-04-opponent-builds` is in its own worktree (`../rp-flt04`), cut from e4a98df.
 
-**Implementation record.** To be added after approval: owner answers, deviations, mutation checks, verification output, the **Observed** blocks of §5, and the renders of the real page.
+**Implementation record** (2026-10-19, branch `feat/FLT-04-opponent-builds`).
+
+*Owner answers.* Q3 (size): **accept**, lever (a), after the production count (§8). The rest of the plan was approved as written, so Q1/Q2/Q4–Q9 follow §12's recommendations: no backfill, an empty list for a mirror or an unseen opponent, `winRateLow` on every build (0/0 = 0), one `ChampionBuildEntry`, `opponentId` in `BuildsQuery`, marker `tier-side-range-opponent`, the showcase split into FLT-05.
+
+*Deviations from the plan.*
+- The lane pair is `fn one_on_one(join)`, not a `const`: the matchup builds add their `match_builds` join between the lane join and the `WHERE`, as `ladder_facts(join)` does.
+- `Keys` has nine constants, not eleven, so nine got `opponent: false`. `Keys` also derives `PartialEq` for the `build_source` test.
+- `a_shared_lane_or_a_mirror_has_no_matchup_build` puts its match under `KR_9` (`KR_6` is `BOTH_SIDES`'), with the mirror in the JUNGLE (champion 8 on both teams), since its TOP is E against D.
+- `the_top_lane_against_an_opponent_is_its_own` gives champion 1 one TOP and one BOTTOM game against 7, so the tie rule is tested too (BOTTOM sorts first).
+- `a_partial_rebuild_leaves_other_patches_matchup_builds_alone` adds a 14.17 lane (`KR_12`), since the fixture's 14.17 game has no opponent.
+- `tests/analytics.rs` adds Anivia's build with its own `seed_anivia_build` instead of extending `seed_builds`, so the other tests' fixtures don't change.
+- The validation test also checks `opponentId=abc&role=` (the role is reported: mutation 9).
+
+*Mutation checks* (`/home/dev/flt04/mut/run.py`; each applied alone, then reverted): all nine fail a test, none by a compile error.
+
+| # | mutation | caught by |
+|---|---|---|
+| 1 | the join without `mb.key_scope = ?1` | `matchup_builds_match_the_hand_computed_fixture` |
+| 2 | dropping `b.n = 1`; then `a.n = 1` | `a_shared_lane_or_a_mirror_has_no_matchup_build` (both) |
+| 3 | dropping `a.champion_id <> b.champion_id` | `a_shared_lane_or_a_mirror_has_no_matchup_build` |
+| 4 | `Filter` ignoring `opponent_id` | `tests/analytics.rs` opponent tests |
+| 5 | `build_source` always the set builds | `opponent_reads_never_read_the_set_builds` |
+| 6 | `top_lane` replaced by `top_role` in the route | `builds_against_an_opponent` (Jayce against Anivia names TOP) |
+| 7 | Wilson's `−` as `+` | `win_rate_low_is_the_wilson_lower_bound` |
+| 8 | the cache key without the opponent | `two_opponents_are_two_entries` |
+| 9 | `opponentId` validated before `role` | `opponent_id_is_validated` |
+
+*Verification.* `cargo fmt --check` clean; `cargo clippy --all-targets -- -D warnings` clean; `cargo test --no-fail-fast`: 44 test binaries, all `ok`. Expected snapshot changes: `analytics_champion_builds` gains `winRateLow` and `opponentId: null`; the OpenAPI document gains `opponentId` (query and body), `opponentName` and `winRateLow`.
+
+*Observed* (2026-10-19, the branch's debug server on a fake Riot serving the two fixture bodies, FLT-03's tiers, `seed_builds` plus Anivia; `/home/dev/flt04/live/`, `curl -i` saved in `obs/`). Every §5 body is equal byte for byte to the expected one at this run's `computedAt` (`2026-10-18T15:47:18.038Z`), and every tag to the recipe's for that stamp (`live/compare.py`, 7 of 7). The three empty bodies have no stamp, so their tags are the plan's exactly:
+
+| §5 | request | status | `ETag` | `X-Cache` |
+|---|---|---|---|---|
+| 1 | `134/builds?patch=all&role=MIDDLE` | 200 | `W/"a1a_sYKnKokfm5gMtrmdGyW97Yi7TzMgiQ9hkbVOwls"` | MISS |
+| 2 | `…&opponentId=157&role=MIDDLE` | 200 | `W/"P6d7GaoomtMYZ_uTnPWkpb4CW-5VJIq9mS_hyKXTzoA"` | MISS, then HIT with the same tag |
+| 3 | `…&opponentId=157` | 200, `role: "MIDDLE"` | `W/"G0w5HcCjKCgDaQC-4pSr5XddE_td_ggJqS9vF2SL0Qo"` | MISS |
+| 4 | `…&opponentId=157&minTier=DIAMOND&side=blue` | 200, empty | `W/"9h7LKtF47ZQ_bfGem0IeRaTBgqYnHDaont2ZJ6pQr_4"` (= expected) | MISS |
+| 4 | `…&opponentId=157&minTier=DIAMOND&side=red` | 200, the build | `W/"R7OQKSIfnJmDllnfNk-62omjDhtIUZgZBbvb42eMWiY"` | MISS |
+| 5 | `…&opponentId=1` | 200, empty | `W/"GsrzU7iMa0XSH0VtupCCuItQ6EHTKl1yLD46E9bO2w8"` (= expected) | MISS |
+| 5 | `…&opponentId=134` | 200, empty | `W/"c4CNx_T8rtUdat-uXmVEQtDhBx01aVaty5U11k0psF8"` (= expected) | MISS |
+
+Body 2, observed:
+```json
+{"championId":134,"platform":null,"queue":"RANKED_SOLO_5x5","tier":null,"minTier":null,"side":null,"patch":"all","role":"MIDDLE","opponentId":157,"computedAt":"2026-10-18T15:47:18.038Z","totalGames":1,"builds":[{"core":[6655,3157],"games":1,"wins":1,"winRate":1,"winRateLow":0.2065,"pickRate":1,"next":[[{"itemId":3089,"games":1,"winRate":1}],[],[]],"starter":[],"boots":[{"itemId":3020,"games":1,"winRate":1}],"skillOrder":[],"runes":[{"keystoneId":8229,"subStyleId":8000,"games":1,"winRate":1}],"spells":[{"spellA":4,"spellB":12,"games":1,"winRate":1}]}]}
+```
+The 400s (§5.6), observed: `opponentId=157&role=` and `&role=SUPPORT` → `querystring/role must be equal to one of the allowed values`; `opponentId=abc` → `querystring/opponentId must be integer`; `opponentId=0` → `querystring/opponentId must be >= 1`; each `VALIDATION` with the request id, no `X-Cache`. `role=` without an opponent → 200 as before. A matchup with a build on one side only: `34/builds?patch=all&opponentId=126` → Anivia's `[6653,3020]` in TOP, 0/1, `winRateLow` 0; `126/builds?patch=all&opponentId=34` → 200, `role: null`, empty (Jayce finished one item). The live table counts: 3 `champion_matchup_builds` rows, 11 parts.
+
+*Not done here.* The acceptance check on the dev VM (Viego jungle against one opponent, games ≤ that matchup's) needs the build deployed there; renders of the real page are FLT-05's.
 
 **The recommendation in one paragraph.** Two new `WITHOUT ROWID` tables are keyed like `champion_matchups` up to the opponent and like `champion_builds` after it: `(…, patch, champion_id, role, opponent_id, remake, core[, part, value], tier, side)`. They are filled in `rebuild_builds`' set-build transaction from a temp table, which joins one-on-one laners (`MATCHUPS`' lane CTE) to their `match_builds` row. There is no backfill. The builds route keeps its body and gains `opponentId`/`opponentName`, plus `winRateLow` on every build. With `opponentId`, only `next[0]`, `boots`, `runes` and `spells` are filled. `opponentId` lives in a builds-only `BuildsQuery`, at the end of the cache key. `STATS_SHAPE` becomes `tier-side-range-opponent`. The showcase keeps the pick in the hash (`#/champion/{id}/builds/vs/{opponentId}[/{LANE}]`). The diff is about 1,100 lines (≈ 890 + ≈ 205), so **the showcase becomes FLT-05** (§10). **Size (§8, Q3) is settled: accepted.** Counted on production (2026-10-18), the two tables come to ~1.3–1.45 GiB, about 3× today's 475 MB of analytics tables. Their rows are close to one per laned player-game, and that is because of the key, not the parts. The owner accepted the disk room over the levers in §12.
 
@@ -206,7 +253,7 @@ flowchart TD
 
 The plumbing (`src/archive/analytics.rs`):
 - **`Read` gains `opponent_id: Option<i64>`** (`:571`). Its constructors get `opponent_id: None`: `Read::slice`, `Common::read` (`src/routes/analytics.rs:753`) and `src/stats.rs:703`. The others use `..`.
-- **`Keys` gains `opponent: bool`**, false on the eleven existing constants (`:737-801`). A new `MATCHUP_BUILDS` has `TierKey::AfterPatch`, side, role, champion and opponent. `Filter::new` (`:826`) adds two terms, both only where `k.opponent`:
+- **`Keys` gains `opponent: bool`**, false on the nine existing constants (`:737-801`). A new `MATCHUP_BUILDS` has `TierKey::AfterPatch`, side, role, champion and opponent. `Filter::new` (`:826`) adds two terms, both only where `k.opponent`:
   - `opponent_id = ?` after the champion;
   - an open role becomes `role IN ('TOP', 'JUNGLE', 'MIDDLE', 'BOTTOM', 'UTILITY')`. `LANES` is a `pub const` here; `LANE_POSITIONS` (`src/routes/analytics.rs:56`) becomes an alias of it. These are code constants written as bound values (`one_of`), like the slice's values.
 - **`build_source(r) -> (builds table, parts table, Keys)`** is the only way to reach the new tables, as `stats_source` is for the totals (`:807`). It returns the new tables when `r.opponent_id` is set, else `champion_builds`/`_parts` with `FACETS`. `builds` (`:1205`), `build_totals` (`:1235`) and `build_parts` (`:1287`) call it, so their SQL is unchanged apart from the table name. No other read takes an opponent. A test empties `champion_builds` and checks that an opponent read is unchanged (`opponent_reads_never_read_the_set_builds`).
