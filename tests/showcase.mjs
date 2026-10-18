@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 const html = readFileSync(new URL('../src/ui/showcase.html', import.meta.url), 'utf8');
 const block = html.match(/\/\/ -{10} pure helpers[^\n]*\n([\s\S]*?)\/\/ -{10} end pure helpers/);
 assert.ok(block, 'the pure helpers block is marked in showcase.html');
-const h = new Function(`${block[1]}; return { APEX, QUEUES, LADDER_PAGE, APEX_LIST_CAP, apexCapNote, tierColour, winRate, pct, sortLadder, ladderPage, championIndex, imageUrl, statusNotices, topChampions, parseRiotId, parseRoute, champKey, findChampion, explorerLink, rankLabel, rankCards, queueNames, spellIndex, outcome, kda, durationSecs, clock, ago, masterySummary, liveGame, TIERS, SIDES, matchHref, matchTeams, goldDiff, goldScale, signedGold, tierRows, runeIndex, runePair, runeUrl, itemIndex, bootsIndex, itemSlots, roleList, thousands, patchChoices, pickPatch, patchLabel, BUILD_STARTER_MS, SHOP_VISIT_GAP_MS, itemCatalog, playerBuild, shopVisits };`)();
+const h = new Function(`${block[1]}; return { APEX, QUEUES, LADDER_PAGE, APEX_LIST_CAP, apexCapNote, tierColour, winRate, pct, sortLadder, ladderPage, championIndex, imageUrl, statusNotices, topChampions, parseRiotId, parseRoute, champKey, findChampion, explorerLink, rankLabel, rankCards, queueNames, spellIndex, outcome, kda, durationSecs, clock, ago, masterySummary, liveGame, TIERS, SIDES, matchHref, matchTeams, goldDiff, goldScale, signedGold, tierRows, runeIndex, runePair, runeUrl, itemIndex, bootsIndex, itemSlots, roleList, thousands, patchChoices, pickPatch, patchLabel, BUILD_STARTER_MS, SHOP_VISIT_GAP_MS, itemCatalog, playerBuild, shopVisits, vsChoices, SMALL_SAMPLE };`)();
 
 test('apex tiers and queues are the ones the apex route accepts', () => {
   assert.deepEqual(h.APEX, ['CHALLENGER', 'GRANDMASTER', 'MASTER']);
@@ -504,4 +504,24 @@ test('shop visits: purchases under 30 s apart are one visit', () => {
     { t: 5000, items: [1055, 2003, 3340] }, { t: 65000, items: [1036] }, { t: 900000, items: [3078] },
   ]);
   assert.deepEqual(h.shopVisits([]), []);
+});
+
+test('vs hashes and the vs picker choices (FLT-05)', () => {
+  assert.deepEqual(h.parseRoute('#/champion/266/builds/vs/103'), { view: 'champion', args: { id: 266, focus: 'builds', vs: 103, lane: '' } });
+  assert.deepEqual(h.parseRoute('#/champion/266/builds/vs/103/MIDDLE'), { view: 'champion', args: { id: 266, focus: 'builds', vs: 103, lane: 'MIDDLE' } });
+  assert.deepEqual(h.parseRoute('#/champion/266/builds/vs/103/SUPPORT'), { view: 'champion', args: { id: 266, focus: 'builds', vs: 103, lane: '' } });
+  for (const bad of ['#/champion/266/builds/vs', '#/champion/266/builds/vs/0', '#/champion/266/builds/vs/x', '#/champion/266/builds/against/103']) {
+    assert.deepEqual(h.parseRoute(bad), { view: 'champion', args: { id: 266, focus: 'builds' } }, bad);
+  }
+  assert.deepEqual(h.parseRoute('#/champion/266/vs/103'), { view: 'champion', args: { id: 266 } });
+  const name = (id) => ({ 2: 'Olaf', 3: 'Galio', 4: 'Ahri' })[id];
+  const list = [
+    { opponentId: 2, role: 'MIDDLE', games: 5 }, { opponentId: 3, role: 'MIDDLE', games: 7 },
+    { opponentId: 2, role: 'TOP', games: 2 }, { opponentId: 4, role: 'MIDDLE', games: 7 },
+  ];
+  assert.deepEqual(h.vsChoices(list, null, name), [[3, 7], [2, 7], [4, 7]].sort((a, b) => name(a[0]).localeCompare(name(b[0]))), 'games summed over lanes; a tie by name');
+  assert.deepEqual(h.vsChoices(list, 3, name).length, 3, 'a listed pick is not repeated');
+  assert.deepEqual(h.vsChoices(list, 145, name).at(-1), [145, null], 'an unlisted pick last, without a count');
+  assert.deepEqual(h.vsChoices(null, 145, name), [[145, null]], 'before the matchups arrive');
+  assert.equal(h.SMALL_SAMPLE, 10);
 });

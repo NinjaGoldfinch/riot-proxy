@@ -140,6 +140,16 @@ const BUILDS = { championId: 1, championName: 'Annie', platform: 'oc1', queue: '
   { core: [3153, 3078], games: 10, wins: 4, winRate: 0.4, pickRate: 0.25, next: [[], [], []], starter: [], boots: [],
     skillOrder: [{ order: 'QWE', games: 10, winRate: 0.4 }], runes: [], spells: [] },
 ] };
+// FLT-04's builds against one opponent: only the 3rd item (next[0]), boots, runes and spells; Galio's are both
+// under SMALL_SAMPLE games. Keyed `opponentId/role`; no role is the opponent's lane with the most games, MIDDLE here.
+const opBuild = (core, games, wins, low, pick) => ({ core, games, wins, winRate: Math.round((wins / games) * 1e4) / 1e4, winRateLow: low, pickRate: pick,
+  next: [[{ itemId: 6672, games: Math.ceil(games / 2), winRate: 0.5 }], [], []], starter: [], boots: [{ itemId: 3047, games, winRate: 0.5 }], skillOrder: [],
+  runes: [{ keystoneId: 8010, subStyleId: 8100, games, winRate: 0.5 }], spells: [{ spellA: 4, spellB: 14, games, winRate: 0.5 }] });
+const VS_BUILDS = {
+  '3/MIDDLE': { opponentName: 'Galio', role: 'MIDDLE', totalGames: 9, builds: [opBuild([3078, 3153], 7, 3, 0.1582, 0.7778), opBuild([3153, 3078], 2, 1, 0.0945, 0.2222)] },
+  '2/MIDDLE': { opponentName: 'Olaf', role: 'MIDDLE', totalGames: 5, builds: [opBuild([3078, 3153], 4, 3, 0.3006, 0.8), opBuild([3153, 3078], 1, 1, 0.2065, 0.2)] },
+  '2/TOP': { opponentName: 'Olaf', role: 'TOP', totalGames: 2, builds: [opBuild([3078, 3153], 2, 2, 0.3424, 1)] },
+};
 // `meIn: n` makes participant n the fake profile's player (PUUID), in the match and its timeline alike.
 const mine = (doc, n) => JSON.parse(JSON.stringify(doc).replaceAll(MATCH.info.participants[n - 1].puuid, PUUID));
 // `playing: { n: [championId, championName] }` puts participant n on that champion in the match.
@@ -162,6 +172,12 @@ function detail(p, u, { noTimeline = false, noAnalytics = false, noBuilds = fals
   }
   if (p.match(/^\/v1\/lol\/analytics\/champions\/\d+\/builds$/)) {
     if (buildsFail) return [503, { error: { code: 'INTERNAL', message: 'try later', requestId: 'r' } }];
+    const vs = Number(u.searchParams.get('opponentId'));
+    if (vs) {
+      const role = u.searchParams.get('role');
+      const got = VS_BUILDS[`${vs}/${role ?? 'MIDDLE'}`];
+      return [200, { ...BUILDS, opponentId: vs, ...(got ?? { role, totalGames: 0, builds: [] }) }];
+    }
     return [200, noAnalytics || noBuilds || u.searchParams.get('patch') === '16.19' ? { ...BUILDS, totalGames: 0, builds: [] } : BUILDS];
   }
   if ((m = p.match(/^\/v1\/lol\/analytics\/champions\/(\d+)(\/matchups)?$/))) {

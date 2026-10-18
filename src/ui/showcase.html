@@ -158,6 +158,7 @@
   .card .tools.builds button { display: inline-flex; align-items: center; gap: 4px; }
   .card .tools.builds .stat { font-variant-numeric: tabular-nums; }
   .card .tools.builds .stat small { margin-left: 4px; color: var(--dim); }
+  .card .tools.builds button.small { opacity: .55; } /* fewer than SMALL_SAMPLE games (FLT-05) */
   /* One player's build on the match page (BLD-04): champion portraits as tabs, then three rows. */
   .card .tools.bplayers { flex-wrap: nowrap; gap: 2px; }
   .card .tools.bplayers button { padding: 2px; line-height: 0; }
@@ -320,11 +321,18 @@ function parseRiotId(s) {
   return m ? { gameName: m[1].trim(), tagLine: m[2].trim() } : null;
 }
 
-/** `#/`, `#/player/{name}/{tag}`, `#/champion/{id}`, `#/champion/{id}/builds` (SITE-10) → `{ view, args }`. */
+/** `#/`, `#/player/{name}/{tag}`, `#/champion/{id}`, `#/champion/{id}/builds` (SITE-10),
+ *  `#/champion/{id}/builds/vs/{opponentId}[/{LANE}]` (FLT-05) → `{ view, args }`. */
 function parseRoute(hash) {
   const parts = String(hash ?? '').replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
   if (parts[0] === 'player' && parts.length === 3) return { view: 'player', args: { gameName: parts[1], tagLine: parts[2] } };
-  if (parts[0] === 'champion' && /^\d+$/.test(parts[1] ?? '')) return { view: 'champion', args: parts[2] === 'builds' ? { id: Number(parts[1]), focus: 'builds' } : { id: Number(parts[1]) } };
+  if (parts[0] === 'champion' && /^\d+$/.test(parts[1] ?? '')) {
+    const id = Number(parts[1]);
+    if (parts[2] !== 'builds') return { view: 'champion', args: { id } };
+    // Against one lane opponent (FLT-05); a lane that isn't one is left to the route.
+    if (parts[3] !== 'vs' || !/^[1-9]\d*$/.test(parts[4] ?? '')) return { view: 'champion', args: { id, focus: 'builds' } };
+    return { view: 'champion', args: { id, focus: 'builds', vs: Number(parts[4]), lane: ROLES.includes(parts[5]) ? parts[5] : '' } };
+  }
   if (parts[0] === 'match' && parts.length === 3 && /^[a-z]+$/.test(parts[1]) && /^[A-Z0-9]+_\d+$/.test(parts[2])) return { view: 'match', args: { region: parts[1], matchId: parts[2] } };
   return { view: 'home', args: {} };
 }
@@ -550,6 +558,16 @@ function itemSlots(p, boots) {
 /** The lanes a matchup list covers, in Riot's teamPosition order. */
 const ROLES = ['TOP', 'JUNGLE', 'MIDDLE', 'BOTTOM', 'UTILITY'];
 const roleList = (matchups) => ROLES.filter((r) => (matchups ?? []).some((m) => m.role === r));
+/** The vs picker's opponents (FLT-05): each in a matchup list once, its games summed over lanes, most first, then by name;
+ *  a picked one the list lacks last, without a count (`null`). `name(id)` names a champion. */
+function vsChoices(matchups, picked, name) {
+  const games = new Map();
+  for (const m of matchups ?? []) games.set(m.opponentId, (games.get(m.opponentId) ?? 0) + m.games);
+  const out = [...games].sort((a, b) => b[1] - a[1] || String(name(a[0])).localeCompare(String(name(b[0]))));
+  return picked && !games.has(picked) ? [...out, [picked, null]] : out;
+}
+/** Below this many games a build is dimmed and says so (FLT-05; MU-01 shares it). */
+const SMALL_SAMPLE = 10;
 /** The patch picker (DEV-21): every patch summed first, then each patch the ladder has analytics for, newest first. */
 function patchChoices(patches) {
   const list = patches ?? [];
@@ -1337,7 +1355,8 @@ function renderGold(tl, match) {
 // ---------- champion view (DEV-08)
 // scrolled: the `#/champion/{id}/builds` hash whose Builds card was last scrolled to (SITE-10).
 // tier and side: the slice the page reads (FLT-02), '' for every tier / both sides, a tier or a range ('DIAMOND+', FLT-03); kept across champions.
-const ch = { id: null, role: '', builds: null, tab: 0, scrolled: '', tier: '', side: '' };
+// vs and lane: the opponent the Builds card is narrowed to and the lane a matchup link named (FLT-05), from the hash only.
+const ch = { id: null, role: '', builds: null, buildsFailed: null, tab: 0, scrolled: '', tier: '', side: '', vs: null, lane: '', matchups: null };
 /** The champion view's platform: the one picked on the page, else the home view's; '' is every platform. */
 const champRegion = () => state.region ?? platform();
 /** The champion view's tier picker and side toggle (FLT-02). UNKNOWN is the players no ladder or lookup placed.
@@ -1354,9 +1373,11 @@ const sliceTag = () => `<span class="muted slice">${esc(sliceLabel())}</span>`;
 const withSlice = (q) => { if (ch.tier.endsWith('+')) q.set('minTier', ch.tier.slice(0, -1)); else if (ch.tier) q.set('tier', ch.tier); if (ch.side) q.set('side', ch.side); return q; };
 const regionSelect = () => `<select data-region aria-label="region"><option value="">All regions</option>${(cfg?.platforms ?? []).map((p) => `<option value="${esc(p.value)}" ${p.value === champRegion() ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}</select>`;
 
-async function renderChampion({ id, focus }) {
+async function renderChampion({ id, focus, vs = null, lane = '' }) {
   const seq = ++viewSeq;
-  if (ch.id !== id) Object.assign(ch, { id, role: '', tab: 0 });
+  // Another champion starts afresh; another opponent keeps the matchups list, so the picker stays filled while it reloads.
+  if (ch.id !== id) Object.assign(ch, { id, role: '', tab: 0, matchups: null });
+  if (ch.vs !== vs || ch.lane !== lane) Object.assign(ch, { tab: 0, vs, lane });
   // Opened from the search box (SITE-10): bring the Builds card into view once it is drawn, once per visit,
   // so a picker changed afterwards doesn't scroll the page back.
   const toBuilds = () => {
@@ -1389,6 +1410,8 @@ async function renderChampion({ id, focus }) {
   const bq = new URLSearchParams({ queue: state.queue, patch: state.patch });
   if (region) bq.set('platform', region);
   withSlice(bq);
+  // Against one lane opponent (FLT-04): the route picks the lane unless a matchup link named it.
+  if (vs) { bq.set('opponentId', String(vs)); if (lane) bq.set('role', lane); }
   const [res, builds] = await Promise.all([
     get(`/v1/lol/analytics/champions/${id}?${q}`),
     get(`/v1/lol/analytics/champions/${id}/builds?${bq}`),
@@ -1397,7 +1420,9 @@ async function renderChampion({ id, focus }) {
   if (seq !== viewSeq) return;
   loadMatchups(seq);
   ch.builds = builds.ok ? builds.json : null;
-  if (!res.ok) { $('#cTiers').innerHTML = `<header><h2>By tier</h2>${sliceTag()}</header>${failure(res)}`; $('#cBuild').innerHTML = `<header><h2>Builds</h2>${sliceTag()}</header>`; toBuilds(); return; }
+  ch.buildsFailed = builds.ok ? null : builds;
+  // Against an opponent the card never falls back to the detail's lists: they aren't against anyone.
+  if (!res.ok) { $('#cTiers').innerHTML = `<header><h2>By tier</h2>${sliceTag()}</header>${failure(res)}`; if (ch.vs) renderBuilds(); else $('#cBuild').innerHTML = `<header><h2>Builds</h2>${sliceTag()}</header>`; toBuilds(); return; }
   const d = res.json;
   $('#cMeta').textContent = `${region || 'every platform'} · ${QUEUES.find(([q2]) => q2 === d.queue)?.[1] ?? d.queue} · ${patchLabel(state.patch)} · ${(d.totalGames ?? 0).toLocaleString()} games`;
   const rows = tierRows(d.byTier);
@@ -1415,7 +1440,7 @@ async function renderChampion({ id, focus }) {
         <td class="n">${pct(r.pickRate)}</td><td class="n">${pct(r.banRate)}</td>
         <td class="n hide-sm">${num(r.avgKda, (v) => v.toFixed(2))}</td><td class="n hide-sm">${num(r.csPerMin, (v) => v.toFixed(1))}</td><td class="n hide-sm">${num(r.goldPerMin, (v) => Math.round(v))}</td></tr>`).join('')}</tbody></table></div>`
     : none);
-  if (ch.builds?.builds?.length) { renderBuilds(); toBuilds(); return; }
+  if (ch.builds?.builds?.length || ch.vs) { renderBuilds(); toBuilds(); return; }
   // No set builds (no timelines archived for this slice yet): each item, rune page and spell pair on its own.
   const items = (d.items ?? []).map((e) => `<li>${itemIcon(e.itemId)}<span>${esc(itemNames?.[e.itemId] ?? `item ${e.itemId}`)}</span>${stat(e)}</li>`).join('');
   const spellRows = (d.spells ?? []).map((e) => `<li><span class="spells-row">${spellIcon(e.spellA)}${spellIcon(e.spellB)}</span>${stat(e)}</li>`).join('');
@@ -1431,20 +1456,36 @@ const itemName = (id) => itemNames?.[id] ?? `item ${id}`;
 /** An item icon named on hover, for the build rows. */
 const namedItem = (id) => `<span title="${esc(itemName(id))}">${itemIcon(id)}</span>`;
 
-/** The set build tabs (BLD-03): up to three builds, each labelled by its two core items. */
+/** A champion's name: Data Dragon's, else the name the matchups or builds route sent (FLT-05), else its id. */
+const champName = (id) => champions[id]?.name ?? ch.matchups?.find((m) => m.opponentId === id)?.opponentName
+  ?? (ch.builds?.opponentId === id ? ch.builds.opponentName : null) ?? `#${id}`;
+/** The vs picker's options (FLT-05): any opponent, then vsChoices. */
+const vsOptions = () => `<option value="">vs any opponent</option>${vsChoices(ch.matchups, ch.vs, champName).map(([id, g]) => `<option value="${id}" ${id === ch.vs ? 'selected' : ''}>vs ${esc(champName(id))}${g == null ? '' : ` · ${g.toLocaleString()}`}</option>`).join('')}`;
+const vsSelect = () => `<select data-vs aria-label="against">${vsOptions()}</select>`;
+
+/** The set build tabs (BLD-03): up to three builds, each labelled by its two core items; with the vs picker (FLT-05). */
 function renderBuilds() {
+  const vs = ch.vs ? `<span class="muted slice">vs ${esc(champName(ch.vs))} · ${esc(sliceLabel())}</span>` : sliceTag();
+  const head = (more = '') => `<header><h2>Builds</h2>${vs}${more}</header><div>${sources(OP.builds, OP.file)}</div>`;
+  if (!ch.builds) { $('#cBuild').innerHTML = head() + `<div class="tools builds">${vsSelect()}</div>${failure(ch.buildsFailed)}`; return; }
   const { builds, role } = ch.builds;
+  if (!builds.length) {
+    const where = `${ch.tier || ch.side ? ' in this slice' : ''}${state.patch === 'all' ? ' yet' : ` on ${esc(patchLabel(state.patch))}`}`;
+    $('#cBuild').innerHTML = head(role ? `<span class="muted">${esc(titleCase(role))}</span>` : '') + `<div class="tools builds">${vsSelect()}</div><p class="empty">No builds against ${esc(champName(ch.vs))}${where}.</p>`;
+    return;
+  }
   if (ch.tab >= builds.length) ch.tab = 0;
   const b = builds[ch.tab];
-  const tabs = builds.map((x, i) => `<button data-build="${i}" class="${i === ch.tab ? 'on' : ''}" title="${esc(x.core.map(itemName).join(' › '))}">${itemIcon(x.core[0])}${itemIcon(x.core[1])}${stat(x)}</button>`).join('');
+  const small = (x) => x.games < SMALL_SAMPLE;
+  const tabs = builds.map((x, i) => `<button data-build="${i}" class="${[i === ch.tab ? 'on' : '', small(x) ? 'small' : ''].join(' ').trim()}" title="${esc(x.core.map(itemName).join(' › '))}${small(x) ? ` · fewer than ${SMALL_SAMPLE} games` : ''}">${itemIcon(x.core[0])}${itemIcon(x.core[1])}${stat(x)}</button>`).join('');
   const group = (label, body) => `<span class="bgroup"><small>${label}</small>${body || '<span class="muted">–</span>'}</span>`;
   const rune = b.runes[0];
   const spell = b.spells[0];
   const order = b.skillOrder[0]?.order;
   const sep = '<span class="sep">›</span>';
   const step = (opts) => `<span class="step">${opts.length ? opts.map((o) => `<span class="opt">${namedItem(o.itemId)}<span>${pct(o.winRate)}<small class="muted"> · ${o.games.toLocaleString()}</small></span></span>`).join('') : '<span class="muted">–</span>'}</span>`;
-  $('#cBuild').innerHTML = `<header><h2>Builds</h2>${sliceTag()}<span class="muted">${role ? `${esc(titleCase(role))} · ` : ''}${pct(b.pickRate)} of ${ch.builds.totalGames.toLocaleString()} games with a build</span></header><div>${sources(OP.builds, OP.file)}</div>
-    <div class="tools builds">${tabs}</div>
+  $('#cBuild').innerHTML = head(`<span class="muted">${role ? `${esc(titleCase(role))} · ` : ''}${pct(b.pickRate)} of ${ch.builds.totalGames.toLocaleString()} games with a build</span>`) + `
+    <div class="tools builds">${vsSelect()}${tabs}</div>
     <div class="brow">${[
       group('Runes', rune ? `<span class="spells-row">${runeIcon(rune.keystoneId)}${runeIcon(rune.subStyleId)}</span>` : ''),
       group('Spells', spell ? `<span class="spells-row">${spellIcon(spell.spellA)}${spellIcon(spell.spellB)}</span>` : ''),
@@ -1466,6 +1507,8 @@ async function loadMatchups(seq) {
   if (!res.ok) { el.innerHTML = head() + failure(res); return; }
   ch.matchups = res.json.matchups ?? [];
   renderMatchups();
+  const vsPick = $('#cBuild [data-vs]');
+  if (vsPick) vsPick.innerHTML = vsOptions();
 }
 
 function renderMatchups() {
@@ -1475,10 +1518,10 @@ function renderMatchups() {
   const tabs = roles.length > 1 ? [['', 'All'], ...roles.map((r) => [r, titleCase(r)])].map(([r, l]) => `<button data-role="${r}" class="${r === ch.role ? 'on' : ''}">${l}</button>`).join('') : '';
   const rows = ch.matchups.filter((m) => !ch.role || m.role === ch.role).sort((a, b) => b.games - a.games || b.winRate - a.winRate);
   el.innerHTML = `<header><h2>Matchups</h2>${sliceTag()}<div class="tools">${tabs}</div></header><div>${sources(OP.matchups)}</div>` + (rows.length
-    ? `<p class="muted note">Win rate of ${esc(champions[ch.id]?.name ?? 'this champion')} against each lane opponent, most games first.</p>
+    ? `<p class="muted note">Win rate of ${esc(champions[ch.id]?.name ?? 'this champion')} against each lane opponent, most games first. A lane opens the builds against that opponent there.</p>
       <div class="scroll tall"><table><thead><tr><th>Against</th><th>Lane</th><th class="n">Games</th><th>Win rate</th></tr></thead><tbody>${rows.map((m) => `<tr>
       <td class="name">${champLink(m.opponentId, 'sm')} ${esc(champions[m.opponentId]?.name ?? m.opponentName ?? `#${m.opponentId}`)}</td>
-      <td>${esc(titleCase(m.role))}</td><td class="n">${m.games.toLocaleString()}</td>
+      <td><a href="#/champion/${esc(ch.id)}/builds/vs/${esc(m.opponentId)}/${esc(m.role)}" title="${esc(champName(ch.id))}'s builds against ${esc(champName(m.opponentId))} in ${esc(titleCase(m.role))}">${esc(titleCase(m.role))}</a></td><td class="n">${m.games.toLocaleString()}</td>
       <td><span class="wr"><span class="bar"><i style="width:${(m.winRate ?? 0) * 100}%"></i></span>${pct(m.winRate)}</span></td></tr>`).join('')}</tbody></table></div>`
     : `<p class="empty">No lane matchups ${state.patch === 'all' ? 'archived yet' : `on ${esc(patchLabel(state.patch))}`}.</p>`);
 }
@@ -1518,6 +1561,7 @@ document.addEventListener('change', (ev) => {
   if ('patch' in t.dataset) { state.patch = t.value; if (parseRoute(location.hash).view === 'champion') route(); else loadTop(); }
   if ('region' in t.dataset) { state.region = t.value; route(); }
   if ('ctier' in t.dataset) { ch.tier = t.value; route(); }
+  if ('vs' in t.dataset) { const h = `#/champion/${ch.id}/builds${t.value ? `/vs/${t.value}` : ''}`; ch.scrolled = h; location.hash = h; }
   if (t.id === 'hPlatform') { store.set('rp.showcase.platform', t.value); state.ladderFor = ''; state.region = null; renderHome(); }
 });
 // An image the mirror cannot serve (an item retired since that game, say) becomes the
