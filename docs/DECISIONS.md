@@ -1884,3 +1884,20 @@ Accepted (owner request, task FLT-05; plan approved 2026-10-19). design/11 §Pag
 - **Owner's answers (plan §9).** The picker leads the build-tab row (a second row at 1280 px in the narrow column, a third at 390 px with the longest name); dimming applies with or without an opponent; `winRateLow` is not shown on the page; the link target is the *Lane* cell, since the champion cell already links to the opponent's own page.
 - **Rejected.** The picker in the card header (wrapped to 2–3 rows in FLT-04's plan); a separate link column in the Matchups table (fell off the right edge at 390 px); the pick in page state rather than the hash; moving the lane into the slice label (would change FLT-02/FLT-03's headers without an opponent).
 - **Tests.** `tests/showcase.mjs`: `vs hashes and the vs picker choices (FLT-05)`. `tests/dom/showcase.test.mjs`: eight FLT-05 tests (the picker, the Lane link, the hash surviving each control, an unlisted opponent, a failed call, dimming, bad hashes, filling in place), and the harness's `hold`/`release()`. `tests/dom/showcase.browser.test.mjs`: the `champion vs` view at 1280, 820 and 390 px, and `Back after a matchup link restores the vs pick`. Ten mutations each fail one of them (plan, Implementation record).
+
+## ADR-177 — Dev and test builds carry line tables only, and dependencies no debug info (2026-10-19)
+Accepted (owner request "speed up CI and build time", task CI-05).
+- **What.** `[profile.dev] debug = "line-tables-only"` and `[profile.dev.package."*"] debug = false`. The test profile inherits both. Release is unchanged (it strips everything). A backtrace or panic still names file, line and column for this crate's frames: a test that panics two calls deep printed `at ./tests/zz_bt.rs:2:13` with `RUST_BACKTRACE=1`. Dependencies' frames keep their names, not their lines. For a debugger session that needs variables: `CARGO_PROFILE_DEV_DEBUG=full`.
+- **Why.** CI builds with the default full debuginfo, and so does a plain local `cargo`. Every test binary carried full DWARF for the library and every dependency: 300–440 MiB each, about 15 GB for the 41 integration binaries. That is what kept filling the dev box's disk, and why the box's notes set `CARGO_PROFILE_*_DEBUG=0` by hand. The linker spent its time writing it, and `Swatinem/rust-cache` saved and restored part of it.
+- **Measured** locally (4 cores, `CARGO_INCREMENTAL=0`, fresh target directory each time, `--all-features`):
+
+  | | before | after |
+  |---|---|---|
+  | cold `cargo build`, time and `target/` | 106.1 s, 2,155 MiB | 95.1 s, 1,161 MiB |
+  | cold `cargo test --no-run` (lib + `analytics`, `openapi`, `cli`, `ladder`), time and `target/` | 75.4 s, 5,094 MiB | 61.6 s, 2,221 MiB |
+  | the same after touching `src/lib.rs` (what CI pays on every PR) | 57.9 s, 58.5 s | 45.2 s, 45.2 s |
+  | one test binary (`analytics`) | 363 MiB | 111 MiB |
+
+  With all the test targets built, `target/` is 5.4 GB.
+- **Coverage** is unaffected: llvm-cov reads its own instrumentation, not DWARF.
+- **Rejected:** `debug = false` for this crate too (a panic's backtrace would lose its lines, for a few more seconds); setting it in CI only through `CARGO_PROFILE_*` env (local builds would keep filling the disk, and CI and local would differ).

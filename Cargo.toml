@@ -72,6 +72,16 @@ unwrap_used = "warn"
 expect_used = "warn"
 panic = "warn"
 
+# Dev and test builds keep line tables for this crate, so a backtrace or panic
+# still names file and line, and no debug info for dependencies: smaller
+# binaries, faster links, a smaller target/ and CI cache (CI-05, ADR-177).
+# A debugger session that needs variables: CARGO_PROFILE_DEV_DEBUG=full.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 [profile.release]
 # Fat, not thin: the static binary must stay under 24 MiB (CI; 20 MB until ADR-162).
 lto = "fat"
