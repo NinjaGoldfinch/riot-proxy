@@ -5,8 +5,6 @@
 //! never stops the rest (DSK-02).
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-mod common;
-
 use std::path::Path;
 
 use riot_proxy::db::{Db, DbError};

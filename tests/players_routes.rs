@@ -3,7 +3,7 @@
 //! Riot's side is the real recording in tests/fixtures/replay/cold-lookup.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-mod common;
+use crate::common;
 
 use std::path::Path;
 use std::time::Duration;

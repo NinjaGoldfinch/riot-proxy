@@ -4,7 +4,7 @@
 //! (ETag, 304, `?remakes=`). Plus `facts:reextract` and the admin routes.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-mod common;
+use crate::common;
 
 use std::sync::Arc;
 
@@ -1753,6 +1753,10 @@ async fn errors_are_not_cached() {
 }
 
 /// Design §6: ten concurrent cold requests for one slice read it once.
+/// A request that joins the computation says `MISS`; one that reaches the
+/// cache after it stored, which a loaded machine allows, says `HIT`.
+/// Either way the slice was read once (CI-02: it failed when it wanted ten
+/// `MISS`es).
 #[tokio::test]
 async fn concurrent_misses_read_once() {
     let e = env().await;
@@ -1764,9 +1768,11 @@ async fn concurrent_misses_read_once() {
     let replies = futures_util::future::join_all((0..10).map(|_| e.get(SITE))).await;
     assert_eq!(e.reads() - before, 5);
     for r in &replies {
-        assert_eq!((r.status, x_cache(r)), (StatusCode::OK, Some("MISS")));
+        assert_eq!(r.status, StatusCode::OK);
+        assert!(matches!(x_cache(r), Some("MISS" | "HIT")), "{:?}", x_cache(r));
         assert_eq!(r.body, replies[0].body);
     }
+    assert!(replies.iter().any(|r| x_cache(r) == Some("MISS")));
 }
 
 // ─── FLT-03: tier ranges (ADR-170) ──────────────────────────────────────────

@@ -12,7 +12,7 @@ env:
   GIT_SHA: ${{ github.sha }}
 
 # Job ids are the required status checks on `main` (fmt, clippy, test, build-musl,
-# acceptance) —
+# acceptance, and `ui` once the owner adds it: CI-03, ADR-175) —
 # renaming a job means updating branch protection too. See ADR-006.
 # The toolchain, components and musl target all come from rust-toolchain.toml.
 # Rust caches are saved from `main` only; pull requests restore them (ADR-079).
@@ -37,18 +37,28 @@ jobs:
       - run: cargo check --all-targets --features postgres
       - run: cargo test --lib --features postgres db::store
 
+  # The test binaries run in parallel under nextest, uninstrumented: coverage
+  # is the `coverage` job's (CI-02, ADR-174).
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - run: rustup toolchain install && rustup component add llvm-tools
+      - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@cargo-llvm-cov
-      - run: cargo llvm-cov --all-features --workspace --summary-only
-      # The dev explorer and showcase driven in jsdom (DEV-03, ADR-074), and the
-      # showcase's layout in headless Chromium (DEV-12, ADR-084).
+      - uses: taiki-e/install-action@nextest
+      - run: cargo nextest run --profile ci --all-features --workspace
+      - name: no leaked Riot keys
+        run: '! grep -rE "RGAPI-[0-9a-f-]{20,}" tests/ src/ docs/'
+
+  # The dev explorer, showcase and dashboard driven in jsdom (DEV-03, ADR-074),
+  # and their layout in headless Chromium (DEV-12, ADR-084). They read the pages
+  # from src/ui and need no Rust, so they run beside `test` (CI-03, ADR-175).
+  ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -67,8 +77,21 @@ jobs:
           name: showcase-screenshots
           path: tests/dom/screenshots/
           if-no-files-found: ignore
-      - name: no leaked Riot keys
-        run: '! grep -rE "RGAPI-[0-9a-f-]{20,}" tests/ src/ docs/'
+
+  # Coverage, reported and not gated (IMPLEMENTATION.md §0.6), on every event so a
+  # pull request still shows it. Not a required check (CI-02, ADR-174).
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install && rustup component add llvm-tools
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov,nextest
+      - run: cargo llvm-cov nextest --profile ci --all-features --workspace --summary-only
 
   # v1's black-box acceptance suite against `serve` and a mock Riot (P8-01,
   # ADR-059). Mock mode only: no Riot key is involved.

@@ -5,7 +5,7 @@
 //! fails the crawl. Plus `POST /v1/admin/ladder/crawl` and `/options`.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-mod common;
+use crate::common;
 
 use std::sync::Arc;
 use std::time::Duration;

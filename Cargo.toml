@@ -6,6 +6,9 @@ rust-version = "1.98"
 description = "Lightweight single-binary proxy for the Riot Games API"
 license = "MIT"
 publish = false
+# One integration-test binary, `tests/it.rs`, with every `tests/*.rs` as a
+# module (CI-04, ADR-176).
+autotests = false
 
 # Versions are pinned to the current minor; Cargo.lock pins the exact patch.
 # rusqlite is held at 0.39 because refinery 0.9 accepts rusqlite <= 0.39 (ADR-005).
@@ -66,6 +69,15 @@ tokio-test = "0.4"
 tokio-tungstenite = "0.29"
 ulid = "3.0"
 wiremock = "0.6"
+
+[[test]]
+name = "it"
+path = "tests/it.rs"
+
+# It reads the process-global metrics recorder, so it needs a process to itself.
+[[test]]
+name = "telemetry"
+path = "tests/telemetry.rs"
 
 [lints.clippy]
 unwrap_used = "warn"

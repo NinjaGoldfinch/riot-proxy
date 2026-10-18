@@ -5,10 +5,10 @@
 //! dashboard's endpoints show the live numbers.
 //!
 //! Ignored by default (a few seconds):
-//!     cargo test --test p7_exit -- --ignored --nocapture
+//!     cargo test --test it p7_exit:: -- --ignored --nocapture
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-mod common;
+use crate::common;
 
 use std::time::Duration;
 

@@ -1893,6 +1893,43 @@ Accepted (owner request "speed up CI and build time", task CI-01). Amends ADR-07
 - **Rejected.** A third-party paths-filter action (one more dependency with write access to the job's outputs, for nine fixed names); `on.pull_request.paths` for the whole workflow (it would skip the required checks too); skipping the job outright with a job-level `if` (a skipped job has no steps to say why).
 - **Tests.** `scripts/docker-paths.test.sh` in the `ops` job: each listed path builds, source and docs only skip, an empty diff skips, a final line without a newline still counts (a bug the test found), a path matches whole and not by suffix, and another workflow file skips.
 
+## ADR-174 — Tests run in parallel under nextest; coverage moves to its own job (2026-10-19)
+Accepted (owner request "speed up CI and build time", task CI-02). Amends ADR-006 (the `test` job) and P0-01's llvm-cov step.
+- **Measured before** (run 39149666697): `test` took 5:34. `cargo llvm-cov` compiled for 115 s, then ran about 45 test binaries one at a time: 24 s for the lib's 562 tests and about 70 s for the integration binaries, most of them under 2 s. The DOM and browser suites took another 75 s (CI-03 moves them).
+- **What.** `test` runs `cargo nextest run --profile ci --all-features --workspace`, uninstrumented. nextest runs each test in its own process and the binaries side by side. Locally, on 4 cores with debuginfo off: 938 tests in 45–46 s, three runs, against `cargo test`'s serial binaries. The `ci` profile in `.config/nextest.toml` sets `fail-fast = false` (`cargo test` stopped at the first failing binary and hid later ones), no retries (a flake should fail, not pass on its second try) and a 3-minute kill for a hung test; the slowest test takes about 10 s.
+- **Coverage stays on every pull request**, in a new `coverage` job that runs `cargo llvm-cov nextest` alongside the others. §0.6 asks a PR to justify a module under 70 %, so it needs the number. It is not a required check: coverage is reported, not gated. The two jobs keep their own Rust caches (rust-cache keys by job), so neither restores the other's instrumented or plain `target/`.
+- **Doctests:** neither `cargo llvm-cov` without `--doctests` nor nextest runs them, so nothing is lost.
+- **`concurrent_misses_read_once`** wanted all ten concurrent requests to say `MISS`. Under nextest it failed in the first full run, and it had flaked under llvm-cov before (FLT-05's PR). The reads were right (5, one computation); one request reached the cache after the computation stored, and a `HIT` is the right answer for it (ADR-169 promises one read, not ten `MISS`es). It now asserts the 5 reads, a 200 and the same body for each, `MISS` or `HIT` for each, and at least one `MISS`. It passed 50 runs under `--stress-count`.
+- **Locally:** `just nextest` runs the suite as CI does; `just test` is still `cargo test`.
+- **Rejected:** coverage on `main` only (a PR couldn't see its own number); `cargo llvm-cov` with `--no-report` per binary plus a merge (more steps for what nextest does); nextest retries (they would have hidden the flake above).
+
+## ADR-175 — The DOM and browser suites run in their own `ui` job (2026-10-19)
+Accepted (owner request "speed up CI and build time", task CI-03). Amends ADR-074 and ADR-084, which put them at the end of `test`.
+- **Measured before** (run 39149666697): in `test`, after the Rust suite, `npx playwright-core install --with-deps` took 18 s and `npm test` in `tests/dom` 56 s; with Node setup and the screenshot upload, about 80 s of the job's 5:34.
+- **What.** A new `ui` job runs them: checkout, Node 22 with the npm cache, `npm ci`, the Chromium headless shell with its system packages, `npm test`, and the screenshot artefact, unchanged. The suites read `src/ui/*.html` straight from the checkout and start no server, so the job needs no Rust toolchain or cache. It runs beside `test` instead of after it.
+- **The leaked-key grep stays in `test`.**
+- **Required checks.** `ui` is a new job id. Until the owner adds it to branch protection, a failing DOM or browser suite no longer blocks a merge as it did inside `test`. The owner should add it (Settings → Branches → `main` → required status checks), keeping `test`.
+- **Rejected.** Moving them into `acceptance`, which already sets up Node: that job is about 4 minutes, so it would become the slowest job.
+
+## ADR-176 — One integration-test binary, `tests/it.rs` (2026-10-19)
+Accepted (owner request "speed up CI and build time", task CI-04).
+- **Before.** Cargo built each of the 41 `tests/*.rs` files as its own crate: 41 binaries, each linking the library and every dependency, and 31 of them compiling `tests/common` again.
+- **What.** `Cargo.toml` sets `autotests = false` and declares a `[[test]]` target `it` at `tests/it.rs`, whose modules are the other test files, unmoved. Their `mod common;` became `use crate::common;`. Files stay where they were, so every `include_bytes!("fixtures/…")` and `../docs/…` path is unchanged. One file test lists to filter: `cargo test --test it analytics::`.
+- **`telemetry.rs` stays a target of its own.** Two of its tests read exact values from the process-global metrics recorder (`proxy_archived_matches_total 0`, a histogram bucket at 1). In one process with every other test, they read the other tests' counts. They test v1's metric contract, so the file keeps its own process rather than looser assertions. Every other test passed in the shared process unchanged.
+- **Snapshots** are named from the module path, which gained `it::`. The 20 files were renamed with `git mv` to `it__<old name>`, contents unchanged.
+- **The guard.** `every_test_file_is_a_module` (in `tests/it.rs`) fails if a `tests/*.rs` file is neither a `mod` of `tests/it.rs` nor a `path` of a `[[test]]` in `Cargo.toml`; with `autotests = false` such a file would never compile. A new file `tests/zz_unlisted.rs` made it fail with `add to tests/it.rs: ["zz_unlisted"]`.
+- **Measured** locally (4 cores, `CARGO_INCREMENTAL=0`, debuginfo off, dependencies built), `cargo test --all-features --no-run` after touching a file:
+
+  | touched | before | after |
+  |---|---|---|
+  | `src/lib.rs` (what CI builds on every PR) | 59.5 s, 57.3 s | 42.5 s, 42.5 s |
+  | `tests/common/mod.rs` | 17.5 s | 10.7 s |
+  | one test file (`tests/analytics.rs`) | 2.2 s | 10.7 s |
+
+  The test binaries took 2,269 MiB in 40 files before and 136 MiB in 2 after, without debuginfo; CI builds with it (until CI-05), where each binary carried its own copy. Editing a single test file is the one thing that got slower: the whole test crate recompiles.
+- **Tests:** 939 under `cargo test` and nextest (938 before, plus the guard), the same 5 ignored.
+- **Rejected:** moving the files into `tests/it/` (every relative `include_bytes!` path would change, for nothing); fixing the telemetry tests to tolerate other tests' metrics (weaker checks on a byte-identical contract); several groups of binaries (the link is per binary, so fewer is better, and nothing else needs a process of its own).
+
 ## ADR-177 — Dev and test builds carry line tables only, and dependencies no debug info (2026-10-19)
 Accepted (owner request "speed up CI and build time", task CI-05).
 - **What.** `[profile.dev] debug = "line-tables-only"` and `[profile.dev.package."*"] debug = false`. The test profile inherits both. Release is unchanged (it strips everything). A backtrace or panic still names file, line and column for this crate's frames: a test that panics two calls deep printed `at ./tests/zz_bt.rs:2:13` with `RUST_BACKTRACE=1`. Dependencies' frames keep their names, not their lines. For a debugger session that needs variables: `CARGO_PROFILE_DEV_DEBUG=full`.

@@ -1,7 +1,7 @@
 //! The OpenAPI document and the docs routes (plan P4-03), and the compare script.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-mod common;
+use crate::common;
 
 use axum::http::StatusCode;
 use riot_proxy::routes::docs;

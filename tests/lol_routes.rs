@@ -2,7 +2,7 @@
 //! upstream request (v1 defaults included), v1 validation, and contract coverage.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-mod common;
+use crate::common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};

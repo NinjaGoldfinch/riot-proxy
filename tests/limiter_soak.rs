@@ -1,6 +1,6 @@
 //! 60 s soak (plan P2-07, P2 exit check): 50 concurrent tasks hammer one scope on
 //! real time; no window is ever over-committed. Ignored by default:
-//!     cargo test --release --test limiter_soak -- --ignored --nocapture
+//!     cargo test --release --test it limiter_soak:: -- --ignored --nocapture
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::sync::{Arc, Mutex};
