@@ -53,7 +53,7 @@ pub const CACHE_CONTROL: &str = "private, max-age=300";
 /// v1 `TEAM_POSITIONS`: the lanes, and `''` for queues without positions.
 const TEAM_POSITIONS: [&str; 6] = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY", ""];
 /// v1 `LANE_POSITIONS`: a matchup is always in a lane.
-const LANE_POSITIONS: [&str; 5] = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"];
+const LANE_POSITIONS: [&str; 5] = analytics::LANES;
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -330,6 +330,10 @@ pub struct ChampionBuildEntry {
     wins: i64,
     #[serde(serialize_with = "js_number")]
     win_rate: f64,
+    /// The lower bound of `winRate`'s 95 % Wilson interval: how low it may
+    /// truly be, given how few games it rests on. 0 for no games.
+    #[serde(serialize_with = "js_number")]
+    win_rate_low: f64,
     /// The build's share of the champion's games that had a build (`totalGames`).
     #[serde(serialize_with = "js_number")]
     pick_rate: f64,
@@ -366,9 +370,17 @@ pub struct ChampionBuildsResponse {
     #[schema(required = true)]
     patch: Option<String>,
     /// The role asked for, else the champion's most-played role in the slice;
-    /// `null` when it has no games.
+    /// with `opponentId`, the lane its builds against that opponent have the
+    /// most games in. `null` when it has no games.
     #[schema(required = true)]
     role: Option<String>,
+    /// The lane opponent asked for (FLT-04): only the champion's games in a
+    /// lane against that champion, one player per team; `null` when none was
+    /// asked for.
+    #[schema(required = true)]
+    opponent_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    opponent_name: Option<String>,
     #[schema(required = true)]
     computed_at: Option<String>,
     /// The champion's games in this role that had a build: `pickRate`'s denominator.
@@ -416,8 +428,9 @@ const ALL_PATCHES: &str = "all";
 /// the same query and the same rows, so a validator issued before must not
 /// get a 304 now. Change it whenever that happens again: FLT-02 made the
 /// matchups, builds and detail sections honour `tier`, which they ignored,
-/// and added `side` to every body; FLT-03 added `minTier` to the same four.
-const STATS_SHAPE: &str = "tier-side-range";
+/// and added `side` to every body; FLT-03 added `minTier` to the same four;
+/// FLT-04 added `opponentId` and `winRateLow` to the builds.
+const STATS_SHAPE: &str = "tier-side-range-opponent";
 
 /// What the analytics reads need, built once at boot and shared by the
 /// routes and the rebuild's warm (PERF-03).
@@ -629,6 +642,21 @@ fn rate(n: i64, d: i64) -> f64 {
     if d == 0 { 0.0 } else { round4(n as f64 / d as f64) }
 }
 
+/// The lower bound of the 95 % Wilson score interval of `wins` in `games`
+/// (z = 1.96): 7 of 10 is 0.3968, 1 of 1 is 0.2065. 0 for no games, like
+/// [`rate`].
+#[allow(clippy::cast_precision_loss)]
+fn win_rate_low(wins: i64, games: i64) -> f64 {
+    if games <= 0 {
+        return 0.0;
+    }
+    let (n, z) = (games as f64, 1.96_f64);
+    let p = wins as f64 / n;
+    let z2 = z * z;
+    let low = (p + z2 / (2.0 * n) - z * (p * (1.0 - p) / n + z2 / (4.0 * n * n)).sqrt()) / (1.0 + z2 / n);
+    round4(low.max(0.0))
+}
+
 /// Pick- and ban-rate denominators, by a stat row's tier: `Some` a tier's
 /// (`analytics_slices`, `champion_bans`), `None` every tier's, a match once
 /// (`analytics_match_totals`, `champion_ban_totals`; ADR-123).
@@ -763,6 +791,7 @@ impl Common {
             min_games: 0,
             limit: self.limit,
             remakes: self.remakes,
+            opponent_id: None,
         }
     }
 
@@ -821,6 +850,14 @@ impl Route {
     }
 }
 
+/// The builds route's query (FLT-04): every route's, and the lane opponent.
+#[derive(Debug)]
+pub struct BuildsQuery {
+    common: Common,
+    /// `None`: every set build, against anyone.
+    opponent_id: Option<i64>,
+}
+
 /// `/patches`' query.
 #[derive(Debug)]
 pub struct PatchesQuery {
@@ -838,7 +875,7 @@ pub enum Request {
     Champions(Common),
     Detail(i64, Common),
     Matchups(i64, Common),
-    Builds(i64, Common),
+    Builds(i64, BuildsQuery),
     Patches(PatchesQuery),
 }
 
@@ -864,7 +901,16 @@ impl Request {
             }
             Route::Builds => {
                 let id = id()?;
-                Self::Builds(id, common(reads, query, &TEAM_POSITIONS, (1, 10, 3))?)
+                // Against an opponent the builds are in a lane, as a
+                // matchup is, so a role is one of the lanes (FLT-04).
+                let roles: &[&'static str] = if query.contains_key("opponentId") {
+                    &LANE_POSITIONS
+                } else {
+                    &TEAM_POSITIONS
+                };
+                let common = common(reads, query, roles, (1, 10, 3))?;
+                let opponent_id = validate::int_query("opponentId", q(query, "opponentId"), 1, i64::MAX)?;
+                Self::Builds(id, BuildsQuery { common, opponent_id })
             }
             Route::Patches => {
                 let ladder = ladder_query(reads, query)?;
@@ -888,7 +934,12 @@ impl Request {
             Self::Champions(c) => (Route::Champions, None, c.parts()),
             Self::Detail(id, c) => (Route::Detail, Some(*id), c.parts()),
             Self::Matchups(id, c) => (Route::Matchups, Some(*id), c.parts()),
-            Self::Builds(id, c) => (Route::Builds, Some(*id), c.parts()),
+            // The opponent last, so the other routes' keys don't move.
+            Self::Builds(id, b) => {
+                let mut parts = b.common.parts();
+                parts.push(b.opponent_id.map(|o| o.to_string()));
+                (Route::Builds, Some(*id), parts)
+            }
             Self::Patches(p) => (
                 Route::Patches,
                 None,
@@ -922,7 +973,7 @@ pub(crate) async fn compute(reads: &Reads, query: &Request) -> Result<Entry, Fai
         Request::Champions(c) => champions_doc(reads, c, version.clone()).await,
         Request::Detail(id, c) => detail_doc(reads, *id, c, version.clone()).await,
         Request::Matchups(id, c) => matchups_doc(reads, *id, c, version.clone()).await,
-        Request::Builds(id, c) => builds_doc(reads, *id, c, version.clone()).await,
+        Request::Builds(id, b) => builds_doc(reads, *id, b, version.clone()).await,
         Request::Patches(p) => patches_doc(reads, p).await,
     }?;
     Ok(Entry {
@@ -1356,6 +1407,7 @@ fn build_entry(b: &BuildRow, parts: &[BuildPartRow], total: i64) -> ChampionBuil
         games: b.games,
         wins: b.wins,
         win_rate: rate(b.wins, b.games),
+        win_rate_low: win_rate_low(b.wins, b.games),
         pick_rate: rate(b.games, total),
         next: vec![items("item3"), items("item4"), items("item5")],
         starter: of("starter")
@@ -1407,7 +1459,10 @@ fn build_entry(b: &BuildRow, parts: &[BuildPartRow], total: i64) -> ChampionBuil
         the most common 3rd, 4th and 5th items, starter, boots, skill order, runes and spells of the players who \
         built it (at most three each). Worked out from archived match timelines, so matches archived without one \
         aren't counted, nor are players who finished fewer than two items. Without `role`, the champion's \
-        most-played role in the slice (its `tier` and `side` included), named in `role`. Sends an `ETag`; a \
+        most-played role in the slice (its `tier` and `side` included), named in `role`. With `opponentId`, only \
+        the games in a lane against that champion, one player per team, as the matchups route counts them; \
+        each build then has its 3rd item, boots, runes and spells, and `next`'s 4th and 5th items, `starter` \
+        and `skillOrder` are empty. Sends an `ETag`; a \
         matching `If-None-Match` gets 304. Kept in memory until the next recompute: `X-Cache: HIT` from memory, `MISS` read from the tables. A champion nobody has \
         builds for yet still returns 200 with an empty \
         `builds`.",
@@ -1419,9 +1474,10 @@ fn build_entry(b: &BuildRow, parts: &[BuildPartRow], total: i64) -> ChampionBuil
         ("minTier" = Option<String>, Query, description = "IRON … CHALLENGER: only builds of players at that tier or above, summed; `UNKNOWN` is never in a range. Not with `tier`"),
         ("side" = Option<String>, Query, description = "`blue` or `red`: only builds of players on that side. Omitted: both sides summed"),
         ("patch" = Option<String>, Query, description = "`major.minor`, or `all` to sum every aggregated patch; default the newest aggregated patch"),
-        ("role" = Option<String>, Query, description = "TOP, JUNGLE, MIDDLE, BOTTOM, UTILITY or empty; default the champion's most-played role"),
+        ("role" = Option<String>, Query, description = "TOP, JUNGLE, MIDDLE, BOTTOM, UTILITY or empty; default the champion's most-played role. With `opponentId`, a lane (not empty); default the lane with the most games against that opponent"),
         ("minGames" = Option<i64>, Query, description = "≥ 0, games a build needs; default 0, every build"),
         ("limit" = Option<i64>, Query, description = "1–10 builds, default 3"),
+        ("opponentId" = Option<i64>, Query, description = "Champion id, ≥ 1: only builds against that champion in the lane. An opponent never met, or the champion itself, gives an empty `builds`"),
         ("remakes" = Option<String>, Query, description = "`exclude` (default) or `include`"),
     ),
     responses((status = 200, description = "The champion's builds, most played first", body = ChampionBuildsResponse),
@@ -1445,9 +1501,10 @@ async fn champion_builds(
 async fn builds_doc(
     reads: &Reads,
     id: i64,
-    c: &Common,
+    b: &BuildsQuery,
     version: Option<String>,
 ) -> Result<(String, Vec<u8>), Failed> {
+    let (c, opponent) = (&b.common, b.opponent_id);
     let min_games = c.min_games.unwrap_or(0);
     let patch = match patch_or_latest(reads, c).await {
         Ok(p) => p,
@@ -1461,11 +1518,18 @@ async fn builds_doc(
         let base = Read {
             champion_id: Some(id),
             min_games,
+            opponent_id: opponent,
             ..c.read(reads, p)
         };
         // Builds differ by role, so they are never summed across roles.
+        // Against an opponent, the lane is the one they met in most.
         if role.is_none() {
-            role = match analytics::top_role(&reads.db, base.clone()).await {
+            let top = if opponent.is_some() {
+                analytics::top_lane(&reads.db, base.clone()).await
+            } else {
+                analytics::top_role(&reads.db, base.clone()).await
+            };
+            role = match top {
                 Ok(r) => r,
                 Err(e) => return Err(failed(&e)),
             };
@@ -1493,7 +1557,8 @@ async fn builds_doc(
             }
         }
     }
-    let names = reads.mirror.champion_names(&[id]).await;
+    let ids: Vec<i64> = std::iter::once(id).chain(opponent).collect();
+    let names = reads.mirror.champion_names(&ids).await;
     let computed_at = computed.and_then(iso_ms);
     let tag = etag(&[
         some("builds"),
@@ -1507,6 +1572,7 @@ async fn builds_doc(
         c.side_part(),
         patch.clone(),
         some(id),
+        opponent.map(|o| o.to_string()),
         c.role.clone(),
         role.clone(),
         some(min_games),
@@ -1525,6 +1591,8 @@ async fn builds_doc(
             min_tier: c.min_tier_part(),
             patch,
             role,
+            opponent_id: opponent,
+            opponent_name: opponent.and_then(|o| names.get(&o).cloned()),
             computed_at,
             total_games,
             builds: builds
@@ -1823,6 +1891,46 @@ mod tests {
                 .as_str(),
             "detail|aaaa|103|~|RANKED_SOLO_5x5|~|~|~|all|~|0|500|exclude"
         );
+        // The builds' opponent comes last (FLT-04), so the other routes'
+        // keys don't move; two opponents are two keys.
+        let builds = |opponent_id: Option<i64>| {
+            Request::Builds(
+                134,
+                BuildsQuery {
+                    common: common_of(None, Some(0)),
+                    opponent_id,
+                },
+            )
+            .key("aaaa")
+        };
+        assert_eq!(
+            builds(None).as_str(),
+            "builds|aaaa|134|~|RANKED_SOLO_5x5|~|~|~|all|~|0|500|exclude|~"
+        );
+        assert_eq!(
+            builds(Some(157)).as_str(),
+            "builds|aaaa|134|~|RANKED_SOLO_5x5|~|~|~|all|~|0|500|exclude|157"
+        );
+        assert_ne!(builds(Some(157)), builds(Some(1)));
+    }
+
+    /// FLT-04: the lower bound of the 95 % Wilson interval, by hand
+    /// (FLT-04 plan §1), never above the win rate, 0 for no games.
+    #[test]
+    fn win_rate_low_is_the_wilson_lower_bound() {
+        for (wins, games, want) in [
+            (7, 10, 0.3968),
+            (1, 1, 0.2065),
+            (2, 2, 0.3424),
+            (100, 200, 0.4314),
+            (0, 3, 0.0),
+            (1, 2, 0.0945),
+            (0, 0, 0.0),
+        ] {
+            let got = win_rate_low(wins, games);
+            assert!((got - want).abs() < 1e-4, "{wins}/{games}: {got}");
+            assert!(got <= rate(wins, games), "{wins}/{games}");
+        }
     }
 
     #[test]

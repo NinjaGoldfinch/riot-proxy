@@ -304,35 +304,78 @@ fn insert_floors(c: &Connection, s: &Scope) -> Result<(), DbError> {
 /// `match_facts`, `matches` and a grouped lane count joined twice) let SQLite,
 /// which has no `ANALYZE` statistics, loop over the whole ladder for every
 /// fact: 44 s for a 16,600-game ladder.
-const MATCHUPS: &str = "WITH lane AS (
-       SELECT f.match_id, f.puuid, f.team_id, f.position, f.champion_id, f.win, f.tier, m.patch,
-         coalesce(m.remake, 0) AS remake,
-         count(*) OVER (PARTITION BY f.match_id, f.team_id, f.position) AS n
-         FROM match_facts f JOIN matches m ON m.match_id = f.match_id
-        WHERE f.key_scope = ?1 AND f.position IS NOT NULL AND m.queue_id = ?4 AND m.patch IS NOT NULL
-          AND substr(m.match_id, 1, length(?2) + 1) = upper(?2) || '_'
-          AND (?5 IS NULL OR m.patch IN (SELECT value FROM json_each(?5)))
-     )
-     INSERT INTO champion_matchups (key_scope, platform, queue, patch, champion_id, role, opponent_id,
-       remake, tier, side, games, wins, computed_at)
-     SELECT ?1, ?2, ?3, a.patch, a.champion_id, a.position, b.champion_id, a.remake, a.tier,
-       CASE a.team_id WHEN 100 THEN 'blue' ELSE 'red' END, count(*), sum(a.win), ?6
-       FROM lane a
-       JOIN lane b ON b.match_id = a.match_id AND b.position = a.position AND b.team_id <> a.team_id
-      WHERE a.n = 1 AND b.n = 1 AND a.champion_id <> b.champion_id AND a.team_id IN (100, 200)
-        AND a.tier IS NOT NULL
-      GROUP BY a.patch, a.position, a.champion_id, b.champion_id, a.remake, a.tier, a.team_id";
+fn matchups() -> String {
+    let (lanes, pairs) = (lanes(""), one_on_one(""));
+    format!(
+        "{lanes}
+         INSERT INTO champion_matchups (key_scope, platform, queue, patch, champion_id, role, opponent_id,
+           remake, tier, side, games, wins, computed_at)
+         SELECT ?1, ?2, ?3, a.patch, a.champion_id, a.position, b.champion_id, a.remake, a.tier,
+           CASE a.team_id WHEN 100 THEN 'blue' ELSE 'red' END, count(*), sum(a.win), ?6
+           {pairs}
+          GROUP BY a.patch, a.position, a.champion_id, b.champion_id, a.remake, a.tier, a.team_id"
+    )
+}
+
+/// `lane`: the platform's laned facts in this queue, each with its lane's head
+/// count, plus the `extra` columns (`", f.runes"`). A fact with no stamp is
+/// in it, so it counts in the head count; [`one_on_one`] drops it. Binds as
+/// [`ladder_facts`]; begins a `WITH`. Widening the matchups' own lane with the
+/// set builds' columns slowed them by 30 % (FLT-04), hence `extra`.
+fn lanes(extra: &str) -> String {
+    format!(
+        "WITH lane AS (
+           SELECT f.match_id, f.puuid, f.team_id, f.position, f.champion_id, f.win, f.tier, m.patch,
+             coalesce(m.remake, 0) AS remake{extra},
+             count(*) OVER (PARTITION BY f.match_id, f.team_id, f.position) AS n
+             FROM match_facts f JOIN matches m ON m.match_id = f.match_id
+            WHERE f.key_scope = ?1 AND f.position IS NOT NULL AND m.queue_id = ?4 AND m.patch IS NOT NULL
+              AND substr(m.match_id, 1, length(?2) + 1) = upper(?2) || '_'
+              AND (?5 IS NULL OR m.patch IN (SELECT value FROM json_each(?5)))
+         )"
+    )
+}
+
+/// Each stamped laner `a` of [`lanes`] against `b`, the other team's player
+/// in its lane, where each team has one player there and they differ; plus
+/// any further `join`.
+fn one_on_one(join: &str) -> String {
+    format!(
+        "FROM lane a
+         JOIN lane b ON b.match_id = a.match_id AND b.position = a.position AND b.team_id <> a.team_id
+         {join}
+        WHERE a.n = 1 AND b.n = 1 AND a.champion_id <> b.champion_id AND a.team_id IN (100, 200)
+          AND a.tier IS NOT NULL"
+    )
+}
 
 pub fn rebuild_matchups(c: &mut Connection, s: &Scope) -> Result<Written, DbError> {
     let tx = c.transaction()?;
     s.clear(&tx, "champion_matchups")?;
-    let n = s.insert(&tx, MATCHUPS)?;
+    let n = s.insert(&tx, &matchups())?;
     tx.commit()?;
     Ok(vec![("champion_matchups", n)])
 }
 
+/// A set build part's value for `k.part` of a player `p` (BLD-02, ADR-120):
+/// `NULL` when the player has nothing to count there, so the part is left
+/// out. Shared by `champion_build_parts` and `champion_matchup_build_parts`.
+const PART_VALUE: &str = "CASE k.part
+       WHEN 'item3' THEN CAST(json_extract(p.items, '$[2]') AS TEXT)
+       WHEN 'item4' THEN CAST(json_extract(p.items, '$[3]') AS TEXT)
+       WHEN 'item5' THEN CAST(json_extract(p.items, '$[4]') AS TEXT)
+       WHEN 'starter' THEN nullif(p.starter, '[]')
+       WHEN 'boots' THEN CAST(p.boots AS TEXT)
+       WHEN 'skill_order' THEN nullif(p.skill_order, '')
+       WHEN 'runes' THEN json_extract(p.runes, '$[1]') || ':' || json_extract(p.runes, '$[2]')
+       WHEN 'spells' THEN
+         min(json_extract(p.summoners, '$[0]'), json_extract(p.summoners, '$[1]')) || ':'
+           || max(json_extract(p.summoners, '$[0]'), json_extract(p.summoners, '$[1]'))
+     END";
+
 /// Items, runes and spells, a transaction each (v1's builds step), then set
-/// builds and their parts in one more (BLD-02).
+/// builds and their parts in one more (BLD-02), with the set builds against
+/// each lane opponent (FLT-04).
 pub fn rebuild_builds(c: &mut Connection, s: &Scope) -> Result<Written, DbError> {
     let mut out = vec![];
     // Items: slots 0–5, empty slots skipped, a player's duplicate item once.
@@ -402,7 +445,12 @@ pub fn rebuild_builds(c: &mut Connection, s: &Scope) -> Result<Written, DbError>
     out.push(("champion_spells", n));
 
     let tx = c.transaction()?;
-    for t in ["champion_builds", "champion_build_parts"] {
+    for t in [
+        "champion_builds",
+        "champion_build_parts",
+        "champion_matchup_builds",
+        "champion_matchup_build_parts",
+    ] {
         s.clear(&tx, t)?;
     }
     let players = set_build_players();
@@ -425,18 +473,7 @@ pub fn rebuild_builds(c: &mut Connection, s: &Scope) -> Result<Written, DbError>
                ('runes'), ('spells')),
              v AS (
                SELECT p.patch, p.champion_id, p.role, p.remake, p.core, p.tier, p.side, p.win, k.part,
-                 CASE k.part
-                   WHEN 'item3' THEN CAST(json_extract(p.items, '$[2]') AS TEXT)
-                   WHEN 'item4' THEN CAST(json_extract(p.items, '$[3]') AS TEXT)
-                   WHEN 'item5' THEN CAST(json_extract(p.items, '$[4]') AS TEXT)
-                   WHEN 'starter' THEN nullif(p.starter, '[]')
-                   WHEN 'boots' THEN CAST(p.boots AS TEXT)
-                   WHEN 'skill_order' THEN nullif(p.skill_order, '')
-                   WHEN 'runes' THEN json_extract(p.runes, '$[1]') || ':' || json_extract(p.runes, '$[2]')
-                   WHEN 'spells' THEN
-                     min(json_extract(p.summoners, '$[0]'), json_extract(p.summoners, '$[1]')) || ':'
-                       || max(json_extract(p.summoners, '$[0]'), json_extract(p.summoners, '$[1]'))
-                 END AS value
+                 {PART_VALUE} AS value
                  FROM p CROSS JOIN k
              )
              INSERT INTO champion_build_parts (key_scope, platform, queue, patch, champion_id, role, remake, core,
@@ -446,9 +483,66 @@ pub fn rebuild_builds(c: &mut Connection, s: &Scope) -> Result<Written, DbError>
               GROUP BY patch, champion_id, role, remake, core, part, value, tier, side"
         ),
     )?;
-    tx.commit()?;
     out.push(("champion_build_parts", n));
+    out.extend(insert_matchup_builds(&tx, s)?);
+    tx.commit()?;
     Ok(out)
+}
+
+/// Set builds against one lane opponent (FLT-04, ADR-171): the players of
+/// [`set_build_players`] who are also `a` in [`one_on_one`], so each row lies
+/// inside one `champion_builds` row and one `champion_matchups` row. The
+/// players are gathered once into a temp table and both inserts read it
+/// (11 s against 19 s for restating the lanes, FLT-04 §8). Only four parts.
+fn insert_matchup_builds(c: &Connection, s: &Scope) -> Result<Written, DbError> {
+    let lanes = lanes(", f.runes, f.summoners");
+    let pairs = one_on_one(
+        "JOIN match_builds mb ON mb.match_id = a.match_id AND mb.key_scope = ?1 AND mb.puuid = a.puuid",
+    );
+    // Each statement names ?6, so it takes all six of `insert`'s parameters
+    // (SQLite counts them to the highest index).
+    s.insert(
+        c,
+        &format!(
+            "CREATE TEMP TABLE lane_builds AS {lanes}
+             SELECT a.patch, a.champion_id, a.position AS role, b.champion_id AS opponent_id, a.remake, a.tier,
+               CASE a.team_id WHEN 100 THEN 'blue' ELSE 'red' END AS side, a.win,
+               json_array(json_extract(mb.items, '$[0]'), json_extract(mb.items, '$[1]')) AS core,
+               mb.items, mb.starter, mb.boots, mb.skill_order, a.runes, a.summoners, ?6 AS computed_at
+               {pairs}
+               AND json_array_length(mb.items) >= 2"
+        ),
+    )?;
+    let builds = s.insert(
+        c,
+        "INSERT INTO champion_matchup_builds (key_scope, platform, queue, patch, champion_id, role, opponent_id,
+           remake, core, tier, side, games, wins, computed_at)
+         SELECT ?1, ?2, ?3, patch, champion_id, role, opponent_id, remake, core, tier, side, count(*), sum(win), ?6
+           FROM temp.lane_builds
+          GROUP BY patch, champion_id, role, opponent_id, remake, core, tier, side",
+    )?;
+    let parts = s.insert(
+        c,
+        &format!(
+            "WITH k (part) AS (VALUES ('item3'), ('boots'), ('runes'), ('spells')),
+             v AS (
+               SELECT p.patch, p.champion_id, p.role, p.opponent_id, p.remake, p.core, p.tier, p.side, p.win,
+                 k.part, {PART_VALUE} AS value
+                 FROM temp.lane_builds p CROSS JOIN k
+             )
+             INSERT INTO champion_matchup_build_parts (key_scope, platform, queue, patch, champion_id, role,
+               opponent_id, remake, core, part, value, tier, side, games, wins, computed_at)
+             SELECT ?1, ?2, ?3, patch, champion_id, role, opponent_id, remake, core, part, value, tier, side,
+               count(*), sum(win), ?6
+               FROM v WHERE value IS NOT NULL
+              GROUP BY patch, champion_id, role, opponent_id, remake, core, part, value, tier, side"
+        ),
+    )?;
+    c.execute_batch("DROP TABLE temp.lane_builds")?;
+    Ok(vec![
+        ("champion_matchup_builds", builds),
+        ("champion_matchup_build_parts", parts),
+    ])
 }
 
 /// Set builds (BLD-02, ADR-120): `p`, the facts of the players whose
@@ -587,6 +681,10 @@ pub struct Read {
     pub limit: i64,
     /// Add remakes' rows back in (`?remakes=include`).
     pub remakes: bool,
+    /// The lane opponent a set build read is against (FLT-04): read from
+    /// `champion_matchup_builds` instead, where `role` is a lane. Only
+    /// [`build_source`]'s reads take it.
+    pub opponent_id: Option<i64>,
 }
 
 /// The newest patch this ladder has stats for (v1 `latestPatch`): the slices'
@@ -676,6 +774,7 @@ impl Read {
             min_games: 0,
             limit: 0,
             remakes: false,
+            opponent_id: None,
         }
     }
 }
@@ -733,12 +832,15 @@ pub(crate) enum TierKey {
 }
 
 /// The filter columns a table has besides `key_scope, platform, queue, patch, remake`.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Keys {
     tier: TierKey,
     side: bool,
     role: bool,
     champion: bool,
+    /// `opponent_id` after the champion, and an open role is an `IN` over the
+    /// lanes so the key reaches it (FLT-04).
+    opponent: bool,
 }
 
 const SLICES: Keys = Keys {
@@ -746,18 +848,21 @@ const SLICES: Keys = Keys {
     side: false,
     role: false,
     champion: false,
+    opponent: false,
 };
 const MATCH_TOTALS: Keys = Keys {
     tier: TierKey::None,
     side: false,
     role: false,
     champion: false,
+    opponent: false,
 };
 const STATS: Keys = Keys {
     tier: TierKey::BeforePatch,
     side: true,
     role: true,
     champion: true,
+    opponent: false,
 };
 /// `champion_stats` summed over tier (PERF-02, ADR-168): no tier column.
 const STATS_TOTALS: Keys = Keys {
@@ -765,18 +870,21 @@ const STATS_TOTALS: Keys = Keys {
     side: true,
     role: true,
     champion: true,
+    opponent: false,
 };
 const BANS: Keys = Keys {
     tier: TierKey::BeforePatch,
     side: false,
     role: false,
     champion: true,
+    opponent: false,
 };
 const BAN_TOTALS: Keys = Keys {
     tier: TierKey::None,
     side: false,
     role: false,
     champion: true,
+    opponent: false,
 };
 /// Distinct matches per floor (FLT-03, V0026).
 const FLOOR_TOTALS: Keys = Keys {
@@ -784,6 +892,7 @@ const FLOOR_TOTALS: Keys = Keys {
     side: false,
     role: false,
     champion: false,
+    opponent: false,
 };
 /// Bans per floor (FLT-03, V0026).
 const BAN_FLOOR_TOTALS: Keys = Keys {
@@ -791,6 +900,7 @@ const BAN_FLOOR_TOTALS: Keys = Keys {
     side: false,
     role: false,
     champion: true,
+    opponent: false,
 };
 /// Matchups, items, runes, spells, set builds and their parts.
 const FACETS: Keys = Keys {
@@ -798,7 +908,36 @@ const FACETS: Keys = Keys {
     side: true,
     role: true,
     champion: true,
+    opponent: false,
 };
+
+/// Set builds against one lane opponent and their parts (FLT-04, V0027).
+const MATCHUP_BUILDS: Keys = Keys {
+    tier: TierKey::AfterPatch,
+    side: true,
+    role: true,
+    champion: true,
+    opponent: true,
+};
+
+/// The lanes, as `champion_matchups` and `champion_matchup_builds` store a
+/// role (v1 `LANE_POSITIONS`).
+pub const LANES: [&str; 5] = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"];
+
+/// The set builds a build read sums, their parts and their keys: the builds
+/// against the read's opponent when it names one (FLT-04, ADR-171), else
+/// every set build. The only way a read reaches the opponent tables.
+pub(crate) fn build_source(r: &Read) -> (&'static str, &'static str, Keys) {
+    if r.opponent_id.is_some() {
+        (
+            "champion_matchup_builds",
+            "champion_matchup_build_parts",
+            MATCHUP_BUILDS,
+        )
+    } else {
+        ("champion_builds", "champion_build_parts", FACETS)
+    }
+}
 
 /// The table a stats read sums and its keys: `champion_stats_totals` when the
 /// read names no tier and wants no row per tier (PERF-02, ADR-168), else
@@ -861,11 +1000,21 @@ impl Filter {
         if let (true, Some(side)) = (k.side, r.side) {
             f.push(&format!("side = '{}'", side.as_str()));
         }
-        if let (true, Some(role)) = (k.role, &r.role) {
-            f.eq("role", role.clone().into());
+        match (k.role, &r.role) {
+            (true, Some(role)) => f.eq("role", role.clone().into()),
+            // Every row is a lane: the IN is no filter, only the way to the
+            // opponent.
+            (true, None) if k.opponent => {
+                let lanes: Vec<String> = LANES.iter().map(|l| l.to_string()).collect();
+                f.one_of("role", None, &lanes);
+            }
+            _ => {}
         }
         if let (true, Some(id)) = (k.champion, r.champion_id) {
             f.eq("champion_id", id.into());
+        }
+        if let (true, Some(id)) = (k.opponent, r.opponent_id) {
+            f.eq("opponent_id", id.into());
         }
         f
     }
@@ -1201,13 +1350,14 @@ pub struct BuildRow {
 }
 
 /// One champion's set builds, roles summed unless a role is asked for, most
-/// played first.
+/// played first; against one opponent when the read names one (FLT-04).
 pub async fn builds(db: &Db, r: Read) -> Result<Vec<BuildRow>, DbError> {
     db.read(move |c| {
-        let w = Filter::new(&r, &domain(c, &r)?, FACETS);
+        let (table, _, keys) = build_source(&r);
+        let w = Filter::new(&r, &domain(c, &r)?, keys);
         let mut stmt = c.prepare(&format!(
             "SELECT json_extract(core, '$[0]'), json_extract(core, '$[1]'), sum(games), sum(wins), max(computed_at)
-               FROM champion_builds WHERE {}
+               FROM {table} WHERE {}
               GROUP BY core HAVING sum(games) >= ?
               ORDER BY sum(games) DESC, core LIMIT ?",
             w.sql
@@ -1234,10 +1384,11 @@ pub async fn builds(db: &Db, r: Read) -> Result<Vec<BuildRow>, DbError> {
 /// and the newest recompute time of those rows: `pickRate`'s denominator.
 pub async fn build_totals(db: &Db, r: Read) -> Result<(i64, Option<i64>), DbError> {
     db.read(move |c| {
-        let w = Filter::new(&r, &domain(c, &r)?, FACETS);
+        let (table, _, keys) = build_source(&r);
+        let w = Filter::new(&r, &domain(c, &r)?, keys);
         Ok(c.query_row(
             &format!(
-                "SELECT coalesce(sum(games), 0), max(computed_at) FROM champion_builds WHERE {}",
+                "SELECT coalesce(sum(games), 0), max(computed_at) FROM {table} WHERE {}",
                 w.sql
             ),
             params_from_iter(w.args),
@@ -1270,6 +1421,28 @@ pub async fn top_role(db: &Db, r: Read) -> Result<Option<String>, DbError> {
     .await
 }
 
+/// The lane one champion's set builds against `r.opponent_id` have the most
+/// games in (FLT-04); `None` when it has none. Every row is a lane, so a tie
+/// goes to the lane that sorts first (ADR-121's second rule).
+pub async fn top_lane(db: &Db, r: Read) -> Result<Option<String>, DbError> {
+    db.read(move |c| {
+        use rusqlite::OptionalExtension;
+        let r = Read { role: None, ..r };
+        let w = Filter::new(&r, &domain(c, &r)?, MATCHUP_BUILDS);
+        Ok(c.query_row(
+            &format!(
+                "SELECT role FROM champion_matchup_builds WHERE {}
+                  GROUP BY role ORDER BY sum(games) DESC, role LIMIT 1",
+                w.sql
+            ),
+            params_from_iter(w.args),
+            |x| x.get(0),
+        )
+        .optional()?)
+    })
+    .await
+}
+
 /// What the players of one set build chose besides its core: `part` is
 /// `item3`–`item5`, `starter`, `boots`, `skill_order`, `runes` or `spells`,
 /// and `value` is as stored in `champion_build_parts`.
@@ -1289,10 +1462,11 @@ pub async fn build_parts(db: &Db, r: Read, cores: Vec<[i64; 2]>) -> Result<Vec<B
     // gives back for each inner array.
     let cores = serde_json::to_string(&cores).unwrap_or_else(|_| "[]".into());
     db.read(move |c| {
-        let w = Filter::new(&r, &domain(c, &r)?, FACETS);
+        let (_, table, keys) = build_source(&r);
+        let w = Filter::new(&r, &domain(c, &r)?, keys);
         let mut stmt = c.prepare(&format!(
             "SELECT json_extract(core, '$[0]'), json_extract(core, '$[1]'), part, value, sum(games), sum(wins)
-               FROM champion_build_parts WHERE {}
+               FROM {table} WHERE {}
                 AND core IN (SELECT j.value FROM json_each(?) j)
               GROUP BY core, part, value
               ORDER BY core, part, sum(games) DESC, value",

@@ -70,12 +70,14 @@ expression: redact(body)
         }
       ],
       "winRate": 1,
+      "winRateLow": 0.2065,
       "wins": 1
     }
   ],
   "championId": 134,
   "computedAt": "<iso>",
   "minTier": null,
+  "opponentId": null,
   "patch": "16.19",
   "platform": null,
   "queue": "RANKED_SOLO_5x5",

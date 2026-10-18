@@ -302,11 +302,12 @@ The site's backfill question (item 3) needs no task: the unbounded lookup backfi
 - [x] TL-02 `timelines:backfill`: the missing timelines of archived ranked matches in the newest `TIMELINE_BACKFILL_PATCHES` patches (default 0, off), newest first, one job per region at priority 40 000; 404s marked in `timeline_gaps` (V0018); progress at `GET /v1/admin/timelines/backfill` (#161, ADR-133)
 
 ## FLT — builds and matchups by rank, opponent and side (owner request 2026-10-10)
-Order: THR-02 → FLT-01 → FLT-02 → FLT-03 → FLT-04, then PAIR.
+Order: THR-02 → FLT-01 → FLT-02 → FLT-03 → FLT-04 → FLT-05, then PAIR.
 - [x] FLT-01 `tier` and `side` keys on matchups and every build table, `side` on `champion_stats` (V0017), the row's own player's stamped tier and side; reads sum over them, output unchanged; rows from before V0017 kept with tier and side `''` until one rebuild over every patch of their ladder (`analytics_unsplit`, queued at boot) (#155, design/04, ADR-129)
 - [x] FLT-02 `tier` and `side` on the matchups, builds and detail routes; `side=green` and the like are 400; the ETag shape marker is `tier-side`; the champion page's tier picker and *Both · Blue · Red* toggle drive the By tier, Builds and Matchups cards, each naming its slice (#157, design/11, ADR-130)
 - [x] FLT-03 `minTier` ranges on the champions, detail, matchups and builds routes (`/patches` ignores it, as it ignores `tier`), with per-floor match and ban totals (V0026); *Master+*, *Diamond+*, *Emerald+* in the picker (#217, design/04, design/11, ADR-170, plan in docs/flt/FLT-03-plan.md)
-- [ ] FLT-04 builds against a lane opponent: `champion_matchup_builds`, `opponentId` on the builds route, a *vs* picker (IMPLEMENTATION.md §Post-release — FLT)
+- [ ] FLT-04 builds against a lane opponent: `champion_matchup_builds` and `_parts` (V0027), `opponentId` on the builds route, `winRateLow` on every build (design/04, design/11, ADR-171, plan in docs/flt/FLT-04-plan.md)
+- [ ] FLT-05 the *vs* picker on the champion page's build tabs, and the matchup rows as links to it (split from FLT-04; plan §7)
 
 ## DSK — less disk for the derived data (owner alert 2026-10-13)
 The VPS (38 GB) hit 97 %: `riot-proxy.db` 20.26 GB (timelines 12.7 GiB, matches 2.6 GiB, derived tables and their indexes ≈ 3.5 GiB, 1.13 M stale pending `archive:match` rows ≈ 0.4 GiB) plus a 9.9 GiB daily backup. Freed pages stay in the file (no `auto_vacuum`, no room for a `VACUUM`), so each task below defers growth until the raw bodies move off the box and the file is copied compact (design/07 §Reclaiming space). Specs in IMPLEMENTATION.md §Post-release — DSK.

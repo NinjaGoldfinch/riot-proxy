@@ -333,6 +333,8 @@ async fn the_rebuild_matches_the_hand_computed_fixture() {
             ("champion_spells", 6),
             ("champion_builds", 3),
             ("champion_build_parts", 18),
+            ("champion_matchup_builds", 3),
+            ("champion_matchup_build_parts", 10),
         ]
     );
 
@@ -498,6 +500,7 @@ async fn reads_leave_remakes_out_unless_asked_and_sum_roles() {
         min_games: 0,
         limit: 500,
         remakes,
+        opponent_id: None,
     };
     assert_eq!(
         latest_patch(&db, "s", Some("kr"), "RANKED_SOLO_5x5")
@@ -660,6 +663,7 @@ async fn every_patch_sums_and_the_patch_list_is_newest_first() {
         min_games: 0,
         limit: 500,
         remakes: false,
+        opponent_id: None,
     };
     let games = |rows: Vec<StatRow>| {
         rows.iter()
@@ -958,6 +962,7 @@ async fn reads_filter_by_tier_and_side() {
         min_games: 0,
         limit: 50,
         remakes: false,
+        opponent_id: None,
     };
     let matchups = |r: Read| {
         let db = db.clone();
@@ -1073,7 +1078,7 @@ async fn reads_filter_by_tier_and_side() {
 /// 44 s on a 16,600-game ladder.
 #[tokio::test]
 async fn the_matchups_plan_reaches_the_opponent_by_key() {
-    let plan = plan_of(MATCHUPS.to_string()).await;
+    let plan = plan_of(matchups()).await;
     assert!(step(&plan, "b").contains("match_id=?"), "{plan:#?}");
     // The player's tier is on the fact row: no table to reach (DSK-04).
     assert!(plan.iter().all(|l| !l.contains("match_tiers")), "{plan:#?}");
@@ -1198,6 +1203,7 @@ async fn summed_reads_count_each_match_once() {
         min_games: 0,
         limit: 500,
         remakes,
+        opponent_id: None,
     };
     // Champion 2: C at DIAMOND in KR_1 (2/5/1, 180 cs, a loss) and B at MASTER
     // in KR_2 (3/3/3, 150 cs, a win), every column summed.
@@ -1389,6 +1395,7 @@ async fn build_reads_sum_patches_and_roles_and_leave_remakes_out() {
         min_games: 0,
         limit: 10,
         remakes,
+        opponent_id: None,
     };
     let list = |r: Read| {
         let db = db.clone();
@@ -1545,6 +1552,17 @@ async fn every_read_seeks_on_its_key() {
         tier: TierFilter::AtOrAbove("DIAMOND"),
         ..open.clone()
     };
+    // Against an opponent (FLT-04): the role left open is an IN over the
+    // lanes, so the key reaches the opponent either way.
+    let vs = Read {
+        champion_id: Some(1),
+        opponent_id: Some(2),
+        ..open.clone()
+    };
+    let one_vs = Read {
+        opponent_id: Some(2),
+        ..one.clone()
+    };
     // (table, its keys, the key column a seek must reach)
     let tables = [
         ("analytics_slices", SLICES, "patch=?"),
@@ -1559,11 +1577,19 @@ async fn every_read_seeks_on_its_key() {
         ("champion_spells", FACETS, "patch=?"),
         ("champion_builds", FACETS, "patch=?"),
         ("champion_build_parts", FACETS, "patch=?"),
+        ("champion_matchup_builds", MATCHUP_BUILDS, "patch=?"),
+        ("champion_matchup_build_parts", MATCHUP_BUILDS, "patch=?"),
         ("analytics_floor_totals", FLOOR_TOTALS, "patch=?"),
         ("champion_ban_floor_totals", BAN_FLOOR_TOTALS, "patch=?"),
     ];
     for analyze in [false, true] {
-        let (open, one, range) = (open.clone(), one.clone(), range.clone());
+        let (open, one, range, vs, one_vs) = (
+            open.clone(),
+            one.clone(),
+            range.clone(),
+            vs.clone(),
+            one_vs.clone(),
+        );
         let failures = db
             .write(move |c| {
                 if analyze {
@@ -1571,9 +1597,18 @@ async fn every_read_seeks_on_its_key() {
                 }
                 let mut failures = vec![];
                 for (table, keys, reach) in tables {
-                    for (name, r) in [("open", &open), ("one", &one), ("range", &range)] {
-                        // The floor tables answer a range only.
-                        if keys.tier == TierKey::Floor && name != "range" {
+                    for (name, r) in [
+                        ("open", &open),
+                        ("one", &one),
+                        ("range", &range),
+                        ("vs", &vs),
+                        ("one_vs", &one_vs),
+                    ] {
+                        // The floor tables answer a range only; the opponent
+                        // tables are read for one opponent only.
+                        if (keys.tier == TierKey::Floor && name != "range")
+                            || (keys.opponent != name.contains("vs"))
+                        {
                             continue;
                         }
                         let w = Filter::new(r, &domain(c, r)?, keys);
@@ -1596,7 +1631,13 @@ async fn every_read_seeks_on_its_key() {
                             && (keys.tier != TierKey::Floor || line.contains("floor_tier=?"));
                         let to_champion =
                             !analyze && keys.champion && name == "one" && keys.tier != TierKey::BeforePatch;
-                        if !seeks || (to_champion && !line.contains("champion_id=?")) {
+                        // Without statistics the key is followed to the
+                        // opponent, whether the role is set or open.
+                        let to_opponent = !analyze && keys.opponent;
+                        if !seeks
+                            || (to_champion && !line.contains("champion_id=?"))
+                            || (to_opponent && !line.contains("opponent_id=?"))
+                        {
                             failures.push(format!("analyze={analyze} {table} {name}: {plan:?}"));
                         }
                     }
@@ -2184,39 +2225,43 @@ async fn range_reads_sum_the_named_tiers() {
             assert_eq!(got, want, "{facet_kind:?} of {champion}");
         }
 
-        let middle = |r: Read| Read {
-            role: Some("MIDDLE".into()),
-            ..r
-        };
-        let mut got = BTreeMap::new();
-        for b in builds(&db, middle(ranged.clone())).await.unwrap() {
-            *got.entry(b.core).or_insert(0) += b.games;
-        }
-        let mut want = BTreeMap::new();
-        let mut total = 0;
-        for r in &each {
-            for b in builds(&db, middle(r.clone())).await.unwrap() {
-                *want.entry(b.core).or_insert(0) += b.games;
+        // Every set build, then those against each lane opponent (FLT-04).
+        for opponent in [None, Some(1), Some(2)] {
+            let middle = |r: Read| Read {
+                role: Some("MIDDLE".into()),
+                opponent_id: opponent,
+                ..r
+            };
+            let mut got = BTreeMap::new();
+            for b in builds(&db, middle(ranged.clone())).await.unwrap() {
+                *got.entry(b.core).or_insert(0) += b.games;
             }
-            total += build_totals(&db, middle(r.clone())).await.unwrap().0;
-        }
-        assert_eq!(got, want, "builds of {champion}");
-        assert_eq!(build_totals(&db, middle(ranged.clone())).await.unwrap().0, total);
-        let cores: Vec<[i64; 2]> = got.keys().copied().collect();
-        let mut got = BTreeMap::new();
-        for p in build_parts(&db, middle(ranged.clone()), cores.clone())
-            .await
-            .unwrap()
-        {
-            *got.entry((p.core, p.part, p.value)).or_insert(0) += p.games;
-        }
-        let mut want = BTreeMap::new();
-        for r in &each {
-            for p in build_parts(&db, middle(r.clone()), cores.clone()).await.unwrap() {
-                *want.entry((p.core, p.part, p.value)).or_insert(0) += p.games;
+            let mut want = BTreeMap::new();
+            let mut total = 0;
+            for r in &each {
+                for b in builds(&db, middle(r.clone())).await.unwrap() {
+                    *want.entry(b.core).or_insert(0) += b.games;
+                }
+                total += build_totals(&db, middle(r.clone())).await.unwrap().0;
             }
+            assert_eq!(got, want, "builds of {champion} against {opponent:?}");
+            assert_eq!(build_totals(&db, middle(ranged.clone())).await.unwrap().0, total);
+            let cores: Vec<[i64; 2]> = got.keys().copied().collect();
+            let mut got = BTreeMap::new();
+            for p in build_parts(&db, middle(ranged.clone()), cores.clone())
+                .await
+                .unwrap()
+            {
+                *got.entry((p.core, p.part, p.value)).or_insert(0) += p.games;
+            }
+            let mut want = BTreeMap::new();
+            for r in &each {
+                for p in build_parts(&db, middle(r.clone()), cores.clone()).await.unwrap() {
+                    *want.entry((p.core, p.part, p.value)).or_insert(0) += p.games;
+                }
+            }
+            assert_eq!(got, want, "build parts of {champion} against {opponent:?}");
         }
-        assert_eq!(got, want, "build parts of {champion}");
     }
     // A range with none of its tiers in the slice reads nothing.
     let none = Read {
@@ -2351,4 +2396,356 @@ fn the_floor_list_is_riots_tiers() {
             "{t} in each of V0026's statements"
         );
     }
+}
+
+/// FLT-04 (ADR-171): the set builds against a lane opponent, by hand. Only
+/// one-on-one lanes with a build of two or more items count: A (1) against C
+/// and B (2) in MIDDLE, 6655 › 3157, KR_1 won and KR_2 lost, the remake KR_3
+/// apart; B against A, 3157 › 4645, won. C's one item counts nowhere, nor
+/// its row under another key scope; D (TOP) has no opponent. The parts are
+/// the 3rd item, boots, runes and spells only, as champion_build_parts has
+/// them for the same games.
+#[tokio::test]
+async fn matchup_builds_match_the_hand_computed_fixture() {
+    let (_d, db) = db();
+    db.write(|c| {
+        seed(c);
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    rebuild(&db, 1).await;
+    assert_eq!(
+        text_rows(
+            &db,
+            "SELECT champion_id || ' v ' || opponent_id || ' ' || role || ' ' || remake || ' ' || core || ' '
+                     || tier || ' ' || side || ' ' || games || '/' || wins || ' ' || computed_at
+               FROM champion_matchup_builds ORDER BY champion_id, remake"
+        )
+        .await,
+        [
+            "1 v 2 MIDDLE 0 [6655,3157] MASTER blue 2/1 77",
+            "1 v 2 MIDDLE 1 [6655,3157] MASTER blue 1/1 77",
+            "2 v 1 MIDDLE 0 [3157,4645] MASTER red 1/1 77",
+        ]
+    );
+    assert_eq!(
+        text_rows(
+            &db,
+            "SELECT champion_id || ' v ' || opponent_id || ' ' || remake || ' ' || core || ' ' || part || ' '
+                     || value || ' ' || games || '/' || wins
+               FROM champion_matchup_build_parts ORDER BY champion_id, remake, part, value"
+        )
+        .await,
+        [
+            "1 v 2 0 [6655,3157] boots 3020 1/1",
+            "1 v 2 0 [6655,3157] boots 3047 1/0",
+            "1 v 2 0 [6655,3157] item3 3089 1/1",
+            "1 v 2 0 [6655,3157] runes 8112:8300 2/1",
+            "1 v 2 0 [6655,3157] spells 4:14 2/1",
+            "1 v 2 1 [6655,3157] runes 8112:8300 1/1",
+            "1 v 2 1 [6655,3157] spells 4:14 1/1",
+            "2 v 1 0 [3157,4645] item3 3089 1/1",
+            "2 v 1 0 [3157,4645] runes 8010:8400 1/1",
+            "2 v 1 0 [3157,4645] spells 4:14 1/1",
+        ]
+    );
+    // The temp table is gone, and a rebuild replaces the rows.
+    assert_eq!(
+        rows(
+            &db,
+            "SELECT count(*) FROM temp.sqlite_master WHERE name = 'lane_builds'"
+        )
+        .await,
+        [vec![0]]
+    );
+    rebuild(&db, 1).await;
+    assert_eq!(
+        rows(&db, "SELECT sum(games) FROM champion_matchup_builds").await,
+        [vec![4]]
+    );
+}
+
+/// KR_9 (14.18 solo): A (1) and B (4) share blue's MIDDLE against C (2); E
+/// (5, MASTER) plays TOP against D (6); G and H both play champion 8 in the
+/// JUNGLE. Every one of them has a two-item build.
+const SHARED_AND_MIRROR: &str = r#"INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd,
+               body_size, archived_at, game_duration, remake, facts_version)
+               VALUES ('KR_9', 'asia', '14.18', 420, 1, x'00', 1, 1, 1500, 0, 3);
+             INSERT INTO match_facts (match_id, key_scope, puuid, team_id, position, champion_id, win, facts_version)
+               VALUES ('KR_9', 's', 'A', 100, 'MIDDLE', 1, 1, 3), ('KR_9', 's', 'B', 100, 'MIDDLE', 4, 1, 3),
+                      ('KR_9', 's', 'C', 200, 'MIDDLE', 2, 0, 3), ('KR_9', 's', 'E', 100, 'TOP', 5, 1, 3),
+                      ('KR_9', 's', 'D', 200, 'TOP', 6, 0, 3), ('KR_9', 's', 'G', 100, 'JUNGLE', 8, 1, 3),
+                      ('KR_9', 's', 'H', 200, 'JUNGLE', 8, 0, 3);
+             INSERT INTO ladder_entries (key_scope, platform, queue, puuid, tier, division, league_points,
+               wins, losses, first_seen_crawl_id, last_seen_crawl_id, updated_at)
+               VALUES ('s', 'kr', 'RANKED_SOLO_5x5', 'E', 'MASTER', 'I', 10, 1, 1, 'c', 'c', 1);
+             INSERT INTO match_builds (match_id, key_scope, puuid, starter, boots, items, skills, skill_order,
+               builds_version)
+               SELECT 'KR_9', 's', p, '[]', 3047, '[3071,3053]', '', NULL, 1
+                 FROM (SELECT column1 AS p FROM (VALUES ('A'), ('B'), ('C'), ('D'), ('E'), ('G'), ('H')));"#;
+
+/// A lane two players of a team share, and a mirror lane, have no matchup
+/// and so no matchup build, though every player there has a set build.
+#[tokio::test]
+async fn a_shared_lane_or_a_mirror_has_no_matchup_build() {
+    let (_d, db) = db();
+    db.write(|c| {
+        seed(c);
+        c.execute_batch(SHARED_AND_MIRROR)?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    rebuild(&db, 1).await;
+    assert_eq!(
+        text_rows(
+            &db,
+            "SELECT champion_id || ' v ' || opponent_id || ' ' || role || ' ' || remake || ' ' || core || ' '
+                     || sum(games) || '/' || sum(wins)
+               FROM champion_matchup_builds GROUP BY champion_id, opponent_id, role, remake, core
+               ORDER BY champion_id, remake"
+        )
+        .await,
+        [
+            "1 v 2 MIDDLE 0 [6655,3157] 2/1",
+            "1 v 2 MIDDLE 1 [6655,3157] 1/1",
+            "2 v 1 MIDDLE 0 [3157,4645] 1/1",
+            "5 v 6 TOP 0 [3071,3053] 1/1",
+            "6 v 5 TOP 0 [3071,3053] 1/0",
+        ]
+    );
+    // They are in the set builds all the same.
+    assert_eq!(
+        rows(
+            &db,
+            "SELECT count(DISTINCT champion_id) FROM champion_builds WHERE champion_id IN (1, 2, 4, 8)
+               AND core = '[3071,3053]'"
+        )
+        .await,
+        [vec![4]]
+    );
+}
+
+/// The matchup builds are a subset of both parents: summed over opponents
+/// they never exceed the set build, and summed over cores never the
+/// matchup. Where every laned build is one-on-one (the fixture alone), both
+/// are equal.
+#[tokio::test]
+async fn opponent_sums_never_exceed_the_set_builds_and_equal_them_in_one_on_one_games() {
+    const OVER_BUILDS: &str = "SELECT count(*) FROM (
+          SELECT mb.patch, mb.champion_id, mb.role, mb.remake, mb.core, mb.tier, mb.side,
+                 sum(mb.games) AS g, (SELECT b.games FROM champion_builds b
+                   WHERE (b.key_scope, b.platform, b.queue, b.patch, b.champion_id, b.role, b.remake, b.core,
+                          b.tier, b.side)
+                       = (mb.key_scope, mb.platform, mb.queue, mb.patch, mb.champion_id, mb.role, mb.remake,
+                          mb.core, mb.tier, mb.side)) AS parent
+            FROM champion_matchup_builds mb
+           GROUP BY mb.key_scope, mb.platform, mb.queue, mb.patch, mb.champion_id, mb.role, mb.remake, mb.core,
+                    mb.tier, mb.side)
+         WHERE parent IS NULL OR g > parent";
+    const OVER_MATCHUPS: &str = "SELECT count(*) FROM (
+          SELECT sum(mb.games) AS g, (SELECT m.games FROM champion_matchups m
+                   WHERE (m.key_scope, m.platform, m.queue, m.patch, m.champion_id, m.role, m.opponent_id,
+                          m.remake, m.tier, m.side)
+                       = (mb.key_scope, mb.platform, mb.queue, mb.patch, mb.champion_id, mb.role,
+                          mb.opponent_id, mb.remake, mb.tier, mb.side)) AS parent
+            FROM champion_matchup_builds mb
+           GROUP BY mb.key_scope, mb.platform, mb.queue, mb.patch, mb.champion_id, mb.role, mb.opponent_id,
+                    mb.remake, mb.tier, mb.side)
+         WHERE parent IS NULL OR g > parent";
+    // Laned set builds (one per participant game) against matchup builds.
+    const LANED: &str = "SELECT (SELECT coalesce(sum(games), 0) FROM champion_builds WHERE role <> ''),
+                                (SELECT coalesce(sum(games), 0) FROM champion_matchup_builds)";
+    let (_d, db) = db();
+    db.write(|c| {
+        seed(c);
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    rebuild(&db, 0).await;
+    assert_eq!(rows(&db, OVER_BUILDS).await, [vec![0]]);
+    assert_eq!(rows(&db, OVER_MATCHUPS).await, [vec![0]]);
+    // KR_4's A (14.17) plays alone, so has a set build and no opponent; the
+    // rest are one-on-one.
+    assert_eq!(rows(&db, LANED).await, [vec![5, 4]]);
+
+    db.write(|c| {
+        c.execute_batch(BOTH_SIDES)?;
+        c.execute_batch(SHARED_AND_MIRROR)?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    rebuild(&db, 0).await;
+    assert_eq!(rows(&db, OVER_BUILDS).await, [vec![0]]);
+    assert_eq!(rows(&db, OVER_MATCHUPS).await, [vec![0]]);
+    // KR_6's B adds one each; KR_9 adds seven set builds and two matchup
+    // builds (E and D).
+    assert_eq!(rows(&db, LANED).await, [vec![13, 7]]);
+}
+
+/// A read against an opponent reads the matchup builds and nothing else:
+/// emptying the set builds leaves it as it was, emptying the matchup builds
+/// empties it.
+#[tokio::test]
+async fn opponent_reads_never_read_the_set_builds() {
+    let (_d, db) = db();
+    db.write(|c| {
+        seed(c);
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    rebuild(&db, 0).await;
+    let vs = Read {
+        champion_id: Some(1),
+        role: Some("MIDDLE".into()),
+        opponent_id: Some(2),
+        limit: 10,
+        ..Read::slice("s", None, "RANKED_SOLO_5x5")
+    };
+    assert_eq!(
+        build_source(&vs),
+        (
+            "champion_matchup_builds",
+            "champion_matchup_build_parts",
+            MATCHUP_BUILDS
+        )
+    );
+    let read = |db: Db, r: Read| async move {
+        let b = builds(&db, r.clone()).await.unwrap();
+        let t = build_totals(&db, r.clone()).await.unwrap();
+        let p = build_parts(&db, r.clone(), b.iter().map(|x| x.core).collect())
+            .await
+            .unwrap();
+        let l = top_lane(&db, r).await.unwrap();
+        (b, t, p, l)
+    };
+    let before = read(db.clone(), vs.clone()).await;
+    assert_eq!(before.0.len(), 1, "{before:?}");
+    assert_eq!(before.1.0, 2);
+    assert_eq!(before.2.len(), 5, "{before:?}");
+    assert_eq!(before.3.as_deref(), Some("MIDDLE"));
+    db.write(|c| {
+        c.execute_batch("DELETE FROM champion_builds; DELETE FROM champion_build_parts;")?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    assert_eq!(read(db.clone(), vs.clone()).await, before);
+    db.write(|c| {
+        c.execute_batch("DELETE FROM champion_matchup_builds; DELETE FROM champion_matchup_build_parts;")?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    assert_eq!(read(db.clone(), vs).await, (vec![], (0, None), vec![], None));
+}
+
+/// The lane builds against an opponent default to is the lane the two met in
+/// most, not the champion's most-played role: champion 1 plays MIDDLE three
+/// times (against 2) and TOP once, against 7. A tie goes to the lane that
+/// sorts first.
+#[tokio::test]
+async fn the_top_lane_against_an_opponent_is_its_own() {
+    let (_d, db) = db();
+    db.write(|c| {
+        seed(c);
+        c.execute_batch(
+            "INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size,
+               archived_at, game_duration, remake, facts_version)
+               VALUES ('KR_10', 'asia', '14.18', 420, 1, x'00', 1, 1, 1500, 0, 3),
+                      ('KR_11', 'asia', '14.18', 420, 1, x'00', 1, 1, 1500, 0, 3);
+             INSERT INTO match_facts (match_id, key_scope, puuid, team_id, position, champion_id, win, facts_version)
+               VALUES ('KR_10', 's', 'A', 100, 'TOP', 1, 1, 3), ('KR_10', 's', 'C', 200, 'TOP', 7, 0, 3),
+                      ('KR_11', 's', 'A', 100, 'BOTTOM', 1, 1, 3), ('KR_11', 's', 'C', 200, 'BOTTOM', 7, 0, 3);
+             INSERT INTO match_builds (match_id, key_scope, puuid, starter, boots, items, skills, skill_order,
+               builds_version)
+               VALUES ('KR_10', 's', 'A', '[]', NULL, '[3071,3053]', '', NULL, 1),
+                      ('KR_11', 's', 'A', '[]', NULL, '[3071,3053]', '', NULL, 1);",
+        )?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    rebuild(&db, 1).await;
+    let read = |opponent: Option<i64>| Read {
+        champion_id: Some(1),
+        opponent_id: opponent,
+        remakes: true,
+        ..Read::slice("s", None, "RANKED_SOLO_5x5")
+    };
+    assert_eq!(
+        top_role(&db, read(None)).await.unwrap().as_deref(),
+        Some("MIDDLE")
+    );
+    assert_eq!(
+        top_lane(&db, read(Some(2))).await.unwrap().as_deref(),
+        Some("MIDDLE")
+    );
+    // One game each in BOTTOM and TOP: BOTTOM sorts first.
+    assert_eq!(
+        top_lane(&db, read(Some(7))).await.unwrap().as_deref(),
+        Some("BOTTOM")
+    );
+    assert_eq!(top_lane(&db, read(Some(9))).await.unwrap(), None);
+    // A mirror is never written, so it is an opponent never met.
+    assert_eq!(top_lane(&db, read(Some(1))).await.unwrap(), None);
+}
+
+/// A rebuild of the newest patch (ADR-094) rewrites only its matchup builds.
+#[tokio::test]
+async fn a_partial_rebuild_leaves_other_patches_matchup_builds_alone() {
+    let (_d, db) = db();
+    db.write(|c| {
+        seed(c);
+        // KR_12 (14.17): A against C in MIDDLE, both with builds.
+        c.execute_batch(
+            "INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size,
+               archived_at, game_duration, remake, facts_version)
+               VALUES ('KR_12', 'asia', '14.17', 420, 1, x'00', 1, 1, 1500, 0, 3);
+             INSERT INTO match_facts (match_id, key_scope, puuid, team_id, position, champion_id, win, facts_version)
+               VALUES ('KR_12', 's', 'A', 100, 'MIDDLE', 1, 1, 3), ('KR_12', 's', 'C', 200, 'MIDDLE', 2, 0, 3);
+             INSERT INTO match_builds (match_id, key_scope, puuid, starter, boots, items, skills, skill_order,
+               builds_version)
+               VALUES ('KR_12', 's', 'A', '[]', 3020, '[3157,6655]', '', NULL, 1),
+                      ('KR_12', 's', 'C', '[]', 3020, '[3157,3089]', '', NULL, 1);",
+        )?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    rebuild(&db, 0).await;
+    let stamps = |db: Db| async move {
+        rows(
+            &db,
+            "SELECT count(*), min(computed_at), max(computed_at) FROM (
+               SELECT patch, computed_at FROM champion_matchup_builds
+               UNION ALL SELECT patch, computed_at FROM champion_matchup_build_parts)
+              GROUP BY patch ORDER BY patch",
+        )
+        .await
+    };
+    let before = stamps(db.clone()).await;
+    assert_eq!(before.len(), 2, "{before:?}");
+    db.write(|c| {
+        c.execute_batch(
+            "UPDATE champion_matchup_builds SET computed_at = 1 WHERE patch = '14.17';
+             UPDATE champion_matchup_build_parts SET computed_at = 1 WHERE patch = '14.17';",
+        )?;
+        let s = Scope {
+            now: 99,
+            ..scope(c, 1)
+        };
+        rebuild_builds(c, &s)?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        stamps(db.clone()).await,
+        [vec![before[0][0], 1, 1], vec![before[1][0], 99, 99]]
+    );
 }
