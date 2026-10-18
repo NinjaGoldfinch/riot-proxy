@@ -55,7 +55,21 @@ Body 2, observed:
 ```
 The 400s (§5.6), observed: `opponentId=157&role=` and `&role=SUPPORT` → `querystring/role must be equal to one of the allowed values`; `opponentId=abc` → `querystring/opponentId must be integer`; `opponentId=0` → `querystring/opponentId must be >= 1`; each `VALIDATION` with the request id, no `X-Cache`. `role=` without an opponent → 200 as before. A matchup with a build on one side only: `34/builds?patch=all&opponentId=126` → Anivia's `[6653,3020]` in TOP, 0/1, `winRateLow` 0; `126/builds?patch=all&opponentId=34` → 200, `role: null`, empty (Jayce finished one item). The live table counts: 3 `champion_matchup_builds` rows, 11 parts.
 
-*Not done here.* The acceptance check on the dev VM (Viego jungle against one opponent, games ≤ that matchup's) needs the build deployed there; renders of the real page are FLT-05's.
+*Not done here.* The acceptance check on the dev VM (Viego jungle against one opponent, games ≤ that matchup's) needs the build deployed there; renders of the real page are FLT-05's. It was done on production instead, below.
+
+**Production check (v2.7.0, 2026-10-19 NZT; the box's clock read 2026-10-18).** Deployed on `ngf-prod-syd1` instead of the dev VM. V0026 and V0027 applied at the first start in one transaction; the schema is at 27. An oc1 recompute from the dashboard filled `champion_matchup_builds` with 656,652 oc1 `RANKED_SOLO_5x5` rows (disk 89 → 90 GB used). The other ladders fill as their crawls end.
+- Viego (234) on oc1, every patch, tier, side, lane and remake group: no group of builds against an opponent has more games than that matchup (`over_matchup` = 0, nor a build group without its matchup row).
+- Viego jungle, ranked games, every patch, the five opponents with the most games:
+
+| opponent | matchup games | builds' games |
+|---|---|---|
+| Lee Sin (64) | 500 | 466 |
+| Graves (104) | 490 | 466 |
+| Talon (91) | 301 | 280 |
+| Jarvan IV (59) | 259 | 244 |
+| Kha'Zix (121) | 258 | 246 |
+
+The builds cover 93–96 % of the matchup games; the rest had fewer than two finished items, so no build.
 
 **The recommendation in one paragraph.** Two new `WITHOUT ROWID` tables are keyed like `champion_matchups` up to the opponent and like `champion_builds` after it: `(…, patch, champion_id, role, opponent_id, remake, core[, part, value], tier, side)`. They are filled in `rebuild_builds`' set-build transaction from a temp table, which joins one-on-one laners (`MATCHUPS`' lane CTE) to their `match_builds` row. There is no backfill. The builds route keeps its body and gains `opponentId`/`opponentName`, plus `winRateLow` on every build. With `opponentId`, only `next[0]`, `boots`, `runes` and `spells` are filled. `opponentId` lives in a builds-only `BuildsQuery`, at the end of the cache key. `STATS_SHAPE` becomes `tier-side-range-opponent`. The showcase keeps the pick in the hash (`#/champion/{id}/builds/vs/{opponentId}[/{LANE}]`). The diff is about 1,100 lines (≈ 890 + ≈ 205), so **the showcase becomes FLT-05** (§10). **Size (§8, Q3) is settled: accepted.** Counted on production (2026-10-18), the two tables come to ~1.3–1.45 GiB, about 3× today's 475 MB of analytics tables. Their rows are close to one per laned player-game, and that is because of the key, not the parts. The owner accepted the disk room over the levers in §12.
 

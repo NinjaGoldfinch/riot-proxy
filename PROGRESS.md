@@ -203,7 +203,7 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 - [x] Release `v2.4.1`: the offload trigger re-arms after an absorbed enqueue (#202), chart tables stay open on redraw (#201), the key sheet shows the server's 403 reason (#203), ADM-01 recorded (#204) (owner request 2026-10-14)
 - [x] Release `v2.5.0`: OBJ-04 index snapshots, `packs reindex` / `restore-index` / `snapshot` and the R2 replica units (#206, #209), PERF-00 spec (#207), PERF-01 analytics reads seek on their keys (#208) (owner request 2026-10-14)
 - [x] Release `v2.6.0`: PERF-02 `champion_stats_totals` (#212), PERF-03 analytics responses cached per aggregate generation and `ANALYTICS_CACHE_ENTRIES` (#213), OBJ-04 safe reclaim and restore-drill docs (#211) (owner request 2026-10-15)
-- [ ] Release `v2.7.0`: FLT-03 `minTier` tier ranges (V0026, #217), FLT-04 builds against a lane opponent (V0027, #218), FLT-05 the *vs* picker (#219), dashboard dropdowns (#215) (owner request 2026-10-19)
+- [x] Release `v2.7.0`: FLT-03 `minTier` tier ranges (V0026, #217), FLT-04 builds against a lane opponent (V0027, #218), FLT-05 the *vs* picker (#219), dashboard dropdowns (#215) (owner request 2026-10-19)
 
 ## OPS — dev environment on Proxmox (owner request 2026-10-05)
 - [x] OPS-01 `:edge` image on every push to `main` (#79, ADR-069)
@@ -307,7 +307,7 @@ Order: THR-02 → FLT-01 → FLT-02 → FLT-03 → FLT-04 → FLT-05, then PAIR.
 - [x] FLT-01 `tier` and `side` keys on matchups and every build table, `side` on `champion_stats` (V0017), the row's own player's stamped tier and side; reads sum over them, output unchanged; rows from before V0017 kept with tier and side `''` until one rebuild over every patch of their ladder (`analytics_unsplit`, queued at boot) (#155, design/04, ADR-129)
 - [x] FLT-02 `tier` and `side` on the matchups, builds and detail routes; `side=green` and the like are 400; the ETag shape marker is `tier-side`; the champion page's tier picker and *Both · Blue · Red* toggle drive the By tier, Builds and Matchups cards, each naming its slice (#157, design/11, ADR-130)
 - [x] FLT-03 `minTier` ranges on the champions, detail, matchups and builds routes (`/patches` ignores it, as it ignores `tier`), with per-floor match and ban totals (V0026); *Master+*, *Diamond+*, *Emerald+* in the picker (#217, design/04, design/11, ADR-170, plan in docs/flt/FLT-03-plan.md)
-- [ ] FLT-04 builds against a lane opponent: `champion_matchup_builds` and `_parts` (V0027), `opponentId` on the builds route, `winRateLow` on every build (design/04, design/11, ADR-171, plan in docs/flt/FLT-04-plan.md)
+- [x] FLT-04 builds against a lane opponent: `champion_matchup_builds` and `_parts` (V0027), `opponentId` on the builds route, `winRateLow` on every build; checked on production in v2.7.0 (#218, design/04, design/11, ADR-171, plan in docs/flt/FLT-04-plan.md)
 - [x] FLT-05 the *vs* picker on the champion page's build tabs, filled in place from the matchups; each matchup's *Lane* cell links to the builds against that opponent there; the pick in the hash only (`#/champion/{id}/builds/vs/{opponentId}[/{LANE}]`); builds under `SMALL_SAMPLE` (10) games dimmed, with or without an opponent (#219, design/11, ADR-172, plan in docs/flt/FLT-05-plan.md)
 
 ## DSK — less disk for the derived data (owner alert 2026-10-13)
