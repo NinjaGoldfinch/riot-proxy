@@ -4,7 +4,7 @@
 //! `pg_restore --data-only` text).
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-mod common;
+use crate::common;
 
 use std::process::Command;
 use std::time::Instant;
@@ -210,7 +210,7 @@ fn the_cli_imports_the_text_form_and_the_custom_dump_when_pg_restore_exists() {
 
 /// Plan P8-02 acceptance: ≥ 1 000 matches/s on the fixture loop. Release
 /// only (zstd and the JSON parse are C and Rust at -O0 in a debug build):
-///     cargo test --release --test migrate_v1 -- --ignored --nocapture
+///     cargo test --release --test it migrate_v1:: -- --ignored --nocapture
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "throughput; run in release"]
 async fn imports_at_least_a_thousand_matches_a_second() {

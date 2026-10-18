@@ -2,7 +2,7 @@
 //! without a key when enabled, 404 when not, and their config documents.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-mod common;
+use crate::common;
 
 use axum::http::StatusCode;
 

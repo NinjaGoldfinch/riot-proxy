@@ -1884,3 +1884,22 @@ Accepted (owner request, task FLT-05; plan approved 2026-10-19). design/11 §Pag
 - **Owner's answers (plan §9).** The picker leads the build-tab row (a second row at 1280 px in the narrow column, a third at 390 px with the longest name); dimming applies with or without an opponent; `winRateLow` is not shown on the page; the link target is the *Lane* cell, since the champion cell already links to the opponent's own page.
 - **Rejected.** The picker in the card header (wrapped to 2–3 rows in FLT-04's plan); a separate link column in the Matchups table (fell off the right edge at 390 px); the pick in page state rather than the hash; moving the lane into the slice label (would change FLT-02/FLT-03's headers without an opponent).
 - **Tests.** `tests/showcase.mjs`: `vs hashes and the vs picker choices (FLT-05)`. `tests/dom/showcase.test.mjs`: eight FLT-05 tests (the picker, the Lane link, the hash surviving each control, an unlisted opponent, a failed call, dimming, bad hashes, filling in place), and the harness's `hold`/`release()`. `tests/dom/showcase.browser.test.mjs`: the `champion vs` view at 1280, 820 and 390 px, and `Back after a matchup link restores the vs pick`. Ten mutations each fail one of them (plan, Implementation record).
+
+## ADR-176 — One integration-test binary, `tests/it.rs` (2026-10-19)
+Accepted (owner request "speed up CI and build time", task CI-04).
+- **Before.** Cargo built each of the 41 `tests/*.rs` files as its own crate: 41 binaries, each linking the library and every dependency, and 31 of them compiling `tests/common` again.
+- **What.** `Cargo.toml` sets `autotests = false` and declares a `[[test]]` target `it` at `tests/it.rs`, whose modules are the other test files, unmoved. Their `mod common;` became `use crate::common;`. Files stay where they were, so every `include_bytes!("fixtures/…")` and `../docs/…` path is unchanged. One file test lists to filter: `cargo test --test it analytics::`.
+- **`telemetry.rs` stays a target of its own.** Two of its tests read exact values from the process-global metrics recorder (`proxy_archived_matches_total 0`, a histogram bucket at 1). In one process with every other test, they read the other tests' counts. They test v1's metric contract, so the file keeps its own process rather than looser assertions. Every other test passed in the shared process unchanged.
+- **Snapshots** are named from the module path, which gained `it::`. The 20 files were renamed with `git mv` to `it__<old name>`, contents unchanged.
+- **The guard.** `every_test_file_is_a_module` (in `tests/it.rs`) fails if a `tests/*.rs` file is neither a `mod` of `tests/it.rs` nor a `path` of a `[[test]]` in `Cargo.toml`; with `autotests = false` such a file would never compile. A new file `tests/zz_unlisted.rs` made it fail with `add to tests/it.rs: ["zz_unlisted"]`.
+- **Measured** locally (4 cores, `CARGO_INCREMENTAL=0`, debuginfo off, dependencies built), `cargo test --all-features --no-run` after touching a file:
+
+  | touched | before | after |
+  |---|---|---|
+  | `src/lib.rs` (what CI builds on every PR) | 59.5 s, 57.3 s | 42.5 s, 42.5 s |
+  | `tests/common/mod.rs` | 17.5 s | 10.7 s |
+  | one test file (`tests/analytics.rs`) | 2.2 s | 10.7 s |
+
+  The test binaries took 2,269 MiB in 40 files before and 136 MiB in 2 after, without debuginfo; CI builds with it (until CI-05), where each binary carried its own copy. Editing a single test file is the one thing that got slower: the whole test crate recompiles.
+- **Tests:** 939 under `cargo test` and nextest (938 before, plus the guard), the same 5 ignored.
+- **Rejected:** moving the files into `tests/it/` (every relative `include_bytes!` path would change, for nothing); fixing the telemetry tests to tolerate other tests' metrics (weaker checks on a byte-identical contract); several groups of binaries (the link is per binary, so fewer is better, and nothing else needs a process of its own).

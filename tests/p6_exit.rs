@@ -8,10 +8,10 @@
 //! `serve` runs in-process against wiremock ([`ServeOptions::riot_base_url`]);
 //! "kill" is aborting its task, so nothing shuts down gracefully. Ignored by
 //! default (about 10 s):
-//!     cargo test --test p6_exit -- --ignored --nocapture
+//!     cargo test --test it p6_exit:: -- --ignored --nocapture
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-mod common;
+use crate::common;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
