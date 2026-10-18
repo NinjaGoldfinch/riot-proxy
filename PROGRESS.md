@@ -368,7 +368,7 @@ ninjagoldfinch.lol's `/champions` data took 3.9 s, all of it the proxy's analyti
 
 - [ ] CI-01 the source `Dockerfile` builds on `main` and on PRs that can change it
 - [ ] CI-02 tests in parallel with nextest; coverage in its own job
-- [x] CI-03 the DOM and browser suites in their own `ui` job (#PR, ADR-175)
+- [x] CI-03 the DOM and browser suites in their own `ui` job (#223, ADR-175)
 - [ ] CI-04 one integration-test binary
 - [ ] CI-05 less debug info in dev and test builds
 
