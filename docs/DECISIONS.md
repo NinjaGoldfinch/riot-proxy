@@ -1902,3 +1902,11 @@ Accepted (owner request "speed up CI and build time", task CI-02). Amends ADR-00
 - **`concurrent_misses_read_once`** wanted all ten concurrent requests to say `MISS`. Under nextest it failed in the first full run, and it had flaked under llvm-cov before (FLT-05's PR). The reads were right (5, one computation); one request reached the cache after the computation stored, and a `HIT` is the right answer for it (ADR-169 promises one read, not ten `MISS`es). It now asserts the 5 reads, a 200 and the same body for each, `MISS` or `HIT` for each, and at least one `MISS`. It passed 50 runs under `--stress-count`.
 - **Locally:** `just nextest` runs the suite as CI does; `just test` is still `cargo test`.
 - **Rejected:** coverage on `main` only (a PR couldn't see its own number); `cargo llvm-cov` with `--no-report` per binary plus a merge (more steps for what nextest does); nextest retries (they would have hidden the flake above).
+
+## ADR-175 — The DOM and browser suites run in their own `ui` job (2026-10-19)
+Accepted (owner request "speed up CI and build time", task CI-03). Amends ADR-074 and ADR-084, which put them at the end of `test`.
+- **Measured before** (run 39149666697): in `test`, after the Rust suite, `npx playwright-core install --with-deps` took 18 s and `npm test` in `tests/dom` 56 s; with Node setup and the screenshot upload, about 80 s of the job's 5:34.
+- **What.** A new `ui` job runs them: checkout, Node 22 with the npm cache, `npm ci`, the Chromium headless shell with its system packages, `npm test`, and the screenshot artefact, unchanged. The suites read `src/ui/*.html` straight from the checkout and start no server, so the job needs no Rust toolchain or cache. It runs beside `test` instead of after it.
+- **The leaked-key grep stays in `test`.**
+- **Required checks.** `ui` is a new job id. Until the owner adds it to branch protection, a failing DOM or browser suite no longer blocks a merge as it did inside `test`. The owner should add it (Settings → Branches → `main` → required status checks), keeping `test`.
+- **Rejected.** Moving them into `acceptance`, which already sets up Node: that job is about 4 minutes, so it would become the slowest job.
