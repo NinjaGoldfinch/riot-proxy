@@ -9,8 +9,11 @@ import { JSDOM } from 'jsdom';
 
 import { html, LADDER, PUUID, BOOTS, MATCH, RUNES, api } from './fake-api.mjs';
 
-async function page({ platform = 'oc1', hash = '', ...opts } = {}) {
+async function page({ platform = 'oc1', hash = '', hold = null, ...opts } = {}) {
   const calls = [];
+  // `hold`: calls whose URL matches wait until `release()`, to see the page before they answer.
+  let release;
+  const held = new Promise((r) => { release = r; });
   const modes = []; // [url, init.cache] per fetch
   const errors = [];
   const scrolled = []; // ids of the elements scrolled into view
@@ -21,6 +24,7 @@ async function page({ platform = 'oc1', hash = '', ...opts } = {}) {
       w.Element.prototype.scrollIntoView = function scrollIntoView() { scrolled.push(this.id); };
       w.fetch = async (url, init) => {
         modes.push([String(url), init?.cache]);
+        if (hold?.test(String(url))) await held;
         const [status, body] = api(calls, url, opts);
         const text = JSON.stringify(body);
         return { status, headers: new Map([['x-cache', 'HIT']]), text: async () => text, json: async () => JSON.parse(text) };
@@ -38,7 +42,7 @@ async function page({ platform = 'oc1', hash = '', ...opts } = {}) {
   const rows = () => [...w.document.querySelectorAll('#ladder tbody tr')];
   const pick = async (sel, value) => { const el = $(sel); el.value = value; el.dispatchEvent(new w.Event('change', { bubbles: true })); await settle(); };
   const search = async (value) => { const form = $('#search'); form.elements.id.value = value; form.dispatchEvent(new w.Event('submit', { cancelable: true })); await settle(); };
-  return { w, $, calls, modes, errors, scrolled, settle, click, pick, search, text, rows };
+  return { w, $, calls, modes, errors, scrolled, settle, click, pick, search, text, rows, release };
 }
 
 test('without a platform the home view asks for one on its own picker and calls nothing platform-scoped', async () => {
@@ -844,5 +848,131 @@ test('the tier picker offers ranges above the tiers, and Diamond+ sends minTier=
   assert.ok(p.calls.includes('/v1/lol/analytics/champions/1/builds?queue=RANKED_SOLO_5x5&patch=all&platform=oc1&tier=MASTER&side=red'));
   assert.ok(p.calls.every((c) => !c.includes('minTier')));
   assert.deepEqual(slices(), Array(3).fill('Master · Red side'));
+  assert.deepEqual(p.errors, []);
+});
+
+// ---------- FLT-05: builds against a lane opponent
+
+const vsOptions = (p) => [...p.w.document.querySelectorAll('#cBuild [data-vs] option')].map((o) => o.textContent);
+
+test('the vs picker fills from the matchups, most games first, and sends opponentId (FLT-05)', async () => {
+  const p = await page({ hash: '#/champion/1' });
+  // Olaf's MIDDLE and TOP games are summed; no count for the champion itself, which is never a matchup.
+  assert.deepEqual(vsOptions(p), ['vs any opponent', 'vs Galio · 9', 'vs Olaf · 7']);
+  assert.equal(p.$('#cBuild [data-vs]').value, '');
+  p.calls.length = 0;
+  await p.pick('#cBuild [data-vs]', '3');
+  assert.equal(p.w.location.hash, '#/champion/1/builds/vs/3');
+  assert.ok(p.calls.includes('/v1/lol/analytics/champions/1/builds?queue=RANKED_SOLO_5x5&patch=all&platform=oc1&opponentId=3'));
+  assert.equal(p.text('#cBuild header .slice'), 'vs Galio · All tiers · both sides');
+  assert.ok(p.text('#cBuild header').includes('Middle · 77.8% of 9 games with a build'), 'the lane the route picked');
+  assert.equal(p.$('#cBuild [data-vs]').value, '3');
+  assert.deepEqual(p.scrolled, [], 'picking does not scroll the page');
+  // Back to any opponent: the plain call again.
+  p.calls.length = 0;
+  await p.pick('#cBuild [data-vs]', '');
+  assert.equal(p.w.location.hash, '#/champion/1/builds');
+  assert.ok(p.calls.includes('/v1/lol/analytics/champions/1/builds?queue=RANKED_SOLO_5x5&patch=all&platform=oc1'));
+  assert.equal(p.text('#cBuild header .slice'), 'All tiers · both sides');
+  assert.deepEqual(p.scrolled, []);
+  assert.deepEqual(p.errors, []);
+});
+
+test("a matchup's lane links to the builds against that opponent there, and scrolls to them (FLT-05)", async () => {
+  const p = await page({ hash: '#/champion/1' });
+  const links = [...p.w.document.querySelectorAll('#cMatchups tbody td:nth-child(2) a')];
+  assert.deepEqual(links.map((a) => a.getAttribute('href')), ['#/champion/1/builds/vs/3/MIDDLE', '#/champion/1/builds/vs/2/MIDDLE', '#/champion/1/builds/vs/2/TOP']);
+  assert.equal(links[2].title, "Annie's builds against Olaf in Top");
+  p.calls.length = 0;
+  p.w.location.hash = links[2].getAttribute('href');
+  await p.settle();
+  assert.ok(p.calls.includes('/v1/lol/analytics/champions/1/builds?queue=RANKED_SOLO_5x5&patch=all&platform=oc1&opponentId=2&role=TOP'));
+  assert.equal(p.text('#cBuild header .slice'), 'vs Olaf · All tiers · both sides');
+  assert.ok(p.text('#cBuild header').includes('Top · 100.0% of 2 games with a build'));
+  assert.equal(p.$('#cBuild [data-vs]').value, '2');
+  assert.deepEqual(p.scrolled, ['cBuild'], 'a link from the Matchups card brings the Builds card into view');
+  assert.deepEqual(p.errors, []);
+});
+
+test('the pick lives in the hash, so tier, side, patch, region and queue keep it; another champion drops it (FLT-05)', async () => {
+  const p = await page({ hash: '#/champion/1/builds/vs/3' });
+  for (const [act, want] of [
+    [() => p.pick('[data-ctier]', 'DIAMOND+'), 'minTier=DIAMOND&opponentId=3'],
+    [() => p.click('[data-cside="red"]'), 'minTier=DIAMOND&side=red&opponentId=3'],
+    [() => p.pick('#cHead [data-patch]', '16.18'), 'opponentId=3'],
+    [() => p.pick('[data-region]', ''), 'opponentId=3'],
+    [() => p.click('[data-cqueue="RANKED_FLEX_SR"]'), 'opponentId=3'],
+  ]) {
+    p.calls.length = 0;
+    await act();
+    assert.ok(p.calls.some((c) => c.includes('/builds?') && c.endsWith(want)), `${want}: ${p.calls.join(' ')}`);
+    assert.equal(p.w.location.hash, '#/champion/1/builds/vs/3');
+    assert.ok(p.text('#cBuild header .slice').startsWith('vs Galio'));
+  }
+  p.calls.length = 0;
+  p.w.location.hash = '#/champion/2';
+  await p.settle();
+  assert.ok(p.calls.some((c) => c.startsWith('/v1/lol/analytics/champions/2/builds?') && !c.includes('opponentId')));
+  assert.ok(!p.text('#cBuild header .slice').startsWith('vs'));
+  assert.deepEqual(p.errors, []);
+});
+
+test('an opponent outside the list stays picked, without a count, and the card says there are none (FLT-05)', async () => {
+  const p = await page({ hash: '#/champion/1/builds/vs/145' });
+  assert.deepEqual(vsOptions(p), ['vs any opponent', 'vs Galio · 9', 'vs Olaf · 7', "vs Kai'Sa"]);
+  assert.equal(p.$('#cBuild [data-vs]').value, '145');
+  assert.equal(p.text('#cBuild .empty'), "No builds against Kai'Sa yet.");
+  assert.equal(p.w.document.querySelectorAll('#cBuild [data-build]').length, 0);
+  assert.ok(!p.text('#cBuild').includes('Trinity Force'), "never the detail's lists: they aren't against Kai'Sa");
+  await p.pick('[data-ctier]', 'MASTER');
+  assert.equal(p.text('#cBuild .empty'), "No builds against Kai'Sa in this slice yet.");
+  await p.pick('#cHead [data-patch]', '16.19');
+  assert.equal(p.text('#cBuild .empty'), "No builds against Kai'Sa in this slice on patch 16.19.");
+  assert.deepEqual(p.errors, []);
+});
+
+test('a failed builds call against an opponent shows the error and keeps the picker (FLT-05)', async () => {
+  const p = await page({ hash: '#/champion/1/builds/vs/3', buildsFail: true });
+  assert.ok(p.text('#cBuild .err').includes('503'));
+  assert.equal(p.$('#cBuild [data-vs]').value, '3');
+  assert.ok(!p.text('#cBuild').includes('Trinity Force'));
+  assert.ok(p.text('#cTiers').includes('55.0% win over 60 games'), 'the rest of the page still renders');
+  assert.deepEqual(p.errors, []);
+});
+
+test('a build under 10 games is dimmed and says so, with or without an opponent (FLT-05)', async () => {
+  const p = await page({ hash: '#/champion/1/builds/vs/3' });
+  const tabs = () => [...p.w.document.querySelectorAll('#cBuild [data-build]')];
+  assert.deepEqual(tabs().map((t) => t.classList.contains('small')), [true, true], 'Galio: 7 and 2 games');
+  assert.equal(tabs()[0].title, 'Trinity Force › Blade of The Ruined King · fewer than 10 games');
+  await p.pick('#cBuild [data-vs]', '');
+  assert.deepEqual(tabs().map((t) => t.classList.contains('small')), [false, false], 'every opponent: 20 and 10 games');
+  assert.equal(tabs()[1].title, 'Blade of The Ruined King › Trinity Force', 'exactly 10 is not small');
+  assert.deepEqual(p.errors, []);
+});
+
+test('a bad vs hash is the plain builds view; a lane that is no lane is left to the route (FLT-05)', async () => {
+  for (const [hash, want] of [
+    ['#/champion/1/builds/vs/abc', '/v1/lol/analytics/champions/1/builds?queue=RANKED_SOLO_5x5&patch=all&platform=oc1'],
+    ['#/champion/1/builds/vs/0', '/v1/lol/analytics/champions/1/builds?queue=RANKED_SOLO_5x5&patch=all&platform=oc1'],
+    ['#/champion/1/builds/vs/2/SUPPORT', '/v1/lol/analytics/champions/1/builds?queue=RANKED_SOLO_5x5&patch=all&platform=oc1&opponentId=2'],
+  ]) {
+    const p = await page({ hash });
+    assert.ok(p.calls.includes(want), `${hash}: ${p.calls.join(' ')}`);
+    assert.deepEqual(p.errors, []);
+  }
+});
+
+test('the matchups fill the picker in place, so a focused picker keeps its focus and pick (FLT-05)', async () => {
+  const p = await page({ hash: '#/champion/1/builds/vs/3', hold: /\/matchups\?/ });
+  // Before the matchups arrive: any opponent and the pick, without a count.
+  assert.deepEqual(vsOptions(p), ['vs any opponent', 'vs Galio']);
+  const picker = p.$('#cBuild [data-vs]');
+  picker.focus();
+  p.release();
+  await p.settle();
+  assert.deepEqual(vsOptions(p), ['vs any opponent', 'vs Galio · 9', 'vs Olaf · 7']);
+  assert.equal(p.w.document.activeElement, picker, 'the same element, still focused');
+  assert.equal(picker.value, '3');
   assert.deepEqual(p.errors, []);
 });

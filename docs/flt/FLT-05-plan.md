@@ -250,4 +250,51 @@ Well under the 600-line rule: one PR.
 | `prototype-*.diff` | the five files' diffs against `origin/main` |
 | `mut.py` | the mutation checks |
 
-**Implementation record.** To be added after approval: your answers, deviations, the verification output, and the renders of the real page.
+---
+
+## Implementation record (2026-10-19)
+
+**Owner's answers to §9.**
+1. The picker leads the build-tab row (recommended).
+2. Builds under 10 games are dimmed with or without an opponent (recommended).
+3. `winRateLow` is not shown on the page (recommended).
+4. The link target is the Matchups *Lane* cell (recommended).
+
+**Preconditions.** #218 (FLT-04) merged on 2026-10-18 as c1d13e0. `origin/main` was merged into this branch with a normal merge commit. #218 touched none of the five files this task changes, so they were byte-identical to e4a98df and every line number above still holds. The latest ADR on `main` is ADR-171 and no open PR claimed another, so this task's is ADR-172.
+
+**Deviations.** None. The five prototype diffs (`/home/dev/flt05/prototype-*.diff`) applied cleanly with `git apply -p0`, and the result is byte-identical to `/home/dev/flt05/check/`. The docs follow §6: design/11's page map (the hash, `FLT-05` and `[&opponentId[&role]]` on the BLD-03 row) and its notes for a frontend (#218's closing sentence replaced), and ADR-172.
+
+**Verification** (in the worktree, after the merge):
+```
+cargo fmt --check                               ok
+cargo clippy --all-targets -- -D warnings       ok
+cargo test --no-fail-fast                       931 passed, 0 failed (tests/ui.rs runs tests/showcase.mjs: ok)
+CI=1 just ui-test (jsdom and Chromium)          176 tests, 176 pass, 0 fail, 0 skipped
+  showcase.test.mjs                             63 (8 new, FLT-05)
+  showcase.browser.test.mjs                     champion vs at 1280, 820, 390 px; Back after a matchup link restores the vs pick
+```
+
+**Mutations** (`mut.py`'s nine against the real `src/ui/showcase.html`, plus the tenth from §5, `loadMatchups` re-rendering the card; each applied alone, then reverted; the page was byte-identical afterwards):
+
+| # | mutation | caught by |
+|---|---|---|
+| 1 | the picker doesn't mark its hash scrolled | the picker test |
+| 2 | against an opponent, fall back to the detail's lists | the unlisted-opponent and failed-call tests |
+| 3 | the link without its lane | the link test |
+| 4 | `opponentId` not sent | the picker and link tests |
+| 5 | no dimming | the dimming test |
+| 6 | `<=` instead of `<` | the dimming test |
+| 7 | an unlisted pick dropped from the options | the helper test and the unlisted-opponent test |
+| 8 | lanes not summed | the helper test and the picker test |
+| 9 | `loadMatchups` re-renders the card | the focus test |
+| 10 | a failed call without the picker | the failed-call test |
+
+**Renders of the real page** (`mock.mjs` run from the real `tests/dom`, so on the real `showcase.html` and fake API). Every measurement in `mock.jsonl` and `long.jsonl` is byte-identical to the prototype's, so §4's table and calls stand as written:
+
+![vs Galio 1280](FLT-05/real/vs-galio-builds-1280.png) ![vs Galio 390](FLT-05/real/vs-galio-builds-390.png)
+
+![unseen 390](FLT-05/real/unseen-builds-390.png) ![failed 390](FLT-05/real/failed-builds-390.png) ![long 390](FLT-05/real/long-builds-390.png)
+
+![matchups 390](FLT-05/real/matchups-390.png)
+
+**Still to do after deploy** (§8 step 5): on the dev VM, Viego's page, pick an opponent and check the builds' games add up to at most that matchup's games.

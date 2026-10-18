@@ -25,6 +25,8 @@ const VIEWS = [
   ['player', '#/player/Faker/KR1', '#pMatches .match img.icon'],
   ['match', `#/match/asia/${MATCH.metadata.matchId}`, '#goldChart svg'],
   ['champion', '#/champion/1', '#cMatchups tbody tr'],
+  // FLT-05: the vs picker leads the build tabs; Galio's builds are both dimmed.
+  ['champion vs', '#/champion/1/builds/vs/3', '#cMatchups tbody a[href*="/vs/"]'],
 ];
 const OPTS = { live: true };
 // Each icon class and the size it must render at, in CSS pixels.
@@ -198,6 +200,30 @@ for (const [device, width] of WIDTHS) {
     }
   });
 }
+
+// FLT-05: a matchup's lane link, then Back, restores the earlier pick: the hash is its only store.
+test('Back after a matchup link restores the vs pick', { timeout: 60000 }, async (t) => {
+  if (skip) return t.skip(skip);
+  const { page, errors } = await open(390, '#/champion/1', '#cMatchups tbody a[href*="/vs/"]');
+  try {
+    const slice = () => page.locator('#cBuild header .slice').textContent();
+    await page.selectOption('#cBuild [data-vs]', '3');
+    await page.waitForFunction(() => document.querySelector('#cBuild header .slice')?.textContent.startsWith('vs Galio'));
+    assert.equal(await page.evaluate(() => Math.round(scrollY)), 0, 'picking does not scroll');
+    await page.click('#cMatchups a[href$="/vs/2/TOP"]');
+    await page.waitForFunction(() => document.querySelector('#cBuild header .slice + .muted')?.textContent.startsWith('Top'));
+    assert.equal(await slice(), 'vs Olaf · All tiers · both sides');
+    await page.goBack();
+    await page.waitForFunction(() => document.querySelector('#cBuild header .slice')?.textContent.startsWith('vs Galio'));
+    assert.equal(await page.locator('#cBuild [data-vs]').inputValue(), '3');
+    await page.goBack();
+    await page.waitForFunction(() => document.querySelector('#cBuild header .slice')?.textContent.startsWith('All'));
+    assert.equal(new URL(page.url()).hash, '#/champion/1');
+    assert.deepEqual(errors, []);
+  } finally {
+    await page.close();
+  }
+});
 
 test('the gold graph tooltip follows the pointer and hides on leave', { timeout: 60000 }, async (t) => {
   if (skip) return t.skip(skip);
