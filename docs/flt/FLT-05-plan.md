@@ -297,4 +297,4 @@ CI=1 just ui-test (jsdom and Chromium)          176 tests, 176 pass, 0 fail, 0 s
 
 ![matchups 390](FLT-05/real/matchups-390.png)
 
-**Still to do after deploy** (§8 step 5): on the dev VM, Viego's page, pick an opponent and check the builds' games add up to at most that matchup's games.
+**After deploy** (§8 step 5). Done on production in v2.7.0 rather than on the dev VM: the data side is FLT-04's production check (`docs/flt/FLT-04-plan.md`, after its Implementation record): Viego's builds against an opponent never exceed that matchup's games on oc1. The owner checks the page itself on the site.
