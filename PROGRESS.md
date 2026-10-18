@@ -203,6 +203,7 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 - [x] Release `v2.4.1`: the offload trigger re-arms after an absorbed enqueue (#202), chart tables stay open on redraw (#201), the key sheet shows the server's 403 reason (#203), ADM-01 recorded (#204) (owner request 2026-10-14)
 - [x] Release `v2.5.0`: OBJ-04 index snapshots, `packs reindex` / `restore-index` / `snapshot` and the R2 replica units (#206, #209), PERF-00 spec (#207), PERF-01 analytics reads seek on their keys (#208) (owner request 2026-10-14)
 - [x] Release `v2.6.0`: PERF-02 `champion_stats_totals` (#212), PERF-03 analytics responses cached per aggregate generation and `ANALYTICS_CACHE_ENTRIES` (#213), OBJ-04 safe reclaim and restore-drill docs (#211) (owner request 2026-10-15)
+- [ ] Release `v2.7.0`: FLT-03 `minTier` tier ranges (V0026, #217), FLT-04 builds against a lane opponent (V0027, #218), FLT-05 the *vs* picker (#219), dashboard dropdowns (#215) (owner request 2026-10-19)
 
 ## OPS — dev environment on Proxmox (owner request 2026-10-05)
 - [x] OPS-01 `:edge` image on every push to `main` (#79, ADR-069)
@@ -366,7 +367,7 @@ ninjagoldfinch.lol's `/champions` data took 3.9 s, all of it the proxy's analyti
 
 ## CI — a faster pull request (owner request 2026-10-19)
 
-- [ ] CI-01 the source `Dockerfile` builds on `main` and on PRs that can change it
+- [x] CI-01 the source `Dockerfile` builds on `main` and on PRs that can change it (#221, ADR-173)
 - [ ] CI-02 tests in parallel with nextest; coverage in its own job
 - [ ] CI-03 the DOM and browser suites in their own `ui` job
 - [x] CI-04 one integration-test binary (#224, ADR-176)
