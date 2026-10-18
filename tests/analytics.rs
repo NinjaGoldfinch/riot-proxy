@@ -252,6 +252,8 @@ async fn the_recompute_feeds_v1s_routes_and_remakes_are_opt_in() {
             "champion_build_parts",
             "champion_builds",
             "champion_items",
+            "champion_matchup_build_parts",
+            "champion_matchup_builds",
             "champion_matchups",
             "champion_runes",
             "champion_spells",
@@ -1070,7 +1072,7 @@ async fn the_builds_route_reads_set_builds_in_the_most_played_role() {
     assert_eq!(
         e.get("/v1/lol/analytics/champions/134/builds").await.json(),
         json!({"championId": 134, "platform": null, "queue": "RANKED_SOLO_5x5", "tier": null, "minTier": null, "side": null,
-               "patch": null, "role": null, "computedAt": null, "totalGames": 0, "builds": []})
+               "patch": null, "role": null, "opponentId": null, "computedAt": null, "totalGames": 0, "builds": []})
     );
     e.seed().await;
     e.seed_builds().await;
@@ -2045,4 +2047,240 @@ async fn a_range_and_a_tier_are_separate_entries() {
     assert_eq!(distinct.len(), 4, "{tags:?}");
     assert_eq!(e.get(&uris[0]).await.json()["minTier"], "DIAMOND");
     assert_eq!(e.get(&uris[1]).await.json()["tier"], "DIAMOND");
+}
+
+impl Env {
+    /// Anivia (34, blue TOP, a loss) gets a two-item build, so her lane
+    /// against Jayce (126, one finished item) has a build on one side only.
+    async fn seed_anivia_build(&self) {
+        let puuid = serde_json::from_slice::<Value>(RANKED).unwrap()["info"]["participants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["championId"] == 34)
+            .unwrap()["puuid"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let scope = self.scope.clone();
+        self.state
+            .db
+            .write(move |c| {
+                c.execute(
+                    "INSERT INTO match_builds (match_id, key_scope, puuid, starter, boots, items, skills,
+                       skill_order, builds_version)
+                     VALUES ('KR_8393343196', ?1, ?2, '[1056]', 3020, '[6653,3020]', '', 'QWE', 1)",
+                    rusqlite::params![scope, puuid],
+                )?;
+                Ok::<_, DbError>(())
+            })
+            .await
+            .unwrap();
+    }
+}
+
+const SYNDRA: &str = "/v1/lol/analytics/champions/134/builds?patch=all";
+
+/// FLT-04 (ADR-171): Syndra's (134, red MIDDLE, GRANDMASTER, a win) builds
+/// against Yasuo (157, blue MIDDLE, MASTER): the 3rd item, boots, runes and
+/// spells of the games in that lane, with `winRateLow` on every build.
+#[tokio::test]
+async fn builds_against_an_opponent() {
+    let e = env().await;
+    e.seed_three_tiers().await;
+    e.seed_anivia_build().await;
+    e.aggregate().await;
+
+    let r = e.get(&format!("{SYNDRA}&opponentId=157&role=MIDDLE")).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(
+        redact(r.json()),
+        json!({"championId": 134, "platform": null, "queue": "RANKED_SOLO_5x5", "tier": null, "minTier": null,
+               "side": null, "patch": "all", "role": "MIDDLE", "opponentId": 157, "computedAt": "<iso>",
+               "totalGames": 1, "builds": [{"core": [6655, 3157], "games": 1, "wins": 1, "winRate": 1,
+               "winRateLow": 0.2065, "pickRate": 1, "next": [[{"itemId": 3089, "games": 1, "winRate": 1}], [], []],
+               "starter": [], "boots": [{"itemId": 3020, "games": 1, "winRate": 1}], "skillOrder": [],
+               "runes": [{"keystoneId": 8229, "subStyleId": 8000, "games": 1, "winRate": 1}],
+               "spells": [{"spellA": 4, "spellB": 12, "games": 1, "winRate": 1}]}]})
+    );
+    let builds = |v: &Value| (v["totalGames"].clone(), v["builds"].clone());
+    let vs = builds(&r.json());
+
+    // No role: the lane they met in, named.
+    let lane = e.get(&format!("{SYNDRA}&opponentId=157")).await.json();
+    assert_eq!(
+        (lane["role"].clone(), builds(&lane)),
+        (json!("MIDDLE"), vs.clone())
+    );
+
+    // Tier, range and side slice it as every other route.
+    let empty = (json!(0), json!([]));
+    for (q, want) in [
+        ("&tier=GRANDMASTER", &vs),
+        ("&tier=MASTER", &empty),
+        ("&minTier=DIAMOND", &vs),
+        ("&minTier=CHALLENGER", &empty),
+        ("&side=red", &vs),
+        ("&side=blue", &empty),
+        // The remake's players have no position, so no lane.
+        ("&remakes=include", &vs),
+    ] {
+        let got = e
+            .get(&format!("{SYNDRA}&opponentId=157&role=MIDDLE{q}"))
+            .await
+            .json();
+        assert_eq!(&builds(&got), want, "{q}");
+    }
+    let one_patch = e
+        .get("/v1/lol/analytics/champions/134/builds?patch=16.19&opponentId=157&role=MIDDLE")
+        .await
+        .json();
+    assert_eq!(builds(&one_patch), vs);
+
+    // Yasuo's side of the lane: his own build, a loss.
+    let yasuo = e
+        .get("/v1/lol/analytics/champions/157/builds?patch=all&opponentId=134")
+        .await
+        .json();
+    assert_eq!(yasuo["role"], "MIDDLE");
+    assert_eq!(yasuo["builds"][0]["core"], json!([6672, 3031]));
+    assert_eq!(yasuo["builds"][0]["winRateLow"], 0);
+    assert_eq!(yasuo["builds"][0]["next"][0][0]["itemId"], 3036);
+
+    // A matchup with a build on one side only: Anivia's against Jayce, none
+    // the other way (Jayce finished one item).
+    let anivia = e
+        .get("/v1/lol/analytics/champions/34/builds?patch=all&opponentId=126")
+        .await
+        .json();
+    assert_eq!(
+        (anivia["role"].clone(), anivia["totalGames"].clone()),
+        (json!("TOP"), json!(1))
+    );
+    assert_eq!(anivia["builds"][0]["core"], json!([6653, 3020]));
+    let jayce = e
+        .get("/v1/lol/analytics/champions/126/builds?patch=all&opponentId=34")
+        .await
+        .json();
+    assert_eq!(
+        (jayce["role"].clone(), builds(&jayce)),
+        (Value::Null, empty.clone())
+    );
+    let jayce_top = e
+        .get("/v1/lol/analytics/champions/126/builds?patch=all&opponentId=34&role=TOP")
+        .await
+        .json();
+    assert_eq!(
+        (jayce_top["role"].clone(), builds(&jayce_top)),
+        (json!("TOP"), empty)
+    );
+
+    // Never more games than the matchups route has for that opponent.
+    for (champion, opponent) in [(134, 157), (157, 134), (34, 126), (126, 34)] {
+        let matchups = e
+            .get(&format!(
+                "/v1/lol/analytics/champions/{champion}/matchups?patch=all&minGames=0"
+            ))
+            .await
+            .json();
+        let met: i64 = matchups["matchups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|m| m["opponentId"] == opponent)
+            .map(|m| m["games"].as_i64().unwrap())
+            .sum();
+        let got = e
+            .get(&format!(
+                "/v1/lol/analytics/champions/{champion}/builds?patch=all&opponentId={opponent}"
+            ))
+            .await
+            .json();
+        assert!(
+            got["totalGames"].as_i64().unwrap() <= met,
+            "{champion} v {opponent}"
+        );
+    }
+
+    // Without an opponent: today's body, plus opponentId null and winRateLow.
+    let any = e.get(&format!("{SYNDRA}&role=MIDDLE")).await.json();
+    assert_eq!(any["opponentId"], Value::Null);
+    assert_eq!(any["builds"][0]["winRateLow"], 0.2065);
+    assert_eq!(any["builds"][0]["next"][1][0]["itemId"], 4645);
+    assert_eq!(any["builds"][0]["skillOrder"][0]["order"], "QEW");
+}
+
+/// `opponentId` is a champion id, and with it `role` is a lane: v1's
+/// matchups message, checked first, in v1's property order.
+#[tokio::test]
+async fn opponent_id_is_validated() {
+    let e = env().await;
+    for (q, message) in [
+        (
+            "opponentId=157&role=",
+            "querystring/role must be equal to one of the allowed values",
+        ),
+        (
+            "opponentId=157&role=SUPPORT",
+            "querystring/role must be equal to one of the allowed values",
+        ),
+        ("opponentId=abc", "querystring/opponentId must be integer"),
+        ("opponentId=0", "querystring/opponentId must be >= 1"),
+        (
+            "opponentId=abc&role=",
+            "querystring/role must be equal to one of the allowed values",
+        ),
+    ] {
+        let r = e.get(&format!("{SYNDRA}&{q}")).await;
+        assert_eq!(error(&r), (StatusCode::BAD_REQUEST, message.into()), "{q}");
+        assert_eq!(r.json()["error"]["code"], "VALIDATION", "{q}");
+        assert!(r.headers.get("x-cache").is_none(), "{q}");
+    }
+    // Without an opponent, an empty role is the roleless rows, as before.
+    assert_eq!(e.get(&format!("{SYNDRA}&role=")).await.status, StatusCode::OK);
+}
+
+/// An opponent never met, and the champion itself (a mirror is never
+/// written), are the documented empty case.
+#[tokio::test]
+async fn an_unseen_opponent_or_a_mirror_is_an_empty_list() {
+    let e = env().await;
+    e.seed_three_tiers().await;
+    for opponent in [1, 134] {
+        let got = e.get(&format!("{SYNDRA}&opponentId={opponent}")).await;
+        assert_eq!(got.status, StatusCode::OK);
+        assert_eq!(
+            got.json(),
+            json!({"championId": 134, "platform": null, "queue": "RANKED_SOLO_5x5", "tier": null,
+                   "minTier": null, "side": null, "patch": "all", "role": null, "opponentId": opponent,
+                   "computedAt": null, "totalGames": 0, "builds": []}),
+            "{opponent}"
+        );
+    }
+}
+
+/// Each opponent is its own cache entry and validator.
+#[tokio::test]
+async fn two_opponents_are_two_entries() {
+    let e = env().await;
+    e.seed_three_tiers().await;
+    let uris = [
+        format!("{SYNDRA}&opponentId=157"),
+        format!("{SYNDRA}&opponentId=1"),
+        SYNDRA.to_string(),
+    ];
+    let mut tags = vec![];
+    for uri in &uris {
+        assert_eq!(x_cache(&e.get(uri).await), Some("MISS"), "{uri}");
+    }
+    for uri in &uris {
+        let hit = e.get(uri).await;
+        assert_eq!(x_cache(&hit), Some("HIT"), "{uri}");
+        tags.push(tag(&hit));
+    }
+    let distinct: std::collections::BTreeSet<_> = tags.iter().collect();
+    assert_eq!(distinct.len(), 3, "{tags:?}");
+    // Another opponent's validator is no match.
+    let other = e.call("GET", SYNDRA, &e.reader, Some(&tags[0]), None).await;
+    assert_eq!(other.status, StatusCode::OK);
 }

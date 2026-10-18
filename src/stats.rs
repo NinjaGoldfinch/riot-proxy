@@ -712,6 +712,7 @@ impl Stats {
                     min_games: 0,
                     limit: 5_000,
                     remakes: false,
+                    opponent_id: None,
                 };
                 // Summed over tiers: the five most played on the ladder.
                 let mut by_champion: BTreeMap<i64, (i64, i64)> = BTreeMap::new();
