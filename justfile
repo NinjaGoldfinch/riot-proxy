@@ -16,6 +16,10 @@ dev *ARGS:
 test *ARGS:
     cargo test {{ARGS}}
 
+# Every test, the binaries in parallel, as CI's `test` job runs them (needs cargo-nextest)
+nextest *ARGS:
+    cargo nextest run --profile ci --all-features {{ARGS}}
+
 # The dev explorer page in jsdom against a fake API (needs node)
 ui-test:
     cd tests/dom && npm ci --no-audit --no-fund && npx playwright-core install chromium-headless-shell && npm test

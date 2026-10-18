@@ -364,6 +364,14 @@ ninjagoldfinch.lol's `/champions` data took 3.9 s, all of it the proxy's analyti
 - [x] PERF-02 `champion_stats_totals`, summed over tier, for tierless reads (#212, ADR-168)
 - [x] PERF-03 analytics responses cached per aggregate generation, warmed after each rebuild (#213, ADR-169)
 
+## CI — a faster pull request (owner request 2026-10-19)
+
+- [ ] CI-01 the source `Dockerfile` builds on `main` and on PRs that can change it
+- [x] CI-02 tests in parallel with nextest; coverage in its own job (#PR, ADR-174)
+- [ ] CI-03 the DOM and browser suites in their own `ui` job
+- [ ] CI-04 one integration-test binary
+- [ ] CI-05 less debug info in dev and test builds
+
 ## PAIR — team pairings (owner request 2026-10-10, outline)
 - [ ] PAIR-01 `champion_pairs`: every ally role per player, keyed by tier and side (IMPLEMENTATION.md §Post-release — PAIR)
 - [ ] PAIR-02 the pairings route with `allyRole`, `winRateLow` and `delta` (IMPLEMENTATION.md §Post-release — PAIR)
