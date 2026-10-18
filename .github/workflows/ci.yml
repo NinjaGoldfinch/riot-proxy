@@ -12,7 +12,7 @@ env:
   GIT_SHA: ${{ github.sha }}
 
 # Job ids are the required status checks on `main` (fmt, clippy, test, build-musl,
-# acceptance) —
+# acceptance, and `ui` once the owner adds it: CI-03, ADR-175) —
 # renaming a job means updating branch protection too. See ADR-006.
 # The toolchain, components and musl target all come from rust-toolchain.toml.
 # Rust caches are saved from `main` only; pull requests restore them (ADR-079).
@@ -47,8 +47,16 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: taiki-e/install-action@cargo-llvm-cov
       - run: cargo llvm-cov --all-features --workspace --summary-only
-      # The dev explorer and showcase driven in jsdom (DEV-03, ADR-074), and the
-      # showcase's layout in headless Chromium (DEV-12, ADR-084).
+      - name: no leaked Riot keys
+        run: '! grep -rE "RGAPI-[0-9a-f-]{20,}" tests/ src/ docs/'
+
+  # The dev explorer, showcase and dashboard driven in jsdom (DEV-03, ADR-074),
+  # and their layout in headless Chromium (DEV-12, ADR-084). They read the pages
+  # from src/ui and need no Rust, so they run beside `test` (CI-03, ADR-175).
+  ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -67,8 +75,6 @@ jobs:
           name: showcase-screenshots
           path: tests/dom/screenshots/
           if-no-files-found: ignore
-      - name: no leaked Riot keys
-        run: '! grep -rE "RGAPI-[0-9a-f-]{20,}" tests/ src/ docs/'
 
   # v1's black-box acceptance suite against `serve` and a mock Riot (P8-01,
   # ADR-059). Mock mode only: no Riot key is involved.
