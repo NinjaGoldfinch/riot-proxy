@@ -366,7 +366,7 @@ ninjagoldfinch.lol's `/champions` data took 3.9 s, all of it the proxy's analyti
 
 ## CI — a faster pull request (owner request 2026-10-19)
 
-- [x] CI-01 the source `Dockerfile` builds on `main` and on PRs that can change it (#PR, ADR-173)
+- [x] CI-01 the source `Dockerfile` builds on `main` and on PRs that can change it (#221, ADR-173)
 - [ ] CI-02 tests in parallel with nextest; coverage in its own job
 - [ ] CI-03 the DOM and browser suites in their own `ui` job
 - [ ] CI-04 one integration-test binary
