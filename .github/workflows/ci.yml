@@ -136,13 +136,28 @@ jobs:
   # The source `Dockerfile` that `docker compose up --build` uses, built with its
   # layers cached in GitHub Actions, so the dependency layer is reused until
   # Cargo.toml or Cargo.lock change. Runs alongside build-musl (ADR-079).
+  # A pull request builds it only if it touches what the Dockerfile reads beyond
+  # the source; build-musl compiles the source on every one (CI-01, ADR-173).
   docker:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@v4
+        with:
+          # A pull request's merge commit and its first parent, the base branch.
+          fetch-depth: 2
+      - id: paths
+        name: does this change what the Dockerfile builds
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            git diff --name-only HEAD^1 HEAD | scripts/docker-paths.sh >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.paths.outputs.build == 'true'
+        uses: docker/setup-buildx-action@v4
       # Tagged as the image compose names, so `up --no-build` runs this build.
-      - uses: docker/build-push-action@v7
+      - if: steps.paths.outputs.build == 'true'
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile
@@ -152,6 +167,7 @@ jobs:
           cache-from: type=gha,scope=dockerfile
           cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,scope=dockerfile,mode=max' || '' }}
       - name: docker compose up serves /healthz
+        if: steps.paths.outputs.build == 'true'
         run: |
           docker run --rm ghcr.io/ninjagoldfinch/riot-proxy:2 --version
           echo "RIOT_API_KEY=ci-dummy-key-not-a-riot-key" > .env
@@ -162,12 +178,12 @@ jobs:
           curl -fsS localhost:8080/docs | grep -qi "<html"
           curl -fsS localhost:8080/openapi.json | grep -q '"openapi"'
           docker compose down
-      - if: failure()
+      - if: failure() && steps.paths.outputs.build == 'true'
         run: docker compose logs || true
 
   # OPS-02: the Proxmox dev VM kit; OPS-05: the image description scripts;
-  # INC-02: the `edge` tag picker; OBJ-04: the archive replica units.
-  # Not a required check (ADR-070).
+  # INC-02: the `edge` tag picker; OBJ-04: the archive replica units;
+  # CI-01: the `docker` job's path filter. Not a required check (ADR-070).
   ops:
     runs-on: ubuntu-latest
     steps:
@@ -177,3 +193,4 @@ jobs:
       - run: deploy/test.sh
       - run: scripts/image-description.test.sh
       - run: scripts/edge-tags.test.sh
+      - run: scripts/docker-paths.test.sh
