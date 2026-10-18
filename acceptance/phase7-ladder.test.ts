@@ -296,6 +296,8 @@ describe.skipIf(!enabled)('Phase 7 — the ladder crawl, live', () => {
         'champion_build_parts',
         'champion_builds',
         'champion_items',
+        'champion_matchup_build_parts',
+        'champion_matchup_builds',
         'champion_matchups',
         'champion_runes',
         'champion_spells',

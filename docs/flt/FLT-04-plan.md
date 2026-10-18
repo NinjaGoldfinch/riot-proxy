@@ -35,7 +35,7 @@ Written 2026-10-18 against `origin/main` **e4a98df** (FLT-03 #217 and the PROGRE
 | 8 | the cache key without the opponent | `two_opponents_are_two_entries` |
 | 9 | `opponentId` validated before `role` | `opponent_id_is_validated` |
 
-*Verification.* `cargo fmt --check` clean; `cargo clippy --all-targets -- -D warnings` clean; `cargo test --no-fail-fast`: 44 test binaries, all `ok`. Expected snapshot changes: `analytics_champion_builds` gains `winRateLow` and `opponentId: null`; the OpenAPI document gains `opponentId` (query and body), `opponentName` and `winRateLow`.
+*Verification.* `cargo fmt --check` clean; `cargo clippy --all-targets -- -D warnings` clean; `cargo test --no-fail-fast`: 44 test binaries, all `ok`. Expected snapshot changes: `analytics_champion_builds` gains `winRateLow` and `opponentId: null`; the OpenAPI document gains `opponentId` (query and body), `opponentName` and `winRateLow`. The acceptance suite's list of the tables a recompute reports (`acceptance/phase7-ladder.test.ts`) gains the two new tables, as `tests/analytics.rs`' list does; the plan had missed it, and CI's `acceptance` job caught it.
 
 *Observed* (2026-10-19, the branch's debug server on a fake Riot serving the two fixture bodies, FLT-03's tiers, `seed_builds` plus Anivia; `/home/dev/flt04/live/`, `curl -i` saved in `obs/`). Every §5 body is equal byte for byte to the expected one at this run's `computedAt` (`2026-10-18T15:47:18.038Z`), and every tag to the recipe's for that stamp (`live/compare.py`, 7 of 7). The three empty bodies have no stamp, so their tags are the plan's exactly:
 
