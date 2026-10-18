@@ -370,7 +370,7 @@ ninjagoldfinch.lol's `/champions` data took 3.9 s, all of it the proxy's analyti
 - [ ] CI-02 tests in parallel with nextest; coverage in its own job
 - [ ] CI-03 the DOM and browser suites in their own `ui` job
 - [ ] CI-04 one integration-test binary
-- [x] CI-05 less debug info in dev and test builds (#PR, ADR-177)
+- [x] CI-05 less debug info in dev and test builds (#225, ADR-177)
 
 ## PAIR — team pairings (owner request 2026-10-10, outline)
 - [ ] PAIR-01 `champion_pairs`: every ally role per player, keyed by tier and side (IMPLEMENTATION.md §Post-release — PAIR)
