@@ -1929,3 +1929,20 @@ Accepted (owner request "speed up CI and build time", task CI-04).
   The test binaries took 2,269 MiB in 40 files before and 136 MiB in 2 after, without debuginfo; CI builds with it (until CI-05), where each binary carried its own copy. Editing a single test file is the one thing that got slower: the whole test crate recompiles.
 - **Tests:** 939 under `cargo test` and nextest (938 before, plus the guard), the same 5 ignored.
 - **Rejected:** moving the files into `tests/it/` (every relative `include_bytes!` path would change, for nothing); fixing the telemetry tests to tolerate other tests' metrics (weaker checks on a byte-identical contract); several groups of binaries (the link is per binary, so fewer is better, and nothing else needs a process of its own).
+
+## ADR-177 — Dev and test builds carry line tables only, and dependencies no debug info (2026-10-19)
+Accepted (owner request "speed up CI and build time", task CI-05).
+- **What.** `[profile.dev] debug = "line-tables-only"` and `[profile.dev.package."*"] debug = false`. The test profile inherits both. Release is unchanged (it strips everything). A backtrace or panic still names file, line and column for this crate's frames: a test that panics two calls deep printed `at ./tests/zz_bt.rs:2:13` with `RUST_BACKTRACE=1`. Dependencies' frames keep their names, not their lines. For a debugger session that needs variables: `CARGO_PROFILE_DEV_DEBUG=full`.
+- **Why.** CI builds with the default full debuginfo, and so does a plain local `cargo`. Every test binary carried full DWARF for the library and every dependency: 300–440 MiB each, about 15 GB for the 41 integration binaries. That is what kept filling the dev box's disk, and why the box's notes set `CARGO_PROFILE_*_DEBUG=0` by hand. The linker spent its time writing it, and `Swatinem/rust-cache` saved and restored part of it.
+- **Measured** locally (4 cores, `CARGO_INCREMENTAL=0`, fresh target directory each time, `--all-features`):
+
+  | | before | after |
+  |---|---|---|
+  | cold `cargo build`, time and `target/` | 106.1 s, 2,155 MiB | 95.1 s, 1,161 MiB |
+  | cold `cargo test --no-run` (lib + `analytics`, `openapi`, `cli`, `ladder`), time and `target/` | 75.4 s, 5,094 MiB | 61.6 s, 2,221 MiB |
+  | the same after touching `src/lib.rs` (what CI pays on every PR) | 57.9 s, 58.5 s | 45.2 s, 45.2 s |
+  | one test binary (`analytics`) | 363 MiB | 111 MiB |
+
+  With all the test targets built, `target/` is 5.4 GB.
+- **Coverage** is unaffected: llvm-cov reads its own instrumentation, not DWARF.
+- **Rejected:** `debug = false` for this crate too (a panic's backtrace would lose its lines, for a few more seconds); setting it in CI only through `CARGO_PROFILE_*` env (local builds would keep filling the disk, and CI and local would differ).
