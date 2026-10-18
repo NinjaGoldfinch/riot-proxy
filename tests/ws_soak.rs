@@ -1,7 +1,7 @@
 //! Soak (plan P6-01 acceptance): 1 000 sockets held open for 20 s with a 1 s
 //! heartbeat and a steady trickle of events; resident memory must not grow once
 //! they are connected. Ignored by default:
-//!     cargo test --release --test ws_soak -- --ignored --nocapture
+//!     cargo test --release --test it ws_soak:: -- --ignored --nocapture
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::collections::HashMap;
