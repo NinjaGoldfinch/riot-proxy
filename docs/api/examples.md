@@ -60,10 +60,10 @@ x-request-id: 01M58N9D55K65Z2YZ2FFZAKBZ3
 ```
 
 ```text
-{"ok":true,"sqlite":true,"limiter":true,"keyScope":"95b708b6","sqliteReaders":4,"sqliteReadersFree":4}
+{"ok":true,"sqlite":true,"limiter":true,"keyScope":"95b708b6","sqliteReaders":4,"sqliteReadersFree":4,"writerBusy":false,"writerBusyMs":0,"writerQueued":0}
 ```
 
-`/readyz` answers 503 with the same body when `sqlite` or `limiter` is false.
+`/readyz` answers 503 with the same body when `sqlite` or `limiter` is false. `writerBusy`, `writerBusyMs` and `writerQueued` say whether the SQLite writer is running a write, for how long, and how many wait behind it; a long write keeps `sqlite` true while it makes progress.
 
 ## 3. Look up an account by Riot ID
 
@@ -314,4 +314,4 @@ Note that 401 and 403 carry no `X-RateLimit-*` headers (refused before metering)
 
 ---
 **Sources:** live capture against `target/debug/riot-proxy` 2.7.0 (`RIOT_API_KEY=RGAPI-docs-not-a-key`, port 18092, keys minted with `riot-proxy key create`), `README.md` "First run", `src/cli/mod.rs`, `src/routes/riot.rs:L127-L300`, `src/routes/lol.rs:L30-L405`, `src/routes/players.rs:L400-L671`, `src/routes/analytics.rs:L486-L614`, `src/routes/admin.rs:L180-L219,L454-L502,L838-L882,L1038,L1583-L1613,L1700-L1733,L2486`, `src/routes/ws.rs:L525-L572`, `src/ws/socket.rs:L63-L206`, `tests/snapshots/ws_hub__ws_session.snap`, `docs/_meta/scratch/routes.md`
-**Last verified:** 2026-10-19 against commit `52fa67d`
+**Last verified:** 2026-10-20 against commit `b7b363c`

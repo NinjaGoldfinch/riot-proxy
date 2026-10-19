@@ -58,6 +58,9 @@ Owner decision (2026-09-24, ADR-014): these use the names **exactly as design/07
 | `archive_offload_bytes_total` | counter | kind | `archive:offload` (OBJ-03), implemented; bytes of packs uploaded and verified |
 | `archive_packs` | gauge | — | `archive:offload` (OBJ-03), implemented, set at the end of each run; rows in `body_packs` |
 | `sqlite_readers_free` | gauge | — | SQLite reader pool (INC-01), implemented; idle read connections, set on every borrow and return. A value that stays below the pool size while idle is a leak (ADR-113) |
+| `sqlite_write_seconds` | histogram | — | SQLite writer thread (WR-02, ADR-180), implemented; how long each write ran on the writer, queue wait excluded. Buckets 0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60. A write over 1 s also logs `slow SQLite write` |
+| `sqlite_write_wait_seconds` | histogram | — | SQLite writer thread (WR-02), implemented; how long each write waited in the writer's queue before it ran. Same buckets as `sqlite_write_seconds` |
+| `sqlite_write_queue` | gauge | — | SQLite writer thread (WR-02), implemented; writes queued behind the running one, set on every enqueue and completion (queue size 1024) |
 | `timeline_backfill_fetched_total` | counter | region | `timelines:backfill` (TL-02), implemented; timelines fetched and archived by the backfill. Left to do: `GET /v1/admin/timelines/backfill` (ADR-133) |
 | `timeline_backfill_not_found_total` | counter | region | `timelines:backfill` (TL-02), implemented; timelines Riot answered 404 for, marked in `timeline_gaps` and never asked for again |
 

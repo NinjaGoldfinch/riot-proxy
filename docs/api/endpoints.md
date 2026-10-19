@@ -113,8 +113,8 @@ Request bodies are capped at 1 MiB (`src/app.rs:L30-L31`, `L105`).
 
 | Method | Path | Auth | Response | Handler |
 |---|---|---|---|---|
-| GET | `/healthz` | none | `200 {"ok":true}`; touches nothing | `src/routes/health.rs:L43` |
-| GET | `/readyz` | none | `{"ok","sqlite","limiter","keyScope","sqliteReaders","sqliteReadersFree"}`; 200 when `sqlite && limiter`, else **503 with the same body**. `sqlite` is a `BEGIN IMMEDIATE; ROLLBACK;` on the writer within 2 s; `limiter` is the restored-checkpoint flag | `src/routes/health.rs:L82` (`L19`, `L83-L94`) |
+| GET | `/healthz` | none | `200 {"ok":true}`; touches nothing | `src/routes/health.rs:L70` |
+| GET | `/readyz` | none | `{"ok","sqlite","limiter","keyScope","sqliteReaders","sqliteReadersFree","writerBusy","writerBusyMs","writerQueued"}`; 200 when `sqlite && limiter`, else **503 with the same body**. With the writer idle, `sqlite` is a `BEGIN IMMEDIATE; ROLLBACK;` on it within 2 s; with the writer busy, nothing is queued behind it and `sqlite` says whether the running write made progress (SQLite stamps or CPU) in the last 5 s (ADR-180). `limiter` is the restored-checkpoint flag; the `writer*` fields are informational | `src/routes/health.rs:L119` (`L21-L46`, `L148-L200`) |
 | GET | `/metrics` | none | Prometheus text, `Content-Type: text/plain; version=0.0.4; charset=utf-8` | `src/telemetry.rs:L119` |
 
 Captured:
@@ -123,9 +123,9 @@ Captured:
 GET /readyz
 HTTP/1.1 200 OK
 content-type: application/json
-x-request-id: 01M58N9D5CT98JPZ2909VSQNQ4
+x-request-id: 01M5B6GNQ9SCSC5X3GTAV136MG
 
-{"ok":true,"sqlite":true,"limiter":true,"keyScope":"95b708b6","sqliteReaders":4,"sqliteReadersFree":4}
+{"ok":true,"sqlite":true,"limiter":true,"keyScope":"d63166ad","sqliteReaders":4,"sqliteReadersFree":4,"writerBusy":true,"writerBusyMs":230814,"writerQueued":9}
 ```
 
 `riot-proxy healthcheck` calls `/healthz` for container health checks (`src/cli/healthcheck.rs:L113-L140`). These three paths are not recorded in the admin "recent requests" ring (`src/http/recent.rs:L116-L122`). Metric names are byte-identical to v1 (`docs/design/metrics.md`).
@@ -238,5 +238,5 @@ The frame shape is `src/events.rs:L159-L172`; data fields per event are listed i
 - Gauge `proxy_ws_connections`; counter `events_published_total{name}`.
 
 ---
-**Sources:** `src/app.rs:L30-L35,L69-L119,L189-L195`, `src/routes/docs.rs:L86-L141,L374-L387`, `src/routes/health.rs:L19-L94`, `src/routes/ui.rs:L94-L233`, `src/routes/dev.rs:L33-L250`, `src/routes/ws.rs:L497-L572`, `src/ws/protocol.rs:L23-L147`, `src/ws/socket.rs:L38-L206`, `src/ws/hub.rs:L20-L205`, `src/http/auth.rs:L141-L353`, `src/http/quota.rs:L320-L431`, `src/http/request_id.rs:L287-L339`, `src/http/validate.rs:L21-L88`, `src/routes/passthrough.rs:L401-L476`, `src/fetcher.rs:L50-L69,L301-L367,L612-L650`, `src/riot/routing.rs:L46-L181`, `docs/_meta/scratch/routes.md`, `docs/design/12-object-storage-and-hosting.md:L904-L925`, `tests/snapshots/http__unknown_route_404.snap`, `tests/snapshots/ws_hub__ws_session.snap`, live capture against `target/debug/riot-proxy` 2.7.0
-**Last verified:** 2026-10-19 against commit `52fa67d`
+**Sources:** `src/app.rs:L30-L35,L69-L119,L189-L195`, `src/routes/docs.rs:L86-L141,L374-L387`, `src/routes/health.rs:L21-L200`, `src/routes/ui.rs:L94-L233`, `src/routes/dev.rs:L33-L250`, `src/routes/ws.rs:L497-L572`, `src/ws/protocol.rs:L23-L147`, `src/ws/socket.rs:L38-L206`, `src/ws/hub.rs:L20-L205`, `src/http/auth.rs:L141-L353`, `src/http/quota.rs:L320-L431`, `src/http/request_id.rs:L287-L339`, `src/http/validate.rs:L21-L88`, `src/routes/passthrough.rs:L401-L476`, `src/fetcher.rs:L50-L69,L301-L367,L612-L650`, `src/riot/routing.rs:L46-L181`, `docs/_meta/scratch/routes.md`, `docs/design/12-object-storage-and-hosting.md:L904-L925`, `tests/snapshots/http__unknown_route_404.snap`, `tests/snapshots/ws_hub__ws_session.snap`, live capture against `target/debug/riot-proxy` 2.7.0
+**Last verified:** 2026-10-20 against commit `b7b363c`

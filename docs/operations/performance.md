@@ -12,7 +12,7 @@ Where riot-proxy spends time, the measurements that exist, the knobs that move t
 
 **`aggregate:analytics`.** One rebuild of one ladder took about 30 s alone on the old 2-vCPU box; four started together beside archiving had not finished after 7 minutes (`docs/design/07-deployment.md:171`). It is CPU and writer bound: three write transactions in a row (`src/jobs/analytics.rs:247-385`), capped to one at a time by `JOB_KIND_LIMITS` (`src/config.rs:111`).
 
-**SQLite's single writer.** Every write goes through one thread and a 1024-deep queue (`src/db/mod.rs:37-38`, `:152-156`); a rebuild, `facts:reextract`, `builds:extract` and every archived match take turns on it (`docs/design/07-deployment.md:171`). `facts:reextract` decodes bodies on a blocking thread in batches of `FACTS_REEXTRACT_BATCH` with a 50 ms pause (`src/jobs/analytics.rs:404-477`); `builds:extract` does 25 timelines per batch (`:488-580`). While readers are always active the WAL does not checkpoint (`docs/design/07-deployment.md:171`), which is why `JOB_CONCURRENCY` matters more than core count on a small host.
+**SQLite's single writer.** Every write goes through one thread and a 1024-deep queue (`src/db/mod.rs:41-42`, `:158-163`); a rebuild, `facts:reextract`, `builds:extract` and every archived match take turns on it (`docs/design/07-deployment.md:171`). `facts:reextract` decodes bodies on a blocking thread in batches of `FACTS_REEXTRACT_BATCH` with a 50 ms pause (`src/jobs/analytics.rs:404-477`); `builds:extract` does 25 timelines per batch (`:488-580`). While readers are always active the WAL does not checkpoint (`docs/design/07-deployment.md:171`), which is why `JOB_CONCURRENCY` matters more than core count on a small host.
 
 ## Benchmarks that exist
 
@@ -51,8 +51,8 @@ The synthetic database and the before/after SQL are reproducible with `python3 s
 | `LADDER_BACKFILL_LIMIT` | 100 (0 to 10 000) | match ids walked per discovered player: one Riot call per 100 | `src/config.rs:748` |
 | `AGGREGATE_PATCH_LIMIT` | 4 (0 to 100) | patches rebuilt per recompute; 0 is every patch | `src/config.rs:753` |
 | tokio worker threads | `min(cores, 4)`, not configurable | async executors; 4 on the 6-vCPU box | `src/cli/mod.rs:125` |
-| SQLite reader pool | `available_parallelism()`, fallback 4, not configurable | concurrent reads; 6 on `ngf-prod-syd1` | `src/db/mod.rs:191-192`; `PROGRESS.md:325` |
-| SQLite `cache_size` / `mmap_size` | 64 MiB / 256 MiB per connection, not configurable | page cache and memory-mapped I/O | `src/db/mod.rs:27-28` |
+| SQLite reader pool | `available_parallelism()`, fallback 4, not configurable | concurrent reads; 6 on `ngf-prod-syd1` | `src/db/mod.rs:201-202`; `PROGRESS.md:325` |
+| SQLite `cache_size` / `mmap_size` | 64 MiB / 256 MiB per connection, not configurable | page cache and memory-mapped I/O | `src/db/mod.rs:31-32` |
 
 Every env knob is read at boot; change the file, restart, and watch `/v1/admin/jobs/queue`, `sqlite_wal_bytes` and `limiter_*_waiters`.
 
@@ -71,5 +71,5 @@ Extrapolated, not measured: design/07's sizing table and its 2-vCPU worker advic
 Disk and memory sizing for the archive and the bucket are in `../deployment/capacity.md`.
 
 ---
-**Sources:** `docs/DECISIONS.md:1732-1818`, `docs/perf/PERF-03-design.md:1-120`, `docs/design/07-deployment.md:165-173`, `docs/design/12-object-storage-and-hosting.md:261-267,480-486,781-799`, `PROGRESS.md:325,366`, `scripts/perf-synthetic.py:1-24`, `src/routes/analytics/cache.rs:1-19`, `src/routes/players.rs:285-324,725-746`, `src/archive/matches.rs:250-254`, `src/jobs/analytics.rs:247-385,404-477,488-580`, `src/db/mod.rs:27-28,37-38,152-156,191-192`, `src/cli/mod.rs:125`, `src/config.rs:111,709-719,735-738,748,753-754,770-783,1108-1139`, `src/cache/l1.rs:106-119`, `src/fetcher.rs:124-150`, `src/riot/limiter/headers.rs:31-42`, `src/riot/limiter/mod.rs:177-184,329-344`, `src/http/recent.rs:36`
-**Last verified:** 2026-10-19 against commit `52fa67d`
+**Sources:** `docs/DECISIONS.md:1732-1818`, `docs/perf/PERF-03-design.md:1-120`, `docs/design/07-deployment.md:165-173`, `docs/design/12-object-storage-and-hosting.md:261-267,480-486,781-799`, `PROGRESS.md:325,366`, `scripts/perf-synthetic.py:1-24`, `src/routes/analytics/cache.rs:1-19`, `src/routes/players.rs:285-324,725-746`, `src/archive/matches.rs:250-254`, `src/jobs/analytics.rs:247-385,404-477,488-580`, `src/db/mod.rs:31-32,41-42,158-163,201-202`, `src/cli/mod.rs:125`, `src/config.rs:111,709-719,735-738,748,753-754,770-783,1108-1139`, `src/cache/l1.rs:106-119`, `src/fetcher.rs:124-150`, `src/riot/limiter/headers.rs:31-42`, `src/riot/limiter/mod.rs:177-184,329-344`, `src/http/recent.rs:36`
+**Last verified:** 2026-10-20 against commit `b7b363c`

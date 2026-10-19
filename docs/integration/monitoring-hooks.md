@@ -6,17 +6,19 @@ What ninja-monitor, a Prometheus scraper, a log shipper or a container runtime c
 
 | Endpoint | Auth | Body | Semantics | Evidence |
 |---|---|---|---|---|
-| `GET /healthz` | none | `{"ok":true}` | the process is serving; touches nothing | `src/routes/health.rs:32-45` |
-| `GET /readyz` | none | `{"ok","sqlite","limiter","keyScope","sqliteReaders","sqliteReadersFree"}` | 200 when `sqlite && limiter`, else 503 with the same body | `src/routes/health.rs:51-105` |
+| `GET /healthz` | none | `{"ok":true}` | the process is serving; touches nothing | `src/routes/health.rs:59-72` |
+| `GET /readyz` | none | `{"ok","sqlite","limiter","keyScope","sqliteReaders","sqliteReadersFree","writerBusy","writerBusyMs","writerQueued"}` | 200 when `sqlite && limiter`, else 503 with the same body | `src/routes/health.rs:73-200` |
 
-`sqlite` is true when the writer thread executes `BEGIN IMMEDIATE; ROLLBACK;` within `READY_TIMEOUT` = 2 s (`src/routes/health.rs:19`, `:83-87`); `limiter` is true once the checkpoint restore has run, whether it succeeded or fell back to fresh state (`:88`; `src/cli/serve.rs:75-81`). `sqliteReadersFree` never affects `ok` (`:60-62`). Both routes get CORS headers only when `ADMIN_CORS_ORIGINS` lists an origin (`src/http/cors.rs:40-43`), and neither is written to the recent-requests ring (`src/http/recent.rs:25`).
+`sqlite` depends on the writer thread (WR-02, ADR-180). Idle, it must execute `BEGIN IMMEDIATE; ROLLBACK;` within `READY_TIMEOUT` = 2 s, waiting at most 1.5 s for another process's write lock (`src/routes/health.rs:21-27`, `:148-171`). Busy, nothing is queued behind the running write: `sqlite` is true while SQLite stamped progress on it in the last 5 s (`WRITER_STALL`, `:34`; a job's start counts for 1.5 s, and only if it found the writer idle, `:39`), or the writer thread used at least a quarter of a 250 ms sample of CPU (`:41-46`, `:173-200`), so a rebuild that holds the writer for minutes stays ready. `limiter` is true once the checkpoint restore has run, whether it succeeded or fell back to fresh state (`:123`; `src/cli/serve.rs:75-81`). `sqliteReadersFree` never affects `ok` (`:83-91`). Both routes get CORS headers only when `ADMIN_CORS_ORIGINS` lists an origin (`src/http/cors.rs:40-43`), and neither is written to the recent-requests ring (`src/http/recent.rs:25`).
+`writerBusy`, `writerBusyMs` and `writerQueued` say what the writer is doing, from atomics it stamps (`src/db/writer.rs:27-127`); none of them affects `ok`.
 
-**Caveat before using `/readyz` as a liveness probe.** The probe queues behind every write already handed to the single writer thread (`src/db/mod.rs:152-156`, `:213-230`). An `aggregate:analytics` run commits three write transactions in a row (`src/jobs/analytics.rs:247-385`), so during a rebuild the probe can exceed 2 s and `/readyz` answers 503 with `"sqlite":false` while the process is healthy. This is pre-existing and worth a task; until then, restart on `/healthz`, not on `/readyz`, and treat a `/readyz` 503 as a signal to look at `GET /v1/admin/jobs/queue`.
+**Using `/readyz` as a restart signal.** A 503 with `"writerBusy":true` means the running write has neither made progress nor used CPU for 5 s: it waits on another process's write lock or is stuck, and a restart is reasonable once nothing else holds the database ([troubleshooting §1](../operations/troubleshooting.md#1-readyz-answers-503-with-sqlitefalse-while-everything-else-works)). A 503 with `"writerBusy":false` means another process holds the write lock. Before WR-02 the probe queued behind every write and a rebuild alone made it 503 (ADR-179); a supervisor that still restarts only on `/healthz` loses nothing.
 
-Observed from a scratch run of the 2.7.0 binary:
+Observed on 2026-10-20 from a scratch run of the WR-02 build on a synthetic database (100 010 matches), idle and then during an `aggregate:analytics` rebuild:
 
 ```text
-GET /readyz → 200 {"ok":true,"sqlite":true,"limiter":true,"keyScope":"95b708b6","sqliteReaders":4,"sqliteReadersFree":4}
+GET /readyz → 200 {"ok":true,"sqlite":true,"limiter":true,"keyScope":"d63166ad","sqliteReaders":4,"sqliteReadersFree":4,"writerBusy":false,"writerBusyMs":0,"writerQueued":0}
+GET /readyz → 200 {"ok":true,"sqlite":true,"limiter":true,"keyScope":"d63166ad","sqliteReaders":4,"sqliteReadersFree":4,"writerBusy":true,"writerBusyMs":134797,"writerQueued":9}
 ```
 
 ## `/metrics`
@@ -27,7 +29,7 @@ GET /readyz → 200 {"ok":true,"sqlite":true,"limiter":true,"keyScope":"95b708b6
 - `https://api.ninjagoldfinch.lol/metrics`: blocked by the WAF rule that covers `/metrics`, `/dashboard*`, `/dev*`, `/v1/admin*` on `api.` (`PROGRESS.md:342`; `docs/design/07-deployment.md:221`);
 - from `ngf-mon-syd1` over WireGuard: planned for Prometheus, not built (`docs/design/12-object-storage-and-hosting.md:846-848`; `docs/design/13-admin-dashboard.md:69`).
 
-A scraper should sample at least every 60 s to see each disk gauge update (`METRICS_HISTORY_INTERVAL_S`, `src/stats.rs:1005-1036`) and every 15 s to see `jobs_pending` move (`src/jobs/scheduler.rs:49`).
+A scraper should sample at least every 60 s to see each disk gauge update (`METRICS_HISTORY_INTERVAL_S`, `src/stats.rs:1038-1069`) and every 15 s to see `jobs_pending` move (`src/jobs/scheduler.rs:49`).
 
 ## Admin JSON snapshots
 
@@ -35,7 +37,7 @@ All need a consumer key with the `admin` scope as `Authorization: Bearer rpx_…
 
 | Route | Gives | Evidence |
 |---|---|---|
-| `GET /v1/admin/metrics` | the live `Snapshot` (`v:1`): totals, queue counts, cache counters, limiter scopes, `process{uptimeSeconds,rssBytes}`, `sqlite{readers,readersFree}`, `disk{dbBytes,walBytes,freelistBytes,freeBytes,totalBytes}`, per-route request counts, upstream counts | `src/routes/admin.rs:2392-2399`; `src/stats.rs:295-331` |
+| `GET /v1/admin/metrics` | the live `Snapshot` (`v:1`): totals, queue counts, cache counters, limiter scopes, `process{uptimeSeconds,rssBytes}`, `sqlite{readers,readersFree}`, `sqliteWriter{busySince,busyMs,lastProgress,lastFinished,queued}`, `disk{dbBytes,walBytes,freelistBytes,freeBytes,totalBytes}`, per-route request counts, upstream counts | `src/routes/admin.rs:2392-2399`; `src/stats.rs:295-333` |
 | `GET /v1/admin/metrics/history` | `{intervalS:60, maxPoints:1440, points[]}`, 24 h of one-minute points from SQLite | `src/routes/admin.rs:2409-2427`; `src/stats.rs:43` |
 | `GET /v1/admin/stats` | archive counts and bytes by location, pack stats, `dbFileBytes`, `walBytes`, `dbFreelistPages`, `diskFreeBytes` | `src/routes/admin.rs:890-924` |
 | `GET /v1/admin/jobs/stats` | `kinds{kind→{pending,running,done,failed}}`, `totals` | `src/routes/admin.rs:1369-1393` |
@@ -116,5 +118,5 @@ flowchart TB
 Today only the solid paths exist: ninja-monitor watches the process and its disk and alerts to Discord; everything about requests, caches, Riot and jobs is read by a person over SSH or through the dashboard behind Access. The three dashed paths are the open items: a Prometheus scrape of `/metrics` over WireGuard from `ngf-mon-syd1` (`docs/design/12-object-storage-and-hosting.md:846`), a dead-man's switch across the boxes (`:847`, ninja-monitor's `NINJA_MONITOR_HEARTBEAT_URL` is the hook, `ninja-monitor:deploy/env.example:8-15`), and the optional `ninja-ingest` push.
 
 ---
-**Sources:** `src/routes/health.rs:19,32-105`, `src/cli/serve.rs:75-81`, `src/cli/healthcheck.rs:11,26-34`, `src/cli/mod.rs:44-49,82-88`, `src/db/mod.rs:152-156,213-230`, `src/jobs/analytics.rs:247-385`, `src/jobs/scheduler.rs:49`, `src/telemetry.rs:24,53-66,101-121`, `src/metrics.rs:1-4,47`, `src/stats.rs:43,295-331,1005-1036`, `src/http/auth.rs:246-260,276-288,327-342`, `src/http/cors.rs:40-43`, `src/http/recent.rs:18-25`, `src/app.rs:107-116`, `src/config.rs:383-387,649-656,721`, `src/riot/client.rs:26`, `src/ws/protocol.rs:23-25,68-71`, `src/ws/socket.rs:36-41,110-116,165-170`, `src/ws/metrics.rs:14-35`, `src/events.rs:159-172`, `src/routes/admin.rs:890-924,1010-1027,1369-1393,2392-2427,2438-2477,2546-2558,2583-2606`, `Dockerfile:24`, `ops/prometheus-alerts.yml:6-57`, `ops/grafana/riot-proxy-dashboard.json`, `docs/design/07-deployment.md:221`, `docs/design/12-object-storage-and-hosting.md:832-848`, `docs/design/13-admin-dashboard.md:69`, `PROGRESS.md:342`, `docs/_meta/scratch/siblings.md` §2, `ninja-monitor:deploy/config.example.toml:29-32,64-99`, `ninja-monitor:deploy/ninja-monitor.service:11-14`, `ninja-monitor:deploy/env.example:8-15`
-**Last verified:** 2026-10-19 against commit `52fa67d`
+**Sources:** `src/routes/health.rs:21-46,59-200`, `src/db/writer.rs:27-127`, `src/cli/serve.rs:75-81`, `src/cli/healthcheck.rs:11,26-34`, `src/cli/mod.rs:44-49,82-88`, `src/db/mod.rs:158-163,254-277`, `src/jobs/analytics.rs:247-385`, `src/jobs/scheduler.rs:49`, `src/telemetry.rs:24,53-66,101-121`, `src/metrics.rs:1-4,47`, `src/stats.rs:43,295-333,1038-1069`, `src/http/auth.rs:246-260,276-288,327-342`, `src/http/cors.rs:40-43`, `src/http/recent.rs:18-25`, `src/app.rs:107-116`, `src/config.rs:383-387,649-656,721`, `src/riot/client.rs:26`, `src/ws/protocol.rs:23-25,68-71`, `src/ws/socket.rs:36-41,110-116,165-170`, `src/ws/metrics.rs:14-35`, `src/events.rs:159-172`, `src/routes/admin.rs:890-924,1010-1027,1369-1393,2392-2427,2438-2477,2546-2558,2583-2606`, `Dockerfile:24`, `ops/prometheus-alerts.yml:6-57`, `ops/grafana/riot-proxy-dashboard.json`, `docs/design/07-deployment.md:221`, `docs/design/12-object-storage-and-hosting.md:832-848`, `docs/design/13-admin-dashboard.md:69`, `PROGRESS.md:342`, `docs/_meta/scratch/siblings.md` §2, `ninja-monitor:deploy/config.example.toml:29-32,64-99`, `ninja-monitor:deploy/ninja-monitor.service:11-14`, `ninja-monitor:deploy/env.example:8-15`
+**Last verified:** 2026-10-20 against commit `b7b363c`

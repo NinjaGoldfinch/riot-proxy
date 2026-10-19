@@ -4,10 +4,10 @@ Every table and index in `riot-proxy.db` after migration V0028, with what writes
 
 ## Conventions
 
-- One file, WAL mode, one writer thread and a reader pool (`src/db/mod.rs:22-38`). Migrations live in `src/db/migrations/` and are the authority for the DDL below; the local dev database on this box stops at V0006 and is not consulted for the schema.
+- One file, WAL mode, one writer thread and a reader pool (`src/db/mod.rs:26-42`). Migrations live in `src/db/migrations/` and are the authority for the DDL below; the local dev database on this box stops at V0006 and is not consulted for the schema.
 - Timestamps are unix milliseconds in `INTEGER` columns; JSON lives in `TEXT`; match and timeline bodies are zstd level 3 `BLOB`s (`src/db/migrations/V0001__init.sql:2`, `V0002__archive.sql:3`, `src/archive/matches.rs:33`).
 - `key_scope` is the first 8 hex characters of `sha256(RIOT_API_KEY)` (`src/cache/keys.rs:34-37`). Rows that hold encrypted Riot ids (PUUIDs) carry it; the archive does not, because match ids are not encrypted (`V0002:21`).
-- Declared foreign keys are few: `match_facts`, `match_bans` and `match_builds` cascade from `matches`; `crawl_legs` and `crawl_match_ids` cascade from `ladder_crawls`; `body_locations.pack_id` references `body_packs`. `PRAGMA foreign_keys = ON` on every connection (`src/db/mod.rs:24-30`). Every other join in the diagrams is logical, not declared.
+- Declared foreign keys are few: `match_facts`, `match_bans` and `match_builds` cascade from `matches`; `crawl_legs` and `crawl_match_ids` cascade from `ladder_crawls`; `body_locations.pack_id` references `body_packs`. `PRAGMA foreign_keys = ON` on every connection (`src/db/mod.rs:28-34`). Every other join in the diagrams is logical, not declared.
 - 40 tables in total: the 37 that `/dev/reset` wipes plus `consumers`, `limiter_state` and `refinery_schema_history` (`src/routes/dev.rs:41-81`).
 
 ## Core tables
@@ -124,9 +124,9 @@ Indexes: `jobs_dedupe UNIQUE (kind, dedupe_key) WHERE state IN ('pending','runni
 | Column | Type | Constraints | Notes |
 |---|---|---|---|
 | `at` | INTEGER | PRIMARY KEY | unix ms of the sample |
-| `point` | TEXT | NOT NULL | JSON `HistoryPoint` (`src/stats.rs:353-368`) |
+| `point` | TEXT | NOT NULL | JSON `HistoryPoint` (`src/stats.rs:355-370`) |
 
-Written every `METRICS_HISTORY_INTERVAL_S` (default 60 s) by `INSERT OR REPLACE` (`src/stats.rs:965-981`). Read by `GET /v1/admin/metrics/history`. Retention: each write keeps only the newest 1 440 rows (`src/stats.rs:43,974-976`) and `maintenance` deletes rows older than 24 h (`maintenance.rs:38,241-244`).
+Written every `METRICS_HISTORY_INTERVAL_S` (default 60 s) by `INSERT OR REPLACE` (`src/stats.rs:998-1014`). Read by `GET /v1/admin/metrics/history`. Retention: each write keeps only the newest 1 440 rows (`src/stats.rs:43,1007-1009`) and `maintenance` deletes rows older than 24 h (`maintenance.rs:38,241-244`).
 
 ### players
 
@@ -149,7 +149,7 @@ Primary key `(key_scope, puuid)`. Index `players_tracked ON players(tracked) WHE
 
 ### refinery_schema_history
 
-Created by refinery itself, not by a migration file: `version int4 PRIMARY KEY, name VARCHAR(255), applied_on VARCHAR(255), checksum VARCHAR(255)` (dev database `sqlite_master`; SQLite stores `int4` as an integer affinity). Written only by the migration runner (`src/db/mod.rs:314-316`). One row per applied version, `applied_on` an ISO timestamp. See [migrations.md](migrations.md).
+Created by refinery itself, not by a migration file: `version int4 PRIMARY KEY, name VARCHAR(255), applied_on VARCHAR(255), checksum VARCHAR(255)` (dev database `sqlite_master`; SQLite stores `int4` as an integer affinity). Written only by the migration runner (`src/db/mod.rs:358-360`). One row per applied version, `applied_on` an ISO timestamp. See [migrations.md](migrations.md).
 
 ## Archive tables
 
@@ -325,5 +325,5 @@ Written by `pack::record_on` after a verified upload (`src/archive/pack.rs:287-3
 Index `body_locations_pack (pack_id)` (`V0023:30`). Written by `locate_on` (upsert, `pack.rs:331-350`) and `restore-index`. Read by the archive read path's `LEFT JOIN` (`matches.rs:186-189`), the free step's guard (`offload.rs:157-158`) and the snapshot. Retention: never deleted by a job; about 60 bytes per row (`docs/design/12-object-storage-and-hosting.md:209-210`).
 
 ---
-**Sources:** `src/db/migrations/V0001__init.sql`, `V0002__archive.sql`, `V0003__cs_and_duration.sql`, `V0005__analytics.sql`, `V0007__job_lane.sql`, `V0009__cache_fetched_at.sql`, `V0012__match_builds.sql`, `V0013__timelines_standalone.sql`, `V0018__timeline_gaps.sql`, `V0019__tier_on_facts.sql`, `V0020__without_rowid_derived.sql`, `V0021__facts_without_rowid.sql`, `V0022__jobs_state_kind.sql`, `V0023__body_packs.sql`, `V0024__matches_archived.sql`, `V0028__jobs_crawl_matches.sql`, `src/db/mod.rs:L22-L38`, `src/db/mod.rs:L314-L316`, `src/archive/matches.rs:L33-L103`, `src/archive/matches.rs:L178-L215`, `src/archive/matches.rs:L375-L431`, `src/archive/facts.rs:L19`, `src/archive/facts.rs:L292-L379`, `src/archive/builds.rs:L24`, `src/archive/pack.rs:L287-L354`, `src/archive/offload.rs:L147-L170`, `src/archive/tiers.rs:L37-L57`, `src/cache/l2.rs:L159-L223`, `src/riot/limiter/persist.rs:L23-L25`, `src/riot/limiter/persist.rs:L178-L213`, `src/consumers.rs:L105-L107`, `src/consumers.rs:L141-L155`, `src/consumers.rs:L213-L283`, `src/jobs/maintenance.rs:L36-L38`, `src/jobs/maintenance.rs:L237-L251`, `src/stats.rs:L43`, `src/stats.rs:L353-L368`, `src/stats.rs:L965-L981`, `src/routes/dev.rs:L41-L81`, `docs/_meta/scratch/persistence.md`, `docs/design/04-data-and-cache.md`, `docs/design/12-object-storage-and-hosting.md:L159-L221`
-**Last verified:** 2026-10-20 against commit `f0087f7`
+**Sources:** `src/db/migrations/V0001__init.sql`, `V0002__archive.sql`, `V0003__cs_and_duration.sql`, `V0005__analytics.sql`, `V0007__job_lane.sql`, `V0009__cache_fetched_at.sql`, `V0012__match_builds.sql`, `V0013__timelines_standalone.sql`, `V0018__timeline_gaps.sql`, `V0019__tier_on_facts.sql`, `V0020__without_rowid_derived.sql`, `V0021__facts_without_rowid.sql`, `V0022__jobs_state_kind.sql`, `V0023__body_packs.sql`, `V0024__matches_archived.sql`, `V0028__jobs_crawl_matches.sql`, `src/db/mod.rs:L26-L42`, `src/db/mod.rs:L358-L360`, `src/archive/matches.rs:L33-L103`, `src/archive/matches.rs:L178-L215`, `src/archive/matches.rs:L375-L431`, `src/archive/facts.rs:L19`, `src/archive/facts.rs:L292-L379`, `src/archive/builds.rs:L24`, `src/archive/pack.rs:L287-L354`, `src/archive/offload.rs:L147-L170`, `src/archive/tiers.rs:L37-L57`, `src/cache/l2.rs:L159-L223`, `src/riot/limiter/persist.rs:L23-L25`, `src/riot/limiter/persist.rs:L178-L213`, `src/consumers.rs:L105-L107`, `src/consumers.rs:L141-L155`, `src/consumers.rs:L213-L283`, `src/jobs/maintenance.rs:L36-L38`, `src/jobs/maintenance.rs:L237-L251`, `src/stats.rs:L43`, `src/stats.rs:L355-L370`, `src/stats.rs:L998-L1014`, `src/routes/dev.rs:L41-L81`, `docs/_meta/scratch/persistence.md`, `docs/design/04-data-and-cache.md`, `docs/design/12-object-storage-and-hosting.md:L159-L221`
+**Last verified:** 2026-10-20 against commit `b7b363c`

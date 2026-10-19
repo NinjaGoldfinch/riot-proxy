@@ -381,7 +381,7 @@ ninjagoldfinch.lol's `/champions` data took 3.9 s, all of it the proxy's analyti
 ## WR — a writer that is not starved (owner request 2026-10-19)
 `/readyz` reported `sqlite: false` on production while the dashboard's crawls tab was open (IMPLEMENTATION.md §Post-release — WR).
 - [x] WR-01 a crawl's activity view seeks its indexes: exact ladder kinds, V0028 `jobs_crawl_matches` (#229, ADR-179)
-- [ ] WR-02 `/readyz` reports writer progress; a slow-write metric (ask first)
+- [x] WR-02 `/readyz` reports writer progress (stamps, CPU clock) instead of queueing behind a write; `sqlite_write_seconds`, `sqlite_write_wait_seconds`, `sqlite_write_queue` (#PR, ADR-180)
 - [ ] WR-03 shutdown inside systemd's stop timeout (ask first)
 
 ## PAIR — team pairings (owner request 2026-10-10, outline)

@@ -94,7 +94,7 @@ Call `activity::step("GOLD II page 12 on na1")` at each unit of progress, `activ
 ### 9. Events and metrics
 
 - **Events.** The `Event` enum and its `NAMES` list are in `src/events.rs:113-124`; a job publishes through the hub (`Hub::publish`, `src/ws/hub.rs:100-103`) as `archive:match` does with `announce` (`src/jobs/archive.rs:264-270`, `423`). A new event is a new variant, a `NAMES` entry, the WebSocket protocol document ([../integration/contract.md](../integration/contract.md)) and the dashboard if it listens; events keep v1's names plus v2's additions (`PROGRESS.md:387`).
-- **Metrics.** `proxy_jobs_total{job,status}` and `jobs_pending{kind}` come for free (`src/jobs/scheduler.rs:36`, `48-49`). A job-specific metric is a constant in `src/metrics.rs`, a `def(...)` row in `CATALOGUE`, and a row in `docs/design/metrics.md`; a unit test fails when the document lacks the row (`src/metrics.rs:87-89`, `426-437`).
+- **Metrics.** `proxy_jobs_total{job,status}` and `jobs_pending{kind}` come for free (`src/jobs/scheduler.rs:36`, `48-49`). A job-specific metric is a constant in `src/metrics.rs`, a `def(...)` row in `CATALOGUE`, and a row in `docs/design/metrics.md`; a unit test fails when the document lacks the row (`src/metrics.rs:91-93`, `426-437`).
 
 ### 10. Tests
 
@@ -166,5 +166,5 @@ Then: `jobs::handlers` gets `.with(kinds::CLASH_SYNC, clash::ClashSyncHandler(Ar
 9. design/06 catalogue row, concurrency and runbook docs, ADR, `PROGRESS.md`.
 
 ---
-**Sources:** `src/jobs/mod.rs:L19-L167`, `src/jobs/scheduler.rs:L1-L19`, `L36-L165`, `L225-L254`, `L418-L450`, `L1070-L1144`, `src/jobs/lanes.rs:L1-L78`, `src/jobs/ticks.rs:L1-L4`, `L44-L80`, `L108-L137`, `L178-L200`, `src/jobs/activity.rs:L363-L378`, `src/jobs/archive.rs:L227-L270`, `L423`, `src/jobs/names.rs:L193`, `L208-L232`, `src/fetcher.rs:L123-L140`, `src/cli/serve.rs:L248-L270`, `src/routes/admin.rs:L2278-L2289`, `src/app.rs:L53`, `src/events.rs:L113-L124`, `src/ws/hub.rs:L100-L103`, `src/metrics.rs:L87-L89`, `L426-L437`, `src/config.rs:L111`, `src/config/tests.rs:L430-L449`, `src/db/migrations/V0001__init.sql:L44`, `tests/jobs.rs:L43-L101`, `src/jobs/ticks/tests.rs:L36-L45`, `src/jobs/scheduler/tests.rs:L31-L40`, `docs/design/06-jobs-and-realtime.md:L84-L158`, `docs/DECISIONS.md:L1443-L1452` (ADR-134), `.env.example:L31-L34`, `PROGRESS.md:L387`
-**Last verified:** 2026-10-19 against commit `52fa67d`
+**Sources:** `src/jobs/mod.rs:L19-L167`, `src/jobs/scheduler.rs:L1-L19`, `L36-L165`, `L225-L254`, `L418-L450`, `L1070-L1144`, `src/jobs/lanes.rs:L1-L78`, `src/jobs/ticks.rs:L1-L4`, `L44-L80`, `L108-L137`, `L178-L200`, `src/jobs/activity.rs:L363-L378`, `src/jobs/archive.rs:L227-L270`, `L423`, `src/jobs/names.rs:L193`, `L208-L232`, `src/fetcher.rs:L123-L140`, `src/cli/serve.rs:L248-L270`, `src/routes/admin.rs:L2278-L2289`, `src/app.rs:L53`, `src/events.rs:L113-L124`, `src/ws/hub.rs:L100-L103`, `src/metrics.rs:L91-L93`, `L426-L437`, `src/config.rs:L111`, `src/config/tests.rs:L430-L449`, `src/db/migrations/V0001__init.sql:L44`, `tests/jobs.rs:L43-L101`, `src/jobs/ticks/tests.rs:L36-L45`, `src/jobs/scheduler/tests.rs:L31-L40`, `docs/design/06-jobs-and-realtime.md:L84-L158`, `docs/DECISIONS.md:L1443-L1452` (ADR-134), `.env.example:L31-L34`, `PROGRESS.md:L387`
+**Last verified:** 2026-10-20 against commit `b7b363c`

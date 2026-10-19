@@ -90,7 +90,7 @@ Stop, replace the file, start; then catch the pack map up (`README.md:142`; `doc
    ```
 
 5. `sudo -u riot-proxy mv restore.db riot-proxy.db` (the file must be owned by `riot-proxy`).
-6. `sudo systemctl start riot-proxy`; `curl -s localhost:8080/readyz`. Migrations newer than the backup apply on this boot (`src/db/mod.rs:144-149`).
+6. `sudo systemctl start riot-proxy`; `curl -s localhost:8080/readyz`. Migrations newer than the backup apply on this boot (`src/db/mod.rs:148-155`).
 7. Catch the pack map up with the packs written after the backup was taken:
 
    ```bash
@@ -131,5 +131,5 @@ The drill passed on 2026-10-15: the 2026-10-14 backup served a body from R2 with
 Freeing a body empties its blob; the pages go to SQLite's free list and the file does not shrink. Once `archive_offload_pending{step="free"}` is 0 for both kinds, copy the database compactly with `rp backup` and swap it in with the gated steps in `deploy/README.md:222-270` (tmux, `fuser`, header check, `quick_check`, checkpoint, swap). The 2026-10-14 incident, a swap made while the copy was still being written, is recounted there; nothing was lost, and the gates exist because of it.
 
 ---
-**Sources:** `src/jobs/maintenance.rs:L34-L41,L57-L105,L127-L139,L204-L232,L280-L322`, `src/jobs/ticks.rs:L116-L117`, `src/cli/backup.rs:L10-L21`, `src/cli/packs.rs:L32-L83`, `src/archive/recovery.rs:L1-L15,L207-L271`, `src/riot/limiter/persist.rs:L23,L92-L94`, `src/cache/l2.rs:L186-L216`, `src/db/mod.rs:L144-L149`, `src/db/migrations/V0023__body_packs.sql:L3-L5`, `src/config.rs:L729`, `deploy/README.md:L12-L47,L103-L152,L156-L160,L222-L270`, `deploy/riot-proxy-replica.service:L12-L19`, `deploy/riot-proxy-replica.timer:L6-L8`, `docs/design/07-deployment.md:L175-L206`, `docs/design/12-object-storage-and-hosting.md:L208-L212,L359-L434,L808-L830,L938-L946`, `docs/DECISIONS.md:L1459-L1464,L1722-L1730`, `README.md:L134-L142`, `PROGRESS.md:L335`, `reports/OBJ implementation handoff.md:L20`, `docs/_meta/scratch/persistence.md`
-**Last verified:** 2026-10-19 against commit `52fa67d`
+**Sources:** `src/jobs/maintenance.rs:L34-L41,L57-L105,L127-L139,L204-L232,L280-L322`, `src/jobs/ticks.rs:L116-L117`, `src/cli/backup.rs:L10-L21`, `src/cli/packs.rs:L32-L83`, `src/archive/recovery.rs:L1-L15,L207-L271`, `src/riot/limiter/persist.rs:L23,L92-L94`, `src/cache/l2.rs:L186-L216`, `src/db/mod.rs:L148-L155`, `src/db/migrations/V0023__body_packs.sql:L3-L5`, `src/config.rs:L729`, `deploy/README.md:L12-L47,L103-L152,L156-L160,L222-L270`, `deploy/riot-proxy-replica.service:L12-L19`, `deploy/riot-proxy-replica.timer:L6-L8`, `docs/design/07-deployment.md:L175-L206`, `docs/design/12-object-storage-and-hosting.md:L208-L212,L359-L434,L808-L830,L938-L946`, `docs/DECISIONS.md:L1459-L1464,L1722-L1730`, `README.md:L134-L142`, `PROGRESS.md:L335`, `reports/OBJ implementation handoff.md:L20`, `docs/_meta/scratch/persistence.md`
+**Last verified:** 2026-10-20 against commit `b7b363c`

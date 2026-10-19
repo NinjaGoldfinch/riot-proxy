@@ -142,11 +142,12 @@ The crawl is written in one transaction; a partial unique index refuses a second
 | Interactive wait for a limiter token | `CLIENT_WAIT_BUDGET_MS` = 2000 | `src/config.rs:716` |
 | Job wait before yielding | `JOB_YIELD_BUDGET_MS` = 1000 | `src/config.rs:711` |
 | Background refresh budget | 15 min | `src/fetcher.rs:42-44` |
-| `/readyz` SQLite probe | 2 s | `src/routes/health.rs:19` |
+| `/readyz` SQLite probe (idle writer) | 2 s, of which 1.5 s waiting for the write lock | `src/routes/health.rs:21-27` |
+| `/readyz` stall threshold (busy writer) | 5 s without progress stamps or CPU | `src/routes/health.rs:34-46` |
 | Graceful drain after SIGTERM | 10 s | `src/app.rs:35` |
 | Data Dragon connect / total | 15 s / 60 s | `src/jobs/ddragon.rs:260-261` |
 | Site's budget per proxy call | 5 s analytics and static, 30 s otherwise | ninjagoldfinch-lol `src/lib/server/proxy.ts:55-64` (origin/main) |
 
 ---
 **Sources:** `src/app.rs:L103-L118`, `src/http/request_id.rs:L287-L338`, `src/http/auth.rs:L319-L343`, `src/fetcher.rs:L36-L44,L281-L367,L402-L608`, `src/riot/endpoints.rs:L112-L121,L495-L503`, `src/singleflight.rs:L1-L12`, `src/archive/mod.rs:L88-L178`, `src/archive/matches.rs:L176-L313`, `src/routes/lol.rs:L53-L64`, `src/routes/players.rs:L66-L105,L128-L147,L244-L324,L547-L599`, `src/routes/players/refresh.rs:L18-L71`, `src/routes/admin.rs:L1700-L1733`, `src/jobs/ladder.rs:L237-L318,L826-L836`, `src/db/store.rs:L98-L133`, `src/jobs/scheduler.rs:L124-L141`, `docs/_meta/scratch/riot-and-cache.md` §1.5, `docs/_meta/scratch/siblings.md` §1.3
-**Last verified:** 2026-10-19 against commit `52fa67d`
+**Last verified:** 2026-10-20 against commit `b7b363c`

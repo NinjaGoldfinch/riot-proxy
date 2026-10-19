@@ -79,4 +79,4 @@ ninjagoldfinch.lol pins the proxy contract it was verified against (its generate
 
 ---
 **Sources:** `.github/workflows/release.yml`, `.github/workflows/edge.yml`, `Cargo.toml:L3`, `git show --stat v2.7.0` (commit `10cf81d`), `git tag -l`, `docs/design/07-deployment.md#upgrade-procedure`, `docs/design/07-deployment.md#build-identity-adm-03`, `deploy/README.md`, `deploy/proxmox/README.md`, `deploy/proxmox/files/riot-proxy-update`
-**Last verified:** 2026-10-20 against commit `a11df6c`
+**Last verified:** 2026-10-20 against commit `b7b363c`

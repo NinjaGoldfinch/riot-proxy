@@ -6,10 +6,10 @@ How schema changes ship: one forward-only refinery SQL file under `src/db/migrat
 
 | Aspect | Behaviour |
 |---|---|
-| Engine | refinery, embedded at compile time by `refinery::embed_migrations!("src/db/migrations")` (`src/db/mod.rs:18-20`) |
+| Engine | refinery, embedded at compile time by `refinery::embed_migrations!("src/db/migrations")` (`src/db/mod.rs:22-24`) |
 | Naming | `V<nnnn>__<name>.sql`; refinery only recognises `^[UV]\d+__\w+\.sql$`, and the four-digit padding is this repository's convention (ADR-010, `docs/DECISIONS.md:51`). refinery logs them without the padding (`V27__matchup_builds`) |
-| When | `Db::open` applies pending migrations on the writer connection, after the pragmas and before the readers open (`src/db/mod.rs:131-147`). `serve` opens that way, and so does every CLI command that touches the database (`src/cli/mod.rs:136-141`). `riot-proxy migrate` applies them on a raw connection and prints `<path>: up to date` or `<path>: applied V…` (`src/cli/mod.rs:144-165`) |
-| Transaction | all pending files in **one** transaction (`set_grouped(true)`, `src/db/mod.rs:294-296`); applied versions are skipped, so running on every boot is safe |
+| When | `Db::open` applies pending migrations on the writer connection, after the pragmas and before the readers open (`src/db/mod.rs:135-151`). `serve` opens that way, and so does every CLI command that touches the database (`src/cli/mod.rs:136-141`). `riot-proxy migrate` applies them on a raw connection and prints `<path>: up to date` or `<path>: applied V…` (`src/cli/mod.rs:144-165`) |
+| Transaction | all pending files in **one** transaction (`set_grouped(true)`, `src/db/mod.rs:338-340`); applied versions are skipped, so running on every boot is safe |
 | History | `refinery_schema_history(version, name, applied_on, checksum)`; a fresh database has 28 rows after V0028 (`src/db/tests.rs:895`) |
 | Direction | forward only. There are no down migrations: every file is `V…`, and a change that must be undone is undone by restoring the previous backup (`README.md:142`; [../deployment/upgrade-and-rollback.md](../deployment/upgrade-and-rollback.md)) |
 
@@ -33,7 +33,7 @@ On 2026-10-19 that printed `src/db/migrations/V0027__matchup_builds.sql` at `ori
 
 - Timestamps are unix milliseconds in `INTEGER` columns; JSON is `TEXT`; match bodies are zstd `BLOB`s (`src/db/migrations/V0001__init.sql:1-2`; CLAUDE.md conventions). Name a timestamp `<what>_at` (`archived_at`, `packed_at`, `created_at`).
 - Rows holding an encrypted Riot id carry `key_scope TEXT NOT NULL` (`docs/design/04-data-and-cache.md:63`, `417-423`).
-- `PRAGMA foreign_keys = ON` on every connection (`src/db/mod.rs:27`), so a declared `REFERENCES … ON DELETE CASCADE` is enforced; declare one only where the parent really owns the rows (`timelines` lost its FK to `matches` in V0013 for that reason, ADR-118).
+- `PRAGMA foreign_keys = ON` on every connection (`src/db/mod.rs:31`), so a declared `REFERENCES … ON DELETE CASCADE` is enforced; declare one only where the parent really owns the rows (`timelines` lost its FK to `matches` in V0013 for that reason, ADR-118).
 - Header comment: task id, ADR, and why, as every file has (`src/db/migrations/V0023__body_packs.sql:1-5`).
 - The DDL in `docs/design/04-data-and-cache.md` §Schema is the authority and V0001 copied it verbatim (`V0001__init.sql:1-2`); keep design/04 in step.
 
@@ -119,5 +119,5 @@ Then: add `"clash_teams"` to the sorted list in `migrations_create_exactly_the_d
 7. `just lint`, `just test`; a backup before the first production boot ([../deployment/backup-and-restore.md](../deployment/backup-and-restore.md)).
 
 ---
-**Sources:** `src/db/mod.rs:L18-L27`, `L131-L147`, `L294-L296`, `src/cli/mod.rs:L136-L165`, `src/db/migrations/V0001__init.sql:L1-L2`, `V0003__cs_and_duration.sql`, `V0021__facts_without_rowid.sql:L1-L33`, `V0023__body_packs.sql:L1-L48`, `V0027__matchup_builds.sql:L1-L19`, `src/db/tests.rs:L92-L149`, `L167`, `L398-L450`, `L539-L562`, `L731`, `L873-L915`, `L1218`, `src/archive/offload/tests.rs:L501-L514`, `src/jobs/offload/tests.rs:L497-L512`, `src/routes/dev.rs:L38-L83`, `tests/common/mod.rs:L32-L33`, `docs/design/04-data-and-cache.md:L61-L63`, `L417-L423`, `docs/design/12-object-storage-and-hosting.md:L196-L221`, `docs/DECISIONS.md:L49-L51` (ADR-010), `L1455` (ADR-135), `L1460-L1462` (ADR-136), `L1490-L1505` (ADR-140, ADR-141), `L1510` (ADR-142), `README.md:L142`, `docs/_meta/scratch/persistence.md` §1
-**Last verified:** 2026-10-20 against commit `f0087f7`
+**Sources:** `src/db/mod.rs:L22-L31`, `L131-L147`, `L294-L296`, `src/cli/mod.rs:L136-L165`, `src/db/migrations/V0001__init.sql:L1-L2`, `V0003__cs_and_duration.sql`, `V0021__facts_without_rowid.sql:L1-L33`, `V0023__body_packs.sql:L1-L48`, `V0027__matchup_builds.sql:L1-L19`, `src/db/tests.rs:L92-L149`, `L167`, `L398-L450`, `L539-L562`, `L731`, `L873-L915`, `L1218`, `src/archive/offload/tests.rs:L501-L514`, `src/jobs/offload/tests.rs:L497-L512`, `src/routes/dev.rs:L38-L83`, `tests/common/mod.rs:L32-L33`, `docs/design/04-data-and-cache.md:L61-L63`, `L417-L423`, `docs/design/12-object-storage-and-hosting.md:L196-L221`, `docs/DECISIONS.md:L49-L51` (ADR-010), `L1455` (ADR-135), `L1460-L1462` (ADR-136), `L1490-L1505` (ADR-140, ADR-141), `L1510` (ADR-142), `README.md:L142`, `docs/_meta/scratch/persistence.md` §1
+**Last verified:** 2026-10-20 against commit `b7b363c`

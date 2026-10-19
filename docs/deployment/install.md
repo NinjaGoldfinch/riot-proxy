@@ -130,7 +130,7 @@ sudo systemd-run --quiet --wait --pipe --uid=riot-proxy -p EnvironmentFile=/etc/
   /usr/local/bin/riot-proxy --data-dir /var/lib/riot-proxy/data migrate     # <path>: applied V0001, … or up to date
 ```
 
-`migrate` creates the database and applies every migration (`src/cli/mod.rs:144-168`); `serve` would do the same on its first boot (`src/db/mod.rs:144-149`).
+`migrate` creates the database and applies every migration (`src/cli/mod.rs:144-168`); `serve` would do the same on its first boot (`src/db/mod.rs:148-155`).
 
 ## 6. Enable, start, verify
 
@@ -143,7 +143,7 @@ curl -s localhost:8080/readyz       # {"ok":true,"sqlite":true,"limiter":true,�
 
 In the journal, in order: `database ready`, `bootstrap admin consumer created`, then on stderr a block `bootstrap admin key (shown once): rpx_…` with `Scopes read,admin. Store it now; it cannot be recovered.` (only when `BOOTSTRAP_ADMIN_KEY` was not set), `limiter checkpoint restored` or `limiter checkpoint could not be read; starting fresh`, `L1 warmed from L2`, `object store configured store=s3://riot-proxy-archive at https://…`, `listening addr=127.0.0.1:8080`, `starting job workers` (`src/cli/serve.rs:52-148,319-324,399-405`; `docs/_meta/scratch/jobs-and-observability.md:11-31`). Store the admin key now; only its sha256 is kept (`src/consumers.rs:105-107,154-157`).
 
-`/readyz` answers 503 with the same body while the writer is busy or the limiter is not yet restored (`src/routes/health.rs:83-94`).
+`/readyz` answers 503 with the same body while the limiter is not yet restored, while another process holds the database's write lock, or while a running write has stalled; a long write that makes progress keeps it 200 (`src/routes/health.rs:119-200`).
 
 ## 7. Consumer keys
 
@@ -237,5 +237,5 @@ docker compose logs | grep -i "admin key"                     # the bootstrap ad
 The image is `FROM scratch` with the static binary, `DATA_DIR=/data`, port 8080 and a `HEALTHCHECK` that runs `riot-proxy healthcheck` (`Dockerfile:19-26`). `healthcheck` loads the configuration first, so `RIOT_API_KEY` must be in the container environment (`src/cli/healthcheck.rs`; `docs/_meta/scratch/config.md:215`). The Proxmox dev VM in `deploy/proxmox/` follows the `:edge` image; it is optional and currently dormant (`README.md:27-58`).
 
 ---
-**Sources:** `docs/design/07-deployment.md:L15,L74-L95`, `docs/design/12-object-storage-and-hosting.md:L544-L558,L585-L641,L794-L807,L815-L818,L893-L903`, `deploy/README.md:L20-L100,L121-L122,L151-L152`, `deploy/riot-proxy-replica.service:L12-L33`, `deploy/riot-proxy-replica.timer:L6-L8`, `.github/workflows/release.yml:L179-L194`, `README.md:L11-L24,L27-L58`, `Dockerfile:L19-L26`, `docker-compose.yml:L1-L11`, `src/config.rs:L115-L116,L622,L658-L684,L699,L826-L877,L987-L999`, `src/cli/mod.rs:L82-L88,L144-L168`, `src/cli/serve.rs:L52-L148,L319-L324,L399-L405`, `src/cli/key.rs:L46-L57`, `src/consumers.rs:L95-L107,L154-L157`, `src/http/auth.rs:L30,L263-L265`, `src/routes/health.rs:L83-L94`, `docs/_meta/scratch/siblings.md`, `docs/_meta/scratch/routes.md:L137-L140`
-**Last verified:** 2026-10-19 against commit `52fa67d`
+**Sources:** `docs/design/07-deployment.md:L15,L74-L95`, `docs/design/12-object-storage-and-hosting.md:L544-L558,L585-L641,L794-L807,L815-L818,L893-L903`, `deploy/README.md:L20-L100,L121-L122,L151-L152`, `deploy/riot-proxy-replica.service:L12-L33`, `deploy/riot-proxy-replica.timer:L6-L8`, `.github/workflows/release.yml:L179-L194`, `README.md:L11-L24,L27-L58`, `Dockerfile:L19-L26`, `docker-compose.yml:L1-L11`, `src/config.rs:L115-L116,L622,L658-L684,L699,L826-L877,L987-L999`, `src/cli/mod.rs:L82-L88,L144-L168`, `src/cli/serve.rs:L52-L148,L319-L324,L399-L405`, `src/cli/key.rs:L46-L57`, `src/consumers.rs:L95-L107,L154-L157`, `src/http/auth.rs:L30,L263-L265`, `src/routes/health.rs:L119-L200`, `docs/_meta/scratch/siblings.md`, `docs/_meta/scratch/routes.md:L137-L140`
+**Last verified:** 2026-10-20 against commit `b7b363c`

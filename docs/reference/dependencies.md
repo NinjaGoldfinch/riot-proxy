@@ -19,7 +19,7 @@ The third-party crates riot-proxy builds on, what each is for, and why some are 
 | `tower`, `tower-http` | 0.5.3, 0.7.1 | Middleware: catch-panic, compression, CORS, static files (`fs`), body limit, request tracing |
 | `reqwest` | 0.13.5 | Riot and Data Dragon client: `json`, `gzip`, `rustls`, `http2`; default features off |
 | `webpki-root-certs` | 1.0.9 | TLS roots compiled in, so no CA bundle is needed at runtime |
-| `rusqlite` | 0.39.0 | SQLite with the `bundled` engine (libsqlite3-sys 0.37). Held at 0.39 because `refinery` 0.9 accepts rusqlite up to 0.39 (ADR-005) |
+| `rusqlite` | 0.39.0 | SQLite with the `bundled` engine (libsqlite3-sys 0.37) and the `hooks` feature, for the writer's progress handler and commit hook (WR-02, ADR-180). Held at 0.39 because `refinery` 0.9 accepts rusqlite up to 0.39 (ADR-005) |
 | `refinery` | 0.9.2 | Embedded SQL migrations (`src/db/migrations/V*.sql`), applied on boot and by `riot-proxy migrate` |
 | `moka` | 0.12.16 | In-memory L1 response cache (weight-bounded by `CACHE_L1_MAX_MB`) and the consumer-key lookup cache |
 | `dashmap` | 6.2.1 | Concurrent maps (single-flight in-flight table and similar) |
@@ -66,4 +66,4 @@ The third-party crates riot-proxy builds on, what each is for, and why some are 
 
 ---
 **Sources:** `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `Dockerfile`, `src/cli/mod.rs:L139-L142`, `docs/design/03-architecture.md#cross-cutting-decisions`
-**Last verified:** 2026-10-20 against commit `a11df6c`
+**Last verified:** 2026-10-20 against commit `b7b363c`
