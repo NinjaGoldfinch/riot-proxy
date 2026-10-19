@@ -57,4 +57,4 @@ The mock Riot in `acceptance/helpers/mock-riot.ts` and the replay fixtures under
 
 ---
 **Sources:** `docs/design/12-object-storage-and-hosting.md` §As executed, `docs/design/07-deployment.md` §Option C, `deploy/proxmox/README.md`, `README.md` §First run, `.env.example`, `src/config.rs:L658-L684,L987-L999`, `src/cache/keys.rs:L24-L37`, `docs/_meta/scratch/siblings.md` §1.2, §1.8, `docs/IMPLEMENTATION.md:L434`
-**Last verified:** 2026-10-19 against commit `52fa67d`
+**Last verified:** 2026-10-20 against commit `a11df6c`

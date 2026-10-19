@@ -204,6 +204,7 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 - [x] Release `v2.5.0`: OBJ-04 index snapshots, `packs reindex` / `restore-index` / `snapshot` and the R2 replica units (#206, #209), PERF-00 spec (#207), PERF-01 analytics reads seek on their keys (#208) (owner request 2026-10-14)
 - [x] Release `v2.6.0`: PERF-02 `champion_stats_totals` (#212), PERF-03 analytics responses cached per aggregate generation and `ANALYTICS_CACHE_ENTRIES` (#213), OBJ-04 safe reclaim and restore-drill docs (#211) (owner request 2026-10-15)
 - [x] Release `v2.7.0`: FLT-03 `minTier` tier ranges (V0026, #217), FLT-04 builds against a lane opponent (V0027, #218), FLT-05 the *vs* picker (#219), dashboard dropdowns (#215) (owner request 2026-10-19)
+- [x] Release `v2.7.1`: WR-01 a crawl's activity view seeks its indexes (V0028, #229) (owner request 2026-10-20)
 
 ## OPS — dev environment on Proxmox (owner request 2026-10-05)
 - [x] OPS-01 `:edge` image on every push to `main` (#79, ADR-069)
@@ -379,7 +380,7 @@ ninjagoldfinch.lol's `/champions` data took 3.9 s, all of it the proxy's analyti
 
 ## WR — a writer that is not starved (owner request 2026-10-19)
 `/readyz` reported `sqlite: false` on production while the dashboard's crawls tab was open (IMPLEMENTATION.md §Post-release — WR).
-- [ ] WR-01 a crawl's activity view seeks its indexes: exact ladder kinds, V0028 `jobs_crawl_matches` (ADR-179)
+- [x] WR-01 a crawl's activity view seeks its indexes: exact ladder kinds, V0028 `jobs_crawl_matches` (#229, ADR-179)
 - [ ] WR-02 `/readyz` reports writer progress; a slow-write metric (ask first)
 - [ ] WR-03 shutdown inside systemd's stop timeout (ask first)
 
