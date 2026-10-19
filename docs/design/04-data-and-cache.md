@@ -361,6 +361,10 @@ CREATE INDEX jobs_claim ON jobs(state, run_after, priority) WHERE state = 'pendi
 -- V0022 (ADM-02): covers every count over jobs (the snapshot's queues,
 -- /v1/admin/jobs/stats, jobs_pending{kind}), so they never read payloads.
 CREATE INDEX jobs_state_kind ON jobs(state, kind, run_after, finished_at);
+-- V0028 (WR-01, ADR-179): the crawl view's count of a platform's crawl-found
+-- downloads; NOCASE so its case-insensitive LIKE prefix seeks.
+CREATE INDEX jobs_crawl_matches ON jobs(priority, dedupe_key COLLATE NOCASE, state, run_after, finished_at)
+  WHERE kind = 'archive:match';
 
 CREATE TABLE metrics_history (                    -- 1440 rows ≈ 24 h at 60 s; maintenance trims
   at INTEGER PRIMARY KEY, point TEXT NOT NULL      -- JSON snapshot

@@ -10,7 +10,7 @@ How schema changes ship: one forward-only refinery SQL file under `src/db/migrat
 | Naming | `V<nnnn>__<name>.sql`; refinery only recognises `^[UV]\d+__\w+\.sql$`, and the four-digit padding is this repository's convention (ADR-010, `docs/DECISIONS.md:51`). refinery logs them without the padding (`V27__matchup_builds`) |
 | When | `Db::open` applies pending migrations on the writer connection, after the pragmas and before the readers open (`src/db/mod.rs:131-147`). `serve` opens that way, and so does every CLI command that touches the database (`src/cli/mod.rs:136-141`). `riot-proxy migrate` applies them on a raw connection and prints `<path>: up to date` or `<path>: applied V…` (`src/cli/mod.rs:144-165`) |
 | Transaction | all pending files in **one** transaction (`set_grouped(true)`, `src/db/mod.rs:294-296`); applied versions are skipped, so running on every boot is safe |
-| History | `refinery_schema_history(version, name, applied_on, checksum)`; a fresh database has 27 rows after V0027 (`src/db/tests.rs:895`) |
+| History | `refinery_schema_history(version, name, applied_on, checksum)`; a fresh database has 28 rows after V0028 (`src/db/tests.rs:895`) |
 | Direction | forward only. There are no down migrations: every file is `V…`, and a change that must be undone is undone by restoring the previous backup (`README.md:142`; [../deployment/upgrade-and-rollback.md](../deployment/upgrade-and-rollback.md)) |
 
 Observed on 2026-10-19: a first `serve` logged `going to batch apply 27 migrations in single transaction.` naming `V1__init` to `V27__matchup_builds`; a second one `going to batch apply 0 migrations`; `riot-proxy migrate` printed `…/riot-proxy.db: up to date`.
@@ -19,7 +19,7 @@ Observed on 2026-10-19: a first `serve` logged `going to batch apply 27 migratio
 
 ## Numbering
 
-The files are `V0001__init.sql` to `V0027__matchup_builds.sql` (`src/db/migrations/`); the next free number is **V0028**. Because several sessions work on this clone and branches are always based on `origin/main`, check there before picking a number:
+The files are `V0001__init.sql` to `V0028__jobs_crawl_matches.sql` (`src/db/migrations/`); the next free number is **V0029**. Because several sessions work on this clone and branches are always based on `origin/main`, check there before picking a number:
 
 ```bash
 git fetch origin && git ls-tree --name-only origin/main src/db/migrations/ | tail -1
@@ -85,7 +85,7 @@ Outside `src/db/`:
 A `clash_teams` table for a Clash feature: one row per (key scope, platform, team id), small rows, read by key only, so `WITHOUT ROWID`; a partial index for rows still to be refreshed, ending with its state column.
 
 ```sql
--- src/db/migrations/V0028__clash_teams.sql (hypothetical)
+-- src/db/migrations/V0029__clash_teams.sql (hypothetical)
 -- CLASH-01 (ADR-NNN): Clash teams a tracked player belongs to, refreshed by
 -- clash:sync. Keyed by the whole row, so WITHOUT ROWID (ADR-140); read by key
 -- and by what is due, never by rowid.
@@ -110,7 +110,7 @@ Then: add `"clash_teams"` to the sorted list in `migrations_create_exactly_the_d
 
 ## Checklist
 
-1. `git ls-tree origin/main src/db/migrations/` for the next number; `V0028__<name>.sql` with a header comment.
+1. `git ls-tree origin/main src/db/migrations/` for the next number; `V0029__<name>.sql` with a header comment.
 2. Conventions: unix-ms `INTEGER`, JSON `TEXT`, `key_scope`, FKs only where owned, `WITHOUT ROWID` by the rule, state columns last in partial indexes.
 3. Cost stated: `ADD COLUMN` where possible; a rebuild's boot time, temp space and WAL in the ADR.
 4. `src/db/tests.rs`: table list, history count, a seeded upgrade test for anything but a new table.
@@ -120,4 +120,4 @@ Then: add `"clash_teams"` to the sorted list in `migrations_create_exactly_the_d
 
 ---
 **Sources:** `src/db/mod.rs:L18-L27`, `L131-L147`, `L294-L296`, `src/cli/mod.rs:L136-L165`, `src/db/migrations/V0001__init.sql:L1-L2`, `V0003__cs_and_duration.sql`, `V0021__facts_without_rowid.sql:L1-L33`, `V0023__body_packs.sql:L1-L48`, `V0027__matchup_builds.sql:L1-L19`, `src/db/tests.rs:L92-L149`, `L167`, `L398-L450`, `L539-L562`, `L731`, `L873-L915`, `L1218`, `src/archive/offload/tests.rs:L501-L514`, `src/jobs/offload/tests.rs:L497-L512`, `src/routes/dev.rs:L38-L83`, `tests/common/mod.rs:L32-L33`, `docs/design/04-data-and-cache.md:L61-L63`, `L417-L423`, `docs/design/12-object-storage-and-hosting.md:L196-L221`, `docs/DECISIONS.md:L49-L51` (ADR-010), `L1455` (ADR-135), `L1460-L1462` (ADR-136), `L1490-L1505` (ADR-140, ADR-141), `L1510` (ADR-142), `README.md:L142`, `docs/_meta/scratch/persistence.md` §1
-**Last verified:** 2026-10-19 against commit `52fa67d`
+**Last verified:** 2026-10-20 against commit `f0087f7`
