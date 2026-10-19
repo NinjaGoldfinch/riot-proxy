@@ -1,8 +1,8 @@
 # Gaps: everything marked TODO (unverified)
 
-Every `> **TODO (unverified):**` marker in this documentation set, collected in one place and ordered by how much it matters, with the file and line it lives on and a suggested way to close it. Regenerate the raw list with `grep -rn "TODO (unverified)" docs/ --include=*.md | grep -v _meta/`.
+Every `> **TODO (unverified):**` marker in this documentation set, collected in one place and ordered by how much it matters, with the file and line it lives on and a suggested way to close it. Regenerate the raw list with `python3 docs/_meta/tools/gaps.py` (only the blockquote form counts; prose that mentions the phrase does not).
 
-Counts on 2026-10-19: 51 markers across 30 files (the index and `doc-maintenance.md` mention the marker without being gaps).
+Counts on 2026-10-19: 51 markers across 30 files.
 
 ## 1. Production state that lives only on the box
 
