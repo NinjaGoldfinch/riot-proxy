@@ -377,6 +377,12 @@ ninjagoldfinch.lol's `/champions` data took 3.9 s, all of it the proxy's analyti
 
 - [x] DOC-01 the documentation set under `docs/` (#227, ADR-178) (71 pages, `docs/README.md` index), `docs/api/openapi.json`, the `docs/_meta/tools/` checks, the `docs` CI job and the OpenAPI step in `test` (ADR-178). Not a required check until the owner adds `docs`. Follow-ups: rename one of the two `champions` handlers so the generated `operationId` is unique; commit the live `riot-proxy.service`, `/etc/riot-proxy/env` (redacted) and the `riot-proxy-offsite` timer into `deploy/` to close the top items in `docs/_meta/gaps.md`.
 
+## WR — a writer that is not starved (owner request 2026-10-19)
+`/readyz` reported `sqlite: false` on production while the dashboard's crawls tab was open (IMPLEMENTATION.md §Post-release — WR).
+- [ ] WR-01 a crawl's activity view seeks its indexes: exact ladder kinds, V0028 `jobs_crawl_matches` (ADR-179)
+- [ ] WR-02 `/readyz` reports writer progress; a slow-write metric (ask first)
+- [ ] WR-03 shutdown inside systemd's stop timeout (ask first)
+
 ## PAIR — team pairings (owner request 2026-10-10, outline)
 - [ ] PAIR-01 `champion_pairs`: every ally role per player, keyed by tier and side (IMPLEMENTATION.md §Post-release — PAIR)
 - [ ] PAIR-02 the pairings route with `allyRole`, `winRateLow` and `delta` (IMPLEMENTATION.md §Post-release — PAIR)

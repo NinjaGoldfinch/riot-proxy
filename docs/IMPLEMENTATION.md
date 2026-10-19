@@ -581,6 +581,16 @@ A pull request took about 8 minutes of CI (runs 39149666697, 39149681337, 391432
 | CI-04 | **One integration-test binary.** `autotests = false` and one `[[test]]` target, `tests/it.rs`, with every `tests/*.rs` as a module, so `tests/common` compiles once and one binary links instead of about 45. Snapshots keep their files, renamed for the new module path. | `Cargo.toml`, `tests/it.rs` (new), `tests/*.rs`, `tests/snapshots/` | a guard test fails if a `tests/*.rs` file is not a module of `tests/it.rs`; the suite passes under `cargo test` and nextest | test compile time measured before and after in the ADR | new ADR |
 | CI-05 | **Less debug info in dev and test builds.** `[profile.dev] debug = "line-tables-only"`, dependencies `debug = false`: backtraces keep file and line, links are faster and `target/` and the CI caches are smaller. | `Cargo.toml` | the suite passes | build time and `target/` size measured before and after in the ADR | new ADR |
 
+### Post-release — WR: a writer that is not starved (owner request 2026-10-19)
+
+On production `/readyz` reported `sqlite: false` (its write probe timing out at 2 s) whenever the dashboard's crawls tab was open: four crawl-activity reads of 5 to 10 s each, every few seconds. A restart in that state took 90 s (SIGTERM timed out) and found the limiter checkpoint stale, so every window restored full (ADR-026).
+
+| ID | Task | Files | Tests | Accept | Design |
+|---|---|---|---|---|---|
+| WR-01 | **A crawl's activity view seeks its indexes.** The ladder kinds as an exact `IN` list instead of `LIKE 'ladder:%'`; V0028 `jobs_crawl_matches`, partial to `archive:match`, NOCASE on `dedupe_key`, covering the download count. Results unchanged. | `src/jobs/ladder/store.rs`, `src/db/migrations/V0028__jobs_crawl_matches.sql` | plan test with and without statistics; the kind list is every ladder kind; the download count stays case-insensitive | the view under 50 ms on a synthetic production-shaped queue (was about 2.2 s) | 04 §Schema; new ADR |
+| WR-02 | `/readyz` reports whether the writer makes progress rather than queueing a probe behind its work; a slow-write metric. Not started (ask first). | | | | |
+| WR-03 | Shutdown finishes inside systemd's 90 s stop timeout. Not started (ask first). | | | | |
+
 ## 3. Parallelism and ordering
 
 Strict order within a phase unless `[parallel-ok]`. Phases are sequential except:

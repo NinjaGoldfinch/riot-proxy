@@ -1647,6 +1647,19 @@ async fn a_crawls_activity_shows_each_stage_its_jobs_and_its_place_in_the_queue(
         None,
     )
     .await;
+    // WR-01: the count seeks a NOCASE index and stays case-insensitive.
+    put_job(
+        &a.state.db,
+        "01AAAAAAAAAAAAAAAAAAAAAAAH",
+        kinds::ARCHIVE_MATCH,
+        "kr_6",
+        order::MATCH,
+        json!({"matchId": "kr_6"}),
+        "pending",
+        now - 1,
+        None,
+    )
+    .await;
     let v = get(id.clone()).await.json();
     assert_eq!(
         stage(&v, 1),
@@ -1659,8 +1672,8 @@ async fn a_crawls_activity_shows_each_stage_its_jobs_and_its_place_in_the_queue(
     assert_eq!(v["stages"][2]["unit"], "ids");
     assert_eq!(
         v["downloads"],
-        json!({"platform": "kr", "ready": 2, "delayed": 0, "running": 0, "failed": 0, "recent": 1, "etaSeconds": 1200}),
-        "`_` is not a wildcard: KRX5 is not kr's"
+        json!({"platform": "kr", "ready": 3, "delayed": 0, "running": 0, "failed": 0, "recent": 1, "etaSeconds": 1800}),
+        "`_` is not a wildcard: KRX5 is not kr's; kr_6 is"
     );
 
     // Cancelled in the archive stage: the earlier stages are done, it stopped there.

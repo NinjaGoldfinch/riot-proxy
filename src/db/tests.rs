@@ -224,7 +224,7 @@ async fn a_v1_database_upgrades_to_v2_and_keeps_its_data() {
         })
         .await
         .expect("read");
-    assert_eq!((name.as_str(), versions), ("old", 27));
+    assert_eq!((name.as_str(), versions), ("old", 28));
 }
 
 /// V0015 (SITE-08, ADR-123) backfills the slices aggregated before it, as the
@@ -892,11 +892,11 @@ async fn migrations_apply_once_across_reopens() {
         })
         .await
         .expect("insert");
-    assert_eq!(history(first.clone()).await.expect("history"), 27);
+    assert_eq!(history(first.clone()).await.expect("history"), 28);
     drop(first);
 
     let second = Db::open(&path, 1).expect("second open");
-    assert_eq!(history(second.clone()).await.expect("history"), 27, "no re-run");
+    assert_eq!(history(second.clone()).await.expect("history"), 28, "no re-run");
     let name: Option<String> = second
         .read(|c| {
             Ok::<_, DbError>(
@@ -1239,6 +1239,91 @@ async fn job_counts_read_only_the_state_kind_index() {
             "{sql}: {plan:?}"
         );
     }
+}
+
+/// WR-01 (ADR-179): every job statement of a crawl's activity view seeks an
+/// index, with and without statistics. Before, `kind LIKE 'ladder:%'` and the
+/// downloads count read every pending or archive:match row from the table.
+#[tokio::test]
+async fn crawl_activity_reads_seek_their_indexes() {
+    use crate::jobs::ladder::store::activity_sql;
+    let (_dir, db) = open_temp(1);
+    let plans = |db: Db| async move {
+        db.read(|c| {
+            let sql = activity_sql();
+            let id = "01M5A4VKTJ7HDGXBV1V2ZPPG5S";
+            let plan = |sql: &str, args: &[&dyn rusqlite::ToSql]| -> Result<String, DbError> {
+                let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
+                let rows = stmt
+                    .query_map(args, |r| r.get::<_, String>(3))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(rows.join(" | "))
+            };
+            Ok::<_, DbError>(vec![
+                ("running", plan(&sql.running, &[&id])?),
+                ("next", plan(&sql.next, &[&id, &1i64, &20i64])?),
+                ("failed", plan(&sql.failed, &[&id, &20i64])?),
+                ("done_recently", plan(&sql.done_recently, &[&id, &1i64])?),
+                (
+                    "downloads",
+                    plan(&sql.downloads, &[&"OC1\\_%", &1i64, &1i64, &20_005i64])?,
+                ),
+            ])
+        })
+        .await
+        .expect("plans")
+    };
+    let check = |plans: Vec<(&str, String)>, when: &str| {
+        for (name, plan) in plans {
+            assert!(!plan.contains("SCAN jobs"), "{name} {when}: {plan}");
+            let want = if name == "downloads" {
+                "COVERING INDEX jobs_crawl_matches (priority=? AND dedupe_key>? AND dedupe_key<?)"
+            } else {
+                "INDEX jobs_state_kind (state=? AND kind=?)"
+            };
+            assert!(plan.contains(want), "{name} {when}: {plan}");
+        }
+    };
+    check(plans(db.clone()).await, "without statistics");
+
+    // A queue shaped like production's: mostly pending archive:match.
+    db.write(|c| {
+        let tx = c.transaction()?;
+        for i in 0..2_000 {
+            let (state, finished) = if i % 4 == 0 {
+                ("done", Some(i))
+            } else {
+                ("pending", None)
+            };
+            tx.execute(
+                "INSERT INTO jobs (id, kind, dedupe_key, priority, payload, state, run_after, finished_at)
+                 VALUES (?1, 'archive:match', ?2, 20005, '{}', ?3, 0, ?4)",
+                params![format!("{i:026}"), format!("OC1_{i}"), state, finished],
+            )?;
+        }
+        tx.execute(
+            "INSERT INTO jobs (id, kind, priority, payload, state, run_after)
+             VALUES ('X', 'ladder:apex', 20001, '{\"crawlId\":\"c\"}', 'pending', 0)",
+            [],
+        )?;
+        tx.execute_batch("ANALYZE")?;
+        tx.commit()?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .expect("seed");
+    check(plans(db).await, "with statistics");
+}
+
+/// The activity view's kind list is every ladder kind (WR-01).
+#[test]
+fn crawl_activity_names_every_ladder_kind() {
+    let ladder: Vec<&str> = crate::jobs::kinds::ALL
+        .iter()
+        .copied()
+        .filter(|k| k.starts_with("ladder:"))
+        .collect();
+    assert_eq!(crate::jobs::ladder::store::LADDER_KINDS.to_vec(), ladder);
 }
 
 /// V0023 (OBJ-02, ADR-163) adds the pack tables and the state columns. Every

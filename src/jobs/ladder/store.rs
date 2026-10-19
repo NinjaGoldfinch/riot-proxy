@@ -694,6 +694,66 @@ pub struct Activity {
     pub downloads: Downloads,
 }
 
+/// The job statements behind [`activity`], one per part of the view. `?1` is the
+/// crawl id in all but `ahead` and `downloads` (WR-01, ADR-179).
+pub(crate) struct ActivitySql {
+    pub running: String,
+    pub next: String,
+    pub failed: String,
+    pub ahead: &'static str,
+    pub done_recently: String,
+    pub downloads: String,
+}
+
+/// The ladder job kinds, the ones whose payload can name a crawl. An exact
+/// list, not `LIKE 'ladder:%'`: SQLite's `LIKE` is case-insensitive, so it
+/// can't seek `jobs_state_kind` and read every pending job's row instead.
+pub(crate) const LADDER_KINDS: [&str; 5] = [
+    crate::jobs::kinds::LADDER_CRAWL,
+    crate::jobs::kinds::LADDER_APEX,
+    crate::jobs::kinds::LADDER_WALK,
+    crate::jobs::kinds::LADDER_COLLECT,
+    crate::jobs::kinds::LADDER_ARCHIVE,
+];
+
+pub(crate) fn activity_sql() -> ActivitySql {
+    use crate::jobs::scheduler::{CLAIM_ORDER, ROW_COLUMNS};
+    let kinds = LADDER_KINDS.map(|k| format!("'{k}'")).join(", ");
+    // The crawl's own jobs carry its id; `ladder:crawl` itself runs before
+    // the row exists and names none.
+    let mine = format!("kind IN ({kinds}) AND json_extract(payload, '$.crawlId') = ?1");
+    ActivitySql {
+        running: format!(
+            "SELECT {ROW_COLUMNS} FROM jobs WHERE state = 'running' AND {mine} ORDER BY claimed_at, id"
+        ),
+        next: format!(
+            "SELECT {ROW_COLUMNS} FROM jobs WHERE state = 'pending' AND {mine}
+              ORDER BY run_after > ?2, {CLAIM_ORDER} LIMIT ?3"
+        ),
+        failed: format!(
+            "SELECT {ROW_COLUMNS} FROM jobs WHERE state = 'failed' AND {mine} ORDER BY id DESC LIMIT ?2"
+        ),
+        ahead: "SELECT count(*) FROM jobs WHERE state = 'pending' AND run_after <= ?1
+                  AND (priority, run_after, id) < (?2, ?3, ?4)",
+        done_recently: format!(
+            "SELECT kind, count(*) FROM jobs WHERE state = 'done' AND finished_at >= ?2 AND {mine}
+              GROUP BY kind ORDER BY kind"
+        ),
+        // The kind is in the text so the partial index `jobs_crawl_matches`
+        // (V0028) applies; its NOCASE key lets this LIKE seek, and it covers
+        // the count.
+        downloads: format!(
+            "SELECT count(*) FILTER (WHERE state = 'pending' AND run_after <= ?2),
+                    count(*) FILTER (WHERE state = 'pending' AND run_after > ?2),
+                    count(*) FILTER (WHERE state = 'running'),
+                    count(*) FILTER (WHERE state = 'failed'),
+                    count(*) FILTER (WHERE state = 'done' AND finished_at >= ?3)
+               FROM jobs WHERE kind = '{}' AND priority = ?4 AND dedupe_key LIKE ?1 ESCAPE '\\'",
+            crate::jobs::kinds::ARCHIVE_MATCH
+        ),
+    }
+}
+
 /// The crawl and its work, as of `now`. `window_ms` is the pace window;
 /// `limit` caps each job list. `match_priority` is the crawl-match band.
 pub async fn activity(
@@ -705,7 +765,7 @@ pub async fn activity(
     limit: u32,
     match_priority: i64,
 ) -> Result<Option<Activity>, DbError> {
-    use crate::jobs::scheduler::{CLAIM_ORDER, ROW_COLUMNS, full_row};
+    use crate::jobs::scheduler::full_row;
     let (scope, id) = (key_scope.to_string(), id.to_string());
     db.read(move |c| {
         let Some(crawl) = c
@@ -732,66 +792,32 @@ pub async fn activity(
             [&id],
             |r| r.get(0),
         )?;
-        // The crawl's own jobs carry its id; `ladder:crawl` itself runs before
-        // the row exists and names none.
-        let mine = "kind LIKE 'ladder:%' AND json_extract(payload, '$.crawlId') = ?1";
-        let rows =
-            |sql: String, args: &[&dyn rusqlite::ToSql]| -> Result<Vec<crate::jobs::JobRow>, DbError> {
-                Ok(c.prepare(&sql)?
-                    .query_map(args, full_row)?
-                    .collect::<Result<Vec<_>, _>>()?)
-            };
-        let running = rows(
-            format!(
-                "SELECT {ROW_COLUMNS} FROM jobs WHERE state = 'running' AND {mine} ORDER BY claimed_at, id"
-            ),
-            &[&id],
-        )?;
-        let next = rows(
-            format!(
-                "SELECT {ROW_COLUMNS} FROM jobs WHERE state = 'pending' AND {mine}
-                  ORDER BY run_after > ?2, {CLAIM_ORDER} LIMIT ?3"
-            ),
-            &[&id, &now, &limit],
-        )?;
-        let failed = rows(
-            format!(
-                "SELECT {ROW_COLUMNS} FROM jobs WHERE state = 'failed' AND {mine} ORDER BY id DESC LIMIT ?2"
-            ),
-            &[&id, &limit],
-        )?;
+        let sql = activity_sql();
+        let rows = |sql: &str, args: &[&dyn rusqlite::ToSql]| -> Result<Vec<crate::jobs::JobRow>, DbError> {
+            Ok(c.prepare(sql)?
+                .query_map(args, full_row)?
+                .collect::<Result<Vec<_>, _>>()?)
+        };
+        let running = rows(&sql.running, &[&id])?;
+        let next = rows(&sql.next, &[&id, &now, &limit])?;
+        let failed = rows(&sql.failed, &[&id, &limit])?;
         let ahead = match next.first().filter(|j| j.run_after <= now) {
-            Some(j) => Some(c.query_row(
-                "SELECT count(*) FROM jobs WHERE state = 'pending' AND run_after <= ?1
-                   AND (priority, run_after, id) < (?2, ?3, ?4)",
-                params![now, j.priority, j.run_after, j.id],
-                |r| r.get(0),
-            )?),
+            Some(j) => Some(
+                c.query_row(sql.ahead, params![now, j.priority, j.run_after, j.id], |r| {
+                    r.get(0)
+                })?,
+            ),
             None => None,
         };
         let done_recently = c
-            .prepare(&format!(
-                "SELECT kind, count(*) FROM jobs WHERE state = 'done' AND finished_at >= ?2 AND {mine}
-                  GROUP BY kind ORDER BY kind"
-            ))?
+            .prepare(&sql.done_recently)?
             .query_map(params![id, now - window_ms], |r| Ok((r.get(0)?, r.get(1)?)))?
             .collect::<Result<Vec<_>, _>>()?;
         // `OC1_…` for oc1; `_` is a LIKE wildcard, hence the escape.
         let prefix = format!("{}\\_%", crawl.platform.to_uppercase());
         let downloads = c.query_row(
-            "SELECT count(*) FILTER (WHERE state = 'pending' AND run_after <= ?3),
-                    count(*) FILTER (WHERE state = 'pending' AND run_after > ?3),
-                    count(*) FILTER (WHERE state = 'running'),
-                    count(*) FILTER (WHERE state = 'failed'),
-                    count(*) FILTER (WHERE state = 'done' AND finished_at >= ?4)
-               FROM jobs WHERE kind = ?1 AND priority = ?5 AND dedupe_key LIKE ?2 ESCAPE '\\'",
-            params![
-                crate::jobs::kinds::ARCHIVE_MATCH,
-                prefix,
-                now,
-                now - window_ms,
-                match_priority
-            ],
+            &sql.downloads,
+            params![prefix, now, now - window_ms, match_priority],
             |r| {
                 Ok(Downloads {
                     ready: r.get(0)?,

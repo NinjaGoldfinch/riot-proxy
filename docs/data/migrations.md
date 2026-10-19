@@ -1,6 +1,6 @@
 # Migrations
 
-How schema migrations are written, applied and recorded, the complete list V0001 to V0027, and what to expect from the expensive ones in production. The resulting tables are in [schema.md](schema.md) and [schema-analytics.md](schema-analytics.md); the procedure for adding one is in [../workflows/adding-a-migration.md](../workflows/adding-a-migration.md).
+How schema migrations are written, applied and recorded, the complete list V0001 to V0028, and what to expect from the expensive ones in production. The resulting tables are in [schema.md](schema.md) and [schema-analytics.md](schema-analytics.md); the procedure for adding one is in [../workflows/adding-a-migration.md](../workflows/adding-a-migration.md).
 
 ## How they run
 
@@ -48,6 +48,7 @@ PR numbers from `PROGRESS.md`; dates are the accepting ADR's in `docs/DECISIONS.
 | [`V0025__champion_stats_totals.sql`](../../src/db/migrations/V0025__champion_stats_totals.sql) | 2026-10-15, #212 | `champion_stats_totals` filled from `champion_stats`; drops `champion_stats_slice` | PERF-02, ADR-168 |
 | [`V0026__floor_totals.sql`](../../src/db/migrations/V0026__floor_totals.sql) | 2026-10-15, #217 | `analytics_floor_totals`, `champion_ban_floor_totals`, backfilled through a TEMP table | FLT-03, ADR-170 |
 | [`V0027__matchup_builds.sql`](../../src/db/migrations/V0027__matchup_builds.sql) | 2026-10-19, #218 | `champion_matchup_builds`, `champion_matchup_build_parts`, not backfilled | FLT-04, ADR-171 |
+| [`V0028__jobs_crawl_matches.sql`](../../src/db/migrations/V0028__jobs_crawl_matches.sql) | 2026-10-20, WR-01 | `jobs_crawl_matches` partial covering index on `archive:match` | WR-01, ADR-179 |
 
 ## Expensive migrations
 
@@ -61,6 +62,7 @@ Every migration runs in the boot transaction before the listener opens, so a slo
 | V0024 | reads `archived_at` from every match row once, about 40 bytes a match of index | `docs/DECISIONS.md:1714` |
 | V0025 | 1.4–1.9 s on a copy; 3 s on production (about 1.6–2× slower there) | `docs/DECISIONS.md:1776`, `docs/flt/FLT-03-plan.md:573` |
 | V0026 | 1.36 s at 200 000 facts, 3.70 s at 600 000; estimated 25–30 s for production's 2.3 M facts | `docs/DECISIONS.md:1841` |
+| V0028 | builds one index over `archive:match` rows: 1.3 s for 1.18 M jobs on a synthetic queue | ADR-179 |
 
 > **TODO (unverified):** the actual V0026 and V0027 timings on production were not found in `docs/DECISIONS.md`, `PROGRESS.md` or `docs/flt/`; the v2.7.0 release line in `PROGRESS.md` was ticked by #226 (`52fa67d`) without recording them.
 
@@ -81,5 +83,5 @@ There is no down migration. To return to an older binary whose schema predates a
 The full procedure, with the test and ADR steps, is in [../workflows/adding-a-migration.md](../workflows/adding-a-migration.md).
 
 ---
-**Sources:** `src/db/mod.rs:L18-L20`, `src/db/mod.rs:L143-L158`, `src/db/mod.rs:L312-L316`, `src/db/store.rs:L172-L206`, `src/cli/mod.rs:L136-L168`, `src/cli/serve.rs:L51-L54`, `src/db/migrations/V0001__init.sql` to `V0027__matchup_builds.sql`, `docs/DECISIONS.md:L15-L17`, `docs/DECISIONS.md:L51`, `docs/DECISIONS.md:L1388`, `docs/DECISIONS.md:L1700`, `docs/DECISIONS.md:L1714`, `docs/DECISIONS.md:L1776`, `docs/DECISIONS.md:L1841`, `docs/flt/FLT-03-plan.md:L573`, `PROGRESS.md:L10-L365`, `docs/design/12-object-storage-and-hosting.md:L159-L162`, `deploy/README.md:L222-L270`, `docs/_meta/scratch/persistence.md`
-**Last verified:** 2026-10-19 against commit `52fa67d`
+**Sources:** `src/db/mod.rs:L18-L20`, `src/db/mod.rs:L143-L158`, `src/db/mod.rs:L312-L316`, `src/db/store.rs:L172-L206`, `src/cli/mod.rs:L136-L168`, `src/cli/serve.rs:L51-L54`, `src/db/migrations/V0001__init.sql` to `V0028__jobs_crawl_matches.sql`, `docs/DECISIONS.md:L15-L17`, `docs/DECISIONS.md:L51`, `docs/DECISIONS.md:L1388`, `docs/DECISIONS.md:L1700`, `docs/DECISIONS.md:L1714`, `docs/DECISIONS.md:L1776`, `docs/DECISIONS.md:L1841`, `docs/flt/FLT-03-plan.md:L573`, `PROGRESS.md:L10-L365`, `docs/design/12-object-storage-and-hosting.md:L159-L162`, `deploy/README.md:L222-L270`, `docs/_meta/scratch/persistence.md`
+**Last verified:** 2026-10-20 against commit `f0087f7`
