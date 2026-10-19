@@ -126,4 +126,4 @@ cargo tree --depth 1 --all-features
 
 ---
 **Sources:** `Cargo.toml`, `rust-toolchain.toml`, `justfile`, `src/lib.rs`, `src/cli/mod.rs:L34-L66`, `src/cli/serve.rs:L43-L394`, `src/routes/docs.rs:L116-L141`, `src/jobs/mod.rs:L20-L68`, `src/jobs/ticks.rs:L276-L304`, `src/config.rs:L23-L90`, `.github/workflows/*.yml`, `docs/_meta/scratch/*.md`, `git log`, `git tag`
-**Last verified:** 2026-10-20 against commit `f0087f7`
+**Last verified:** 2026-10-20 against commit `a11df6c`

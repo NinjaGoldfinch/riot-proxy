@@ -5,6 +5,7 @@ Dated log of changes to this documentation set. One line per change; the newest 
 ## 2026-10-20
 
 - WR-01 (ADR-179): V0028 `jobs_crawl_matches` added to `data/schema.md` and `data/migrations.md` (with its build time); the migration count and next free number updated in `workflows/adding-a-migration.md` and `_meta/inventory.md`.
+- Release 2.7.1: `api/openapi.json` `info.version` is `2.7.1`; the version example in `deploy/proxmox` follows.
 
 ## 2026-10-19
 
@@ -17,4 +18,4 @@ Dated log of changes to this documentation set. One line per change; the newest 
 
 ---
 **Sources:** this documentation set
-**Last verified:** 2026-10-20 against commit `f0087f7`
+**Last verified:** 2026-10-20 against commit `a11df6c`
