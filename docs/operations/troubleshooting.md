@@ -1,0 +1,189 @@
+# Troubleshooting
+
+Failures an operator or integrator meets with riot-proxy, each as symptom, likely cause, the command that confirms it, and the fix. Every quoted message cites the line that emits it. Admin calls below assume `ADMIN_KEY` holds an `admin`-scoped consumer key and the proxy is on `localhost:8080`; `rp` is the helper from `runbook.md`.
+
+## Health and readiness
+
+### 1. `/readyz` answers 503 with `"sqlite":false` while everything else works
+
+- **Cause:** the probe runs `BEGIN IMMEDIATE; ROLLBACK;` through `Db::write` with a 2 s timeout (`src/routes/health.rs:19`, `:83-87`). Writes are one queue on one writer thread (`src/db/mod.rs:37-38`, `:152-156`, `:213-230`), so the probe waits behind whatever a job has queued; an `aggregate:analytics` run commits three write transactions in a row (`src/jobs/analytics.rs:247-385`), and the probe times out behind them. Known and pre-existing; `/readyz` is not yet safe as a liveness probe and deserves its own task.
+- **Diagnose:** `curl -s localhost:8080/readyz` repeatedly; `GET /v1/admin/jobs/queue` shows `aggregate:analytics` under `running[]` (`src/routes/admin.rs:1908-1925`); the journal then logs `analytics recomputed` (`src/jobs/analytics.rs:301`).
+- **Fix:** none needed; it clears when the rebuild commits. Do not restart on this signal alone.
+
+> **TODO (unverified):** the production observation itself (`sqlite:false` during an `oc1` rebuild) is not recorded in the repository; only the mechanism above is cited.
+
+### 2. `/readyz` answers 503 with `"limiter":false`
+
+- **Cause:** `limiter_restored` is set after `restore_from` returns, success or failure (`src/cli/serve.rs:75-81`; `src/riot/limiter/persist.rs:224-229`), so `false` means boot has not reached step 5 yet (migrations or the L2 warm still running).
+- **Diagnose:** `sudo journalctl -u riot-proxy -n 50 -o cat` for `limiter checkpoint restored rows=` or `limiter checkpoint could not be read; starting fresh` (`src/cli/serve.rs:77-79`).
+- **Fix:** wait for `listening` (`src/cli/serve.rs:148`). A persistent `false` after `listening` is a bug.
+
+## Authentication and authorisation
+
+### 3. 401 `UNAUTHORIZED` `Missing or invalid API key`
+
+- **Cause:** no `Authorization: Bearer` header and no `?token=`, or a key that is unknown or revoked (`src/http/auth.rs:267-275`; message `src/http/error.rs:107`). The journal shows `rejected unknown key` with the path (`src/http/auth.rs:273`). An unknown key is cached as unknown for 30 s (`NEGATIVE_AUTH_TTL`, `:32`).
+- **Diagnose:** `rp key list` shows `active` or `revoked` per consumer (`src/cli/key.rs:59-79`).
+- **Fix:** mint a key (`runbook.md` §5); for the site, check `PROXY_KEY` in `/etc/ninjagoldfinch-lol/env` and restart the site.
+
+### 4. 403 `FORBIDDEN` `This key lacks the 'admin' scope`
+
+- **Cause:** the key has `read` only (`src/http/auth.rs:276-281`).
+- **Diagnose:** `rp key list` shows the scopes column.
+- **Fix:** mint a key with `--scopes read,admin`; scopes cannot be changed on an existing consumer (no such route in `src/routes/admin.rs:44-82`).
+
+### 5. 403 `FORBIDDEN` `Admin access is not permitted from this address`
+
+- **Cause:** `ADMIN_IP_ALLOWLIST` is non-empty and the client address is not in it (`src/http/auth.rs:118-126`, `:282-288`). With `TRUST_PROXY=true` the address is the leftmost `X-Forwarded-For` entry (`:131-139`), so through the Cloudflare Tunnel every caller has their own public address and an allowlist of `127.0.0.1` refuses every tunnelled admin call; with `TRUST_PROXY=false` every tunnelled call arrives from cloudflared at `127.0.0.1` and the allowlist cannot narrow anything (`docs/design/07-deployment.md:221`). Production keeps the list empty and puts `admin.ninjagoldfinch.lol` behind Cloudflare Access instead (`PROGRESS.md:342`).
+- **Diagnose:** the journal logs `admin request from disallowed IP ip=… consumer=…` (`src/http/auth.rs:283`); `GET /v1/admin/info` from loopback shows `ADMIN_IP_ALLOWLIST` and `trustProxy` (`src/routes/admin.rs:2438-2477`).
+- **Fix:** leave `ADMIN_IP_ALLOWLIST` unset on the production box; an unparsable entry is warned and ignored (`:193-199`), not refused.
+
+### 6. 429 `QUOTA_EXCEEDED` `Quota of 600/min exceeded`
+
+- **Cause:** the consumer's own quota, a sliding 60 s window per consumer id (`src/http/quota.rs:131`, `:320`, `:397-399`), independent of Riot's limits. `Retry-After` and `x-ratelimit-reset` say when a slot frees.
+- **Diagnose:** `GET /v1/admin/metrics | jq .quotas` (`src/http/quota.rs:339-391`).
+- **Fix:** mint a key with a higher `--quota` (1 to 1 000 000, `src/routes/admin.rs:181-200`) and rotate it in; the site has no retry (`docs/_meta/scratch/siblings.md` §1.3).
+
+### 7. 503 `RATE_LIMITED`
+
+- **Cause:** two messages. `Upstream rate limited` means Riot answered 429 and the fetcher gave up (`src/riot/client.rs:179-182`, `:308-318`); `Upstream rate limit budget exceeded` means the proxy's own limiter had no token within the caller's budget, 2 s for a request (`CLIENT_WAIT_BUDGET_MS`, `src/config.rs:716`; `src/riot/limiter/mod.rs:58-80`; `src/fetcher.rs:460-466`). A cached copy inside its hard TTL is served as `STALE` instead when one exists.
+- **Diagnose:** `GET /v1/admin/limits/{scope}` for `usage` and `frozenMs` (`src/routes/admin.rs:1010-1027`); `/metrics` `proxy_rl_429_total{type}` and `limiter_interactive_waiters`.
+- **Fix:** for the budget message, bulk work is starving interactive calls: lower `BULK_USAGE_CEILING` or pause crawls (`runbook.md` §13); for Riot's 429, see `runbook.md` §9.
+
+### 8. 502 `UPSTREAM_ERROR` `Upstream authentication failed`
+
+- **Cause:** Riot answered 401 or 403; the key is expired, revoked or wrong (`src/riot/client.rs:304-307`, `:176-178`). Never retried.
+- **Diagnose:** journal `error` `RIOT KEY REJECTED` with `status`, `method`, `host` (`src/riot/client.rs:305`); `/metrics` `proxy_upstream_requests_total{status="401"}` or `"403"`.
+- **Fix:** `runbook.md` §4.
+
+## Request validation
+
+### 9. 400 `BAD_REGION` `params/platform must be equal to one of the allowed values` for `EUW1`
+
+- **Cause:** route path parameters are matched case-sensitively against the 16 lower-case platform ids (`src/http/validate.rs:53-78`; ids `src/riot/routing.rs:46-63`). The same applies to `params/region` (`americas|europe|asia|sea`) and `querystring/platform` (`:194-198`).
+- **Fix:** send `euw1`. Match ids may keep their upper-case prefix (`EUW1_…`): the prefix parser is case-insensitive (`src/riot/routing.rs:132-143`).
+
+### 10. 400 `VALIDATION` `querystring must have required property 'platform'` on `/v1/players/{puuid}/matches`
+
+- **Cause:** that route requires `?platform=` (`src/http/validate.rs:200-208`; `src/routes/players.rs:635`). The profile route finds the platform itself; the match page does not.
+- **Fix:** take `platform` from the profile body and pass it (`docs/_meta/scratch/siblings.md` §1.5 row 2 shows how the site does it).
+
+### 11. 404 on `/v1/static/*`: `Static data 'champion' has not been synced yet. Run the ddragon:sync job.`
+
+- **Cause:** no patch directory with a `versions.json` exists under `DDRAGON_DIR` yet (`src/routes/statics.rs:289-292`; `:213` for `queues`). `ddragon:sync` runs at boot and hourly (`src/jobs/ticks.rs:193-209`) but needs the CDN.
+- **Diagnose:** `ls /var/lib/riot-proxy/data/ddragon`; journal for `syncing Data Dragon` / `Data Dragon sync complete` (`src/jobs/ddragon.rs:241`, `:258`); `GET /v1/admin/jobs?kind=ddragon:sync`.
+- **Fix:** §27, then `POST /v1/admin/ddragon/sync {"force":true}`.
+
+## Caching
+
+### 12. `X-Cache: MISS` on every request, or hit ratio under 70 %
+
+- **Cause:** one of: the endpoint is immutable and served `ARCHIVE` not `HIT` (`match.byId`, `match.timeline`; `src/riot/endpoints.rs:185-204`); an admin key sends `?refresh=true` and gets `BYPASS` (`src/routes/passthrough.rs:159-167`); `CACHE_TTL_OVERRIDES` set a tiny soft TTL (`src/riot/endpoints.rs:424-444`); L1 is too small so entries evict at once, and an entry larger than the whole budget is never kept (`CACHE_L1_MAX_MB`, `src/cache/l1.rs:106-119`); the L2 write-behind queue is full so nothing survives a restart (`cache_l2_dropped_total`, `warn` `L2 write queue full; entry not persisted`, `src/cache/l2.rs:102-112`).
+- **Diagnose:** `GET /v1/admin/debug/cache?scope=oc1&method=summoner.byPuuid&path=/lol/summoner/v4/summoners/by-puuid/<puuid>` → `{key,present,ageSeconds,stale}` (`src/routes/admin.rs:1232-1248`); `GET /v1/admin/metrics | jq '{cache,cacheStore}'`; `/metrics` `proxy_cache_reads_total{state}` and `cache_l2_dropped_total`.
+- **Fix:** remove the override, raise `CACHE_L1_MAX_MB`, or lower `JOB_CONCURRENCY` if the SQLite writer is behind (a rising `cache_l2_dropped_total` means exactly that, `docs/design/metrics.md:56`).
+
+## Storage and maintenance
+
+### 13. `warn` `backup skipped: not enough disk`
+
+- **Cause:** free space on the backup directory is under 1.2 × (db + wal) (`BACKUP_FREE_FACTOR`, `src/jobs/maintenance.rs:34`, `:294-306`). The run goes on without the backup.
+- **Diagnose:** `GET /v1/admin/backups` → `lastRun.report.backupSkipped`, `diskFreeBytes` (`src/routes/admin.rs:2583-2606`); `df -h /var/lib/riot-proxy`.
+- **Fix:** `runbook.md` §11.
+
+### 14. The WAL keeps growing (`sqlite_wal_bytes` in the hundreds of MB)
+
+- **Cause:** `wal_autocheckpoint=1000` (`src/db/mod.rs:34`) cannot complete while readers hold old snapshots; with readers always active the WAL never checkpointed on the 2-vCPU host (`docs/design/07-deployment.md:171`). The daily `maintenance` runs `PRAGMA wal_checkpoint(TRUNCATE)` and logs `checkpoint_busy`, `wal_frames`, `checkpointed` (`src/jobs/maintenance.rs:254-268`).
+- **Diagnose:** `/metrics` `sqlite_wal_bytes`; `ls -la /var/lib/riot-proxy/data/riot-proxy.db-wal`; the last `maintenance done` line.
+- **Fix:** `POST /v1/admin/maintenance/run` in a quiet moment; lower `JOB_CONCURRENCY` so fewer readers overlap. Never delete the `-wal` file (`deploy/README.md:258-265`).
+
+## Jobs
+
+### 15. Jobs show `running` right after a crash or restart
+
+- **Cause:** the previous process died with handlers mid-flight; rows stay `running` until the next boot resets them to `pending` with attempts kept (`src/jobs/scheduler.rs:963-973`), logged as `re-queued jobs a previous process left running jobs=n` (`src/cli/serve.rs:276`).
+- **Diagnose:** `GET /v1/admin/jobs?state=running` and compare `claimedAt` with `startedAt` from `/v1/admin/info`.
+- **Fix:** nothing; it is recovered at boot. If rows are `running` with a `claimedAt` older than the process, the process did not restart cleanly: restart it.
+
+### 16. `warn` `job failed … attempts=5 next=failed`
+
+- **Cause:** the fifth attempt failed, or the handler returned `Fail` (`MAX_ATTEMPTS = 5`, `src/jobs/scheduler.rs:40`, `:1070-1075`, `:1092`). Earlier attempts back off `30 s × 2^attempts ± 20 %` (`:42`, `:160-171`). `archive:match` fails at once on a Riot 404 (`src/jobs/archive.rs:245-289`).
+- **Diagnose:** `GET /v1/admin/jobs?state=failed&kind=<kind>` → `error` per row; `GET /v1/admin/jobs/{id}/activity`.
+- **Fix:** `POST /v1/admin/jobs/{id}/retry` after the cause (Riot, the store, the disk) is fixed; a 404 match is final.
+
+### 17. A ladder crawl ends `failed`
+
+- **Cause:** a leg (`ladder:apex`, `ladder:walk`, `ladder:collect`) gave up after five attempts; when the last leg ends with `legs_failed > 0` the crawl is finished `failed` (`src/jobs/ladder.rs:781-818`; `src/jobs/ladder/store.rs:351-406`). The partial unique index allows one running crawl per ladder (`src/db/migrations/V0004__ladder.sql:33-34`).
+- **Diagnose:** `GET /v1/admin/ladder/crawls?platform=oc1` → `status`, `legsFailed`; `GET /v1/admin/ladder/crawls/{id}` → `failed[]` (`src/routes/admin.rs:2092-2110`); the failed legs' `error` in `/v1/admin/jobs?state=failed&kind=ladder:walk`.
+- **Fix:** `POST /v1/admin/ladder/crawl {"platform":"oc1"}` starts a new crawl (`src/routes/admin.rs:1700-1733`); `ladder_entries` already written are kept (`V0004__ladder.sql:7`).
+
+## Object storage
+
+### 18. `archive:offload` keeps failing
+
+- **Cause:** credentials or endpoint. Boot refuses `http://` in production (`ARCHIVE_OBJECT_ENDPOINT: must be https:// when ENV=production`, `src/config.rs:914-926`), an `s3://` URL without an endpoint (`is required with an s3:// ARCHIVE_OBJECT_URL`, `:988`), one key without the other (`set both or neither`, `:981-984`), or a production URL without keys (`:990-995`). A boot that passes logs `object store configured store=s3://riot-proxy-archive at <endpoint>` (`src/cli/serve.rs:103`; `src/archive/objects.rs:134`); a store that then rejects requests makes every run `Retry` (`src/jobs/offload.rs:147`).
+- **Diagnose:** `GET /v1/admin/jobs?kind=archive:offload` → `error`; `rp packs snapshot` exercises a PUT with the service's credentials (`src/cli/packs.rs:55-65`); `sudo rclone --config /etc/riot-proxy/rclone.conf lsf onidel:riot-proxy-archive --max-depth 1`.
+- **Fix:** correct the env file and restart (`runbook.md` §6); `archive_offload_pending` falls on the next run.
+
+### 19. `warn` lines ending in `reading from Riot`
+
+- **Cause:** an offloaded body could not be read from its pack: `offloaded body has no location` (`src/archive/matches.rs:235`), `offloaded bodies but no ARCHIVE_OBJECT_URL` (`:243-246`, the URL was unset after bodies were freed), `pack id is not a ULID` (`:269`), `pack read failed` (`:280`), `offloaded body failed its sha256` (`:291`), `offloaded body did not decompress` (`:302`). The body is dropped and the request goes to Riot (`src/archive/mod.rs:128-144`); the re-fetched body is stored locally again (`src/archive/matches.rs:384`).
+- **Diagnose:** the line's `key`/`pack_id`; `GET /v1/admin/stats | jq .archiveBodies`; `rp packs reindex --since <pack id>` lists packs that cannot be read (`src/cli/packs.rs:32-35`, `:71-83`).
+- **Fix:** for a missing URL, set it back (`docs/design/12-object-storage-and-hosting.md:943`); for a store outage, `runbook.md` §10; for a damaged pack, the R2 replica holds a copy (`deploy/README.md:12-18`).
+
+## Configuration refusals at boot
+
+### 20. `TLS: built-in TLS was removed; terminate HTTPS in a reverse proxy`
+
+- **Cause:** `TLS=true` or `1` in the env (`src/config.rs:668-673`); built-in TLS went in ADR-067 (`docs/design/07-deployment.md:59-61`).
+- **Fix:** remove `TLS`, `TLS_DOMAIN`, `ACME_EMAIL`, `TLS_PORT` (the last three are dropped silently, `src/config.rs:873-880`).
+
+### 21. `AUTH_DISABLED cannot be enabled when ENV=production`
+
+- **Cause:** `src/config.rs:658-662`. `AUTH_DISABLED` is for local work only; it runs every request as `dev-local` with `read,admin` (`src/http/auth.rs:43-52`).
+- **Fix:** remove it from `/etc/riot-proxy/env`; mint keys instead.
+
+### 22. `warn` `DEV_UI=true ignored: /dev is never served when ENV=production`
+
+- **Cause:** `DEV_UI` is forced off in production (`src/config.rs:664-666`, `:762-763`; `src/cli/serve.rs:95-97`). Not an error; `/dev` and `/dev/reset` are simply absent.
+- **Fix:** remove the variable to silence the warning. The dashboard (`/dashboard`, `DASHBOARD_UI`) is unaffected.
+
+### 23. Boot fails with `binding 127.0.0.1:8080: Address already in use`
+
+- **Cause:** another process holds the port; the bind error carries that context (`src/cli/serve.rs:143-146`) and exits 1.
+- **Diagnose:** `sudo ss -ltnp 'sport = :8080'`; often a previous instance still draining (10 s grace, `src/app.rs:35`) or a stray `rp … serve`.
+- **Fix:** wait or stop the other process, then `sudo systemctl restart riot-proxy`.
+
+### 24. `warn` `CACHE_TTL_OVERRIDES key matches no cacheable endpoint; ignored key=match`
+
+- **Cause:** the key is unknown or names only immutable endpoints (`match`, `timeline`), whose bodies are archived, not cached (`src/cli/serve.rs:106-108`; `src/riot/endpoints.rs:500-512`). Valid keys: `account, summoner, league, ladder, match, timeline, spectator, mastery, rotations, status` (`docs/_meta/scratch/config.md` §1.2). Malformed items are skipped silently (`src/riot/endpoints.rs:424-444`).
+- **Fix:** correct the key; the rest of the list still applies.
+
+## Other environments
+
+### 25. The Proxmox dev VM logs `error: rejected ghcr.io/ninjagoldfinch/riot-proxy:edge (<commit>): …; rolled back to riot-proxy:previous (<commit>)`
+
+- **Cause:** `riot-proxy-update` found the new `:edge` image unhealthy or crash-looping and restored `:previous`; it records the image in `/opt/riot-proxy/.rejected` so later runs skip it (`deploy/proxmox/files/riot-proxy-update:69-96`; `deploy/proxmox/README.md:72-85`).
+- **Diagnose:** `cat /opt/riot-proxy/.rejected`; the VM's journal for the health reason.
+- **Fix:** fix `main`; a newer edge image is tried automatically. To retry the same image: `sudo rm /opt/riot-proxy/.rejected && sudo riot-proxy-update` (`deploy/proxmox/README.md:80-81`). The VM is dormant today (see the writing brief); the procedure is kept for when it runs.
+
+### 26. The container `HEALTHCHECK` fails with `error: Invalid environment configuration: RIOT_API_KEY: is required`
+
+- **Cause:** `riot-proxy healthcheck` loads the full configuration before it GETs `/healthz` (`src/cli/mod.rs:82-88`; `src/cli/healthcheck.rs`), so it needs the same env as `serve` (`src/config.rs:610-614`). Docker runs it as `CMD ["/riot-proxy","healthcheck"]` (`Dockerfile:24`).
+- **Diagnose:** `docker exec <ctr> /riot-proxy healthcheck`; `docker inspect --format '{{json .State.Health}}' <ctr>`.
+- **Fix:** pass `RIOT_API_KEY` (and the rest of `.env`) into the container's environment, not only into a mounted file the health command cannot see.
+
+### 27. `ddragon:sync` fails or stays `running`
+
+- **Cause:** the CDN or `static.developer.riotgames.com` is unreachable: `warn` `Data Dragon file unavailable; skipping` (`src/jobs/ddragon.rs:252`) or `queue table unavailable; keeping what is on disk` (`:281`); any error makes the job `Retry` (`:302-304`). Timeouts are 15 s connect, 60 s total (`:111-112`). The job is a deduped singleton, so a second request joins the queued one (`src/jobs/ticks.rs:243-247`; `src/routes/admin.rs:1640-1650`).
+- **Diagnose:** `curl -sI https://ddragon.leagueoflegends.com/api/versions.json` from the box; `GET /v1/admin/jobs?kind=ddragon:sync`; `ls -la /var/lib/riot-proxy/data/ddragon` for write permission.
+- **Fix:** restore connectivity or permissions, then `POST /v1/admin/ddragon/sync {"force":true}`.
+
+### 28. The bootstrap admin key was never shown
+
+- **Cause:** it is printed only when the `consumers` table is empty at `serve` and `BOOTSTRAP_ADMIN_KEY` is unset (`src/consumers.rs:308-333`; `src/cli/serve.rs:57-68`, `:399-405`). With `BOOTSTRAP_ADMIN_KEY` set, that key is imported silently; with any consumer already present, nothing is created. It goes to stderr, not the log (`src/cli/serve.rs:401`).
+- **Diagnose:** `rp key list` shows whether `bootstrap-admin` exists (`src/consumers.rs:16`).
+- **Fix:** mint a new admin key with `rp key create --name admin-2026-10 --scopes read,admin`; a lost key cannot be recovered (only its hash is stored, `src/consumers.rs:105-107`).
+
+---
+**Sources:** `src/routes/health.rs:19,83-87`, `src/db/mod.rs:34,37-38,152-156,213-230`, `src/jobs/analytics.rs:247-385,301`, `src/cli/serve.rs:57-68,75-81,95-97,101-108,143-148,276,399-405`, `src/riot/limiter/persist.rs:224-229`, `src/http/auth.rs:32,43-52,118-139,193-199,267-288`, `src/http/error.rs:107`, `src/http/quota.rs:131,320,339-399`, `src/http/validate.rs:53-78,194-208`, `src/riot/routing.rs:46-63,132-143`, `src/riot/client.rs:176-183,304-318`, `src/riot/limiter/mod.rs:58-80`, `src/fetcher.rs:460-466`, `src/riot/endpoints.rs:185-204,424-444,500-512`, `src/routes/passthrough.rs:159-167`, `src/routes/players.rs:635`, `src/routes/statics.rs:213,289-292`, `src/cache/l1.rs:106-119`, `src/cache/l2.rs:102-112`, `src/jobs/maintenance.rs:34,254-268,294-306`, `src/jobs/scheduler.rs:40-42,160-171,963-973,1070-1092`, `src/jobs/archive.rs:245-289`, `src/jobs/ladder.rs:781-818`, `src/jobs/ladder/store.rs:351-406`, `src/jobs/ddragon.rs:111-112,241-304`, `src/jobs/offload.rs:147`, `src/jobs/ticks.rs:193-209`, `src/archive/matches.rs:235-302,384`, `src/archive/mod.rs:128-144`, `src/archive/objects.rs:134`, `src/config.rs:610-614,658-673,716,762-763,873-880,914-926,981-995`, `src/consumers.rs:16,105-107,308-333`, `src/cli/mod.rs:82-88`, `src/cli/key.rs:59-79`, `src/cli/packs.rs:32-35,55-83`, `src/routes/admin.rs:44-82,181-200,1010-1027,1232-1248,1700-1733,1908-1925,2092-2110,2438-2477,2583-2606`, `src/db/migrations/V0004__ladder.sql:7,33-34`, `src/app.rs:35`, `Dockerfile:24`, `deploy/README.md:12-18,258-265`, `deploy/proxmox/README.md:72-85`, `deploy/proxmox/files/riot-proxy-update:69-96`, `docs/design/07-deployment.md:59-61,171,221`, `docs/design/12-object-storage-and-hosting.md:943`, `docs/design/metrics.md:56`, `PROGRESS.md:342`
+**Last verified:** 2026-10-19 against commit `52fa67d`

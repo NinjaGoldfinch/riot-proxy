@@ -51,6 +51,11 @@ jobs:
       - run: cargo nextest run --profile ci --all-features --workspace
       - name: no leaked Riot keys
         run: '! grep -rE "RGAPI-[0-9a-f-]{20,}" tests/ src/ docs/'
+      # The docs copy of the OpenAPI document must describe the routes this commit serves (DOC-01, ADR-178).
+      - name: docs/api/openapi.json matches the generated document
+        run: |
+          target/debug/riot-proxy spec > "$RUNNER_TEMP/openapi.json"
+          python3 docs/_meta/tools/openapi-check.py "$RUNNER_TEMP/openapi.json" docs/api/openapi.json
 
   # The dev explorer, showcase and dashboard driven in jsdom (DEV-03, ADR-074),
   # and their layout in headless Chromium (DEV-12, ADR-084). They read the pages
@@ -203,6 +208,34 @@ jobs:
           docker compose down
       - if: failure() && steps.paths.outputs.build == 'true'
         run: docker compose logs || true
+
+  # DOC-01 (ADR-178): the documentation set under docs/ is kept current with the code.
+  # On a pull request, a page whose Sources footer cites a changed file must change too,
+  # code changes need a docs change, every footer names a real commit, and every
+  # relative link and Mermaid block still resolves and renders.
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: links resolve
+        run: python3 docs/_meta/tools/linkcheck.py docs
+      - name: pages are current
+        if: github.event_name == 'pull_request'
+        run: python3 docs/_meta/tools/docs-guard.py "origin/${{ github.base_ref }}" HEAD
+      - name: footers name real commits
+        if: github.event_name != 'pull_request'
+        run: python3 docs/_meta/tools/docs-guard.py HEAD~1 HEAD || true
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Mermaid blocks render
+        run: docs/_meta/tools/mermaidcheck.sh docs
+      - name: gaps.md lists every TODO (unverified)
+        run: |
+          n=$(python3 docs/_meta/tools/gaps.py 2>/dev/null | grep -vc '^README.md\|^_meta/doc-maintenance.md')
+          grep -q "^Counts on .*: $n markers" docs/_meta/gaps.md || { echo "::error::docs/_meta/gaps.md counts differ from the $n markers in docs/"; exit 1; }
 
   # OPS-02: the Proxmox dev VM kit; OPS-05: the image description scripts;
   # INC-02: the `edge` tag picker; OBJ-04: the archive replica units;

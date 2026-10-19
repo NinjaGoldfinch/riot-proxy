@@ -151,6 +151,10 @@ Import v1's archive and players from its Postgres dump:
 
 Consumer keys do not migrate; mint new ones. The full sequence is in [docs/CUTOVER.md](docs/CUTOVER.md).
 
+## Documentation
+
+The full documentation set is under [docs/](docs/README.md): architecture, the API contract and reference, data and caching, developer workflows, deployment on the production VPS, operations runbooks and reference material. The design it describes lives in [docs/design/](docs/design/) and the decision record in [docs/DECISIONS.md](docs/DECISIONS.md).
+
 ## Development
 
 ```bash

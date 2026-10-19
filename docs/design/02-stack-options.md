@@ -89,7 +89,7 @@ Replace Redis with in-process cache, Postgres with `better-sqlite3`, BullMQ with
 | Effort | Lowest — mostly deletions |
 | Risks | Doesn't hit the "lightweight" goal; still pinned to a Node major; `better-sqlite3` is a native addon that must be rebuilt per Node version |
 
-**Fit:** a legitimate *intermediate* step (see [08-migration-plan](08-migration-plan.md#option-b-strangler-path)), not the destination.
+**Fit:** a legitimate *intermediate* step (see [08-migration-plan](08-migration-plan.md#option-b--strangler-path)), not the destination.
 
 ### Scoring
 
