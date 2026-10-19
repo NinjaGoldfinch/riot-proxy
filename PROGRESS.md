@@ -375,7 +375,7 @@ ninjagoldfinch.lol's `/champions` data took 3.9 s, all of it the proxy's analyti
 
 ## DOC — the documentation set (owner request 2026-10-19)
 
-- [ ] DOC-01 the documentation set under `docs/` (71 pages, `docs/README.md` index), `docs/api/openapi.json`, the `docs/_meta/tools/` checks, the `docs` CI job and the OpenAPI step in `test` (ADR-178). Not a required check until the owner adds `docs`. Follow-ups: rename one of the two `champions` handlers so the generated `operationId` is unique; commit the live `riot-proxy.service`, `/etc/riot-proxy/env` (redacted) and the `riot-proxy-offsite` timer into `deploy/` to close the top items in `docs/_meta/gaps.md`.
+- [x] DOC-01 the documentation set under `docs/` (#227, ADR-178) (71 pages, `docs/README.md` index), `docs/api/openapi.json`, the `docs/_meta/tools/` checks, the `docs` CI job and the OpenAPI step in `test` (ADR-178). Not a required check until the owner adds `docs`. Follow-ups: rename one of the two `champions` handlers so the generated `operationId` is unique; commit the live `riot-proxy.service`, `/etc/riot-proxy/env` (redacted) and the `riot-proxy-offsite` timer into `deploy/` to close the top items in `docs/_meta/gaps.md`.
 
 ## PAIR — team pairings (owner request 2026-10-10, outline)
 - [ ] PAIR-01 `champion_pairs`: every ally role per player, keyed by tier and side (IMPLEMENTATION.md §Post-release — PAIR)
