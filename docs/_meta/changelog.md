@@ -24,4 +24,4 @@ Dated log of changes to this documentation set. One line per change; the newest 
 
 ---
 **Sources:** this documentation set
-**Last verified:** 2026-10-20 against commit `b7b363c`
+**Last verified:** 2026-10-21 against commit `844df70`
