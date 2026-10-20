@@ -14,6 +14,10 @@ use crate::archive::objects::Objects;
 
 pub mod disk;
 pub mod store;
+mod writer;
+
+pub use writer::WriterStatus;
+use writer::{Stamps, WriteJob};
 
 mod embedded {
     refinery::embed_migrations!("src/db/migrations");
@@ -63,8 +67,6 @@ pub enum DbError {
     PostgresUnimplemented,
 }
 
-type WriteJob = Box<dyn FnOnce(&mut Connection) + Send>;
-
 /// Cheap to clone; every clone shares the writer and the reader pool. The writer
 /// thread exits once the last clone is dropped and its queue has drained.
 #[derive(Clone)]
@@ -85,6 +87,8 @@ struct Inner {
     /// Calls to [`Db::read`] since open: what a cached analytics hit must not
     /// add to (PERF-03).
     reads: AtomicU64,
+    /// What the writer thread is doing (WR-02).
+    stamps: Arc<Stamps>,
 }
 
 impl Inner {
@@ -145,6 +149,8 @@ impl Db {
         apply_pragmas(&writer, CONNECTION_PRAGMAS)?;
         migrate(&mut writer)?;
         optimize(&writer)?;
+        let stamps = Arc::new(Stamps::new());
+        writer::install_progress(&writer, &stamps)?;
 
         let readers = readers.max(1);
         let pool = (0..readers)
@@ -152,10 +158,18 @@ impl Db {
             .collect::<Result<Vec<_>, _>>()?;
 
         let (tx, rx) = mpsc::channel(WRITE_QUEUE);
+        let writer_stamps = Arc::clone(&stamps);
+        // The thread records its CPU clock first, so it is there before any job.
+        let (registered, wait_registered) = std::sync::mpsc::sync_channel::<()>(1);
         std::thread::Builder::new()
             .name("sqlite-writer".into())
-            .spawn(move || writer_loop(writer, rx))
+            .spawn(move || {
+                writer::register_thread(&writer_stamps);
+                let _ = registered.send(());
+                writer_loop(writer, rx, &writer_stamps);
+            })
             .map_err(DbError::Spawn)?;
+        let _ = wait_registered.recv();
 
         set_readers_free(readers);
         Ok(Self {
@@ -167,6 +181,7 @@ impl Db {
                 reader_count: readers,
                 objects: OnceLock::new(),
                 reads: AtomicU64::new(0),
+                stamps,
             }),
         })
     }
@@ -211,6 +226,36 @@ impl Db {
         self.inner.idle_readers().len()
     }
 
+    /// What the writer thread is doing now: read from atomics, never queued behind
+    /// it (`/readyz`, WR-02).
+    pub fn writer_status(&self) -> WriterStatus {
+        self.inner.stamps.status(self.write_queued())
+    }
+
+    /// Writes waiting behind the running one.
+    fn write_queued(&self) -> usize {
+        WRITE_QUEUE.saturating_sub(self.inner.writer.capacity())
+    }
+
+    /// Test hook: how long a busy writer may go without progress before `/readyz`
+    /// counts it as stalled. `None` until set; `/readyz` then uses its default.
+    #[doc(hidden)]
+    pub fn set_writer_stall(&self, stall: std::time::Duration) {
+        self.inner.stamps.set_stall(stall);
+    }
+
+    #[doc(hidden)]
+    pub fn writer_stall(&self) -> Option<std::time::Duration> {
+        self.inner.stamps.stall()
+    }
+
+    /// CPU time the writer thread has used (Linux; `None` elsewhere). Two readings
+    /// apart tell a write that computes without SQLite stamping progress, such as a
+    /// large sort, from one that waits (WR-02).
+    pub fn writer_cpu_time(&self) -> Option<std::time::Duration> {
+        self.inner.stamps.cpu_time()
+    }
+
     /// Run `f` on the writer thread. Writes are serialised by construction, so
     /// they never see `SQLITE_BUSY` from each other. A panic inside `f` is
     /// contained: this call returns [`DbError::WriterGone`] and the writer lives on.
@@ -221,14 +266,18 @@ impl Db {
         E: From<DbError> + Send + 'static,
     {
         let (tx, rx) = oneshot::channel();
-        let job: WriteJob = Box::new(move |conn| {
-            let _ = tx.send(f(conn));
-        });
+        let job = WriteJob {
+            queued_at: std::time::Instant::now(),
+            run: Box::new(move |conn| {
+                let _ = tx.send(f(conn));
+            }),
+        };
         self.inner
             .writer
             .send(job)
             .await
             .map_err(|_| DbError::WriterGone)?;
+        writer::set_queue_gauge(self.write_queued());
         rx.await.map_err(|_| DbError::WriterGone)?
     }
 
@@ -315,13 +364,10 @@ pub fn migrate(conn: &mut Connection) -> Result<refinery::Report, DbError> {
     Ok(embedded::migrations::runner().set_grouped(true).run(conn)?)
 }
 
-fn writer_loop(mut conn: Connection, mut rx: mpsc::Receiver<WriteJob>) {
+fn writer_loop(mut conn: Connection, mut rx: mpsc::Receiver<WriteJob>, stamps: &Stamps) {
+    let mut after_idle = true;
     while let Some(job) = rx.blocking_recv() {
-        // The job's oneshot sender is dropped on panic, which the caller sees as
-        // WriterGone; the connection stays usable for the next job.
-        if std::panic::catch_unwind(AssertUnwindSafe(|| job(&mut conn))).is_err() {
-            tracing::error!("a SQLite write closure panicked");
-        }
+        after_idle = writer::run_job(&mut conn, job, stamps, &rx, after_idle);
     }
     tracing::debug!("SQLite writer stopped");
 }

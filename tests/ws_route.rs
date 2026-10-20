@@ -280,6 +280,7 @@ async fn the_metrics_topic_ticks_only_while_held() {
             "requests",
             "sampledAt",
             "sqlite",
+            "sqliteWriter",
             "totals",
             "upstream",
             "v",

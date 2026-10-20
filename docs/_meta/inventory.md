@@ -7,7 +7,7 @@ What is in the riot-proxy repository at commit `7491ff6` (version 2.7.0), gather
 | Item | Value | Source |
 |---|---|---|
 | Language | Rust, edition 2024, `rust-version = "1.98"`; toolchain pinned to 1.98.1 with rustfmt, clippy and the `x86_64-unknown-linux-musl` target | `Cargo.toml`, `rust-toolchain.toml` |
-| Framework | axum 0.8 on tokio 1.53; rusqlite 0.39 (bundled SQLite 3); moka; reqwest 0.13 (rustls); object_store 0.14; utoipa 6 | `Cargo.toml`, `Cargo.lock` |
+| Framework | axum 0.8 on tokio 1.53; rusqlite 0.39 (bundled SQLite 3, `hooks`); moka; reqwest 0.13 (rustls); object_store 0.14; utoipa 6 | `Cargo.toml`, `Cargo.lock` |
 | Package manager and lockfiles | cargo, `Cargo.lock` committed; npm for `tests/dom/package-lock.json` and `acceptance/package-lock.json` (Node 22) | repo root, `.github/workflows/ci.yml` |
 | Task runner | `just` (`justfile`: dev, test, nextest, ui-test, lint, cov, musl, docker, riot, acceptance) | `justfile` |
 | Features | `dev-cli` (raw Riot calls, fixture recording; never in releases), `postgres` (compile-only stub) | `Cargo.toml:52-56` |
@@ -58,7 +58,7 @@ What is in the riot-proxy repository at commit `7491ff6` (version 2.7.0), gather
 | WebSocket `/v1/ws` | `src/routes/ws.rs:497-499`, protocol in `src/ws/protocol.rs` |
 | Ticks (periodic enqueues): `poll:live` 60 s, `poll:rank` 600 s, `poll:matches` 300 s, `ddragon:sync` 3600 s, `maintenance` and `names:backfill` daily, `ladder:crawl` on `LADDER_CRAWL_S`, `aggregate:analytics` on `AGGREGATE_INTERVAL_S`, `timelines:backfill` hourly when enabled | `src/jobs/ticks.rs:276-304` |
 | 21 job kinds with handlers | `src/jobs/mod.rs:20-68,89-162`; table in [scratch/jobs-and-observability.md](./scratch/jobs-and-observability.md) §3 |
-| Loops: limiter checkpoint 10 s, L2 flush 2 s, metrics history 60 s (fast sample 15 s), `jobs_pending` sample 15 s, `metrics` topic 5 s while held, histogram upkeep 5 s | `src/cli/serve.rs`, `src/riot/limiter/persist.rs:25`, `src/cache/l2.rs:24-26`, `src/stats.rs:1005-1036` |
+| Loops: limiter checkpoint 10 s, L2 flush 2 s, metrics history 60 s (fast sample 15 s), `jobs_pending` sample 15 s, `metrics` topic 5 s while held, histogram upkeep 5 s | `src/cli/serve.rs`, `src/riot/limiter/persist.rs:25`, `src/cache/l2.rs:24-26`, `src/stats.rs:1038-1069` |
 
 ## Outbound network calls
 
@@ -126,4 +126,4 @@ cargo tree --depth 1 --all-features
 
 ---
 **Sources:** `Cargo.toml`, `rust-toolchain.toml`, `justfile`, `src/lib.rs`, `src/cli/mod.rs:L34-L66`, `src/cli/serve.rs:L43-L394`, `src/routes/docs.rs:L116-L141`, `src/jobs/mod.rs:L20-L68`, `src/jobs/ticks.rs:L276-L304`, `src/config.rs:L23-L90`, `.github/workflows/*.yml`, `docs/_meta/scratch/*.md`, `git log`, `git tag`
-**Last verified:** 2026-10-20 against commit `a11df6c`
+**Last verified:** 2026-10-20 against commit `b7b363c`

@@ -4286,7 +4286,7 @@ expression: doc
         "type": "object"
       },
       "Ready": {
-        "description": "v1 returned `{ok, redis, postgres, keyScope}`. v2 has one store, so `sqlite` replaces\nthe two backend booleans, and `limiter` says the checkpoint was restored\n(design/07). `keyScope` is v1's (ADR-011). `sqliteReaders`/`sqliteReadersFree`\nshow the read pool, so a leak shows before reads fail (ADR-113).",
+        "description": "v1 returned `{ok, redis, postgres, keyScope}`. v2 has one store, so `sqlite` replaces\nthe two backend booleans, and `limiter` says the checkpoint was restored\n(design/07). `keyScope` is v1's (ADR-011). `sqliteReaders`/`sqliteReadersFree`\nshow the read pool, so a leak shows before reads fail (ADR-113). `writer*` say\nwhat the writer thread is doing (WR-02).",
         "properties": {
           "keyScope": {
             "type": "string"
@@ -4309,6 +4309,21 @@ expression: doc
             "description": "Of those, how many are idle now. Informational: 0 under load is normal and\ndoesn't make the probe fail.",
             "minimum": 0,
             "type": "integer"
+          },
+          "writerBusy": {
+            "description": "The writer thread is running a write now.",
+            "type": "boolean"
+          },
+          "writerBusyMs": {
+            "description": "For how long, in ms; 0 when idle.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "writerQueued": {
+            "description": "Writes queued behind it.",
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
@@ -4317,7 +4332,10 @@ expression: doc
           "limiter",
           "keyScope",
           "sqliteReaders",
-          "sqliteReadersFree"
+          "sqliteReadersFree",
+          "writerBusy",
+          "writerBusyMs",
+          "writerQueued"
         ],
         "type": "object"
       },
@@ -4796,6 +4814,10 @@ expression: doc
           "sqlite": {
             "$ref": "#/components/schemas/SqliteReaders"
           },
+          "sqliteWriter": {
+            "$ref": "#/components/schemas/SqliteWriter",
+            "description": "What the writer thread is doing (WR-02)."
+          },
           "totals": {
             "$ref": "#/components/schemas/Totals"
           },
@@ -4844,6 +4866,7 @@ expression: doc
           "inflight",
           "quotas",
           "sqlite",
+          "sqliteWriter",
           "disk",
           "requests",
           "upstream"
@@ -4868,6 +4891,51 @@ expression: doc
         "required": [
           "readers",
           "readersFree"
+        ],
+        "type": "object"
+      },
+      "SqliteWriter": {
+        "description": "The SQLite writer thread (`Db::writer_status`, WR-02). Times are Unix ms.",
+        "properties": {
+          "busyMs": {
+            "description": "How long it has run; 0 while idle.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "busySince": {
+            "description": "When the running write started; null while idle.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "lastFinished": {
+            "description": "When the last write finished; 0 for never.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lastProgress": {
+            "description": "When SQLite last made progress on a write; 0 for never.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "queued": {
+            "description": "Writes queued behind the running one (`sqlite_write_queue`).",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "busyMs",
+          "lastProgress",
+          "lastFinished",
+          "queued"
         ],
         "type": "object"
       },
@@ -5564,7 +5632,7 @@ expression: doc
     },
     "/readyz": {
       "get": {
-        "description": "SQLite can take a write and the limiter checkpoint is restored. **The 503 carries the same body as the 200**, so the booleans name what is not ready. `sqliteReadersFree` counts the idle read connections; it doesn't affect `ok`.",
+        "description": "SQLite can take a write and the limiter checkpoint is restored. While the writer runs a write, `sqlite` says whether SQLite has made progress on it in the last 5 s instead of queueing a probe behind it, so a long rebuild stays ready and a stuck write does not. **The 503 carries the same body as the 200**, so the booleans name what is not ready. `sqliteReadersFree`, `writerBusy`, `writerBusyMs` and `writerQueued` are informational; they don't affect `ok`.",
         "operationId": "readyz",
         "responses": {
           "200": {

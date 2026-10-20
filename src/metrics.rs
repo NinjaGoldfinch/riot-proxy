@@ -60,12 +60,16 @@ pub const CACHE_L2_DROPPED_TOTAL: &str = "cache_l2_dropped_total";
 pub const ARCHIVE_OFFLOAD_PENDING: &str = "archive_offload_pending";
 pub const ARCHIVE_OFFLOAD_BYTES_TOTAL: &str = "archive_offload_bytes_total";
 pub const ARCHIVE_PACKS: &str = "archive_packs";
+pub const SQLITE_WRITE_SECONDS: &str = "sqlite_write_seconds";
+pub const SQLITE_WRITE_WAIT_SECONDS: &str = "sqlite_write_wait_seconds";
+pub const SQLITE_WRITE_QUEUE: &str = "sqlite_write_queue";
 
 const UPSTREAM_LATENCY_BUCKETS: &[f64] = &[0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0];
 const RL_WAIT_BUCKETS: &[f64] = &[0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0];
 const LADDER_CRAWL_BUCKETS: &[f64] = &[
     10.0, 60.0, 300.0, 900.0, 1800.0, 3600.0, 7200.0, 14_400.0, 28_800.0,
 ];
+const SQLITE_WRITE_BUCKETS: &[f64] = &[0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0];
 const AGGREGATE_BUCKETS: &[f64] = &[1.0, 5.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0, 1200.0];
 
 const fn def(
@@ -341,6 +345,28 @@ pub const CATALOGUE: &[MetricDef] = &[
         Kind::Gauge,
         &[],
         "Pack objects recorded in body_packs",
+        &[],
+    ),
+    // The writer thread (WR-02, ADR-180): recorded by it for every job.
+    def(
+        SQLITE_WRITE_SECONDS,
+        Kind::Histogram,
+        &[],
+        "Time each SQLite write took on the writer thread, queue wait excluded",
+        SQLITE_WRITE_BUCKETS,
+    ),
+    def(
+        SQLITE_WRITE_WAIT_SECONDS,
+        Kind::Histogram,
+        &[],
+        "Time each SQLite write waited in the writer's queue before it ran",
+        SQLITE_WRITE_BUCKETS,
+    ),
+    def(
+        SQLITE_WRITE_QUEUE,
+        Kind::Gauge,
+        &[],
+        "SQLite writes queued behind the running one",
         &[],
     ),
 ];

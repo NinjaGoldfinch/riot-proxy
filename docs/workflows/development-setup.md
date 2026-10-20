@@ -37,7 +37,7 @@ just dev            # = cargo run -- serve  (justfile:11-13)
 
 The first `serve` on an empty `DATA_DIR` prints, on stdout as JSON (pretty when stdout is a terminal, `src/config.rs:649-656`):
 
-1. refinery's lines: `schema history table is empty, going to apply all migrations`, then `going to batch apply 27 migrations in single transaction.` naming `V1__init` to `V27__matchup_builds` (`src/db/mod.rs:18-20`, `294-296`).
+1. refinery's lines: `schema history table is empty, going to apply all migrations`, then `going to batch apply 27 migrations in single transaction.` naming `V1__init` to `V27__matchup_builds` (`src/db/mod.rs:22-24`, `294-296`).
 2. `database ready` with `path=<DATA_DIR>/riot-proxy.db` (`src/cli/serve.rs:52-55`).
 3. `bootstrap admin consumer created` with its ULID id (`src/cli/serve.rs:57-68`).
 4. `limiter checkpoint restored rows=0`, `L1 warmed from L2 entries=0`, `listening addr=<HOST>:<PORT>`, `starting job workers workers=<JOB_CONCURRENCY> kind_limits=…` (`src/cli/serve.rs:76-93`, `143-148`, `319-324`).
@@ -203,4 +203,4 @@ Not re-executed here: `cargo build`, `cargo test` and `just nextest` (a full run
 
 ---
 **Sources:** `rust-toolchain.toml:L1-L5`, `justfile:L1-L52`, `.env.example:L1-L171`, `README.md:L60-L112`, `src/config.rs:L3`, `L568-L582`, `L610-L620`, `L658-L684`, `L884-L910`, `L987-L999`, `src/cli/mod.rs:L82-L88`, `src/cli/serve.rs:L52-L68`, `L76-L108`, `L143-L148`, `L319-L324`, `L399-L405`, `src/cli/key.rs:L13-L57`, `src/consumers.rs:L12-L14`, `L95-L96`, `src/http/auth.rs:L201-L204`, `src/jobs/ticks.rs:L1-L4`, `L44-L80`, `L108-L137`, `src/cli/riot.rs:L1-L32`, `L63-L81`, `src/archive/objects.rs:L102-L113`, `acceptance/helpers/env.ts:L19-L25`, `L244-L275`, `acceptance/helpers/setup.ts:L23-L54`, `acceptance/helpers/mock-riot.ts:L7`, `tests/ui.rs:L42-L64`, `tests/dom/package.json`, `acceptance/package.json`, `.github/workflows/ci.yml:L52-L53`, `PROGRESS.md:L390`, `L400`, `L420-L422`, `docs/IMPLEMENTATION.md:L434`, `docs/design/11-showcase.md:L15`, `docs/DECISIONS.md:L1457`, `docs/_meta/scratch/config.md`, `docs/_meta/scratch/persistence.md` §5, `docs/_meta/scratch/siblings.md` §1.2, §1.8
-**Last verified:** 2026-10-19 against commit `52fa67d`
+**Last verified:** 2026-10-20 against commit `b7b363c`

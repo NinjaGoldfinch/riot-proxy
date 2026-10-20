@@ -214,7 +214,7 @@ sqlite3 -readonly riot-proxy.db "SELECT name, SUM(pgsize)/1048576 AS mib FROM db
 ## Observability
 
 - `/metrics` — Prometheus, **same metric names as v1** so `ops/grafana/riot-proxy-dashboard.json` and `ops/prometheus-alerts.yml` import unchanged. Add `jobs_pending{kind}`, `limiter_bulk_waiters`, `sqlite_wal_bytes`; and, for the disk, `sqlite_db_bytes`, `sqlite_freelist_bytes`, `data_dir_free_bytes` (DSK-01, ADR-135), sampled with the metrics history. `GET /v1/admin/stats` shows the same readings with the page geometry.
-- `/healthz` — process up. `/readyz` — SQLite writable and limiter restored; it also reports the SQLite readers, total and idle, without failing on 0 idle (ADR-113).
+- `/healthz` — process up. `/readyz` — SQLite writable and limiter restored; it also reports the SQLite readers, total and idle, without failing on 0 idle (ADR-113). While the writer runs a write, `/readyz` does not queue its probe behind it: `sqlite` is true while the write makes progress (SQLite's progress handler, or the writer thread's CPU clock during a sort) and false once it has made none for 5 s, and `writerBusy`, `writerBusyMs`, `writerQueued` report the writer (WR-02, ADR-180).
 - Logs — `tracing` JSON to stdout; every request carries `request_id`, `consumer`, `x_cache`, `upstream_ms`.
 - `/dashboard` — the operator page (design/13): `/v1/admin/*` JSON and the `metrics` + `firehose` topics.
 

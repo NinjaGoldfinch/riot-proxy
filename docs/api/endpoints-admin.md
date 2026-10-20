@@ -130,7 +130,7 @@ A probe on a Riot key that is rejected answers `502 UPSTREAM_ERROR`, as any Riot
 
 | Method | Path | Params | Response | Handler |
 |---|---|---|---|---|
-| GET | `/v1/admin/metrics` | none | the `stats::Snapshot` document the `metrics` WebSocket topic sends; not recorded in the recent ring | `src/routes/admin.rs:L2399` |
+| GET | `/v1/admin/metrics` | none | the `stats::Snapshot` document the `metrics` WebSocket topic sends, including `sqliteWriter{busySince,busyMs,lastProgress,lastFinished,queued}` (WR-02); not recorded in the recent ring | `src/routes/admin.rs:L2399` |
 | GET | `/v1/admin/metrics/history` | none | `{intervalS,maxPoints,points[]}`; `intervalS` is `METRICS_HISTORY_INTERVAL_S` (60) | `src/routes/admin.rs:L2424` |
 | GET | `/v1/admin/info` | none | `{version,gitSha,rustc,builtAt,startedAt,uptimeSeconds,env,role,keyScope,features{devUi,docsUi,dashboardUi,authDisabled,archiveTimelines,staleWhileRevalidate,trustProxy,postgres},workers,config{…}}`; `RIOT_API_KEY` is never listed and other secrets read `[REDACTED]` | `src/routes/admin.rs:L2486` |
 | GET | `/v1/admin/recent` | `?kind` in `requests` (default), `errors`; `?limit` 1 to 500 (default 100) | `{kind,capacity,requests?[{at,method,route,path,status,cache,latencyMs,consumer,requestId}],errors?[{at,code,status,message,requestId}]}`; rings of 500 requests and 200 errors, lost on restart | `src/routes/admin.rs:L2546` |
@@ -150,4 +150,4 @@ Captured `/v1/admin/info`, shortened:
 
 ---
 **Sources:** `src/routes/admin.rs:L44-L107,L114-L171,L180-L326,L336-L435,L454-L502,L524-L571,L580-L594,L630-L653,L664,L717-L780,L832-L882,L890-L924,L969,L1010-L1038,L1075-L1204,L1212-L1248,L1262-L1354,L1369-L1536,L1583-L1613,L1634-L1652,L1674-L1689,L1700-L1758,L1764-L1795,L1831-L1848,L1870-L1894,L1904-L1925,L1936-L1997,L2009-L2033,L2092-L2110,L2197-L2225,L2277-L2311,L2340-L2362,L2375-L2384,L2394-L2415,L2424,L2438-L2486,L2522-L2558,L2583-L2624,L2662-L2670`, `src/routes/admin/ladder_probe.rs:L42-L44,L121-L149,L351-L355,L387-L434,L458-L496`, `src/http/body.rs:L341-L391`, `src/http/validate.rs:L81-L88,L253-L259`, `src/http/auth.rs:L276-L288,L327-L342`, `src/http/recent.rs:L109-L122`, `docs/_meta/scratch/routes.md` §1.8, live capture against `target/debug/riot-proxy` 2.7.0
-**Last verified:** 2026-10-19 against commit `52fa67d`
+**Last verified:** 2026-10-20 against commit `b7b363c`

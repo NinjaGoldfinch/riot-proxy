@@ -134,3 +134,36 @@ async fn published_events_are_counted_by_name() {
         "{body}"
     );
 }
+
+#[tokio::test]
+async fn sqlite_writes_are_timed_and_the_queue_is_a_gauge() {
+    let handle = metrics_handle().expect("recorder");
+    let dir = tempfile::tempdir().unwrap();
+    let db = riot_proxy::db::Db::open(&dir.path().join("riot-proxy.db"), 1).unwrap();
+    db.write(|c| {
+        c.execute_batch("CREATE TABLE t (a INTEGER)")
+            .map_err(riot_proxy::db::DbError::from)
+    })
+    .await
+    .unwrap();
+    handle.run_upkeep();
+    let (_, _, body) = get_body(app(), Request::get("/metrics").body(Body::empty()).unwrap()).await;
+    for name in ["sqlite_write_seconds", "sqlite_write_wait_seconds"] {
+        assert!(body.contains(&format!("# TYPE {name} histogram")), "{body}");
+        let les: Vec<&str> = body
+            .lines()
+            .filter_map(|l| l.strip_prefix(&format!("{name}_bucket{{le=\"")))
+            .filter_map(|l| l.split('"').next())
+            .collect();
+        assert_eq!(
+            les,
+            [
+                "0.001", "0.01", "0.05", "0.1", "0.25", "0.5", "1", "2", "5", "10", "30", "60", "+Inf"
+            ],
+            "{body}"
+        );
+        assert!(body.contains(&format!("{name}_count ")), "{body}");
+    }
+    assert!(body.contains("# TYPE sqlite_write_queue gauge"), "{body}");
+    assert!(body.contains("sqlite_write_queue 0"), "{body}");
+}

@@ -4,14 +4,14 @@ How schema migrations are written, applied and recorded, the complete list V0001
 
 ## How they run
 
-- **Embedded at compile time.** `refinery::embed_migrations!("src/db/migrations")` compiles every `V####__name.sql` into the binary (`src/db/mod.rs:18-20`), so a release binary carries exactly the migrations its schema expects. refinery only recognises the `^[UV]\d+__\w+\.sql$` naming (ADR-010, `docs/DECISIONS.md:51`).
-- **On every open.** `Db::open` applies the pragmas to the writer connection, runs `migrate`, then `PRAGMA optimize`, and only then opens the reader pool and starts the writer thread (`src/db/mod.rs:143-158`). `riot-proxy serve` and every CLI command that touches the database go through `Db::open`, so all of them migrate (`src/cli/serve.rs:51-54`, `src/cli/mod.rs:136-141`).
+- **Embedded at compile time.** `refinery::embed_migrations!("src/db/migrations")` compiles every `V####__name.sql` into the binary (`src/db/mod.rs:22-24`), so a release binary carries exactly the migrations its schema expects. refinery only recognises the `^[UV]\d+__\w+\.sql$` naming (ADR-010, `docs/DECISIONS.md:51`).
+- **On every open.** `Db::open` applies the pragmas to the writer connection, runs `migrate`, then `PRAGMA optimize`, and only then opens the reader pool and starts the writer thread (`src/db/mod.rs:147-171`). `riot-proxy serve` and every CLI command that touches the database go through `Db::open`, so all of them migrate (`src/cli/serve.rs:51-54`, `src/cli/mod.rs:136-141`).
 - **`riot-proxy migrate`.** Creates the parent directory, opens a raw `rusqlite::Connection` without the pragmas, runs the same `migrate` and prints `<path>: up to date` or `<path>: applied V…` (`src/cli/mod.rs:144-168`). Use it to migrate ahead of a restart when a migration is known to be slow.
-- **Grouped, one transaction.** `runner().set_grouped(true).run(conn)`: every pending migration runs in a single transaction, so a failure part-way leaves the database at the previous version (`src/db/mod.rs:312-316`). Already-applied versions are skipped, which is what makes migrating on every boot safe.
+- **Grouped, one transaction.** `runner().set_grouped(true).run(conn)`: every pending migration runs in a single transaction, so a failure part-way leaves the database at the previous version (`src/db/mod.rs:361-365`). Already-applied versions are skipped, which is what makes migrating on every boot safe.
 - **Forward only.** There are no down migrations. A schema change SQLite cannot express as `ALTER` is done as copy into `<table>_vNN`, `DROP`, `RENAME` (V0013, V0017, V0020, V0021, V0025 follow this pattern). Rollback is restoring a backup, below.
 - **History.** refinery records each version in `refinery_schema_history(version, name, applied_on, checksum)`, one row per applied file; `applied_on` is an ISO timestamp (dev database `sqlite_master`). The `checksum` column is what lets refinery notice an edited file, so never edit a merged migration; add a new one.
 
-> **TODO (unverified):** what refinery does when an applied file's checksum no longer matches (abort or warn) is the crate's default behaviour; `src/db/mod.rs:312-316` sets only `set_grouped(true)` and the repo has no test for a divergent file.
+> **TODO (unverified):** what refinery does when an applied file's checksum no longer matches (abort or warn) is the crate's default behaviour; `src/db/mod.rs:361-365` sets only `set_grouped(true)` and the repo has no test for a divergent file.
 
 - **Postgres.** `PgStore::migrate` returns `DbError::PostgresUnimplemented` (`src/db/store.rs:172-206`); the SQL is SQLite-only (partial indexes, `WITHOUT ROWID`).
 
@@ -83,5 +83,5 @@ There is no down migration. To return to an older binary whose schema predates a
 The full procedure, with the test and ADR steps, is in [../workflows/adding-a-migration.md](../workflows/adding-a-migration.md).
 
 ---
-**Sources:** `src/db/mod.rs:L18-L20`, `src/db/mod.rs:L143-L158`, `src/db/mod.rs:L312-L316`, `src/db/store.rs:L172-L206`, `src/cli/mod.rs:L136-L168`, `src/cli/serve.rs:L51-L54`, `src/db/migrations/V0001__init.sql` to `V0028__jobs_crawl_matches.sql`, `docs/DECISIONS.md:L15-L17`, `docs/DECISIONS.md:L51`, `docs/DECISIONS.md:L1388`, `docs/DECISIONS.md:L1700`, `docs/DECISIONS.md:L1714`, `docs/DECISIONS.md:L1776`, `docs/DECISIONS.md:L1841`, `docs/flt/FLT-03-plan.md:L573`, `PROGRESS.md:L10-L365`, `docs/design/12-object-storage-and-hosting.md:L159-L162`, `deploy/README.md:L222-L270`, `docs/_meta/scratch/persistence.md`
-**Last verified:** 2026-10-20 against commit `f0087f7`
+**Sources:** `src/db/mod.rs:L22-L24`, `src/db/mod.rs:L147-L171`, `src/db/mod.rs:L361-L365`, `src/db/store.rs:L172-L206`, `src/cli/mod.rs:L136-L168`, `src/cli/serve.rs:L51-L54`, `src/db/migrations/V0001__init.sql` to `V0028__jobs_crawl_matches.sql`, `docs/DECISIONS.md:L15-L17`, `docs/DECISIONS.md:L51`, `docs/DECISIONS.md:L1388`, `docs/DECISIONS.md:L1700`, `docs/DECISIONS.md:L1714`, `docs/DECISIONS.md:L1776`, `docs/DECISIONS.md:L1841`, `docs/flt/FLT-03-plan.md:L573`, `PROGRESS.md:L10-L365`, `docs/design/12-object-storage-and-hosting.md:L159-L162`, `deploy/README.md:L222-L270`, `docs/_meta/scratch/persistence.md`
+**Last verified:** 2026-10-20 against commit `b7b363c`

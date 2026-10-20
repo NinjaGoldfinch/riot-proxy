@@ -50,7 +50,7 @@ PRAGMA wal_autocheckpoint = 1000;
 
 Connection policy:
 
-- **One writer connection** on a dedicated thread. All `INSERT/UPDATE/DELETE` go through an `mpsc` channel of closures — serialised by construction, so there is never a `SQLITE_BUSY` on write.
+- **One writer connection** on a dedicated thread. All `INSERT/UPDATE/DELETE` go through an `mpsc` channel of closures — serialised by construction, so there is never a `SQLITE_BUSY` on write. The thread stamps when each job starts and ends, and a progress handler (every 1000 VM instructions) and commit hook stamp while SQLite executes; `Db::writer_status` reads the stamps without queueing, for `/readyz`, and every job is timed into `sqlite_write_seconds` (WR-02, ADR-180).
 - **Reader pool** of `n_cores` connections for the HTTP path. WAL means they see a consistent snapshot without blocking. A read borrows a connection with its semaphore permit and hands both back from inside the blocking closure, connection first, so a caller that stops waiting (`try_join!`, a client gone) can't leave a permit without a connection. `/readyz` and `sqlite_readers_free` show the idle count (ADR-113).
 - `spawn_blocking` at the boundary; no SQLite call inside an async fn.
 

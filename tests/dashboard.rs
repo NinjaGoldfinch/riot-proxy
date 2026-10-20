@@ -184,6 +184,7 @@ async fn the_snapshot_is_v1s_whole_document_from_v2s_sources() {
             "requests",
             "sampledAt",
             "sqlite",
+            "sqliteWriter",
             "totals",
             "upstream",
             "v",
@@ -524,6 +525,9 @@ async fn the_snapshot_carries_the_runtime_gauges() {
     assert_eq!(s["inflight"], 0);
     assert_eq!(s["sqlite"]["readers"], 2);
     assert!(s["sqlite"]["readersFree"].as_u64().unwrap() <= 2);
+    let writer = &s["sqliteWriter"];
+    assert!(writer["lastFinished"].as_u64().unwrap() > 0, "{writer}");
+    assert!(writer["queued"].is_u64() && writer["busyMs"].is_u64(), "{writer}");
     let disk = &s["disk"];
     assert!(disk["dbBytes"].as_u64().unwrap() > 0);
     assert!(disk["totalBytes"].as_u64().unwrap() >= disk["freeBytes"].as_u64().unwrap());

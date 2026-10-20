@@ -320,6 +320,8 @@ pub struct Snapshot {
     /// Every consumer metered since the start, busiest first (ADM-04).
     pub quotas: Vec<QuotaUse>,
     pub sqlite: SqliteReaders,
+    /// What the writer thread is doing (WR-02).
+    pub sqlite_writer: SqliteWriter,
     /// From the slow sample (ADM-04).
     pub disk: DiskSection,
     /// `route|status|cache` → requests answered since the start
@@ -424,6 +426,36 @@ pub struct SqliteReaders {
     pub readers: u64,
     /// Idle right now (`sqlite_readers_free`).
     pub readers_free: u64,
+}
+
+/// The SQLite writer thread (`Db::writer_status`, WR-02). Times are Unix ms.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SqliteWriter {
+    /// When the running write started; null while idle.
+    pub busy_since: Option<u64>,
+    /// How long it has run; 0 while idle.
+    pub busy_ms: u64,
+    /// When SQLite last made progress on a write; 0 for never.
+    pub last_progress: u64,
+    /// When the last write finished; 0 for never.
+    pub last_finished: u64,
+    /// Writes queued behind the running one (`sqlite_write_queue`).
+    pub queued: u64,
+}
+
+impl From<crate::db::WriterStatus> for SqliteWriter {
+    fn from(w: crate::db::WriterStatus) -> Self {
+        Self {
+            busy_since: w.busy_since,
+            busy_ms: w
+                .busy_for
+                .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX)),
+            last_progress: w.last_progress,
+            last_finished: w.last_finished,
+            queued: u64::try_from(w.queued).unwrap_or(u64::MAX),
+        }
+    }
 }
 
 /// What the database takes on disk, and what is left (DSK-01's readings).
@@ -919,6 +951,7 @@ impl Stats {
                 readers: as_u64(self.db.readers()),
                 readers_free: as_u64(self.db.readers_free()),
             },
+            sqlite_writer: self.db.writer_status().into(),
             disk,
             requests: self.labelled(crate::metrics::REQUESTS_TOTAL, &["route", "status", "cache"], "|"),
             upstream: self.labelled(

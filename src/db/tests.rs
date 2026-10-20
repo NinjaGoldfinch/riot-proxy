@@ -1669,3 +1669,293 @@ async fn the_reads_counter_counts_every_read() {
         .unwrap();
     assert_eq!(db.reads() - before, 3, "writes don't count");
 }
+
+/// ADR-180's overhead figure: a 1 M-row insert in one transaction, row by row and
+/// as one statement, on a plain connection, without the progress stamps and with
+/// them at several intervals.
+/// `cargo test --release --lib progress_handler_overhead -- --ignored --nocapture`
+#[test]
+#[ignore = "timing, run by hand"]
+fn progress_handler_overhead() {
+    fn insert(ops: Option<i32>) -> (std::time::Duration, std::time::Duration) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = Connection::open(dir.path().join("bench.db")).expect("open");
+        apply_pragmas(&conn, WRITER_PRAGMAS).expect("pragmas");
+        let stamps = Arc::new(Stamps::new());
+        if let Some(ops) = ops {
+            let s = Arc::clone(&stamps);
+            conn.progress_handler(
+                ops,
+                Some(move || {
+                    s.progress();
+                    false
+                }),
+            )
+            .expect("handler");
+        }
+        conn.execute_batch("CREATE TABLE t (a INTEGER PRIMARY KEY, b TEXT, c INTEGER)")
+            .expect("table");
+        let started = std::time::Instant::now();
+        conn.execute_batch("BEGIN").expect("begin");
+        {
+            let mut stmt = conn
+                .prepare_cached("INSERT INTO t (b, c) VALUES (?1, ?2)")
+                .expect("prepare");
+            for i in 0..1_000_000_i64 {
+                stmt.execute(params![format!("row-{i}"), i * 7]).expect("insert");
+            }
+        }
+        conn.execute_batch("COMMIT").expect("commit");
+        let one_by_one = started.elapsed();
+        // The rebuild shape: one statement writing every row.
+        let started = std::time::Instant::now();
+        conn.execute_batch("CREATE TABLE u AS SELECT a, b, c * 2 AS c FROM t ORDER BY c DESC")
+            .expect("bulk");
+        (one_by_one, started.elapsed())
+    }
+    // Interleaved rounds, so drift in the machine's speed lands on every setting.
+    let settings = [None, Some(1000), Some(100), Some(10)];
+    let mut rows = vec![Vec::new(); settings.len()];
+    let mut bulk = vec![Vec::new(); settings.len()];
+    for _ in 0..11 {
+        for (k, ops) in settings.iter().enumerate() {
+            let (r, b) = insert(*ops);
+            rows[k].push(r);
+            bulk[k].push(b);
+        }
+    }
+    let median = |v: &mut Vec<std::time::Duration>| {
+        v.sort();
+        v[v.len() / 2]
+    };
+    let (base_rows, base_bulk) = (median(&mut rows[0]), median(&mut bulk[0]));
+    for (k, ops) in settings.iter().enumerate() {
+        let (r, b) = (median(&mut rows[k]), median(&mut bulk[k]));
+        let pct = |x: std::time::Duration, base: std::time::Duration| {
+            100.0 * (x.as_secs_f64() / base.as_secs_f64() - 1.0)
+        };
+        println!(
+            "ops={ops:?} row-by-row median={r:?} ({:+.1} %) bulk median={b:?} ({:+.1} %)",
+            pct(r, base_rows),
+            pct(b, base_bulk)
+        );
+    }
+}
+
+/// A write that blocks the writer until `release` is sent, after telling `started`.
+fn hold_writer(db: &Db) -> (std::sync::mpsc::Sender<()>, tokio::task::JoinHandle<()>) {
+    let (release, wait) = std::sync::mpsc::channel::<()>();
+    let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
+    let db = db.clone();
+    let task = tokio::spawn(async move {
+        db.write(move |_| {
+            let _ = started_tx.send(());
+            let _ = wait.recv();
+            Ok::<_, DbError>(())
+        })
+        .await
+        .expect("held write");
+    });
+    started_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the held write started");
+    (release, task)
+}
+
+async fn wait_for_idle_writer(db: &Db) {
+    for _ in 0..500 {
+        if !db.writer_status().busy() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    }
+    panic!("writer still busy: {:?}", db.writer_status());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn writer_status_goes_idle_busy_idle_and_counts_the_queue() {
+    let (_dir, db) = open_temp(1);
+    db.write(|c| c.execute_batch("SELECT 1").map_err(DbError::from))
+        .await
+        .expect("warm-up write");
+    wait_for_idle_writer(&db).await;
+    let idle = db.writer_status();
+    assert_eq!(idle.busy_since, None);
+    assert_eq!(idle.busy_for, None);
+    assert_eq!(idle.queued, 0);
+    assert!(idle.last_finished > 0 && idle.last_progress > 0, "{idle:?}");
+
+    let (release, held) = hold_writer(&db);
+    let busy = db.writer_status();
+    assert!(busy.busy(), "{busy:?}");
+    // Unix times are derived per read, so two reads may differ by a millisecond.
+    assert!(busy.busy_since.expect("busy_since") + 1 >= idle.last_finished);
+    assert_eq!(busy.queued, 0);
+
+    let queued: Vec<_> = (0..3)
+        .map(|_| {
+            let db = db.clone();
+            tokio::spawn(async move { db.write(|_| Ok::<_, DbError>(())).await })
+        })
+        .collect();
+    for _ in 0..500 {
+        if db.writer_status().queued == 3 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    }
+    assert_eq!(db.writer_status().queued, 3);
+
+    release.send(()).expect("release");
+    held.await.expect("held");
+    for q in queued {
+        q.await.expect("join").expect("queued write");
+    }
+    wait_for_idle_writer(&db).await;
+    let after = db.writer_status();
+    assert_eq!((after.busy_since, after.queued), (None, 0));
+    assert_eq!(
+        after.finished,
+        busy.finished + 4,
+        "the held write and the three queued"
+    );
+    assert!(after.last_finished + 1 >= busy.busy_since.expect("busy_since"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sqlite_work_stamps_progress_and_a_sleep_does_not() {
+    let (_dir, db) = open_temp(1);
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    let (go, wait) = std::sync::mpsc::channel::<()>();
+    let job = {
+        let db = db.clone();
+        tokio::spawn(async move {
+            db.write(move |c| {
+                c.execute_batch("CREATE TABLE t (a INTEGER)")?;
+                std::thread::sleep(std::time::Duration::from_millis(150));
+                let _ = tx.send(());
+                let _ = wait.recv();
+                // Executing for a while: progress keeps up.
+                c.execute_batch(
+                    "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 300000) \
+                     INSERT INTO t SELECT i FROM n",
+                )?;
+                Ok::<_, DbError>(())
+            })
+            .await
+        })
+    };
+    rx.recv_timeout(std::time::Duration::from_secs(5)).expect("slept");
+    // The sleep left no progress behind it.
+    let stuck = db.writer_status();
+    assert!(stuck.busy());
+    assert!(
+        stuck.since_progress.expect("stamped") >= std::time::Duration::from_millis(100),
+        "{stuck:?}"
+    );
+    go.send(()).expect("go");
+    job.await.expect("join").expect("job");
+    let done = db.writer_status();
+    assert!(
+        done.last_progress >= stuck.last_progress + 100,
+        "{stuck:?} {done:?}"
+    );
+}
+
+/// Writes that each wait out `busy_timeout` back to back must not look fresh
+/// because each one starts: only a job that finds the writer idle is progress.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_job_queued_behind_another_inherits_its_stamps() {
+    let (_dir, db) = open_temp(1);
+    let (release, held) = hold_writer(&db);
+    let first = db.writer_status();
+    let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
+    let (go, wait) = std::sync::mpsc::channel::<()>();
+    let second = {
+        let db = db.clone();
+        tokio::spawn(async move {
+            db.write(move |_| {
+                let _ = started_tx.send(());
+                let _ = wait.recv();
+                Ok::<_, DbError>(())
+            })
+            .await
+        })
+    };
+    for _ in 0..500 {
+        if db.writer_status().queued == 1 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    release.send(()).expect("release");
+    started_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the queued write started");
+    let s = db.writer_status();
+    assert!(s.busy(), "{s:?}");
+    // Unix times are derived per read and may differ by a millisecond.
+    assert!(
+        s.last_progress.abs_diff(first.last_progress) <= 1,
+        "{first:?} {s:?}"
+    );
+    assert!(
+        s.since_progress.expect("stamped") >= std::time::Duration::from_millis(150),
+        "{s:?}"
+    );
+    go.send(()).expect("go");
+    held.await.expect("held");
+    second.await.expect("join").expect("second");
+
+    // Idle again: the next job is fresh.
+    wait_for_idle_writer(&db).await;
+    let (release, held) = hold_writer(&db);
+    assert!(db.writer_status().since_progress.expect("stamped") < std::time::Duration::from_millis(100));
+    release.send(()).expect("release");
+    held.await.expect("held");
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_writer_cpu_clock_counts_work_and_not_sleep() {
+    let (_dir, db) = open_temp(1);
+    let before = db.writer_cpu_time().expect("a CPU clock on Linux");
+    db.write(|_| {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        Ok::<_, DbError>(())
+    })
+    .await
+    .expect("sleep");
+    let slept = db.writer_cpu_time().expect("clock");
+    assert!(
+        slept - before < std::time::Duration::from_millis(50),
+        "{before:?} {slept:?}"
+    );
+    db.write(|_| {
+        let until = std::time::Instant::now() + std::time::Duration::from_millis(200);
+        let mut x = 0_u64;
+        while std::time::Instant::now() < until {
+            x = std::hint::black_box(x.wrapping_add(1));
+        }
+        Ok::<_, DbError>(())
+    })
+    .await
+    .expect("spin");
+    let worked = db.writer_cpu_time().expect("clock");
+    assert!(
+        worked - slept >= std::time::Duration::from_millis(100),
+        "{slept:?} {worked:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_panicking_write_still_clears_busy_since() {
+    let (_dir, db) = open_temp(1);
+    let r = db.write(|_| -> Result<(), DbError> { panic!("boom") }).await;
+    assert!(matches!(r, Err(DbError::WriterGone)));
+    wait_for_idle_writer(&db).await;
+    let s = db.writer_status();
+    assert_eq!(s.busy_since, None);
+    assert!(s.last_finished > 0);
+}

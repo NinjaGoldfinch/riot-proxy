@@ -2,7 +2,7 @@
 
 Every `> **TODO (unverified):**` marker in this documentation set, collected in one place and ordered by how much it matters, with the file and line it lives on and a suggested way to close it. Regenerate the raw list with `python3 docs/_meta/tools/gaps.py` (only the blockquote form counts; prose that mentions the phrase does not).
 
-Counts on 2026-10-19: 51 markers across 30 files.
+Counts on 2026-10-20: 50 markers across 29 files.
 
 ## 1. Production state that lives only on the box
 
@@ -28,7 +28,6 @@ These matter most: the docs describe production from the design record and dated
 | `deployment/capacity.md:101`, `operations/runbook.md:128` | Whether Onidel counts ingress against the 6 TB; the site's traffic; how outbound traffic is measured on the box (nothing in the repo does) | Onidel console or `vnstat`; record the method in the runbook |
 | `operations/performance.md:34` | Production `/champions` latency after PERF-03 (PROGRESS says done without a number) | One timed curl on the box |
 | `data/migrations.md:65` | Production timings for V0026 and V0027 | From the deploy journal |
-| `operations/troubleshooting.md:13` | The production observation of `/readyz` `sqlite:false` during a rebuild is a session note | Reproduce and record, or make `/readyz` not queue behind the writer (worth a task) |
 
 ## 3. Behaviour not pinned down in code or tests
 
@@ -79,4 +78,4 @@ Found while writing; not gaps in these docs but worth a fix in the repository.
 
 ---
 **Sources:** every `TODO (unverified)` marker under `docs/` on 2026-10-19; `docs/_meta/scratch/*.md` "design vs code" sections
-**Last verified:** 2026-10-19 against commit `52fa67d`
+**Last verified:** 2026-10-20 against commit `b7b363c`
