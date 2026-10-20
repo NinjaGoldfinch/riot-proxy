@@ -182,7 +182,8 @@ fn periods_come_from_config() {
             ("poll:matches", 300),
             ("ddragon:sync", 3600),
             ("maintenance", 86_400),
-            ("names:backfill", 86_400)
+            ("names:backfill", 86_400),
+            ("aggregate:delta", 60)
         ]
     );
 }
@@ -217,8 +218,8 @@ fn serve_ticks_every_kind_whose_handler_exists() {
     })
     .unwrap();
     let kinds: Vec<&str> = running_schedule(&config).into_iter().map(|(k, _)| k).collect();
-    // Every tick has its handler since P7-05; the crawl and aggregate ticks
-    // are off by default (v1).
+    // Every tick has its handler since P7-05; the crawl and rebuild ticks
+    // are off by default (v1); the delta's is on (THR-03).
     assert_eq!(
         kinds,
         [
@@ -227,7 +228,8 @@ fn serve_ticks_every_kind_whose_handler_exists() {
             "poll:matches",
             "ddragon:sync",
             "maintenance",
-            "names:backfill"
+            "names:backfill",
+            "aggregate:delta"
         ]
     );
 }

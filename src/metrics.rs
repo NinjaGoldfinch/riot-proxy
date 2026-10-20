@@ -63,6 +63,10 @@ pub const ARCHIVE_PACKS: &str = "archive_packs";
 pub const SQLITE_WRITE_SECONDS: &str = "sqlite_write_seconds";
 pub const SQLITE_WRITE_WAIT_SECONDS: &str = "sqlite_write_wait_seconds";
 pub const SQLITE_WRITE_QUEUE: &str = "sqlite_write_queue";
+pub const AGGREGATE_DELTA_MATCHES_TOTAL: &str = "aggregate_delta_matches_total";
+pub const AGGREGATE_DELTA_BATCH_SECONDS: &str = "aggregate_delta_batch_seconds";
+pub const AGGREGATE_DELTA_BATCH_SIZE: &str = "aggregate_delta_batch_size";
+pub const AGGREGATE_DELTA_PENDING: &str = "aggregate_delta_pending";
 
 const UPSTREAM_LATENCY_BUCKETS: &[f64] = &[0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0];
 const RL_WAIT_BUCKETS: &[f64] = &[0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0];
@@ -71,6 +75,7 @@ const LADDER_CRAWL_BUCKETS: &[f64] = &[
 ];
 const SQLITE_WRITE_BUCKETS: &[f64] = &[0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0];
 const AGGREGATE_BUCKETS: &[f64] = &[1.0, 5.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0, 1200.0];
+const DELTA_BATCH_BUCKETS: &[f64] = &[0.01, 0.025, 0.05, 0.1, 0.15, 0.25, 0.5, 1.0, 2.0, 5.0];
 
 const fn def(
     name: &'static str,
@@ -206,8 +211,8 @@ pub const CATALOGUE: &[MetricDef] = &[
     def(
         AGGREGATE_RUNS_TOTAL,
         Kind::Counter,
-        &["platform", "queue", "status"],
-        "Analytics recomputes, by outcome",
+        &["platform", "queue", "status", "kind"],
+        "Analytics recomputes, by outcome and kind (rebuild, delta)",
         &[],
     ),
     def(
@@ -367,6 +372,35 @@ pub const CATALOGUE: &[MetricDef] = &[
         Kind::Gauge,
         &[],
         "SQLite writes queued behind the running one",
+        &[],
+    ),
+    // aggregate:delta (THR-03, ADR-182).
+    def(
+        AGGREGATE_DELTA_MATCHES_TOTAL,
+        Kind::Counter,
+        &["platform", "queue", "kind"],
+        "Matches aggregate:delta counted (added) or took a count back for first (retracted)",
+        &[],
+    ),
+    def(
+        AGGREGATE_DELTA_BATCH_SECONDS,
+        Kind::Histogram,
+        &["platform", "queue", "part"],
+        "One aggregate:delta batch's write transaction: its statements (sql) and its COMMIT (commit)",
+        DELTA_BATCH_BUCKETS,
+    ),
+    def(
+        AGGREGATE_DELTA_BATCH_SIZE,
+        Kind::Gauge,
+        &[],
+        "Matches in the last aggregate:delta batch, sized to AGGREGATE_DELTA_TARGET_MS",
+        &[],
+    ),
+    def(
+        AGGREGATE_DELTA_PENDING,
+        Kind::Gauge,
+        &[],
+        "Matches no rebuild or delta has fully counted, at the start of the last aggregate:delta",
         &[],
     ),
 ];

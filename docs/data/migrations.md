@@ -1,6 +1,6 @@
 # Migrations
 
-How schema migrations are written, applied and recorded, the complete list V0001 to V0028, and what to expect from the expensive ones in production. The resulting tables are in [schema.md](schema.md) and [schema-analytics.md](schema-analytics.md); the procedure for adding one is in [../workflows/adding-a-migration.md](../workflows/adding-a-migration.md).
+How schema migrations are written, applied and recorded, the complete list V0001 to V0029, and what to expect from the expensive ones in production. The resulting tables are in [schema.md](schema.md) and [schema-analytics.md](schema-analytics.md); the procedure for adding one is in [../workflows/adding-a-migration.md](../workflows/adding-a-migration.md).
 
 ## How they run
 
@@ -8,7 +8,7 @@ How schema migrations are written, applied and recorded, the complete list V0001
 - **On every open.** `Db::open` applies the pragmas to the writer connection, runs `migrate`, then `PRAGMA optimize`, and only then opens the reader pool and starts the writer thread (`src/db/mod.rs:147-171`). `riot-proxy serve` and every CLI command that touches the database go through `Db::open`, so all of them migrate (`src/cli/serve.rs:51-54`, `src/cli/mod.rs:136-141`).
 - **`riot-proxy migrate`.** Creates the parent directory, opens a raw `rusqlite::Connection` without the pragmas, runs the same `migrate` and prints `<path>: up to date` or `<path>: applied V…` (`src/cli/mod.rs:144-168`). Use it to migrate ahead of a restart when a migration is known to be slow.
 - **Grouped, one transaction.** `runner().set_grouped(true).run(conn)`: every pending migration runs in a single transaction, so a failure part-way leaves the database at the previous version (`src/db/mod.rs:361-365`). Already-applied versions are skipped, which is what makes migrating on every boot safe.
-- **Forward only.** There are no down migrations. A schema change SQLite cannot express as `ALTER` is done as copy into `<table>_vNN`, `DROP`, `RENAME` (V0013, V0017, V0020, V0021, V0025 follow this pattern). Rollback is restoring a backup, below.
+- **Forward only.** There are no down migrations. A schema change SQLite cannot express as `ALTER` is done as copy into `<table>_vNN`, `DROP`, `RENAME` (V0013, V0017, V0020, V0021, V0025, V0029 follow this pattern). Rollback is restoring a backup, below.
 - **History.** refinery records each version in `refinery_schema_history(version, name, applied_on, checksum)`, one row per applied file; `applied_on` is an ISO timestamp (dev database `sqlite_master`). The `checksum` column is what lets refinery notice an edited file, so never edit a merged migration; add a new one.
 
 > **TODO (unverified):** what refinery does when an applied file's checksum no longer matches (abort or warn) is the crate's default behaviour; `src/db/mod.rs:361-365` sets only `set_grouped(true)` and the repo has no test for a divergent file.
@@ -49,6 +49,7 @@ PR numbers from `PROGRESS.md`; dates are the accepting ADR's in `docs/DECISIONS.
 | [`V0026__floor_totals.sql`](../../src/db/migrations/V0026__floor_totals.sql) | 2026-10-15, #217 | `analytics_floor_totals`, `champion_ban_floor_totals`, backfilled through a TEMP table | FLT-03, ADR-170 |
 | [`V0027__matchup_builds.sql`](../../src/db/migrations/V0027__matchup_builds.sql) | 2026-10-19, #218 | `champion_matchup_builds`, `champion_matchup_build_parts`, not backfilled | FLT-04, ADR-171 |
 | [`V0028__jobs_crawl_matches.sql`](../../src/db/migrations/V0028__jobs_crawl_matches.sql) | 2026-10-20, WR-01 | `jobs_crawl_matches` partial covering index on `archive:match` | WR-01, ADR-179 |
+| [`V0029__analytics_counted.sql`](../../src/db/migrations/V0029__analytics_counted.sql) | 2026-10-21, THR-03 | `analytics_counted` + partial index `analytics_uncounted`, `analytics_retract`, `analytics_stamped`, trigger `match_facts_tier_moved`; `analytics_runs` rebuilt with `kind` in its primary key | THR-03, ADR-182 |
 
 ## Expensive migrations
 
@@ -63,6 +64,7 @@ Every migration runs in the boot transaction before the listener opens, so a slo
 | V0025 | 1.4–1.9 s on a copy; 3 s on production (about 1.6–2× slower there) | `docs/DECISIONS.md:1776`, `docs/flt/FLT-03-plan.md:573` |
 | V0026 | 1.36 s at 200 000 facts, 3.70 s at 600 000; estimated 25–30 s for production's 2.3 M facts | `docs/DECISIONS.md:1841` |
 | V0028 | builds one index over `archive:match` rows: 1.3 s for 1.18 M jobs on a synthetic queue | ADR-179 |
+| V0029 | pure DDL on empty tables plus a copy of `analytics_runs`' eight rows at most; reads no other data (6–25 ms in the plan's runs; about 10 ms at boot with the release binary on a synthetic 100 000-match archive, 2026-10-21). The cost comes after it: with `AGGREGATE_DELTA_S` > 0 the first boot queues one full rebuild of every configured ladder, one at a time, before its deltas start. By the 2026-10-20 production runs (oc1 532 s, na1 970 s, kr 1012 s, euw1 980 s) that is about 58 minutes of writer time | `V0029:1-4`, `docs/thr/THR-03-plan.md` |
 
 > **TODO (unverified):** the actual V0026 and V0027 timings on production were not found in `docs/DECISIONS.md`, `PROGRESS.md` or `docs/flt/`; the v2.7.0 release line in `PROGRESS.md` was ticked by #226 (`52fa67d`) without recording them.
 
@@ -83,5 +85,5 @@ There is no down migration. To return to an older binary whose schema predates a
 The full procedure, with the test and ADR steps, is in [../workflows/adding-a-migration.md](../workflows/adding-a-migration.md).
 
 ---
-**Sources:** `src/db/mod.rs:L22-L24`, `src/db/mod.rs:L147-L171`, `src/db/mod.rs:L361-L365`, `src/db/store.rs:L172-L206`, `src/cli/mod.rs:L136-L168`, `src/cli/serve.rs:L51-L54`, `src/db/migrations/V0001__init.sql` to `V0028__jobs_crawl_matches.sql`, `docs/DECISIONS.md:L15-L17`, `docs/DECISIONS.md:L51`, `docs/DECISIONS.md:L1388`, `docs/DECISIONS.md:L1700`, `docs/DECISIONS.md:L1714`, `docs/DECISIONS.md:L1776`, `docs/DECISIONS.md:L1841`, `docs/flt/FLT-03-plan.md:L573`, `PROGRESS.md:L10-L365`, `docs/design/12-object-storage-and-hosting.md:L159-L162`, `deploy/README.md:L222-L270`, `docs/_meta/scratch/persistence.md`
-**Last verified:** 2026-10-20 against commit `b7b363c`
+**Sources:** `src/db/mod.rs:L22-L24`, `src/db/mod.rs:L147-L171`, `src/db/mod.rs:L361-L365`, `src/db/store.rs:L172-L206`, `src/cli/mod.rs:L136-L168`, `src/cli/serve.rs:L51-L54`, `src/db/migrations/V0001__init.sql` to `V0029__analytics_counted.sql`, `docs/thr/THR-03-plan.md`, `docs/DECISIONS.md:L15-L17`, `docs/DECISIONS.md:L51`, `docs/DECISIONS.md:L1388`, `docs/DECISIONS.md:L1700`, `docs/DECISIONS.md:L1714`, `docs/DECISIONS.md:L1776`, `docs/DECISIONS.md:L1841`, `docs/flt/FLT-03-plan.md:L573`, `PROGRESS.md:L10-L365`, `docs/design/12-object-storage-and-hosting.md:L159-L162`, `deploy/README.md:L222-L270`, `docs/_meta/scratch/persistence.md`
+**Last verified:** 2026-10-21 against commit `32c4672`

@@ -746,6 +746,24 @@ fn failed(e: &dyn std::fmt::Display) -> Failed {
     Failed
 }
 
+/// The slice's match totals' newest stamp, an `ETag` part (THR-03, ADR-182):
+/// a delta stamps only the rows it touches, so the returned rows' newest
+/// `computed_at` misses a game added outside them that moved the rates.
+async fn slice_stamp(reads: &Reads, c: &Common, patch: Option<&String>) -> Result<Option<String>, Failed> {
+    let patch = patch.map(String::as_str).filter(|p| *p != ALL_PATCHES);
+    analytics::totals_stamp(
+        &reads.db,
+        &reads.key_scope,
+        c.platform.as_deref(),
+        &c.queue,
+        patch,
+        c.remakes,
+    )
+    .await
+    .map(|t| t.and_then(iso_ms))
+    .map_err(|e| failed(&e))
+}
+
 async fn patch_or_latest(reads: &Reads, c: &Common) -> Result<Option<String>, DbError> {
     if c.patch.is_some() {
         return Ok(c.patch.clone());
@@ -1050,10 +1068,12 @@ async fn champions_doc(
     let ids: Vec<i64> = rows.iter().map(|r| r.champion_id).collect();
     let names = reads.mirror.champion_names(&ids).await;
     let (total_games, champions) = enrich(rows, &rates, &names);
+    let slice = slice_stamp(reads, c, patch.as_ref()).await?;
     let tag = etag(&[
         some("champions"),
         some(STATS_SHAPE),
         computed_at.clone(),
+        slice,
         version,
         c.platform.clone(),
         some(&c.queue),
@@ -1151,10 +1171,12 @@ async fn matchups_doc(
     ids.extend(rows.iter().filter_map(|r| r.ids.first().copied()));
     let names = reads.mirror.champion_names(&ids).await;
     let computed_at = newest(rows.iter().map(|r| r.computed_at));
+    let slice = slice_stamp(reads, c, patch.as_ref()).await?;
     let tag = etag(&[
         some("matchups"),
         some(STATS_SHAPE),
         computed_at.clone(),
+        slice,
         version,
         c.platform.clone(),
         some(&c.queue),
@@ -1309,6 +1331,7 @@ async fn detail_doc(
     };
     let mut parts = vec![some("detail"), some(STATS_SHAPE)];
     parts.extend(section_stamps);
+    parts.push(slice_stamp(reads, c, patch.as_ref()).await?);
     parts.extend([
         version,
         c.platform.clone(),
@@ -1560,10 +1583,12 @@ async fn builds_doc(
     let ids: Vec<i64> = std::iter::once(id).chain(opponent).collect();
     let names = reads.mirror.champion_names(&ids).await;
     let computed_at = computed.and_then(iso_ms);
+    let slice = slice_stamp(reads, c, patch.as_ref()).await?;
     let tag = etag(&[
         some("builds"),
         some(STATS_SHAPE),
         computed_at.clone(),
+        slice,
         version,
         c.platform.clone(),
         some(&c.queue),

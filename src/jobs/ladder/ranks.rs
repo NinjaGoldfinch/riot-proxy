@@ -140,9 +140,33 @@ impl LadderContext {
     }
 
     /// The list is done: count the players under their tiers now rather than
-    /// at the next crawl. A pending recompute will see every lookup; a running
+    /// at the next crawl. With the delta on and the ladder stamped (THR-03),
+    /// the late stamps left retract rows that any delta takes up, so one is
+    /// queued and nothing waits. Otherwise a pending recompute will see every lookup; a running
     /// one may not, and blocks queueing another, so the job waits it out.
     async fn ranks_done(&self, ladder: &Ladder, run: &RankLookup) -> Result<(), JobError> {
+        let (scope, l) = (self.key_scope.clone(), ladder.clone());
+        let ready = self.delta_on
+            && self
+                .db()
+                .read(move |c| {
+                    Ok::<_, crate::db::DbError>(crate::archive::analytics::delta::ready(
+                        c,
+                        &scope,
+                        &l.platform,
+                        &l.queue,
+                    )?)
+                })
+                .await
+                .map_err(|e| store_err(&e))?;
+        if ready {
+            self.queue
+                .enqueue(crate::jobs::analytics::delta_job())
+                .await
+                .map_err(|e| store_err(&e))?;
+            tracing::info!(platform = %ladder.platform, queue = %ladder.queue, "rank lookups done; delta queued");
+            return Ok(());
+        }
         let job = crate::jobs::analytics::aggregate_job(&ladder.platform, &ladder.queue);
         let queued = self.queue.enqueue(job).await.map_err(|e| store_err(&e))?;
         if !queued.created {

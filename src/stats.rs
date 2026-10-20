@@ -254,6 +254,8 @@ pub struct LadderSection {
 pub struct RunSummary {
     pub platform: String,
     pub queue: String,
+    /// `rebuild` or `delta` (THR-03): a ladder has the last of each.
+    pub kind: String,
     /// Unix ms.
     pub at: i64,
     pub status: String,
@@ -712,6 +714,7 @@ impl Stats {
             .map(|(l, r)| RunSummary {
                 platform: l.platform,
                 queue: l.queue,
+                kind: r.kind,
                 at: r.at,
                 status: r.status,
                 ms: r.ms,

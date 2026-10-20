@@ -92,6 +92,9 @@ fn defaults_match_v1_and_design_07() {
     assert_eq!(c.facts_reextract_batch, 500);
     assert_eq!(c.aggregate_patch_limit, 4);
     assert_eq!(c.aggregate_interval_s, 0);
+    assert_eq!(c.aggregate_delta_s, 60);
+    assert_eq!(c.aggregate_delta_target_ms, 100);
+    assert_eq!(c.aggregate_delta_batch, 500);
     assert_eq!(c.ddragon_locale, "en_US");
     assert!(c.admin_ip_allowlist.is_empty());
     assert!(c.bootstrap_admin_key.is_none());

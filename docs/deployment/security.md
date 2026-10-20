@@ -7,8 +7,8 @@ The threat model in brief: what the proxy protects (the Riot key, consumer keys,
 | Control | Detail | Evidence |
 |---|---|---|
 | One place on disk | `/etc/riot-proxy/env`, root-only, read by systemd before it drops to `riot-proxy`; streamed into the file through `umask 077`, never displayed | `docs/design/12-object-storage-and-hosting.md:594-601` |
-| Never logged | the `Secret` wrapper prints `[REDACTED]`; the outgoing `X-Riot-Token` header is marked sensitive so `HeaderMap`'s `Debug` redacts it | `src/config.rs:131-155`; `src/riot/client.rs:234-236` |
-| Not in the admin API | `GET /v1/admin/info` returns every variable in effect except `RIOT_API_KEY`, "not even its length" | `src/config.rs:383-390`; `src/routes/admin.rs:2485-2512` |
+| Never logged | the `Secret` wrapper prints `[REDACTED]`; the outgoing `X-Riot-Token` header is marked sensitive so `HeaderMap`'s `Debug` redacts it | `src/config.rs:134-158`; `src/riot/client.rs:234-236` |
+| Not in the admin API | `GET /v1/admin/info` returns every variable in effect except `RIOT_API_KEY`, "not even its length" | `src/config.rs:393-400`; `src/routes/admin.rs:2485-2512` |
 | Not in fixtures or docs | CI step "no leaked Riot keys" fails on `RGAPI-[0-9a-f-]{20,}` anywhere in `tests/`, `src/`, `docs/`; `riot record` replaces the key with `RGAPI-REDACTED` and refuses to keep a file that still contains one | `.github/workflows/ci.yml:52-53`; `src/cli/record.rs:29,114-158` |
 | Key scope, not key | the 8-hex `KeyScope` (first 8 hex of sha256 of the key) is what appears in `/readyz` and the archive tables | `src/cache/keys.rs:34-37`; `src/routes/health.rs:79-97` |
 | Key rejection is loud | a 401/403 from Riot logs `RIOT KEY REJECTED` at error level and the alert rule `RiotKeyRejected` fires | `src/riot/client.rs:305`; `ops/prometheus-alerts.yml:6-14` |
@@ -34,18 +34,18 @@ Note on `?token=`: the proxy's recent-request ring stores paths without their qu
 
 | Credential | Scope | Where | Evidence |
 |---|---|---|---|
-| Onidel access key | the proxy's key for bucket `riot-proxy-archive`; full read and write on that bucket, since the offload writes packs and snapshots; also used by the `[onidel]` rclone remote | `/etc/riot-proxy/env` (`ARCHIVE_OBJECT_ACCESS_KEY` / `_SECRET_KEY`, `[REDACTED]` in `/v1/admin/info`, boot logs bucket and endpoint only) and `/etc/riot-proxy/rclone.conf` (root, 0600) | `src/config.rs:444-455`; `src/archive/objects.rs:134,168-171`; `deploy/README.md:24-25,51-62` |
+| Onidel access key | the proxy's key for bucket `riot-proxy-archive`; full read and write on that bucket, since the offload writes packs and snapshots; also used by the `[onidel]` rclone remote | `/etc/riot-proxy/env` (`ARCHIVE_OBJECT_ACCESS_KEY` / `_SECRET_KEY`, `[REDACTED]` in `/v1/admin/info`, boot logs bucket and endpoint only) and `/etc/riot-proxy/rclone.conf` (root, 0600) | `src/config.rs:454-465`; `src/archive/objects.rs:134,168-171`; `deploy/README.md:24-25,51-62` |
 | R2 replica token | Object Read & Write on R2 bucket `riot-proxy-archive` only, so it cannot touch `ngf-backups`; IP-filtered to the box's addresses (session note, 2026-10-14) | `/etc/riot-proxy/rclone.conf`, handed to the replica unit as a systemd credential | `deploy/README.md:26-28`; `deploy/riot-proxy-replica.service:15` |
 | R2 backups token | scoped to `ngf-backups` | `/etc/rclone/r2.conf`, used by the offsite timer | `docs/design/12-object-storage-and-hosting.md:815-818`; `deploy/README.md:151` |
 | Restore-drill token | **read-only** (Object Read) on R2 `riot-proxy-archive`, typed into a 0600 scratch env file, so the drill's own boot-time `archive:offload` cannot write into the replica | `/var/tmp/restore-drill/env`, removed after the drill | `deploy/README.md:153-160,220` |
 
-No bucket is public. Serving raw bodies from the bucket is a stated non-goal; every read goes through the proxy, which fetches byte ranges with its own credentials, checks each body's sha256 against `body_locations` and drops anything that fails (`docs/design/12-object-storage-and-hosting.md:52-54,100-101`; `src/archive/matches.rs:250-304`). The `object_store` client trusts only the bundled `webpki` roots, and `http://` endpoints are refused in production (`src/archive/objects.rs:329-338`; `src/config.rs:914-926`).
+No bucket is public. Serving raw bodies from the bucket is a stated non-goal; every read goes through the proxy, which fetches byte ranges with its own credentials, checks each body's sha256 against `body_locations` and drops anything that fails (`docs/design/12-object-storage-and-hosting.md:52-54,100-101`; `src/archive/matches.rs:265-319`). The `object_store` client trusts only the bundled `webpki` roots, and `http://` endpoints are refused in production (`src/archive/objects.rs:329-338`; `src/config.rs:930-942`).
 
 > **TODO (unverified):** the IP filter on the R2 replica token (box IPv4 plus the IPv6 /64) is a session note, not in the repository; and whether the Onidel key is bucket-scoped or account-wide depends on how it was created in the console (`docs/design/12-object-storage-and-hosting.md:545-546` asked for a scoped key).
 
 ## Authentication modes
 
-- **Production**: every `/v1/*` route needs a consumer key; `AUTH_DISABLED=true` fails `Config::load` with `AUTH_DISABLED cannot be enabled when ENV=production` (`src/config.rs:658-662`).
+- **Production**: every `/v1/*` route needs a consumer key; `AUTH_DISABLED=true` fails `Config::load` with `AUTH_DISABLED cannot be enabled when ENV=production` (`src/config.rs:671-675`).
 - **Development**: `AUTH_DISABLED=true` makes every request and socket run as the synthetic `dev-local` consumer (scopes read and admin, quota 100 000/min, never persisted); the allowlist is not consulted; `serve` warns at boot (`src/http/auth.rs:43-52,201-205,267-270`). The dormant LAN dev VM ran this way (`README.md:27-58`).
 - **Bootstrap**: on the first `serve` with an empty `consumers` table, `bootstrap-admin` is created with `BOOTSTRAP_ADMIN_KEY` or a generated key printed once to stderr; never again once any row exists (`src/consumers.rs:308-333`; `src/cli/serve.rs:57-68`).
 
@@ -59,8 +59,8 @@ No bucket is public. Serving raw bodies from the bucket is a stated non-goal; ev
 | Cloudflare Access on `admin.` | self-hosted application, One-time PIN only, policy "Owner only", session 24 h; the proxy does not read the Access JWT | `docs/design/12-object-storage-and-hosting.md:856-862,897-903` |
 | WAF rule on `api.` | blocks `/metrics`, `/dashboard*`, `/dev*`, `/v1/admin*` (and `/docs`); `/v1/ws`, `/healthz`, `/readyz` stay open | `docs/design/12-object-storage-and-hosting.md:863-866,905-916` |
 | `/metrics` | unauthenticated by design, for a scraper; public only on `admin.` behind Access, blocked on `api.` | `src/telemetry.rs:116`; `docs/design/07-deployment.md:221` |
-| CORS | none unless `ADMIN_CORS_ORIGINS` lists exact origins; `*` is refused; applies only to `/v1/admin/*`, `/v1/ws`, `/healthz`, `/readyz` | `src/http/cors.rs:22-43`; `src/config.rs:1013-1031` |
-| `/dev` | never served in production, whatever `DEV_UI` says | `src/config.rs:664-666,762-763` |
+| CORS | none unless `ADMIN_CORS_ORIGINS` lists exact origins; `*` is refused; applies only to `/v1/admin/*`, `/v1/ws`, `/healthz`, `/readyz` | `src/http/cors.rs:22-43`; `src/config.rs:1029-1047` |
+| `/dev` | never served in production, whatever `DEV_UI` says | `src/config.rs:677-679,778-779` |
 
 Checks from outside after ADM-01: `api./metrics` 403, `api./v1/admin/stats` 403, `api./healthz` 200, `admin./dashboard` 302 to the Access login (`docs/design/12-object-storage-and-hosting.md:852-855`).
 
@@ -71,7 +71,7 @@ Checks from outside after ADM-01: `api./metrics` 403, `api./v1/admin/stats` 403,
 | Request bodies | `DefaultBodyLimit` 1 MiB (v1's Fastify `bodyLimit`); larger bodies get axum's rejection, not the envelope | `src/app.rs:31,105` |
 | JSON bodies | ajv-style coercion and messages: `body is not valid JSON`, `body must be object`, `body must have required property '<n>'` | `src/http/body.rs:341-391` |
 | Ids | 26-char ULIDs, else `VALIDATION` `params/id must match format "ulid"` | `src/http/validate.rs:253-259` |
-| Enums | case-sensitive where Riot's are: `LADDER_QUEUES`, scopes `read`/`admin`; platforms are case-insensitive on purpose | `src/config.rs:1141-1148`; `src/consumers.rs:25-35`; `src/riot/routing.rs:214-228` |
+| Enums | case-sensitive where Riot's are: `LADDER_QUEUES`, scopes `read`/`admin`; platforms are case-insensitive on purpose | `src/config.rs:1157-1164`; `src/consumers.rs:25-35`; `src/riot/routing.rs:214-228` |
 | Request id | an inbound `X-Request-Id` is honoured only if ≤ 128 chars of `[A-Za-z0-9-_.:]`, else a ULID is generated; echoed on every response | `src/http/request_id.rs:287,304-315,336-338` |
 | Panics | caught and answered as 500 `INTERNAL` with the request id | `src/app.rs:117,193-195` |
 | WebSocket | 200 topics per socket, 200-char topic names, unknown topics refused, heartbeat drop after 2 unanswered pings | `src/ws/protocol.rs:201-232` |
@@ -88,7 +88,7 @@ Checks from outside after ADM-01: `api./metrics` 403, `api./v1/admin/stats` 403,
 
 ## TLS and transport
 
-The proxy serves plain HTTP only; built-in TLS was removed before 2.0.0 and `TLS=true` refuses to start (`README.md:116-118`; `src/config.rs:668-673`; `docs/DECISIONS.md:792`, ADR-067). On production TLS terminates at Cloudflare's edge; the hop from Cloudflare to the box is the tunnel's outbound connection, and inside the box every hop is loopback (`docs/design/12-object-storage-and-hosting.md:532-537,806-807`). Outbound: HTTPS to Riot and Data Dragon with `rustls` and bundled roots (`docs/design/07-deployment.md:15`), HTTPS to the S3 endpoint (`http://` refused in production).
+The proxy serves plain HTTP only; built-in TLS was removed before 2.0.0 and `TLS=true` refuses to start (`README.md:116-118`; `src/config.rs:681-686`; `docs/DECISIONS.md:792`, ADR-067). On production TLS terminates at Cloudflare's edge; the hop from Cloudflare to the box is the tunnel's outbound connection, and inside the box every hop is loopback (`docs/design/12-object-storage-and-hosting.md:532-537,806-807`). Outbound: HTTPS to Riot and Data Dragon with `rustls` and bundled roots (`docs/design/07-deployment.md:15`), HTTPS to the S3 endpoint (`http://` refused in production).
 
 ## Dependencies
 
@@ -118,5 +118,5 @@ The separation that makes this hold is separate system users per service with ro
 > **TODO (unverified):** whether R2 object versioning or a deletion grace is enabled on the replica bucket; `deploy/README.md:29-36` lists only expiry and multipart-abort rules.
 
 ---
-**Sources:** `src/config.rs:L131-L155,L383-L390,L444-L455,L658-L673,L762-L763,L914-L926,L1013-L1031,L1141-L1148`, `src/riot/client.rs:L234-L236,L305`, `src/riot/limiter/mod.rs:L417-L428`, `src/riot/routing.rs:L214-L228`, `src/cache/keys.rs:L34-L37`, `src/consumers.rs:L12-L45,L95-L107,L154-L162,L228-L283,L308-L333`, `src/cli/key.rs:L46-L57`, `src/cli/serve.rs:L57-L68`, `src/cli/record.rs:L29,L114-L158`, `src/http/auth.rs:L30,L43-L77,L116-L156,L201-L205,L263-L288,L302-L315`, `src/http/quota.rs:L305-L306,L320,L332-L336,L429-L431`, `src/http/cors.rs:L22-L43`, `src/http/body.rs:L341-L391`, `src/http/validate.rs:L253-L259`, `src/http/request_id.rs:L287,L304-L338`, `src/http/recent.rs:L195-L198`, `src/app.rs:L31,L105-L117,L193-L195`, `src/ws/protocol.rs:L201-L250`, `src/telemetry.rs:L116`, `src/archive/objects.rs:L134,L168-L171,L329-L338`, `src/archive/matches.rs:L250-L304`, `src/routes/admin.rs:L264,L321,L2485-L2512`, `src/routes/health.rs:L79-L97`, `src/routes/docs.rs:L86-L113`, `.github/workflows/ci.yml:L52-L53`, `Dockerfile:L3-L17`, `ops/prometheus-alerts.yml:L6-L14`, `deploy/README.md:L24-L36,L51-L62,L151-L160,L220`, `deploy/riot-proxy-replica.service:L13-L33`, `docs/design/07-deployment.md:L15,L65-L70,L80-L91,L221`, `docs/design/12-object-storage-and-hosting.md:L52-L56,L79-L80,L100-L101,L484,L532-L537,L545-L546,L585-L601,L613-L614,L636-L640,L776-L778,L806-L818,L852-L873,L897-L916`, `docs/DECISIONS.md:L792,L800-L803`, `README.md:L27-L58,L116-L118`, `docs/_meta/scratch/routes.md`, `docs/_meta/scratch/riot-and-cache.md:L188`, `docs/_meta/scratch/siblings.md`
-**Last verified:** 2026-10-20 against commit `b7b363c`
+**Sources:** `src/config.rs:L134-L158,L393-L400,L454-L465,L671-L686,L778-L779,L930-L942,L1029-L1047,L1157-L1164`, `src/riot/client.rs:L234-L236,L305`, `src/riot/limiter/mod.rs:L417-L428`, `src/riot/routing.rs:L214-L228`, `src/cache/keys.rs:L34-L37`, `src/consumers.rs:L12-L45,L95-L107,L154-L162,L228-L283,L308-L333`, `src/cli/key.rs:L46-L57`, `src/cli/serve.rs:L57-L68`, `src/cli/record.rs:L29,L114-L158`, `src/http/auth.rs:L30,L43-L77,L116-L156,L201-L205,L263-L288,L302-L315`, `src/http/quota.rs:L305-L306,L320,L332-L336,L429-L431`, `src/http/cors.rs:L22-L43`, `src/http/body.rs:L341-L391`, `src/http/validate.rs:L253-L259`, `src/http/request_id.rs:L287,L304-L338`, `src/http/recent.rs:L195-L198`, `src/app.rs:L31,L105-L117,L193-L195`, `src/ws/protocol.rs:L201-L250`, `src/telemetry.rs:L116`, `src/archive/objects.rs:L134,L168-L171,L329-L338`, `src/archive/matches.rs:L265-L319`, `src/routes/admin.rs:L264,L321,L2485-L2512`, `src/routes/health.rs:L79-L97`, `src/routes/docs.rs:L86-L113`, `.github/workflows/ci.yml:L52-L53`, `Dockerfile:L3-L17`, `ops/prometheus-alerts.yml:L6-L14`, `deploy/README.md:L24-L36,L51-L62,L151-L160,L220`, `deploy/riot-proxy-replica.service:L13-L33`, `docs/design/07-deployment.md:L15,L65-L70,L80-L91,L221`, `docs/design/12-object-storage-and-hosting.md:L52-L56,L79-L80,L100-L101,L484,L532-L537,L545-L546,L585-L601,L613-L614,L636-L640,L776-L778,L806-L818,L852-L873,L897-L916`, `docs/DECISIONS.md:L792,L800-L803`, `README.md:L27-L58,L116-L118`, `docs/_meta/scratch/routes.md`, `docs/_meta/scratch/riot-and-cache.md:L188`, `docs/_meta/scratch/siblings.md`
+**Last verified:** 2026-10-21 against commit `32c4672`

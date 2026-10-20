@@ -395,6 +395,8 @@ async fn backfilled_timelines_become_builds() {
         patch_limit: 0,
         reextract_batch: 500,
         mirror: Arc::clone(&e.state.ddragon),
+        ladders: vec![],
+        delta: riot_proxy::jobs::analytics::DeltaSettings::OFF,
     };
     let recompute = || async {
         analytics

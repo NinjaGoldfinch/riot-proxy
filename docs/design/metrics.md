@@ -24,7 +24,7 @@ The catalogue lives in `src/metrics.rs` (`CATALOGUE`). A unit test fails if a ca
 | `proxy_ladder_matches_queued_total` | counter | platform, queue | — | Ladder archive (P7-03) |
 | `proxy_ladder_crawl_duration_seconds` | histogram | platform, queue, status | 10, 60, 300, 900, 1800, 3600, 7200, 14400, 28800 | Ladder (P7-03) |
 | `proxy_rank_lookups_total` | counter | platform, queue | — | Rank lookups (DEV-29) |
-| `proxy_aggregate_runs_total` | counter | platform, queue, status | — | Analytics (P7-04) |
+| `proxy_aggregate_runs_total` | counter | platform, queue, status, kind | — | Analytics (P7-04); `kind` (`rebuild`, `delta`) since THR-03 |
 | `proxy_aggregate_duration_seconds` | histogram | platform, queue, step | 1, 5, 15, 30, 60, 120, 300, 600, 1200 | Analytics (P7-04) |
 | `proxy_aggregate_rows` | gauge | platform, queue, table | — | Analytics (P7-04) |
 | `proxy_facts_reextract_progress` | gauge | — | — | `facts:reextract` (P7-04) |
@@ -61,6 +61,10 @@ Owner decision (2026-09-24, ADR-014): these use the names **exactly as design/07
 | `sqlite_write_seconds` | histogram | — | SQLite writer thread (WR-02, ADR-180), implemented; how long each write ran on the writer, queue wait excluded. Buckets 0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60. A write over 1 s also logs `slow SQLite write` |
 | `sqlite_write_wait_seconds` | histogram | — | SQLite writer thread (WR-02), implemented; how long each write waited in the writer's queue before it ran. Same buckets as `sqlite_write_seconds` |
 | `sqlite_write_queue` | gauge | — | SQLite writer thread (WR-02), implemented; writes queued behind the running one, set on every enqueue and completion (queue size 1024) |
+| `aggregate_delta_matches_total` | counter | platform, queue, kind | `aggregate:delta` (THR-03, ADR-182), implemented; matches a batch counted (`kind="added"`) or took a count back for first, after their tier moved (`kind="retracted"`) |
+| `aggregate_delta_batch_seconds` | histogram | platform, queue, part | `aggregate:delta` (THR-03), implemented; one batch's write transaction, its statements (`part="sql"`, what the batch size follows) and its `COMMIT` (`part="commit"`, where a WAL checkpoint lands). Buckets 0.01, 0.025, 0.05, 0.1, 0.15, 0.25, 0.5, 1, 2, 5 |
+| `aggregate_delta_batch_size` | gauge | — | `aggregate:delta` (THR-03), implemented; matches in the last batch, sized to `AGGREGATE_DELTA_TARGET_MS` within 5 and `AGGREGATE_DELTA_BATCH` |
+| `aggregate_delta_pending` | gauge | — | `aggregate:delta` (THR-03), implemented; matches no rebuild or delta has fully counted (`analytics_counted.bits <> 63`), at the start of the last run |
 | `timeline_backfill_fetched_total` | counter | region | `timelines:backfill` (TL-02), implemented; timelines fetched and archived by the backfill. Left to do: `GET /v1/admin/timelines/backfill` (ADR-133) |
 | `timeline_backfill_not_found_total` | counter | region | `timelines:backfill` (TL-02), implemented; timelines Riot answered 404 for, marked in `timeline_gaps` and never asked for again |
 

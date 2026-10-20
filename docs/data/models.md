@@ -133,7 +133,7 @@ The pack binary layout is in [../integration/object-storage.md](../integration/o
 
 ## Job payloads
 
-`jobs.payload` per kind; every struct is `camelCase` (`src/jobs/mod.rs:20-68` lists the kinds).
+`jobs.payload` per kind; every struct is `camelCase` (`src/jobs/mod.rs:20-71` lists the kinds).
 
 | Kind | Payload | Source |
 |---|---|---|
@@ -141,19 +141,20 @@ The pack binary layout is in [../integration/object-storage.md](../integration/o
 | `archive:match` | `{"matchId", "puuid"?, "fetchTimeline"?}` | `ArchiveMatch`, `src/jobs/archive.rs:49-58` |
 | `backfill:player` | `{"puuid", "platform", "limit": 500, "fetchTimeline"?, "queueId"?, "reason"?}`; `reason` ∈ lookup, track, catchup, admin | `BackfillPlayer`, `archive.rs:60-81` |
 | `ddragon:sync` | `{"force": false}` | `SyncPayload`, `src/jobs/ddragon.rs:287-292` |
-| `ladder:crawl` | `{"platform", "queue", "tierFloor"?}` | `CrawlRequest`, `src/jobs/ladder.rs:127-135` |
-| `ladder:apex`, `ladder:walk` | `{"crawlId", "platform", "queue", "tier", "division"?}` | `LegJob`, `ladder.rs:137-147` |
-| `ladder:collect` | `{"crawlId", "platform", "queue", "puuids": [...], "offset"}` | `CollectJob`, `ladder.rs:99-109` |
-| `ladder:archive` | `{"crawlId", "platform", "queue"}` | `ArchiveLeg`, `ladder.rs:117-125` |
+| `ladder:crawl` | `{"platform", "queue", "tierFloor"?}` | `CrawlRequest`, `src/jobs/ladder.rs:130-138` |
+| `ladder:apex`, `ladder:walk` | `{"crawlId", "platform", "queue", "tier", "division"?}` | `LegJob`, `ladder.rs:140-150` |
+| `ladder:collect` | `{"crawlId", "platform", "queue", "puuids": [...], "offset"}` | `CollectJob`, `ladder.rs:102-112` |
+| `ladder:archive` | `{"crawlId", "platform", "queue"}` | `ArchiveLeg`, `ladder.rs:120-128` |
 | `ranks:lookup` | `{"platform", "queue", "planned": false}` | `RankLookup`, `src/jobs/ladder/ranks.rs:33-43` |
-| `aggregate:analytics` | `{"platform", "queue"}` | `src/jobs/analytics.rs:51-52` |
+| `aggregate:analytics` | `{"platform", "queue"}` | `src/jobs/analytics.rs:54-55` |
 | `timelines:backfill` | `{"region"}` | `src/jobs/timelines.rs:195` |
+| `aggregate:delta` | `{}`, one at a time for every ladder (THR-03) | `src/jobs/analytics.rs:93-96` |
 | `names:backfill`, `facts:reextract`, `builds:extract`, `tiers:backfill`, `maintenance`, `archive:offload`, `archive:index-snapshot` | `{}` | e.g. `src/jobs/offload.rs:42-49` |
 
 ## Event frames
 
-Events are serialised once into v1's frame `{"op":"event","event":"<name>","topic":"<topic>","at":<unix ms>,"data":{…}}` (`src/events.rs:158-172`). The `Event` enum (`events.rs:30-111`) carries, per name: `game.started` `{puuid, platform, gameId, queueId?, championId?}`; `game.ended` the same with `platform` optional; `rank.changed` `{puuid, queue, before, after}` where each side is `{tier?, rank?, lp?}` or `null`; `match.archived` `{puuid?, matchId, patch?, participants[]}`; `patch.new` `{version}`; `crawl.phase` `{crawlId, platform, queue, phase, stats}`; `ladder.crawl.completed` `{crawlId, platform, queue, entries, players, durationS}`; `analytics.updated` `{platform, queue, durationS, tables}`; `metrics.snapshot` the dashboard snapshot. `HistoryPoint` (`src/stats.rs:355-370`), the `metrics_history` row, is `{t, totals, queues, analytics, cache, disk?, requests?, upstream?}`.
+Events are serialised once into v1's frame `{"op":"event","event":"<name>","topic":"<topic>","at":<unix ms>,"data":{…}}` (`src/events.rs:158-172`). The `Event` enum (`events.rs:30-111`) carries, per name: `game.started` `{puuid, platform, gameId, queueId?, championId?}`; `game.ended` the same with `platform` optional; `rank.changed` `{puuid, queue, before, after}` where each side is `{tier?, rank?, lp?}` or `null`; `match.archived` `{puuid?, matchId, patch?, participants[]}`; `patch.new` `{version}`; `crawl.phase` `{crawlId, platform, queue, phase, stats}`; `ladder.crawl.completed` `{crawlId, platform, queue, entries, players, durationS}`; `analytics.updated` `{platform, queue, durationS, tables}`; `metrics.snapshot` the dashboard snapshot. `HistoryPoint` (`src/stats.rs:357-372`), the `metrics_history` row, is `{t, totals, queues, analytics, cache, disk?, requests?, upstream?}`.
 
 ---
-**Sources:** `src/riot/client.rs:L31-L42`, `src/riot/endpoints.rs:L18-L57`, `src/riot/endpoints.rs:L302-L322`, `src/riot/endpoints.rs:L448-L496`, `src/cache/l1.rs:L22-L62`, `src/cache/l1.rs:L121-L177`, `src/cache/l2.rs:L31-L63`, `src/consumers.rs:L18-L23`, `src/consumers.rs:L70-L107`, `src/players.rs:L22-L36`, `src/jobs/archive.rs:L49-L100`, `src/routes/players.rs:L188-L218`, `src/routes/players.rs:L244-L263`, `src/routes/players.rs:L494-L526`, `src/routes/players.rs:L889-L926`, `src/routes/players.rs:L953-L989`, `src/routes/players/summary.rs:L14-L215`, `src/archive/pool.rs:L39-L84`, `src/archive/matches.rs:L53-L103`, `src/archive/mod.rs:L146-L198`, `src/archive/facts.rs:L14-L80`, `src/archive/facts.rs:L173-L289`, `src/archive/tiers.rs:L37-L57`, `src/archive/builds.rs:L23-L65`, `src/archive/builds.rs:L263-L290`, `src/routes/analytics.rs:L72-L134`, `src/routes/analytics.rs:L153-L421`, `src/routes/analytics.rs:L645-L658`, `src/routes/analytics.rs:L690-L720`, `src/archive/pack.rs:L79-L122`, `src/archive/recovery.rs:L63-L88`, `src/riot/limiter/persist.rs:L37-L70`, `src/jobs/mod.rs:L20-L68`, `src/jobs/poll.rs:L55-L56`, `src/jobs/analytics.rs:L51-L52`, `src/jobs/timelines.rs:L195`, `src/jobs/ddragon.rs:L287-L292`, `src/jobs/ladder.rs:L99-L147`, `src/jobs/ladder/ranks.rs:L33-L43`, `src/jobs/offload.rs:L42-L49`, `src/events.rs:L30-L172`, `src/stats.rs:L355-L370`, `docs/DECISIONS.md` (ADR-131, ADR-132), `docs/_meta/scratch/routes.md`
-**Last verified:** 2026-10-20 against commit `b7b363c`
+**Sources:** `src/riot/client.rs:L31-L42`, `src/riot/endpoints.rs:L18-L57`, `src/riot/endpoints.rs:L302-L322`, `src/riot/endpoints.rs:L448-L496`, `src/cache/l1.rs:L22-L62`, `src/cache/l1.rs:L121-L177`, `src/cache/l2.rs:L31-L63`, `src/consumers.rs:L18-L23`, `src/consumers.rs:L70-L107`, `src/players.rs:L22-L36`, `src/jobs/archive.rs:L49-L100`, `src/routes/players.rs:L188-L218`, `src/routes/players.rs:L244-L263`, `src/routes/players.rs:L494-L526`, `src/routes/players.rs:L889-L926`, `src/routes/players.rs:L953-L989`, `src/routes/players/summary.rs:L14-L215`, `src/archive/pool.rs:L39-L84`, `src/archive/matches.rs:L53-L103`, `src/archive/mod.rs:L146-L198`, `src/archive/facts.rs:L14-L80`, `src/archive/facts.rs:L173-L289`, `src/archive/tiers.rs:L37-L57`, `src/archive/builds.rs:L23-L65`, `src/archive/builds.rs:L263-L290`, `src/routes/analytics.rs:L72-L134`, `src/routes/analytics.rs:L153-L421`, `src/routes/analytics.rs:L645-L658`, `src/routes/analytics.rs:L690-L720`, `src/archive/pack.rs:L79-L122`, `src/archive/recovery.rs:L63-L88`, `src/riot/limiter/persist.rs:L37-L70`, `src/jobs/mod.rs:L20-L71`, `src/jobs/poll.rs:L55-L56`, `src/jobs/analytics.rs:L54-L55`, `src/jobs/analytics.rs:L93-L96`, `src/jobs/timelines.rs:L195`, `src/jobs/ddragon.rs:L287-L292`, `src/jobs/ladder.rs:L102-L150`, `src/jobs/ladder/ranks.rs:L33-L43`, `src/jobs/offload.rs:L42-L49`, `src/events.rs:L30-L172`, `src/stats.rs:L357-L372`, `docs/DECISIONS.md` (ADR-131, ADR-132), `docs/_meta/scratch/routes.md`
+**Last verified:** 2026-10-21 against commit `32c4672`

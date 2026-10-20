@@ -86,6 +86,8 @@ impl Env {
             patch_limit,
             reextract_batch: 1,
             mirror: std::sync::Arc::clone(&self.state.ddragon),
+            ladders: vec![],
+            delta: riot_proxy::jobs::analytics::DeltaSettings::OFF,
         }
     }
 
@@ -1585,7 +1587,7 @@ async fn a_miss_is_read_once_then_served_from_memory_with_the_same_tag() {
     let (miss, reads) = e.read_counted(uri, None).await;
     assert_eq!(
         (miss.status, x_cache(&miss), reads),
-        (StatusCode::OK, Some("MISS"), 5)
+        (StatusCode::OK, Some("MISS"), 6)
     );
     let (hit, reads) = e.read_counted(uri, None).await;
     assert_eq!((x_cache(&hit), reads), (Some("HIT"), 0));
@@ -1593,7 +1595,7 @@ async fn a_miss_is_read_once_then_served_from_memory_with_the_same_tag() {
     // Read again from the same tables, the tag is the one served from memory.
     e.state.analytics.clear();
     let (again, reads) = e.read_counted(uri, None).await;
-    assert_eq!((x_cache(&again), reads), (Some("MISS"), 5));
+    assert_eq!((x_cache(&again), reads), (Some("MISS"), 6));
     assert_eq!((tag(&again), &again.body), (tag(&hit), &hit.body));
 }
 
@@ -1669,7 +1671,7 @@ async fn a_failed_rebuild_still_clears() {
         .await;
     assert!(failed.is_err());
     let (r, reads) = e.read_counted(SITE, None).await;
-    assert_eq!((x_cache(&r), reads), (Some("MISS"), 5));
+    assert_eq!((x_cache(&r), reads), (Some("MISS"), 6));
 }
 
 /// Design §6: at `ANALYTICS_CACHE_ENTRIES=2`, A, B, C evicts A; A again
@@ -1690,7 +1692,7 @@ async fn the_cap_evicts_the_least_recently_used() {
         let (r, reads) = e.read_counted(uri, None).await;
         seen.push((x_cache(&r).unwrap().to_string(), reads));
     }
-    let want: Vec<(String, u64)> = [("MISS", 5), ("MISS", 5), ("MISS", 1), ("MISS", 5), ("HIT", 0)]
+    let want: Vec<(String, u64)> = [("MISS", 6), ("MISS", 6), ("MISS", 1), ("MISS", 6), ("HIT", 0)]
         .iter()
         .map(|(x, n)| ((*x).to_string(), *n))
         .collect();
@@ -1706,7 +1708,7 @@ async fn zero_keeps_nothing() {
     e.keys_resolved().await;
     for _ in 0..2 {
         let (r, reads) = e.read_counted(SITE, None).await;
-        assert_eq!((r.status, x_cache(&r), reads), (StatusCode::OK, Some("MISS"), 5));
+        assert_eq!((r.status, x_cache(&r), reads), (StatusCode::OK, Some("MISS"), 6));
     }
     assert!(e.state.analytics.responses.is_empty());
 }
@@ -1766,7 +1768,7 @@ async fn concurrent_misses_read_once() {
     e.state.analytics.clear();
     let before = e.reads();
     let replies = futures_util::future::join_all((0..10).map(|_| e.get(SITE))).await;
-    assert_eq!(e.reads() - before, 5);
+    assert_eq!(e.reads() - before, 6);
     for r in &replies {
         assert_eq!(r.status, StatusCode::OK);
         assert!(matches!(x_cache(r), Some("MISS" | "HIT")), "{:?}", x_cache(r));
@@ -2289,4 +2291,276 @@ async fn two_opponents_are_two_entries() {
     // Another opponent's validator is no match.
     let other = e.call("GET", SYNDRA, &e.reader, Some(&tags[0]), None).await;
     assert_eq!(other.status, StatusCode::OK);
+}
+
+// ── THR-03: aggregate:delta ────────────────────────────────────────────────
+
+const KR_SOLO: (&str, &str) = ("kr", "RANKED_SOLO_5x5");
+
+impl Env {
+    /// The context with the delta on for the KR solo ladder (THR-03).
+    fn delta_ctx(&self, cap: usize) -> AnalyticsContext {
+        AnalyticsContext {
+            ladders: vec![(KR_SOLO.0.into(), KR_SOLO.1.into())],
+            delta: riot_proxy::jobs::analytics::DeltaSettings {
+                on: true,
+                target_ms: 100,
+                cap,
+            },
+            ..self.ctx_with(0)
+        }
+    }
+
+    /// Archive `body` again under another match id: the same game counted twice.
+    async fn archive_as(&self, id: &str, body: &[u8]) {
+        matches::put(&self.state.db, id, "asia", &self.scope, body.to_vec().into(), 2)
+            .await
+            .unwrap();
+    }
+
+    async fn delta(&self) {
+        self.delta_ctx(500)
+            .delta_run(&job("aggregate:delta", json!({})))
+            .await
+            .unwrap();
+    }
+
+    /// Seed, then the first rebuild with the delta on, which stamps the ladder.
+    async fn seed_stamped(&self) {
+        self.seed().await;
+        self.delta_ctx(500)
+            .aggregate(&job(
+                "aggregate:analytics",
+                json!({"platform": KR_SOLO.0, "queue": KR_SOLO.1}),
+            ))
+            .await
+            .unwrap();
+    }
+
+    async fn count(&self, sql: &'static str) -> i64 {
+        self.state
+            .db
+            .read(move |c| Ok::<_, DbError>(c.query_row(sql, [], |r| r.get(0))?))
+            .await
+            .unwrap()
+    }
+}
+
+#[tokio::test]
+async fn the_first_rebuild_with_the_delta_on_stamps_the_ladder_and_a_delta_then_finds_nothing() {
+    let e = env().await;
+    e.seed().await;
+    let ctx = e.delta_ctx(500);
+    // Before it: no delta for the ladder, and a run queues the rebuild.
+    let kr = riot_proxy::jobs::analytics::Ladder {
+        platform: KR_SOLO.0.into(),
+        queue: KR_SOLO.1.into(),
+    };
+    assert_eq!(ctx.delta_ladder(&kr).await.unwrap().batches, 0);
+    e.delta().await;
+    let queued = e
+        .count("SELECT count(*) FROM jobs WHERE kind = 'aggregate:analytics' AND state = 'pending'")
+        .await;
+    assert_eq!(queued, 1, "the full rebuild the ladder needs");
+    e.seed_stamped().await;
+    assert_eq!(
+        e.count("SELECT count(*) FROM analytics_counted WHERE bits <> 63")
+            .await,
+        0
+    );
+    assert_eq!(
+        e.count("SELECT count(*) FROM analytics_stamped WHERE stamped_at IS NOT NULL")
+            .await,
+        1
+    );
+    let before = e.get(SITE).await;
+    e.delta().await;
+    let after = e.get(SITE).await;
+    assert_eq!(
+        (tag(&after), &after.body),
+        (tag(&before), &before.body),
+        "nothing to count"
+    );
+}
+
+#[tokio::test]
+async fn a_delta_adding_a_game_gives_a_new_tag_and_one_outside_the_slice_a_304() {
+    let e = env().await;
+    e.seed_stamped().await;
+    let uri = "/v1/lol/analytics/champions?patch=16.19&minGames=0";
+    let first = e.get(uri).await;
+    assert_eq!(first.json()["totalGames"], 10);
+    // The ranked game again: a game more for every row of the slice.
+    e.archive_as("KR_9000000001", RANKED).await;
+    e.delta().await;
+    let moved = e.call("GET", uri, &e.reader, Some(&tag(&first)), None).await;
+    assert_eq!(moved.status, StatusCode::OK);
+    assert_ne!(tag(&moved), tag(&first));
+    assert_eq!(moved.json()["totalGames"], 20);
+    // A remake: no row of the slice remakes are left out of.
+    e.archive_as("KR_9000000002", REMAKE).await;
+    e.delta().await;
+    let same = e.call("GET", uri, &e.reader, Some(&tag(&moved)), None).await;
+    assert_eq!(same.status, StatusCode::NOT_MODIFIED);
+    // And the delta's output is the rebuild's.
+    let counted = e.get(uri).await.body;
+    e.delta_ctx(500)
+        .aggregate(&job(
+            "aggregate:analytics",
+            json!({"platform": KR_SOLO.0, "queue": KR_SOLO.1}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        redact(serde_json::from_slice(&e.get(uri).await.body).unwrap()),
+        redact(serde_json::from_slice(&counted).unwrap())
+    );
+}
+
+/// The rows a read returns needn't move for its rates to: their slice's
+/// totals carry the stamp that does (plan §7).
+#[tokio::test]
+async fn the_tag_follows_the_slices_totals_not_only_the_rows_returned() {
+    let e = env().await;
+    e.seed_stamped().await;
+    let uri = "/v1/lol/analytics/champions?patch=16.19&minGames=0&limit=1";
+    let first = e.get(uri).await;
+    e.state
+        .db
+        .write(|c| {
+            Ok::<_, DbError>(c.execute(
+                "UPDATE analytics_match_totals SET computed_at = computed_at + 1 WHERE remake = 0",
+                [],
+            )?)
+        })
+        .await
+        .unwrap();
+    e.state.analytics.clear();
+    let again = e.call("GET", uri, &e.reader, Some(&tag(&first)), None).await;
+    assert_eq!(
+        again.status,
+        StatusCode::OK,
+        "a new tag, though the row returned is the same"
+    );
+    assert_eq!(again.json()["champions"], first.json()["champions"]);
+}
+
+#[tokio::test]
+async fn the_cache_serves_the_old_numbers_until_the_delta_ends_then_misses_once() {
+    let e = env().await;
+    e.seed_stamped().await;
+    e.keys_resolved().await;
+    let uri = "/v1/lol/analytics/champions?patch=16.19&role=MIDDLE";
+    let (miss, _) = e.read_counted(uri, None).await;
+    assert_eq!(x_cache(&miss), Some("MISS"));
+    e.archive_as("KR_9000000001", RANKED).await;
+    let (hit, reads) = e.read_counted(uri, None).await;
+    assert_eq!(
+        (x_cache(&hit), reads, &hit.body),
+        (Some("HIT"), 0, &miss.body),
+        "archived, not counted"
+    );
+    e.delta().await;
+    let (after, reads) = e.read_counted(uri, None).await;
+    assert_eq!(x_cache(&after), Some("MISS"));
+    assert!(reads > 0);
+    assert_ne!(after.body, miss.body);
+    let (again, reads) = e.read_counted(uri, None).await;
+    assert_eq!((x_cache(&again), reads), (Some("HIT"), 0));
+}
+
+/// The brief's bound: however many matches wait, the writer is held for one
+/// batch at a time, never more than its cap.
+#[tokio::test]
+async fn a_delta_over_ten_thousand_matches_holds_the_writer_one_batch_at_a_time() {
+    let e = env().await;
+    e.seed_stamped().await;
+    let scope = e.scope.clone();
+    e.state
+        .db
+        .write(move |c| {
+            let tx = c.transaction()?;
+            for i in 0..10_000 {
+                let id = format!("KR_{}", 7_000_000_000_i64 + i);
+                tx.execute(
+                    "INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size,
+                       archived_at, game_duration, remake, facts_version) VALUES (?1, 'asia', '16.19', 420, 1, x'00',
+                       1, 1, 1500, 0, ?2)",
+                    rusqlite::params![id, riot_proxy::archive::facts::FACTS_VERSION],
+                )?;
+                for (p, team) in [("A", 100), ("B", 200)] {
+                    tx.execute(
+                        "INSERT INTO match_facts (match_id, key_scope, puuid, team_id, position, champion_id, win,
+                           facts_version, tier) VALUES (?1, ?2, ?3, ?4, 'MIDDLE', ?5, ?6, ?7, 'MASTER')",
+                        rusqlite::params![id, scope, p, team, team / 100, team == 100,
+                            riot_proxy::archive::facts::FACTS_VERSION],
+                    )?;
+                }
+                riot_proxy::archive::analytics::delta::on_facts_written(&tx, &id, &scope, None, 1)?;
+            }
+            tx.commit()?;
+            Ok::<_, DbError>(())
+        })
+        .await
+        .unwrap();
+    let done = e
+        .delta_ctx(200)
+        .delta_ladder(&riot_proxy::jobs::analytics::Ladder {
+            platform: KR_SOLO.0.into(),
+            queue: KR_SOLO.1.into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(done.matches, 10_000);
+    assert!(done.largest <= 200, "{done:?}");
+    assert!(done.batches >= 50, "{done:?}");
+    assert_eq!(
+        e.count("SELECT count(*) FROM analytics_counted WHERE bits <> 63")
+            .await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn crawls_and_lookups_queue_the_delta_and_boot_queues_only_unstamped_ladders() {
+    use riot_proxy::jobs::analytics::{counting_job, stamp_if_needed};
+    assert_eq!(
+        counting_job("kr", "RANKED_SOLO_5x5", true).kind,
+        "aggregate:delta"
+    );
+    assert_eq!(
+        counting_job("kr", "RANKED_SOLO_5x5", false).kind,
+        "aggregate:analytics"
+    );
+    let e = env().await;
+    e.seed_stamped().await;
+    let ladders = vec![
+        (KR_SOLO.0.to_string(), KR_SOLO.1.to_string()),
+        ("euw1".to_string(), KR_SOLO.1.to_string()),
+    ];
+    let q = Queue::new(e.state.db.clone());
+    assert_eq!(
+        stamp_if_needed(&q, &e.scope, &ladders).await.unwrap(),
+        1,
+        "euw1 only"
+    );
+}
+
+/// A ladder outside the configured ones that a rebuild stamped (an admin
+/// crawl's) is counted by the delta too.
+#[tokio::test]
+async fn a_stamped_ladder_outside_the_configured_ones_is_counted() {
+    let e = env().await;
+    e.seed_stamped().await;
+    let unconfigured = AnalyticsContext {
+        ladders: vec![],
+        ..e.delta_ctx(500)
+    };
+    e.archive_as("KR_9000000001", RANKED).await;
+    unconfigured
+        .delta_run(&job("aggregate:delta", json!({})))
+        .await
+        .unwrap();
+    let r = e.get("/v1/lol/analytics/champions?patch=16.19&minGames=0").await;
+    assert_eq!(r.json()["totalGames"], 20);
 }

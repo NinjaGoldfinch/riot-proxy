@@ -86,6 +86,7 @@ impl Env {
             rank_lookup_limit: 50_000,
             rank_lookup_recheck_s: 604_800,
             late_stamp_days: 14,
+            delta_on: false,
         })
     }
 
@@ -734,6 +735,7 @@ impl Env {
             rank_lookup_limit: 50_000,
             rank_lookup_recheck_s: 604_800,
             late_stamp_days: 14,
+            delta_on: false,
         });
         let archiving = Arc::new(riot_proxy::jobs::archive::ArchiveContext {
             fetcher,
@@ -801,6 +803,8 @@ impl Env {
                         patch_limit: 4,
                         reextract_batch: 500,
                         mirror,
+                        ladders: vec![],
+                        delta: riot_proxy::jobs::analytics::DeltaSettings::OFF,
                     })
                 }),
             )
@@ -2040,4 +2044,58 @@ async fn no_lookup_is_queued_when_the_limit_is_zero() {
             .await,
         0
     );
+}
+
+/// THR-03: with the delta on, a completed crawl of a ladder no full rebuild
+/// has stamped (one outside `LADDER_PLATFORMS`, or before its first) queues
+/// the rebuild that stamps it; of a stamped one, the delta.
+#[tokio::test]
+async fn with_the_delta_on_a_crawl_queues_the_rebuild_until_its_ladder_is_stamped() {
+    for stamped in [false, true] {
+        let e = env().await;
+        e.ladder_of_thirty().await;
+        if stamped {
+            let scope = e.scope.clone();
+            e.db.write(move |c| {
+                riot_proxy::archive::analytics::delta::mark_stamped(c, &scope, "kr", SOLO, 1, 2)?;
+                Ok::<_, DbError>(())
+            })
+            .await
+            .unwrap();
+        }
+        let mut ctx = e.ctx(100);
+        let c = Arc::get_mut(&mut ctx).unwrap();
+        c.rank_lookup_limit = 0;
+        c.delta_on = true;
+        let id = e.start("CHALLENGER").await;
+        let legs: Vec<String> =
+            e.db.read({
+                let id = id.clone();
+                move |c| {
+                    let mut stmt = c.prepare("SELECT leg FROM crawl_legs WHERE crawl_id = ?1")?;
+                    let rows = stmt
+                        .query_map([id], |r| r.get(0))?
+                        .collect::<Result<Vec<String>, _>>()?;
+                    Ok::<_, DbError>(rows)
+                }
+            })
+            .await
+            .unwrap();
+        for leg in legs {
+            ctx.end_leg(&id, &leg, false).await.unwrap();
+        }
+        ctx.end_leg(&id, kinds::LADDER_ARCHIVE, false).await.unwrap();
+        assert_eq!(e.crawl(&id).await.status, "completed");
+        let (rebuilds, deltas) = (
+            e.count("SELECT COUNT(*) FROM jobs WHERE kind = 'aggregate:analytics'")
+                .await,
+            e.count("SELECT COUNT(*) FROM jobs WHERE kind = 'aggregate:delta'")
+                .await,
+        );
+        assert_eq!(
+            (rebuilds, deltas),
+            if stamped { (0, 1) } else { (1, 0) },
+            "stamped: {stamped}"
+        );
+    }
 }

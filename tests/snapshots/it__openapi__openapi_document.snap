@@ -4613,6 +4613,10 @@ expression: doc
             "format": "int64",
             "type": "integer"
           },
+          "kind": {
+            "description": "`rebuild` or `delta` (THR-03): a ladder has the last of each.",
+            "type": "string"
+          },
           "ms": {
             "format": "int64",
             "type": "integer"
@@ -4650,6 +4654,7 @@ expression: doc
         "required": [
           "platform",
           "queue",
+          "kind",
           "at",
           "status",
           "ms",

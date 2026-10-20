@@ -4,6 +4,9 @@
 //! `aggregate:analytics` rebuilds one ladder's analytics tables from the
 //! facts: champions (slices, stats, bans), then matchups, then builds, each
 //! step its own transaction (v1), and announces `analytics.updated`.
+//! `aggregate:delta` counts the matches no rebuild has counted, a short
+//! transaction a batch, for every ladder a full rebuild has stamped (THR-03,
+//! ADR-182); the rebuild stays as the repair.
 //! `facts:reextract` re-derives the facts of every match below the current
 //! `FACTS_VERSION`, a batch at a time, from the stored bodies; no Riot call.
 //! `builds:extract` derives `match_builds` from the archived timelines the
@@ -87,6 +90,52 @@ pub fn reextract_job() -> NewJob {
     NewJob::new(kinds::FACTS_REEXTRACT, priority::MAINTENANCE, json!({})).dedupe(kinds::FACTS_REEXTRACT)
 }
 
+/// One `aggregate:delta` at a time, every ladder (THR-03).
+pub fn delta_job() -> NewJob {
+    NewJob::new(kinds::AGGREGATE_DELTA, priority::MAINTENANCE, json!({})).dedupe(kinds::AGGREGATE_DELTA)
+}
+
+/// What counts a ladder's new matches after a crawl or its rank lookups: the
+/// delta when it is on (`AGGREGATE_DELTA_S` > 0) and the ladder is stamped
+/// (`delta_ready`), else a rebuild as before, which stamps it.
+pub fn counting_job(platform: &str, queue: &str, delta_ready: bool) -> NewJob {
+    if delta_ready {
+        delta_job()
+    } else {
+        aggregate_job(platform, queue)
+    }
+}
+
+/// Queue a full rebuild of each configured ladder no full rebuild has stamped
+/// since V0029, or since something rewrote a counted match (THR-03). Returns
+/// how many were queued.
+pub async fn stamp_if_needed(
+    queue: &Queue,
+    key_scope: &str,
+    ladders: &[(String, String)],
+) -> Result<usize, DbError> {
+    let (scope, all) = (key_scope.to_string(), ladders.to_vec());
+    let unready = queue
+        .db()
+        .read(move |c| {
+            let mut out = vec![];
+            for (p, q) in all {
+                if !analytics::delta::ready(c, &scope, &p, &q)? {
+                    out.push((p, q));
+                }
+            }
+            Ok::<_, DbError>(out)
+        })
+        .await?;
+    let mut queued = 0;
+    for (platform, ladder) in unready {
+        if enqueue_aggregate(queue, &platform, &ladder).await?.created {
+            queued += 1;
+        }
+    }
+    Ok(queued)
+}
+
 /// One `builds:extract` at a time (BLD-01).
 pub fn builds_job() -> NewJob {
     NewJob::new(kinds::BUILDS_EXTRACT, priority::MAINTENANCE, json!({})).dedupe(kinds::BUILDS_EXTRACT)
@@ -153,6 +202,8 @@ pub async fn reextract_if_stale(queue: &Queue) -> Result<bool, DbError> {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Run {
+    /// `rebuild` or `delta` (THR-03).
+    pub kind: String,
     pub at: i64,
     pub status: String,
     pub ms: i64,
@@ -161,17 +212,19 @@ pub struct Run {
     pub games: i64,
 }
 
-/// A ladder's last run, keyed by ladder: the next run replaces it.
+/// A ladder's last run of its kind, keyed by ladder and kind: the next one
+/// replaces it.
 pub async fn record_run(db: &Db, key_scope: &str, ladder: &Ladder, run: &Run) -> Result<(), DbError> {
     let (scope, l, run) = (key_scope.to_string(), ladder.clone(), run.clone());
     db.write(move |c| {
         c.execute(
-            "INSERT OR REPLACE INTO analytics_runs (key_scope, platform, queue, at, status, ms, steps, rows, games)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT OR REPLACE INTO analytics_runs (key_scope, platform, queue, kind, at, status, ms, steps, rows, games)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 scope,
                 l.platform,
                 l.queue,
+                run.kind,
                 run.at,
                 run.status,
                 run.ms,
@@ -190,7 +243,7 @@ pub async fn runs(db: &Db, key_scope: &str) -> Result<Vec<(Ladder, Run)>, DbErro
     let scope = key_scope.to_string();
     db.read(move |c| {
         let mut stmt = c.prepare(
-            "SELECT platform, queue, at, status, ms, steps, rows, games FROM analytics_runs
+            "SELECT platform, queue, at, status, ms, steps, rows, games, kind FROM analytics_runs
               WHERE key_scope = ?1 ORDER BY at DESC",
         )?;
         let rows = stmt
@@ -203,6 +256,7 @@ pub async fn runs(db: &Db, key_scope: &str) -> Result<Vec<(Ladder, Run)>, DbErro
                         queue: r.get(1)?,
                     },
                     Run {
+                        kind: r.get(8)?,
                         at: r.get(2)?,
                         status: r.get(3)?,
                         ms: r.get(4)?,
@@ -231,6 +285,28 @@ pub struct AnalyticsContext {
     pub reextract_batch: u32,
     /// Where `builds:extract` reads the newest mirrored `item.json`.
     pub mirror: Arc<Mirror>,
+    /// `LADDER_PLATFORMS` × `LADDER_QUEUES`: the ladders a delta queues a
+    /// full rebuild for when they aren't stamped.
+    pub ladders: Vec<(String, String)>,
+    /// `aggregate:delta`'s batches (THR-03).
+    pub delta: DeltaSettings,
+}
+
+/// `AGGREGATE_DELTA_S` > 0, `AGGREGATE_DELTA_TARGET_MS`, `AGGREGATE_DELTA_BATCH`.
+#[derive(Debug, Clone, Copy)]
+pub struct DeltaSettings {
+    pub on: bool,
+    pub target_ms: u32,
+    pub cap: usize,
+}
+
+impl DeltaSettings {
+    /// The delta off: rebuilds as before THR-03.
+    pub const OFF: Self = Self {
+        on: false,
+        target_ms: 100,
+        cap: 500,
+    };
 }
 
 fn store(e: &dyn std::fmt::Display) -> JobError {
@@ -273,7 +349,8 @@ impl AnalyticsContext {
         let result = self.rebuild(&ladder, i64::from(queue_id), &mut steps).await;
         let status = if result.is_ok() { "completed" } else { "failed" };
         metrics::counter!(crate::metrics::AGGREGATE_RUNS_TOTAL,
-            "platform" => ladder.platform.clone(), "queue" => ladder.queue.clone(), "status" => status)
+            "platform" => ladder.platform.clone(), "queue" => ladder.queue.clone(), "status" => status,
+            "kind" => "rebuild")
         .increment(1);
         let ms = started.elapsed().as_millis();
         let games: i64 = match &result {
@@ -283,6 +360,7 @@ impl AnalyticsContext {
         // The dashboard's record of the run, failed ones with the steps that
         // finished (v1 `recordAnalyticsRun`).
         let run = Run {
+            kind: "rebuild".into(),
             at: Clock::now().unix_ms,
             status: status.into(),
             ms: i64::try_from(ms).unwrap_or(i64::MAX),
@@ -327,13 +405,25 @@ impl AnalyticsContext {
             ("builds", analytics::rebuild_builds),
         ];
         // A ladder with rows V0017 couldn't split by tier and side is rebuilt
-        // over every patch once, which replaces them all (ADR-129).
+        // over every patch once, which replaces them all (ADR-129). So is one
+        // no full rebuild has stamped since V0029 or since a counted match
+        // was rewritten (THR-03): only then do its stamps cover every match.
+        let started_ms = Clock::now().unix_ms;
         let (key_scope, l) = (self.key_scope.clone(), ladder.clone());
-        let full = self
+        let (unsplit, stamped) = self
             .db()
-            .read(move |c| analytics::unsplit(c, &key_scope, &l.platform, &l.queue))
+            .read(move |c| {
+                Ok::<_, DbError>((
+                    analytics::unsplit(c, &key_scope, &l.platform, &l.queue)?,
+                    analytics::delta::ready(c, &key_scope, &l.platform, &l.queue)?,
+                ))
+            })
             .await
             .map_err(|e| store(&e))?;
+        // Without the delta the stamps change nothing, so the patch limit
+        // holds; a rebuild of every patch stamps the ladder either way.
+        let full = unsplit || (self.delta.on && !stamped);
+        let every_patch = full || self.patch_limit == 0;
         let mut tables = BTreeMap::new();
         for (name, step) in steps {
             activity::step(format!(
@@ -374,10 +464,24 @@ impl AnalyticsContext {
                 tables.insert(table.to_string(), n);
             }
         }
-        if full {
+        if every_patch {
             let (key_scope, l) = (self.key_scope.clone(), ladder.clone());
             self.db()
-                .write(move |c| analytics::mark_split(c, &key_scope, &l.platform, &l.queue))
+                .write(move |c| {
+                    if unsplit {
+                        analytics::mark_split(c, &key_scope, &l.platform, &l.queue)?;
+                    }
+                    // Unless something rewrote a counted match since it began.
+                    analytics::delta::mark_stamped(
+                        c,
+                        &key_scope,
+                        &l.platform,
+                        &l.queue,
+                        started_ms,
+                        Clock::now().unix_ms,
+                    )?;
+                    Ok::<_, DbError>(())
+                })
                 .await
                 .map_err(|e| store(&e))?;
         }
@@ -473,6 +577,14 @@ impl AnalyticsContext {
         }
         metrics::gauge!(crate::metrics::FACTS_REEXTRACT_PROGRESS).set(1.0);
         tracing::info!(matches = done, "facts re-extracted");
+        // A counted match it rewrote marked its ladder dirty (THR-03): those
+        // are rebuilt in full before their next delta.
+        if done > 0 && self.delta.on {
+            let queued = stamp_if_needed(&self.queue, &self.key_scope, &self.ladders)
+                .await
+                .map_err(|e| store(&e))?;
+            tracing::info!(queued, "rebuilds queued after the re-extraction");
+        }
         Ok(())
     }
 
@@ -626,7 +738,195 @@ impl AnalyticsContext {
     }
 }
 
+impl AnalyticsContext {
+    /// `aggregate:delta` (THR-03, ADR-182): derive new timelines' builds, then
+    /// count every stamped ladder's uncounted matches, any platform, a batch
+    /// per write transaction sized to `AGGREGATE_DELTA_TARGET_MS`, pacing
+    /// between them. A configured ladder no full rebuild has stamped gets one
+    /// queued instead. The response cache is cleared once, after the last batch,
+    /// and each ladder it counted in announces `analytics.updated` once.
+    pub async fn delta_run(&self, _job: &Job) -> Result<(), JobError> {
+        let started = Instant::now();
+        activity::step("extracting builds".to_string());
+        if let Err(e) = self.extract_builds().await {
+            tracing::warn!(error = ?e, "could not extract builds");
+        }
+        let scope = self.key_scope.clone();
+        let (ready, pending) = self
+            .db()
+            .read(move |c| {
+                Ok::<_, DbError>((
+                    analytics::delta::ready_ladders(c, &scope)?,
+                    analytics::delta::uncounted(c, &scope)?,
+                ))
+            })
+            .await
+            .map_err(|e| store(&e))?;
+        #[allow(clippy::cast_precision_loss)]
+        metrics::gauge!(crate::metrics::AGGREGATE_DELTA_PENDING).set(pending as f64);
+        let queued = stamp_if_needed(&self.queue, &self.key_scope, &self.ladders)
+            .await
+            .map_err(|e| store(&e))?;
+        if queued > 0 {
+            tracing::info!(queued, "full rebuilds queued for ladders not stamped yet");
+        }
+        let mut counted = vec![];
+        for (platform, queue) in ready {
+            let ladder = Ladder { platform, queue };
+            let ladder_started = Instant::now();
+            let done = self.delta_ladder(&ladder).await?;
+            if done.matches > 0 {
+                counted.push((ladder, ladder_started.elapsed(), done.matches, done.rows));
+            }
+        }
+        if counted.is_empty() {
+            return Ok(());
+        }
+        // After the last commit and before the announcements (ADR-169): one
+        // clear a run, not a batch, or the cache would be empty all crawl.
+        self.cache.clear();
+        for (ladder, took, matches, rows) in counted {
+            let games = self.games(&ladder).await.unwrap_or(0);
+            let ms = i64::try_from(took.as_millis()).unwrap_or(i64::MAX);
+            let run = Run {
+                kind: "delta".into(),
+                at: Clock::now().unix_ms,
+                status: "completed".into(),
+                ms,
+                steps: BTreeMap::from([("delta".to_string(), took.as_secs_f64())]),
+                rows: rows.iter().map(|(t, n)| ((*t).to_string(), *n)).collect(),
+                games,
+            };
+            if let Err(e) = record_run(self.db(), &self.key_scope, &ladder, &run).await {
+                tracing::warn!(error = %e, "could not record the delta run");
+            }
+            metrics::counter!(crate::metrics::AGGREGATE_RUNS_TOTAL,
+                "platform" => ladder.platform.clone(), "queue" => ladder.queue.clone(), "status" => "completed",
+                "kind" => "delta")
+            .increment(1);
+            tracing::info!(platform = %ladder.platform, queue = %ladder.queue, matches, games, ms, "analytics counted");
+            events::publish(
+                &self.hub,
+                &Event::AnalyticsUpdated {
+                    platform: ladder.platform.clone(),
+                    queue: ladder.queue.clone(),
+                    duration_s: (ms + 500) / 1000,
+                    tables: rows.iter().map(|(t, n)| ((*t).to_string(), *n)).collect(),
+                },
+            );
+            let warmed = self.cache.warm(&ladder.platform).await;
+            tracing::debug!(warmed, "analytics responses warmed");
+        }
+        tracing::debug!(ms = started.elapsed().as_millis(), "delta run done");
+        Ok(())
+    }
+
+    /// One ladder's batches until nothing is left.
+    pub async fn delta_ladder(&self, ladder: &Ladder) -> Result<LadderCount, JobError> {
+        let queue_id = i64::from(
+            crate::riot::ladder::queue_id(&ladder.queue)
+                .ok_or_else(|| JobError::Fail(format!("'{}' is not a ranked queue", ladder.queue)))?,
+        );
+        let mut size = analytics::delta::FIRST_BATCH.min(self.delta.cap.max(analytics::delta::MIN_BATCH));
+        let mut cursor = String::new();
+        let mut out = LadderCount {
+            rows: analytics::REPORTED.iter().map(|t| (*t, 0)).collect(),
+            ..LadderCount::default()
+        };
+        loop {
+            let (scope, l, after) = (self.key_scope.clone(), ladder.clone(), cursor.clone());
+            // A match with a count to take back costs about two (plan §1.5).
+            let (ids, last) = self
+                .db()
+                .read(move |c| {
+                    let back = analytics::delta::retracting(c, &scope, &l.platform, queue_id, size / 2)?;
+                    let left = size.saturating_sub(back.len() * 2).max(1);
+                    let new = analytics::delta::pending(c, &scope, &l.platform, queue_id, &after, left)?;
+                    let last = new.last().cloned();
+                    let mut ids = back;
+                    for id in new {
+                        if !ids.contains(&id) {
+                            ids.push(id);
+                        }
+                    }
+                    Ok::<_, DbError>((ids, last))
+                })
+                .await
+                .map_err(|e| store(&e))?;
+            if ids.is_empty() {
+                break;
+            }
+            if let Some(last) = last {
+                cursor = last;
+            }
+            activity::step(format!(
+                "counting {} matches for {} {}",
+                ids.len(),
+                ladder.platform,
+                ladder.queue
+            ));
+            let (key_scope, l, n) = (self.key_scope.clone(), ladder.clone(), ids.len());
+            let done = self
+                .db()
+                .write(move |c| {
+                    let scope = Scope {
+                        key_scope,
+                        platform: l.platform,
+                        queue: l.queue,
+                        queue_id,
+                        patches: None,
+                        now: Clock::now().unix_ms,
+                    };
+                    analytics::delta::count_batch(c, &scope, &ids)
+                })
+                .await
+                .map_err(|e| store(&e))?;
+            if !done.ready {
+                // Marked dirty since the run began: its rebuild comes first.
+                break;
+            }
+            let (p, q) = (ladder.platform.clone(), ladder.queue.clone());
+            metrics::histogram!(crate::metrics::AGGREGATE_DELTA_BATCH_SECONDS,
+                "platform" => p.clone(), "queue" => q.clone(), "part" => "sql")
+            .record(done.sql_s);
+            metrics::histogram!(crate::metrics::AGGREGATE_DELTA_BATCH_SECONDS,
+                "platform" => p.clone(), "queue" => q.clone(), "part" => "commit")
+            .record(done.commit_s);
+            metrics::counter!(crate::metrics::AGGREGATE_DELTA_MATCHES_TOTAL,
+                "platform" => p.clone(), "queue" => q.clone(), "kind" => "added")
+            .increment(u64::try_from(done.added).unwrap_or(0));
+            metrics::counter!(crate::metrics::AGGREGATE_DELTA_MATCHES_TOTAL,
+                "platform" => p, "queue" => q, "kind" => "retracted")
+            .increment(u64::try_from(done.retracted).unwrap_or(0));
+            #[allow(clippy::cast_precision_loss)]
+            metrics::gauge!(crate::metrics::AGGREGATE_DELTA_BATCH_SIZE).set(n as f64);
+            out.matches += done.added;
+            out.batches += 1;
+            out.largest = out.largest.max(n);
+            for (t, k) in &done.rows {
+                *out.rows.entry(t).or_default() += k;
+            }
+            size = analytics::delta::next_batch(size, done.sql_s, self.delta.target_ms, self.delta.cap);
+            tokio::time::sleep(REEXTRACT_PACE).await;
+        }
+        Ok(out)
+    }
+}
+
+/// What one ladder's delta did.
+#[derive(Debug, Clone, Default)]
+pub struct LadderCount {
+    /// Matches with a step counted.
+    pub matches: i64,
+    /// Write transactions, and the most matches one held.
+    pub batches: usize,
+    pub largest: usize,
+    /// Rows upserted per reported table.
+    pub rows: BTreeMap<&'static str, i64>,
+}
+
 pub struct AggregateHandler(pub Arc<AnalyticsContext>);
+pub struct DeltaHandler(pub Arc<AnalyticsContext>);
 pub struct ReextractHandler(pub Arc<AnalyticsContext>);
 pub struct BuildsHandler(pub Arc<AnalyticsContext>);
 pub struct TiersHandler(pub Arc<AnalyticsContext>);
@@ -640,6 +940,12 @@ impl Handler for TiersHandler {
 impl Handler for AggregateHandler {
     fn run<'a>(&'a self, job: &'a Job) -> BoxFuture<'a, Result<(), JobError>> {
         Box::pin(self.0.aggregate(job))
+    }
+}
+
+impl Handler for DeltaHandler {
+    fn run<'a>(&'a self, job: &'a Job) -> BoxFuture<'a, Result<(), JobError>> {
+        Box::pin(self.0.delta_run(job))
     }
 }
 

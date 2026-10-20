@@ -25,7 +25,7 @@ What is in the riot-proxy repository at commit `7491ff6` (version 2.7.0), gather
 | `src/fetcher.rs`, `src/singleflight.rs`, `src/cache/` | the read funnel, in-flight coalescing, L1 and L2 caches, key scheme |
 | `src/archive/` and its `*/tests.rs` dirs | bodies, facts, builds, tiers, ranks, player pools, analytics rebuilds, packs, object store, offload, index recovery |
 | `src/jobs/` and `src/jobs/{activity,ladder,offload,scheduler,ticks,timelines}/` | scheduler, lanes, ticks, every job handler, live activity traces |
-| `src/db/`, `src/db/migrations/` | writer thread, reader pool, disk gauges, the Postgres stub, 28 refinery migrations `V0001`…`V0028` |
+| `src/db/`, `src/db/migrations/` | writer thread, reader pool, disk gauges, the Postgres stub, 29 refinery migrations `V0001`…`V0029` (next free `V0030`) |
 | `src/events/`, `src/ws/` | event catalogue and the WebSocket hub, socket, protocol, metrics topic |
 | `src/static/`, `src/ui/` | Data Dragon mirror and image fill; the three embedded pages (`dev-ui.html`, `showcase.html`, `admin.html`) |
 | `src/config.rs`, `src/config/tests.rs` | the configuration surface and its validation |
@@ -39,7 +39,7 @@ What is in the riot-proxy repository at commit `7491ff6` (version 2.7.0), gather
 | `scripts/` | CI helpers (image description, edge tags, docker paths) with self-tests; `compare-openapi.py`; `perf-synthetic.py` |
 | `docs/design/`, `docs/design/img/` | the v2 design (01–13, metrics.md), the authority |
 | `docs/contract/` | v1's OpenAPI document and endpoint list for parity checks |
-| `docs/flt/`, `docs/perf/` | per-task plans and measurements (FLT-03..05, PERF-03) |
+| `docs/flt/`, `docs/perf/`, `docs/thr/` | per-task plans and measurements (FLT-03..05, PERF-03, THR-03) |
 | `docs/adr/` | empty (`.gitkeep`); ADRs live in `docs/DECISIONS.md` |
 | `docs/img/` | two orphaned v1-dashboard screenshots |
 | `docs/` (this set) | `README.md`, `architecture/`, `integration/`, `api/`, `data/`, `workflows/`, `deployment/`, `operations/`, `reference/`, `_meta/` |
@@ -53,12 +53,12 @@ What is in the riot-proxy repository at commit `7491ff6` (version 2.7.0), gather
 | Entry | Where |
 |---|---|
 | Binary `riot-proxy` with subcommands `serve`, `migrate`, `key {create,list,revoke}`, `healthcheck`, `spec`, `migrate-v1`, `backup`, `packs {reindex,restore-index,snapshot}`, and `riot {get,record}` (dev-cli) | `src/cli/mod.rs:34-66` |
-| Server bootstrap (23 ordered steps) | `src/cli/serve.rs:43-394`, summarised in [scratch/jobs-and-observability.md](./scratch/jobs-and-observability.md) §1 |
+| Server bootstrap (23 ordered steps) | `src/cli/serve.rs:43-415`, summarised in [scratch/jobs-and-observability.md](./scratch/jobs-and-observability.md) §1 |
 | HTTP routes (76 documented operations on 70 paths plus docs, pages, dev reset, `/ddragon` files, fallback) | registered in `src/routes/docs.rs:116-141`; table in [scratch/routes.md](./scratch/routes.md) §1 and [../api/endpoints.md](../api/endpoints.md) |
 | WebSocket `/v1/ws` | `src/routes/ws.rs:497-499`, protocol in `src/ws/protocol.rs` |
-| Ticks (periodic enqueues): `poll:live` 60 s, `poll:rank` 600 s, `poll:matches` 300 s, `ddragon:sync` 3600 s, `maintenance` and `names:backfill` daily, `ladder:crawl` on `LADDER_CRAWL_S`, `aggregate:analytics` on `AGGREGATE_INTERVAL_S`, `timelines:backfill` hourly when enabled | `src/jobs/ticks.rs:276-304` |
-| 21 job kinds with handlers | `src/jobs/mod.rs:20-68,89-162`; table in [scratch/jobs-and-observability.md](./scratch/jobs-and-observability.md) §3 |
-| Loops: limiter checkpoint 10 s, L2 flush 2 s, metrics history 60 s (fast sample 15 s), `jobs_pending` sample 15 s, `metrics` topic 5 s while held, histogram upkeep 5 s | `src/cli/serve.rs`, `src/riot/limiter/persist.rs:25`, `src/cache/l2.rs:24-26`, `src/stats.rs:1038-1069` |
+| Ticks (periodic enqueues): `poll:live` 60 s, `poll:rank` 600 s, `poll:matches` 300 s, `ddragon:sync` 3600 s, `maintenance` and `names:backfill` daily, `ladder:crawl` on `LADDER_CRAWL_S`, `aggregate:analytics` on `AGGREGATE_INTERVAL_S`, `aggregate:delta` on `AGGREGATE_DELTA_S` (60 s), `timelines:backfill` hourly when enabled | `src/jobs/ticks.rs:108-139` |
+| 22 job kinds with handlers | `src/jobs/mod.rs:20-71,92-169`; table in [scratch/jobs-and-observability.md](./scratch/jobs-and-observability.md) §3 |
+| Loops: limiter checkpoint 10 s, L2 flush 2 s, metrics history 60 s (fast sample 15 s), `jobs_pending` sample 15 s, `metrics` topic 5 s while held, histogram upkeep 5 s | `src/cli/serve.rs`, `src/riot/limiter/persist.rs:25`, `src/cache/l2.rs:24-26`, `src/stats.rs:1041-1072` |
 
 ## Outbound network calls
 
@@ -75,7 +75,7 @@ Details in [scratch/riot-and-cache.md](./scratch/riot-and-cache.md) §1–§2 an
 
 | Store | What | Where documented |
 |---|---|---|
-| SQLite `$DATA_DIR/riot-proxy.db` (WAL, `synchronous=NORMAL`), 40 tables after `V0028` | consumers, cache (L2), limiter checkpoint, jobs, metrics history, players, matches, timelines, facts, bans, builds, timeline gaps, ladder crawls and entries, ranks, analytics tables, pack map | [../data/schema.md](../data/schema.md), [scratch/persistence.md](./scratch/persistence.md) |
+| SQLite `$DATA_DIR/riot-proxy.db` (WAL, `synchronous=NORMAL`), 43 tables after `V0029` | consumers, cache (L2), limiter checkpoint, jobs, metrics history, players, matches, timelines, facts, bans, builds, timeline gaps, ladder crawls and entries, ranks, analytics tables, pack map | [../data/schema.md](../data/schema.md), [scratch/persistence.md](./scratch/persistence.md) |
 | In-memory | L1 response cache (moka, `CACHE_L1_MAX_MB`), auth cache, analytics response cache, recent rings, job activity traces | [../data/caching.md](../data/caching.md) |
 | Disk | `$DATA_DIR/ddragon/<version>/…`, `$DATA_DIR/backups/riot-proxy-<date>.db` | [scratch/persistence.md](./scratch/persistence.md) §5 |
 | Onidel Object Storage `riot-proxy-archive` | `packs/{matches,timelines}/<yyyy>/<mm>/<ulid>.pack`, `index/{packs,locations}-<date>.jsonl.zst` | [../integration/object-storage.md](../integration/object-storage.md) |
@@ -87,7 +87,7 @@ Three workflows, no deploy step: `ci.yml` (fmt, clippy, test, ui, coverage, acce
 
 ## Configuration surface
 
-65 variables read from flags, environment and `.env` (`src/config.rs:23-90`), plus the legacy `NODE_ENV` fallback and the `TLS` refusal; ten global CLI flags. Complete table in [../deployment/configuration.md](../deployment/configuration.md), evidence in [scratch/config.md](./scratch/config.md).
+68 variables read from flags, environment and `.env` (`src/config.rs:23-93`), plus the legacy `NODE_ENV` fallback and the `TLS` refusal; ten global CLI flags. Complete table in [../deployment/configuration.md](../deployment/configuration.md), evidence in [scratch/config.md](./scratch/config.md).
 
 ## Build, test, lint, release, deploy tooling
 
@@ -95,7 +95,7 @@ Three workflows, no deploy step: `ci.yml` (fmt, clippy, test, ui, coverage, acce
 
 ## Existing documentation
 
-`README.md` (front door), `CLAUDE.md` (working rules), `docs/IMPLEMENTATION.md` (the plan and task list), `PROGRESS.md` (ticks and exit checks), `docs/DECISIONS.md` (175 ADRs), `docs/CUTOVER.md` (v1 to v2, historical), `docs/design/01-13` and `metrics.md` (the design authority), `deploy/README.md` and `deploy/proxmox/README.md` (operator how-tos), `docs/flt/`, `docs/perf/` (task plans), `tests/fixtures/*/README.md`. The map with keep/supersede notes is in [scratch/tests-tooling-history.md](./scratch/tests-tooling-history.md) §5. This set supersedes none of them; it describes what is built and links to them.
+`README.md` (front door), `CLAUDE.md` (working rules), `docs/IMPLEMENTATION.md` (the plan and task list), `PROGRESS.md` (ticks and exit checks), `docs/DECISIONS.md` (ADRs numbered to ADR-182), `docs/CUTOVER.md` (v1 to v2, historical), `docs/design/01-13` and `metrics.md` (the design authority), `deploy/README.md` and `deploy/proxmox/README.md` (operator how-tos), `docs/flt/`, `docs/perf/`, `docs/thr/` (task plans), `tests/fixtures/*/README.md`. The map with keep/supersede notes is in [scratch/tests-tooling-history.md](./scratch/tests-tooling-history.md) §5. This set supersedes none of them; it describes what is built and links to them.
 
 ## Tests
 
@@ -125,5 +125,5 @@ cargo tree --depth 1 --all-features
 ```
 
 ---
-**Sources:** `Cargo.toml`, `rust-toolchain.toml`, `justfile`, `src/lib.rs`, `src/cli/mod.rs:L34-L66`, `src/cli/serve.rs:L43-L394`, `src/routes/docs.rs:L116-L141`, `src/jobs/mod.rs:L20-L68`, `src/jobs/ticks.rs:L276-L304`, `src/config.rs:L23-L90`, `.github/workflows/*.yml`, `docs/_meta/scratch/*.md`, `git log`, `git tag`
-**Last verified:** 2026-10-21 against commit `844df70`
+**Sources:** `Cargo.toml`, `rust-toolchain.toml`, `justfile`, `src/lib.rs`, `src/cli/mod.rs:L34-L66`, `src/cli/serve.rs:L43-L415`, `src/routes/docs.rs:L116-L141`, `src/jobs/mod.rs:L20-L71`, `src/jobs/ticks.rs:L108-L139`, `src/config.rs:L23-L93`, `.github/workflows/*.yml`, `docs/_meta/scratch/*.md`, `git log`, `git tag`
+**Last verified:** 2026-10-21 against commit `32c4672`

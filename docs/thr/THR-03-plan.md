@@ -7,7 +7,51 @@ Written 2026-10-21 against `origin/main` **32c4672** (v2.7.2, the version on pro
 - The latest migration is `V0028__jobs_crawl_matches.sql`, so this task's is **V0029**. The latest ADR is ADR-180. WR-03's handoff reserves **ADR-181** and adds no migration, so this task takes **ADR-182** (re-checked before merging).
 - The implementation goes on `feat/THR-03-aggregate-delta`, in its own worktree (`../rp-thr03`), cut from `origin/main` after this plan merges.
 
-**Implementation record.** *(Filled in after approval.)*
+**Implementation record** (2026-10-21, branch `feat/THR-03-aggregate-delta`, ADR-182).
+
+*Owner answers.* Plan approved; Q2–Q5 as recommended: the 60 s tick and no `archive:match` trigger, the one-time rebuilds queued at boot, the `ETag` part, a self-sizing batch. Q1 is §1.2.
+
+*Deviations from the plan.*
+- **`analytics_stamped` holds `stamped_at` and `dirty_at`**, not one `at`. An un-stamp racing a running full rebuild must win: the rebuild stamps only if nothing marked the ladder dirty after it began (`mark_stamped`'s `WHERE dirty_at IS NULL OR dirty_at < started`), and a dirty mark is an upsert, so it holds for a ladder that has no row yet.
+- **The dirty mark sits in `write_derived`.** That function serves archive, re-archive and `facts:reextract`, and it marks a counted match whose facts were at an older `FACTS_VERSION`. This covers a re-archive after a version bump too, and every rewrite is atomic with its mark, so a sweep stopped part-way has marked what it touched.
+- **A rebuild is forced over every patch only with the delta on**, for an unstamped ladder. Any rebuild over every patch stamps (production runs `AGGREGATE_PATCH_LIMIT=0`, so its crawl-end rebuilds stamp even with the delta off). With the delta off, the patch limit holds as before.
+- **The delta walks every stamped ladder, any platform**, not only configured ones. A completed crawl or `ranks:lookup` queues the delta only for a stamped ladder, and otherwise the rebuild that stamps it. So a crawl started by hand outside `LADDER_PLATFORMS` is still counted (found by the docs pass).
+- **A retract subtracts only for the steps that counted the match** (`sub = bits & retract steps`). A match's first `match_builds` rows also delete its set-build retract rows, since that step had counted nothing.
+- **Metrics names follow ADR-014:** `aggregate_delta_*`, no `proxy_` prefix. `part` (`sql`, `commit`) splits the batch histogram, and `aggregate_delta_batch_size` is new.
+- **`AGGREGATE_DELTA_TARGET_MS` defaults to 100, not 150.** At 150 ms, statement time plus commit passed 250 ms too often on the synthetic run (ADR-182, Observed, runs 2 and 3).
+- **There is no `/v1/admin/analytics/runs` route.** `kind` is on `/v1/admin/metrics`' `lastRuns[]`.
+- **`/patches` gets no slice part:** its rows already cover the patch.
+- **"A delta queued while a rebuild runs waits" became a stronger test:** a delta between a rebuild's steps gives the rebuild's output.
+- **The "another patch gives `304`" test uses a remake-only delta,** since the fixtures have one patch. Remakes are outside the default slice.
+- **Every analytics cache miss now runs one more `Db::read`.** The cache tests count 6 for a champions miss.
+
+*Mutation checks* (`/home/dev/thr03/mut/run.py`; each applied alone, then reverted). All eight fail a test, none by a compile error:
+
+| # | mutation | caught by |
+|---|---|---|
+| 1 | the upsert drops a summed column | 12 delta tests, the property test among them |
+| 2 | a batch doesn't stamp its matches | the property test and 4 others (the pending set never empties) |
+| 3 | the trigger without `WHEN OLD.tier IS NOT NEW.tier` | `v0029_creates_the_stamp_tables_and_the_tier_trigger` |
+| 4 | a rebuild step stamps all six bits | `a_delta_between_a_rebuilds_steps_…`, `a_late_stamp_between_a_rebuilds_steps_…` |
+| 5 | the pending read ignores `facts_version` | `stale_facts_wait_and_rewriting_counted_ones_makes_the_ladder_dirty` |
+| 6 | the tag without the totals part | `the_tag_follows_the_slices_totals_not_only_the_rows_returned` |
+| 7 | a retract subtracts nothing | the late-stamp tests |
+| 8 | a match's first builds keep the set-build bit | `a_matchs_first_builds_clear_only_its_set_build_step` |
+
+*Verification.*
+- `cargo fmt --check` clean; `cargo clippy --all-targets --all-features -- -D warnings` clean.
+- `cargo nextest run --profile ci --all-features`: 975 tests, all pass.
+- Expected changes: the OpenAPI snapshot gains `RunSummary.kind`; the dashboard snapshot test reads `"kind": "rebuild"`; the cache tests count six reads.
+- `docs-guard.py`, `linkcheck.py` and `mermaidcheck.sh` are clean. The regenerated spec equals `docs/api/openapi.json` except for the tolerated operationId.
+
+*Observed* (release binary, the synthetic oc1 archive). The full blocks are in ADR-182:
+- V0029 applied in 10 ms at boot, and the boot rebuild took 94 s.
+- Deltas counted ~7,000 matches (3,000 new, ~3,900 with retracts) in 43 s over 201 batches, every batch's statements ≤ 150 ms. Commits were ≤ 100 ms except 8 WAL-checkpoint commits of 0.25–1 s (risk R1, kept).
+- `POST …/recompute` answered `202` in 0.76 ms.
+- The recompute after the deltas left all sixteen tables identical.
+
+*Not done here.* The production check (Accept) needs the build deployed. The owner's commands are in the PR description.
+
 
 ---
 

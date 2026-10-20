@@ -1,14 +1,14 @@
 # SQLite schema: core and archive tables
 
-Every table and index in `riot-proxy.db` after migration V0028, with what writes it, what reads it and how long rows live. This file covers the core (operational) and archive groups; the ladder, rank and analytics groups are in [schema-analytics.md](schema-analytics.md).
+Every table and index in `riot-proxy.db` after migration V0029, with what writes it, what reads it and how long rows live. This file covers the core (operational) and archive groups; the ladder, rank and analytics groups are in [schema-analytics.md](schema-analytics.md), including V0029's incremental-analytics bookkeeping: `analytics_counted`, `analytics_retract` and `analytics_stamped`, the `match_facts_tier_moved` trigger, and the `kind` column of `analytics_runs` (THR-03, ADR-182).
 
 ## Conventions
 
 - One file, WAL mode, one writer thread and a reader pool (`src/db/mod.rs:26-42`). Migrations live in `src/db/migrations/` and are the authority for the DDL below; the local dev database on this box stops at V0006 and is not consulted for the schema.
 - Timestamps are unix milliseconds in `INTEGER` columns; JSON lives in `TEXT`; match and timeline bodies are zstd level 3 `BLOB`s (`src/db/migrations/V0001__init.sql:2`, `V0002__archive.sql:3`, `src/archive/matches.rs:33`).
 - `key_scope` is the first 8 hex characters of `sha256(RIOT_API_KEY)` (`src/cache/keys.rs:34-37`). Rows that hold encrypted Riot ids (PUUIDs) carry it; the archive does not, because match ids are not encrypted (`V0002:21`).
-- Declared foreign keys are few: `match_facts`, `match_bans` and `match_builds` cascade from `matches`; `crawl_legs` and `crawl_match_ids` cascade from `ladder_crawls`; `body_locations.pack_id` references `body_packs`. `PRAGMA foreign_keys = ON` on every connection (`src/db/mod.rs:28-34`). Every other join in the diagrams is logical, not declared.
-- 40 tables in total: the 37 that `/dev/reset` wipes plus `consumers`, `limiter_state` and `refinery_schema_history` (`src/routes/dev.rs:41-81`).
+- Declared foreign keys are few: `match_facts`, `match_bans`, `match_builds`, `analytics_counted` and `analytics_retract` cascade from `matches`; `crawl_legs` and `crawl_match_ids` cascade from `ladder_crawls`; `body_locations.pack_id` references `body_packs`. `PRAGMA foreign_keys = ON` on every connection (`src/db/mod.rs:28-34`). Every other join in the diagrams is logical, not declared.
+- 43 tables in total: the 40 that `/dev/reset` wipes plus `consumers`, `limiter_state` and `refinery_schema_history` (`src/routes/dev.rs:41-84`).
 
 ## Core tables
 
@@ -94,7 +94,7 @@ Index: `cache_hard ON cache(hard_expires)` (`V0001:24`). Written by the write-be
 | `frozen_until` | INTEGER | nullable | unix ms |
 | `updated_at` | INTEGER | NOT NULL | unix ms |
 
-No secondary index. Written by `persist::save`, which deletes every row and re-inserts the current set in one transaction (`src/riot/limiter/persist.rs:178-194`) every 10 s and at shutdown (`persist.rs:25`, `src/cli/serve.rs:82,389`). Read once at boot (`persist.rs:196-213`, `serve.rs:76`); a checkpoint older than 120 s restores every window as full (`persist.rs:23,92-94`). Retention: replaced whole on every checkpoint; not wiped by `/dev/reset`.
+No secondary index. Written by `persist::save`, which deletes every row and re-inserts the current set in one transaction (`src/riot/limiter/persist.rs:178-194`) every 10 s and at shutdown (`persist.rs:25`, `src/cli/serve.rs:82,410`). Read once at boot (`persist.rs:196-213`, `serve.rs:76`); a checkpoint older than 120 s restores every window as full (`persist.rs:23,92-94`). Retention: replaced whole on every checkpoint; not wiped by `/dev/reset`.
 
 ### jobs
 
@@ -103,9 +103,9 @@ No secondary index. Written by `persist::save`, which deletes every row and re-i
 | Column | Type | Constraints | Notes |
 |---|---|---|---|
 | `id` | TEXT | PRIMARY KEY | ULID, monotonic (`src/jobs/scheduler.rs:190-198`) |
-| `kind` | TEXT | NOT NULL | one of the 21 kinds in `src/jobs/mod.rs:20-68` |
+| `kind` | TEXT | NOT NULL | one of the 21 kinds in `src/jobs/mod.rs:20-71` |
 | `dedupe_key` | TEXT | nullable | unique per kind while pending or running |
-| `priority` | INTEGER | NOT NULL | lower runs first (`src/jobs/mod.rs:71-86`) |
+| `priority` | INTEGER | NOT NULL | lower runs first (`src/jobs/mod.rs:74-89`) |
 | `payload` | TEXT | NOT NULL | JSON, per kind (see [models.md](models.md#job-payloads)) |
 | `state` | TEXT | NOT NULL DEFAULT 'pending' | `pending`, `running`, `done`, `failed` |
 | `attempts` | INTEGER | NOT NULL DEFAULT 0 | |
@@ -124,9 +124,9 @@ Indexes: `jobs_dedupe UNIQUE (kind, dedupe_key) WHERE state IN ('pending','runni
 | Column | Type | Constraints | Notes |
 |---|---|---|---|
 | `at` | INTEGER | PRIMARY KEY | unix ms of the sample |
-| `point` | TEXT | NOT NULL | JSON `HistoryPoint` (`src/stats.rs:355-370`) |
+| `point` | TEXT | NOT NULL | JSON `HistoryPoint` (`src/stats.rs:357-372`) |
 
-Written every `METRICS_HISTORY_INTERVAL_S` (default 60 s) by `INSERT OR REPLACE` (`src/stats.rs:998-1014`). Read by `GET /v1/admin/metrics/history`. Retention: each write keeps only the newest 1 440 rows (`src/stats.rs:43,1007-1009`) and `maintenance` deletes rows older than 24 h (`maintenance.rs:38,241-244`).
+Written every `METRICS_HISTORY_INTERVAL_S` (default 60 s) by `INSERT OR REPLACE` (`src/stats.rs:1001-1017`). Read by `GET /v1/admin/metrics/history`. Retention: each write keeps only the newest 1 440 rows (`src/stats.rs:43,1010-1012`) and `maintenance` deletes rows older than 24 h (`maintenance.rs:38,241-244`).
 
 ### players
 
@@ -232,7 +232,7 @@ A timeline may exist before its match (`V0013:1-5`), which is why that edge is o
 | `packed_at` | INTEGER | nullable | unix ms; in a verified pack |
 | `offloaded_at` | INTEGER | nullable | unix ms; local copy freed |
 
-Indexes: `matches_patch_queue (patch, queue_id)`, `matches_end (game_end_ms)` (`V0002:32-33`); `matches_facts_version (facts_version)` (`V0005:17`); `matches_to_pack (archived_at, packed_at) WHERE packed_at IS NULL` and `matches_to_free (archived_at, packed_at, offloaded_at) WHERE packed_at IS NOT NULL AND offloaded_at IS NULL` (`V0023:41-44`); `matches_archived (match_id, archived_at)` (`V0024:7`). Written by `put_stored` (upsert, clears `offloaded_at`; `src/archive/matches.rs:375-396`), `write_derived` (`:143-151`), `pack::locate_on` (`packed_at`, `src/archive/pack.rs:337-351`) and `offload::free` (`body_zstd = X''`, `offloaded_at`; `src/archive/offload.rs:147-170`). Read by the archive read path (`matches.rs:178-215`), the player routes, analytics and the offload selectors. Retention: never deleted by any job; a body moves local, then packed, then offloaded (`V0023:2-5`).
+Indexes: `matches_patch_queue (patch, queue_id)`, `matches_end (game_end_ms)` (`V0002:32-33`); `matches_facts_version (facts_version)` (`V0005:17`); `matches_to_pack (archived_at, packed_at) WHERE packed_at IS NULL` and `matches_to_free (archived_at, packed_at, offloaded_at) WHERE packed_at IS NOT NULL AND offloaded_at IS NULL` (`V0023:41-44`); `matches_archived (match_id, archived_at)` (`V0024:7`). Written by `put_stored` (upsert, clears `offloaded_at`; `src/archive/matches.rs:390-411`), `write_derived` (`:151-159`; it also inserts the match's `analytics_counted` row, `:162-168`), `pack::locate_on` (`packed_at`, `src/archive/pack.rs:337-351`) and `offload::free` (`body_zstd = X''`, `offloaded_at`; `src/archive/offload.rs:147-170`). Read by the archive read path (`matches.rs:193-230`), the player routes, analytics and the offload selectors. Retention: never deleted by any job; a body moves local, then packed, then offloaded (`V0023:2-5`).
 
 ### timelines
 
@@ -244,7 +244,7 @@ Rebuilt without its foreign key by [`V0013__timelines_standalone.sql`](../../src
 | `body_zstd` | BLOB | NOT NULL | zstd frame of the timeline body; `X''` once offloaded |
 | `packed_at`, `offloaded_at` | INTEGER | nullable | as on `matches` |
 
-Indexes: `timelines_to_pack (match_id, packed_at) WHERE packed_at IS NULL`, `timelines_to_free (match_id, packed_at, offloaded_at) WHERE packed_at IS NOT NULL AND offloaded_at IS NULL`. Written by `put_timeline_stored` (`matches.rs:425-431`), `locate_on` and `free`. Read by the archive read path, `builds:extract` and `timelines:backfill`. Retention: never deleted.
+Indexes: `timelines_to_pack (match_id, packed_at) WHERE packed_at IS NULL`, `timelines_to_free (match_id, packed_at, offloaded_at) WHERE packed_at IS NOT NULL AND offloaded_at IS NULL`. Written by `put_timeline_stored` (`matches.rs:440-446`), `locate_on` and `free`. Read by the archive read path, `builds:extract` and `timelines:backfill`. Retention: never deleted.
 
 ### match_facts
 
@@ -267,11 +267,11 @@ One row per participant, a derivation of the match body except for `tier`. Rebui
 | `cs`, `gold`, `damage`, `vision` | INTEGER | nullable | V0003 and V0005 additions |
 | `tier` | TEXT | nullable | NULL until stamped, then a Riot tier or `UNKNOWN`; never rewritten by `facts:reextract` (`V0019:7-9`) |
 
-Primary key `(match_id, puuid)`, `WITHOUT ROWID`. Index `facts_player (key_scope, puuid, match_id)` (`V0021:33`); `facts_champ` was dropped at V0021. Written by `facts::write` (upsert without `tier`, deleting participants no longer in the body; `src/archive/facts.rs:329-379`) inside the archive transaction and `facts:reextract`; `tier` by `tiers::stamp` in the same transaction (`src/archive/tiers.rs:37-57`, `matches.rs:399`), `tiers:backfill` and the late stamp. Read by the champion pool, player pages, analytics rebuilds and the rank planner. Retention: rows disappear only with their match (never) or when a participant leaves the body.
+Primary key `(match_id, puuid)`, `WITHOUT ROWID`. Index `facts_player (key_scope, puuid, match_id)` (`V0021:33`); `facts_champ` was dropped at V0021. Written by `facts::write` (upsert without `tier`, deleting participants no longer in the body; `src/archive/facts.rs:329-379`) inside the archive transaction and `facts:reextract`; `tier` by `tiers::stamp` in the same transaction (`src/archive/tiers.rs:37-57`, `matches.rs:414`), `tiers:backfill` and the late stamp; a `tier` that changes fires the `match_facts_tier_moved` trigger (V0029), which writes `analytics_retract` rows for the steps that had counted the player ([schema-analytics.md](schema-analytics.md#analytics_retract)). Read by the champion pool, player pages, analytics rebuilds and the rank planner. Retention: rows disappear only with their match (never) or when a participant leaves the body.
 
 ### match_bans
 
-`V0005:22-28`, rebuilt `WITHOUT ROWID` by [`V0020`](../../src/db/migrations/V0020__without_rowid_derived.sql) (`V0020:31-42`). Columns `match_id TEXT NOT NULL` (FK `matches`, cascade), `team_id INTEGER NOT NULL`, `pick_turn INTEGER NOT NULL`, `champion_id INTEGER NOT NULL`; primary key `(match_id, team_id, pick_turn)`. A ban of `-1` is left out (`src/archive/facts.rs:264-289`). Written by `facts::write_bans` (`DELETE` per match, then `INSERT OR IGNORE`; `facts.rs:292-301`). Read by the ban aggregates (`src/archive/analytics.rs:203-222`). Retention: replaced per match, never trimmed.
+`V0005:22-28`, rebuilt `WITHOUT ROWID` by [`V0020`](../../src/db/migrations/V0020__without_rowid_derived.sql) (`V0020:31-42`). Columns `match_id TEXT NOT NULL` (FK `matches`, cascade), `team_id INTEGER NOT NULL`, `pick_turn INTEGER NOT NULL`, `champion_id INTEGER NOT NULL`; primary key `(match_id, team_id, pick_turn)`. A ban of `-1` is left out (`src/archive/facts.rs:264-289`). Written by `facts::write_bans` (`DELETE` per match, then `INSERT OR IGNORE`; `facts.rs:292-301`). Read by the ban aggregates (`src/archive/analytics.rs:364-382`). Retention: replaced per match, never trimmed.
 
 ### match_builds
 
@@ -288,7 +288,7 @@ Primary key `(match_id, puuid)`, `WITHOUT ROWID`. Index `facts_player (key_scope
 | `skill_order` | TEXT | nullable | `"QWE"`; four letters for Udyr |
 | `builds_version` | INTEGER | NOT NULL | 3 today (`src/archive/builds.rs:24`) |
 
-Written by `builds::write` from `builds:extract` (`src/archive/builds.rs:381-407`). Read by `rebuild_builds` (`src/archive/analytics.rs:379-546`). Retention: replaced per match, never trimmed.
+Written by `builds::write` from `builds:extract` (`src/archive/builds.rs:382-419`); a match's first rows clear its set-build bit in `analytics_counted`, rows replacing others mark its ladder dirty in `analytics_stamped` (`src/archive/analytics/delta.rs:120-145`). Read by `rebuild_builds` (`src/archive/analytics.rs:545-702`). Retention: replaced per match, never trimmed.
 
 ### timeline_gaps
 
@@ -322,8 +322,8 @@ Written by `pack::record_on` after a verified upload (`src/archive/pack.rs:287-3
 | `offset`, `len` | INTEGER | NOT NULL | byte range inside the pack |
 | `sha256` | BLOB | NOT NULL | of the body's zstd bytes |
 
-Index `body_locations_pack (pack_id)` (`V0023:30`). Written by `locate_on` (upsert, `pack.rs:331-350`) and `restore-index`. Read by the archive read path's `LEFT JOIN` (`matches.rs:186-189`), the free step's guard (`offload.rs:157-158`) and the snapshot. Retention: never deleted by a job; about 60 bytes per row (`docs/design/12-object-storage-and-hosting.md:209-210`).
+Index `body_locations_pack (pack_id)` (`V0023:30`). Written by `locate_on` (upsert, `pack.rs:331-350`) and `restore-index`. Read by the archive read path's `LEFT JOIN` (`matches.rs:201-204`), the free step's guard (`offload.rs:157-158`) and the snapshot. Retention: never deleted by a job; about 60 bytes per row (`docs/design/12-object-storage-and-hosting.md:209-210`).
 
 ---
-**Sources:** `src/db/migrations/V0001__init.sql`, `V0002__archive.sql`, `V0003__cs_and_duration.sql`, `V0005__analytics.sql`, `V0007__job_lane.sql`, `V0009__cache_fetched_at.sql`, `V0012__match_builds.sql`, `V0013__timelines_standalone.sql`, `V0018__timeline_gaps.sql`, `V0019__tier_on_facts.sql`, `V0020__without_rowid_derived.sql`, `V0021__facts_without_rowid.sql`, `V0022__jobs_state_kind.sql`, `V0023__body_packs.sql`, `V0024__matches_archived.sql`, `V0028__jobs_crawl_matches.sql`, `src/db/mod.rs:L26-L42`, `src/db/mod.rs:L363-L365`, `src/archive/matches.rs:L33-L103`, `src/archive/matches.rs:L178-L215`, `src/archive/matches.rs:L375-L431`, `src/archive/facts.rs:L19`, `src/archive/facts.rs:L292-L379`, `src/archive/builds.rs:L24`, `src/archive/pack.rs:L287-L354`, `src/archive/offload.rs:L147-L170`, `src/archive/tiers.rs:L37-L57`, `src/cache/l2.rs:L159-L223`, `src/riot/limiter/persist.rs:L23-L25`, `src/riot/limiter/persist.rs:L178-L213`, `src/consumers.rs:L105-L107`, `src/consumers.rs:L141-L155`, `src/consumers.rs:L213-L283`, `src/jobs/maintenance.rs:L36-L38`, `src/jobs/maintenance.rs:L237-L251`, `src/stats.rs:L43`, `src/stats.rs:L355-L370`, `src/stats.rs:L998-L1014`, `src/routes/dev.rs:L41-L81`, `docs/_meta/scratch/persistence.md`, `docs/design/04-data-and-cache.md`, `docs/design/12-object-storage-and-hosting.md:L159-L221`
-**Last verified:** 2026-10-20 against commit `b7b363c`
+**Sources:** `src/db/migrations/V0001__init.sql`, `V0002__archive.sql`, `V0003__cs_and_duration.sql`, `V0005__analytics.sql`, `V0007__job_lane.sql`, `V0009__cache_fetched_at.sql`, `V0012__match_builds.sql`, `V0013__timelines_standalone.sql`, `V0018__timeline_gaps.sql`, `V0019__tier_on_facts.sql`, `V0020__without_rowid_derived.sql`, `V0021__facts_without_rowid.sql`, `V0022__jobs_state_kind.sql`, `V0023__body_packs.sql`, `V0024__matches_archived.sql`, `V0028__jobs_crawl_matches.sql`, `V0029__analytics_counted.sql`, `src/db/mod.rs:L26-L42`, `src/db/mod.rs:L363-L365`, `src/archive/matches.rs:L33-L103`, `src/archive/matches.rs:L193-L230`, `src/archive/matches.rs:L390-L446`, `src/archive/analytics/delta.rs:L98-L145`, `src/archive/facts.rs:L19`, `src/archive/facts.rs:L292-L379`, `src/archive/builds.rs:L24`, `src/archive/pack.rs:L287-L354`, `src/archive/offload.rs:L147-L170`, `src/archive/tiers.rs:L37-L57`, `src/cache/l2.rs:L159-L223`, `src/riot/limiter/persist.rs:L23-L25`, `src/riot/limiter/persist.rs:L178-L213`, `src/consumers.rs:L105-L107`, `src/consumers.rs:L141-L155`, `src/consumers.rs:L213-L283`, `src/jobs/maintenance.rs:L36-L38`, `src/jobs/maintenance.rs:L237-L251`, `src/stats.rs:L43`, `src/stats.rs:L357-L372`, `src/stats.rs:L1001-L1017`, `src/routes/dev.rs:L41-L84`, `docs/_meta/scratch/persistence.md`, `docs/design/04-data-and-cache.md`, `docs/design/12-object-storage-and-hosting.md:L159-L221`
+**Last verified:** 2026-10-21 against commit `32c4672`

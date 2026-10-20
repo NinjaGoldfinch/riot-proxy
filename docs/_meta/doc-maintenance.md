@@ -41,7 +41,7 @@ cargo run -q -- spec > docs/api/openapi.json
 npx -y @redocly/cli lint docs/api/openapi.json
 ```
 
-The generator emits `operationId: champions` twice (`GET /v1/lol/analytics/champions` and `GET /v1/players/{puuid}/champions`, from the handler function names in `src/routes/analytics.rs:1013` and `src/routes/players.rs:1005`). Until the code renames one of them, patch the docs copy after regenerating:
+The generator emits `operationId: champions` twice (`GET /v1/lol/analytics/champions` and `GET /v1/players/{puuid}/champions`, from the handler function names in `src/routes/analytics.rs:1031` and `src/routes/players.rs:1005`). Until the code renames one of them, patch the docs copy after regenerating:
 
 ```bash
 python3 - <<'EOF2'
@@ -119,5 +119,5 @@ These files are written for a static site generator served from the dev box. The
 The files under [scratch/](./scratch/) are the Phase 0 inventories the set was written from: `routes.md`, `config.md`, `riot-and-cache.md`, `jobs-and-observability.md`, `persistence.md`, `siblings.md`, `tests-tooling-history.md`, plus `WRITING-BRIEF.md` (the writers' shared contract) and `openapi-generated.json` (the unpatched generator output). They are dense, cite line numbers that drift with every change, and are not meant for readers; refresh or delete them when the pages that cite them are re-verified.
 
 ---
-**Sources:** `docs/_meta/scratch/WRITING-BRIEF.md`, `src/routes/analytics.rs:L1013`, `src/routes/players.rs:L1005`, `tests/openapi.rs`, `scripts/compare-openapi.py`, `src/config/tests.rs:L430-L449`
-**Last verified:** 2026-10-19 against commit `52fa67d`
+**Sources:** `docs/_meta/scratch/WRITING-BRIEF.md`, `src/routes/analytics.rs:L1031`, `src/routes/players.rs:L1005`, `tests/openapi.rs`, `scripts/compare-openapi.py`, `src/config/tests.rs:L433-L452`
+**Last verified:** 2026-10-21 against commit `32c4672`

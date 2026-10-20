@@ -39,11 +39,11 @@ Only the L1 lookup decides freshness; L2 is never read on the request path, it i
 
 ## L1
 
-- A `moka::future::Cache<String, Arc<CacheEntry>>` with `max_capacity = CACHE_L1_MAX_MB × 1024 × 1024` bytes (default 128, range 1–1 048 576, `src/config.rs:713`) and a weigher of `key.len() + body.len() + 128` (`src/cache/l1.rs:18-19,102-119`). An entry heavier than the whole budget is not kept.
+- A `moka::future::Cache<String, Arc<CacheEntry>>` with `max_capacity = CACHE_L1_MAX_MB × 1024 × 1024` bytes (default 128, range 1–1 048 576, `src/config.rs:726`) and a weigher of `key.len() + body.len() + 128` (`src/cache/l1.rs:18-19,102-119`). An entry heavier than the whole budget is not kept.
 - Freshness is the entry's own instants on tokio time: `Fresh` before `soft_expires`, `Stale` before `hard_expires`, else invalidated and `Miss` (`l1.rs:121-134`). moka's per-entry expiry is set to the hard TTL only to reclaim memory (`l1.rs:64-86`).
-- Soft and hard TTLs come from the endpoint registry; hard = soft × 4 while `STALE_WHILE_REVALIDATE=true` (default), else hard = soft (`src/riot/endpoints.rs:13-14,476-489`, `config.rs:720`). A `Stale` hit is served and a bulk-priority refresh runs in the background with a 15-minute budget (`fetcher.rs:332-338,376-390`).
+- Soft and hard TTLs come from the endpoint registry; hard = soft × 4 while `STALE_WHILE_REVALIDATE=true` (default), else hard = soft (`src/riot/endpoints.rs:13-14,476-489`, `config.rs:733`). A `Stale` hit is served and a bulk-priority refresh runs in the background with a 15-minute budget (`fetcher.rs:332-338,376-390`).
 - A refresh that returns byte-identical bytes keeps `content_at` and restarts `fetched_at` and both expiries (`l1.rs:161-176`).
-- Negative entries are 404s stored with `soft = hard = negative TTL`, never `Stale`: `NEG_TTL_SECONDS` (30) for most endpoints, `NEG_TTL_ACCOUNT_SECONDS` (300) for account-v1, none for the ladder, rotations, status and league-exp endpoints (`l1.rs:143-146`, `config.rs:714-715`, `endpoints.rs:93-284`).
+- Negative entries are 404s stored with `soft = hard = negative TTL`, never `Stale`: `NEG_TTL_SECONDS` (30) for most endpoints, `NEG_TTL_ACCOUNT_SECONDS` (300) for account-v1, none for the ladder, rotations, status and league-exp endpoints (`l1.rs:143-146`, `config.rs:727-728`, `endpoints.rs:93-284`).
 - Immutable endpoints never enter L1: `put` returns `None` when the TTLs are `None` (`l1.rs:136-141`).
 - `invalidate_where(pred)` removes every matching key and `keys_where` lists them without removing (`l1.rs:183-204`); both serve the admin purge.
 
@@ -51,7 +51,7 @@ Only the L1 lookup decides freshness; L2 is never read on the request path, it i
 
 - The SQLite `cache` table holds only endpoints with `persist_l2`: `account.byRiotId`, `account.byPuuid`, `account.regionByPuuid`, `summoner.byPuuid`, the four ladder endpoints and both mastery endpoints (`src/cache/mod.rs:58-64`, `endpoints.rs:639-657`). Negative entries for those endpoints are persisted too (`cache/mod.rs:52-56`).
 - Write-behind: `put` enqueues a row on a bounded channel of 10 000; the writer flushes a batch of 500 rows or 2 s after a batch's first row, whichever comes first, as one `INSERT OR REPLACE` transaction; a full channel drops the row, logs a warning and bumps `cache_l2_dropped_total` (`src/cache/l2.rs:23-28,102-112,126-183`). The request path never waits.
-- Boot: `warm` loads every row with `hard_expires > now` into L1, then `sweep` deletes rows with `hard_expires <= now` (`l2.rs:186-223`, `serve.rs:84-92`). Shutdown drops the sender and awaits the writer, which flushes the rest (`l2.rs:115-123`, `serve.rs:390`).
+- Boot: `warm` loads every row with `hard_expires > now` into L1, then `sweep` deletes rows with `hard_expires <= now` (`l2.rs:186-223`, `serve.rs:84-92`). Shutdown drops the sender and awaits the writer, which flushes the rest (`l2.rs:115-123`, `serve.rs:411`).
 - The daily `maintenance` job runs `sweep` again (`src/jobs/maintenance.rs:251`).
 
 ## TTLs per endpoint
@@ -87,7 +87,7 @@ From the registry (`src/riot/endpoints.rs:93-284`); hard TTLs assume stale-while
 
 ## The archive as a cache
 
-`match.byId` and `match.timeline` have no TTL: a body is fetched once and served from `matches` or `timelines` forever, byte-identical, with `X-Cache: ARCHIVE`, `X-Cache-Age: 0` and no `X-Cache-Fetched-Age` (`fetcher.rs:306-317`, `src/routes/passthrough.rs:133-145`). An offloaded body is read back from its pack by byte range (`src/archive/matches.rs:217-313`); a body that cannot be read is dropped with a warning and the request goes to Riot (`src/archive/mod.rs:128-144`). The archive is never purged by `POST /v1/admin/cache/purge` (`src/routes/admin.rs:831-834`).
+`match.byId` and `match.timeline` have no TTL: a body is fetched once and served from `matches` or `timelines` forever, byte-identical, with `X-Cache: ARCHIVE`, `X-Cache-Age: 0` and no `X-Cache-Fetched-Age` (`fetcher.rs:306-317`, `src/routes/passthrough.rs:133-145`). An offloaded body is read back from its pack by byte range (`src/archive/matches.rs:232-328`); a body that cannot be read is dropped with a warning and the request goes to Riot (`src/archive/mod.rs:128-144`). The archive is never purged by `POST /v1/admin/cache/purge` (`src/routes/admin.rs:831-834`).
 
 ## Derived documents in L1
 
@@ -95,12 +95,12 @@ From the registry (`src/riot/endpoints.rs:93-284`); hard TTLs assume stale-while
 
 ## Analytics response cache
 
-- Each of the five analytics routes keeps its serialised 200 and `ETag` in an LRU of `ANALYTICS_CACHE_ENTRIES` entries (default 512, range 0–4 096; 0 stores nothing; `config.rs:754`, `src/routes/analytics/cache.rs:72-130`).
-- Key: `route|keyScope|championId|part|…` with `~` for a part left open, every parameter as parsed, so two spellings of one query share an entry; the builds route appends `opponentId` last (`src/routes/analytics.rs:929-965`).
-- Cleared by `Analytics::clear` after each `aggregate:analytics` rebuild's last commit (and after a failed one) and by `/dev/reset`; a clear bumps a generation, and a miss that began before it does not store what it read (`cache.rs:1-19,107-137`). An entry also records the Data Dragon version it was built at; a lookup at another version is a miss (`cache.rs:89-100`).
+- Each of the five analytics routes keeps its serialised 200 and `ETag` in an LRU of `ANALYTICS_CACHE_ENTRIES` entries (default 512, range 0–4 096; 0 stores nothing; `config.rs:767`, `src/routes/analytics/cache.rs:72-130`).
+- Key: `route|keyScope|championId|part|…` with `~` for a part left open, every parameter as parsed, so two spellings of one query share an entry; the builds route appends `opponentId` last (`src/routes/analytics.rs:947-983`).
+- Cleared by `Analytics::clear` after each `aggregate:analytics` rebuild's last commit (and after a failed one), once per `aggregate:delta` run that counted anything, after its last batch rather than per batch (`src/jobs/analytics.rs:784-787`), and by `/dev/reset`; a clear bumps a generation, and a miss that began before it does not store what it read (`cache.rs:1-19,107-137`). An entry also records the Data Dragon version it was built at; a lookup at another version is a miss (`cache.rs:89-100`).
 - Concurrent misses for one key share one computation through a single-flight keyed by generation (`cache.rs:205-235`).
-- After a rebuild the job warms, for every ladder queue, the champions call at `patch=all` and without a patch, the rebuilt platform's champions call and both patch lists (`cache.rs:178-187,240-264`).
-- Serving: a hit sends `X-Cache: HIT`, a computed one `MISS`; both carry `Cache-Control: private, max-age=300` and a weak `ETag` `W/"<base64url(sha256(parts))>"`; `If-None-Match` listing that tag or `*` gets a 304 with the same headers (`analytics.rs:52,577-616`).
+- After a rebuild, and after a delta for each ladder it counted in, the job warms, for every ladder queue, the champions call at `patch=all` and without a patch, the rebuilt platform's champions call and both patch lists (`cache.rs:178-187,240-264`).
+- Serving: a hit sends `X-Cache: HIT`, a computed one `MISS`; both carry `Cache-Control: private, max-age=300` and a weak `ETag` `W/"<base64url(sha256(parts))>"`; on the champions, champion detail, matchups and builds routes the parts include the newest `computed_at` of the slice's `analytics_match_totals` rows, so a delta that adds a game anywhere in the slice changes the tag (THR-03; one more read per miss, `src/routes/analytics.rs:749-765`, `src/archive/analytics.rs:1375-1404`); `If-None-Match` listing that tag or `*` gets a 304 with the same headers (`analytics.rs:52,577-616`).
 
 ## Auth cache
 
@@ -129,11 +129,11 @@ Consumer lookups are cached in a moka cache of 10 000 entries keyed by the key's
 | L1 | empty, then rewarmed from L2 before the listener opens (`serve.rs:84-92`); L1-only endpoints (league entries, spectator, match-id lists, rotations, status) start cold |
 | L2 | kept; expired rows swept |
 | Limiter buckets | restored from `limiter_state`; a checkpoint older than 120 s restores every window as full (`src/riot/limiter/persist.rs:23,92-94`) |
-| Analytics responses | cold until the next rebuild's warm; the first visitor computes |
+| Analytics responses | cold until the next rebuild's or delta's warm; the first visitor computes |
 | Auth cache, refresh windows, single-flight map | empty |
 | Recent-request ring, live job activity | empty (in memory only) |
-| Offload trigger counter | 0; boot queues an `archive:offload` run to compensate (`src/cli/serve.rs:312-318`) |
+| Offload trigger counter | 0; boot queues an `archive:offload` run to compensate (`src/cli/serve.rs:333-339`) |
 
 ---
-**Sources:** `src/fetcher.rs:L301-L367`, `src/fetcher.rs:L376-L390`, `src/fetcher.rs:L415-L428`, `src/cache/l1.rs:L18-L19`, `src/cache/l1.rs:L64-L146`, `src/cache/l1.rs:L161-L204`, `src/cache/l2.rs:L23-L28`, `src/cache/l2.rs:L102-L223`, `src/cache/mod.rs:L39-L64`, `src/cache/keys.rs:L24-L114`, `src/riot/endpoints.rs:L13-L14`, `src/riot/endpoints.rs:L93-L284`, `src/riot/endpoints.rs:L424-L512`, `src/config.rs:L713-L720`, `src/config.rs:L754`, `src/cli/serve.rs:L84-L92`, `src/cli/serve.rs:L312-L318`, `src/cli/serve.rs:L390`, `src/routes/analytics.rs:L52`, `src/routes/analytics.rs:L577-L616`, `src/routes/analytics.rs:L929-L965`, `src/routes/analytics/cache.rs:L1-L264`, `src/routes/players.rs:L883-L884`, `src/routes/players.rs:L1050-L1078`, `src/routes/players/refresh.rs:L5-L71`, `src/routes/passthrough.rs:L126-L167`, `src/routes/admin.rs:L816-L883`, `src/routes/statics.rs:L26`, `src/routes/statics.rs:L79`, `src/routes/ui.rs:L8-L9`, `src/routes/ui.rs:L108-L128`, `src/http/auth.rs:L29-L32`, `src/http/auth.rs:L206-L209`, `src/archive/matches.rs:L217-L313`, `src/archive/mod.rs:L128-L144`, `src/riot/limiter/persist.rs:L23`, `src/jobs/maintenance.rs:L251`, `src/jobs/ddragon.rs:L239-L285`, `docs/design/04-data-and-cache.md:L372-L436`, `docs/_meta/scratch/riot-and-cache.md`
-**Last verified:** 2026-10-19 against commit `52fa67d`
+**Sources:** `src/fetcher.rs:L301-L367`, `src/fetcher.rs:L376-L390`, `src/fetcher.rs:L415-L428`, `src/cache/l1.rs:L18-L19`, `src/cache/l1.rs:L64-L146`, `src/cache/l1.rs:L161-L204`, `src/cache/l2.rs:L23-L28`, `src/cache/l2.rs:L102-L223`, `src/cache/mod.rs:L39-L64`, `src/cache/keys.rs:L24-L114`, `src/riot/endpoints.rs:L13-L14`, `src/riot/endpoints.rs:L93-L284`, `src/riot/endpoints.rs:L424-L512`, `src/config.rs:L726-L733`, `src/config.rs:L767`, `src/cli/serve.rs:L84-L92`, `src/cli/serve.rs:L333-L339`, `src/cli/serve.rs:L411`, `src/routes/analytics.rs:L52`, `src/routes/analytics.rs:L577-L616`, `src/routes/analytics.rs:L749-L765`, `src/routes/analytics.rs:L947-L983`, `src/archive/analytics.rs:L1375-L1404`, `src/jobs/analytics.rs:L784-L787`, `src/routes/analytics/cache.rs:L1-L264`, `src/routes/players.rs:L883-L884`, `src/routes/players.rs:L1050-L1078`, `src/routes/players/refresh.rs:L5-L71`, `src/routes/passthrough.rs:L126-L167`, `src/routes/admin.rs:L816-L883`, `src/routes/statics.rs:L26`, `src/routes/statics.rs:L79`, `src/routes/ui.rs:L8-L9`, `src/routes/ui.rs:L108-L128`, `src/http/auth.rs:L29-L32`, `src/http/auth.rs:L206-L209`, `src/archive/matches.rs:L232-L328`, `src/archive/mod.rs:L128-L144`, `src/riot/limiter/persist.rs:L23`, `src/jobs/maintenance.rs:L251`, `src/jobs/ddragon.rs:L239-L285`, `docs/design/04-data-and-cache.md:L372-L436`, `docs/_meta/scratch/riot-and-cache.md`
+**Last verified:** 2026-10-21 against commit `32c4672`

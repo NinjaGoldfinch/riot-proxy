@@ -24,6 +24,8 @@ use rusqlite::{Connection, params, params_from_iter};
 use crate::db::{Db, DbError};
 use crate::riot::ladder;
 
+pub mod delta;
+
 /// One ladder's rebuild.
 #[derive(Debug, Clone)]
 pub struct Scope {
@@ -110,119 +112,277 @@ const SIDE: &str = "CASE f.team_id WHEN 100 THEN 'blue' ELSE 'red' END";
 /// Binds `?2` platform.
 const ON_PLATFORM: &str = "substr(m.match_id, 1, length(?2) + 1) = upper(?2) || '_'";
 
+/// Which facts a step's statements read (THR-03): every fact of the ladder,
+/// as a rebuild does, or a delta batch's copy in a temp table, narrowed by
+/// `only` (a further `AND …` on `f.match_id`).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Facts<'a> {
+    /// `match_facts`, or a temp table with its columns.
+    pub table: &'a str,
+    pub only: &'a str,
+}
+
+/// Every fact: a rebuild's source.
+pub(crate) const EVERY_FACT: Facts<'static> = Facts {
+    table: "match_facts",
+    only: "",
+};
+
 /// Facts of the platform's archived matches in this queue, each with its
 /// player's stamped [`TIER`] and their [`SIDE`], plus any further `join`. A
 /// fact with no stamp (a match `tiers:backfill` hasn't reached) doesn't
 /// count, nor one of a team other than Summoner's Rift's two. Binds `?1` key
 /// scope, `?2` platform, `?3` queue, `?4` queue id, `?5` patches.
+#[cfg(test)]
 fn ladder_facts(join: &str) -> String {
+    ladder_facts_in(EVERY_FACT, join)
+}
+
+/// [`ladder_facts`] from `src`.
+fn ladder_facts_in(src: Facts, join: &str) -> String {
+    let (table, only) = (src.table, src.only);
     format!(
-        "FROM match_facts f
+        "FROM {table} f
          JOIN matches m ON m.match_id = f.match_id
          {join}
         WHERE f.key_scope = ?1 AND m.queue_id = ?4 AND m.patch IS NOT NULL AND {ON_PLATFORM}
           AND f.tier IS NOT NULL AND f.team_id IN (100, 200)
-          AND (?5 IS NULL OR m.patch IN (SELECT value FROM json_each(?5)))"
+          AND (?5 IS NULL OR m.patch IN (SELECT value FROM json_each(?5))){only}"
     )
 }
 
 /// Rows written per table by one rebuild step.
 pub type Written = Vec<(&'static str, i64)>;
 
-/// Slices, champion stats and bans, their totals over every tier (SITE-08,
-/// PERF-02) and per tier floor (FLT-03), in one transaction (v1's champion
-/// step).
-pub fn rebuild_champions(c: &mut Connection, s: &Scope) -> Result<Written, DbError> {
-    let facts = ladder_facts("");
-    let tx = c.transaction()?;
-    for t in [
-        "analytics_slices",
-        "analytics_match_totals",
-        "champion_stats",
-        "champion_stats_totals",
-        "champion_bans",
-        "champion_ban_totals",
-        "analytics_floor_totals",
-        "champion_ban_floor_totals",
-    ] {
-        s.clear(&tx, t)?;
+/// The tables a run reports rows for (`analytics.updated`, the dashboard's
+/// runs), in v1's set plus the set builds'.
+pub const REPORTED: [&str; 9] = [
+    "champion_stats",
+    "champion_matchups",
+    "champion_items",
+    "champion_runes",
+    "champion_spells",
+    "champion_builds",
+    "champion_build_parts",
+    "champion_matchup_builds",
+    "champion_matchup_build_parts",
+];
+
+/// One statement of a step (THR-03): the rebuild runs it as an `INSERT`, a
+/// delta as an upsert or into a temp table first.
+pub(crate) enum Stmt {
+    /// Rows for `table`, its `cols` in order, from `select` (which may begin
+    /// with a `WITH`). Takes the six parameters of [`Scope::insert`].
+    Into {
+        table: &'static str,
+        cols: &'static str,
+        select: String,
+    },
+    /// `champion_stats_totals` from the stats this step wrote (PERF-02).
+    Totals,
+    /// A temp table made (it names `?6`, so it takes all six parameters) or
+    /// dropped (it takes none).
+    Exec(String),
+}
+
+impl Stmt {
+    fn rows(table: &'static str, cols: &'static str, select: String) -> Self {
+        Self::Into { table, cols, select }
     }
-    s.insert(
-        &tx,
-        &format!(
-            "INSERT INTO analytics_slices (key_scope, platform, queue, tier, patch, remake, matches, computed_at)
-             SELECT ?1, ?2, ?3, {TIER}, m.patch, coalesce(m.remake, 0), count(DISTINCT m.match_id), ?6
-             {facts}
-             GROUP BY {TIER}, m.patch, coalesce(m.remake, 0)"
-        ),
-    )?;
-    // The same matches once each, whatever tiers their players are in: the
-    // denominator of a row summed over every tier (ADR-123).
-    s.insert(
-        &tx,
-        &format!(
-            "INSERT INTO analytics_match_totals (key_scope, platform, queue, patch, remake, matches, computed_at)
-             SELECT ?1, ?2, ?3, m.patch, coalesce(m.remake, 0), count(DISTINCT m.match_id), ?6
-             {facts}
-             GROUP BY m.patch, coalesce(m.remake, 0)"
-        ),
-    )?;
-    let stats = s.insert(
-        &tx,
-        &format!(
-            "INSERT INTO champion_stats (key_scope, platform, queue, tier, patch, champion_id, role, remake, side,
-               games, wins, matches_picked, stated_games, kills, deaths, assists, cs, gold, damage, vision,
-               duration_s, computed_at)
-             SELECT ?1, ?2, ?3, {TIER}, m.patch, f.champion_id, coalesce(f.position, ''), coalesce(m.remake, 0),
-               {SIDE}, count(*), sum(f.win), count(DISTINCT m.match_id), count(f.kills),
-               coalesce(sum(f.kills), 0), coalesce(sum(f.deaths), 0), coalesce(sum(f.assists), 0),
-               coalesce(sum(f.cs), 0), coalesce(sum(f.gold), 0), coalesce(sum(f.damage), 0),
-               coalesce(sum(f.vision), 0),
-               coalesce(sum(m.game_duration) FILTER (WHERE f.kills IS NOT NULL), 0), ?6
-             {facts}
-             GROUP BY {TIER}, m.patch, f.champion_id, coalesce(f.position, ''), coalesce(m.remake, 0), {SIDE}"
-        ),
-    )?;
-    // The same rows summed over tier, for the reads that name none (PERF-02,
-    // ADR-168). From the rows just written, not the facts again, so the two
-    // can't drift; every one of them carries ?6.
-    s.insert(
-        &tx,
+}
+
+/// A rebuild step's transaction: its stamp bit in `analytics_counted.bits`,
+/// the tables it replaces, and its statements.
+pub(crate) struct Step {
+    pub bit: i64,
+    pub tables: &'static [&'static str],
+    pub sql: fn(Facts) -> Vec<Stmt>,
+}
+
+/// The rebuild's six transactions, in order. A match counted by all six has
+/// [`ALL_STEPS`].
+pub(crate) const STEPS: [Step; 6] = [
+    // champions
+    Step {
+        bit: 1,
+        tables: &[
+            "analytics_slices",
+            "analytics_match_totals",
+            "champion_stats",
+            "champion_stats_totals",
+            "champion_bans",
+            "champion_ban_totals",
+            "analytics_floor_totals",
+            "champion_ban_floor_totals",
+        ],
+        sql: champions_sql,
+    },
+    // matchups
+    Step {
+        bit: 2,
+        tables: &["champion_matchups"],
+        sql: matchups_sql,
+    },
+    // items
+    Step {
+        bit: 4,
+        tables: &["champion_items"],
+        sql: items_sql,
+    },
+    // runes
+    Step {
+        bit: 8,
+        tables: &["champion_runes"],
+        sql: runes_sql,
+    },
+    // spells
+    Step {
+        bit: 16,
+        tables: &["champion_spells"],
+        sql: spells_sql,
+    },
+    // sets
+    Step {
+        bit: 32,
+        tables: &[
+            "champion_builds",
+            "champion_build_parts",
+            "champion_matchup_builds",
+            "champion_matchup_build_parts",
+        ],
+        sql: sets_sql,
+    },
+];
+
+/// Every step's bit: a counted match.
+pub const ALL_STEPS: i64 = 63;
+
+/// The set-build step's bit: the one a match's first `match_builds` rows clear.
+pub const SETS_STEP: i64 = 32;
+
+/// `champion_stats_totals` from `champion_stats` rows (PERF-02, ADR-168), the
+/// rebuild's own or a delta batch's. Binds as [`Scope::insert`].
+pub(crate) fn totals_from(stats: &str) -> String {
+    format!(
         "INSERT INTO champion_stats_totals (key_scope, platform, queue, patch, champion_id, role, remake, side,
            games, wins, matches_picked, stated_games, kills, deaths, assists, cs, gold, damage, vision,
            duration_s, computed_at)
          SELECT key_scope, platform, queue, patch, champion_id, role, remake, side,
            sum(games), sum(wins), sum(matches_picked), sum(stated_games), sum(kills), sum(deaths), sum(assists),
            sum(cs), sum(gold), sum(damage), sum(vision), sum(duration_s), ?6
-           FROM champion_stats
+           FROM {stats}
           WHERE key_scope = ?1 AND platform = ?2 AND queue = ?3
             AND (?5 IS NULL OR patch IN (SELECT value FROM json_each(?5)))
-          GROUP BY patch, champion_id, role, remake, side",
-    )?;
-    // A ban counts once per match, in every tier the match had a player in (v1).
-    let facts = ladder_facts("JOIN match_bans b ON b.match_id = f.match_id");
-    s.insert(
-        &tx,
-        &format!(
-            "INSERT INTO champion_bans (key_scope, platform, queue, tier, patch, champion_id, remake, bans, computed_at)
-             SELECT ?1, ?2, ?3, {TIER}, m.patch, b.champion_id, coalesce(m.remake, 0), count(DISTINCT b.match_id), ?6
-             {facts}
-             GROUP BY {TIER}, m.patch, b.champion_id, coalesce(m.remake, 0)"
-        ),
-    )?;
-    // And once per match over every tier.
-    s.insert(
-        &tx,
-        &format!(
-            "INSERT INTO champion_ban_totals (key_scope, platform, queue, patch, champion_id, remake, bans, computed_at)
-             SELECT ?1, ?2, ?3, m.patch, b.champion_id, coalesce(m.remake, 0), count(DISTINCT b.match_id), ?6
-             {facts}
-             GROUP BY m.patch, b.champion_id, coalesce(m.remake, 0)"
-        ),
-    )?;
-    insert_floors(&tx, s)?;
+          GROUP BY patch, champion_id, role, remake, side"
+    )
+}
+
+/// Run one step as a rebuild, in the caller's transaction: clear its tables
+/// for the scope, write them from every fact, and stamp what it counted
+/// (THR-03). Returns the rows written to the [`REPORTED`] tables.
+pub(crate) fn rebuild_step(c: &Connection, s: &Scope, step: &Step) -> Result<Written, DbError> {
+    for t in step.tables {
+        s.clear(c, t)?;
+    }
+    let mut out = vec![];
+    for stmt in (step.sql)(EVERY_FACT) {
+        match stmt {
+            Stmt::Into { table, cols, select } => {
+                let n = s.insert(c, &format!("INSERT INTO {table} ({cols}) {select}"))?;
+                if REPORTED.contains(&table) {
+                    out.push((table, n));
+                }
+            }
+            // From the rows just written, not the facts again, so the two
+            // can't drift; every one of them carries ?6.
+            Stmt::Totals => {
+                s.insert(c, &totals_from("champion_stats"))?;
+            }
+            Stmt::Exec(sql) if sql.contains("?6") => {
+                s.insert(c, &sql)?;
+            }
+            Stmt::Exec(sql) => c.execute_batch(&sql)?,
+        }
+    }
+    delta::stamp_step(c, s, step.bit)?;
+    Ok(out)
+}
+
+/// Slices, champion stats and bans, their totals over every tier (SITE-08,
+/// PERF-02) and per tier floor (FLT-03), in one transaction (v1's champion
+/// step).
+pub fn rebuild_champions(c: &mut Connection, s: &Scope) -> Result<Written, DbError> {
+    let tx = c.transaction()?;
+    let out = rebuild_step(&tx, s, &STEPS[0])?;
     tx.commit()?;
-    Ok(vec![("champion_stats", stats)])
+    Ok(out)
+}
+
+fn champions_sql(src: Facts) -> Vec<Stmt> {
+    let facts = ladder_facts_in(src, "");
+    // A ban counts once per match, in every tier the match had a player in (v1).
+    let bans = ladder_facts_in(src, "JOIN match_bans b ON b.match_id = f.match_id");
+    let mut out = vec![
+        Stmt::rows(
+            "analytics_slices",
+            "key_scope, platform, queue, tier, patch, remake, matches, computed_at",
+            format!(
+                "SELECT ?1, ?2, ?3, {TIER}, m.patch, coalesce(m.remake, 0), count(DISTINCT m.match_id), ?6
+                 {facts}
+                 GROUP BY {TIER}, m.patch, coalesce(m.remake, 0)"
+            ),
+        ),
+        // The same matches once each, whatever tiers their players are in: the
+        // denominator of a row summed over every tier (ADR-123).
+        Stmt::rows(
+            "analytics_match_totals",
+            "key_scope, platform, queue, patch, remake, matches, computed_at",
+            format!(
+                "SELECT ?1, ?2, ?3, m.patch, coalesce(m.remake, 0), count(DISTINCT m.match_id), ?6
+                 {facts}
+                 GROUP BY m.patch, coalesce(m.remake, 0)"
+            ),
+        ),
+        Stmt::rows(
+            "champion_stats",
+            "key_scope, platform, queue, tier, patch, champion_id, role, remake, side,
+               games, wins, matches_picked, stated_games, kills, deaths, assists, cs, gold, damage, vision,
+               duration_s, computed_at",
+            format!(
+                "SELECT ?1, ?2, ?3, {TIER}, m.patch, f.champion_id, coalesce(f.position, ''), coalesce(m.remake, 0),
+                   {SIDE}, count(*), sum(f.win), count(DISTINCT m.match_id), count(f.kills),
+                   coalesce(sum(f.kills), 0), coalesce(sum(f.deaths), 0), coalesce(sum(f.assists), 0),
+                   coalesce(sum(f.cs), 0), coalesce(sum(f.gold), 0), coalesce(sum(f.damage), 0),
+                   coalesce(sum(f.vision), 0),
+                   coalesce(sum(m.game_duration) FILTER (WHERE f.kills IS NOT NULL), 0), ?6
+                 {facts}
+                 GROUP BY {TIER}, m.patch, f.champion_id, coalesce(f.position, ''), coalesce(m.remake, 0), {SIDE}"
+            ),
+        ),
+        // The same rows summed over tier, for the reads that name none.
+        Stmt::Totals,
+        Stmt::rows(
+            "champion_bans",
+            "key_scope, platform, queue, tier, patch, champion_id, remake, bans, computed_at",
+            format!(
+                "SELECT ?1, ?2, ?3, {TIER}, m.patch, b.champion_id, coalesce(m.remake, 0), count(DISTINCT b.match_id), ?6
+                 {bans}
+                 GROUP BY {TIER}, m.patch, b.champion_id, coalesce(m.remake, 0)"
+            ),
+        ),
+        // And once per match over every tier.
+        Stmt::rows(
+            "champion_ban_totals",
+            "key_scope, platform, queue, patch, champion_id, remake, bans, computed_at",
+            format!(
+                "SELECT ?1, ?2, ?3, m.patch, b.champion_id, coalesce(m.remake, 0), count(DISTINCT b.match_id), ?6
+                 {bans}
+                 GROUP BY m.patch, b.champion_id, coalesce(m.remake, 0)"
+            ),
+        ),
+    ];
+    out.extend(floors_sql(src));
+    out
 }
 
 /// Riot's tiers with their rank, lowest first, as an SQL `floors(rank, tier)`
@@ -244,52 +404,46 @@ pub(crate) fn floors() -> String {
 /// spread over the floors below it: grouping per floor first sorted every
 /// match up to ten times over (about 4× slower, ADR-170). A match whose
 /// players are all `UNKNOWN` or unstamped is in no floor.
-fn insert_floors(c: &Connection, s: &Scope) -> Result<(), DbError> {
+fn floors_sql(src: Facts) -> Vec<Stmt> {
     let floors = floors();
-    let facts = ladder_facts("JOIN floors fl ON fl.tier = f.tier");
-    // Each statement names ?6, so it takes all six of `insert`'s parameters
-    // (SQLite counts them to the highest index).
-    s.insert(
-        c,
-        &format!(
+    let facts = ladder_facts_in(src, "JOIN floors fl ON fl.tier = f.tier");
+    vec![
+        Stmt::Exec(format!(
             "CREATE TEMP TABLE floor_top AS WITH {floors}
              SELECT m.match_id, m.patch, coalesce(m.remake, 0) AS remake, max(fl.rank) AS rank, ?6 AS computed_at
              {facts}
              GROUP BY m.match_id"
+        )),
+        Stmt::rows(
+            "analytics_floor_totals",
+            "key_scope, platform, queue, floor_tier, patch, remake, matches, computed_at",
+            format!(
+                "WITH {floors},
+                   g AS MATERIALIZED (SELECT patch, remake, rank, count(*) AS n FROM temp.floor_top
+                                       GROUP BY patch, remake, rank)
+                 SELECT ?1, ?2, ?3, fl.tier, g.patch, g.remake, sum(g.n), ?6
+                   FROM g JOIN floors fl ON fl.rank <= g.rank
+                  GROUP BY fl.tier, g.patch, g.remake"
+            ),
         ),
-    )?;
-    s.insert(
-        c,
-        &format!(
-            "WITH {floors},
-               g AS MATERIALIZED (SELECT patch, remake, rank, count(*) AS n FROM temp.floor_top
-                                   GROUP BY patch, remake, rank)
-             INSERT INTO analytics_floor_totals (key_scope, platform, queue, floor_tier, patch, remake, matches,
-               computed_at)
-             SELECT ?1, ?2, ?3, fl.tier, g.patch, g.remake, sum(g.n), ?6
-               FROM g JOIN floors fl ON fl.rank <= g.rank
-              GROUP BY fl.tier, g.patch, g.remake"
+        // A champion banned by both teams counts once per match, as in
+        // champion_ban_totals; a match has one highest tier, so the per-tier
+        // counts are disjoint and their sum over a floor is exact.
+        Stmt::rows(
+            "champion_ban_floor_totals",
+            "key_scope, platform, queue, floor_tier, patch, champion_id, remake, bans, computed_at",
+            format!(
+                "WITH {floors},
+                   g AS MATERIALIZED (SELECT t.patch, b.champion_id, t.remake, t.rank, count(DISTINCT t.match_id) AS n
+                                        FROM temp.floor_top t JOIN match_bans b ON b.match_id = t.match_id
+                                       GROUP BY t.patch, b.champion_id, t.remake, t.rank)
+                 SELECT ?1, ?2, ?3, fl.tier, g.patch, g.champion_id, g.remake, sum(g.n), ?6
+                   FROM g JOIN floors fl ON fl.rank <= g.rank
+                  GROUP BY fl.tier, g.patch, g.champion_id, g.remake"
+            ),
         ),
-    )?;
-    // A champion banned by both teams counts once per match, as in
-    // champion_ban_totals; a match has one highest tier, so the per-tier
-    // counts are disjoint and their sum over a floor is exact.
-    s.insert(
-        c,
-        &format!(
-            "WITH {floors},
-               g AS MATERIALIZED (SELECT t.patch, b.champion_id, t.remake, t.rank, count(DISTINCT t.match_id) AS n
-                                    FROM temp.floor_top t JOIN match_bans b ON b.match_id = t.match_id
-                                   GROUP BY t.patch, b.champion_id, t.remake, t.rank)
-             INSERT INTO champion_ban_floor_totals (key_scope, platform, queue, floor_tier, patch, champion_id,
-               remake, bans, computed_at)
-             SELECT ?1, ?2, ?3, fl.tier, g.patch, g.champion_id, g.remake, sum(g.n), ?6
-               FROM g JOIN floors fl ON fl.rank <= g.rank
-              GROUP BY fl.tier, g.patch, g.champion_id, g.remake"
-        ),
-    )?;
-    c.execute_batch("DROP TABLE temp.floor_top")?;
-    Ok(())
+        Stmt::Exec("DROP TABLE temp.floor_top".into()),
+    ]
 }
 
 /// Lane matchups (v1): two players of opposite teams in the same lane, each
@@ -304,17 +458,29 @@ fn insert_floors(c: &Connection, s: &Scope) -> Result<(), DbError> {
 /// `match_facts`, `matches` and a grouped lane count joined twice) let SQLite,
 /// which has no `ANALYZE` statistics, loop over the whole ladder for every
 /// fact: 44 s for a 16,600-game ladder.
+fn matchups_sql(src: Facts) -> Vec<Stmt> {
+    let (lanes, pairs) = (lanes_in(src, ""), one_on_one(""));
+    vec![Stmt::rows(
+        "champion_matchups",
+        "key_scope, platform, queue, patch, champion_id, role, opponent_id, remake, tier, side, games, wins,
+           computed_at",
+        format!(
+            "{lanes}
+             SELECT ?1, ?2, ?3, a.patch, a.champion_id, a.position, b.champion_id, a.remake, a.tier,
+               CASE a.team_id WHEN 100 THEN 'blue' ELSE 'red' END, count(*), sum(a.win), ?6
+               {pairs}
+              GROUP BY a.patch, a.position, a.champion_id, b.champion_id, a.remake, a.tier, a.team_id"
+        ),
+    )]
+}
+
+/// The rebuild's matchups statement, whole (its query plan is tested).
+#[cfg(test)]
 fn matchups() -> String {
-    let (lanes, pairs) = (lanes(""), one_on_one(""));
-    format!(
-        "{lanes}
-         INSERT INTO champion_matchups (key_scope, platform, queue, patch, champion_id, role, opponent_id,
-           remake, tier, side, games, wins, computed_at)
-         SELECT ?1, ?2, ?3, a.patch, a.champion_id, a.position, b.champion_id, a.remake, a.tier,
-           CASE a.team_id WHEN 100 THEN 'blue' ELSE 'red' END, count(*), sum(a.win), ?6
-           {pairs}
-          GROUP BY a.patch, a.position, a.champion_id, b.champion_id, a.remake, a.tier, a.team_id"
-    )
+    match matchups_sql(EVERY_FACT).remove(0) {
+        Stmt::Into { table, cols, select } => format!("INSERT INTO {table} ({cols}) {select}"),
+        _ => unreachable!("matchups_sql is one INSERT"),
+    }
 }
 
 /// `lane`: the platform's laned facts in this queue, each with its lane's head
@@ -322,21 +488,22 @@ fn matchups() -> String {
 /// in it, so it counts in the head count; [`one_on_one`] drops it. Binds as
 /// [`ladder_facts`]; begins a `WITH`. Widening the matchups' own lane with the
 /// set builds' columns slowed them by 30 % (FLT-04), hence `extra`.
-fn lanes(extra: &str) -> String {
+fn lanes_in(src: Facts, extra: &str) -> String {
+    let (table, only) = (src.table, src.only);
     format!(
         "WITH lane AS (
            SELECT f.match_id, f.puuid, f.team_id, f.position, f.champion_id, f.win, f.tier, m.patch,
              coalesce(m.remake, 0) AS remake{extra},
              count(*) OVER (PARTITION BY f.match_id, f.team_id, f.position) AS n
-             FROM match_facts f JOIN matches m ON m.match_id = f.match_id
+             FROM {table} f JOIN matches m ON m.match_id = f.match_id
             WHERE f.key_scope = ?1 AND f.position IS NOT NULL AND m.queue_id = ?4 AND m.patch IS NOT NULL
               AND substr(m.match_id, 1, length(?2) + 1) = upper(?2) || '_'
-              AND (?5 IS NULL OR m.patch IN (SELECT value FROM json_each(?5)))
+              AND (?5 IS NULL OR m.patch IN (SELECT value FROM json_each(?5))){only}
          )"
     )
 }
 
-/// Each stamped laner `a` of [`lanes`] against `b`, the other team's player
+/// Each stamped laner `a` of [`lanes_in`] against `b`, the other team's player
 /// in its lane, where each team has one player there and they differ; plus
 /// any further `join`.
 fn one_on_one(join: &str) -> String {
@@ -351,10 +518,9 @@ fn one_on_one(join: &str) -> String {
 
 pub fn rebuild_matchups(c: &mut Connection, s: &Scope) -> Result<Written, DbError> {
     let tx = c.transaction()?;
-    s.clear(&tx, "champion_matchups")?;
-    let n = s.insert(&tx, &matchups())?;
+    let out = rebuild_step(&tx, s, &STEPS[1])?;
     tx.commit()?;
-    Ok(vec![("champion_matchups", n)])
+    Ok(out)
 }
 
 /// A set build part's value for `k.part` of a player `p` (BLD-02, ADR-120):
@@ -378,16 +544,23 @@ const PART_VALUE: &str = "CASE k.part
 /// each lane opponent (FLT-04).
 pub fn rebuild_builds(c: &mut Connection, s: &Scope) -> Result<Written, DbError> {
     let mut out = vec![];
-    // Items: slots 0–5, empty slots skipped, a player's duplicate item once.
-    let facts = ladder_facts("JOIN json_each(f.items) i");
-    let tx = c.transaction()?;
-    s.clear(&tx, "champion_items")?;
-    let n = s.insert(
-        &tx,
-        &format!(
-            "INSERT INTO champion_items (key_scope, platform, queue, patch, champion_id, role, item_id, remake,
-               tier, side, games, wins, computed_at)
-             SELECT ?1, ?2, ?3, m.patch, f.champion_id, coalesce(f.position, ''), CAST(i.value AS INTEGER),
+    for step in &STEPS[2..] {
+        let tx = c.transaction()?;
+        out.extend(rebuild_step(&tx, s, step)?);
+        tx.commit()?;
+    }
+    Ok(out)
+}
+
+/// Items: slots 0–5, empty slots skipped, a player's duplicate item once.
+fn items_sql(src: Facts) -> Vec<Stmt> {
+    let facts = ladder_facts_in(src, "JOIN json_each(f.items) i");
+    vec![Stmt::rows(
+        "champion_items",
+        "key_scope, platform, queue, patch, champion_id, role, item_id, remake, tier, side, games, wins,
+           computed_at",
+        format!(
+            "SELECT ?1, ?2, ?3, m.patch, f.champion_id, coalesce(f.position, ''), CAST(i.value AS INTEGER),
                coalesce(m.remake, 0), {TIER}, {SIDE}, count(DISTINCT f.match_id || ' ' || f.puuid),
                count(DISTINCT CASE WHEN f.win THEN f.match_id || ' ' || f.puuid END), ?6
              {facts}
@@ -395,19 +568,17 @@ pub fn rebuild_builds(c: &mut Connection, s: &Scope) -> Result<Written, DbError>
              GROUP BY m.patch, f.champion_id, coalesce(f.position, ''), CAST(i.value AS INTEGER), coalesce(m.remake, 0),
                {TIER}, {SIDE}"
         ),
-    )?;
-    tx.commit()?;
-    out.push(("champion_items", n));
+    )]
+}
 
-    let facts = ladder_facts("");
-    let tx = c.transaction()?;
-    s.clear(&tx, "champion_runes")?;
-    let n = s.insert(
-        &tx,
-        &format!(
-            "INSERT INTO champion_runes (key_scope, platform, queue, patch, champion_id, role, keystone_id,
-               sub_style_id, remake, tier, side, games, wins, computed_at)
-             SELECT ?1, ?2, ?3, m.patch, f.champion_id, coalesce(f.position, ''),
+fn runes_sql(src: Facts) -> Vec<Stmt> {
+    let facts = ladder_facts_in(src, "");
+    vec![Stmt::rows(
+        "champion_runes",
+        "key_scope, platform, queue, patch, champion_id, role, keystone_id, sub_style_id, remake, tier, side,
+           games, wins, computed_at",
+        format!(
+            "SELECT ?1, ?2, ?3, m.patch, f.champion_id, coalesce(f.position, ''),
                json_extract(f.runes, '$[1]'), json_extract(f.runes, '$[2]'),
                coalesce(m.remake, 0), {TIER}, {SIDE}, count(*), sum(f.win), ?6
              {facts}
@@ -416,19 +587,18 @@ pub fn rebuild_builds(c: &mut Connection, s: &Scope) -> Result<Written, DbError>
              GROUP BY m.patch, f.champion_id, coalesce(f.position, ''), json_extract(f.runes, '$[1]'),
                json_extract(f.runes, '$[2]'), coalesce(m.remake, 0), {TIER}, {SIDE}"
         ),
-    )?;
-    tx.commit()?;
-    out.push(("champion_runes", n));
+    )]
+}
 
-    // Spells as an unordered pair: Flash on D and on F is one build (v1).
-    let tx = c.transaction()?;
-    s.clear(&tx, "champion_spells")?;
-    let n = s.insert(
-        &tx,
-        &format!(
-            "INSERT INTO champion_spells (key_scope, platform, queue, patch, champion_id, role, spell_a, spell_b,
-               remake, tier, side, games, wins, computed_at)
-             SELECT ?1, ?2, ?3, m.patch, f.champion_id, coalesce(f.position, ''),
+/// Spells as an unordered pair: Flash on D and on F is one build (v1).
+fn spells_sql(src: Facts) -> Vec<Stmt> {
+    let facts = ladder_facts_in(src, "");
+    vec![Stmt::rows(
+        "champion_spells",
+        "key_scope, platform, queue, patch, champion_id, role, spell_a, spell_b, remake, tier, side, games, wins,
+           computed_at",
+        format!(
+            "SELECT ?1, ?2, ?3, m.patch, f.champion_id, coalesce(f.position, ''),
                min(json_extract(f.summoners, '$[0]'), json_extract(f.summoners, '$[1]')),
                max(json_extract(f.summoners, '$[0]'), json_extract(f.summoners, '$[1]')),
                coalesce(m.remake, 0), {TIER}, {SIDE}, count(*), sum(f.win), ?6
@@ -440,53 +610,45 @@ pub fn rebuild_builds(c: &mut Connection, s: &Scope) -> Result<Written, DbError>
                max(json_extract(f.summoners, '$[0]'), json_extract(f.summoners, '$[1]')),
                coalesce(m.remake, 0), {TIER}, {SIDE}"
         ),
-    )?;
-    tx.commit()?;
-    out.push(("champion_spells", n));
+    )]
+}
 
-    let tx = c.transaction()?;
-    for t in [
-        "champion_builds",
-        "champion_build_parts",
-        "champion_matchup_builds",
-        "champion_matchup_build_parts",
-    ] {
-        s.clear(&tx, t)?;
-    }
-    let players = set_build_players();
-    let n = s.insert(
-        &tx,
-        &format!(
-            "{players}
-             INSERT INTO champion_builds (key_scope, platform, queue, patch, champion_id, role, remake, core,
-               tier, side, games, wins, computed_at)
-             SELECT ?1, ?2, ?3, patch, champion_id, role, remake, core, tier, side, count(*), sum(win), ?6
-               FROM p GROUP BY patch, champion_id, role, remake, core, tier, side"
+/// Set builds and their parts (BLD-02), then the set builds against each lane
+/// opponent (FLT-04).
+fn sets_sql(src: Facts) -> Vec<Stmt> {
+    let players = set_build_players_in(src);
+    let mut out = vec![
+        Stmt::rows(
+            "champion_builds",
+            "key_scope, platform, queue, patch, champion_id, role, remake, core, tier, side, games, wins, computed_at",
+            format!(
+                "{players}
+                 SELECT ?1, ?2, ?3, patch, champion_id, role, remake, core, tier, side, count(*), sum(win), ?6
+                   FROM p GROUP BY patch, champion_id, role, remake, core, tier, side"
+            ),
         ),
-    )?;
-    out.push(("champion_builds", n));
-    let n = s.insert(
-        &tx,
-        &format!(
-            "{players},
-             k (part) AS (VALUES ('item3'), ('item4'), ('item5'), ('starter'), ('boots'), ('skill_order'),
-               ('runes'), ('spells')),
-             v AS (
-               SELECT p.patch, p.champion_id, p.role, p.remake, p.core, p.tier, p.side, p.win, k.part,
-                 {PART_VALUE} AS value
-                 FROM p CROSS JOIN k
-             )
-             INSERT INTO champion_build_parts (key_scope, platform, queue, patch, champion_id, role, remake, core,
-               part, value, tier, side, games, wins, computed_at)
-             SELECT ?1, ?2, ?3, patch, champion_id, role, remake, core, part, value, tier, side, count(*), sum(win), ?6
-               FROM v WHERE value IS NOT NULL
-              GROUP BY patch, champion_id, role, remake, core, part, value, tier, side"
+        Stmt::rows(
+            "champion_build_parts",
+            "key_scope, platform, queue, patch, champion_id, role, remake, core, part, value, tier, side, games,
+               wins, computed_at",
+            format!(
+                "{players},
+                 k (part) AS (VALUES ('item3'), ('item4'), ('item5'), ('starter'), ('boots'), ('skill_order'),
+                   ('runes'), ('spells')),
+                 v AS (
+                   SELECT p.patch, p.champion_id, p.role, p.remake, p.core, p.tier, p.side, p.win, k.part,
+                     {PART_VALUE} AS value
+                     FROM p CROSS JOIN k
+                 )
+                 SELECT ?1, ?2, ?3, patch, champion_id, role, remake, core, part, value, tier, side, count(*),
+                   sum(win), ?6
+                   FROM v WHERE value IS NOT NULL
+                  GROUP BY patch, champion_id, role, remake, core, part, value, tier, side"
+            ),
         ),
-    )?;
-    out.push(("champion_build_parts", n));
-    out.extend(insert_matchup_builds(&tx, s)?);
-    tx.commit()?;
-    Ok(out)
+    ];
+    out.extend(matchup_builds_sql(src));
+    out
 }
 
 /// Set builds against one lane opponent (FLT-04, ADR-171): the players of
@@ -494,16 +656,13 @@ pub fn rebuild_builds(c: &mut Connection, s: &Scope) -> Result<Written, DbError>
 /// inside one `champion_builds` row and one `champion_matchups` row. The
 /// players are gathered once into a temp table and both inserts read it
 /// (11 s against 19 s for restating the lanes, FLT-04 §8). Only four parts.
-fn insert_matchup_builds(c: &Connection, s: &Scope) -> Result<Written, DbError> {
-    let lanes = lanes(", f.runes, f.summoners");
+fn matchup_builds_sql(src: Facts) -> Vec<Stmt> {
+    let lanes = lanes_in(src, ", f.runes, f.summoners");
     let pairs = one_on_one(
         "JOIN match_builds mb ON mb.match_id = a.match_id AND mb.key_scope = ?1 AND mb.puuid = a.puuid",
     );
-    // Each statement names ?6, so it takes all six of `insert`'s parameters
-    // (SQLite counts them to the highest index).
-    s.insert(
-        c,
-        &format!(
+    vec![
+        Stmt::Exec(format!(
             "CREATE TEMP TABLE lane_builds AS {lanes}
              SELECT a.patch, a.champion_id, a.position AS role, b.champion_id AS opponent_id, a.remake, a.tier,
                CASE a.team_id WHEN 100 THEN 'blue' ELSE 'red' END AS side, a.win,
@@ -511,46 +670,49 @@ fn insert_matchup_builds(c: &Connection, s: &Scope) -> Result<Written, DbError> 
                mb.items, mb.starter, mb.boots, mb.skill_order, a.runes, a.summoners, ?6 AS computed_at
                {pairs}
                AND json_array_length(mb.items) >= 2"
+        )),
+        Stmt::rows(
+            "champion_matchup_builds",
+            "key_scope, platform, queue, patch, champion_id, role, opponent_id, remake, core, tier, side, games,
+               wins, computed_at",
+            "SELECT ?1, ?2, ?3, patch, champion_id, role, opponent_id, remake, core, tier, side, count(*), sum(win), ?6
+               FROM temp.lane_builds
+              GROUP BY patch, champion_id, role, opponent_id, remake, core, tier, side"
+                .into(),
         ),
-    )?;
-    let builds = s.insert(
-        c,
-        "INSERT INTO champion_matchup_builds (key_scope, platform, queue, patch, champion_id, role, opponent_id,
-           remake, core, tier, side, games, wins, computed_at)
-         SELECT ?1, ?2, ?3, patch, champion_id, role, opponent_id, remake, core, tier, side, count(*), sum(win), ?6
-           FROM temp.lane_builds
-          GROUP BY patch, champion_id, role, opponent_id, remake, core, tier, side",
-    )?;
-    let parts = s.insert(
-        c,
-        &format!(
-            "WITH k (part) AS (VALUES ('item3'), ('boots'), ('runes'), ('spells')),
-             v AS (
-               SELECT p.patch, p.champion_id, p.role, p.opponent_id, p.remake, p.core, p.tier, p.side, p.win,
-                 k.part, {PART_VALUE} AS value
-                 FROM temp.lane_builds p CROSS JOIN k
-             )
-             INSERT INTO champion_matchup_build_parts (key_scope, platform, queue, patch, champion_id, role,
-               opponent_id, remake, core, part, value, tier, side, games, wins, computed_at)
-             SELECT ?1, ?2, ?3, patch, champion_id, role, opponent_id, remake, core, part, value, tier, side,
-               count(*), sum(win), ?6
-               FROM v WHERE value IS NOT NULL
-              GROUP BY patch, champion_id, role, opponent_id, remake, core, part, value, tier, side"
+        Stmt::rows(
+            "champion_matchup_build_parts",
+            "key_scope, platform, queue, patch, champion_id, role, opponent_id, remake, core, part, value, tier,
+               side, games, wins, computed_at",
+            format!(
+                "WITH k (part) AS (VALUES ('item3'), ('boots'), ('runes'), ('spells')),
+                 v AS (
+                   SELECT p.patch, p.champion_id, p.role, p.opponent_id, p.remake, p.core, p.tier, p.side, p.win,
+                     k.part, {PART_VALUE} AS value
+                     FROM temp.lane_builds p CROSS JOIN k
+                 )
+                 SELECT ?1, ?2, ?3, patch, champion_id, role, opponent_id, remake, core, part, value, tier, side,
+                   count(*), sum(win), ?6
+                   FROM v WHERE value IS NOT NULL
+                  GROUP BY patch, champion_id, role, opponent_id, remake, core, part, value, tier, side"
+            ),
         ),
-    )?;
-    c.execute_batch("DROP TABLE temp.lane_builds")?;
-    Ok(vec![
-        ("champion_matchup_builds", builds),
-        ("champion_matchup_build_parts", parts),
-    ])
+        Stmt::Exec("DROP TABLE temp.lane_builds".into()),
+    ]
 }
 
 /// Set builds (BLD-02, ADR-120): `p`, the facts of the players whose
 /// `match_builds` row has two or more finished items, each with its `core`,
 /// the first two as `"[a,b]"`. A player with fewer counts in no build and no
 /// part. Binds as [`ladder_facts`]; begins a `WITH`.
+#[cfg(test)]
 fn set_build_players() -> String {
-    let facts = ladder_facts(
+    set_build_players_in(EVERY_FACT)
+}
+
+fn set_build_players_in(src: Facts) -> String {
+    let facts = ladder_facts_in(
+        src,
         "JOIN match_builds b ON b.match_id = f.match_id AND b.key_scope = f.key_scope AND b.puuid = f.puuid",
     );
     format!(
@@ -1205,6 +1367,36 @@ pub async fn match_totals(db: &Db, r: Read) -> Result<i64, DbError> {
             ),
             params_from_iter(w.args),
             |x| x.get(0),
+        )?)
+    })
+    .await
+}
+
+/// The newest `computed_at` of a slice's match totals (THR-03, ADR-182):
+/// every match a rebuild or a delta counts upserts its patch's row, so this
+/// moves whenever anything in the slice does, the pick and ban rates'
+/// denominators included. `None` for no rows.
+pub async fn totals_stamp(
+    db: &Db,
+    key_scope: &str,
+    platform: Option<&str>,
+    queue: &str,
+    patch: Option<&str>,
+    remakes: bool,
+) -> Result<Option<i64>, DbError> {
+    let (scope, platform, queue, patch) = (
+        key_scope.to_string(),
+        platform.map(str::to_string),
+        queue.to_string(),
+        patch.map(str::to_string),
+    );
+    db.read(move |c| {
+        Ok(c.query_row(
+            "SELECT max(computed_at) FROM analytics_match_totals
+              WHERE key_scope = ?1 AND queue = ?3 AND (?2 IS NULL OR platform = ?2)
+                AND (?4 IS NULL OR patch = ?4) AND (?5 OR remake = 0)",
+            params![scope, platform, queue, patch, remakes],
+            |r| r.get(0),
         )?)
     })
     .await

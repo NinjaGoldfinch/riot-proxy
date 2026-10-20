@@ -132,14 +132,22 @@ async fn prepare(body: Bytes) -> Result<(Derived, Vec<u8>), ArchiveError> {
 }
 
 /// Write a match's derived rows: its `game_duration` and `remake` columns,
-/// its facts for `key_scope`, and its bans. Shared by archiving and
-/// `facts:reextract`.
+/// its facts for `key_scope`, its bans, and its `analytics_counted` row
+/// (THR-03). Shared by archiving and `facts:reextract`.
 pub fn write_derived(
     tx: &rusqlite::Connection,
     match_id: &str,
     key_scope: &str,
     (meta, rows, extras): &Derived,
 ) -> rusqlite::Result<()> {
+    // The version the facts were at before this write (THR-03): rewriting a
+    // counted match's older facts marks its ladder for a rebuild.
+    let old_version: Option<i64> = rusqlite::OptionalExtension::optional(tx.query_row(
+        "SELECT facts_version FROM matches WHERE match_id = ?1",
+        [match_id],
+        |r| r.get(0),
+    ))?
+    .flatten();
     tx.execute(
         "UPDATE matches SET game_duration = ?2, remake = ?3, facts_version = ?4 WHERE match_id = ?1",
         rusqlite::params![
@@ -150,7 +158,14 @@ pub fn write_derived(
         ],
     )?;
     facts::write(tx, match_id, key_scope, rows)?;
-    facts::write_bans(tx, match_id, &extras.bans)
+    facts::write_bans(tx, match_id, &extras.bans)?;
+    crate::archive::analytics::delta::on_facts_written(
+        tx,
+        match_id,
+        key_scope,
+        old_version,
+        crate::clock::Clock::now().unix_ms,
+    )
 }
 
 fn decompress(blob: &[u8]) -> Result<Bytes, ArchiveError> {

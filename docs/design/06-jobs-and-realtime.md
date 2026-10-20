@@ -17,6 +17,7 @@ flowchart LR
         t4[ddragon:sync 3600 s]
         t5[ladder:crawl LADDER_CRAWL_S]
         t6[aggregate AGGREGATE_INTERVAL_S]
+        t8[aggregate:delta AGGREGATE_DELTA_S]
         t7[maintenance daily]
     end
     subgraph enq["enqueue()"]
@@ -91,7 +92,7 @@ RETURNING *;
 | 100–9 999 | `archive:match` ordered by depth in a player's history, in blocks of ten (v1 #31) | `priority = 100 + depth_block` — global, not per player, so anyone's newest ten beat anyone's hundredth |
 | 10 000 | polls | |
 | 20 000 | `backfill:player`, `ladder:*` | |
-| 30 000 | `aggregate:analytics`, `facts:reextract`, `builds:extract`, `tiers:backfill`, `maintenance`, `archive:offload`, `archive:index-snapshot` | |
+| 30 000 | `aggregate:analytics`, `aggregate:delta`, `facts:reextract`, `builds:extract`, `tiers:backfill`, `maintenance`, `archive:offload`, `archive:index-snapshot` | |
 | 40 000 | `timelines:backfill` (TL-02) | below everything: a worker only when nothing else is claimable, so polls, walks and a crawl's downloads always go first |
 
 Every enqueue sets a priority explicitly; there is no "unprioritised outranks prioritised" surprise because there is no separate `wait` list.
@@ -145,16 +146,17 @@ Every handler that hits Riot calls the fetcher with `FetchOptions::JOB` (`Priori
 | `ladder:crawl` | tick or admin | create crawl row, fan out `ladder:apex` × 3 + `ladder:walk` × (tier, division) |
 | `ladder:apex` / `ladder:walk` | per crawl | upsert `ladder_entries`; an apex league of `RIOT_APEX_LIST_CAP` or more entries adds its tier to the crawl's `apex_capped`; last one flips `phase → collect` |
 | `ladder:collect` | phase collect | 25 players per job → `crawl_match_ids`; last one flips `phase → archive` |
-| `ladder:archive` | phase archive | `filter_unarchived`, enqueue `archive:match`; ends the crawl `completed`, enqueues `aggregate:analytics`, `ranks:lookup` and `names:backfill` |
-| `ranks:lookup` | crawl completed | plan up to `RANK_LOOKUP_LIMIT` archived players the ladder doesn't hold and nobody looked up within `RANK_LOOKUP_RECHECK_S`, most games first, then one `league.entriesByPuuid` each, 25 a turn; an empty list enqueues `aggregate:analytics` (ADR-111) |
+| `ladder:archive` | phase archive | `filter_unarchived`, enqueue `archive:match`; ends the crawl `completed`, enqueues `aggregate:delta` for a stamped ladder (`aggregate:analytics`, which stamps it, for one not yet stamped or with `AGGREGATE_DELTA_S=0`), `ranks:lookup` and `names:backfill` |
+| `ranks:lookup` | crawl completed | plan up to `RANK_LOOKUP_LIMIT` archived players the ladder doesn't hold and nobody looked up within `RANK_LOOKUP_RECHECK_S`, most games first, then one `league.entriesByPuuid` each, 25 a turn; an empty list enqueues `aggregate:delta` for a stamped ladder, which takes up the late stamps' retract rows (`aggregate:analytics`, after any running one, otherwise; ADR-111, ADR-182) |
 | `names:backfill` | crawl end, daily, admin | Riot IDs for nameless players from their latest archived matches; no Riot calls (v1, ADR-055) |
-| `facts:reextract` | admin / boot when stale | re-derive facts, bans and `remake` for matches below `FACTS_VERSION`, in batches of `FACTS_REEXTRACT_BATCH`; no Riot calls |
+| `facts:reextract` | admin / boot when stale | re-derive facts, bans and `remake` for matches below `FACTS_VERSION`, in batches of `FACTS_REEXTRACT_BATCH`; a batch that rewrites a counted match marks its ladder dirty, and the sweep's end queues a full rebuild of each configured ladder left unstamped (THR-03); no Riot calls |
 | `archive:offload` | a kind's unpacked bytes reach `ARCHIVE_PACK_TARGET_BYTES` (deduped), boot, and after each `maintenance`; registered only with `ARCHIVE_OBJECT_URL` | pack local bodies into the bucket, one pack of one kind per turn (matches, then timelines) while a full pack is due or a partial one holds a body past the window; then free, `FREE_BATCH` (2,000) at a time, the packed bodies whose match was archived over `ARCHIVE_BODY_LOCAL_DAYS` ago; then re-read the backlog for the trigger and the `archive_offload_pending` gauges. No Riot calls, no lane; capped at one by `JOB_KIND_LIMITS` (design/12 §Offload job, OBJ-03, ADR-164) |
 | `archive:index-snapshot` | after each `maintenance` (deduped); registered only with `ARCHIVE_OBJECT_URL` | read `body_packs` and `body_locations` in one transaction and write them to the bucket as `index/packs-<date>.jsonl.zst` and `index/locations-<date>.jsonl.zst` (zstd JSON lines with a frame checksum; metadata `x-amz-meta-last-pack`, `x-amz-meta-rows`); a second run the same UTC day replaces them. No Riot calls, no lane (design/12 §Replica and backups, OBJ-04, ADR-165) |
 | `builds:extract` | run inline by `aggregate:analytics` | derive `match_builds` from every archived timeline whose match has facts and no rows at `BUILDS_VERSION`, 25 timelines a batch, with the newest mirrored `item.json` and each player's champion from `match_facts` (BLD-05); does nothing without one; no Riot calls (ADR-117, ADR-131) |
 | `tiers:backfill` | boot when a ranked match has a fact with no tier; run inline by `aggregate:analytics` | stamp `match_facts.tier` for those matches, 500 a batch, from the ladder and league lookups as they are now (ADR-105's tier), in id order; no Riot calls (ADR-127, ADR-138) |
 | `timelines:backfill` | hourly, one per match-v5 region (deduped by region, in its region's lane), only while `TIMELINE_BACKFILL_PATCHES` > 0 | fetch the missing timelines of archived ranked matches (420, 440) in the newest `TIMELINE_BACKFILL_PATCHES` patches, newest patch then newest game first, 25 a turn through the bulk lane; a 404 is marked in `timeline_gaps` and never asked again; a turn that stored any queues `builds:extract`. Progress: `GET /v1/admin/timelines/backfill` (TL-02, ADR-133) |
-| `aggregate:analytics` | crawl end, tick, admin | run `builds:extract` and `tiers:backfill`, then rebuild the analytics tables (v1's shape, ADR-056) for the last `AGGREGATE_PATCH_LIMIT` patches; `analytics.updated` |
+| `aggregate:analytics` | crawl end and rank lookups (with `AGGREGATE_DELTA_S=0`), tick, admin, boot for a ladder not yet stamped, a delta or a re-extraction for an unstamped one | run `builds:extract` and `tiers:backfill`, then rebuild the analytics tables (v1's shape, ADR-056) for the last `AGGREGATE_PATCH_LIMIT` patches, or every patch for a ladder not yet stamped with the delta on; each step stamps the matches it read (`analytics_counted`), and a rebuild of every patch stamps the ladder (THR-03); `analytics.updated`. The repair path: it holds the writer a step at a time, minutes on production |
+| `aggregate:delta` | tick `AGGREGATE_DELTA_S` (60), crawl end, rank lookups; deduped to one; no lane | run `builds:extract`, then for each stamped ladder, any platform, count its uncounted matches and take back the counts of moved tiers, one write transaction a batch sized to `AGGREGATE_DELTA_TARGET_MS` (within 5 and `AGGREGATE_DELTA_BATCH`), 50 ms apart; queue `aggregate:analytics` for a configured ladder not stamped; clear the analytics response cache once, record a `delta` run, `analytics.updated` per ladder counted in (design/04 §Analytics: incremental counting, THR-03, ADR-182) |
 | `maintenance` | daily | `VACUUM INTO` backup (`BACKUP_KEEP` kept; skipped when the disk is short, a failed copy logged, neither stops the rest), trim `jobs`/`metrics_history`, sweep L2, `PRAGMA optimize`, WAL checkpoint |
 
 The three-phase crawl is preserved exactly — it is the reason a ten-participant match is fetched once, and it is a design property, not a queue property.

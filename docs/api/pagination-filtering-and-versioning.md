@@ -40,7 +40,7 @@ Apex tiers (`MASTER`, `GRANDMASTER`, `CHALLENGER`) are not paged: `GET /v1/lol/l
 
 ## Analytics filters
 
-All five `/v1/lol/analytics/*` routes parse the same query (`src/routes/analytics.rs:L486-L561`, `L885-L927`); each route then accepts a subset.
+All five `/v1/lol/analytics/*` routes parse the same query (`src/routes/analytics.rs:L486-L561`, `L903-L945`); each route then accepts a subset.
 
 | Filter | Values | Default | Notes |
 |---|---|---|---|
@@ -66,11 +66,11 @@ Analytics responses carry a weak validator `ETag: W/"<base64url sha256 of the ro
 ```text
 HTTP/1.1 304 Not Modified
 cache-control: private, max-age=300
-etag: W/"HwbkHHPVcX8gqbVqhdoe6Fa0DRAJwgyuz7r2LxH1V0s"
+etag: W/"pG-2XjBV9zuyNBcF5V3Tf_TERlw-OdnaWXVDeIr2mTM"
 x-cache: HIT
 ```
 
-The validator changes when the `aggregate:analytics` job rewrites the slice (its `computedAt`) and when the document's shape changes (ADR-123 added the marker so a per-tier document could not revalidate as a summed one). `private` because the body is per-consumer scoped by key; `max-age=300` matches the in-memory response cache's intent. ninjagoldfinch.lol sends no conditional headers at all (`docs/_meta/scratch/siblings.md` §1.3), so in production the 304 path is unused; ADR-166 records that the ETag saved nothing.
+The validator changes when the `aggregate:analytics` job rewrites the slice (its `computedAt`); on every analytics route but `/patches`, when a rebuild or an `aggregate:delta` run adds a match anywhere in the slice, because one part is the newest `computed_at` of the slice's `analytics_match_totals` rows (THR-03, ADR-182; `src/routes/analytics.rs:L749-L765`), so every tag changed once at that deploy; and when the document's shape changes (ADR-123 added the marker so a per-tier document could not revalidate as a summed one). `private` because the body is per-consumer scoped by key; `max-age=300` matches the in-memory response cache's intent. ninjagoldfinch.lol sends no conditional headers at all (`docs/_meta/scratch/siblings.md` §1.3), so in production the 304 path is unused; ADR-166 records that the ETag saved nothing.
 
 `/dashboard` uses a strong `ETag` and `Cache-Control: no-cache` the same way (`src/routes/ui.rs:L113-L131`). No other route emits a validator; passthrough bodies are described by `X-Cache*` instead (see [endpoints.md](endpoints.md#shared-passthrough-behaviour-v1riot-v1lol)).
 
@@ -93,5 +93,5 @@ The validator changes when the `aggregate:analytics` job rewrites the slice (its
 `/healthz` and `/readyz` carry no version. There is no `Server` header.
 
 ---
-**Sources:** `src/routes/lol.rs:L154-L155,L180-L187,L217-L243`, `src/routes/players.rs:L541,L633-L671,L825-L837`, `src/routes/admin.rs:L775-L780,L1335-L1354,L1832-L1841,L1937-L1979,L2022-L2025,L2307-L2311,L2548-L2558`, `src/routes/analytics.rs:L52-L56,L486-L561,L577-L607,L885-L927`, `src/routes/ui.rs:L113-L131`, `src/http/validate.rs:L211-L250`, `src/http/recent.rs:L109-L111`, `src/riot/ladder.rs:L14-L26`, `tests/snapshots/lol_routes__lol_routes_upstream_calls.snap`, `docs/DECISIONS.md` ADR-065, ADR-066, ADR-123, ADR-143, ADR-166, `docs/api/openapi.json`, `README.md`, `docs/_meta/scratch/siblings.md` §1.3-1.5, §5-6, live capture against `target/debug/riot-proxy` 2.7.0
-**Last verified:** 2026-10-19 against commit `52fa67d`
+**Sources:** `src/routes/lol.rs:L154-L155,L180-L187,L217-L243`, `src/routes/players.rs:L541,L633-L671,L825-L837`, `src/routes/admin.rs:L775-L780,L1335-L1354,L1832-L1841,L1937-L1979,L2022-L2025,L2307-L2311,L2548-L2558`, `src/routes/analytics.rs:L52-L56,L486-L561,L577-L607,L903-L945`, `src/routes/ui.rs:L113-L131`, `src/http/validate.rs:L211-L250`, `src/http/recent.rs:L109-L111`, `src/riot/ladder.rs:L14-L26`, `tests/snapshots/lol_routes__lol_routes_upstream_calls.snap`, `docs/DECISIONS.md` ADR-065, ADR-066, ADR-123, ADR-143, ADR-166, `docs/api/openapi.json`, `README.md`, `docs/_meta/scratch/siblings.md` §1.3-1.5, §5-6, live capture against `target/debug/riot-proxy` 2.7.0
+**Last verified:** 2026-10-21 against commit `32c4672`
