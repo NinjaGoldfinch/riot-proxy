@@ -159,12 +159,17 @@ impl Db {
 
         let (tx, rx) = mpsc::channel(WRITE_QUEUE);
         let writer_stamps = Arc::clone(&stamps);
-        let thread = std::thread::Builder::new()
+        // The thread records its CPU clock first, so it is there before any job.
+        let (registered, wait_registered) = std::sync::mpsc::sync_channel::<()>(1);
+        std::thread::Builder::new()
             .name("sqlite-writer".into())
-            .spawn(move || writer_loop(writer, rx, &writer_stamps))
+            .spawn(move || {
+                writer::register_thread(&writer_stamps);
+                let _ = registered.send(());
+                writer_loop(writer, rx, &writer_stamps);
+            })
             .map_err(DbError::Spawn)?;
-        // Read while the handle still holds the thread; dropping it detaches.
-        writer::register_thread(&stamps, &thread);
+        let _ = wait_registered.recv();
 
         set_readers_free(readers);
         Ok(Self {

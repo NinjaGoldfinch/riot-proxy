@@ -54,7 +54,7 @@ A Riot key gives one application-level rate limit shared by every request made w
 
 ## Runtime shape
 
-One process, four tokio worker threads at most (`src/cli/mod.rs:123-126`), one SQLite writer thread and a reader pool sized to the CPU count (`src/db/mod.rs:190-193`), `JOB_CONCURRENCY` background workers (default 8), and periodic ticks. Cold start is the migration check, the limiter restore and the L1 warm from L2; the process listens within a second (`docs/design/03-architecture.md#process-model`, `src/cli/serve.rs:43-148`). The internal structure is in [components.md](./components.md).
+One process, four tokio worker threads at most (`src/cli/mod.rs:123-126`), one SQLite writer thread and a reader pool sized to the CPU count (`src/db/mod.rs:195-198`), `JOB_CONCURRENCY` background workers (default 8), and periodic ticks. Cold start is the migration check, the limiter restore and the L1 warm from L2; the process listens within a second (`docs/design/03-architecture.md#process-model`, `src/cli/serve.rs:43-148`). The internal structure is in [components.md](./components.md).
 
 ## Environments at a glance
 
@@ -67,5 +67,5 @@ One process, four tokio worker threads at most (`src/cli/mod.rs:123-126`), one S
 Details in [../integration/environments.md](../integration/environments.md).
 
 ---
-**Sources:** `docs/design/03-architecture.md`, `docs/design/12-object-storage-and-hosting.md` (§Topology after the move, §As executed), `deploy/README.md`, `src/riot/client.rs:L33-L43`, `src/riot/limiter/headers.rs:L30-L41`, `src/cli/mod.rs:L123-L126`, `src/db/mod.rs:L190-L193`, `src/cli/serve.rs:L43-L148`, `docs/_meta/scratch/siblings.md`
+**Sources:** `docs/design/03-architecture.md`, `docs/design/12-object-storage-and-hosting.md` (§Topology after the move, §As executed), `deploy/README.md`, `src/riot/client.rs:L33-L43`, `src/riot/limiter/headers.rs:L30-L41`, `src/cli/mod.rs:L123-L126`, `src/db/mod.rs:L195-L198`, `src/cli/serve.rs:L43-L148`, `docs/_meta/scratch/siblings.md`
 **Last verified:** 2026-10-20 against commit `b7b363c`

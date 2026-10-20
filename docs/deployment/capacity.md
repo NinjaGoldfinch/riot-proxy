@@ -12,7 +12,7 @@ ONI-4: 6 vCPU, 12 GB RAM, 120 GB NVMe (115 GB usable), 6 TB/month transfer, A$42
 
 | Component | Size | Evidence |
 |---|---|---|
-| SQLite page cache | `cache_size = -65536`, 64 MiB **per connection**. `serve` opens one writer plus `available_parallelism()` readers (6 on this box), and the daily backup opens one more; worst case about 7 × 64 MiB = 448 MiB if every connection fills its cache (*estimate*) | `src/db/mod.rs:28-34,190-193`; `src/jobs/maintenance.rs:57-76`; `PROGRESS.md:325` ("6 of 6 SQLite readers") |
+| SQLite page cache | `cache_size = -65536`, 64 MiB **per connection**. `serve` opens one writer plus `available_parallelism()` readers (6 on this box), and the daily backup opens one more; worst case about 7 × 64 MiB = 448 MiB if every connection fills its cache (*estimate*) | `src/db/mod.rs:28-34,195-198`; `src/jobs/maintenance.rs:57-76`; `PROGRESS.md:325` ("6 of 6 SQLite readers") |
 | SQLite `mmap_size` | 256 MiB per connection, file-backed and shared with the kernel page cache; shows in RSS as file pages, not anonymous memory | `src/db/mod.rs:32` |
 | L1 response cache | `CACHE_L1_MAX_MB`, default 128 MiB, weight-bounded | `src/config.rs:713`; `src/cache/l1.rs:117-118` |
 | Analytics response cache | `ANALYTICS_CACHE_ENTRIES` 512 × about 40 kB per champions list ≈ 20 MB (*estimate*) | `src/config.rs:754`; `.env.example:137-139` |
@@ -42,8 +42,8 @@ So about 3.6 GiB is spoken for by processes at their limits, leaving roughly 8 G
 | Pool | Size | Evidence |
 |---|---|---|
 | tokio runtime | `min(available_parallelism, 4)` = 4 worker threads; "the workload is I/O; four workers are plenty" | `src/cli/mod.rs:123-126` |
-| SQLite readers | `available_parallelism()` = 6 read-only connections, each `read` on `spawn_blocking` | `src/db/mod.rs:190-193,280-311` |
-| SQLite writer | one dedicated thread, queue depth 1024; every write is serialised through it | `src/db/mod.rs:41-42,158-163` |
+| SQLite readers | `available_parallelism()` = 6 read-only connections, each `read` on `spawn_blocking` | `src/db/mod.rs:195-198,285-316` |
+| SQLite writer | one dedicated thread, queue depth 1024; every write is serialised through it | `src/db/mod.rs:41-42,160-172` |
 | Job workers | `JOB_CONCURRENCY`, default 8; production set 4 on 2026-10-13 (session note, `reports/OBJ implementation handoff.md:20`) | `src/config.rs:709` |
 | Per-kind caps | `JOB_KIND_LIMITS` default `aggregate:analytics=1,archive:offload=1`: one rebuild and one offload at a time | `src/config.rs:111` |
 
@@ -119,5 +119,5 @@ All are on `/metrics` and in `GET /v1/admin/stats` (`docs/design/07-deployment.m
 | `ninja-monitor` memory alerts | per-service anonymous memory | proxy above 2 GiB: look at L1, `cache_size` × connections and the job mix | `docs/design/12-object-storage-and-hosting.md:832-835` |
 
 ---
-**Sources:** `docs/design/07-deployment.md:L165-L173,L185-L206,L216`, `docs/design/12-object-storage-and-hosting.md:L13-L18,L366-L369,L459-L487,L780-L786,L827-L836,L957-L959`, `deploy/README.md:L36,L222-L270`, `PROGRESS.md:L325`, `docs/DECISIONS.md:L1513`, `reports/OBJ implementation handoff.md:L20,L24`, `src/db/mod.rs:L28-L42,L158-L163,L190-L193,L280-L311`, `src/db/disk.rs:L70-L73`, `src/cli/mod.rs:L123-L126`, `src/config.rs:L111,L709,L713,L717,L727-L729,L736,L741,L748,L752,L754`, `src/cache/l1.rs:L117-L118`, `src/cache/l2.rs:L24-L28`, `src/http/auth.rs:L206-L209`, `src/jobs/activity.rs:L40-L42`, `src/jobs/maintenance.rs:L34,L57-L76,L294-L306`, `src/jobs/offload.rs:L204-L215`, `src/jobs/scheduler.rs:L49,L1226-L1245`, `src/jobs/analytics.rs:L404-L477`, `src/riot/limiter/mod.rs:L240-L242`, `src/routes/health.rs:L21-L46,L148-L200`, `.env.example:L137-L139`, `docs/_meta/scratch/persistence.md:L350-L358`, `docs/_meta/scratch/riot-and-cache.md:L188`, `docs/_meta/scratch/siblings.md:L186,L191`
+**Sources:** `docs/design/07-deployment.md:L165-L173,L185-L206,L216`, `docs/design/12-object-storage-and-hosting.md:L13-L18,L366-L369,L459-L487,L780-L786,L827-L836,L957-L959`, `deploy/README.md:L36,L222-L270`, `PROGRESS.md:L325`, `docs/DECISIONS.md:L1513`, `reports/OBJ implementation handoff.md:L20,L24`, `src/db/mod.rs:L28-L42,L160-L172,L195-L198,L285-L316`, `src/db/disk.rs:L70-L73`, `src/cli/mod.rs:L123-L126`, `src/config.rs:L111,L709,L713,L717,L727-L729,L736,L741,L748,L752,L754`, `src/cache/l1.rs:L117-L118`, `src/cache/l2.rs:L24-L28`, `src/http/auth.rs:L206-L209`, `src/jobs/activity.rs:L40-L42`, `src/jobs/maintenance.rs:L34,L57-L76,L294-L306`, `src/jobs/offload.rs:L204-L215`, `src/jobs/scheduler.rs:L49,L1226-L1245`, `src/jobs/analytics.rs:L404-L477`, `src/riot/limiter/mod.rs:L240-L242`, `src/routes/health.rs:L21-L46,L148-L200`, `.env.example:L137-L139`, `docs/_meta/scratch/persistence.md:L350-L358`, `docs/_meta/scratch/riot-and-cache.md:L188`, `docs/_meta/scratch/siblings.md:L186,L191`
 **Last verified:** 2026-10-20 against commit `b7b363c`

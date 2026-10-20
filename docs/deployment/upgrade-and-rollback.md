@@ -12,7 +12,7 @@ The first `serve` of a new binary runs the boot sequence in `src/cli/serve.rs:43
 
 | Step | What happens | Evidence |
 |---|---|---|
-| Migrations | `Db::open` runs every pending embedded migration, grouped in one transaction, before readers open or the writer thread starts; already-applied versions are skipped. There is no "migrations applied" log line, only `database ready` afterwards, or `DbError::Migration` on failure | `src/db/mod.rs:148-155,338-340`; `docs/_meta/scratch/jobs-and-observability.md:295` |
+| Migrations | `Db::open` runs every pending embedded migration, grouped in one transaction, before readers open or the writer thread starts; already-applied versions are skipped. There is no "migrations applied" log line, only `database ready` afterwards, or `DbError::Migration` on failure | `src/db/mod.rs:148-155,343-345`; `docs/_meta/scratch/jobs-and-observability.md:295` |
 | Direction | forward-only: `src/db/migrations/` holds `V0001` to `V0027` with no down files; rebuild-style migrations copy into `_vNN` tables, drop and rename | `docs/_meta/scratch/persistence.md:17,21-51` |
 | Limiter | the checkpoint in `limiter_state` is restored (`limiter checkpoint restored rows=`); a row older than 120 s restores every window as full, so the first requests after a long stop wait rather than burst | `src/cli/serve.rs:76-80`; `src/riot/limiter/persist.rs:23,92-94` |
 | Caches | L1 is warmed from every unexpired L2 row and expired L2 rows are swept (`L1 warmed from L2 entries=`) | `src/cli/serve.rs:86-93`; `src/cache/l2.rs:186-216` |
@@ -74,7 +74,7 @@ When the new version misbehaves and no migration needs undoing:
 2. `sudo cp /usr/local/bin/riot-proxy.<old version> /usr/local/bin/riot-proxy`.
 3. `sudo systemctl start riot-proxy`, then the verification above.
 
-> **TODO (unverified):** how an older binary behaves when the database already carries migrations it does not embed. `refinery` is run with `set_grouped(true)` (`src/db/mod.rs:338-340`) and nothing in `src/db/mod.rs` handles a history newer than the embedded set; whether it errors or ignores the extra versions was not exercised. Treat "new migration, then downgrade" as the restore case below.
+> **TODO (unverified):** how an older binary behaves when the database already carries migrations it does not embed. `refinery` is run with `set_grouped(true)` (`src/db/mod.rs:343-345`) and nothing in `src/db/mod.rs` handles a history newer than the embedded set; whether it errors or ignores the extra versions was not exercised. Treat "new migration, then downgrade" as the restore case below.
 
 ## Rolling back a migration
 
@@ -100,5 +100,5 @@ What a restore costs, by table:
 Rolling back only the object-storage feature is configuration, not a restore: unset `ARCHIVE_OBJECT_URL` and offloaded rows read as misses and re-fetch from Riot; the bucket keeps everything and re-setting the URL restores reads (`docs/design/12-object-storage-and-hosting.md:941-943`).
 
 ---
-**Sources:** `.github/workflows/release.yml:L179-L194`, `docs/workflows/release-process.md`, `docs/design/07-deployment.md:L177,L216,L225-L231`, `docs/design/12-object-storage-and-hosting.md:L938-L946`, `deploy/README.md:L121-L138,L246-L265`, `src/cli/serve.rs:L43-L394`, `src/cli/backup.rs:L10-L21`, `src/db/mod.rs:L148-L155,L338-L340`, `src/jobs/scheduler.rs:L963-L973,L1291-L1300`, `src/jobs/ticks.rs:L170,L198-L202`, `src/jobs/maintenance.rs:L34,L36,L237-L240,L294-L306`, `src/jobs/archive.rs:L186-L191`, `src/riot/limiter/persist.rs:L23,L92-L94`, `src/cache/l2.rs:L186-L216`, `src/consumers.rs:L228-L283`, `src/routes/health.rs:L148-L200`, `src/routes/admin.rs:L2485-L2512`, `src/app.rs:L35,L240-L253`, `docs/DECISIONS.md:L1722-L1730`, `reports/OBJ implementation handoff.md:L23`, `docs/_meta/scratch/jobs-and-observability.md`, `docs/_meta/scratch/persistence.md`, `docs/_meta/scratch/routes.md:L157,L168,L187`
+**Sources:** `.github/workflows/release.yml:L179-L194`, `docs/workflows/release-process.md`, `docs/design/07-deployment.md:L177,L216,L225-L231`, `docs/design/12-object-storage-and-hosting.md:L938-L946`, `deploy/README.md:L121-L138,L246-L265`, `src/cli/serve.rs:L43-L394`, `src/cli/backup.rs:L10-L21`, `src/db/mod.rs:L148-L155,L343-L345`, `src/jobs/scheduler.rs:L963-L973,L1291-L1300`, `src/jobs/ticks.rs:L170,L198-L202`, `src/jobs/maintenance.rs:L34,L36,L237-L240,L294-L306`, `src/jobs/archive.rs:L186-L191`, `src/riot/limiter/persist.rs:L23,L92-L94`, `src/cache/l2.rs:L186-L216`, `src/consumers.rs:L228-L283`, `src/routes/health.rs:L148-L200`, `src/routes/admin.rs:L2485-L2512`, `src/app.rs:L35,L240-L253`, `docs/DECISIONS.md:L1722-L1730`, `reports/OBJ implementation handoff.md:L23`, `docs/_meta/scratch/jobs-and-observability.md`, `docs/_meta/scratch/persistence.md`, `docs/_meta/scratch/routes.md:L157,L168,L187`
 **Last verified:** 2026-10-20 against commit `b7b363c`

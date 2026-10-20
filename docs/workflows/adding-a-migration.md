@@ -9,7 +9,7 @@ How schema changes ship: one forward-only refinery SQL file under `src/db/migrat
 | Engine | refinery, embedded at compile time by `refinery::embed_migrations!("src/db/migrations")` (`src/db/mod.rs:22-24`) |
 | Naming | `V<nnnn>__<name>.sql`; refinery only recognises `^[UV]\d+__\w+\.sql$`, and the four-digit padding is this repository's convention (ADR-010, `docs/DECISIONS.md:51`). refinery logs them without the padding (`V27__matchup_builds`) |
 | When | `Db::open` applies pending migrations on the writer connection, after the pragmas and before the readers open (`src/db/mod.rs:135-151`). `serve` opens that way, and so does every CLI command that touches the database (`src/cli/mod.rs:136-141`). `riot-proxy migrate` applies them on a raw connection and prints `<path>: up to date` or `<path>: applied V…` (`src/cli/mod.rs:144-165`) |
-| Transaction | all pending files in **one** transaction (`set_grouped(true)`, `src/db/mod.rs:338-340`); applied versions are skipped, so running on every boot is safe |
+| Transaction | all pending files in **one** transaction (`set_grouped(true)`, `src/db/mod.rs:343-345`); applied versions are skipped, so running on every boot is safe |
 | History | `refinery_schema_history(version, name, applied_on, checksum)`; a fresh database has 28 rows after V0028 (`src/db/tests.rs:895`) |
 | Direction | forward only. There are no down migrations: every file is `V…`, and a change that must be undone is undone by restoring the previous backup (`README.md:142`; [../deployment/upgrade-and-rollback.md](../deployment/upgrade-and-rollback.md)) |
 

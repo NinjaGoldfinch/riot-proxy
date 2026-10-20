@@ -38,7 +38,7 @@ pub(super) struct Stamps {
     finished: AtomicU64,
     /// Test hook: `/readyz`'s stall threshold in ms, 0 for its default.
     stall_override: AtomicU64,
-    /// The writer thread's CPU-time clock, set as it is spawned.
+    /// The writer thread's CPU-time clock, set before `Db::open` returns.
     cpu_clock: OnceLock<CpuClock>,
 }
 
@@ -161,19 +161,19 @@ impl WriterStatus {
 struct CpuClock(#[cfg(target_os = "linux")] libc::clockid_t);
 
 impl CpuClock {
-    /// The clock of the thread `handle` was spawned as.
+    /// The calling thread's clock. Read on the thread itself: `pthread_self()` is
+    /// `libc`'s own `pthread_t`, which std's `JoinHandleExt` is not on musl.
     #[cfg(target_os = "linux")]
-    fn of(handle: &std::thread::JoinHandle<()>) -> Option<Self> {
-        use std::os::unix::thread::JoinHandleExt;
+    fn current() -> Option<Self> {
         let mut id: libc::clockid_t = 0;
-        // SAFETY: the handle holds the thread, so its pthread_t is valid here, and
-        // `id` is a valid out pointer for the call.
-        let rc = unsafe { libc::pthread_getcpuclockid(handle.as_pthread_t(), &raw mut id) };
+        // SAFETY: `pthread_self()` is the live calling thread and `id` is a valid
+        // out pointer for the call.
+        let rc = unsafe { libc::pthread_getcpuclockid(libc::pthread_self(), &raw mut id) };
         (rc == 0).then_some(Self(id))
     }
 
     #[cfg(not(target_os = "linux"))]
-    fn of(_handle: &std::thread::JoinHandle<()>) -> Option<Self> {
+    fn current() -> Option<Self> {
         None
     }
 
@@ -197,9 +197,10 @@ impl CpuClock {
     }
 }
 
-/// Remember the writer thread's CPU clock, from its spawn handle.
-pub(super) fn register_thread(stamps: &Stamps, handle: &std::thread::JoinHandle<()>) {
-    if let Some(clock) = CpuClock::of(handle) {
+/// Remember the calling thread's CPU clock; the writer thread calls this before
+/// it signals that it has started.
+pub(super) fn register_thread(stamps: &Stamps) {
+    if let Some(clock) = CpuClock::current() {
         let _ = stamps.cpu_clock.set(clock);
     }
 }
