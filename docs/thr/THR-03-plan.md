@@ -17,7 +17,7 @@ Written 2026-10-21 against `origin/main` **32c4672** (v2.7.2, the version on pro
 - **Late timelines.** A match's first `match_builds` rows clear only its sets bit.
 - **Re-extraction.** Anything else un-stamps the ladder, and a full rebuild follows.
 
-A delta batch is **50 matches in one write transaction: 138–154 ms at the median, 163 ms at worst in a run without a checkpoint stall**, on tables the size of production's oc1. On this container a WAL checkpoint inside a commit can stall any write for 1–2 s (§1.3, risk R1). A 100-match batch is 247–294 ms, so the row's 500 would take about 600 ms. Today's rebuild of the same archive holds the writer for 101 s, 52 s of it in one transaction. On the synthetic archive the delta's output equals a rebuild's, table by table. That held after 100,000 matches in 1,000 batches, after 5 % of `UNKNOWN` facts were late-stamped, and with a delta run between a rebuild's steps. V0029 is DDL only, 6–25 ms.
+A delta batch is **50 matches in one write transaction: 138–154 ms at the median, 163 ms at worst in a run without a checkpoint stall**, on tables the size of production's oc1. On this container a WAL checkpoint inside a commit can stall any write for 1–2 s (§1.3, risk R1), and production already shows writes of 5–10 s with no rebuild running (§1.2). Production's rebuilds take 532–1,012 s a ladder and may run ~4× slower per match than here, so the batch sizes itself to a 150 ms target instead of a fixed count. A 100-match batch is 247–294 ms, so the row's 500 would take about 600 ms. Today's rebuild of the same archive holds the writer for 101 s, 52 s of it in one transaction. On the synthetic archive the delta's output equals a rebuild's, table by table. That held after 100,000 matches in 1,000 batches, after 5 % of `UNKNOWN` facts were late-stamped, and with a delta run between a rebuild's steps. V0029 is DDL only, 6–25 ms.
 
 ---
 
@@ -52,7 +52,24 @@ The rebuild is a port of `src/archive/analytics.rs:118-566` into Python, string 
 
 The writer is held for the whole of each step. Anything queued behind a step waits for it, which is the queueing WR-02 made visible (`writerBusyMs:120688, writerQueued:8` on production's na1, ADR-180). The same rebuild took 114.9 s after 10,000 more arrivals (§1.5's reference) and 122.8 s after 11,500 (§1.6's).
 
-**Production's numbers** (per step, the last run per ladder, and the write-time histograms) are Q1 in §15: the dashboard shows them and this container can't reach the box. The Accept column is judged on production after deploy in any case.
+**Production's numbers** (Q1, run by the owner on `ngf-prod-syd1` on 2026-10-21). Each ladder's last rebuild from `analytics_runs`; `builds` is four transactions: items, runes, spells, sets:
+
+| ladder | ended (box clock) | champions s | matchups s | builds s | total s | games |
+|---|---|---|---|---|---|---|
+| oc1 solo | 2026-10-20 18:18 | 87.5 | 20.6 | 339.2 | 532.1 | 967,350 |
+| na1 solo | 2026-10-20 17:06 | 199.3 | 46.3 | 712.3 | 969.9 | 2,402,760 |
+| kr solo | 2026-10-20 03:12 | 208.1 | 46.8 | 710.5 | 1,012.3 | 2,224,260 |
+| euw1 solo | 2026-10-19 21:52 | 187.7 | 41.2 | 704.9 | 980.1 | 2,079,490 |
+
+- **The archive.** Ranked matches: EUW1 235,284, KR 241,063, NA1 240,276 and OC1 96,742 (solo), plus 3 OC1 flex and 383 on platforms with no ladder. `match_facts`: 6,815,503 rows with a known tier, 1,322,007 `UNKNOWN` (16.2 %, against the synthetic archive's 20 %) and 1,734 NULL (the facts of unranked queues, which `tiers::stamp` leaves alone, `tiers.rs:51-54`).
+- **The synthetic oc1 is production's oc1.** It matches on matches (100,000 against 96,742), games (1,000,000 against 967,350), `UNKNOWN` share and matchup-build rows (§1.1). Production's rebuild takes 3.8× as long on champions (87.5 s against 23.2 s), 4.0× on matchups and 4.7× on builds (339 s against 72.7 s for the synthetic items, runes, spells and sets).
+  - **Two causes, not separable from here.** Production's statements scan every platform's facts (8.1 M rows against 1.0 M), and its CPU and disk differ. The delta seeks by key, so only the second cause reaches it. It could still run up to ~4× slower per match than measured here.
+  - **The answer is a self-sizing batch** (§1.3).
+- **One switch-over is about an hour of writer.** It is 3,494 s over the four ladders (§6, Q3). Production already pays that once per round of crawl ends.
+- **`sqlite_write_seconds` since the last restart** covers 1,145 writes with no rebuild among them: the longest rebuild step on record ran 87–712 s, and none appears.
+  - **Already over the target without a rebuild.** 1,123 writes (98.1 %) took ≤ 100 ms, 15 took 100–250 ms, and **7 took over 250 ms**: one 0.25–0.5 s, two 0.5–1 s, two 1–2 s, one 2–5 s, one 5–10 s. The longest write with no rebuild running is already 5–10 s, which is R1 (§1.3) on production.
+  - **What THR-03 can be held to.** Accept is "no delta transaction over 250 ms" (`proxy_aggregate_delta_batch_seconds`), plus "no write over a few seconds during a crawl that wasn't already there before THR-03". The longest write overall belongs to WR-03.
+- **`sqlite_write_wait_seconds`:** 1,123 waits ≤ 100 ms and 4 over 5 s (5–10 s), mean 34 ms: writes queued behind those same slow ones.
 
 ### 1.3 A delta batch: cost against batch size
 
@@ -78,7 +95,11 @@ In one profiled run (2,000 matches at 50, 5.6 s in all; `prof.py`), `COMMIT` too
 - **No extra checkpoints.** The delta doesn't make checkpoints more frequent than the same rows written in any other shape would.
 - **The risk (R1).** Checkpoint stalls can break "longest write transaction under 250 ms" whatever the batch size. If production shows them, the remedy is WR-03's (checkpointing outside the writer's transactions), not a smaller batch. The ADR reports the delta's SQL time and the commit time separately, from `proxy_aggregate_delta_batch_seconds` and `sqlite_write_seconds`.
 
-**So `AGGREGATE_DELTA_BATCH` defaults to 50**, not the row's 500. A match with a retract to apply counts as two (§1.5). With a 50 ms pace between batches the delta does about 250 matches a second, far above any crawl's fetch rate, which is limited to a few matches a second by the app limit.
+**So the batch sizes itself.** On this container 50 matches is about 150 ms. Production may be up to ~4× slower per match (§1.2), and a fixed 50 could then pass 500 ms. Each batch starts from the last one's measured time: `next = clamp(n × AGGREGATE_DELTA_TARGET_MS / elapsed_ms, 5, AGGREGATE_DELTA_BATCH)`.
+- **The settings.** The first batch is 50, `AGGREGATE_DELTA_TARGET_MS` defaults to 150 and `AGGREGATE_DELTA_BATCH` (the cap) to 500.
+- **Retracts.** A match with a retract to apply counts as two (§1.5).
+- **Checkpoint stalls are ignored.** A commit that spent most of its time in a checkpoint (R1) would shrink the batch for no gain. So `elapsed` is the time before `COMMIT`, and the commit is reported apart (§11).
+- **Throughput.** With a 50 ms pace between batches, even 10 matches a batch is about 50 matches a second, above any crawl's fetch rate (a few a second under the app limit).
 
 ### 1.4 Delta equals rebuild
 
@@ -311,7 +332,7 @@ sequenceDiagram
 
 - **The brief's `archive:match` trigger is dropped** (Q2). The tick bounds staleness at 60 s on its own. A trigger per archive would either run the delta at fetch rate, clearing the response cache every few seconds, or need a delay. And a dedupe key that is also held while the job runs drops the wake-up of a match archived as the delta finishes (`jobs_dedupe`, `V0001__init.sql:44`; `enqueue_on`, `src/jobs/scheduler.rs:225-254`). The tick costs one job row and one indexed read a minute.
 - **`AGGREGATE_DELTA_S=0` is the kill switch.** Everything is then as at 32c4672: crawl end and lookups queue the rebuild. The stamps still go on, so turning the delta back on needs no new full rebuild.
-- **`AGGREGATE_DELTA_BATCH`** defaults to 50 (1–1,000). `JOB_KIND_LIMITS`'s default gains nothing: the dedupe already keeps one delta.
+- **`AGGREGATE_DELTA_TARGET_MS`** (default 150, 20–1,000) and **`AGGREGATE_DELTA_BATCH`** (the cap, default 500, 5–5,000) size the batches (§1.3). `JOB_KIND_LIMITS`'s default gains nothing: the dedupe already keeps one delta.
 
 ## 9. V0029
 
@@ -367,7 +388,8 @@ DROP TABLE analytics_runs; ALTER TABLE analytics_runs_v29 RENAME TO analytics_ru
 | name | type | labels | |
 |---|---|---|---|
 | `proxy_aggregate_delta_matches_total` | counter | `platform`, `queue`, `kind` (`added`, `retracted`) | matches counted or taken back |
-| `proxy_aggregate_delta_batch_seconds` | histogram | `platform`, `queue` | one batch's write transaction, buckets 0.01–5 s |
+| `proxy_aggregate_delta_batch_seconds` | histogram | `platform`, `queue`, `part` (`sql`, `commit`) | one batch's write transaction, its statements and its `COMMIT` apart, buckets 0.01–5 s |
+| `proxy_aggregate_delta_batch_size` | gauge | — | the last batch's matches |
 | `proxy_aggregate_delta_pending` | gauge | — | pending matches at a run's start, read from `analytics_uncounted` |
 
 `proxy_aggregate_runs_total` gains `kind`. `sqlite_write_seconds` (WR-02) remains the judge of the Accept column. All of these go in `CATALOGUE` (`src/metrics.rs`) and `docs/design/metrics.md`.
@@ -391,7 +413,9 @@ A batch is one transaction of about 150 ms. Interrupted at shutdown, it rolls ba
 - a stale `facts_version` match waits; `facts:reextract` un-stamps its ladders;
 - zero rows deleted after a retract.
 
-**`src/jobs/analytics.rs`** (paused time): a delta over 10,000 pending matches never holds the writer longer than one batch. `Db::writer_status()` is sampled between batches and the per-batch histogram is checked; no batch over 50 matches is recorded.
+**`src/jobs/analytics.rs`**: the sizing rule (a slow batch halves the next, a fast one grows it to the cap, never under 5, the commit's time left out).
+
+**`src/jobs/analytics.rs`** (paused time): a delta over 10,000 pending matches never holds the writer longer than one batch. `Db::writer_status()` is sampled between batches and the per-batch histogram is checked; no batch over its size is recorded.
 
 **`src/db/tests.rs`**: `v0029_creates_the_stamp_tables_and_trigger`; the trigger writes one row per counted step and none for an uncounted match.
 
@@ -408,7 +432,7 @@ A batch is one transaction of about 150 ms. Interrupted at shutdown, it rolls ba
 
 - `docs/design/04-data-and-cache.md`: §Analytics (the stamp, the additive rule, retracts, un-stamping) and §Analytics reads (the line "change only when `aggregate:analytics` commits" becomes "a delta or a rebuild").
 - `docs/design/06-jobs-and-realtime.md`: §Job catalogue (`aggregate:delta`), the crawl-end and `ranks:lookup` rows.
-- `docs/design/07-deployment.md`: config (`AGGREGATE_DELTA_S`, `AGGREGATE_DELTA_BATCH`).
+- `docs/design/07-deployment.md`: config (`AGGREGATE_DELTA_S`, `AGGREGATE_DELTA_TARGET_MS`, `AGGREGATE_DELTA_BATCH`).
 - `docs/design/metrics.md`.
 - `docs/data/schema.md`, `docs/data/migrations.md`, `docs/workflows/adding-a-migration.md` and `docs/_meta/inventory.md` (29 migrations; V0030 next; `docs/thr/` beside `docs/flt/` and `docs/perf/`, which this plan's PR left out to keep that page's footer honest).
 - `docs/operations/runbook.md` and `troubleshooting.md`: when to press Recompute now (after a manual DB edit, after `AGGREGATE_DELTA_S=0`, or when a diff shows drift).
@@ -420,23 +444,15 @@ A batch is one transaction of about 150 ms. Interrupted at shutdown, it rolls ba
 
 ## 15. Questions for the owner
 
-**Q1. Production's numbers** (the baseline, read-only; the two counts scan `matches` and `match_facts`, so give them a minute). On `ngf-prod-syd1`:
-
-```bash
-sudo sqlite3 -readonly /var/lib/riot-proxy/data/riot-proxy.db \
-  "SELECT platform, queue, datetime(at/1000,'unixepoch'), status, ms, steps, games FROM analytics_runs ORDER BY at DESC;" \
-  "SELECT substr(match_id,1,instr(match_id,'_')-1) p, queue_id, count(*) FROM matches WHERE queue_id IN (420,440) GROUP BY 1,2;" \
-  "SELECT tier='UNKNOWN', count(*) FROM match_facts GROUP BY 1;"
-curl -s localhost:8080/metrics | grep -E '^sqlite_write_(seconds|wait_seconds)_(bucket|count|sum)' | grep -v 'le="0.0'
-```
+**Q1. Production's numbers.** Answered 2026-10-21; they are in §1.2.
 
 **Q2. Triggers:** a 60 s tick instead of a trigger per archived match (§8)? *Recommended: the tick.*
 
-**Q3. The one-time full rebuilds** after deploy (one per configured ladder, one at a time; production's last runs held the writer for minutes each). Queued at boot, or left for you to press Recompute per ladder at a quiet hour? Until a ladder's rebuild finishes, that ladder gets no delta and is aggregated by rebuilds, as today. *Recommended: queued at boot.*
+**Q3. The one-time full rebuilds** after deploy (one per ladder, one at a time: about 58 minutes of writer in all by the last runs, oc1 532 s, na1 970 s, kr 1,012 s, euw1 980 s; §1.2). Queued at boot, or left for you to press Recompute per ladder at a quiet hour? Until a ladder's rebuild finishes, that ladder gets no delta and is aggregated by rebuilds, as today. *Recommended: queued at boot.* Crawls are paused, so nothing is waiting on the writer. A restart during the hour costs only the rebuild in progress. **Rejected:** stamping from each ladder's last run instead of rebuilding. Late stamps since those runs moved tiers the tables still count at the old value, and the trigger didn't exist to record them, so the stamps would bake in a drift that no delta corrects.
 
 **Q4. Every analytics `ETag` changes once** at deploy (the totals' stamp joins the tag, §7). *Recommended: yes; it fixes a stale `304` the delta would otherwise cause.*
 
-**Q5. `AGGREGATE_DELTA_BATCH = 50`**, not 500 (§1.3)? *Recommended: 50.*
+**Q5. A self-sizing batch** (target 150 ms, first batch 50, cap 500; §1.3) instead of a fixed 500? *Recommended: self-sizing.*
 
 ## 16. The prototype (in `/home/dev/thr03`, not in the repo)
 
