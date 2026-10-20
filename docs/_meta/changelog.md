@@ -2,6 +2,10 @@
 
 Dated log of changes to this documentation set. One line per change; the newest first.
 
+## 2026-10-21
+
+- Release 2.7.2: `api/openapi.json` `info.version` is `2.7.2`; the version example in `deploy/proxmox` follows.
+
 ## 2026-10-20
 
 - WR-02 (ADR-180): `/readyz` reports writer progress instead of queueing behind a running write; its new `writerBusy`, `writerBusyMs`, `writerQueued` fields, the `sqlite_write_seconds`, `sqlite_write_wait_seconds` and `sqlite_write_queue` metrics, the `slow SQLite write` warning and `sqliteWriter` in `/v1/admin/metrics` are in `api/endpoints.md`, `api/examples.md`, `api/openapi.json`, `operations/{observability,runbook,troubleshooting}.md`, `integration/monitoring-hooks.md`, `deployment/{capacity,install,upgrade-and-rollback}.md`, `architecture/request-lifecycle.md`, `reference/{faq,dependencies}.md` and `docs/design/{04-data-and-cache,07-deployment,metrics}.md`. Troubleshooting §1 is rewritten (a rebuild no longer makes `sqlite:false`; a busy `false` is a stalled writer), which closes its gap; line citations into `src/db/mod.rs`, `src/stats.rs`, `src/metrics.rs` and `src/routes/health.rs` follow the moved code.
