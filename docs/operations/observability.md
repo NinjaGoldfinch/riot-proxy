@@ -65,7 +65,7 @@ What is not logged: the Riot key (a sensitive header value, `src/riot/client.rs:
 | `proxy_cache_reads_total` | counter | state | Riot-cache reads: hit, miss, neg, stale (analytics hits excluded) | `src/fetcher.rs:401-403`; `src/routes/players.rs:733` |
 | `proxy_ws_connections` | gauge | | open sockets | `src/ws/hub.rs:78`, `:180` |
 | `proxy_jobs_total` | counter | job, status | job outcomes completed/failed (yields excluded) | `src/jobs/scheduler.rs:1079`, `:1086` |
-| `proxy_backfills_queued_total` | counter | reason, status | backfill requests (lookup/track/catchup/admin × queued/already-queued) | `src/jobs/archive.rs:223` |
+| `proxy_backfills_queued_total` | counter | reason, status | backfill requests (lookup/track/catchup/admin × queued/already-queued) | `src/jobs/archive.rs:241` |
 | `proxy_refresh_claims_total` | counter | part, outcome | `?refresh=true` windows claimed/coalesced | `src/routes/players/refresh.rs:53`, `:61` |
 | `proxy_ladder_pages_total` | counter | platform, queue | ladder pages fetched | `src/jobs/ladder.rs:543` |
 | `proxy_ladder_entries_total` | counter | platform, queue | entries upserted | `src/jobs/ladder.rs:546` |
@@ -166,4 +166,4 @@ Logs reach journald and are read over SSH; the dashboard reaches the admin JSON 
 
 ---
 **Sources:** `src/telemetry.rs:24,27,31,41-66,91-121`, `src/cli/serve.rs:45,55,77-107,148,283-344,412,420-426`, `src/app.rs:103-118,121-171,217,244-245`, `src/http/auth.rs:197-204,273,283,325`, `src/http/error.rs:133,176-187`, `src/http/request_id.rs:14,31-41,57-64`, `src/http/recent.rs:18-25,36-57,81-82,100-106`, `src/config.rs:393-397,454-465,662-669,714,734`, `src/consumers.rs:105-107`, `src/riot/client.rs:26,234-236,267-275,305-362`, `src/riot/limiter/mod.rs:240-283,416-428`, `src/fetcher.rs:401-403,462-602`, `src/metrics.rs:1-4,47,98-434,486-499`, `src/db/writer.rs:244-275`, `src/stats.rs:43,297-372,863,996-1072`, `src/routes/health.rs:1,21-46,75-200`, `src/routes/admin.rs:2409-2427,2546-2558`, `src/routes/ui.rs:5-8,218-221`, `src/ws/metrics.rs:14-35`, `src/events.rs:159-172,198`, `src/jobs/scheduler.rs:49,1079-1092,1156,1219,1226-1245,1296`, `src/jobs/maintenance.rs:38,241-244,263,304-315`, `src/jobs/offload.rs:163-215`, `src/jobs/ladder.rs:315-931`, `src/jobs/analytics.rs:351-914`, `src/jobs/ddragon.rs:241,258`, `src/jobs/index_snapshot.rs:598`, `src/archive/matches.rs:250-317,419`, `src/archive/objects.rs:134`, `src/cache/l2.rs:109-154`, `src/db/mod.rs:123,328`, `src/db/disk.rs:70-116`, `src/db/migrations/V0001__init.sql:47-50`, `docs/design/07-deployment.md:74-95,218,221`, `docs/design/12-object-storage-and-hosting.md:846-848`, `docs/design/13-admin-dashboard.md:69,341`, `docs/design/metrics.md`, `ops/grafana/riot-proxy-dashboard.json`, `ops/prometheus-alerts.yml`, `PROGRESS.md:342`
-**Last verified:** 2026-10-21 against commit `32c4672`
+**Last verified:** 2026-10-22 against commit `6eda84e`

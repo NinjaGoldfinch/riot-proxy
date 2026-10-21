@@ -91,7 +91,7 @@ RETURNING *;
 | 0–99 | interactive-triggered: `archive:match` for a just-finished game, `?refresh=true`, a manual analytics recompute, the other half of a match or timeline the archive just stored (TL-01) | the recompute moves a rebuild already queued for its ladder up to 0 (DEV-18); so does the archive, for a match a walk queued |
 | 100–9 999 | `archive:match` ordered by depth in a player's history, in blocks of ten (v1 #31) | `priority = 100 + depth_block` — global, not per player, so anyone's newest ten beat anyone's hundredth |
 | 10 000 | polls | |
-| 20 000 | `backfill:player`, `ladder:*` | |
+| 20 000 | `backfill:player`, `ladder:*`, the boot catch-up of missing halves (20 004, TL-03) | crawl stages in order: crawl, apex, walk, collect (20 003), the catch-up (20 004, beside `ladder:archive`), the crawl's downloads (20 005), `ranks:lookup` (20 006) |
 | 30 000 | `aggregate:analytics`, `aggregate:delta`, `facts:reextract`, `builds:extract`, `tiers:backfill`, `maintenance`, `archive:offload`, `archive:index-snapshot` | |
 | 40 000 | `timelines:backfill` (TL-02) | below everything: a worker only when nothing else is claimable, so polls, walks and a crawl's downloads always go first |
 
@@ -140,7 +140,7 @@ Every handler that hits Riot calls the fetcher with `FetchOptions::JOB` (`Priori
 | `poll:live` | tick 60 s → one job per tracked player | spectator → `game.started` / `game.ended` |
 | `poll:rank` | tick 600 s → per player | league → `rank.changed` |
 | `poll:matches` | tick 300 s → per player | page from `last_seen_match_id`, enqueue `archive:match` by depth; gap > `TRACK_CATCHUP_LIMIT` → `backfill:player` |
-| `archive:match` | polls, lookups, crawl; the archive, for a stored match's timeline or a stored timeline's match (priority 0), and the boot catch-up (100) (TL-01) | fetch, zstd, insert `matches` + `match_facts`, `match.archived`, then the timeline unless `fetchTimeline` (or `ARCHIVE_TIMELINES`) is false |
+| `archive:match` | polls, lookups, crawl; the archive, for a stored match's timeline or a stored timeline's match (priority 0), and the boot catch-up (20 004, after a crawl's collect and before its downloads; TL-01, TL-03) | fetch, zstd, insert `matches` + `match_facts`, `match.archived`, then the timeline unless `fetchTimeline` (or `ARCHIVE_TIMELINES`) is false |
 | `backfill:player` | first lookup, tracking, admin | page 100 ids at a time up to `LOOKUP_BACKFILL_LIMIT`, enqueue archives |
 | `ddragon:sync` | hourly | versions.json → mirror new patch to `data/ddragon`, `patch.new` |
 | `ladder:crawl` | tick or admin | create crawl row, fan out `ladder:apex` × 3 + `ladder:walk` × (tier, division) |
