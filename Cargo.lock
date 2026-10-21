@@ -2308,7 +2308,7 @@ dependencies = [
 
 [[package]]
 name = "riot-proxy"
-version = "2.7.2"
+version = "2.8.0"
 dependencies = [
  "anyhow",
  "async-trait",
