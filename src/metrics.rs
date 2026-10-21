@@ -63,6 +63,8 @@ pub const ARCHIVE_PACKS: &str = "archive_packs";
 pub const SQLITE_WRITE_SECONDS: &str = "sqlite_write_seconds";
 pub const SQLITE_WRITE_WAIT_SECONDS: &str = "sqlite_write_wait_seconds";
 pub const SQLITE_WRITE_QUEUE: &str = "sqlite_write_queue";
+pub const SQLITE_CHECKPOINT_SECONDS: &str = "sqlite_checkpoint_seconds";
+pub const SQLITE_WAL_FRAMES_PENDING: &str = "sqlite_wal_frames_pending";
 pub const AGGREGATE_DELTA_MATCHES_TOTAL: &str = "aggregate_delta_matches_total";
 pub const AGGREGATE_DELTA_BATCH_SECONDS: &str = "aggregate_delta_batch_seconds";
 pub const AGGREGATE_DELTA_BATCH_SIZE: &str = "aggregate_delta_batch_size";
@@ -372,6 +374,21 @@ pub const CATALOGUE: &[MetricDef] = &[
         Kind::Gauge,
         &[],
         "SQLite writes queued behind the running one",
+        &[],
+    ),
+    // The WAL checkpointer (WR-04, ADR-185).
+    def(
+        SQLITE_CHECKPOINT_SECONDS,
+        Kind::Histogram,
+        &[],
+        "Time each passive WAL checkpoint took on the checkpointer thread, off the writer",
+        SQLITE_WRITE_BUCKETS,
+    ),
+    def(
+        SQLITE_WAL_FRAMES_PENDING,
+        Kind::Gauge,
+        &[],
+        "WAL frames not yet copied into the database file after the last checkpoint pass",
         &[],
     ),
     // aggregate:delta (THR-03, ADR-182).

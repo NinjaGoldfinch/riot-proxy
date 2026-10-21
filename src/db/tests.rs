@@ -50,7 +50,7 @@ async fn writer_has_every_design_04_pragma() {
         ("cache_size", "-65536"),
         ("mmap_size", "268435456"),
         ("temp_store", "2"), // MEMORY
-        ("wal_autocheckpoint", "1000"),
+        ("wal_autocheckpoint", "10000"),
     ];
     let expected: Vec<(String, String)> = expected
         .iter()
@@ -2028,4 +2028,45 @@ async fn a_panicking_write_still_clears_busy_since() {
     let s = db.writer_status();
     assert_eq!(s.busy_since, None);
     assert!(s.last_finished > 0);
+}
+
+/// WR-04 (ADR-185): the checkpointer copies a commit's WAL frames into the
+/// database file on its own thread, without a write asking for it.
+#[tokio::test]
+async fn the_checkpointer_copies_committed_frames_back() {
+    let (_dir, db) = open_temp(1);
+    db.write(|c| {
+        c.execute_batch(
+            "CREATE TABLE wr04 (x TEXT);
+             WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 20000)
+             INSERT INTO wr04 SELECT hex(randomblob(64)) FROM n;",
+        )?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .expect("write");
+    let p = db.checkpoints();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let (log, done) = (
+            p.log.load(std::sync::atomic::Ordering::Relaxed),
+            p.checkpointed.load(std::sync::atomic::Ordering::Relaxed),
+        );
+        if log > 0 && done == log {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "log {log}, checkpointed {done}");
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(p.runs.load(std::sync::atomic::Ordering::Relaxed) >= 1);
+}
+
+/// Dropping the last handle stops the checkpointer without waiting out its
+/// period.
+#[test]
+fn dropping_the_db_stops_the_checkpointer_at_once() {
+    let (_dir, db) = open_temp(1);
+    let started = std::time::Instant::now();
+    drop(db);
+    assert!(started.elapsed() < std::time::Duration::from_millis(500), "{:?}", started.elapsed());
 }

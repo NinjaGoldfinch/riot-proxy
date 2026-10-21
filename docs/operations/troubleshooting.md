@@ -90,7 +90,7 @@ Failures an operator or integrator meets with riot-proxy, each as symptom, likel
 
 ### 14. The WAL keeps growing (`sqlite_wal_bytes` in the hundreds of MB)
 
-- **Cause:** `wal_autocheckpoint=1000` (`src/db/mod.rs:38`) cannot complete while readers hold old snapshots; with readers always active the WAL never checkpointed on the 2-vCPU host (`docs/design/07-deployment.md:171`). The daily `maintenance` runs `PRAGMA wal_checkpoint(TRUNCATE)` and logs `checkpoint_busy`, `wal_frames`, `checkpointed` (`src/jobs/maintenance.rs:254-268`).
+- **Cause:** a checkpoint cannot copy frames a reader's old snapshot still needs. The checkpointer thread runs a passive checkpoint every second (WR-04, `src/db/checkpointer.rs`; the writer's own automatic one is a backstop at 10 000 pages, `src/db/mod.rs`), and `sqlite_wal_frames_pending` is what it couldn't copy yet; with readers always active the WAL never checkpointed on the 2-vCPU host before it (`docs/design/07-deployment.md:171`). The daily `maintenance` runs `PRAGMA wal_checkpoint(TRUNCATE)` and logs `checkpoint_busy`, `wal_frames`, `checkpointed` (`src/jobs/maintenance.rs:254-268`).
 - **Diagnose:** `/metrics` `sqlite_wal_bytes`; `ls -la /var/lib/riot-proxy/data/riot-proxy.db-wal`; the last `maintenance done` line.
 - **Fix:** `POST /v1/admin/maintenance/run` in a quiet moment; lower `JOB_CONCURRENCY` so fewer readers overlap. Never delete the `-wal` file (`deploy/README.md:258-265`).
 

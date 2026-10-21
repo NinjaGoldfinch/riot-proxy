@@ -94,6 +94,8 @@ What is not logged: the Riot key (a sensitive header value, `src/riot/client.rs:
 | `timeline_backfill_not_found_total` | counter | region | timelines Riot answered 404 for | `src/jobs/timelines.rs:366` |
 | `sqlite_db_bytes` | gauge | | database file size | `src/db/disk.rs:70` |
 | `sqlite_wal_bytes` | gauge | | `-wal` size; 0 after a truncating checkpoint | `src/db/disk.rs:71` |
+| `sqlite_checkpoint_seconds` | histogram | | one passive WAL checkpoint on the checkpointer thread, every second, off the writer (WR-04) | `src/db/checkpointer.rs` |
+| `sqlite_wal_frames_pending` | gauge | | WAL frames the last pass couldn't copy yet (a reader's snapshot holds them) | `src/db/checkpointer.rs` |
 | `sqlite_freelist_bytes` | gauge | | freed pages not yet reused | `src/db/disk.rs:72` |
 | `data_dir_free_bytes` | gauge | | `statvfs` available space on the data directory | `src/db/disk.rs:73`, `:96-116` |
 | `cache_l2_dropped_total` | counter | | L2 writes dropped on a full 10 000 queue | `src/cache/l2.rs:109` |

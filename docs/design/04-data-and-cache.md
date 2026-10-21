@@ -45,12 +45,13 @@ PRAGMA foreign_keys = ON;
 PRAGMA cache_size = -65536;        -- 64 MB page cache
 PRAGMA mmap_size = 268435456;      -- 256 MB, read path
 PRAGMA temp_store = MEMORY;
-PRAGMA wal_autocheckpoint = 1000;
+PRAGMA wal_autocheckpoint = 10000;  -- writer only: a backstop (WR-04); the checkpointer thread does the work
 ```
 
 Connection policy:
 
 - **One writer connection** on a dedicated thread. All `INSERT/UPDATE/DELETE` go through an `mpsc` channel of closures — serialised by construction, so there is never a `SQLITE_BUSY` on write. The thread stamps when each job starts and ends, and a progress handler (every 1000 VM instructions) and commit hook stamp while SQLite executes; `Db::writer_status` reads the stamps without queueing, for `/readyz`, and every job is timed into `sqlite_write_seconds` (WR-02, ADR-180).
+- **A checkpointer thread** with its own connection runs `PRAGMA wal_checkpoint(PASSIVE)` every second (WR-04, ADR-185). A passive checkpoint takes no write lock, so the writer's commits no longer copy the WAL back into the database file: at SQLite's default `wal_autocheckpoint = 1000` the commit that crossed it did, which made 0.25–1.4 s commits on production. Frames a reader still needs wait for the next pass. The writer keeps an automatic checkpoint at 10 000 pages (about 40 MiB) for a checkpointer that falls behind. The thread writes no rows; the one-writer rule is about transactions, and it opens none. `sqlite_checkpoint_seconds`, `sqlite_wal_frames_pending`.
 - **Reader pool** of `n_cores` connections for the HTTP path. WAL means they see a consistent snapshot without blocking. A read borrows a connection with its semaphore permit and hands both back from inside the blocking closure, connection first, so a caller that stops waiting (`try_join!`, a client gone) can't leave a permit without a connection. `/readyz` and `sqlite_readers_free` show the idle count (ADR-113).
 - `spawn_blocking` at the boundary; no SQLite call inside an async fn.
 

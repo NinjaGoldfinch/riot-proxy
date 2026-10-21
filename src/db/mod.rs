@@ -12,9 +12,12 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 
 use crate::archive::objects::Objects;
 
+mod checkpointer;
 pub mod disk;
 pub mod store;
 mod writer;
+
+pub use checkpointer::Progress as CheckpointProgress;
 
 pub use writer::WriterStatus;
 use writer::{Stamps, WriteJob};
@@ -35,8 +38,14 @@ const CONNECTION_PRAGMAS: &[(&str, &str)] = &[
 const WRITER_PRAGMAS: &[(&str, &str)] = &[
     ("journal_mode", "WAL"),
     ("synchronous", "NORMAL"),
-    ("wal_autocheckpoint", "1000"),
+    ("wal_autocheckpoint", WAL_BACKSTOP_PAGES),
 ];
+
+/// The writer's own automatic checkpoint, a backstop only (WR-04, ADR-185):
+/// the checkpointer thread copies frames back every second, so a commit
+/// reaches this many WAL pages (about 40 MiB) only if it falls behind. At
+/// SQLite's default of 1000 the commit that crossed it ran the checkpoint.
+const WAL_BACKSTOP_PAGES: &str = "10000";
 
 /// Queued writes before `write()` callers start waiting for the writer.
 const WRITE_QUEUE: usize = 1024;
@@ -89,6 +98,8 @@ struct Inner {
     reads: AtomicU64,
     /// What the writer thread is doing (WR-02).
     stamps: Arc<Stamps>,
+    /// Copies the WAL back into the database file off the writer (WR-04).
+    checkpointer: checkpointer::Checkpointer,
 }
 
 impl Inner {
@@ -170,6 +181,7 @@ impl Db {
             })
             .map_err(DbError::Spawn)?;
         let _ = wait_registered.recv();
+        let checkpointer = checkpointer::Checkpointer::start(path, checkpointer::EVERY)?;
 
         set_readers_free(readers);
         Ok(Self {
@@ -182,6 +194,7 @@ impl Db {
                 objects: OnceLock::new(),
                 reads: AtomicU64::new(0),
                 stamps,
+                checkpointer,
             }),
         })
     }
@@ -195,6 +208,11 @@ impl Db {
     /// Only the first call takes effect; later ones return `false`.
     pub fn attach_objects(&self, objects: Objects) -> bool {
         self.inner.objects.set(objects).is_ok()
+    }
+
+    /// What the WAL checkpointer's last pass found (WR-04).
+    pub fn checkpoints(&self) -> &CheckpointProgress {
+        &self.inner.checkpointer.progress
     }
 
     /// The bucket set by [`Db::attach_objects`], if any.
