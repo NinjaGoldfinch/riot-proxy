@@ -90,7 +90,7 @@ With data, `champions[]` rows are `{championId, games, wins, winRate, avgKda, cs
 
 ## `/v1/lol/analytics/*`: champion analytics
 
-Computed by the `aggregate:analytics` job from archived ranked matches; the routes only read tables (`src/routes/analytics.rs:L1-L3`). Tagged `lol` in the OpenAPI document. Documented responses: 200, 304, 400, 401, 403, 404, 429.
+Computed by the `aggregate:analytics` job from archived ranked matches, and kept current between rebuilds by `aggregate:delta` (THR-03); the routes only read tables (`src/routes/analytics.rs:L1-L3`). Tagged `lol` in the OpenAPI document. Documented responses: 200, 304, 400, 401, 403, 404, 429.
 
 ### Common filters (`src/routes/analytics.rs:L486-L561`)
 
@@ -110,29 +110,29 @@ Routes and their own parameters:
 
 | Method | Path | Specific params | Handler |
 |---|---|---|---|
-| GET | `/v1/lol/analytics/champions` | `role` team positions; `limit` 1 to 500 (default 200) | `src/routes/analytics.rs:L1013` |
-| GET | `/v1/lol/analytics/champions/{championId}` | `championId` integer ≥ 1; `limit` 1 to 50 (default 10) per section | `src/routes/analytics.rs:L1215` |
-| GET | `/v1/lol/analytics/champions/{championId}/matchups` | `role` lanes only (no `""`); `limit` 1 to 200 (default 50) | `src/routes/analytics.rs:L1111` |
-| GET | `/v1/lol/analytics/champions/{championId}/builds` | `limit` 1 to 10 (default 3); `opponentId` integer ≥ 1; `role` lanes when `opponentId` is set, else team positions | `src/routes/analytics.rs:L1486` |
-| GET | `/v1/lol/analytics/patches` | only `platform`, `queue`, `championId`, `side`, `remakes` | `src/routes/analytics.rs:L1623` |
+| GET | `/v1/lol/analytics/champions` | `role` team positions; `limit` 1 to 500 (default 200) | `src/routes/analytics.rs:L1031` |
+| GET | `/v1/lol/analytics/champions/{championId}` | `championId` integer ≥ 1; `limit` 1 to 50 (default 10) per section | `src/routes/analytics.rs:L1237` |
+| GET | `/v1/lol/analytics/champions/{championId}/matchups` | `role` lanes only (no `""`); `limit` 1 to 200 (default 50) | `src/routes/analytics.rs:L1131` |
+| GET | `/v1/lol/analytics/champions/{championId}/builds` | `limit` 1 to 10 (default 3); `opponentId` integer ≥ 1; `role` lanes when `opponentId` is set, else team positions | `src/routes/analytics.rs:L1509` |
+| GET | `/v1/lol/analytics/patches` | only `platform`, `queue`, `championId`, `side`, `remakes` | `src/routes/analytics.rs:L1648` |
 
 ### Response headers
 
-Every 200 carries a weak `ETag` and `Cache-Control: private, max-age=300`; `If-None-Match` (a list or `*`) that matches is a `304` with the same headers (`src/routes/analytics.rs:L52`, `L577-L614`). `X-Cache: HIT` means the in-memory response cache (`ANALYTICS_CACHE_ENTRIES`, default 512, cleared on every rebuild and on a Data Dragon version change); `MISS` means computed now. There is **no** `X-Cache-Age` on these routes. Captured:
+Every 200 carries a weak `ETag` and `Cache-Control: private, max-age=300`; `If-None-Match` (a list or `*`) that matches is a `304` with the same headers (`src/routes/analytics.rs:L52`, `L577-L614`). On every route but `/patches` the tag includes the newest `computed_at` of the slice's `analytics_match_totals` rows, so it changes whenever a rebuild or an `aggregate:delta` run counts a match in the slice (THR-03, ADR-182; `L749-L765`). `X-Cache: HIT` means the in-memory response cache (`ANALYTICS_CACHE_ENTRIES`, default 512, cleared on every rebuild, on every delta that counted something and on a Data Dragon version change); `MISS` means computed now. There is **no** `X-Cache-Age` on these routes. Captured:
 
 ```text
 GET /v1/lol/analytics/champions?queue=RANKED_SOLO_5x5&limit=2
 HTTP/1.1 200 OK
 content-type: application/json; charset=utf-8
 cache-control: private, max-age=300
-etag: W/"HwbkHHPVcX8gqbVqhdoe6Fa0DRAJwgyuz7r2LxH1V0s"
+etag: W/"pG-2XjBV9zuyNBcF5V3Tf_TERlw-OdnaWXVDeIr2mTM"
 x-cache: MISS
 
 {"platform":null,"queue":"RANKED_SOLO_5x5","tier":null,"minTier":null,"side":null,"patch":null,"role":null,"computedAt":null,"totalGames":0,"champions":[]}
 
-GET … with If-None-Match: W/"HwbkHHPVcX8gqbVqhdoe6Fa0DRAJwgyuz7r2LxH1V0s"
+GET … with If-None-Match: W/"pG-2XjBV9zuyNBcF5V3Tf_TERlw-OdnaWXVDeIr2mTM"
 HTTP/1.1 304 Not Modified
-etag: W/"HwbkHHPVcX8gqbVqhdoe6Fa0DRAJwgyuz7r2LxH1V0s"
+etag: W/"pG-2XjBV9zuyNBcF5V3Tf_TERlw-OdnaWXVDeIr2mTM"
 x-cache: HIT
 ```
 
@@ -158,5 +158,5 @@ A read failure is `500 INTERNAL` (`L627`).
 What ninjagoldfinch.lol sends: `queue=RANKED_SOLO_5x5`, optional `patch` and `role`, `minGames=0`, `limit=500` on the list, `limit=10` on the detail, `limit=200` on matchups; never `tier`, `side` or `minTier` (`docs/_meta/scratch/siblings.md` §1.5).
 
 ---
-**Sources:** `src/routes/players.rs:L5-L7,L66-L147,L190-L233,L244-L263,L358-L379,L400-L492,L541-L599,L623-L671,L825-L837,L884,L912-L926,L1005-L1085`, `src/routes/summary.rs:L14-L43`, `src/http/refresh.rs:L18-L71`, `src/http/validate.rs:L185-L250`, `src/routes/analytics.rs:L1-L3,L52-L56,L111-L134,L153-L178,L230-L267,L326-L421,L486-L629,L649-L658,L749-L754,L885-L965,L1013,L1111,L1215,L1486,L1623`, `src/routes/analytics/cache.rs:L1-L19,L89-L137,L181-L264`, `tests/snapshots/players_routes__*.snap`, `tests/snapshots/analytics__*.snap`, `docs/DECISIONS.md` ADR-065, ADR-123, `docs/_meta/scratch/routes.md` §1.4-1.5, `docs/_meta/scratch/siblings.md` §1.5, live capture against `target/debug/riot-proxy` 2.7.0
-**Last verified:** 2026-10-19 against commit `52fa67d`
+**Sources:** `src/routes/players.rs:L5-L7,L66-L147,L190-L233,L244-L263,L358-L379,L400-L492,L541-L599,L623-L671,L825-L837,L884,L912-L926,L1005-L1085`, `src/routes/summary.rs:L14-L43`, `src/http/refresh.rs:L18-L71`, `src/http/validate.rs:L185-L250`, `src/routes/analytics.rs:L1-L3,L52-L56,L111-L134,L153-L178,L230-L267,L326-L421,L486-L629,L649-L658,L749-L765,L767-L772,L903-L983,L1031,L1131,L1237,L1509,L1648`, `src/routes/analytics/cache.rs:L1-L19,L89-L137,L181-L264`, `tests/snapshots/players_routes__*.snap`, `tests/snapshots/analytics__*.snap`, `docs/DECISIONS.md` ADR-065, ADR-123, `docs/_meta/scratch/routes.md` §1.4-1.5, `docs/_meta/scratch/siblings.md` §1.5, live capture against `target/debug/riot-proxy` 2.7.0
+**Last verified:** 2026-10-21 against commit `32c4672`

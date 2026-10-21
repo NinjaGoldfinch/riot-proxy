@@ -16,7 +16,7 @@ flowchart LR
     M -->|"builds:extract"| Builds[("DB · match_builds")]
     Ladder["ladder crawl, ranks:lookup"] --> Ranks[("DB · ladder_entries, player_ranks")]
     Ranks -->|"tiers::stamp"| Facts
-    Facts -->|"aggregate:analytics"| Agg[("DB · champion_* tables")]
+    Facts -->|"aggregate:analytics, aggregate:delta"| Agg[("DB · champion_* tables")]
     Builds --> Agg
     Agg -->|"read + response cache"| A["/v1/lol/analytics/*"]
     M -->|"archive:offload, 64 MiB packs"| OS["Onidel Object Storage"]
@@ -36,17 +36,17 @@ The archive is the only source for facts; the ladder and rank lookups add the ti
 The fetcher stores a 2xx body in one of two ways (`src/fetcher.rs:487-506`):
 
 - **Mutable endpoints** (summoner, league, mastery, spectator, match ids, rotations, status, account) go to L1 under `{keyScope}:{endpoint}:{host}:{params}[:{queryHash}]` with the endpoint's soft and hard TTL (`src/cache/keys.rs:72-90`). Endpoints flagged `persist_l2` (account, summoner, mastery, the ladder reads) are also queued for the SQLite `cache` table so they survive a restart (`src/riot/endpoints.rs:88-285`, `src/cache/l2.rs:23-28`). Bodies are stored as the bytes Riot sent; passthrough routes forward them untouched.
-- **Immutable endpoints** (`match.byId`, `match.timeline`) go to the archive: zstd level 3 into `matches.body_zstd` or `timelines.body_zstd`, with `region`, `patch` (`major.minor` from `gameVersion`), `queue_id`, `game_end_ms`, `game_duration`, `body_size` and `archived_at` (`src/archive/matches.rs:33,351-396`). The two halves are archived together: storing one queues the other as an `archive:match` job at priority 0 (`src/archive/mod.rs:88-110`, ADR-118).
+- **Immutable endpoints** (`match.byId`, `match.timeline`) go to the archive: zstd level 3 into `matches.body_zstd` or `timelines.body_zstd`, with `region`, `patch` (`major.minor` from `gameVersion`), `queue_id`, `game_end_ms`, `game_duration`, `body_size` and `archived_at` (`src/archive/matches.rs:33,366-411`). The two halves are archived together: storing one queues the other as an `archive:match` job at priority 0 (`src/archive/mod.rs:88-110`, ADR-118).
 
 A league-entries body is also "observed": the player's ranks are recorded in `player_ranks` and late tier stamps are applied (`src/archive/mod.rs:180-201`).
 
 ### 2. Body to facts
 
-In the same write transaction as the match body, `facts::write` extracts one `match_facts` row per participant: team, position, champion, win, kills, deaths, assists, items, runes (a positional array), summoner spells, cs, gold, damage, vision, and `facts_version` (currently 4); bans go to `match_bans`; `remake` and `game_duration` go on the match row (`src/archive/matches.rs:137-154`, `src/archive/facts.rs:19,329-379`). When the extraction version moves, boot queues `facts:reextract`, which re-derives rows batch by batch from the stored bodies (`src/jobs/analytics.rs:404-477`).
+In the same write transaction as the match body, `facts::write` extracts one `match_facts` row per participant: team, position, champion, win, kills, deaths, assists, items, runes (a positional array), summoner spells, cs, gold, damage, vision, and `facts_version` (currently 4); bans go to `match_bans`; `remake` and `game_duration` go on the match row (`src/archive/matches.rs:137-169`, `src/archive/facts.rs:19,329-379`). When the extraction version moves, boot queues `facts:reextract`, which re-derives rows batch by batch from the stored bodies (`src/jobs/analytics.rs:508-589`).
 
 ### 3. Timeline to builds
 
-`builds:extract` reads timelines whose match has facts and no `match_builds` row at `BUILDS_VERSION` 3, and derives each participant's starter items, boots, finished items in order and skill order, using the mirrored `item.json` to know which items are finished (`src/archive/builds.rs:24,381-407`, `src/jobs/analytics.rs:488-580`). Two champion-specific rules apply: Viego's possession is not counted as his skill points and Udyr's R ranks with Q, W and E (ADR-131, ADR-132).
+`builds:extract` reads timelines whose match has facts and no `match_builds` row at `BUILDS_VERSION` 3, and derives each participant's starter items, boots, finished items in order and skill order, using the mirrored `item.json` to know which items are finished (`src/archive/builds.rs:24,382-419`, `src/jobs/analytics.rs:600-692`). Two champion-specific rules apply: Viego's possession is not counted as his skill points and Udyr's R ranks with Q, W and E (ADR-131, ADR-132).
 
 ### 4. Ladder and ranks to tier stamps
 
@@ -54,7 +54,9 @@ A crawl writes `ladder_entries` for every player on the ladder and `players` row
 
 ### 5. Facts to analytics
 
-`aggregate:analytics` runs per `(platform, queue)` ladder over the newest `AGGREGATE_PATCH_LIMIT` patches (default 4; 0 means all). It clears and re-inserts the champion tables with `INSERT … SELECT` over `match_facts` joined to `matches`, keyed by key scope, platform, queue, tier, patch, champion, role, remake and side; writes the tier-summed `champion_stats_totals` and the per-floor totals; then matchups, items, runes, spells, set builds and matchup builds; records `analytics_runs`; clears and warms the response cache; publishes `analytics.updated` (`src/jobs/analytics.rs:247-385`, `src/archive/analytics.rs:70-98,135-540`). It runs after every completed crawl, on `AGGREGATE_INTERVAL_S` if set, and on `POST /v1/admin/analytics/recompute`; one rebuild runs at a time by default (`JOB_KIND_LIMITS`).
+`aggregate:analytics` runs per `(platform, queue)` ladder over the newest `AGGREGATE_PATCH_LIMIT` patches (default 4; 0 means all). It clears and re-inserts the champion tables with `INSERT … SELECT` over `match_facts` joined to `matches`, keyed by key scope, platform, queue, tier, patch, champion, role, remake and side; writes the tier-summed `champion_stats_totals` and the per-floor totals; then matchups, items, runes, spells, set builds and matchup builds; records `analytics_runs`; clears and warms the response cache; publishes `analytics.updated` (`src/jobs/analytics.rs:323-489`, `src/archive/analytics.rs:62-97,204-702`). It runs on `AGGREGATE_INTERVAL_S` if set, on `POST /v1/admin/analytics/recompute`, once per ladder not yet stamped (at boot after V0029, or after a version bump rewrote counted matches), and after every completed crawl when `AGGREGATE_DELTA_S=0`; one rebuild runs at a time by default (`JOB_KIND_LIMITS`).
+
+Between rebuilds `aggregate:delta` (THR-03, ADR-182) keeps the same tables current: every `AGGREGATE_DELTA_S` (60 s) and after each completed crawl and `ranks:lookup`, it adds the matches whose `analytics_counted` row lacks a step, and takes back what a step counted for a player whose tier has moved since, in write transactions sized toward `AGGREGATE_DELTA_TARGET_MS` (100 ms), for each configured ladder a full rebuild has stamped; then it clears and warms the response cache once and publishes `analytics.updated` per ladder it counted in (`src/jobs/analytics.rs:741-914`, `src/archive/analytics/delta.rs`).
 
 ### 6. Analytics to the consumer
 
@@ -74,12 +76,12 @@ Within hours of being archived a body is packed: `archive:offload` builds a 64 M
 | Pack map | `body_packs`, `body_locations` | backups; daily `index/` snapshot; each pack's own index | `packs reindex` |
 | Facts, bans, builds, tier stamps | SQLite | backups | the bodies (`facts:reextract`, `builds:extract`, `tiers:backfill`) |
 | Ladder entries, ranks | SQLite | backups | a new crawl / lookups |
-| Analytics tables | SQLite | backups | `aggregate:analytics` |
+| Analytics tables | SQLite | backups | a full `aggregate:analytics` rebuild per ladder |
 | Jobs, limiter checkpoint, metrics history | SQLite | backups | regenerated in operation |
 | Data Dragon mirror | `$DATA_DIR/ddragon` | none | the CDN |
 
 The table in [../data/schema.md](../data/schema.md) gives every column; [../data/caching.md](../data/caching.md) gives every TTL.
 
 ---
-**Sources:** `src/fetcher.rs:L487-L506`, `src/cache/keys.rs:L72-L90`, `src/cache/l2.rs:L23-L28`, `src/riot/endpoints.rs:L88-L285`, `src/archive/matches.rs:L33,L137-L154,L351-L396`, `src/archive/mod.rs:L88-L110,L180-L201`, `src/archive/facts.rs:L19,L329-L379`, `src/archive/builds.rs:L24,L381-L407`, `src/archive/tiers.rs:L33-L90`, `src/archive/ranks.rs:L53-L66`, `src/jobs/analytics.rs:L247-L385,L404-L580`, `src/archive/analytics.rs:L70-L98`, `src/routes/analytics.rs:L577-L629`, `src/archive/offload.rs:L72-L170`, `src/jobs/offload.rs:L146-L195`, `docs/_meta/scratch/persistence.md`, `docs/_meta/scratch/siblings.md` §1.5
-**Last verified:** 2026-10-19 against commit `52fa67d`
+**Sources:** `src/fetcher.rs:L487-L506`, `src/cache/keys.rs:L72-L90`, `src/cache/l2.rs:L23-L28`, `src/riot/endpoints.rs:L88-L285`, `src/archive/matches.rs:L33,L137-L169,L366-L411`, `src/archive/mod.rs:L88-L110,L180-L201`, `src/archive/facts.rs:L19,L329-L379`, `src/archive/builds.rs:L24,L382-L419`, `src/archive/tiers.rs:L33-L90`, `src/archive/ranks.rs:L53-L66`, `src/jobs/analytics.rs:L323-L489,L508-L692,L741-L914`, `src/archive/analytics.rs:L62-L97,L204-L702`, `src/archive/analytics/delta.rs`, `src/routes/analytics.rs:L577-L629`, `src/archive/offload.rs:L72-L170`, `src/jobs/offload.rs:L146-L195`, `docs/_meta/scratch/persistence.md`, `docs/_meta/scratch/siblings.md` §1.5
+**Last verified:** 2026-10-21 against commit `32c4672`

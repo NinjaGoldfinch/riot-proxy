@@ -127,6 +127,8 @@ pub fn schedule(config: &Config) -> Vec<(&'static str, Duration)> {
         (config.aggregate_interval_s > 0)
             .then(|| (kinds::AGGREGATE_ANALYTICS, s(config.aggregate_interval_s))),
     )
+    // THR-03: on by default; each run counts what arrived since the last.
+    .chain((config.aggregate_delta_s > 0).then(|| (kinds::AGGREGATE_DELTA, s(config.aggregate_delta_s))))
     // TL-02: off unless TIMELINE_BACKFILL_PATCHES is set. Hourly, so a region
     // whose job finished starts again once newer matches arrive without one.
     .chain(

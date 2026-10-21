@@ -32,6 +32,8 @@ pub mod kinds {
     pub const RANKS_LOOKUP: &str = "ranks:lookup";
     pub const NAMES_BACKFILL: &str = "names:backfill";
     pub const AGGREGATE_ANALYTICS: &str = "aggregate:analytics";
+    /// THR-03: count the matches no rebuild or delta has counted yet.
+    pub const AGGREGATE_DELTA: &str = "aggregate:delta";
     pub const FACTS_REEXTRACT: &str = "facts:reextract";
     pub const BUILDS_EXTRACT: &str = "builds:extract";
     pub const TIERS_BACKFILL: &str = "tiers:backfill";
@@ -58,6 +60,7 @@ pub mod kinds {
         RANKS_LOOKUP,
         NAMES_BACKFILL,
         AGGREGATE_ANALYTICS,
+        AGGREGATE_DELTA,
         FACTS_REEXTRACT,
         BUILDS_EXTRACT,
         TIERS_BACKFILL,
@@ -138,6 +141,10 @@ pub fn handlers(
         .with(
             kinds::AGGREGATE_ANALYTICS,
             analytics::AggregateHandler(Arc::clone(analytics)),
+        )
+        .with(
+            kinds::AGGREGATE_DELTA,
+            analytics::DeltaHandler(Arc::clone(analytics)),
         )
         .with(
             kinds::FACTS_REEXTRACT,

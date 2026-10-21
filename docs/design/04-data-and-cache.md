@@ -193,7 +193,9 @@ CREATE INDEX facts_player ON match_facts(key_scope, puuid, match_id);  -- holds 
 
 -- Analytics (recomputed; safe to TRUNCATE) ── v1's shape, ADR-056 ───────────
 -- Every table here is WITHOUT ROWID since V0020 (DSK-06, ADR-140): the key is
--- most of the row, so a rowid table held it twice. Rebuilt by DELETE + INSERT.
+-- most of the row, so a rowid table held it twice. Rebuilt by DELETE + INSERT;
+-- since THR-03 (ADR-182) also counted a batch at a time by aggregate:delta,
+-- whose upserts add to the rows (§Analytics: incremental counting).
 -- Every table is keyed by (key_scope, platform, queue, …, patch) and carries
 -- remake (0/1) as a key, so a read excludes remakes (default) or sums both.
 -- Every participant of the platform's archived matches counts (ADR-105), at
@@ -282,6 +284,26 @@ CREATE TABLE champion_matchup_build_parts (       -- item3 | boots | runes | spe
 CREATE TABLE analytics_unsplit (                  -- V0017: ladders whose next rebuild covers every patch
   key_scope, platform, queue, PRIMARY KEY (key_scope, platform, queue)
 );
+-- V0029 (THR-03, ADR-182): which rebuild steps count each match. bits: 1
+-- champions, 2 matchups, 4 items, 8 runes, 16 spells, 32 sets; 63 counted.
+-- Written at 0 with the match's facts; a step sets its bit for the matches it
+-- read, in its own transaction; a delta batch sets all six with its counts.
+CREATE TABLE analytics_counted (
+  match_id TEXT REFERENCES matches(match_id) ON DELETE CASCADE, key_scope TEXT, bits INTEGER,
+  PRIMARY KEY (match_id, key_scope)
+) WITHOUT ROWID;
+CREATE INDEX analytics_uncounted ON analytics_counted (key_scope, match_id) WHERE bits <> 63;
+CREATE TABLE analytics_retract (                  -- a step's count of a player whose tier moved since
+  match_id TEXT REFERENCES matches(match_id) ON DELETE CASCADE, key_scope TEXT, puuid TEXT,
+  step INTEGER, tier TEXT,                        -- the step's bit; the tier it counted them at
+  PRIMARY KEY (match_id, key_scope, puuid, step)
+) WITHOUT ROWID;                                  -- written by the trigger match_facts_tier_moved
+CREATE TABLE analytics_stamped (                  -- ladders whose stamps agree with their tables
+  key_scope, platform, queue,
+  stamped_at INTEGER,                             -- start of the last full rebuild that stamped it
+  dirty_at INTEGER,                               -- a counted match's inputs rewritten since; no delta
+  PRIMARY KEY (key_scope, platform, queue)
+) WITHOUT ROWID;
 
 -- Ladder ──────────────────────────────────────────────────────────────────── (v1's shape, ADR-054)
 CREATE TABLE ladder_crawls (                      -- the run log
@@ -381,7 +403,7 @@ Migrations are embedded in the binary (`sqlx::migrate!("./src/db/migrations")` o
 | **L2** | account, summoner, ladder pages, mastery | soft/hard as v1 | yes (SQLite `cache`) |
 | **L1** | everything above plus league, spectator, rotations, status, match-id lists | soft/hard as v1 | no — rebuilt from L2 on boot or from Riot on first miss |
 | **Negative** | spectator 404 (30 s), account 404 (300 s) | fixed | no |
-| **Analytics responses** | the five `/v1/lol/analytics/*` routes' 200 bytes and `ETag` (PERF-03, ADR-169) | none: dropped when a rebuild commits or the Data Dragon version moves; LRU of `ANALYTICS_CACHE_ENTRIES` (512) | no — the next rebuild warms the sites' slices |
+| **Analytics responses** | the five `/v1/lol/analytics/*` routes' 200 bytes and `ETag` (PERF-03, ADR-169) | none: dropped when a rebuild commits, an `aggregate:delta` run ends (THR-03) or the Data Dragon version moves; LRU of `ANALYTICS_CACHE_ENTRIES` (512) | no — the next rebuild or delta warms the sites' slices |
 
 **A match and its timeline are archived together** (TL-01, ADR-118). Whatever stores one, a read or a job, queues an `archive:match` for the other in the next write: a stored match queues its timeline (unless `ARCHIVE_TIMELINES=false`), and a stored timeline queues its match. The job runs at priority 0, so it is next once the lane has bulk room, and it costs the caller nothing: the caller's request makes one Riot call, and the other half goes through the bulk ceiling (05). If a walk already queued that match, its job is moved up to 0 and asked to fetch the timeline, not queued twice. At boot, every archived match without a timeline and every timeline without its match is queued at 100. A match is skipped if its finished job already asked for the timeline, so one Riot won't serve is not requested again on every restart; it is retried once a `done` row is pruned after seven days (`failed` rows are kept).
 
@@ -426,16 +448,29 @@ let key_scope = hex::encode(Sha256::digest(riot_api_key.as_bytes()))[..8].to_str
 
 Derived at boot, stored nowhere, included in every L1/L2 key and every `players`/`match_facts`/`ladder_entries` row. Rotate the key → old rows are inert, `matches` (keyed by unencrypted match id) is untouched. Re-resolve tracked players by Riot ID via `POST /v1/admin/tracked-players`, exactly as v1.
 
+## Analytics: incremental counting (THR-03, ADR-182)
+
+Every analytics table is a sum, a `count(*)` or a `count(DISTINCT match_id)` grouped by keys that include the patch and remake, over disjoint matches; the lane head count and `floor_top` sit inside one match. So the rows of two sets of matches add up to the rows of both, and **`aggregate:delta` counts new matches a batch at a time** with the rebuild's own statements, read from a temp copy of the batch's facts and upserted (`games = games + excluded.games`, …, `computed_at = excluded.computed_at`). Nothing stored is a top-N: every `LIMIT` is in a read. A delta's output equals a rebuild's, table by table (property-tested; plan `docs/thr/THR-03-plan.md` §1.4).
+
+- **Stamps.** `analytics_counted.bits` holds one bit per rebuild step for each `(match, key scope)`: a match can hold facts under two key scopes. `write_derived` writes the row at 0 with the facts; a rebuild step sets its bit for every match it read, in that step's transaction; a delta batch counts each match's missing steps and sets all six, in one transaction. So a delta may run between a rebuild's steps and stay exact, and a crash between batches loses nothing and counts nothing twice.
+- **Inputs that change after counting.**
+  - A tier that moves (`late_stamp`'s `UNKNOWN` → tier within `TIER_LATE_STAMP_DAYS`, `tiers::stamp`'s NULL → tier): the trigger `match_facts_tier_moved` writes an `analytics_retract` row per step that had counted the player, with the old tier (the oldest, if it moves twice). The next batch takes those counts back, from the facts at the recorded tiers, adds the match again at its tiers now, and deletes any row left counting nothing.
+  - A match's first `match_builds` rows (a timeline that came later): its set-build bit is cleared, so the next delta adds only its set builds.
+  - Anything else that rewrites a counted match's inputs (facts from an older `FACTS_VERSION`, builds from an older `BUILDS_VERSION`) sets the ladder's `analytics_stamped.dirty_at`: no delta for it until a full rebuild that started after that stamps it again.
+- **The switch-over.** V0029's tables start empty. A ladder takes deltas only once a full rebuild has stamped it (`stamped_at` set, `dirty_at` NULL); with `AGGREGATE_DELTA_S` > 0 a rebuild of an unstamped ladder covers every patch whatever `AGGREGATE_PATCH_LIMIT` says, and boot queues one per configured ladder. Any rebuild over every patch stamps the ladder.
+- **Batches.** Up to the ladder's uncounted matches at the current `FACTS_VERSION` (a stale one waits for `facts:reextract`) and those with a count to take back (each counted as two), sized from the previous batch's statement time towards `AGGREGATE_DELTA_TARGET_MS` (100), first 50, within 5 and `AGGREGATE_DELTA_BATCH` (500). The commit is timed apart: a WAL checkpoint lands there and says nothing about the batch.
+
 ## Analytics reads
 
-The analytics routes read the derived tables only, never `matches` or `match_facts`. Those tables change only when `aggregate:analytics` commits, so between rebuilds a read's answer is a constant (PERF series, ADR-166).
+The analytics routes read the derived tables only, never `matches` or `match_facts`. Those tables change when `aggregate:analytics` commits or an `aggregate:delta` run ends, so between those a read's answer is a constant (PERF series, ADR-166).
 
 - **Every read seeks** (PERF-01). A read names the filters it has and nothing else. A filter left open (no platform, no tier, `patch=all`) becomes an `IN` over the values the slice actually has, read from `analytics_slices` (ADR-167). So every read is a range seek on its key, `key_scope, platform, queue[, tier], patch, …`. The `(?N IS NULL OR col = ?N)` form is not used: SQLite cannot seek on it, and with statistics it picked the non-covering `champion_stats_slice` index for a full read.
 - **Reads with no tier use a tier-summed table** (PERF-02, ADR-168). `champion_stats_totals` is `champion_stats` summed over tier, rewritten in `rebuild_champions`' transaction for the same patches, from the rows just written. `/champions` without `tier`, a champion's summed row, `/patches` and the builds route's top role read it; a read that names a tier, and `byTier`, read `champion_stats`. A read across every platform and patch sums about a third of the rows (the synthetic copy), first per platform and patch in key order and then per champion, so its last sort is a few thousand rows.
 - **A tier range is an `IN` over its tiers** (FLT-03, ADR-170). `minTier=DIAMOND` reads the rows of Diamond and every tier above it that the slice has, `tier IN (…)`, on `champion_stats` (never `champion_stats_totals`, which has no tier) and on the facet and build tables; its first sum keeps the key's order (`platform, tier, patch, champion`). Its summed row's pick and ban rates divide by its floor's totals (`analytics_floor_totals`, `champion_ban_floor_totals`), and each `byTier` row by its own tier's slice, as with no range. `/patches` takes no range, as it takes no tier.
 - **Builds against an opponent read their own tables** (FLT-04, ADR-171). `opponentId` on the builds route reads `champion_matchup_builds` and `_parts`, keyed as `champion_matchups` up to the opponent; a role left open is an `IN` over the five lanes, so the seek reaches `opponent_id` either way. Without a role the route takes the lane with the most of those builds. `build_source` is the only way a read reaches these tables. Their rows are close to one per laned player-game (about 1.3–1.45 GiB with the parts on production's archive in October 2026, accepted).
+- **`ETag`s follow the slice** (THR-03, ADR-182). A route's weak tag is built from the newest `computed_at` of the rows it returns and, since THR-03, of its slice's `analytics_match_totals` rows (key scope, queue, platform or all, patch or all, remakes as asked). A delta stamps only the rows it touches; every match it counts touches its patch's totals row, so a game added to a champion outside the rows returned, which moves the rates' denominators, still moves the tag. `/patches` sums every row of a patch, so its own stamp suffices.
 - **Responses are cached by generation** (PERF-03, ADR-169). Each analytics route keeps its serialized 200 and `ETag` in memory, keyed by route, key scope, champion and every parameter as parsed, so two spellings of one query share an entry.
-  - **Clearing.** A rebuild clears after its last commit and before it announces `analytics.updated`, and a failed one clears too. A miss that began before a clear doesn't store what it read. An entry is good only for the Data Dragon version it was built at. `/dev/reset` clears with its wipe.
+  - **Clearing.** A rebuild clears after its last commit and before it announces `analytics.updated`, and a failed one clears too. A delta clears once a run, after its last batch, not once a batch (THR-03): during a crawl a cached answer is at most one `AGGREGATE_DELTA_S` tick and one run old. A miss that began before a clear doesn't store what it read. An entry is good only for the Data Dragon version it was built at. `/dev/reset` clears with its wipe.
   - **Serving.** A hit, 200 or 304, runs no SQL and sends `X-Cache: HIT`; a computed one sends `MISS`; concurrent misses for one key share one read.
   - **Warming.** After each rebuild the job warms, for every ladder queue, the site's champions call at `patch=all` and with no `patch`, the showcase home's champions call for the rebuilt platform, and both patch lists. So the first visitor after a recompute is served from memory.
 

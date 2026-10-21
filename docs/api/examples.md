@@ -196,18 +196,18 @@ ETAG=$(curl -si -H "Authorization: Bearer $KEY" "$BASE/v1/lol/analytics/champion
 curl -si -H "Authorization: Bearer $KEY" -H "If-None-Match: $ETAG" "$BASE/v1/lol/analytics/champions?queue=RANKED_SOLO_5x5&limit=2"
 ```
 
-Captured, first call then the revalidation:
+Captured, first call then the revalidation (the `etag` value recomputed for THR-03, whose slice stamp added a part to every analytics tag):
 
 ```text
 HTTP/1.1 200 OK
 cache-control: private, max-age=300
-etag: W/"HwbkHHPVcX8gqbVqhdoe6Fa0DRAJwgyuz7r2LxH1V0s"
+etag: W/"pG-2XjBV9zuyNBcF5V3Tf_TERlw-OdnaWXVDeIr2mTM"
 x-cache: MISS
 
 {"platform":null,"queue":"RANKED_SOLO_5x5","tier":null,"minTier":null,"side":null,"patch":null,"role":null,"computedAt":null,"totalGames":0,"champions":[]}
 
 HTTP/1.1 304 Not Modified
-etag: W/"HwbkHHPVcX8gqbVqhdoe6Fa0DRAJwgyuz7r2LxH1V0s"
+etag: W/"pG-2XjBV9zuyNBcF5V3Tf_TERlw-OdnaWXVDeIr2mTM"
 x-cache: HIT
 ```
 
@@ -314,4 +314,4 @@ Note that 401 and 403 carry no `X-RateLimit-*` headers (refused before metering)
 
 ---
 **Sources:** live capture against `target/debug/riot-proxy` 2.7.0 (`RIOT_API_KEY=RGAPI-docs-not-a-key`, port 18092, keys minted with `riot-proxy key create`), `README.md` "First run", `src/cli/mod.rs`, `src/routes/riot.rs:L127-L300`, `src/routes/lol.rs:L30-L405`, `src/routes/players.rs:L400-L671`, `src/routes/analytics.rs:L486-L614`, `src/routes/admin.rs:L180-L219,L454-L502,L838-L882,L1038,L1583-L1613,L1700-L1733,L2486`, `src/routes/ws.rs:L525-L572`, `src/ws/socket.rs:L63-L206`, `tests/snapshots/ws_hub__ws_session.snap`, `docs/_meta/scratch/routes.md`
-**Last verified:** 2026-10-20 against commit `b7b363c`
+**Last verified:** 2026-10-21 against commit `32c4672`

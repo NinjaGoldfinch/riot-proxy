@@ -377,13 +377,19 @@ pub fn extract(timeline: &[u8], catalog: &ItemCatalog, champions: &HashMap<Strin
     out
 }
 
-/// Replace a match's `match_builds` rows, in the caller's transaction.
+/// Replace a match's `match_builds` rows, in the caller's transaction, and
+/// tell the analytics stamps (THR-03).
 pub fn write(
     conn: &rusqlite::Connection,
     match_id: &str,
     key_scope: &str,
     rows: &[BuildFact],
 ) -> Result<(), rusqlite::Error> {
+    // A match's first rows add set builds no step has counted; rows that
+    // replace others change what one did (THR-03).
+    let had_rows = conn
+        .prepare_cached("SELECT EXISTS (SELECT 1 FROM match_builds WHERE match_id = ?1 AND key_scope = ?2)")?
+        .query_row([match_id, key_scope], |r| r.get::<_, bool>(0))?;
     conn.execute("DELETE FROM match_builds WHERE match_id = ?1", [match_id])?;
     let mut stmt = conn.prepare_cached(
         "INSERT INTO match_builds
@@ -403,7 +409,13 @@ pub fn write(
             BUILDS_VERSION,
         ])?;
     }
-    Ok(())
+    crate::archive::analytics::delta::on_builds_written(
+        conn,
+        match_id,
+        key_scope,
+        had_rows,
+        crate::clock::Clock::now().unix_ms,
+    )
 }
 
 #[cfg(test)]

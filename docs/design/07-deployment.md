@@ -144,8 +144,11 @@ Same variable names as v1 where the concept survives; removed variables are list
 | `ARCHIVE_BODY_LOCAL_DAYS` | `14` | **new** — how long SQLite keeps its own copy of a body already in the bucket, from when its match was archived (a timeline goes by its match); `0`–`365`, `0` frees every packed body (design/12, OBJ-03, ADR-164) |
 | `ARCHIVE_PACK_TARGET_BYTES` | `67108864` | **new** — a pack closes at this many bytes of bodies, and a kind reaching it queues `archive:offload`; 1 MiB–1 GiB |
 | `ARCHIVE_OFFLOAD_PACE_MS` | `50` | **new** — pause between offload turns; `0`–`60000` |
+| `AGGREGATE_DELTA_S` | `60` | **new** — seconds between `aggregate:delta` runs, which count newly archived matches in short transactions; with it on a completed crawl and `ranks:lookup` of a stamped ladder queue the delta instead of a rebuild, and boot queues one full rebuild per configured ladder not yet stamped. `0`–`86400`; `0` is off and everything is as before (THR-03, ADR-182) |
+| `AGGREGATE_DELTA_TARGET_MS` | `100` | **new** — the statement time a delta batch aims for; each batch is sized from the last one's. `20`–`1000` |
+| `AGGREGATE_DELTA_BATCH` | `500` | **new** — the most matches in one delta batch (the first is 50, none under 5). `5`–`5000` |
 | `BOOTSTRAP_ADMIN_KEY` | — | printed on first `serve`, no separate migrate step |
-| everything else (`CACHE_TTL_OVERRIDES`, `NEG_TTL_*`, `CLIENT_WAIT_BUDGET_MS`, `BULK_USAGE_CEILING`, `STALE_WHILE_REVALIDATE`, `METRICS_*`, `TRACK_POLL_*`, `TRACK_CATCHUP_LIMIT`, `LADDER_*`, `FACTS_REEXTRACT_BATCH`, `AGGREGATE_*`, `ADMIN_IP_ALLOWLIST`, `AUTH_DISABLED`, `DEV_UI`, `DOCS_UI`, `DASHBOARD_UI`, `LOG_LEVEL`) | as v1 | unchanged |
+| everything else (`CACHE_TTL_OVERRIDES`, `NEG_TTL_*`, `CLIENT_WAIT_BUDGET_MS`, `BULK_USAGE_CEILING`, `STALE_WHILE_REVALIDATE`, `METRICS_*`, `TRACK_POLL_*`, `TRACK_CATCHUP_LIMIT`, `LADDER_*`, `FACTS_REEXTRACT_BATCH`, `AGGREGATE_PATCH_LIMIT`, `AGGREGATE_INTERVAL_S`, `ADMIN_IP_ALLOWLIST`, `AUTH_DISABLED`, `DEV_UI`, `DOCS_UI`, `DASHBOARD_UI`, `LOG_LEVEL`) | as v1 | unchanged |
 
 ## First run
 

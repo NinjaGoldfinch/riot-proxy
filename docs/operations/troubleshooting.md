@@ -44,7 +44,7 @@ Failures an operator or integrator meets with riot-proxy, each as symptom, likel
 
 ### 7. 503 `RATE_LIMITED`
 
-- **Cause:** two messages. `Upstream rate limited` means Riot answered 429 and the fetcher gave up (`src/riot/client.rs:179-182`, `:308-318`); `Upstream rate limit budget exceeded` means the proxy's own limiter had no token within the caller's budget, 2 s for a request (`CLIENT_WAIT_BUDGET_MS`, `src/config.rs:716`; `src/riot/limiter/mod.rs:58-80`; `src/fetcher.rs:460-466`). A cached copy inside its hard TTL is served as `STALE` instead when one exists.
+- **Cause:** two messages. `Upstream rate limited` means Riot answered 429 and the fetcher gave up (`src/riot/client.rs:179-182`, `:308-318`); `Upstream rate limit budget exceeded` means the proxy's own limiter had no token within the caller's budget, 2 s for a request (`CLIENT_WAIT_BUDGET_MS`, `src/config.rs:729`; `src/riot/limiter/mod.rs:58-80`; `src/fetcher.rs:460-466`). A cached copy inside its hard TTL is served as `STALE` instead when one exists.
 - **Diagnose:** `GET /v1/admin/limits/{scope}` for `usage` and `frozenMs` (`src/routes/admin.rs:1010-1027`); `/metrics` `proxy_rl_429_total{type}` and `limiter_interactive_waiters`.
 - **Fix:** for the budget message, bulk work is starving interactive calls: lower `BULK_USAGE_CEILING` or pause crawls (`runbook.md` §13); for Riot's 429, see `runbook.md` §9.
 
@@ -68,7 +68,7 @@ Failures an operator or integrator meets with riot-proxy, each as symptom, likel
 
 ### 11. 404 on `/v1/static/*`: `Static data 'champion' has not been synced yet. Run the ddragon:sync job.`
 
-- **Cause:** no patch directory with a `versions.json` exists under `DDRAGON_DIR` yet (`src/routes/statics.rs:289-292`; `:213` for `queues`). `ddragon:sync` runs at boot and hourly (`src/jobs/ticks.rs:193-209`) but needs the CDN.
+- **Cause:** no patch directory with a `versions.json` exists under `DDRAGON_DIR` yet (`src/routes/statics.rs:289-292`; `:213` for `queues`). `ddragon:sync` runs at boot and hourly (`src/jobs/ticks.rs:195-211`) but needs the CDN.
 - **Diagnose:** `ls /var/lib/riot-proxy/data/ddragon`; journal for `syncing Data Dragon` / `Data Dragon sync complete` (`src/jobs/ddragon.rs:241`, `:258`); `GET /v1/admin/jobs?kind=ddragon:sync`.
 - **Fix:** §27, then `POST /v1/admin/ddragon/sync {"force":true}`.
 
@@ -98,7 +98,7 @@ Failures an operator or integrator meets with riot-proxy, each as symptom, likel
 
 ### 15. Jobs show `running` right after a crash or restart
 
-- **Cause:** the previous process died with handlers mid-flight; rows stay `running` until the next boot resets them to `pending` with attempts kept (`src/jobs/scheduler.rs:963-973`), logged as `re-queued jobs a previous process left running jobs=n` (`src/cli/serve.rs:276`).
+- **Cause:** the previous process died with handlers mid-flight; rows stay `running` until the next boot resets them to `pending` with attempts kept (`src/jobs/scheduler.rs:963-973`), logged as `re-queued jobs a previous process left running jobs=n` (`src/cli/serve.rs:283`).
 - **Diagnose:** `GET /v1/admin/jobs?state=running` and compare `claimedAt` with `startedAt` from `/v1/admin/info`.
 - **Fix:** nothing; it is recovered at boot. If rows are `running` with a `claimedAt` older than the process, the process did not restart cleanly: restart it.
 
@@ -110,7 +110,7 @@ Failures an operator or integrator meets with riot-proxy, each as symptom, likel
 
 ### 17. A ladder crawl ends `failed`
 
-- **Cause:** a leg (`ladder:apex`, `ladder:walk`, `ladder:collect`) gave up after five attempts; when the last leg ends with `legs_failed > 0` the crawl is finished `failed` (`src/jobs/ladder.rs:781-818`; `src/jobs/ladder/store.rs:351-406`). The partial unique index allows one running crawl per ladder (`src/db/migrations/V0004__ladder.sql:33-34`).
+- **Cause:** a leg (`ladder:apex`, `ladder:walk`, `ladder:collect`) gave up after five attempts; when the last leg ends with `legs_failed > 0` the crawl is finished `failed` (`src/jobs/ladder.rs:784-832`; `src/jobs/ladder/store.rs:351-406`). The partial unique index allows one running crawl per ladder (`src/db/migrations/V0004__ladder.sql:33-34`).
 - **Diagnose:** `GET /v1/admin/ladder/crawls?platform=oc1` → `status`, `legsFailed`; `GET /v1/admin/ladder/crawls/{id}` → `failed[]` (`src/routes/admin.rs:2092-2110`); the failed legs' `error` in `/v1/admin/jobs?state=failed&kind=ladder:walk`.
 - **Fix:** `POST /v1/admin/ladder/crawl {"platform":"oc1"}` starts a new crawl (`src/routes/admin.rs:1700-1733`); `ladder_entries` already written are kept (`V0004__ladder.sql:7`).
 
@@ -118,13 +118,13 @@ Failures an operator or integrator meets with riot-proxy, each as symptom, likel
 
 ### 18. `archive:offload` keeps failing
 
-- **Cause:** credentials or endpoint. Boot refuses `http://` in production (`ARCHIVE_OBJECT_ENDPOINT: must be https:// when ENV=production`, `src/config.rs:914-926`), an `s3://` URL without an endpoint (`is required with an s3:// ARCHIVE_OBJECT_URL`, `:988`), one key without the other (`set both or neither`, `:981-984`), or a production URL without keys (`:990-995`). A boot that passes logs `object store configured store=s3://riot-proxy-archive at <endpoint>` (`src/cli/serve.rs:103`; `src/archive/objects.rs:134`); a store that then rejects requests makes every run `Retry` (`src/jobs/offload.rs:147`).
+- **Cause:** credentials or endpoint. Boot refuses `http://` in production (`ARCHIVE_OBJECT_ENDPOINT: must be https:// when ENV=production`, `src/config.rs:930-942`), an `s3://` URL without an endpoint (`is required with an s3:// ARCHIVE_OBJECT_URL`, `:1004`), one key without the other (`set both or neither`, `:997-1000`), or a production URL without keys (`:1006-1011`). A boot that passes logs `object store configured store=s3://riot-proxy-archive at <endpoint>` (`src/cli/serve.rs:103`; `src/archive/objects.rs:134`); a store that then rejects requests makes every run `Retry` (`src/jobs/offload.rs:147`).
 - **Diagnose:** `GET /v1/admin/jobs?kind=archive:offload` → `error`; `rp packs snapshot` exercises a PUT with the service's credentials (`src/cli/packs.rs:55-65`); `sudo rclone --config /etc/riot-proxy/rclone.conf lsf onidel:riot-proxy-archive --max-depth 1`.
 - **Fix:** correct the env file and restart (`runbook.md` §6); `archive_offload_pending` falls on the next run.
 
 ### 19. `warn` lines ending in `reading from Riot`
 
-- **Cause:** an offloaded body could not be read from its pack: `offloaded body has no location` (`src/archive/matches.rs:235`), `offloaded bodies but no ARCHIVE_OBJECT_URL` (`:243-246`, the URL was unset after bodies were freed), `pack id is not a ULID` (`:269`), `pack read failed` (`:280`), `offloaded body failed its sha256` (`:291`), `offloaded body did not decompress` (`:302`). The body is dropped and the request goes to Riot (`src/archive/mod.rs:128-144`); the re-fetched body is stored locally again (`src/archive/matches.rs:384`).
+- **Cause:** an offloaded body could not be read from its pack: `offloaded body has no location` (`src/archive/matches.rs:250`), `offloaded bodies but no ARCHIVE_OBJECT_URL` (`:258-261`, the URL was unset after bodies were freed), `pack id is not a ULID` (`:284`), `pack read failed` (`:295`), `offloaded body failed its sha256` (`:306`), `offloaded body did not decompress` (`:317`). The body is dropped and the request goes to Riot (`src/archive/mod.rs:128-144`); the re-fetched body is stored locally again (`src/archive/matches.rs:399`).
 - **Diagnose:** the line's `key`/`pack_id`; `GET /v1/admin/stats | jq .archiveBodies`; `rp packs reindex --since <pack id>` lists packs that cannot be read (`src/cli/packs.rs:32-35`, `:71-83`).
 - **Fix:** for a missing URL, set it back (`docs/design/12-object-storage-and-hosting.md:943`); for a store outage, `runbook.md` §10; for a damaged pack, the R2 replica holds a copy (`deploy/README.md:12-18`).
 
@@ -132,17 +132,17 @@ Failures an operator or integrator meets with riot-proxy, each as symptom, likel
 
 ### 20. `TLS: built-in TLS was removed; terminate HTTPS in a reverse proxy`
 
-- **Cause:** `TLS=true` or `1` in the env (`src/config.rs:668-673`); built-in TLS went in ADR-067 (`docs/design/07-deployment.md:59-61`).
-- **Fix:** remove `TLS`, `TLS_DOMAIN`, `ACME_EMAIL`, `TLS_PORT` (the last three are dropped silently, `src/config.rs:873-880`).
+- **Cause:** `TLS=true` or `1` in the env (`src/config.rs:681-686`); built-in TLS went in ADR-067 (`docs/design/07-deployment.md:59-61`).
+- **Fix:** remove `TLS`, `TLS_DOMAIN`, `ACME_EMAIL`, `TLS_PORT` (the last three are dropped silently, `src/config.rs:889-896`).
 
 ### 21. `AUTH_DISABLED cannot be enabled when ENV=production`
 
-- **Cause:** `src/config.rs:658-662`. `AUTH_DISABLED` is for local work only; it runs every request as `dev-local` with `read,admin` (`src/http/auth.rs:43-52`).
+- **Cause:** `src/config.rs:671-675`. `AUTH_DISABLED` is for local work only; it runs every request as `dev-local` with `read,admin` (`src/http/auth.rs:43-52`).
 - **Fix:** remove it from `/etc/riot-proxy/env`; mint keys instead.
 
 ### 22. `warn` `DEV_UI=true ignored: /dev is never served when ENV=production`
 
-- **Cause:** `DEV_UI` is forced off in production (`src/config.rs:664-666`, `:762-763`; `src/cli/serve.rs:95-97`). Not an error; `/dev` and `/dev/reset` are simply absent.
+- **Cause:** `DEV_UI` is forced off in production (`src/config.rs:677-679`, `:778-779`; `src/cli/serve.rs:95-97`). Not an error; `/dev` and `/dev/reset` are simply absent.
 - **Fix:** remove the variable to silence the warning. The dashboard (`/dashboard`, `DASHBOARD_UI`) is unaffected.
 
 ### 23. Boot fails with `binding 127.0.0.1:8080: Address already in use`
@@ -166,22 +166,42 @@ Failures an operator or integrator meets with riot-proxy, each as symptom, likel
 
 ### 26. The container `HEALTHCHECK` fails with `error: Invalid environment configuration: RIOT_API_KEY: is required`
 
-- **Cause:** `riot-proxy healthcheck` loads the full configuration before it GETs `/healthz` (`src/cli/mod.rs:82-88`; `src/cli/healthcheck.rs`), so it needs the same env as `serve` (`src/config.rs:610-614`). Docker runs it as `CMD ["/riot-proxy","healthcheck"]` (`Dockerfile:24`).
+- **Cause:** `riot-proxy healthcheck` loads the full configuration before it GETs `/healthz` (`src/cli/mod.rs:82-88`; `src/cli/healthcheck.rs`), so it needs the same env as `serve` (`src/config.rs:623-627`). Docker runs it as `CMD ["/riot-proxy","healthcheck"]` (`Dockerfile:24`).
 - **Diagnose:** `docker exec <ctr> /riot-proxy healthcheck`; `docker inspect --format '{{json .State.Health}}' <ctr>`.
 - **Fix:** pass `RIOT_API_KEY` (and the rest of `.env`) into the container's environment, not only into a mounted file the health command cannot see.
 
 ### 27. `ddragon:sync` fails or stays `running`
 
-- **Cause:** the CDN or `static.developer.riotgames.com` is unreachable: `warn` `Data Dragon file unavailable; skipping` (`src/jobs/ddragon.rs:252`) or `queue table unavailable; keeping what is on disk` (`:281`); any error makes the job `Retry` (`:302-304`). Timeouts are 15 s connect, 60 s total (`:111-112`). The job is a deduped singleton, so a second request joins the queued one (`src/jobs/ticks.rs:243-247`; `src/routes/admin.rs:1640-1650`).
+- **Cause:** the CDN or `static.developer.riotgames.com` is unreachable: `warn` `Data Dragon file unavailable; skipping` (`src/jobs/ddragon.rs:252`) or `queue table unavailable; keeping what is on disk` (`:281`); any error makes the job `Retry` (`:302-304`). Timeouts are 15 s connect, 60 s total (`:111-112`). The job is a deduped singleton, so a second request joins the queued one (`src/jobs/ticks.rs:76-80`; `src/routes/admin.rs:1640-1650`).
 - **Diagnose:** `curl -sI https://ddragon.leagueoflegends.com/api/versions.json` from the box; `GET /v1/admin/jobs?kind=ddragon:sync`; `ls -la /var/lib/riot-proxy/data/ddragon` for write permission.
 - **Fix:** restore connectivity or permissions, then `POST /v1/admin/ddragon/sync {"force":true}`.
 
 ### 28. The bootstrap admin key was never shown
 
-- **Cause:** it is printed only when the `consumers` table is empty at `serve` and `BOOTSTRAP_ADMIN_KEY` is unset (`src/consumers.rs:308-333`; `src/cli/serve.rs:57-68`, `:399-405`). With `BOOTSTRAP_ADMIN_KEY` set, that key is imported silently; with any consumer already present, nothing is created. It goes to stderr, not the log (`src/cli/serve.rs:401`).
+- **Cause:** it is printed only when the `consumers` table is empty at `serve` and `BOOTSTRAP_ADMIN_KEY` is unset (`src/consumers.rs:308-333`; `src/cli/serve.rs:57-68`, `:420-426`). With `BOOTSTRAP_ADMIN_KEY` set, that key is imported silently; with any consumer already present, nothing is created. It goes to stderr, not the log (`src/cli/serve.rs:422`).
 - **Diagnose:** `rp key list` shows whether `bootstrap-admin` exists (`src/consumers.rs:16`).
 - **Fix:** mint a new admin key with `rp key create --name admin-2026-10 --scopes read,admin`; a lost key cannot be recovered (only its hash is stored, `src/consumers.rs:105-107`).
 
+## Analytics
+
+### 29. A ladder's analytics stop moving after crawls, or `lastRuns` has no `delta` for it
+
+- **Cause:** since THR-03 (ADR-182) a completed crawl of a stamped ladder queues `aggregate:delta`, not a rebuild, and the delta counts only ladders stamped by a full rebuild with nothing marked dirty since, of any platform (`src/jobs/analytics.rs:748-780`; `src/archive/analytics/delta.rs:199-222`). A ladder is unstamped after the upgrade to V0029 until its first full rebuild finishes, and dirty after a `facts:reextract` or a `BUILDS_VERSION` bump rewrote matches already counted; either way a full rebuild is queued for it and the delta skips it until then. A crawl of an unstamped ladder (a platform outside `LADDER_PLATFORMS`, started from the admin route, or one before its first full rebuild) queues that rebuild at its end, which stamps it; deltas count it from then on. Boot and each delta queue the rebuild only for configured ladders.
+- **Diagnose:** `GET /v1/admin/metrics | jq '.analytics.lastRuns[] | {platform,queue,kind,at,status}'`; `GET /v1/admin/jobs/queue` for a pending or running `aggregate:analytics`; the journal's `full rebuilds queued for ladders not stamped yet queued=n` (`src/jobs/analytics.rs:774`) or, at boot, `queued full analytics rebuilds to stamp counted matches ladders=n` (`src/cli/serve.rs:326-329`). `GET /v1/admin/info` shows `AGGREGATE_DELTA_S`; at `0` crawls queue rebuilds as before.
+- **Fix:** let the queued rebuild finish (minutes per ladder on production; `runbook.md` §19 step 1). For an unconfigured platform, run a crawl of it or press Recompute now for it (`POST /v1/admin/analytics/recompute {"platform":"…"}`): its rebuild stamps it.
+
+### 30. `aggregate_delta_pending` keeps rising
+
+- **Cause:** the gauge counts the key scope's matches with any rebuild step still uncounted, read at the start of each delta (`src/archive/analytics/delta.rs:224-231`, `src/jobs/analytics.rs:765-766`). It grows when matches arrive faster than the deltas count them, when a ladder is waiting for its full rebuild (§29), or while `facts:reextract` runs (matches whose facts are below `FACTS_VERSION` are left for it, `delta.rs:233-270`). Solo and flex matches of platforms or queues that are not configured ladders are in the count and are never counted, so a floor that stays level is normal.
+- **Diagnose:** `aggregate_delta_matches_total{kind="added"}` should rise with it; `aggregate_delta_batch_seconds{part="sql"}` near `AGGREGATE_DELTA_TARGET_MS` and `aggregate_delta_batch_size` show the batches; `part="commit"` of seconds is a slow writer (§1). `proxy_aggregate_runs_total{kind="delta"}` not moving means no delta is running: check `AGGREGATE_DELTA_S` and `GET /v1/admin/jobs?kind=aggregate:delta&state=failed`.
+- **Fix:** none for arrival bursts; it drains between crawls. A stuck ladder: §29. A delta that fails repeatedly: retry it after the cause (`runbook.md` §14); a full rebuild of the ladder (Recompute now) is the repair.
+
+### 31. The writer is busy for about an hour after an upgrade
+
+- **Cause:** the first boot with V0029 and `AGGREGATE_DELTA_S` > 0 queues one full rebuild over every patch per configured ladder, one at a time; by the 2026-10-20 production runs that is about 58 minutes in all (oc1 532 s, na1 970 s, kr 1012 s, euw1 980 s; `docs/thr/THR-03-plan.md`). `/readyz` answers `"sqlite":true,"writerBusy":true` with `writerBusyMs` climbing meanwhile (§1).
+- **Diagnose:** `GET /v1/admin/jobs/queue` shows `aggregate:analytics` running and the rest pending; `lastRuns` gains a `rebuild` per ladder as each finishes.
+- **Fix:** nothing; pause crawls for the hour if you can. A restart costs only the rebuild in progress, which the next boot queues again.
+
 ---
-**Sources:** `src/routes/health.rs:21-46,148-200`, `src/db/writer.rs:22,158-206,214-230,244-275`, `src/db/mod.rs:29,38,41-42,160-172,229-257,367-373`, `src/jobs/analytics.rs:247-385,301`, `src/cli/serve.rs:57-68,75-81,95-97,101-108,143-148,276,399-405`, `src/riot/limiter/persist.rs:224-229`, `src/http/auth.rs:32,43-52,118-139,193-199,267-288`, `src/http/error.rs:107`, `src/http/quota.rs:131,320,339-399`, `src/http/validate.rs:53-78,194-208`, `src/riot/routing.rs:46-63,132-143`, `src/riot/client.rs:176-183,304-318`, `src/riot/limiter/mod.rs:58-80`, `src/fetcher.rs:460-466`, `src/riot/endpoints.rs:185-204,424-444,500-512`, `src/routes/passthrough.rs:159-167`, `src/routes/players.rs:635`, `src/routes/statics.rs:213,289-292`, `src/cache/l1.rs:106-119`, `src/cache/l2.rs:102-112`, `src/jobs/maintenance.rs:34,254-268,294-306`, `src/jobs/scheduler.rs:40-42,160-171,963-973,1070-1092`, `src/jobs/archive.rs:245-289`, `src/jobs/ladder.rs:781-818`, `src/jobs/ladder/store.rs:351-406`, `src/jobs/ddragon.rs:111-112,241-304`, `src/jobs/offload.rs:147`, `src/jobs/ticks.rs:193-209`, `src/archive/matches.rs:235-302,384`, `src/archive/mod.rs:128-144`, `src/archive/objects.rs:134`, `src/config.rs:610-614,658-673,716,762-763,873-880,914-926,981-995`, `src/consumers.rs:16,105-107,308-333`, `src/cli/mod.rs:82-88`, `src/cli/key.rs:59-79`, `src/cli/packs.rs:32-35,55-83`, `src/routes/admin.rs:44-82,181-200,1010-1027,1232-1248,1700-1733,1908-1925,2092-2110,2438-2477,2583-2606`, `src/db/migrations/V0004__ladder.sql:7,33-34`, `src/app.rs:35`, `Dockerfile:24`, `deploy/README.md:12-18,258-265`, `deploy/proxmox/README.md:72-85`, `deploy/proxmox/files/riot-proxy-update:69-96`, `docs/design/07-deployment.md:59-61,171,221`, `docs/design/12-object-storage-and-hosting.md:943`, `docs/design/metrics.md:56`, `PROGRESS.md:342`
-**Last verified:** 2026-10-20 against commit `b7b363c`
+**Sources:** `src/routes/health.rs:21-46,148-200`, `src/db/writer.rs:22,158-206,214-230,244-275`, `src/db/mod.rs:29,38,41-42,160-172,229-257,367-373`, `src/jobs/analytics.rs:323-489,379,748-780`, `src/archive/analytics/delta.rs:199-270`, `src/cli/serve.rs:318-331,57-68,75-81,95-97,101-108,143-148,283,420-426`, `src/riot/limiter/persist.rs:224-229`, `src/http/auth.rs:32,43-52,118-139,193-199,267-288`, `src/http/error.rs:107`, `src/http/quota.rs:131,320,339-399`, `src/http/validate.rs:53-78,194-208`, `src/riot/routing.rs:46-63,132-143`, `src/riot/client.rs:176-183,304-318`, `src/riot/limiter/mod.rs:58-80`, `src/fetcher.rs:460-466`, `src/riot/endpoints.rs:185-204,424-444,500-512`, `src/routes/passthrough.rs:159-167`, `src/routes/players.rs:635`, `src/routes/statics.rs:213,289-292`, `src/cache/l1.rs:106-119`, `src/cache/l2.rs:102-112`, `src/jobs/maintenance.rs:34,254-268,294-306`, `src/jobs/scheduler.rs:40-42,160-171,963-973,1070-1092`, `src/jobs/archive.rs:245-289`, `src/jobs/ladder.rs:784-832`, `src/jobs/ladder/store.rs:351-406`, `src/jobs/ddragon.rs:111-112,241-304`, `src/jobs/offload.rs:147`, `src/jobs/ticks.rs:195-211`, `src/archive/matches.rs:250-317,399`, `src/archive/mod.rs:128-144`, `src/archive/objects.rs:134`, `src/config.rs:623-627,671-686,729,778-779,889-896,930-942,997-1011`, `src/consumers.rs:16,105-107,308-333`, `src/cli/mod.rs:82-88`, `src/cli/key.rs:59-79`, `src/cli/packs.rs:32-35,55-83`, `src/routes/admin.rs:44-82,181-200,1010-1027,1232-1248,1700-1733,1908-1925,2092-2110,2438-2477,2583-2606`, `src/db/migrations/V0004__ladder.sql:7,33-34`, `src/app.rs:35`, `Dockerfile:24`, `deploy/README.md:12-18,258-265`, `deploy/proxmox/README.md:72-85`, `deploy/proxmox/files/riot-proxy-update:69-96`, `docs/design/07-deployment.md:59-61,171,221`, `docs/design/12-object-storage-and-hosting.md:943`, `docs/design/metrics.md:56`, `PROGRESS.md:342`, `docs/thr/THR-03-plan.md`
+**Last verified:** 2026-10-21 against commit `32c4672`

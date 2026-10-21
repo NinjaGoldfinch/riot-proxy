@@ -200,6 +200,7 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         rank_lookup_limit: config.rank_lookup_limit,
         rank_lookup_recheck_s: config.rank_lookup_recheck_s,
         late_stamp_days: config.tier_late_stamp_days,
+        delta_on: config.aggregate_delta_s > 0,
     });
     let names = Arc::new(crate::jobs::names::NamesBackfill {
         db: db.clone(),
@@ -228,6 +229,12 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         patch_limit: config.aggregate_patch_limit,
         reextract_batch: config.facts_reextract_batch,
         mirror: Arc::clone(&mirror),
+        ladders: crate::jobs::ticks::ladders(&config),
+        delta: crate::jobs::analytics::DeltaSettings {
+            on: config.aggregate_delta_s > 0,
+            target_ms: config.aggregate_delta_target_ms,
+            cap: config.aggregate_delta_batch as usize,
+        },
     });
     let timelines = Arc::new(crate::jobs::timelines::TimelinesContext {
         fetcher: fetcher.clone(),
@@ -308,6 +315,20 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
             "queued analytics rebuilds to split rows by tier and side"
         ),
         Err(e) => tracing::warn!(error = %e, "could not check for analytics rows to split by tier and side"),
+    }
+    // A ladder no full rebuild has stamped since V0029 is rebuilt over every
+    // patch once, one at a time, before its deltas start (THR-03, ADR-182).
+    if config.aggregate_delta_s > 0 {
+        match crate::jobs::analytics::stamp_if_needed(&queue, &scope, &crate::jobs::ticks::ladders(&config))
+            .await
+        {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(
+                ladders = n,
+                "queued full analytics rebuilds to stamp counted matches"
+            ),
+            Err(e) => tracing::warn!(error = %e, "could not check which ladders are stamped"),
+        }
     }
     // A boot run catches a full pack the lost counter would have queued.
     if pending.is_some() {

@@ -95,12 +95,13 @@ Jobs live in the SQLite `jobs` table; there is no in-memory queue (ADR-047, ADR-
 | Concept | Rule | Source |
 |---|---|---|
 | Lane | Riot-calling kinds get `(lane, method)` from their payload: a platform or the match-v5 region, and the endpoint id; other kinds have no lane and can be capped by `JOB_KIND_LIMITS` | `src/jobs/lanes.rs:425-468` |
-| Priority bands | 0 interactive (a just-finished game, a missing timeline half), 100 + depth/10 archive by depth, 10 000 polls, 20 000–20 006 backfill and crawl stages, 30 000 maintenance and rebuilds, 40 000 timeline backfill | `src/jobs/mod.rs:71-86`, `src/jobs/ladder.rs:48-61` |
+| Priority bands | 0 interactive (a just-finished game, a missing timeline half), 100 + depth/10 archive by depth, 10 000 polls, 20 000–20 006 backfill and crawl stages, 30 000 maintenance, rebuilds and `aggregate:delta`, 40 000 timeline backfill | `src/jobs/mod.rs:74-89`, `src/jobs/ladder.rs:48-61` |
 | Dedupe | A unique partial index on `(kind, dedupe_key)` while pending or running; a duplicate enqueue returns the existing id (`already-queued`) or promotes a pending row's priority | `src/db/migrations/V0001__init.sql:44`, `src/jobs/scheduler.rs:225-269` |
 | Retry | Up to 5 attempts; backoff 30 s × 2^attempts ± 20 % where `attempts` includes the current run, so the first retry waits about 60 s | `src/jobs/scheduler.rs:40-42,160-171,1070-1075` |
 | Yield | A limiter wait beyond `JOB_YIELD_BUDGET_MS` re-queues the job at `retry_at` without counting an attempt; long jobs call `take_turns()` to let others in | `src/jobs/scheduler.rs:145-150,1082-1084` |
 | Recovery | Rows left `running` by a crash go back to `pending` on boot | `src/jobs/scheduler.rs:963-973` |
 | Idle | A worker with nothing claimable sleeps until the next `run_after` or blocked lane frees, at most 1 s, and is woken by any enqueue | `src/jobs/scheduler.rs:996-1025` |
+| Analytics on the writer | `aggregate:analytics` holds the writer for a step at a time and runs one at a time (`JOB_KIND_LIMITS`); `aggregate:delta` (THR-03) is one job for every ladder, deduped to one, whose batches are separate write transactions sized toward `AGGREGATE_DELTA_TARGET_MS` with a 50 ms pause between them, so other writes interleave | `src/jobs/analytics.rs:93-96,825-913` |
 | Retention | `done` rows are deleted after 7 days by `maintenance`; `failed` rows stay until purged | `src/jobs/maintenance.rs:36,237-240` |
 
 Every job kind, its trigger, priority and tables is tabulated in `docs/_meta/scratch/jobs-and-observability.md` §3 and summarised for operators in [../operations/runbook.md](../operations/runbook.md).
@@ -114,11 +115,11 @@ Every job kind, its trigger, priority and tables is tabulated in `docs/_meta/scr
 | SQLite readers | `available_parallelism()` connections behind a semaphore | `src/db/mod.rs:82-89,195-198` |
 | Riot HTTP pool | 32 idle connections per host, 60 s idle | `src/riot/client.rs:27-28` |
 | L2 write-behind | 10 000 queued rows, flushed every 2 s or 500 rows | `src/cache/l2.rs:23-28` |
-| Object-store reads | `ARCHIVE_OBJECT_CONCURRENCY` (16) ranged GETs in flight | `src/archive/matches.rs:250-254` |
+| Object-store reads | `ARCHIVE_OBJECT_CONCURRENCY` (16) ranged GETs in flight | `src/archive/matches.rs:265-269` |
 | WebSocket | 256 events buffered per topic; 200 topics per socket; ping every 30 s, dropped after 2 missed | `src/ws/hub.rs:20`, `src/ws/protocol.rs:23-29` |
 | Refresh windows | one `?refresh=true` per part per puuid per 60 s | `src/routes/players/refresh.rs:18` |
 | Request body | 1 MiB | `src/app.rs:30-31` |
 
 ---
-**Sources:** `src/riot/limiter/mod.rs:L50-L175,L229-L300,L307-L431,L520-L594`, `src/riot/limiter/bucket.rs:L15-L162`, `src/riot/limiter/headers.rs:L30-L41`, `src/riot/limiter/persist.rs:L21-L25,L141-L175`, `src/http/quota.rs:L320-L431`, `src/fetcher.rs:L40-L45,L133-L151,L356-L361,L508-L547,L610-L648`, `src/riot/routing.rs:L148-L181`, `src/cache/keys.rs:L72-L79`, `src/jobs/scheduler.rs:L40-L42,L124-L171,L225-L269,L963-L1025,L1070-L1084`, `src/jobs/lanes.rs:L425-L468`, `src/jobs/mod.rs:L71-L86`, `src/db/store.rs:L98-L133`, `src/db/mod.rs:L41-L42,L82-L89,L158-L198`, `src/cli/serve.rs:L75-L81`, `ops/prometheus-alerts.yml`, `docs/design/05-rate-limiter.md`, `docs/design/06-jobs-and-realtime.md`
-**Last verified:** 2026-10-20 against commit `b7b363c`
+**Sources:** `src/riot/limiter/mod.rs:L50-L175,L229-L300,L307-L431,L520-L594`, `src/riot/limiter/bucket.rs:L15-L162`, `src/riot/limiter/headers.rs:L30-L41`, `src/riot/limiter/persist.rs:L21-L25,L141-L175`, `src/http/quota.rs:L320-L431`, `src/fetcher.rs:L40-L45,L133-L151,L356-L361,L508-L547,L610-L648`, `src/riot/routing.rs:L148-L181`, `src/cache/keys.rs:L72-L79`, `src/jobs/scheduler.rs:L40-L42,L124-L171,L225-L269,L963-L1025,L1070-L1084`, `src/jobs/lanes.rs:L425-L468`, `src/jobs/mod.rs:L74-L89`, `src/db/store.rs:L98-L133`, `src/db/mod.rs:L41-L42,L82-L89,L158-L198`, `src/cli/serve.rs:L75-L81`, `ops/prometheus-alerts.yml`, `docs/design/05-rate-limiter.md`, `docs/design/06-jobs-and-realtime.md`
+**Last verified:** 2026-10-21 against commit `32c4672`

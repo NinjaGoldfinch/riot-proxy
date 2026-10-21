@@ -142,7 +142,7 @@ No key. Not listed in the document itself. `riot-proxy spec` prints the same JSO
 
 ## Dev and dashboard pages (toggles)
 
-`DEV_UI` defaults on but is forced off when `ENV=production`; `DASHBOARD_UI` defaults on (`src/config.rs:L664-L666`, `L762-L765`). None of these are in the OpenAPI document.
+`DEV_UI` defaults on but is forced off when `ENV=production`; `DASHBOARD_UI` defaults on (`src/config.rs:L677-L679`, `L778-L781`). None of these are in the OpenAPI document.
 
 | Method | Path | Toggle | Auth | Response | Handler |
 |---|---|---|---|---|---|
@@ -151,8 +151,8 @@ No key. Not listed in the document itself. `riot-proxy spec` prints the same JSO
 | GET | `/dev/config.json` | `DEV_UI` | none | `{authDisabled,version,env,docsUi,dashboardUi,regions[],platforms[{value,label,region}]}`, `no-store` | `src/routes/ui.rs:L199-L202` |
 | GET | `/dev/openapi.json` | `DEV_UI` | none | the OpenAPI JSON even when `DOCS_UI` is off, `no-store` | `src/routes/ui.rs:L203-L215` |
 | GET | `/dev/jobs` | `DEV_UI` and `DASHBOARD_UI` | none | `302 Location: /dashboard#jobs` | `src/routes/ui.rs:L223-L230` |
-| GET | `/dev/reset` | `DEV_UI` | admin | preview `{tables[{name,rows}],l1Entries,runningJobs,kept[]}` | `src/routes/dev.rs:L152` |
-| POST | `/dev/reset` | `DEV_UI` | admin | body must be `{"confirm":"reset"}` else `400 VALIDATION` `body/confirm must be equal to 'reset'`; wipes data tables, keeps `consumers`, `limiter_state`, `refinery_schema_history` | `src/routes/dev.rs:L185` (`L36`, `L83`, `L186-L198`) |
+| GET | `/dev/reset` | `DEV_UI` | admin | preview `{tables[{name,rows}],l1Entries,runningJobs,kept[]}` | `src/routes/dev.rs:L155` |
+| POST | `/dev/reset` | `DEV_UI` | admin | body must be `{"confirm":"reset"}` else `400 VALIDATION` `body/confirm must be equal to 'reset'`; wipes data tables, keeps `consumers`, `limiter_state`, `refinery_schema_history` | `src/routes/dev.rs:L188` (`L36`, `L86`, `L189-L201`) |
 | GET | `/dashboard` | `DASHBOARD_UI` | none for the page; every call it makes needs an admin key | HTML with a strong `ETag`, `Cache-Control: no-cache`; `If-None-Match` hit is 304 | `src/routes/ui.rs:L218-L221` (`L113-L131`) |
 
 ## The 404 fallback
@@ -238,5 +238,5 @@ The frame shape is `src/events.rs:L159-L172`; data fields per event are listed i
 - Gauge `proxy_ws_connections`; counter `events_published_total{name}`.
 
 ---
-**Sources:** `src/app.rs:L30-L35,L69-L119,L189-L195`, `src/routes/docs.rs:L86-L141,L374-L387`, `src/routes/health.rs:L21-L200`, `src/routes/ui.rs:L94-L233`, `src/routes/dev.rs:L33-L250`, `src/routes/ws.rs:L497-L572`, `src/ws/protocol.rs:L23-L147`, `src/ws/socket.rs:L38-L206`, `src/ws/hub.rs:L20-L205`, `src/http/auth.rs:L141-L353`, `src/http/quota.rs:L320-L431`, `src/http/request_id.rs:L287-L339`, `src/http/validate.rs:L21-L88`, `src/routes/passthrough.rs:L401-L476`, `src/fetcher.rs:L50-L69,L301-L367,L612-L650`, `src/riot/routing.rs:L46-L181`, `docs/_meta/scratch/routes.md`, `docs/design/12-object-storage-and-hosting.md:L904-L925`, `tests/snapshots/http__unknown_route_404.snap`, `tests/snapshots/ws_hub__ws_session.snap`, live capture against `target/debug/riot-proxy` 2.7.0
-**Last verified:** 2026-10-20 against commit `b7b363c`
+**Sources:** `src/app.rs:L30-L35,L69-L119,L189-L195`, `src/routes/docs.rs:L86-L141,L374-L387`, `src/routes/health.rs:L21-L200`, `src/routes/ui.rs:L94-L233`, `src/routes/dev.rs:L33-L253`, `src/routes/ws.rs:L497-L572`, `src/ws/protocol.rs:L23-L147`, `src/ws/socket.rs:L38-L206`, `src/ws/hub.rs:L20-L205`, `src/http/auth.rs:L141-L353`, `src/http/quota.rs:L320-L431`, `src/http/request_id.rs:L287-L339`, `src/http/validate.rs:L21-L88`, `src/routes/passthrough.rs:L401-L476`, `src/fetcher.rs:L50-L69,L301-L367,L612-L650`, `src/riot/routing.rs:L46-L181`, `docs/_meta/scratch/routes.md`, `docs/design/12-object-storage-and-hosting.md:L904-L925`, `tests/snapshots/http__unknown_route_404.snap`, `tests/snapshots/ws_hub__ws_session.snap`, live capture against `target/debug/riot-proxy` 2.7.0
+**Last verified:** 2026-10-21 against commit `32c4672`

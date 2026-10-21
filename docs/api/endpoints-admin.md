@@ -94,7 +94,7 @@ Captured job summary:
 |---|---|---|---|---|
 | POST | `/v1/admin/maintenance/run` | none | **202** `{"ok":true,"jobId":…,"status":"queued"\|"already-queued"}`; dedupe key `maintenance` | `src/routes/admin.rs:L2662` |
 | POST | `/v1/admin/ddragon/sync` | body `force` bool (default false) | **200** `{"ok":true,"jobId":…}`; dedupe `ddragon:sync` or `ddragon:sync:force` | `src/routes/admin.rs:L1634` |
-| POST | `/v1/admin/analytics/recompute` | body `platform` **required**; `queue` in `RANKED_SOLO_5x5`, `RANKED_FLEX_SR` (default first of `LADDER_QUEUES`) | **202** `{"ok":true,"platform":…,"queue":…}`; queues `aggregate:analytics` at priority 0, ahead of everything | `src/routes/admin.rs:L2340` |
+| POST | `/v1/admin/analytics/recompute` | body `platform` **required**; `queue` in `RANKED_SOLO_5x5`, `RANKED_FLEX_SR` (default first of `LADDER_QUEUES`) | **202** `{"ok":true,"platform":…,"queue":…}`; queues `aggregate:analytics` at priority 0, ahead of everything; a full rebuild, the repair path since `aggregate:delta` (THR-03) keeps the tables current | `src/routes/admin.rs:L2340` |
 | POST | `/v1/admin/analytics/reextract` | none | **202** `{"ok":true,"stale":n}`; queues `facts:reextract` | `src/routes/admin.rs:L2375` |
 | GET | `/v1/admin/timelines/backfill` | `?patches` 1 to 1000 (default `TIMELINE_BACKFILL_PATCHES`, 0) | the timeline backfill progress document; read-only | `src/routes/admin.rs:L2306` |
 
@@ -130,7 +130,7 @@ A probe on a Riot key that is rejected answers `502 UPSTREAM_ERROR`, as any Riot
 
 | Method | Path | Params | Response | Handler |
 |---|---|---|---|---|
-| GET | `/v1/admin/metrics` | none | the `stats::Snapshot` document the `metrics` WebSocket topic sends, including `sqliteWriter{busySince,busyMs,lastProgress,lastFinished,queued}` (WR-02); not recorded in the recent ring | `src/routes/admin.rs:L2399` |
+| GET | `/v1/admin/metrics` | none | the `stats::Snapshot` document the `metrics` WebSocket topic sends, including `sqliteWriter{busySince,busyMs,lastProgress,lastFinished,queued}` (WR-02) and `analytics.lastRuns[]`, one entry per ladder and `kind` (`rebuild` or `delta`, THR-03; a delta's `steps` is `{"delta": seconds}` and its `rows` the rows upserted per table); not recorded in the recent ring | `src/routes/admin.rs:L2399` |
 | GET | `/v1/admin/metrics/history` | none | `{intervalS,maxPoints,points[]}`; `intervalS` is `METRICS_HISTORY_INTERVAL_S` (60) | `src/routes/admin.rs:L2424` |
 | GET | `/v1/admin/info` | none | `{version,gitSha,rustc,builtAt,startedAt,uptimeSeconds,env,role,keyScope,features{devUi,docsUi,dashboardUi,authDisabled,archiveTimelines,staleWhileRevalidate,trustProxy,postgres},workers,config{…}}`; `RIOT_API_KEY` is never listed and other secrets read `[REDACTED]` | `src/routes/admin.rs:L2486` |
 | GET | `/v1/admin/recent` | `?kind` in `requests` (default), `errors`; `?limit` 1 to 500 (default 100) | `{kind,capacity,requests?[{at,method,route,path,status,cache,latencyMs,consumer,requestId}],errors?[{at,code,status,message,requestId}]}`; rings of 500 requests and 200 errors, lost on restart | `src/routes/admin.rs:L2546` |
@@ -149,5 +149,5 @@ Captured `/v1/admin/info`, shortened:
 ```
 
 ---
-**Sources:** `src/routes/admin.rs:L44-L107,L114-L171,L180-L326,L336-L435,L454-L502,L524-L571,L580-L594,L630-L653,L664,L717-L780,L832-L882,L890-L924,L969,L1010-L1038,L1075-L1204,L1212-L1248,L1262-L1354,L1369-L1536,L1583-L1613,L1634-L1652,L1674-L1689,L1700-L1758,L1764-L1795,L1831-L1848,L1870-L1894,L1904-L1925,L1936-L1997,L2009-L2033,L2092-L2110,L2197-L2225,L2277-L2311,L2340-L2362,L2375-L2384,L2394-L2415,L2424,L2438-L2486,L2522-L2558,L2583-L2624,L2662-L2670`, `src/routes/admin/ladder_probe.rs:L42-L44,L121-L149,L351-L355,L387-L434,L458-L496`, `src/http/body.rs:L341-L391`, `src/http/validate.rs:L81-L88,L253-L259`, `src/http/auth.rs:L276-L288,L327-L342`, `src/http/recent.rs:L109-L122`, `docs/_meta/scratch/routes.md` §1.8, live capture against `target/debug/riot-proxy` 2.7.0
-**Last verified:** 2026-10-20 against commit `b7b363c`
+**Sources:** `src/stats.rs:L254-L268`, `src/routes/admin.rs:L44-L107,L114-L171,L180-L326,L336-L435,L454-L502,L524-L571,L580-L594,L630-L653,L664,L717-L780,L832-L882,L890-L924,L969,L1010-L1038,L1075-L1204,L1212-L1248,L1262-L1354,L1369-L1536,L1583-L1613,L1634-L1652,L1674-L1689,L1700-L1758,L1764-L1795,L1831-L1848,L1870-L1894,L1904-L1925,L1936-L1997,L2009-L2033,L2092-L2110,L2197-L2225,L2277-L2311,L2340-L2362,L2375-L2384,L2394-L2415,L2424,L2438-L2486,L2522-L2558,L2583-L2624,L2662-L2670`, `src/routes/admin/ladder_probe.rs:L42-L44,L121-L149,L351-L355,L387-L434,L458-L496`, `src/http/body.rs:L341-L391`, `src/http/validate.rs:L81-L88,L253-L259`, `src/http/auth.rs:L276-L288,L327-L342`, `src/http/recent.rs:L109-L122`, `docs/_meta/scratch/routes.md` §1.8, live capture against `target/debug/riot-proxy` 2.7.0
+**Last verified:** 2026-10-21 against commit `32c4672`

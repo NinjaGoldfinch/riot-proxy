@@ -22,7 +22,7 @@ Production on the shared Onidel VPS, local development, and the dormant LAN dev 
 
 The box runs riot-proxy, ninjagoldfinch.lol and `cloudflared` as systemd services, plus ninja-monitor and two rclone timers. The proxy and the site bind loopback only; the tunnel is the only ingress and there are no inbound ports (`docs/design/12-object-storage-and-hosting.md` §As executed). `TRUST_PROXY=true` lets the proxy see the real client address behind `cloudflared`; `ADMIN_IP_ALLOWLIST` stays empty. Prometheus and Grafana on `ngf-mon-syd1` are planned, not deployed. The topology, ports and directories are in [../deployment/overview.md](../deployment/overview.md); the configuration in force, as far as it is recorded, is in [../deployment/configuration.md](../deployment/configuration.md).
 
-Last known production settings come from session notes dated 2026-10-10 to 2026-10-18, not from the box: `LADDER_PLATFORMS=oc1,kr,euw1,na1`, `LADDER_CRAWL_S=86400`, `LADDER_TIER_FLOOR=MASTER`, `LADDER_BACKFILL_LIMIT=100`, `ARCHIVE_TIMELINES=true`, `BULK_USAGE_CEILING=0.80`, `AGGREGATE_PATCH_LIMIT=0`, `HOST=127.0.0.1`, the Onidel bucket variables.
+Last known production settings come from session notes dated 2026-10-10 to 2026-10-18, not from the box: `LADDER_PLATFORMS=oc1,kr,euw1,na1`, `LADDER_CRAWL_S=86400`, `LADDER_TIER_FLOOR=MASTER`, `LADDER_BACKFILL_LIMIT=100`, `ARCHIVE_TIMELINES=true`, `BULK_USAGE_CEILING=0.80`, `AGGREGATE_PATCH_LIMIT=0`, `HOST=127.0.0.1`, the Onidel bucket variables. `AGGREGATE_DELTA_S` is not among them: unset, `aggregate:delta` runs every 60 s from the release that carries THR-03 (`.env.example`).
 
 > **TODO (unverified):** `/etc/riot-proxy/env` and `/etc/systemd/system/riot-proxy.service` on `ngf-prod-syd1` were not read; the unit is assumed to be the template in `docs/design/07-deployment.md` §Option C.
 
@@ -33,9 +33,9 @@ Everything works against a locally started proxy; no shared dev instance exists 
 1. `cp .env.example .env`, set `RIOT_API_KEY` to your own personal key from the Riot developer portal.
 2. `just dev`. The first run migrates `./data/riot-proxy.db` and prints the bootstrap admin key on stderr.
 3. Open `http://127.0.0.1:8080/dev` (explorer), `/dev/showcase` (example frontend), `/docs`, `/dashboard`.
-4. For frontend work without keys, add `AUTH_DISABLED=true` to `.env`; for a quiet box add `LADDER_CRAWL_S=0` and `JOB_CONCURRENCY=1`.
+4. For frontend work without keys, add `AUTH_DISABLED=true` to `.env`; for a quiet box add `LADDER_CRAWL_S=0`, `AGGREGATE_DELTA_S=0` and `JOB_CONCURRENCY=1`.
 5. To point ninjagoldfinch.lol at it, set `PROXY_URL=http://127.0.0.1:8080` in the site's `.env` (and `PROXY_KEY` only if auth is on).
-6. To exercise the offload locally, set `ARCHIVE_OBJECT_URL=file:///absolute/dir` (allowed outside production; `file://` and `http://` endpoints are refused when `ENV=production`, `src/config.rs:990-999`).
+6. To exercise the offload locally, set `ARCHIVE_OBJECT_URL=file:///absolute/dir` (allowed outside production; `file://` and `http://` endpoints are refused when `ENV=production`, `src/config.rs:1006-1015`).
 
 The mock Riot in `acceptance/helpers/mock-riot.ts` and the replay fixtures under `tests/fixtures/replay/` let the test suites run with no Riot key at all. Full steps in [../workflows/development-setup.md](../workflows/development-setup.md).
 
@@ -49,12 +49,12 @@ The mock Riot in `acceptance/helpers/mock-riot.ts` and the replay fixtures under
 
 | Difference | Effect |
 |---|---|
-| `ENV=production` | refuses `AUTH_DISABLED`, `RIOT_BASE_URL`, `DDRAGON_BASE_URL`, `file://` object URLs and `http://` endpoints; forces `/dev` off; requires both object-storage keys with an `s3://` URL (`src/config.rs:658-684,987-999`) |
+| `ENV=production` | refuses `AUTH_DISABLED`, `RIOT_BASE_URL`, `DDRAGON_BASE_URL`, `file://` object URLs and `http://` endpoints; forces `/dev` off; requires both object-storage keys with an `s3://` URL (`src/config.rs:671-697,1003-1015`) |
 | Key scope | cache keys and facts are scoped by the hash of the Riot key, so a local database filled with one key is invisible to another (`src/cache/keys.rs:24-37`) |
 | Object storage | locally, bodies never leave SQLite unless a `file://` store is set; in production bodies older than 14 days exist only in the bucket and its replica |
 | Limits | the same personal-key limits apply everywhere; two instances with the same key share Riot's budget without knowing it, which is why the dev VM and production should not run the same key at full load |
 | Logs | JSON in production (journald); pretty on a terminal locally |
 
 ---
-**Sources:** `docs/design/12-object-storage-and-hosting.md` §As executed, `docs/design/07-deployment.md` §Option C, `deploy/proxmox/README.md`, `README.md` §First run, `.env.example`, `src/config.rs:L658-L684,L987-L999`, `src/cache/keys.rs:L24-L37`, `docs/_meta/scratch/siblings.md` §1.2, §1.8, `docs/IMPLEMENTATION.md:L434`
-**Last verified:** 2026-10-21 against commit `844df70`
+**Sources:** `docs/design/12-object-storage-and-hosting.md` §As executed, `docs/design/07-deployment.md` §Option C, `deploy/proxmox/README.md`, `README.md` §First run, `.env.example`, `src/config.rs:L671-L697,L1003-L1015`, `src/cache/keys.rs:L24-L37`, `docs/_meta/scratch/siblings.md` §1.2, §1.8, `docs/IMPLEMENTATION.md:L434`
+**Last verified:** 2026-10-21 against commit `32c4672`

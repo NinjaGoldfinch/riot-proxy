@@ -104,10 +104,13 @@ async fn migrations_create_exactly_the_design_04_tables() {
     assert_eq!(
         tables,
         [
+            "analytics_counted",
             "analytics_floor_totals",
             "analytics_match_totals",
+            "analytics_retract",
             "analytics_runs",
             "analytics_slices",
+            "analytics_stamped",
             "analytics_unsplit",
             "body_locations",
             "body_packs",
@@ -224,7 +227,7 @@ async fn a_v1_database_upgrades_to_v2_and_keeps_its_data() {
         })
         .await
         .expect("read");
-    assert_eq!((name.as_str(), versions), ("old", 28));
+    assert_eq!((name.as_str(), versions), ("old", 29));
 }
 
 /// V0015 (SITE-08, ADR-123) backfills the slices aggregated before it, as the
@@ -892,11 +895,11 @@ async fn migrations_apply_once_across_reopens() {
         })
         .await
         .expect("insert");
-    assert_eq!(history(first.clone()).await.expect("history"), 28);
+    assert_eq!(history(first.clone()).await.expect("history"), 29);
     drop(first);
 
     let second = Db::open(&path, 1).expect("second open");
-    assert_eq!(history(second.clone()).await.expect("history"), 28, "no re-run");
+    assert_eq!(history(second.clone()).await.expect("history"), 29, "no re-run");
     let name: Option<String> = second
         .read(|c| {
             Ok::<_, DbError>(
@@ -1652,6 +1655,73 @@ async fn v0027_creates_the_matchup_build_tables() {
         };
         assert_eq!(key.join(" "), want, "{t}");
     }
+}
+
+/// V0029 (THR-03, ADR-182): the stamp tables start empty; the runs keep
+/// their rows as rebuilds; the trigger records, for a counted player whose
+/// tier moves, one row per step that counted them, at the old tier, and
+/// nothing for an uncounted match or an unchanged tier.
+#[tokio::test]
+async fn v0029_creates_the_stamp_tables_and_the_tier_trigger() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("riot-proxy.db");
+    {
+        let mut conn = Connection::open(&path).expect("open");
+        embedded::migrations::runner()
+            .set_grouped(true)
+            .set_target(refinery::Target::Version(28))
+            .run(&mut conn)
+            .expect("to V0028");
+        conn.execute_batch(
+            "INSERT INTO analytics_runs (key_scope, platform, queue, at, status, ms, steps, rows, games)
+               VALUES ('s', 'kr', 'RANKED_SOLO_5x5', 5, 'completed', 9, '{}', '{}', 3);
+             INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size, archived_at)
+               VALUES ('KR_1', 'asia', '14.18', 420, 1, x'00', 1, 1), ('KR_2', 'asia', '14.18', 420, 1, x'00', 1, 1);
+             INSERT INTO match_facts (match_id, key_scope, puuid, team_id, champion_id, win, facts_version, tier) VALUES
+               ('KR_1', 's', 'A', 100, 1, 1, 4, 'UNKNOWN'), ('KR_1', 's', 'B', 200, 2, 0, 4, 'MASTER'),
+               ('KR_2', 's', 'C', 100, 1, 1, 4, 'UNKNOWN');",
+        )
+        .expect("seed");
+    }
+    let db = Db::open(&path, 1).expect("to V0029");
+    let got = db
+        .write(|c| {
+            let empty: i64 = c.query_row(
+                "SELECT (SELECT count(*) FROM analytics_counted) + (SELECT count(*) FROM analytics_retract)
+                      + (SELECT count(*) FROM analytics_stamped)",
+                [],
+                |r| r.get(0),
+            )?;
+            let run: (String, i64) =
+                c.query_row("SELECT kind, games FROM analytics_runs", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            // KR_1 counted by champions (1) and items (4); KR_2 by nothing.
+            c.execute_batch(
+                "INSERT INTO analytics_counted (match_id, key_scope, bits) VALUES ('KR_1', 's', 5), ('KR_2', 's', 0);
+                 UPDATE match_facts SET tier = 'MASTER' WHERE puuid = 'B';
+                 UPDATE match_facts SET tier = 'MASTER' WHERE tier = 'UNKNOWN';
+                 UPDATE match_facts SET tier = 'GRANDMASTER' WHERE puuid = 'A';",
+            )?;
+            let mut stmt =
+                c.prepare("SELECT match_id, puuid, step, tier FROM analytics_retract ORDER BY match_id, puuid, step")?;
+            let rows = stmt
+                .query_map([], |r| {
+                    Ok(format!(
+                        "{} {} {} {}",
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, i64>(2)?,
+                        r.get::<_, String>(3)?
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok::<_, DbError>((empty, run, rows))
+        })
+        .await
+        .expect("trigger");
+    assert_eq!(got.0, 0, "empty");
+    assert_eq!(got.1, ("rebuild".to_string(), 3), "the run kept, as a rebuild");
+    // A moved twice; the first move (from UNKNOWN) is kept.
+    assert_eq!(got.2, ["KR_1 A 1 UNKNOWN", "KR_1 A 4 UNKNOWN"]);
 }
 
 /// PERF-03: a cached analytics hit is proven by this counter not moving.

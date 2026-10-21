@@ -63,7 +63,7 @@ flowchart LR
     Monitor -. "cgroup and disk samples" .-> Proxy
 ```
 
-The only way in is the tunnel: `cloudflared` opens an outbound connection to Cloudflare and no DNS record points at the server's address (`docs/design/12-object-storage-and-hosting.md:532-537`). TLS terminates at Cloudflare; the proxy serves plain HTTP and refuses `TLS=true` (`README.md:116-118`; `src/config.rs:668-673`). The site calls the proxy over loopback with a consumer key, never through `api.` (`docs/design/12-object-storage-and-hosting.md:928-929`). The browser never calls the proxy; images come straight from Data Dragon (`docs/_meta/scratch/siblings.md:259-262`). `ninja-monitor` reads cgroups and the data directory; it does not call `/healthz`, `/readyz` or `/metrics` (`docs/_meta/scratch/siblings.md:210`).
+The only way in is the tunnel: `cloudflared` opens an outbound connection to Cloudflare and no DNS record points at the server's address (`docs/design/12-object-storage-and-hosting.md:532-537`). TLS terminates at Cloudflare; the proxy serves plain HTTP and refuses `TLS=true` (`README.md:116-118`; `src/config.rs:681-686`). The site calls the proxy over loopback with a consumer key, never through `api.` (`docs/design/12-object-storage-and-hosting.md:928-929`). The browser never calls the proxy; images come straight from Data Dragon (`docs/_meta/scratch/siblings.md:259-262`). `ninja-monitor` reads cgroups and the data directory; it does not call `/healthz`, `/readyz` or `/metrics` (`docs/_meta/scratch/siblings.md:210`).
 
 ## Processes and ports
 
@@ -106,12 +106,12 @@ The proxy only ever talks to the Onidel bucket; R2 is reached only by `rclone` f
 
 | What | Where | Evidence |
 |---|---|---|
-| Proxy logs | journald, `sudo journalctl -u riot-proxy`; JSON on stdout when stdout is not a terminal (`LOG_FORMAT` default) | `docs/workflows/release-process.md` step 6; `src/config.rs:649-656`; `README.md:132` |
-| Bootstrap admin key banner | stderr on first `serve` only, so it lands in journald as well | `src/cli/serve.rs:399-405` |
+| Proxy logs | journald, `sudo journalctl -u riot-proxy`; JSON on stdout when stdout is not a terminal (`LOG_FORMAT` default) | `docs/workflows/release-process.md` step 6; `src/config.rs:662-669`; `README.md:132` |
+| Bootstrap admin key banner | stderr on first `serve` only, so it lands in journald as well | `src/cli/serve.rs:420-426` |
 | Site logs | `journalctl -u ninjagoldfinch-lol` | `docs/_meta/scratch/siblings.md:145` |
 | Replica logs | `journalctl -u riot-proxy-replica` | `deploy/README.md:93` |
 | SQLite | `/var/lib/riot-proxy/data/riot-proxy.db` with `-wal` and `-shm` | `docs/_meta/scratch/persistence.md:398-402` |
-| Daily backups | `/var/lib/riot-proxy/data/backups/riot-proxy-<YYYY-MM-DD>.db` | `src/jobs/maintenance.rs:40-41`; `src/cli/serve.rs:208-212` |
+| Daily backups | `/var/lib/riot-proxy/data/backups/riot-proxy-<YYYY-MM-DD>.db` | `src/jobs/maintenance.rs:40-41`; `src/cli/serve.rs:209-213` |
 | Data Dragon mirror | `/var/lib/riot-proxy/data/ddragon/<version>/…` and `meta/queues.json` | `docs/_meta/scratch/persistence.md:406-412` |
 | Site checkout | `/opt/ninjagoldfinch-lol` | `docs/design/12-object-storage-and-hosting.md:617-618` |
 
@@ -143,5 +143,5 @@ The proxy only ever talks to the Onidel bucket; R2 is reached only by `rclone` f
 `ninja-monitor` on the box alerts when `riot-proxy` exceeds 2 GiB, the site 1 GiB and `cloudflared` 512 MiB of memory, when host memory falls below 15 %, disk passes 70 % and 85 %, or host CPU stays above 90 % for 20 minutes; a service counts as down after 30 s, repeating every 30 min (`docs/design/12-object-storage-and-hosting.md:832-837`). The proxy's own footprint is the SQLite page cache plus the L1 cache (`docs/design/07-deployment.md:173`); the host was chosen for RAM, not disk or cores, because the Riot key pins the request rate at 100 per 2 minutes (`docs/design/12-object-storage-and-hosting.md:480-487`). The arithmetic is in [capacity.md](./capacity.md).
 
 ---
-**Sources:** `docs/design/07-deployment.md:L59-L95,L173,L221`, `docs/design/12-object-storage-and-hosting.md:L58-L112,L424-L446,L474-L487,L532-L558,L585-L641,L772-L848,L850-L937`, `deploy/README.md:L24-L36,L51,L93,L140-L152`, `deploy/riot-proxy-replica.service:L12-L19`, `deploy/riot-proxy-replica.timer:L6-L8`, `README.md:L116-L132`, `PROGRESS.md:L325`, `src/config.rs:L649-L656,L668-L673`, `src/cli/serve.rs:L208-L212,L399-L405`, `src/jobs/maintenance.rs:L40-L41`, `docs/_meta/scratch/siblings.md`, `docs/_meta/scratch/persistence.md`
-**Last verified:** 2026-10-19 against commit `52fa67d`
+**Sources:** `docs/design/07-deployment.md:L59-L95,L173,L221`, `docs/design/12-object-storage-and-hosting.md:L58-L112,L424-L446,L474-L487,L532-L558,L585-L641,L772-L848,L850-L937`, `deploy/README.md:L24-L36,L51,L93,L140-L152`, `deploy/riot-proxy-replica.service:L12-L19`, `deploy/riot-proxy-replica.timer:L6-L8`, `README.md:L116-L132`, `PROGRESS.md:L325`, `src/config.rs:L662-L669,L681-L686`, `src/cli/serve.rs:L209-L213,L420-L426`, `src/jobs/maintenance.rs:L40-L41`, `docs/_meta/scratch/siblings.md`, `docs/_meta/scratch/persistence.md`
+**Last verified:** 2026-10-21 against commit `32c4672`

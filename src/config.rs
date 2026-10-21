@@ -75,6 +75,9 @@ pub const VARS: &[&str] = &[
     "AGGREGATE_PATCH_LIMIT",
     "ANALYTICS_CACHE_ENTRIES",
     "AGGREGATE_INTERVAL_S",
+    "AGGREGATE_DELTA_S",
+    "AGGREGATE_DELTA_TARGET_MS",
+    "AGGREGATE_DELTA_BATCH",
     "DDRAGON_DIR",
     "DDRAGON_LOCALE",
     "ADMIN_IP_ALLOWLIST",
@@ -351,6 +354,13 @@ pub struct Config {
     /// ADR-169); 0 keeps none.
     pub analytics_cache_entries: u32,
     pub aggregate_interval_s: u32,
+    /// How often `aggregate:delta` counts new matches (THR-03, ADR-182); 0
+    /// is off, and crawls and rank lookups queue a rebuild as before.
+    pub aggregate_delta_s: u32,
+    /// The time a delta batch's statements aim for; batches size to it.
+    pub aggregate_delta_target_ms: u32,
+    /// The most matches in one delta batch.
+    pub aggregate_delta_batch: u32,
     pub ddragon_dir: PathBuf,
     pub ddragon_locale: String,
     pub admin_ip_allowlist: Vec<String>,
@@ -471,6 +481,9 @@ impl Config {
             ("AGGREGATE_PATCH_LIMIT", s(self.aggregate_patch_limit)),
             ("ANALYTICS_CACHE_ENTRIES", s(self.analytics_cache_entries)),
             ("AGGREGATE_INTERVAL_S", s(self.aggregate_interval_s)),
+            ("AGGREGATE_DELTA_S", s(self.aggregate_delta_s)),
+            ("AGGREGATE_DELTA_TARGET_MS", s(self.aggregate_delta_target_ms)),
+            ("AGGREGATE_DELTA_BATCH", s(self.aggregate_delta_batch)),
             ("DDRAGON_DIR", path(&self.ddragon_dir)),
             ("DDRAGON_LOCALE", s(&self.ddragon_locale)),
             ("ADMIN_IP_ALLOWLIST", s(self.admin_ip_allowlist.join(","))),
@@ -753,6 +766,9 @@ impl Config {
             aggregate_patch_limit: v.int("AGGREGATE_PATCH_LIMIT", 4, 0, 100),
             analytics_cache_entries: v.int("ANALYTICS_CACHE_ENTRIES", 512, 0, 4096),
             aggregate_interval_s: v.int("AGGREGATE_INTERVAL_S", 0, 0, 604_800),
+            aggregate_delta_s: v.int("AGGREGATE_DELTA_S", 60, 0, 86_400),
+            aggregate_delta_target_ms: v.int("AGGREGATE_DELTA_TARGET_MS", 100, 20, 1_000),
+            aggregate_delta_batch: v.int("AGGREGATE_DELTA_BATCH", 500, 5, 5_000),
             ddragon_locale: v.string("DDRAGON_LOCALE", "en_US"),
             admin_ip_allowlist: csv(&v.string("ADMIN_IP_ALLOWLIST", "")),
             trust_proxy: v.bool("TRUST_PROXY", false),

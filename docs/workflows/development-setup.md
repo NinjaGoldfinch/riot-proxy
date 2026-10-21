@@ -21,11 +21,11 @@ Nothing else is needed: there is no Redis, no Postgres and no Node runtime in th
 ## Clone and configure
 
 1. Clone the public repository and enter it: `git clone https://github.com/NinjaGoldfinch/riot-proxy.git && cd riot-proxy`.
-2. Copy the documented configuration: `cp .env.example .env` (`README.md:62-63`). `.env` is git-ignored (`.gitignore`), and `.env.example` is the authoritative list of variables: a config test asserts it documents exactly the set the binary reads (`src/config/tests.rs:430-449`).
-3. Set `RIOT_API_KEY=` in `.env` to a personal development key from [developer.riotgames.com](https://developer.riotgames.com/). The key must be at least 8 characters (`src/config.rs:610-614`); development keys expire every 24 hours (`PROGRESS.md:400`). Never commit it and never paste it into a fixture: CI greps `tests/`, `src/` and `docs/` for key-shaped strings (`.github/workflows/ci.yml:52-53`).
-4. Leave everything else commented out. A commented line shows the default; an empty value (`FOO=`) also means the default (`.env.example:1-3`; `src/config.rs:871-877`).
+2. Copy the documented configuration: `cp .env.example .env` (`README.md:62-63`). `.env` is git-ignored (`.gitignore`), and `.env.example` is the authoritative list of variables: a config test asserts it documents exactly the set the binary reads (`src/config/tests.rs:433-452`).
+3. Set `RIOT_API_KEY=` in `.env` to a personal development key from [developer.riotgames.com](https://developer.riotgames.com/). The key must be at least 8 characters (`src/config.rs:623-627`); development keys expire every 24 hours (`PROGRESS.md:400`). Never commit it and never paste it into a fixture: CI greps `tests/`, `src/` and `docs/` for key-shaped strings (`.github/workflows/ci.yml:52-53`).
+4. Leave everything else commented out. A commented line shows the default; an empty value (`FOO=`) also means the default (`.env.example:1-3`; `src/config.rs:887-893`).
 
-Precedence is CLI flag, then environment, then `.env`, then the built-in default (`src/config.rs:3`, `.env.example:2`). The binary reads `.env` itself from the **current working directory**, so `just` deliberately does not pre-load it (`justfile:3`; `src/config.rs:568-582`).
+Precedence is CLI flag, then environment, then `.env`, then the built-in default (`src/config.rs:3`, `.env.example:2`). The binary reads `.env` itself from the **current working directory**, so `just` deliberately does not pre-load it (`justfile:3`; `src/config.rs:581-595`).
 
 ## First run
 
@@ -35,15 +35,15 @@ just dev            # = cargo run -- serve  (justfile:11-13)
 ./target/debug/riot-proxy serve
 ```
 
-The first `serve` on an empty `DATA_DIR` prints, on stdout as JSON (pretty when stdout is a terminal, `src/config.rs:649-656`):
+The first `serve` on an empty `DATA_DIR` prints, on stdout as JSON (pretty when stdout is a terminal, `src/config.rs:662-669`):
 
 1. refinery's lines: `schema history table is empty, going to apply all migrations`, then `going to batch apply 27 migrations in single transaction.` naming `V1__init` to `V27__matchup_builds` (`src/db/mod.rs:22-24`, `294-296`).
 2. `database ready` with `path=<DATA_DIR>/riot-proxy.db` (`src/cli/serve.rs:52-55`).
 3. `bootstrap admin consumer created` with its ULID id (`src/cli/serve.rs:57-68`).
-4. `limiter checkpoint restored rows=0`, `L1 warmed from L2 entries=0`, `listening addr=<HOST>:<PORT>`, `starting job workers workers=<JOB_CONCURRENCY> kind_limits=…` (`src/cli/serve.rs:76-93`, `143-148`, `319-324`).
+4. `limiter checkpoint restored rows=0`, `L1 warmed from L2 entries=0`, `listening addr=<HOST>:<PORT>`, `starting job workers workers=<JOB_CONCURRENCY> kind_limits=…` (`src/cli/serve.rs:76-93`, `143-148`, `340-345`).
 5. The ticks that fire immediately at boot (`src/jobs/ticks.rs:1-4`): `ddragon:sync` (downloads the current patch from `ddragon.leagueoflegends.com` into `DATA_DIR/ddragon`), `maintenance` (writes `DATA_DIR/backups/riot-proxy-<date>.db` and logs `backup written`, `maintenance done`) and `names:backfill` (`player names backfilled from archive`).
 
-On **stderr**, and only when `BOOTSTRAP_ADMIN_KEY` was not set, the one-time banner (`src/cli/serve.rs:399-405`):
+On **stderr**, and only when `BOOTSTRAP_ADMIN_KEY` was not set, the one-time banner (`src/cli/serve.rs:420-426`):
 
 ```text
 
@@ -57,13 +57,13 @@ Store it: only its SHA-256 is kept (`src/routes/docs.rs:98-99`). A second `serve
 
 ### The pages
 
-With the defaults every page is on (`src/config.rs:664-666`, `762-765`):
+With the defaults every page is on (`src/config.rs:677-679`, `778-781`):
 
 | Page | What | Key needed |
 |---|---|---|
 | `http://127.0.0.1:8080/docs` | the OpenAPI reference (Scalar) and `/openapi.json`, `/openapi.yaml` (`src/routes/docs.rs:373-387`) | no |
-| `/dev` and `/dev/showcase` | the dev explorer and the example frontend; never served when `ENV=production` (`README.md:88`; `src/config.rs:664-666`) | the page loads without one; its API calls need a read key unless `AUTH_DISABLED` (`docs/design/11-showcase.md:15`) |
-| `/dashboard` | the operational dashboard; inert without an admin key (`.env.example:170-171`) | admin key in the page |
+| `/dev` and `/dev/showcase` | the dev explorer and the example frontend; never served when `ENV=production` (`README.md:88`; `src/config.rs:677-679`) | the page loads without one; its API calls need a read key unless `AUTH_DISABLED` (`docs/design/11-showcase.md:15`) |
+| `/dashboard` | the operational dashboard; inert without an admin key (`.env.example:177-178`) | admin key in the page |
 | `/healthz`, `/readyz`, `/metrics` | ops routes | no |
 
 ### Mint a key and make the first request
@@ -97,7 +97,7 @@ For a frontend on the same machine, skip consumer keys entirely:
 AUTH_DISABLED=true just dev
 ```
 
-Every request then runs as a synthetic `dev-local` consumer with read and admin scope, and `serve` warns `AUTH_DISABLED=true: every request runs as the synthetic dev-local consumer (read+admin)` (`src/http/auth.rs:201-204`). It is refused with `ENV=production` (`src/config.rs:658-662`).
+Every request then runs as a synthetic `dev-local` consumer with read and admin scope, and `serve` warns `AUTH_DISABLED=true: every request runs as the synthetic dev-local consumer (read+admin)` (`src/http/auth.rs:201-204`). It is refused with `ENV=production` (`src/config.rs:671-675`).
 
 ### Pointing ninjagoldfinch.lol at it
 
@@ -118,25 +118,26 @@ Packed match and timeline bodies go to object storage only when `ARCHIVE_OBJECT_
 ARCHIVE_OBJECT_URL=file:///absolute/path/to/bucket just dev
 ```
 
-`file://` must be absolute and is refused when `ENV=production`; `s3://` needs `ARCHIVE_OBJECT_ENDPOINT` and, in production, both keys (`src/config.rs:884-910`, `987-999`; [../deployment/configuration.md](../deployment/configuration.md) lists every `ARCHIVE_OBJECT_*` variable). With a `file://` store `serve` logs `object store configured store=file:///…` and `queued archive:offload`, and the directory fills with `packs/…` and `index/…` exactly as a bucket would (`src/archive/objects.rs:102-113`). Verified here: after boot the directory held `index/packs-<date>.jsonl.zst` and `index/locations-<date>.jsonl.zst`.
+`file://` must be absolute and is refused when `ENV=production`; `s3://` needs `ARCHIVE_OBJECT_ENDPOINT` and, in production, both keys (`src/config.rs:900-926`, `1003-1015`; [../deployment/configuration.md](../deployment/configuration.md) lists every `ARCHIVE_OBJECT_*` variable). With a `file://` store `serve` logs `object store configured store=file:///…` and `queued archive:offload`, and the directory fills with `packs/…` and `index/…` exactly as a bucket would (`src/archive/objects.rs:102-113`). Verified here: after boot the directory held `index/packs-<date>.jsonl.zst` and `index/locations-<date>.jsonl.zst`.
 
 ## Talking to Riot without Riot
 
 | Need | Use |
 |---|---|
 | The whole server against a scripted Riot | `just acceptance` (`justfile:49-52`): builds, then `acceptance/helpers/mock-riot.ts` stands in for every Riot host (the proxy names the host it meant in `x-riot-host`, `mock-riot.ts:7`) and `serve` starts on port 18980 pointed at the mock on 18981 with a known admin key (`acceptance/helpers/env.ts:19-25`, `244-275`; `helpers/setup.ts:23-54`). `ACCEPTANCE_LIVE=1` is the real-Riot mode and spends your key's quota. |
-| Pointing any `serve` at a mock | `RIOT_BASE_URL` and `DDRAGON_BASE_URL`; both refused in production (`src/config.rs:675-684`; `.env.example:160-163`) |
+| Pointing any `serve` at a mock | `RIOT_BASE_URL` and `DDRAGON_BASE_URL`; both refused in production (`src/config.rs:688-697`; `.env.example:167-170`) |
 | Recorded real exchanges | `tests/fixtures/replay/` (`tests/fixtures/replay/README.md`), served by wiremock in `tests/replay.rs` and `tests/players_routes.rs` |
 | One raw call with your key | `just riot account/by-riot-id europe 'Hide on bush' KR1` = `cargo run --features dev-cli -- riot get …` (`justfile:45-47`). Endpoint by id or slug, routing a platform or region, `-q k=v` for queries; it bypasses the cache and the limiter, so it counts against the key (`src/cli/riot.rs:1-3`, `15-32`, `63-81`). `riot record --out <dir> …` writes a redacted fixture ([adding-a-riot-call.md](./adding-a-riot-call.md)). |
 
 ## A quiet local instance
 
-The defaults already schedule no crawl and no analytics recompute (`LADDER_CRAWL_S=0`, `LADDER_PLATFORMS` empty, `AGGREGATE_INTERVAL_S=0`, `TIMELINE_BACKFILL_PATCHES=0`; `src/jobs/ticks.rs:123-135`), and the poll ticks fan out only over tracked players (`src/jobs/ticks.rs:44-74`). What still runs at boot is `ddragon:sync` (hourly, first tick immediate, real CDN), `maintenance` and `names:backfill` (daily). For a quiet box:
+The defaults already schedule no crawl and no full analytics recompute (`LADDER_CRAWL_S=0`, `LADDER_PLATFORMS` empty, `AGGREGATE_INTERVAL_S=0`, `TIMELINE_BACKFILL_PATCHES=0`; `src/jobs/ticks.rs:123-137`), and the poll ticks fan out only over tracked players (`src/jobs/ticks.rs:44-74`). What still runs at boot is `ddragon:sync` (hourly, first tick immediate, real CDN), `maintenance` and `names:backfill` (daily), and `aggregate:delta` every 60 s (`AGGREGATE_DELTA_S`, `src/jobs/ticks.rs:130-131`); with `LADDER_PLATFORMS` empty it has no ladder to count, so it only runs its `builds:extract` pass (`src/jobs/analytics.rs:748-753`). For a quiet box:
 
 ```ini
 LADDER_CRAWL_S=0          # already the default; stated for clarity
+AGGREGATE_DELTA_S=0       # no aggregate:delta tick (src/config.rs:769)
 JOB_CONCURRENCY=1         # one worker (also --job-concurrency)
-BACKUP_KEEP=0             # no backup file in data/backups at every boot (src/config.rs:729)
+BACKUP_KEEP=0             # no backup file in data/backups at every boot (src/config.rs:742)
 LOG_LEVEL=riot_proxy=debug,tower_http=info   # a tracing filter (.env.example:17-18)
 ```
 
@@ -144,7 +145,7 @@ Setting `DDRAGON_BASE_URL=http://127.0.0.1:9` keeps it fully offline: the sync t
 
 ## The `data/` directory
 
-`DATA_DIR` (default `./data`, created at config load, `src/config.rs:589`, `793-798`) holds everything (`src/cli/serve.rs:210`; `src/config.rs:703-705`):
+`DATA_DIR` (default `./data`, created at config load, `src/config.rs:602`, `809-814`) holds everything (`src/cli/serve.rs:211`; `src/config.rs:716-718`):
 
 ```text
 data/
@@ -175,12 +176,12 @@ data/
 | Symptom | Cause | Fix |
 |---|---|---|
 | `error: binding 127.0.0.1:8080: Address already in use (os error 98)` | another `serve` (or anything) on the port (`src/cli/serve.rs:143-148`) | stop it, or `PORT=8081` / `--port 8081` |
-| `error: Invalid environment configuration:` then `  RIOT_API_KEY: must be at least 8 characters` | a placeholder or truncated key (`src/config.rs:610-614`) | set a real development key |
-| `  RIOT_API_KEY: is required` although `.env` has one | the command ran from another directory: `.env` is read relative to the process cwd (`src/config.rs:568-582`) | `cd` to the directory with `.env`, or export the variable |
+| `error: Invalid environment configuration:` then `  RIOT_API_KEY: must be at least 8 characters` | a placeholder or truncated key (`src/config.rs:623-627`) | set a real development key |
+| `  RIOT_API_KEY: is required` although `.env` has one | the command ran from another directory: `.env` is read relative to the process cwd (`src/config.rs:581-595`) | `cd` to the directory with `.env`, or export the variable |
 | `key list` shows no keys although `serve` printed a banner | a different `DATA_DIR` | pass the same `DATA_DIR` (or `--data-dir`) to every command |
-| `TLS: built-in TLS was removed; terminate HTTPS in a reverse proxy` | a v1 `.env` with `TLS=true` (`src/config.rs:668-673`) | remove it; terminate HTTPS in front (`README.md:118`) |
-| `DATABASE_URL: postgres:// needs a build with the postgres feature` | a v1 `DATABASE_URL` (`src/config.rs:628-633`) | remove it; SQLite only |
-| `AUTH_DISABLED cannot be enabled when ENV=production` | `ENV=production` (or a v1 `NODE_ENV=production` fallback, `src/config.rs:616-620`) | use `ENV=development` locally |
+| `TLS: built-in TLS was removed; terminate HTTPS in a reverse proxy` | a v1 `.env` with `TLS=true` (`src/config.rs:681-686`) | remove it; terminate HTTPS in front (`README.md:118`) |
+| `DATABASE_URL: postgres:// needs a build with the postgres feature` | a v1 `DATABASE_URL` (`src/config.rs:641-646`) | remove it; SQLite only |
+| `AUTH_DISABLED cannot be enabled when ENV=production` | `ENV=production` (or a v1 `NODE_ENV=production` fallback, `src/config.rs:629-633`) | use `ENV=development` locally |
 | `DEV_UI=true ignored: /dev is never served when ENV=production` | by design (`src/cli/serve.rs:95-97`) | run with `ENV=development` to see `/dev` |
 | `invalid LOG_LEVEL filter: …` at `serve` | `LOG_LEVEL` is a tracing filter, validated only by `serve` (`src/telemetry.rs:31`, `41-42`) | e.g. `info` or `riot_proxy=debug` |
 | `skipping: node not runnable` during `cargo test` | no `node` on `PATH`; the helper suites skip locally and fail in CI (`tests/ui.rs:52-56`) | install Node 22 |
@@ -202,5 +203,5 @@ Not re-executed here: `cargo build`, `cargo test` and `just nextest` (a full run
 > **TODO (unverified):** the exact first-run output of a **release** binary built without `dev-cli` (`Cargo.toml:52-54`); only the local `--all-features` debug build was run, and its `--help` lists `riot`.
 
 ---
-**Sources:** `rust-toolchain.toml:L1-L5`, `justfile:L1-L52`, `.env.example:L1-L171`, `README.md:L60-L112`, `src/config.rs:L3`, `L568-L582`, `L610-L620`, `L658-L684`, `L884-L910`, `L987-L999`, `src/cli/mod.rs:L82-L88`, `src/cli/serve.rs:L52-L68`, `L76-L108`, `L143-L148`, `L319-L324`, `L399-L405`, `src/cli/key.rs:L13-L57`, `src/consumers.rs:L12-L14`, `L95-L96`, `src/http/auth.rs:L201-L204`, `src/jobs/ticks.rs:L1-L4`, `L44-L80`, `L108-L137`, `src/cli/riot.rs:L1-L32`, `L63-L81`, `src/archive/objects.rs:L102-L113`, `acceptance/helpers/env.ts:L19-L25`, `L244-L275`, `acceptance/helpers/setup.ts:L23-L54`, `acceptance/helpers/mock-riot.ts:L7`, `tests/ui.rs:L42-L64`, `tests/dom/package.json`, `acceptance/package.json`, `.github/workflows/ci.yml:L52-L53`, `PROGRESS.md:L390`, `L400`, `L420-L422`, `docs/IMPLEMENTATION.md:L434`, `docs/design/11-showcase.md:L15`, `docs/DECISIONS.md:L1457`, `docs/_meta/scratch/config.md`, `docs/_meta/scratch/persistence.md` §5, `docs/_meta/scratch/siblings.md` §1.2, §1.8
-**Last verified:** 2026-10-20 against commit `b7b363c`
+**Sources:** `rust-toolchain.toml:L1-L5`, `justfile:L1-L52`, `.env.example:L1-L178`, `README.md:L60-L112`, `src/config.rs:L3`, `L581-L595`, `L623-L633`, `L671-L697`, `L900-L926`, `L1003-L1015`, `src/cli/mod.rs:L82-L88`, `src/cli/serve.rs:L52-L68`, `L76-L108`, `L143-L148`, `L340-L345`, `L420-L426`, `src/cli/key.rs:L13-L57`, `src/consumers.rs:L12-L14`, `L95-L96`, `src/http/auth.rs:L201-L204`, `src/jobs/ticks.rs:L1-L4`, `L44-L80`, `L108-L139`, `src/cli/riot.rs:L1-L32`, `L63-L81`, `src/archive/objects.rs:L102-L113`, `acceptance/helpers/env.ts:L19-L25`, `L244-L275`, `acceptance/helpers/setup.ts:L23-L54`, `acceptance/helpers/mock-riot.ts:L7`, `tests/ui.rs:L42-L64`, `tests/dom/package.json`, `acceptance/package.json`, `.github/workflows/ci.yml:L52-L53`, `PROGRESS.md:L390`, `L400`, `L420-L422`, `docs/IMPLEMENTATION.md:L434`, `docs/design/11-showcase.md:L15`, `docs/DECISIONS.md:L1457`, `docs/_meta/scratch/config.md`, `docs/_meta/scratch/persistence.md` §5, `docs/_meta/scratch/siblings.md` §1.2, §1.8
+**Last verified:** 2026-10-21 against commit `32c4672`

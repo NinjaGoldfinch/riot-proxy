@@ -120,6 +120,7 @@ async fn the_snapshot_is_v1s_whole_document_from_v2s_sources() {
         queue: "RANKED_SOLO_5x5".into(),
     };
     let run = Run {
+        kind: "rebuild".into(),
         at: t - 5_000,
         status: "completed".into(),
         ms: 1234,
@@ -246,7 +247,7 @@ async fn the_snapshot_is_v1s_whole_document_from_v2s_sources() {
     // Analytics: the run as recorded; top champions on its ladder's latest patch, summed over tiers.
     assert_eq!(
         s["analytics"]["lastRuns"],
-        json!([{"platform": "kr", "queue": "RANKED_SOLO_5x5", "at": t - 5_000, "status": "completed", "ms": 1234,
+        json!([{"platform": "kr", "queue": "RANKED_SOLO_5x5", "kind": "rebuild", "at": t - 5_000, "status": "completed", "ms": 1234,
                 "steps": {"champions": 0.5, "matchups": 0.25}, "rows": {"champion_items": 7, "champion_stats": 3},
                 "games": 30}])
     );

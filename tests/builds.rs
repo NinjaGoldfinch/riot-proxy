@@ -66,6 +66,8 @@ impl Env {
             patch_limit: 4,
             reextract_batch: 500,
             mirror: Arc::clone(&self.state.ddragon),
+            ladders: vec![],
+            delta: riot_proxy::jobs::analytics::DeltaSettings::OFF,
         }
     }
 

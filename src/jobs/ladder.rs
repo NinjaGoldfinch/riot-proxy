@@ -87,6 +87,9 @@ pub struct LadderContext {
     /// `TIER_LATE_STAMP_DAYS`: how far back a ladder page places its players'
     /// `UNKNOWN` tier stamps (THR-02).
     pub late_stamp_days: u32,
+    /// `AGGREGATE_DELTA_S` > 0: a completed crawl queues `aggregate:delta`
+    /// instead of a rebuild (THR-03).
+    pub delta_on: bool,
 }
 
 /// Players one `ladder:collect` job walks (v1 `COLLECT_BATCH`).
@@ -782,6 +785,7 @@ impl LadderContext {
         let (crawl, leg) = (crawl_id.to_string(), leg.to_string());
         let backfill_limit = self.backfill_limit;
         let rank_lookups = self.rank_lookup_limit > 0;
+        let delta_on = self.delta_on;
         let scope = self.key_scope.clone();
         let now = Clock::now().unix_ms;
         let ended = self
@@ -798,7 +802,17 @@ impl LadderContext {
                     // Only a clean run: aggregating part of a ladder as the
                     // whole is worse than keeping the previous numbers (v1).
                     if crawl.status == "completed" {
-                        let job = crate::jobs::analytics::aggregate_job(&crawl.platform, &crawl.queue);
+                        // A stamped ladder's new matches are the delta's; an
+                        // unstamped one (a crawl outside LADDER_PLATFORMS, or
+                        // before its first full rebuild) is rebuilt (THR-03).
+                        let ready = delta_on
+                            && crate::archive::analytics::delta::ready(
+                                &tx,
+                                &scope,
+                                &crawl.platform,
+                                &crawl.queue,
+                            )?;
+                        let job = crate::jobs::analytics::counting_job(&crawl.platform, &crawl.queue, ready);
                         enqueue_on(&tx, &job, now)?;
                         // Then place the players it counts under UNKNOWN (ADR-111).
                         if rank_lookups {

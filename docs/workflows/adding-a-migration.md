@@ -10,7 +10,7 @@ How schema changes ship: one forward-only refinery SQL file under `src/db/migrat
 | Naming | `V<nnnn>__<name>.sql`; refinery only recognises `^[UV]\d+__\w+\.sql$`, and the four-digit padding is this repository's convention (ADR-010, `docs/DECISIONS.md:51`). refinery logs them without the padding (`V27__matchup_builds`) |
 | When | `Db::open` applies pending migrations on the writer connection, after the pragmas and before the readers open (`src/db/mod.rs:135-151`). `serve` opens that way, and so does every CLI command that touches the database (`src/cli/mod.rs:136-141`). `riot-proxy migrate` applies them on a raw connection and prints `<path>: up to date` or `<path>: applied V…` (`src/cli/mod.rs:144-165`) |
 | Transaction | all pending files in **one** transaction (`set_grouped(true)`, `src/db/mod.rs:343-345`); applied versions are skipped, so running on every boot is safe |
-| History | `refinery_schema_history(version, name, applied_on, checksum)`; a fresh database has 28 rows after V0028 (`src/db/tests.rs:895`) |
+| History | `refinery_schema_history(version, name, applied_on, checksum)`; a fresh database has 29 rows after V0029 (`src/db/tests.rs:898`) |
 | Direction | forward only. There are no down migrations: every file is `V…`, and a change that must be undone is undone by restoring the previous backup (`README.md:142`; [../deployment/upgrade-and-rollback.md](../deployment/upgrade-and-rollback.md)) |
 
 Observed on 2026-10-19: a first `serve` logged `going to batch apply 27 migrations in single transaction.` naming `V1__init` to `V27__matchup_builds`; a second one `going to batch apply 0 migrations`; `riot-proxy migrate` printed `…/riot-proxy.db: up to date`.
@@ -19,7 +19,7 @@ Observed on 2026-10-19: a first `serve` logged `going to batch apply 27 migratio
 
 ## Numbering
 
-The files are `V0001__init.sql` to `V0028__jobs_crawl_matches.sql` (`src/db/migrations/`); the next free number is **V0029**. Because several sessions work on this clone and branches are always based on `origin/main`, check there before picking a number:
+The files are `V0001__init.sql` to `V0029__analytics_counted.sql` (`src/db/migrations/`); the next free number is **V0030**. Because several sessions work on this clone and branches are always based on `origin/main`, check there before picking a number:
 
 ```bash
 git fetch origin && git ls-tree --name-only origin/main src/db/migrations/ | tail -1
@@ -62,15 +62,15 @@ Every integration test opens a fresh tempfile database through `Db::open` (`test
 
 | Test | What to change | Lines |
 |---|---|---|
-| `migrations_create_exactly_the_design_04_tables` | add the new table to the sorted list | `src/db/tests.rs:92-149` |
-| `migrations_apply_once_across_reopens` | the history count, 27 → 28 | `:895`, `:899` |
-| a seeded upgrade test, for anything beyond `CREATE TABLE` | run the runner with `.set_target(refinery::Target::Version(27))`, seed rows, open with `Db::open`, assert rows survive with their values and the DDL says what it should: `v0020_rebuilds_…` and `v0021_rebuilds_…` are the models | `:398-450`, `:539-562` |
-| `archive_indexes_exist` / `archive_foreign_keys_behave_as_designed` | if the migration adds an index or an FK | `:167`, `:731` |
+| `migrations_create_exactly_the_design_04_tables` | add the new table to the sorted list | `src/db/tests.rs:92-152` |
+| `migrations_apply_once_across_reopens` | the history count, 28 → 29 | `:898`, `:902` |
+| a seeded upgrade test, for anything beyond `CREATE TABLE` | run the runner with `.set_target(refinery::Target::Version(27))`, seed rows, open with `Db::open`, assert rows survive with their values and the DDL says what it should: `v0020_rebuilds_…` and `v0021_rebuilds_…` are the models | `:401-453`, `:542-565` |
+| `archive_indexes_exist` / `archive_foreign_keys_behave_as_designed` | if the migration adds an index or an FK | `:170`, `:734` |
 
 Outside `src/db/`:
 
-- **The dev reset lists.** `routes::dev::WIPED` and `KEPT` must together name every table; a test fails otherwise, "so a new migration has to choose" (`src/routes/dev.rs:38-83`; `tests/dev_reset.rs`). Derived and fetched data go in `WIPED`, children before parents; only consumers, the limiter checkpoint and refinery's history are `KEPT`.
-- **A `/v1/admin/stats` or dashboard count** over the new table needs its own `EXPLAIN QUERY PLAN` test, as the pack counts (`src/archive/offload/tests.rs:501-514`) and the job counts (`src/db/tests.rs:1218`) have.
+- **The dev reset lists.** `routes::dev::WIPED` and `KEPT` must together name every table; a test fails otherwise, "so a new migration has to choose" (`src/routes/dev.rs:38-86`; `tests/dev_reset.rs`). Derived and fetched data go in `WIPED`, children before parents; only consumers, the limiter checkpoint and refinery's history are `KEPT`.
+- **A `/v1/admin/stats` or dashboard count** over the new table needs its own `EXPLAIN QUERY PLAN` test, as the pack counts (`src/archive/offload/tests.rs:501-514`) and the job counts (`src/db/tests.rs:1221`) have.
 - Run `cargo test --lib db::` then `cargo test --test it dev_reset::` and the lot ([testing.md](./testing.md)).
 
 ## Documents to update
@@ -85,7 +85,7 @@ Outside `src/db/`:
 A `clash_teams` table for a Clash feature: one row per (key scope, platform, team id), small rows, read by key only, so `WITHOUT ROWID`; a partial index for rows still to be refreshed, ending with its state column.
 
 ```sql
--- src/db/migrations/V0029__clash_teams.sql (hypothetical)
+-- src/db/migrations/V0030__clash_teams.sql (hypothetical)
 -- CLASH-01 (ADR-NNN): Clash teams a tracked player belongs to, refreshed by
 -- clash:sync. Keyed by the whole row, so WITHOUT ROWID (ADR-140); read by key
 -- and by what is due, never by rowid.
@@ -104,13 +104,13 @@ CREATE INDEX clash_teams_due ON clash_teams(platform, refresh_after)
   WHERE refresh_after IS NOT NULL;
 ```
 
-Then: add `"clash_teams"` to the sorted list in `migrations_create_exactly_the_design_04_tables` and to `routes::dev::WIPED` (it is derived from Riot), bump the history count to 28, add the DDL to design/04 §Schema, write the ADR, and document the table in `docs/data/schema.md` and the file in `docs/data/migrations.md`.
+Then: add `"clash_teams"` to the sorted list in `migrations_create_exactly_the_design_04_tables` and to `routes::dev::WIPED` (it is derived from Riot), bump the history count to 30, add the DDL to design/04 §Schema, write the ADR, and document the table in `docs/data/schema.md` and the file in `docs/data/migrations.md`.
 
 > **TODO (unverified):** the example's columns are illustrative; a real Clash table takes its fields from the developer portal's `TeamDto`, not from this page.
 
 ## Checklist
 
-1. `git ls-tree origin/main src/db/migrations/` for the next number; `V0029__<name>.sql` with a header comment.
+1. `git ls-tree origin/main src/db/migrations/` for the next number; `V0030__<name>.sql` with a header comment.
 2. Conventions: unix-ms `INTEGER`, JSON `TEXT`, `key_scope`, FKs only where owned, `WITHOUT ROWID` by the rule, state columns last in partial indexes.
 3. Cost stated: `ADD COLUMN` where possible; a rebuild's boot time, temp space and WAL in the ADR.
 4. `src/db/tests.rs`: table list, history count, a seeded upgrade test for anything but a new table.
@@ -119,5 +119,5 @@ Then: add `"clash_teams"` to the sorted list in `migrations_create_exactly_the_d
 7. `just lint`, `just test`; a backup before the first production boot ([../deployment/backup-and-restore.md](../deployment/backup-and-restore.md)).
 
 ---
-**Sources:** `src/db/mod.rs:L22-L31`, `L131-L147`, `L294-L296`, `src/cli/mod.rs:L136-L165`, `src/db/migrations/V0001__init.sql:L1-L2`, `V0003__cs_and_duration.sql`, `V0021__facts_without_rowid.sql:L1-L33`, `V0023__body_packs.sql:L1-L48`, `V0027__matchup_builds.sql:L1-L19`, `src/db/tests.rs:L92-L149`, `L167`, `L398-L450`, `L539-L562`, `L731`, `L873-L915`, `L1218`, `src/archive/offload/tests.rs:L501-L514`, `src/jobs/offload/tests.rs:L497-L512`, `src/routes/dev.rs:L38-L83`, `tests/common/mod.rs:L32-L33`, `docs/design/04-data-and-cache.md:L61-L63`, `L417-L423`, `docs/design/12-object-storage-and-hosting.md:L196-L221`, `docs/DECISIONS.md:L49-L51` (ADR-010), `L1455` (ADR-135), `L1460-L1462` (ADR-136), `L1490-L1505` (ADR-140, ADR-141), `L1510` (ADR-142), `README.md:L142`, `docs/_meta/scratch/persistence.md` §1
-**Last verified:** 2026-10-20 against commit `b7b363c`
+**Sources:** `src/db/mod.rs:L22-L31`, `L131-L147`, `L294-L296`, `src/cli/mod.rs:L136-L165`, `src/db/migrations/V0001__init.sql:L1-L2`, `V0003__cs_and_duration.sql`, `V0021__facts_without_rowid.sql:L1-L33`, `V0023__body_packs.sql:L1-L48`, `V0027__matchup_builds.sql:L1-L19`, `src/db/tests.rs:L92-L152`, `L170`, `L401-L453`, `L542-L565`, `L734`, `L876-L918`, `L1221`, `src/archive/offload/tests.rs:L501-L514`, `src/jobs/offload/tests.rs:L497-L512`, `src/routes/dev.rs:L38-L86`, `tests/common/mod.rs:L32-L33`, `docs/design/04-data-and-cache.md:L61-L63`, `L417-L423`, `docs/design/12-object-storage-and-hosting.md:L196-L221`, `docs/DECISIONS.md:L49-L51` (ADR-010), `L1455` (ADR-135), `L1460-L1462` (ADR-136), `L1490-L1505` (ADR-140, ADR-141), `L1510` (ADR-142), `README.md:L142`, `docs/_meta/scratch/persistence.md` §1
+**Last verified:** 2026-10-21 against commit `32c4672`

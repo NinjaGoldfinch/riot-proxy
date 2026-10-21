@@ -17472,6 +17472,7 @@
         "required": [
           "platform",
           "queue",
+          "kind",
           "at",
           "status",
           "ms",
@@ -17485,6 +17486,10 @@
           },
           "queue": {
             "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "description": "`rebuild` or `delta` (THR-03): a ladder has the last of each."
           },
           "at": {
             "type": "integer",
