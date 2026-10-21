@@ -805,6 +805,7 @@ impl Env {
                         mirror,
                         ladders: vec![],
                         delta: riot_proxy::jobs::analytics::DeltaSettings::OFF,
+                        delta_sizes: Default::default(),
                     })
                 }),
             )

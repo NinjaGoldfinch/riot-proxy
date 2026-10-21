@@ -235,6 +235,7 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
             target_ms: config.aggregate_delta_target_ms,
             cap: config.aggregate_delta_batch as usize,
         },
+        delta_sizes: Default::default(),
     });
     let timelines = Arc::new(crate::jobs::timelines::TimelinesContext {
         fetcher: fetcher.clone(),

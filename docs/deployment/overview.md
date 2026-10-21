@@ -107,7 +107,7 @@ The proxy only ever talks to the Onidel bucket; R2 is reached only by `rclone` f
 | What | Where | Evidence |
 |---|---|---|
 | Proxy logs | journald, `sudo journalctl -u riot-proxy`; JSON on stdout when stdout is not a terminal (`LOG_FORMAT` default) | `docs/workflows/release-process.md` step 6; `src/config.rs:662-669`; `README.md:132` |
-| Bootstrap admin key banner | stderr on first `serve` only, so it lands in journald as well | `src/cli/serve.rs:420-426` |
+| Bootstrap admin key banner | stderr on first `serve` only, so it lands in journald as well | `src/cli/serve.rs:421-427` |
 | Site logs | `journalctl -u ninjagoldfinch-lol` | `docs/_meta/scratch/siblings.md:145` |
 | Replica logs | `journalctl -u riot-proxy-replica` | `deploy/README.md:93` |
 | SQLite | `/var/lib/riot-proxy/data/riot-proxy.db` with `-wal` and `-shm` | `docs/_meta/scratch/persistence.md:398-402` |
@@ -143,5 +143,5 @@ The proxy only ever talks to the Onidel bucket; R2 is reached only by `rclone` f
 `ninja-monitor` on the box alerts when `riot-proxy` exceeds 2 GiB, the site 1 GiB and `cloudflared` 512 MiB of memory, when host memory falls below 15 %, disk passes 70 % and 85 %, or host CPU stays above 90 % for 20 minutes; a service counts as down after 30 s, repeating every 30 min (`docs/design/12-object-storage-and-hosting.md:832-837`). The proxy's own footprint is the SQLite page cache plus the L1 cache (`docs/design/07-deployment.md:173`); the host was chosen for RAM, not disk or cores, because the Riot key pins the request rate at 100 per 2 minutes (`docs/design/12-object-storage-and-hosting.md:480-487`). The arithmetic is in [capacity.md](./capacity.md).
 
 ---
-**Sources:** `docs/design/07-deployment.md:L59-L95,L173,L221`, `docs/design/12-object-storage-and-hosting.md:L58-L112,L424-L446,L474-L487,L532-L558,L585-L641,L772-L848,L850-L937`, `deploy/README.md:L24-L36,L51,L93,L140-L152`, `deploy/riot-proxy-replica.service:L12-L19`, `deploy/riot-proxy-replica.timer:L6-L8`, `README.md:L116-L132`, `PROGRESS.md:L325`, `src/config.rs:L662-L669,L681-L686`, `src/cli/serve.rs:L209-L213,L420-L426`, `src/jobs/maintenance.rs:L40-L41`, `docs/_meta/scratch/siblings.md`, `docs/_meta/scratch/persistence.md`
-**Last verified:** 2026-10-21 against commit `32c4672`
+**Sources:** `docs/design/07-deployment.md:L59-L95,L173,L221`, `docs/design/12-object-storage-and-hosting.md:L58-L112,L424-L446,L474-L487,L532-L558,L585-L641,L772-L848,L850-L937`, `deploy/README.md:L24-L36,L51,L93,L140-L152`, `deploy/riot-proxy-replica.service:L12-L19`, `deploy/riot-proxy-replica.timer:L6-L8`, `README.md:L116-L132`, `PROGRESS.md:L325`, `src/config.rs:L662-L669,L681-L686`, `src/cli/serve.rs:L209-L213,L421-L427`, `src/jobs/maintenance.rs:L40-L41`, `docs/_meta/scratch/siblings.md`, `docs/_meta/scratch/persistence.md`
+**Last verified:** 2026-10-22 against commit `6eda84e`

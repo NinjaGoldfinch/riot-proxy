@@ -43,7 +43,7 @@ The first `serve` on an empty `DATA_DIR` prints, on stdout as JSON (pretty when 
 4. `limiter checkpoint restored rows=0`, `L1 warmed from L2 entries=0`, `listening addr=<HOST>:<PORT>`, `starting job workers workers=<JOB_CONCURRENCY> kind_limits=…` (`src/cli/serve.rs:76-93`, `143-148`, `340-345`).
 5. The ticks that fire immediately at boot (`src/jobs/ticks.rs:1-4`): `ddragon:sync` (downloads the current patch from `ddragon.leagueoflegends.com` into `DATA_DIR/ddragon`), `maintenance` (writes `DATA_DIR/backups/riot-proxy-<date>.db` and logs `backup written`, `maintenance done`) and `names:backfill` (`player names backfilled from archive`).
 
-On **stderr**, and only when `BOOTSTRAP_ADMIN_KEY` was not set, the one-time banner (`src/cli/serve.rs:420-426`):
+On **stderr**, and only when `BOOTSTRAP_ADMIN_KEY` was not set, the one-time banner (`src/cli/serve.rs:421-427`):
 
 ```text
 
@@ -131,7 +131,7 @@ ARCHIVE_OBJECT_URL=file:///absolute/path/to/bucket just dev
 
 ## A quiet local instance
 
-The defaults already schedule no crawl and no full analytics recompute (`LADDER_CRAWL_S=0`, `LADDER_PLATFORMS` empty, `AGGREGATE_INTERVAL_S=0`, `TIMELINE_BACKFILL_PATCHES=0`; `src/jobs/ticks.rs:123-137`), and the poll ticks fan out only over tracked players (`src/jobs/ticks.rs:44-74`). What still runs at boot is `ddragon:sync` (hourly, first tick immediate, real CDN), `maintenance` and `names:backfill` (daily), and `aggregate:delta` every 60 s (`AGGREGATE_DELTA_S`, `src/jobs/ticks.rs:130-131`); with `LADDER_PLATFORMS` empty it has no ladder to count, so it only runs its `builds:extract` pass (`src/jobs/analytics.rs:748-753`). For a quiet box:
+The defaults already schedule no crawl and no full analytics recompute (`LADDER_CRAWL_S=0`, `LADDER_PLATFORMS` empty, `AGGREGATE_INTERVAL_S=0`, `TIMELINE_BACKFILL_PATCHES=0`; `src/jobs/ticks.rs:123-137`), and the poll ticks fan out only over tracked players (`src/jobs/ticks.rs:44-74`). What still runs at boot is `ddragon:sync` (hourly, first tick immediate, real CDN), `maintenance` and `names:backfill` (daily), and `aggregate:delta` every 60 s (`AGGREGATE_DELTA_S`, `src/jobs/ticks.rs:130-131`); with `LADDER_PLATFORMS` empty it has no ladder to count, so it only runs its `builds:extract` pass (`src/jobs/analytics.rs:779-784`). For a quiet box:
 
 ```ini
 LADDER_CRAWL_S=0          # already the default; stated for clarity
@@ -204,4 +204,4 @@ Not re-executed here: `cargo build`, `cargo test` and `just nextest` (a full run
 
 ---
 **Sources:** `rust-toolchain.toml:L1-L5`, `justfile:L1-L52`, `.env.example:L1-L178`, `README.md:L60-L112`, `src/config.rs:L3`, `L581-L595`, `L623-L633`, `L671-L697`, `L900-L926`, `L1003-L1015`, `src/cli/mod.rs:L82-L88`, `src/cli/serve.rs:L52-L68`, `L76-L108`, `L143-L148`, `L340-L345`, `L420-L426`, `src/cli/key.rs:L13-L57`, `src/consumers.rs:L12-L14`, `L95-L96`, `src/http/auth.rs:L201-L204`, `src/jobs/ticks.rs:L1-L4`, `L44-L80`, `L108-L139`, `src/cli/riot.rs:L1-L32`, `L63-L81`, `src/archive/objects.rs:L102-L113`, `acceptance/helpers/env.ts:L19-L25`, `L244-L275`, `acceptance/helpers/setup.ts:L23-L54`, `acceptance/helpers/mock-riot.ts:L7`, `tests/ui.rs:L42-L64`, `tests/dom/package.json`, `acceptance/package.json`, `.github/workflows/ci.yml:L52-L53`, `PROGRESS.md:L390`, `L400`, `L420-L422`, `docs/IMPLEMENTATION.md:L434`, `docs/design/11-showcase.md:L15`, `docs/DECISIONS.md:L1457`, `docs/_meta/scratch/config.md`, `docs/_meta/scratch/persistence.md` §5, `docs/_meta/scratch/siblings.md` §1.2, §1.8
-**Last verified:** 2026-10-21 against commit `32c4672`
+**Last verified:** 2026-10-22 against commit `6eda84e`

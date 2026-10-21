@@ -86,4 +86,4 @@ The full procedure, with the test and ADR steps, is in [../workflows/adding-a-mi
 
 ---
 **Sources:** `src/db/mod.rs:L22-L24`, `src/db/mod.rs:L147-L171`, `src/db/mod.rs:L361-L365`, `src/db/store.rs:L172-L206`, `src/cli/mod.rs:L136-L168`, `src/cli/serve.rs:L51-L54`, `src/db/migrations/V0001__init.sql` to `V0029__analytics_counted.sql`, `docs/thr/THR-03-plan.md`, `docs/DECISIONS.md:L15-L17`, `docs/DECISIONS.md:L51`, `docs/DECISIONS.md:L1388`, `docs/DECISIONS.md:L1700`, `docs/DECISIONS.md:L1714`, `docs/DECISIONS.md:L1776`, `docs/DECISIONS.md:L1841`, `docs/flt/FLT-03-plan.md:L573`, `PROGRESS.md:L10-L365`, `docs/design/12-object-storage-and-hosting.md:L159-L162`, `deploy/README.md:L222-L270`, `docs/_meta/scratch/persistence.md`
-**Last verified:** 2026-10-21 against commit `32c4672`
+**Last verified:** 2026-10-22 against commit `6eda84e`
