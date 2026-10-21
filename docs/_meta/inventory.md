@@ -57,7 +57,7 @@ What is in the riot-proxy repository at commit `7491ff6` (version 2.7.0), gather
 | HTTP routes (76 documented operations on 70 paths plus docs, pages, dev reset, `/ddragon` files, fallback) | registered in `src/routes/docs.rs:116-141`; table in [scratch/routes.md](./scratch/routes.md) §1 and [../api/endpoints.md](../api/endpoints.md) |
 | WebSocket `/v1/ws` | `src/routes/ws.rs:497-499`, protocol in `src/ws/protocol.rs` |
 | Ticks (periodic enqueues): `poll:live` 60 s, `poll:rank` 600 s, `poll:matches` 300 s, `ddragon:sync` 3600 s, `maintenance` and `names:backfill` daily, `ladder:crawl` on `LADDER_CRAWL_S`, `aggregate:analytics` on `AGGREGATE_INTERVAL_S`, `aggregate:delta` on `AGGREGATE_DELTA_S` (60 s), `timelines:backfill` hourly when enabled | `src/jobs/ticks.rs:108-139` |
-| 22 job kinds with handlers | `src/jobs/mod.rs:20-71,92-169`; table in [scratch/jobs-and-observability.md](./scratch/jobs-and-observability.md) §3 |
+| 22 job kinds with handlers | `src/jobs/mod.rs:20-71,97-174`; table in [scratch/jobs-and-observability.md](./scratch/jobs-and-observability.md) §3 |
 | Loops: limiter checkpoint 10 s, L2 flush 2 s, metrics history 60 s (fast sample 15 s), `jobs_pending` sample 15 s, `metrics` topic 5 s while held, histogram upkeep 5 s | `src/cli/serve.rs`, `src/riot/limiter/persist.rs:25`, `src/cache/l2.rs:24-26`, `src/stats.rs:1041-1072` |
 
 ## Outbound network calls
@@ -126,4 +126,4 @@ cargo tree --depth 1 --all-features
 
 ---
 **Sources:** `Cargo.toml`, `rust-toolchain.toml`, `justfile`, `src/lib.rs`, `src/cli/mod.rs:L34-L66`, `src/cli/serve.rs:L43-L415`, `src/routes/docs.rs:L116-L141`, `src/jobs/mod.rs:L20-L71`, `src/jobs/ticks.rs:L108-L139`, `src/config.rs:L23-L93`, `.github/workflows/*.yml`, `docs/_meta/scratch/*.md`, `git log`, `git tag`
-**Last verified:** 2026-10-21 against commit `f8384be`
+**Last verified:** 2026-10-22 against commit `6eda84e`

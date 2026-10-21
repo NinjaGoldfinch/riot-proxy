@@ -495,13 +495,16 @@ async fn the_catch_up_queues_every_missing_half_once() {
     let queue = Queue::new(e.db.clone());
 
     assert_eq!(queue_missing_halves(&queue, true).await.unwrap(), 4);
+    // TL-03: at the catch-up's place, after a crawl's collect; KR_6, queued
+    // by a lookup's walk at a better priority, keeps it and is asked for the
+    // timeline, not queued twice.
     let want = [
-        ("KR_1".to_string(), 100, Some(true)),
-        ("KR_3".to_string(), 100, Some(true)),
-        ("KR_5".to_string(), 100, Some(true)),
-        ("KR_6".to_string(), 100, Some(true)),
+        ("KR_1".to_string(), 20_004, Some(true)),
+        ("KR_3".to_string(), 20_004, Some(true)),
+        ("KR_5".to_string(), 20_004, Some(true)),
+        ("KR_6".to_string(), 128, Some(true)),
     ];
-    assert_eq!(e.pending().await, want, "KR_6 lifted, not queued twice");
+    assert_eq!(e.pending().await, want, "KR_6 asked, not queued twice");
 
     queue_missing_halves(&queue, true).await.unwrap();
     assert_eq!(e.pending().await, want, "a second boot adds nothing");
@@ -517,8 +520,73 @@ async fn with_archive_timelines_off_the_catch_up_queues_only_missing_matches() {
     assert_eq!(
         e.pending().await,
         [
-            ("KR_3".to_string(), 100, Some(true)),
+            ("KR_3".to_string(), 20_004, Some(true)),
             ("KR_6".to_string(), 128, None),
+        ]
+    );
+}
+
+/// TL-03: more missing halves than one write holds are all queued, over
+/// several writes.
+#[tokio::test]
+async fn the_catch_up_queues_in_batches() {
+    use riot_proxy::archive::matches;
+    use riot_proxy::jobs::archive::{CATCH_UP_BATCH, queue_missing_halves};
+    let e = env().await;
+    let n = CATCH_UP_BATCH * 2 + 7;
+    for i in 0..n {
+        matches::put_timeline(
+            &e.db,
+            &format!("KR_{}", 100_000 + i),
+            bytes::Bytes::from_static(b"{}"),
+        )
+        .await
+        .unwrap();
+    }
+    let queue = Queue::new(e.db.clone());
+    assert_eq!(queue_missing_halves(&queue, true).await.unwrap(), n);
+    assert_eq!(e.pending().await.len(), n);
+}
+
+/// TL-03: in a lane with a crawl's collect and the boot catch-up waiting,
+/// the collect is claimed first, and the catch-up before the crawl's
+/// downloads.
+#[tokio::test]
+async fn a_crawls_collect_goes_before_the_catch_up_and_its_downloads_after() {
+    use riot_proxy::jobs::NewJob;
+    use riot_proxy::jobs::archive::queue_missing_halves;
+    let e = env().await;
+    riot_proxy::archive::matches::put_timeline(&e.db, "KR_1", bytes::Bytes::from_static(b"{}"))
+        .await
+        .unwrap();
+    let queue = Queue::new(e.db.clone());
+    queue
+        .enqueue(NewJob::new("archive:match", 20_005, json!({"matchId": "KR_2"})).dedupe("KR_2"))
+        .await
+        .unwrap();
+    queue_missing_halves(&queue, true).await.unwrap();
+    queue
+        .enqueue(
+            NewJob::new(
+                "ladder:collect",
+                20_003,
+                json!({"crawlId": "c", "platform": "kr", "queue": "RANKED_SOLO_5x5", "puuids": []}),
+            )
+            .dedupe("c:0"),
+        )
+        .await
+        .unwrap();
+    let scheduler = riot_proxy::jobs::Scheduler::new(e.db.clone(), riot_proxy::jobs::Registry::new());
+    let mut order = vec![];
+    while let Some(job) = scheduler.claim(i64::MAX / 2).await.unwrap() {
+        order.push((job.kind, job.dedupe_key.unwrap_or_default()));
+    }
+    assert_eq!(
+        order,
+        [
+            ("ladder:collect".to_string(), "c:0".to_string()),
+            ("archive:match".to_string(), "KR_1".to_string()),
+            ("archive:match".to_string(), "KR_2".to_string()),
         ]
     );
 }

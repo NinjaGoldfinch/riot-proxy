@@ -58,17 +58,17 @@ impl Handler for ClashSyncHandler {
 }
 ```
 
-Register it in `jobs::handlers`, which builds the `Registry` with `.with(kinds::X, handler)` and is called once by `serve` (`src/jobs/mod.rs:91-169`). A kind that exists only under some configuration is added afterwards in `serve`, as the two bucket kinds are (`src/cli/serve.rs:255-277`). A job whose kind has no handler fails with `no handler for job kind '…'` (`src/jobs/scheduler.rs:1126-1129`).
+Register it in `jobs::handlers`, which builds the `Registry` with `.with(kinds::X, handler)` and is called once by `serve` (`src/jobs/mod.rs:96-174`). A kind that exists only under some configuration is added afterwards in `serve`, as the two bucket kinds are (`src/cli/serve.rs:255-277`). A job whose kind has no handler fails with `no handler for job kind '…'` (`src/jobs/scheduler.rs:1126-1129`).
 
 ### 4. Priority, dedupe, payload
 
-- **Priority bands** are constants in `jobs::priority`: `INTERACTIVE` 0, `ARCHIVE_DEPTH` 100 (+ depth/10), `POLL` 10 000, `BACKFILL` 20 000, `MAINTENANCE` 30 000, `TIMELINE_BACKFILL` 40 000; lower runs first (`src/jobs/mod.rs:74-89`; `docs/design/06-jobs-and-realtime.md:84-97`). Pick the band by who waits for it; every enqueue sets one explicitly.
+- **Priority bands** are constants in `jobs::priority`: `INTERACTIVE` 0, `ARCHIVE_DEPTH` 100 (+ depth/10), `POLL` 10 000, `BACKFILL` 20 000, `MAINTENANCE` 30 000, `TIMELINE_BACKFILL` 40 000; lower runs first (`src/jobs/mod.rs:74-94`; `docs/design/06-jobs-and-realtime.md:84-97`). Pick the band by who waits for it; every enqueue sets one explicitly.
 - **Dedupe key.** `NewJob::new(kind, priority, payload).dedupe(key)`; a job without a key is never deduped (`src/jobs/scheduler.rs:51-78`). The key names the unit of work: a PUUID for polls, a match id for `archive:match`, `platform:queue` for a ladder, the kind itself for a singleton (`src/jobs/ticks.rs:58-63`, `76-80`). `Queue::enqueue` returns `Enqueued { id, created }`; `enqueue_or_promote` lifts a pending duplicate to the better priority instead (`src/jobs/scheduler.rs:80-92`, `418-450`).
 - **Payload** is a `serde_json::Value`, stored as text; keep it small and camelCase as the existing ones are (`{"puuid", "platform"}`, `{"matchId", "puuid", "fetchTimeline"}`).
 
 ### 5. Calling Riot from a job
 
-Every job fetch uses `Fetcher::fetch(req, FetchOptions::JOB)`: bulk priority, no bypass, and a wait of at most `JOB_YIELD_BUDGET_MS` for the limiter before the fetch fails with `limited_until` set (`src/fetcher.rs:123-140`). Convert the error with `JobError::from_fetch`, which yields when the limiter had no room and retries otherwise (`src/jobs/scheduler.rs:131-142`); `archive:match` is the model, including treating an upstream 404 as `Fail` because retrying cannot help (`src/jobs/archive.rs:227-262`). A long job hands its worker back between batches with `JobError::take_turns()` (yield with `retry_at = now`), optionally carrying a new payload so it resumes where it stopped (`src/jobs/scheduler.rs:123-129`, `144-150`; `ladder:walk` every 10 pages, `timelines:backfill` every 25 timelines).
+Every job fetch uses `Fetcher::fetch(req, FetchOptions::JOB)`: bulk priority, no bypass, and a wait of at most `JOB_YIELD_BUDGET_MS` for the limiter before the fetch fails with `limited_until` set (`src/fetcher.rs:123-140`). Convert the error with `JobError::from_fetch`, which yields when the limiter had no room and retries otherwise (`src/jobs/scheduler.rs:131-142`); `archive:match` is the model, including treating an upstream 404 as `Fail` because retrying cannot help (`src/jobs/archive.rs:245-280`). A long job hands its worker back between batches with `JobError::take_turns()` (yield with `retry_at = now`), optionally carrying a new payload so it resumes where it stopped (`src/jobs/scheduler.rs:123-129`, `144-150`; `ladder:walk` every 10 pages, `timelines:backfill` every 25 timelines).
 
 ### 6. Activity tracing
 
@@ -93,7 +93,7 @@ Call `activity::step("GOLD II page 12 on na1")` at each unit of progress, `activ
 
 ### 9. Events and metrics
 
-- **Events.** The `Event` enum and its `NAMES` list are in `src/events.rs:113-124`; a job publishes through the hub (`Hub::publish`, `src/ws/hub.rs:100-103`) as `archive:match` does with `announce` (`src/jobs/archive.rs:264-270`, `423`). A new event is a new variant, a `NAMES` entry, the WebSocket protocol document ([../integration/contract.md](../integration/contract.md)) and the dashboard if it listens; events keep v1's names plus v2's additions (`PROGRESS.md:387`).
+- **Events.** The `Event` enum and its `NAMES` list are in `src/events.rs:113-124`; a job publishes through the hub (`Hub::publish`, `src/ws/hub.rs:100-103`) as `archive:match` does with `announce` (`src/jobs/archive.rs:282-288`, `423`). A new event is a new variant, a `NAMES` entry, the WebSocket protocol document ([../integration/contract.md](../integration/contract.md)) and the dashboard if it listens; events keep v1's names plus v2's additions (`PROGRESS.md:387`).
 - **Metrics.** `proxy_jobs_total{job,status}` and `jobs_pending{kind}` come for free (`src/jobs/scheduler.rs:36`, `48-49`). A job-specific metric is a constant in `src/metrics.rs`, a `def(...)` row in `CATALOGUE`, and a row in `docs/design/metrics.md`; a unit test fails when the document lacks the row (`src/metrics.rs:96-98`, `460-471`).
 
 ### 10. Tests
@@ -166,5 +166,5 @@ Then: `jobs::handlers` gets `.with(kinds::CLASH_SYNC, clash::ClashSyncHandler(Ar
 9. design/06 catalogue row, concurrency and runbook docs, ADR, `PROGRESS.md`.
 
 ---
-**Sources:** `src/jobs/mod.rs:L19-L174`, `src/jobs/scheduler.rs:L1-L19`, `L36-L165`, `L225-L254`, `L418-L450`, `L1070-L1144`, `src/jobs/lanes.rs:L1-L78`, `src/jobs/ticks.rs:L1-L4`, `L44-L80`, `L108-L139`, `L180-L202`, `src/jobs/activity.rs:L363-L378`, `src/jobs/archive.rs:L227-L270`, `L423`, `src/jobs/names.rs:L193`, `L208-L232`, `src/fetcher.rs:L123-L140`, `src/cli/serve.rs:L255-L277`, `src/routes/admin.rs:L2278-L2289`, `src/app.rs:L53`, `src/events.rs:L113-L124`, `src/ws/hub.rs:L100-L103`, `src/metrics.rs:L96-L98`, `L460-L471`, `src/config.rs:L114`, `src/config/tests.rs:L433-L452`, `src/db/migrations/V0001__init.sql:L44`, `tests/jobs.rs:L43-L101`, `src/jobs/ticks/tests.rs:L36-L45`, `src/jobs/scheduler/tests.rs:L31-L40`, `docs/design/06-jobs-and-realtime.md:L84-L158`, `docs/DECISIONS.md:L1443-L1452` (ADR-134), `.env.example:L31-L34`, `PROGRESS.md:L387`
-**Last verified:** 2026-10-21 against commit `32c4672`
+**Sources:** `src/jobs/mod.rs:L19-L179`, `src/jobs/scheduler.rs:L1-L19`, `L36-L165`, `L225-L254`, `L418-L450`, `L1070-L1144`, `src/jobs/lanes.rs:L1-L78`, `src/jobs/ticks.rs:L1-L4`, `L44-L80`, `L108-L139`, `L180-L202`, `src/jobs/activity.rs:L363-L378`, `src/jobs/archive.rs:L245-L288`, `L423`, `src/jobs/names.rs:L193`, `L208-L232`, `src/fetcher.rs:L123-L140`, `src/cli/serve.rs:L255-L277`, `src/routes/admin.rs:L2278-L2289`, `src/app.rs:L53`, `src/events.rs:L113-L124`, `src/ws/hub.rs:L100-L103`, `src/metrics.rs:L96-L98`, `L460-L471`, `src/config.rs:L114`, `src/config/tests.rs:L433-L452`, `src/db/migrations/V0001__init.sql:L44`, `tests/jobs.rs:L43-L101`, `src/jobs/ticks/tests.rs:L36-L45`, `src/jobs/scheduler/tests.rs:L31-L40`, `docs/design/06-jobs-and-realtime.md:L84-L158`, `docs/DECISIONS.md:L1443-L1452` (ADR-134), `.env.example:L31-L34`, `PROGRESS.md:L387`
+**Last verified:** 2026-10-22 against commit `6eda84e`
