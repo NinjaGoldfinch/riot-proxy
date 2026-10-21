@@ -290,6 +290,37 @@ pub struct AnalyticsContext {
     pub ladders: Vec<(String, String)>,
     /// `aggregate:delta`'s batches (THR-03).
     pub delta: DeltaSettings,
+    /// The batch size each ladder's last delta run ended on (THR-07).
+    pub delta_sizes: DeltaSizes,
+}
+
+/// The batch size each ladder's last delta run ended on, so the next run
+/// starts there (THR-07). A run on production is often one batch a minute,
+/// so a size that started from [`analytics::delta::FIRST_BATCH`] every run
+/// never followed its measured time. In memory: a restart starts again at
+/// the first size.
+#[derive(Debug, Default)]
+pub struct DeltaSizes(std::sync::Mutex<HashMap<(String, String), usize>>);
+
+impl DeltaSizes {
+    fn map(&self) -> std::sync::MutexGuard<'_, HashMap<(String, String), usize>> {
+        self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Where a run's first batch starts: the last run's next size, or the
+    /// first size; within the floor and `cap` either way.
+    pub fn start(&self, ladder: &Ladder, cap: usize) -> usize {
+        let key = (ladder.platform.clone(), ladder.queue.clone());
+        let last = self.map().get(&key).copied();
+        last.unwrap_or(analytics::delta::FIRST_BATCH)
+            .clamp(analytics::delta::MIN_BATCH, cap.max(analytics::delta::MIN_BATCH))
+    }
+
+    /// Keep `size` for the ladder's next run.
+    pub fn remember(&self, ladder: &Ladder, size: usize) {
+        self.map()
+            .insert((ladder.platform.clone(), ladder.queue.clone()), size);
+    }
 }
 
 /// `AGGREGATE_DELTA_S` > 0, `AGGREGATE_DELTA_TARGET_MS`, `AGGREGATE_DELTA_BATCH`.
@@ -827,10 +858,11 @@ impl AnalyticsContext {
             crate::riot::ladder::queue_id(&ladder.queue)
                 .ok_or_else(|| JobError::Fail(format!("'{}' is not a ranked queue", ladder.queue)))?,
         );
-        let mut size = analytics::delta::FIRST_BATCH.min(self.delta.cap.max(analytics::delta::MIN_BATCH));
+        let mut size = self.delta_sizes.start(ladder, self.delta.cap);
         let mut cursor = String::new();
         let mut out = LadderCount {
             rows: analytics::REPORTED.iter().map(|t| (*t, 0)).collect(),
+            first: size,
             ..LadderCount::default()
         };
         loop {
@@ -909,6 +941,11 @@ impl AnalyticsContext {
             size = analytics::delta::next_batch(size, done.sql_s, self.delta.target_ms, self.delta.cap);
             tokio::time::sleep(REEXTRACT_PACE).await;
         }
+        // A run with no batch measured nothing: the last size stands.
+        if out.batches > 0 {
+            self.delta_sizes.remember(ladder, size);
+        }
+        out.next = size;
         Ok(out)
     }
 }
@@ -918,6 +955,9 @@ impl AnalyticsContext {
 pub struct LadderCount {
     /// Matches with a step counted.
     pub matches: i64,
+    /// The size the run started at, and the one its next run starts at.
+    pub first: usize,
+    pub next: usize,
     /// Write transactions, and the most matches one held.
     pub batches: usize,
     pub largest: usize,

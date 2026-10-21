@@ -88,6 +88,7 @@ impl Env {
             mirror: std::sync::Arc::clone(&self.state.ddragon),
             ladders: vec![],
             delta: riot_proxy::jobs::analytics::DeltaSettings::OFF,
+            delta_sizes: Default::default(),
         }
     }
 
@@ -2563,4 +2564,38 @@ async fn a_stamped_ladder_outside_the_configured_ones_is_counted() {
         .unwrap();
     let r = e.get("/v1/lol/analytics/champions?patch=16.19&minGames=0").await;
     assert_eq!(r.json()["totalGames"], 20);
+}
+
+/// THR-07: a ladder's next delta run starts at the batch size its last run
+/// ended on, not at the first size again; a run that counted nothing leaves
+/// it alone; the cap still holds.
+#[tokio::test]
+async fn a_delta_run_starts_where_the_ladders_last_run_ended() {
+    let e = env().await;
+    e.seed_stamped().await;
+    let ctx = e.delta_ctx(500);
+    let kr = riot_proxy::jobs::analytics::Ladder {
+        platform: KR_SOLO.0.into(),
+        queue: KR_SOLO.1.into(),
+    };
+    e.archive_as("KR_9000000001", RANKED).await;
+    let first = ctx.delta_ladder(&kr).await.unwrap();
+    assert_eq!(
+        (first.first, first.batches),
+        (riot_proxy::archive::analytics::delta::FIRST_BATCH, 1)
+    );
+    e.archive_as("KR_9000000002", RANKED).await;
+    let second = ctx.delta_ladder(&kr).await.unwrap();
+    assert_eq!(second.first, first.next, "{first:?} {second:?}");
+    let idle = ctx.delta_ladder(&kr).await.unwrap();
+    assert_eq!(
+        (idle.batches, idle.first, idle.next),
+        (0, second.next, second.next)
+    );
+    // Another context (a restart) starts at the first size; a lower cap wins.
+    assert_eq!(
+        e.delta_ctx(500).delta_sizes.start(&kr, 500),
+        riot_proxy::archive::analytics::delta::FIRST_BATCH
+    );
+    assert_eq!(ctx.delta_sizes.start(&kr, 6), 6);
 }
