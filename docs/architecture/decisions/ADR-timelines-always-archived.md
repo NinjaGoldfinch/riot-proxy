@@ -8,8 +8,8 @@
 
 **Status.** Accepted, in force (ADR-085 2026-10-08; ADR-098, ADR-118, ADR-133 2026-10-10 to 2026-10-11).
 
-**Evidence.** `src/jobs/archive.rs:245-289`, `src/archive/mod.rs:88-110`, `src/jobs/timelines.rs`, `src/db/migrations/V0013__timelines_standalone.sql`, `tests/archive.rs`, `tests/timelines.rs`.
+**Evidence.** `src/jobs/archive.rs:263-307`, `src/archive/mod.rs:88-110`, `src/jobs/timelines.rs`, `src/db/migrations/V0013__timelines_standalone.sql`, `tests/archive.rs`, `tests/timelines.rs`.
 
 ---
-**Sources:** `docs/DECISIONS.md:L968-L973,L1094-L1101,L1274-L1283,L1443-L1452`, `src/config.rs:L740`, `src/archive/mod.rs:L88-L110`, `src/jobs/archive.rs:L245-L289`, `docs/design/12-object-storage-and-hosting.md` §Why
-**Last verified:** 2026-10-21 against commit `32c4672`
+**Sources:** `docs/DECISIONS.md:L968-L973,L1094-L1101,L1274-L1283,L1443-L1452`, `src/config.rs:L740`, `src/archive/mod.rs:L88-L110`, `src/jobs/archive.rs:L263-L307`, `docs/design/12-object-storage-and-hosting.md` §Why
+**Last verified:** 2026-10-26 against commit `220cdef`

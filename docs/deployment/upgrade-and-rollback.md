@@ -101,4 +101,4 @@ Rolling back only the object-storage feature is configuration, not a restore: un
 
 ---
 **Sources:** `.github/workflows/release.yml:L179-L194`, `docs/workflows/release-process.md`, `docs/design/07-deployment.md:L177,L216,L225-L231`, `docs/design/12-object-storage-and-hosting.md:L938-L946`, `deploy/README.md:L121-L138,L246-L265`, `src/cli/serve.rs:L43-L416`, `src/cli/backup.rs:L10-L21`, `src/db/mod.rs:L148-L155,L343-L345`, `src/jobs/scheduler.rs:L963-L973,L1291-L1300`, `src/jobs/ticks.rs:L172,L200-L204`, `src/jobs/maintenance.rs:L34,L36,L237-L240,L294-L306`, `src/jobs/archive.rs:L186-L191`, `src/riot/limiter/persist.rs:L23,L92-L94`, `src/cache/l2.rs:L186-L216`, `src/consumers.rs:L228-L283`, `src/routes/health.rs:L148-L200`, `src/routes/admin.rs:L2485-L2512`, `src/app.rs:L35,L240-L253`, `docs/DECISIONS.md:L1722-L1730`, `reports/OBJ implementation handoff.md:L23`, `docs/_meta/scratch/jobs-and-observability.md`, `docs/_meta/scratch/persistence.md`, `docs/_meta/scratch/routes.md:L157,L168,L187`
-**Last verified:** 2026-10-22 against commit `6eda84e`
+**Last verified:** 2026-10-26 against commit `220cdef`

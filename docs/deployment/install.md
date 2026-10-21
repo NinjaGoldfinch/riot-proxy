@@ -238,4 +238,4 @@ The image is `FROM scratch` with the static binary, `DATA_DIR=/data`, port 8080 
 
 ---
 **Sources:** `docs/design/07-deployment.md:L15,L74-L95`, `docs/design/12-object-storage-and-hosting.md:L544-L558,L585-L641,L794-L807,L815-L818,L893-L903`, `deploy/README.md:L20-L100,L121-L122,L151-L152`, `deploy/riot-proxy-replica.service:L12-L33`, `deploy/riot-proxy-replica.timer:L6-L8`, `.github/workflows/release.yml:L179-L194`, `README.md:L11-L24,L27-L58`, `Dockerfile:L19-L26`, `docker-compose.yml:L1-L11`, `src/config.rs:L118-L119,L635,L671-L697,L712,L842-L893,L1003-L1015`, `src/cli/mod.rs:L82-L88,L144-L168`, `src/cli/serve.rs:L52-L148,L341-L346,L421-L427`, `src/cli/key.rs:L46-L57`, `src/consumers.rs:L95-L107,L154-L157`, `src/http/auth.rs:L30,L263-L265`, `src/routes/health.rs:L119-L200`, `docs/_meta/scratch/siblings.md`, `docs/_meta/scratch/routes.md:L137-L140`
-**Last verified:** 2026-10-22 against commit `6eda84e`
+**Last verified:** 2026-10-26 against commit `220cdef`

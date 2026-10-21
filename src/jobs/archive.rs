@@ -161,57 +161,75 @@ pub fn queue_missing_half_on(
 
 /// TL-01's catch-up, run at boot: queue every archived match without its
 /// timeline (when `want_timeline`) and every archived timeline without its
-/// match, at `priority::ARCHIVE_DEPTH`. A match whose finished `archive:match`
-/// already asked for its timeline is skipped, so a timeline Riot won't serve
-/// is not asked for on every restart: a `done` row goes after seven days and
-/// it is tried again then; a `failed` one stays. Returns how many were queued
-/// or lifted.
+/// match, at `priority::CATCH_UP` (TL-03): after a crawl's collect and before
+/// its downloads, so it no longer holds a crawl for hours after a restart. A
+/// job already queued keeps a better priority and is asked for the timeline.
+/// A match whose finished `archive:match` already asked for its timeline is
+/// skipped, so a timeline Riot won't serve is not asked for on every
+/// restart: a `done` row goes after seven days and it is tried again then; a
+/// `failed` one stays. Returns how many were queued or lifted.
+///
+/// The ids are found on a reader and queued [`CATCH_UP_BATCH`] to a write
+/// (TL-03): one transaction that also ran the search held the writer while
+/// it read every match and the jobs table (production logged 5–17 s writes
+/// at its first 2.8.0 boot, this the likely one). Each id is checked again
+/// in its write, so one archived meanwhile is left alone.
 pub async fn queue_missing_halves(queue: &Queue, want_timeline: bool) -> Result<usize, crate::db::DbError> {
-    let now = Clock::now().unix_ms;
-    let n = queue
+    let ids: Vec<String> = queue
         .db()
-        .write(move |c| {
-            let tx = c.transaction()?;
-            let ids: Vec<String> = {
-                let without_timeline = if want_timeline {
-                    "SELECT match_id FROM matches m
-                      WHERE NOT EXISTS (SELECT 1 FROM timelines t WHERE t.match_id = m.match_id)
-                     UNION "
-                } else {
-                    ""
-                };
-                let mut s = tx.prepare(&format!(
-                    "{without_timeline}
-                     SELECT match_id FROM timelines t
-                      WHERE NOT EXISTS (SELECT 1 FROM matches m WHERE m.match_id = t.match_id)
-                     EXCEPT
-                     SELECT dedupe_key FROM jobs
-                      WHERE kind = '{kind}' AND state IN ('done', 'failed')
-                        AND json_extract(payload, '$.fetchTimeline') = 1",
-                    kind = kinds::ARCHIVE_MATCH,
-                ))?;
-                let rows = s.query_map([], |r| r.get(0))?;
-                rows.collect::<Result<_, _>>()?
+        .read(move |c| {
+            let without_timeline = if want_timeline {
+                "SELECT match_id FROM matches m
+                  WHERE NOT EXISTS (SELECT 1 FROM timelines t WHERE t.match_id = m.match_id)
+                 UNION "
+            } else {
+                ""
             };
-            let mut n = 0;
-            for id in &ids {
-                n += usize::from(queue_missing_half_on(
-                    &tx,
-                    id,
-                    want_timeline,
-                    priority::ARCHIVE_DEPTH,
-                    now,
-                )?);
-            }
-            tx.commit()?;
-            Ok::<_, crate::db::DbError>(n)
+            let mut s = c.prepare(&format!(
+                "{without_timeline}
+                 SELECT match_id FROM timelines t
+                  WHERE NOT EXISTS (SELECT 1 FROM matches m WHERE m.match_id = t.match_id)
+                 EXCEPT
+                 SELECT dedupe_key FROM jobs
+                  WHERE kind = '{kind}' AND state IN ('done', 'failed')
+                    AND json_extract(payload, '$.fetchTimeline') = 1",
+                kind = kinds::ARCHIVE_MATCH,
+            ))?;
+            let rows = s.query_map([], |r| r.get(0))?;
+            Ok::<_, crate::db::DbError>(rows.collect::<Result<_, _>>()?)
         })
         .await?;
+    let mut n = 0;
+    for chunk in ids.chunks(CATCH_UP_BATCH) {
+        let chunk = chunk.to_vec();
+        let now = Clock::now().unix_ms;
+        n += queue
+            .db()
+            .write(move |c| {
+                let tx = c.transaction()?;
+                let mut n = 0;
+                for id in &chunk {
+                    n += usize::from(queue_missing_half_on(
+                        &tx,
+                        id,
+                        want_timeline,
+                        priority::CATCH_UP,
+                        now,
+                    )?);
+                }
+                tx.commit()?;
+                Ok::<_, crate::db::DbError>(n)
+            })
+            .await?;
+    }
     if n > 0 {
         queue.wake_all();
     }
     Ok(n)
 }
+
+/// Ids the boot catch-up queues per write transaction.
+pub const CATCH_UP_BATCH: usize = 500;
 
 /// Queue a history walk for a player, deduped per player while pending or
 /// running (v1 `enqueueBackfill`), and count it by reason and outcome.
