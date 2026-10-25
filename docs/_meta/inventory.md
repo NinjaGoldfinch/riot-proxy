@@ -53,7 +53,7 @@ What is in the riot-proxy repository at commit `7491ff6` (version 2.7.0), gather
 | Entry | Where |
 |---|---|
 | Binary `riot-proxy` with subcommands `serve`, `migrate`, `key {create,list,revoke}`, `healthcheck`, `spec`, `migrate-v1`, `backup`, `packs {reindex,restore-index,snapshot}`, and `riot {get,record}` (dev-cli) | `src/cli/mod.rs:34-66` |
-| Server bootstrap (23 ordered steps) | `src/cli/serve.rs:43-415`, summarised in [scratch/jobs-and-observability.md](./scratch/jobs-and-observability.md) §1 |
+| Server bootstrap (23 ordered steps) | `src/cli/serve.rs:43-416`, summarised in [scratch/jobs-and-observability.md](./scratch/jobs-and-observability.md) §1 |
 | HTTP routes (76 documented operations on 70 paths plus docs, pages, dev reset, `/ddragon` files, fallback) | registered in `src/routes/docs.rs:116-141`; table in [scratch/routes.md](./scratch/routes.md) §1 and [../api/endpoints.md](../api/endpoints.md) |
 | WebSocket `/v1/ws` | `src/routes/ws.rs:497-499`, protocol in `src/ws/protocol.rs` |
 | Ticks (periodic enqueues): `poll:live` 60 s, `poll:rank` 600 s, `poll:matches` 300 s, `ddragon:sync` 3600 s, `maintenance` and `names:backfill` daily, `ladder:crawl` on `LADDER_CRAWL_S`, `aggregate:analytics` on `AGGREGATE_INTERVAL_S`, `aggregate:delta` on `AGGREGATE_DELTA_S` (60 s), `timelines:backfill` hourly when enabled | `src/jobs/ticks.rs:108-139` |
@@ -125,5 +125,5 @@ cargo tree --depth 1 --all-features
 ```
 
 ---
-**Sources:** `Cargo.toml`, `rust-toolchain.toml`, `justfile`, `src/lib.rs`, `src/cli/mod.rs:L34-L66`, `src/cli/serve.rs:L43-L415`, `src/routes/docs.rs:L116-L141`, `src/jobs/mod.rs:L20-L71`, `src/jobs/ticks.rs:L108-L139`, `src/config.rs:L23-L93`, `.github/workflows/*.yml`, `docs/_meta/scratch/*.md`, `git log`, `git tag`
-**Last verified:** 2026-10-21 against commit `f8384be`
+**Sources:** `Cargo.toml`, `rust-toolchain.toml`, `justfile`, `src/lib.rs`, `src/cli/mod.rs:L34-L66`, `src/cli/serve.rs:L43-L416`, `src/routes/docs.rs:L116-L141`, `src/jobs/mod.rs:L20-L71`, `src/jobs/ticks.rs:L108-L139`, `src/config.rs:L23-L93`, `.github/workflows/*.yml`, `docs/_meta/scratch/*.md`, `git log`, `git tag`
+**Last verified:** 2026-10-22 against commit `6eda84e`
