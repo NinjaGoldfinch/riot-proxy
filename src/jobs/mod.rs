@@ -80,6 +80,11 @@ pub mod priority {
     pub const POLL: i64 = 10_000;
     /// `backfill:player`, `ladder:*`.
     pub const BACKFILL: i64 = 20_000;
+    /// TL-01's boot catch-up of missing halves (TL-03): after a crawl's
+    /// collect (`BACKFILL + 3`) and before its downloads (`BACKFILL + 5`), so
+    /// a restart doesn't hold the crawls for hours, and a bounded catch-up
+    /// isn't starved by an unbounded download backlog either.
+    pub const CATCH_UP: i64 = BACKFILL + 4;
     /// `aggregate:analytics`, `facts:reextract`, `builds:extract`, `tiers:backfill`, `maintenance`,
     /// `ddragon:sync`, `archive:offload`, `archive:index-snapshot`.
     pub const MAINTENANCE: i64 = 30_000;
