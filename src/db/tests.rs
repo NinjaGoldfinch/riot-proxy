@@ -227,7 +227,7 @@ async fn a_v1_database_upgrades_to_v2_and_keeps_its_data() {
         })
         .await
         .expect("read");
-    assert_eq!((name.as_str(), versions), ("old", 29));
+    assert_eq!((name.as_str(), versions), ("old", 30));
 }
 
 /// V0015 (SITE-08, ADR-123) backfills the slices aggregated before it, as the
@@ -895,11 +895,11 @@ async fn migrations_apply_once_across_reopens() {
         })
         .await
         .expect("insert");
-    assert_eq!(history(first.clone()).await.expect("history"), 29);
+    assert_eq!(history(first.clone()).await.expect("history"), 30);
     drop(first);
 
     let second = Db::open(&path, 1).expect("second open");
-    assert_eq!(history(second.clone()).await.expect("history"), 29, "no re-run");
+    assert_eq!(history(second.clone()).await.expect("history"), 30, "no re-run");
     let name: Option<String> = second
         .read(|c| {
             Ok::<_, DbError>(
@@ -2028,4 +2028,46 @@ async fn a_panicking_write_still_clears_busy_since() {
     let s = db.writer_status();
     assert_eq!(s.busy_since, None);
     assert!(s.last_finished > 0);
+}
+
+/// THR-04 (ADR-185): V0030 adds the collect cursor, NULL on every ladder row
+/// already there, and a crawl counter that starts at 0.
+#[tokio::test]
+async fn v0030_adds_the_collect_cursor() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("riot-proxy.db");
+    {
+        let mut conn = Connection::open(&path).expect("open");
+        embedded::migrations::runner()
+            .set_grouped(true)
+            .set_target(refinery::Target::Version(29))
+            .run(&mut conn)
+            .expect("to V0029");
+        conn.execute_batch(
+            "INSERT INTO ladder_crawls (id, key_scope, platform, queue, tier_floor, started_at, backfills_enqueued)
+               VALUES ('C1', 's', 'kr', 'RANKED_SOLO_5x5', 'MASTER', 1, 7);
+             INSERT INTO ladder_entries (key_scope, platform, queue, puuid, tier, division, league_points,
+                 wins, losses, first_seen_crawl_id, last_seen_crawl_id, updated_at)
+               VALUES ('s', 'kr', 'RANKED_SOLO_5x5', 'A', 'MASTER', 'I', 10, 6, 4, 'C1', 'C1', 1);",
+        )
+        .expect("seed");
+    }
+    let db = Db::open(&path, 1).expect("to V0030");
+    let got = db
+        .read(|c| {
+            let entry: (i64, Option<i64>, Option<i64>) = c.query_row(
+                "SELECT wins + losses, collected_games, collected_at FROM ladder_entries WHERE puuid = 'A'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )?;
+            let crawl: (i64, i64) = c.query_row(
+                "SELECT backfills_enqueued, players_skipped FROM ladder_crawls WHERE id = 'C1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            Ok::<_, DbError>((entry, crawl))
+        })
+        .await
+        .expect("read");
+    assert_eq!(got, ((10, None, None), (7, 0)));
 }

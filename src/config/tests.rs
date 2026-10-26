@@ -86,6 +86,7 @@ fn defaults_match_v1_and_design_07() {
     );
     assert_eq!(c.ladder_tier_floor, "MASTER");
     assert_eq!(c.ladder_backfill_limit, 100);
+    assert_eq!(c.ladder_collect_overlap_s, 7_200);
     assert_eq!(c.rank_lookup_limit, 50_000);
     assert_eq!(c.rank_lookup_recheck_s, 604_800, "seven days (ADR-111)");
     assert_eq!(c.tier_late_stamp_days, 14);
@@ -940,4 +941,23 @@ fn analytics_cache_entries_defaults_and_bounds() {
         ..env(&[("ANALYTICS_CACHE_ENTRIES", "9")])
     });
     assert_eq!(c.analytics_cache_entries, 7, "the flag wins");
+}
+
+/// THR-04 (ADR-185): two hours by default, 0 to a day.
+#[test]
+fn ladder_collect_overlap_defaults_and_bounds() {
+    assert_eq!(load(env(&[])).ladder_collect_overlap_s, 7_200);
+    for (value, want) in [("0", 0), ("600", 600), ("86400", 86_400)] {
+        assert_eq!(
+            load(env(&[("LADDER_COLLECT_OVERLAP_S", value)])).ladder_collect_overlap_s,
+            want
+        );
+    }
+    for value in ["86401", "-1", "x"] {
+        let errs = errors(env(&[("LADDER_COLLECT_OVERLAP_S", value)]));
+        assert!(
+            errs.iter().any(|e| e.starts_with("LADDER_COLLECT_OVERLAP_S:")),
+            "{value}: {errs:#?}"
+        );
+    }
 }

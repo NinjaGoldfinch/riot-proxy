@@ -2,6 +2,10 @@
 
 Dated log of changes to this documentation set. One line per change; the newest first.
 
+## 2026-10-26
+
+- THR-04 (ADR-185): the collect cursor. V0030 (`ladder_entries.collected_games`, `collected_at`, `ladder_crawls.players_skipped`), `LADDER_COLLECT_OVERLAP_S`, `startTime` on the crawl's `match.idsByPuuid` and the portal's text for it, `playersSkipped` on the crawl summary and card; `data/schema-analytics.md`, `data/migrations.md`, `workflows/adding-a-migration.md` (V0031 next), `deployment/configuration.md`, `reference/riot-api-usage.md`, `operations/runbook.md`, `api/*`. Line citations of the changed files moved with them across the set.
+
 ## 2026-10-21
 
 - Release 2.8.0: `api/openapi.json` `info.version` is `2.8.0`; the version examples in `deploy/proxmox` and `workflows/release-process.md` follow.
@@ -26,4 +30,4 @@ Dated log of changes to this documentation set. One line per change; the newest 
 
 ---
 **Sources:** this documentation set
-**Last verified:** 2026-10-21 against commit `f8384be`
+**Last verified:** 2026-10-26 against commit `c9e1b33`

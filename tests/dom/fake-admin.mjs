@@ -202,7 +202,7 @@ export const PAST = '01K0000000000000000000DON1';
 const crawl = (id, status, phase, extra = {}) => ({
   id, platform: 'oc1', queue: 'RANKED_SOLO_5x5', tierFloor: 'MASTER', status, phase,
   startedAt: ago(3_600_000), finishedAt: status === 'running' ? null : ago(60_000),
-  pagesFetched: 12, entriesSeen: 1982, playersDiscovered: 1982, backfillsEnqueued: 1982,
+  pagesFetched: 12, entriesSeen: 1982, playersDiscovered: 1982, backfillsEnqueued: 1982, playersSkipped: 340,
   matchIdsSeen: 21137, matchesQueued: 0, pendingLegs: status === 'running' ? 30 : 0, apexCapped: [], ...extra,
 });
 const OLD = Array.from({ length: 11 }, (_, i) => crawl(`01K00000000000000000000LD${String(i).padStart(2, '0')}`, i === 3 ? 'failed' : 'completed', 'archive', {

@@ -73,6 +73,10 @@ fn entries(tier: &str, division: &str, page: u32, n: u32) -> Vec<Value> {
 
 impl Env {
     fn ctx(&self, backfill_limit: u32) -> Arc<LadderContext> {
+        self.ctx_overlap(backfill_limit, 7_200)
+    }
+
+    fn ctx_overlap(&self, backfill_limit: u32, collect_overlap_s: u32) -> Arc<LadderContext> {
         let config = common::config(&[]);
         Arc::new(LadderContext {
             fetcher: common::fetcher(&config, &self.server.uri(), Arc::new(Limiter::new(0.8)), None),
@@ -82,6 +86,7 @@ impl Env {
             tier_floor: "MASTER".into(),
             backfill_limit,
             lookup_backfill_limit: 500,
+            collect_overlap_s,
             archive_timelines: false,
             rank_lookup_limit: 50_000,
             rank_lookup_recheck_s: 604_800,
@@ -731,6 +736,7 @@ impl Env {
             tier_floor: "CHALLENGER".into(),
             backfill_limit: 100,
             lookup_backfill_limit: 500,
+            collect_overlap_s: 7_200,
             archive_timelines: config.archive_timelines,
             rank_lookup_limit: 50_000,
             rank_lookup_recheck_s: 604_800,
@@ -930,6 +936,14 @@ async fn a_crawl_runs_every_stage_and_fetches_each_match_once() {
         e.count("SELECT COUNT(*) FROM players WHERE json_extract(backfill_state, '$.doneAt') IS NOT NULL")
             .await,
         0
+    );
+    // A first crawl skips nobody and leaves every player a cursor: the total
+    // its enumerate stored (THR-04).
+    assert_eq!(c.players_skipped, 0);
+    assert_eq!(
+        e.count("SELECT COUNT(*) FROM ladder_entries WHERE collected_games = 90 AND collected_at > 0")
+            .await,
+        30
     );
 
     let events: Vec<(String, String)> = drain(&mut ladder)
@@ -2098,5 +2112,381 @@ async fn with_the_delta_on_a_crawl_queues_the_rebuild_until_its_ladder_is_stampe
             if stamped { (0, 1) } else { (1, 0) },
             "stamped: {stamped}"
         );
+    }
+}
+
+/// THR-04 (ADR-185): the collect cursor. A crawl skips players whose wins
+/// and losses haven't moved since their last collect and asks the rest only
+/// for games since then, with no depth limit.
+mod cursor {
+    use super::*;
+
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::Mutex;
+
+    use wiremock::{Request, Respond};
+
+    const HOUR: i64 = 3_600_000;
+
+    /// Each player's ranked games as Riot would list them, and their wins +
+    /// losses as league-v4 reports them.
+    #[derive(Default)]
+    struct Games {
+        /// Newest first: (match id, start ms).
+        lists: BTreeMap<String, Vec<(String, i64)>>,
+        totals: BTreeMap<String, i64>,
+        /// Players match-v5 answers 404 for.
+        gone: BTreeSet<String>,
+        /// Every `match.idsByPuuid` request: the player and its query.
+        asked: Vec<(String, BTreeMap<String, String>)>,
+    }
+
+    type World = Arc<Mutex<Games>>;
+
+    impl Games {
+        /// `p` plays a game that started at `start`; a remake doesn't count.
+        fn play(&mut self, p: &str, start: i64, counts: bool) -> String {
+            let list = self.lists.entry(p.to_string()).or_default();
+            let id = format!("KR_{p}_{}", list.len());
+            list.push((id.clone(), start));
+            list.sort_by_key(|g| std::cmp::Reverse(g.1));
+            if counts {
+                *self.totals.entry(p.to_string()).or_default() += 1;
+            }
+            id
+        }
+    }
+
+    /// The Challenger league: every player, best first in the order named.
+    struct Apex(World);
+    impl Respond for Apex {
+        fn respond(&self, _: &Request) -> ResponseTemplate {
+            let w = self.0.lock().unwrap();
+            let entries: Vec<Value> = w
+                .totals
+                .iter()
+                .enumerate()
+                .map(|(i, (p, n))| {
+                    json!({"puuid": p, "leaguePoints": 1000 - i64::try_from(i).unwrap(),
+                           "wins": n - n / 2, "losses": n / 2})
+                })
+                .collect();
+            ResponseTemplate::new(200).set_body_json(json!({"tier": "CHALLENGER", "entries": entries}))
+        }
+    }
+
+    /// `match.idsByPuuid`, with `startTime` compared to a game's start: the
+    /// reading ADR-185 assumes, not a claim about Riot.
+    struct Ids(World);
+    impl Respond for Ids {
+        fn respond(&self, r: &Request) -> ResponseTemplate {
+            let p = r.url.path().split('/').rev().nth(1).unwrap().to_string();
+            let q: BTreeMap<String, String> = r.url.query_pairs().into_owned().collect();
+            let mut w = self.0.lock().unwrap();
+            w.asked.push((p.clone(), q.clone()));
+            if w.gone.contains(&p) {
+                return ResponseTemplate::new(404).set_body_json(json!({"status": {"status_code": 404}}));
+            }
+            let since = q.get("startTime").map(|v| v.parse::<i64>().unwrap() * 1000);
+            let start: usize = q["start"].parse().unwrap();
+            let count: usize = q["count"].parse().unwrap();
+            let ids: Vec<&String> = w
+                .lists
+                .get(&p)
+                .map(Vec::as_slice)
+                .unwrap_or_default()
+                .iter()
+                .filter(|(_, at)| since.is_none_or(|s| *at >= s))
+                .map(|(id, _)| id)
+                .skip(start)
+                .take(count)
+                .collect();
+            ResponseTemplate::new(200).set_body_json(ids)
+        }
+    }
+
+    fn now() -> i64 {
+        riot_proxy::clock::Clock::now().unix_ms
+    }
+
+    /// A ladder of `players`, each with `games` ranked games three hours
+    /// apart, the newest three hours ago.
+    async fn world(e: &Env, players: &[&str], games: i64) -> World {
+        let w: World = Arc::default();
+        {
+            let mut g = w.lock().unwrap();
+            for p in players {
+                for k in (1..=games).rev() {
+                    g.play(p, now() - k * 3 * HOUR, true);
+                }
+            }
+        }
+        Mock::given(method("GET"))
+            .and(path(apex_path("CHALLENGER")))
+            .respond_with(Apex(Arc::clone(&w)))
+            .mount(&e.server)
+            .await;
+        Mock::given(method("GET"))
+            .and(wiremock::matchers::path_regex(
+                r"^/lol/match/v5/matches/by-puuid/[^/]+/ids$",
+            ))
+            .respond_with(Ids(Arc::clone(&w)))
+            .mount(&e.server)
+            .await;
+        w
+    }
+
+    /// What one crawl did: its row, the id requests it sent, the ids it
+    /// collected and how many collect jobs it queued.
+    struct Run {
+        crawl: store::Crawl,
+        asked: Vec<(String, BTreeMap<String, String>)>,
+        ids: BTreeSet<String>,
+        collect_jobs: i64,
+    }
+
+    impl Run {
+        fn asked_for(&self, p: &str) -> Vec<&BTreeMap<String, String>> {
+            self.asked
+                .iter()
+                .filter(|(who, _)| who == p)
+                .map(|(_, q)| q)
+                .collect()
+        }
+    }
+
+    /// One crawl, enumerate and collect, up to the archive hand-off; then
+    /// closed, so the next can start. A fresh fetcher each time: match ids
+    /// are cached for 120 s.
+    async fn crawl(e: &Env, w: &World, overlap_s: u32) -> Run {
+        let before = w.lock().unwrap().asked.len();
+        let ctx = e.ctx_overlap(100, overlap_s);
+        let id = e.start("CHALLENGER").await;
+        let registry = Registry::new()
+            .with(kinds::LADDER_CRAWL, LadderCrawlHandler(Arc::clone(&ctx)))
+            .with(kinds::LADDER_APEX, LadderApexHandler(Arc::clone(&ctx)))
+            .with(kinds::LADDER_WALK, LadderWalkHandler(Arc::clone(&ctx)))
+            .with(
+                kinds::LADDER_COLLECT,
+                ladder::LadderCollectHandler(Arc::clone(&ctx)),
+            );
+        let running = Scheduler::with_queue(Queue::new(e.db.clone()), registry).start(2);
+        let crawl = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let c = e.crawl(&id).await;
+                if c.phase == "archive" || c.status != "running" {
+                    return c;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("the crawl reaches its archive stage");
+        running.shutdown(Duration::from_secs(5)).await;
+        let key = id.clone();
+        let (ids, collect_jobs) = e
+            .db
+            .write(move |c| {
+                let ids = c
+                    .prepare("SELECT match_id FROM crawl_match_ids WHERE crawl_id = ?1")?
+                    .query_map([&key], |r| r.get::<_, String>(0))?
+                    .collect::<Result<BTreeSet<_>, _>>()?;
+                let jobs: i64 = c.query_row(
+                    "SELECT COUNT(*) FROM jobs WHERE kind = 'ladder:collect' AND json_extract(payload, '$.crawlId') = ?1",
+                    [&key],
+                    |r| r.get(0),
+                )?;
+                c.execute("UPDATE ladder_crawls SET status = 'completed', finished_at = 1 WHERE id = ?1", [&key])?;
+                c.execute("DELETE FROM jobs WHERE state IN ('pending', 'running')", [])?;
+                Ok::<_, DbError>((ids, jobs))
+            })
+            .await
+            .unwrap();
+        let asked = w.lock().unwrap().asked[before..].to_vec();
+        Run {
+            crawl,
+            asked,
+            ids,
+            collect_jobs,
+        }
+    }
+
+    async fn collected_at(e: &Env, p: &'static str) -> Option<i64> {
+        store::cursor(&e.db, &e.scope, "kr", SOLO, p).await.unwrap()
+    }
+
+    async fn backfill_state(e: &Env, p: &'static str) -> Option<String> {
+        e.db.read(move |c| {
+            Ok::<_, DbError>(c.query_row(
+                "SELECT backfill_state FROM players WHERE puuid = ?1",
+                [p],
+                |r| r.get(0),
+            )?)
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_second_crawl_over_an_unchanged_ladder_queues_no_collect_and_goes_to_archive() {
+        let e = env().await;
+        let w = world(&e, &["A", "B", "C"], 5).await;
+        let first = crawl(&e, &w, 7_200).await;
+        assert_eq!(first.asked.len(), 3);
+        assert_eq!(
+            (
+                first.crawl.counters.backfills_enqueued,
+                first.crawl.counters.players_skipped
+            ),
+            (3, 0)
+        );
+
+        let second = crawl(&e, &w, 7_200).await;
+        assert_eq!(second.crawl.phase, "archive");
+        assert_eq!(second.collect_jobs, 0, "no collect job queued");
+        assert!(second.asked.is_empty(), "no match id request: {:?}", second.asked);
+        let c = &second.crawl.counters;
+        assert_eq!(
+            (c.entries_seen, c.backfills_enqueued, c.players_skipped),
+            (3, 0, 3)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_player_whose_total_rose_by_three_gets_one_request_with_start_time() {
+        let e = env().await;
+        let w = world(&e, &["A", "B"], 5).await;
+        crawl(&e, &w, 7_200).await;
+        let at = collected_at(&e, "A").await.expect("a first sight stamps");
+        let state = backfill_state(&e, "A").await;
+        let new: Vec<String> = {
+            let mut g = w.lock().unwrap();
+            (0..3).map(|i| g.play("A", now() + i, true)).collect()
+        };
+
+        let run = crawl(&e, &w, 7_200).await;
+        let asked = run.asked_for("A");
+        assert_eq!(asked.len(), 1, "{:?}", run.asked);
+        let q = asked[0];
+        assert_eq!(q["startTime"], (at / 1000 - 7_200).to_string());
+        assert_eq!(
+            (q["start"].as_str(), q["count"].as_str(), q["queue"].as_str()),
+            ("0", "100", "420")
+        );
+        assert!(run.asked_for("B").is_empty(), "B didn't play");
+        for id in &new {
+            assert!(run.ids.contains(id), "{id} collected");
+        }
+        assert_eq!(
+            backfill_state(&e, "A").await,
+            state,
+            "a cursor walk leaves backfill_state alone"
+        );
+        assert!(collected_at(&e, "A").await.unwrap() > at, "restamped");
+        assert_eq!(run.crawl.counters.players_skipped, 1);
+    }
+
+    #[tokio::test]
+    async fn a_player_with_250_new_games_is_paged_three_times() {
+        let e = env().await;
+        let w = world(&e, &["A"], 5).await;
+        crawl(&e, &w, 7_200).await;
+        let new: Vec<String> = {
+            let mut g = w.lock().unwrap();
+            (0..250).map(|i| g.play("A", now() + i, true)).collect()
+        };
+        let run = crawl(&e, &w, 7_200).await;
+        let pages: Vec<(&str, &str)> = run
+            .asked_for("A")
+            .iter()
+            .map(|q| (q["start"].as_str(), q["count"].as_str()))
+            .collect();
+        assert_eq!(pages, [("0", "100"), ("100", "100"), ("200", "100")]);
+        assert!(
+            new.iter().all(|id| run.ids.contains(id)),
+            "all 250, past LADDER_BACKFILL_LIMIT"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_total_that_dropped_is_collected() {
+        let e = env().await;
+        let w = world(&e, &["A"], 30).await;
+        crawl(&e, &w, 7_200).await;
+        // A season reset: totals start again, and two games are played.
+        let new: Vec<String> = {
+            let mut g = w.lock().unwrap();
+            g.totals.insert("A".into(), 0);
+            (0..2).map(|i| g.play("A", now() + i, true)).collect()
+        };
+        let run = crawl(&e, &w, 7_200).await;
+        assert_eq!(run.asked_for("A").len(), 1);
+        assert!(new.iter().all(|id| run.ids.contains(id)));
+    }
+
+    #[tokio::test]
+    async fn a_404_player_is_not_stamped() {
+        let e = env().await;
+        let w = world(&e, &["A", "B"], 5).await;
+        w.lock().unwrap().gone.insert("A".into());
+        crawl(&e, &w, 7_200).await;
+        assert_eq!(collected_at(&e, "A").await, None);
+        assert!(collected_at(&e, "B").await.is_some());
+
+        // Next crawl: A is asked again from the top, as a first sight.
+        let run = crawl(&e, &w, 7_200).await;
+        let asked = run.asked_for("A");
+        assert_eq!(asked.len(), 1);
+        assert!(!asked[0].contains_key("startTime"), "{asked:?}");
+    }
+
+    #[tokio::test]
+    async fn a_first_sight_stamps_and_the_overlap_follows_the_setting() {
+        let e = env().await;
+        let w = world(&e, &["A"], 5).await;
+        let first = crawl(&e, &w, 0).await;
+        assert!(
+            !first.asked_for("A")[0].contains_key("startTime"),
+            "a first sight is today's walk"
+        );
+        let at = collected_at(&e, "A").await.unwrap();
+        w.lock().unwrap().play("A", now(), true);
+        let run = crawl(&e, &w, 0).await;
+        assert_eq!(run.asked_for("A")[0]["startTime"], (at / 1000).to_string());
+    }
+
+    #[tokio::test]
+    async fn a_remake_waits_for_the_next_real_game() {
+        let e = env().await;
+        let w = world(&e, &["A"], 5).await;
+        crawl(&e, &w, 7_200).await;
+        let remake = w.lock().unwrap().play("A", now(), false);
+        let second = crawl(&e, &w, 7_200).await;
+        assert!(second.asked.is_empty(), "totals didn't move: skipped");
+
+        let real = w.lock().unwrap().play("A", now() + 1, true);
+        let third = crawl(&e, &w, 7_200).await;
+        assert!(third.ids.contains(&real));
+        assert!(
+            third.ids.contains(&remake),
+            "the walk reaches back to the first crawl's cursor"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cursor_older_than_the_late_stamp_window_walks_as_a_first_sight() {
+        let e = env().await;
+        let w = world(&e, &["A"], 5).await;
+        crawl(&e, &w, 7_200).await;
+        let old = now() - 15 * 24 * HOUR;
+        store::stamp_cursor(&e.db, &e.scope, "kr", SOLO, "A", old)
+            .await
+            .unwrap();
+        w.lock().unwrap().play("A", now(), true);
+        let run = crawl(&e, &w, 7_200).await;
+        let asked = run.asked_for("A");
+        assert_eq!(asked.len(), 1);
+        assert!(!asked[0].contains_key("startTime"), "{asked:?}");
+        assert_eq!(asked[0]["count"], "100", "the newest LADDER_BACKFILL_LIMIT");
     }
 }

@@ -14,12 +14,12 @@ ONI-4: 6 vCPU, 12 GB RAM, 120 GB NVMe (115 GB usable), 6 TB/month transfer, A$42
 |---|---|---|
 | SQLite page cache | `cache_size = -65536`, 64 MiB **per connection**. `serve` opens one writer plus `available_parallelism()` readers (6 on this box), and the daily backup opens one more; worst case about 7 × 64 MiB = 448 MiB if every connection fills its cache (*estimate*) | `src/db/mod.rs:28-34,195-198`; `src/jobs/maintenance.rs:57-76`; `PROGRESS.md:325` ("6 of 6 SQLite readers") |
 | SQLite `mmap_size` | 256 MiB per connection, file-backed and shared with the kernel page cache; shows in RSS as file pages, not anonymous memory | `src/db/mod.rs:32` |
-| L1 response cache | `CACHE_L1_MAX_MB`, default 128 MiB, weight-bounded | `src/config.rs:726`; `src/cache/l1.rs:117-118` |
-| Analytics response cache | `ANALYTICS_CACHE_ENTRIES` 512 × about 40 kB per champions list ≈ 20 MB (*estimate*) | `src/config.rs:767`; `.env.example:144-146` |
+| L1 response cache | `CACHE_L1_MAX_MB`, default 128 MiB, weight-bounded | `src/config.rs:731`; `src/cache/l1.rs:117-118` |
+| Analytics response cache | `ANALYTICS_CACHE_ENTRIES` 512 × about 40 kB per champions list ≈ 20 MB (*estimate*) | `src/config.rs:773`; `.env.example:148-150` |
 | L2 write-behind queue | up to 10 000 entries, flushed every 2 s or 500 rows | `src/cache/l2.rs:24-28` |
 | Auth cache | up to 10 000 entries | `src/http/auth.rs:206-209` |
 | Live activity traces | 200 events per job, 200 finished traces | `src/jobs/activity.rs:40-42` |
-| Job handlers | `JOB_CONCURRENCY` tasks; an analytics rebuild and `facts:reextract` work in batches (500 matches) on blocking threads | `src/jobs/analytics.rs:539-620`; `src/config.rs:765` |
+| Job handlers | `JOB_CONCURRENCY` tasks; an analytics rebuild and `facts:reextract` work in batches (500 matches) on blocking threads | `src/jobs/analytics.rs:539-620`; `src/config.rs:771` |
 
 The design puts the binary's RSS at "the SQLite page cache plus L1", tunable down to about 50 MB on a Pi, and sizes an Emerald-floor crawl with timelines at 1–2 GB (`docs/design/07-deployment.md:165-173`).
 
@@ -44,8 +44,8 @@ So about 3.6 GiB is spoken for by processes at their limits, leaving roughly 8 G
 | tokio runtime | `min(available_parallelism, 4)` = 4 worker threads; "the workload is I/O; four workers are plenty" | `src/cli/mod.rs:123-126` |
 | SQLite readers | `available_parallelism()` = 6 read-only connections, each `read` on `spawn_blocking` | `src/db/mod.rs:195-198,285-316` |
 | SQLite writer | one dedicated thread, queue depth 1024; every write is serialised through it | `src/db/mod.rs:41-42,160-172` |
-| Job workers | `JOB_CONCURRENCY`, default 8; production set 4 on 2026-10-13 (session note, `reports/OBJ implementation handoff.md:20`) | `src/config.rs:722` |
-| Per-kind caps | `JOB_KIND_LIMITS` default `aggregate:analytics=1,archive:offload=1`: one rebuild and one offload at a time | `src/config.rs:114` |
+| Job workers | `JOB_CONCURRENCY`, default 8; production set 4 on 2026-10-13 (session note, `reports/OBJ implementation handoff.md:20`) | `src/config.rs:727` |
+| Per-kind caps | `JOB_KIND_LIMITS` default `aggregate:analytics=1,archive:offload=1`: one rebuild and one offload at a time | `src/config.rs:115` |
 
 The 2-vCPU story in `docs/design/07-deployment.md:171` is the sizing evidence: 8 workers left the CPU about 1 % idle with PSI `some avg60` near 48 %, four rebuilds started together had not finished after 7 minutes where one alone takes about 30 s, and the WAL never checkpointed because readers were always active. The remedy was `JOB_CONCURRENCY=2` on 2 vCPU with the default kind caps. On 6 vCPU the same handoff asked for `cat /proc/pressure/cpu` to stay well under 20 on `some avg60`, lowering `JOB_CONCURRENCY` to 2–3 otherwise (`reports/OBJ implementation handoff.md:24`). Requests are served outside the job pool, so fewer workers do not lower the API's throughput (`docs/design/07-deployment.md:171`). The site's Node process competes for the same cores; nothing in either repository measures its share.
 
@@ -68,7 +68,7 @@ From 21.6 GB on 2026-10-13 to 53.8 GB on 2026-10-18 is about 6.4 GB/day with the
 ### Arithmetic
 
 - The key allows at most 72,000 requests a day (below). With `ARCHIVE_TIMELINES=true` a match costs two requests, so at most about 36,000 matches a day can be archived even if every request went to match bodies; at 10.7 + 62.3 KB that is about 2.6 GB/day of bodies, plus about 10 KB of facts per match (*estimate*). The measured 6.4 GB/day is higher; the difference (indexes, derived tables, the L2 `cache` table, WAL) is not accounted for in any source, so plan with the measured figure.
-- The 14-day window keeps every body local for 14 days after its match was archived (`src/config.rs:749`; `docs/_meta/scratch/persistence.md:353-355`). At 6.4 GB/day that is about 90 GB of local bodies, which does not fit beside the rest on 115 GB; at the 2.6 GB/day body rate it is about 36 GB (*estimate*). The session note of 2026-10-18 advised `ARCHIVE_BODY_LOCAL_DAYS=3` plus a reclaim rather than a larger disk.
+- The 14-day window keeps every body local for 14 days after its match was archived (`src/config.rs:754`; `docs/_meta/scratch/persistence.md:353-355`). At 6.4 GB/day that is about 90 GB of local bodies, which does not fit beside the rest on 115 GB; at the 2.6 GB/day body rate it is about 36 GB (*estimate*). The session note of 2026-10-18 advised `ARCHIVE_BODY_LOCAL_DAYS=3` plus a reclaim rather than a larger disk.
 - The daily backup needs 1.2 × (file + WAL) free: 65 GB at 53.8 GB, more than the 27 GB free on 2026-10-18, so it skips, and the offsite copy has nothing new to upload (`src/jobs/maintenance.rs:34,294-306`). A manual `rp backup` needs the same room (`docs/design/07-deployment.md:189`).
 - Freed bodies leave their pages on the free list (`sqlite_freelist_bytes`); later writes reuse them, so the file stops growing but does not shrink until a `VACUUM INTO` copy is swapped in, which needs free space of about the live data's size (`docs/design/07-deployment.md:185-206`). After the reclaim, expect `sqlite_db_bytes` under 8 GB (`deploy/README.md:267-268`).
 - The bucket: 250 GB allocated, upgradable, not downgradable; 3 M objects (`docs/design/12-object-storage-and-hosting.md:475`). From 20 GB at 2.6 GB/day the allocation lasts about 90 days (*estimate*); the design's own table puts a 1.1 M-match backlog at about 100 GB with timelines (`docs/design/12-object-storage-and-hosting.md:464-470`). Packs are never expired (`deploy/README.md:36`).
@@ -77,10 +77,10 @@ From 21.6 GB on 2026-10-13 to 53.8 GB on 2026-10-18 is about 6.4 GB/day with the
 
 | Lever | Effect | Evidence |
 |---|---|---|
-| `ARCHIVE_BODY_LOCAL_DAYS` | the main one: how long a packed body stays in SQLite; `0` frees every packed body on the next run | `src/config.rs:749`; `docs/_meta/scratch/persistence.md:358` |
+| `ARCHIVE_BODY_LOCAL_DAYS` | the main one: how long a packed body stays in SQLite; `0` frees every packed body on the next run | `src/config.rs:754`; `docs/_meta/scratch/persistence.md:358` |
 | `archive:offload` | packs a kind as soon as it has 64 MiB of unpacked bodies (`ARCHIVE_PACK_TARGET_BYTES`), at boot and after each `maintenance`; frees past the window in batches of 2 000 | `docs/_meta/scratch/persistence.md:350-356` |
-| `BACKUP_KEEP` | local backups kept; `1` on production | `src/config.rs:742`; `reports/OBJ implementation handoff.md:20` |
-| `LADDER_CRAWL_S`, `LADDER_BACKFILL_LIMIT`, `ARCHIVE_TIMELINES` | how much the crawl archives per day; `LADDER_CRAWL_S=0` was the 2026-10-13 stop-gap for a full disk | `src/config.rs:740,754,761`; session note (`vps`, 2026-10-13) |
+| `BACKUP_KEEP` | local backups kept; `1` on production | `src/config.rs:747`; `reports/OBJ implementation handoff.md:20` |
+| `LADDER_CRAWL_S`, `LADDER_BACKFILL_LIMIT`, `ARCHIVE_TIMELINES` | how much the crawl archives per day; `LADDER_CRAWL_S=0` was the 2026-10-13 stop-gap for a full disk | `src/config.rs:745,759,766`; session note (`vps`, 2026-10-13) |
 | the reclaim | one-off: `VACUUM INTO` copy and swap once free-pending is 0 | `deploy/README.md:222-270` |
 
 ## Bandwidth
@@ -113,11 +113,11 @@ All are on `/metrics` and in `GET /v1/admin/stats` (`docs/design/07-deployment.m
 | `archive_offload_pending{kind,step}` | backlog to pack or free after each run | `pack` growing: the bucket is not keeping up; `free` 0 for both kinds: safe to reclaim | `src/jobs/offload.rs:204-207`; `deploy/README.md:224-226` |
 | `archive_packs` | packs in the bucket | approaching the object cap (3 M) is not a concern at 64 MiB packs | `src/jobs/offload.rs:215` |
 | `/readyz` `"sqlite":false` | idle writer: another process held the write lock for 1.5 s; busy writer: the running write made no progress and used no CPU for 5 s | a rebuild no longer causes it (WR-02); check for another process on the file, then treat a stalled writer as a restart signal (`../operations/troubleshooting.md` §1) | `src/routes/health.rs:21-46,148-200` |
-| `limiter_interactive_waiters`, `limiter_bulk_waiters` | requests waiting for a Riot token | interactive waiters persistently above 0: bulk is taking the bucket; lower `BULK_USAGE_CEILING` | `src/riot/limiter/mod.rs:240-242`; `src/config.rs:730` |
+| `limiter_interactive_waiters`, `limiter_bulk_waiters` | requests waiting for a Riot token | interactive waiters persistently above 0: bulk is taking the bucket; lower `BULK_USAGE_CEILING` | `src/riot/limiter/mod.rs:240-242`; `src/config.rs:735` |
 | `jobs_pending{kind}` | queue depth per kind, sampled every 15 s | `archive:match` in the millions: the crawl outruns the key; the 2026-10-13 purge removed 1.11 M | `src/jobs/scheduler.rs:49,1226-1245`; `docs/design/12-object-storage-and-hosting.md:957-959` |
 | PSI `/proc/pressure/cpu` `some avg60` | CPU contention | near 48 % was the 2-vCPU saturation; keep well under 20 | `docs/design/07-deployment.md:171`; `reports/OBJ implementation handoff.md:24` |
 | `ninja-monitor` memory alerts | per-service anonymous memory | proxy above 2 GiB: look at L1, `cache_size` × connections and the job mix | `docs/design/12-object-storage-and-hosting.md:832-835` |
 
 ---
-**Sources:** `docs/design/07-deployment.md:L165-L173,L185-L206,L216`, `docs/design/12-object-storage-and-hosting.md:L13-L18,L366-L369,L459-L487,L780-L786,L827-L836,L957-L959`, `deploy/README.md:L36,L222-L270`, `PROGRESS.md:L325`, `docs/DECISIONS.md:L1513`, `reports/OBJ implementation handoff.md:L20,L24`, `src/db/mod.rs:L28-L42,L160-L172,L195-L198,L285-L316`, `src/db/disk.rs:L70-L73`, `src/cli/mod.rs:L123-L126`, `src/config.rs:L114,L722,L726,L730,L740-L742,L749,L754,L761,L765,L767`, `src/cache/l1.rs:L117-L118`, `src/cache/l2.rs:L24-L28`, `src/http/auth.rs:L206-L209`, `src/jobs/activity.rs:L40-L42`, `src/jobs/maintenance.rs:L34,L57-L76,L294-L306`, `src/jobs/offload.rs:L204-L215`, `src/jobs/scheduler.rs:L49,L1226-L1245`, `src/jobs/analytics.rs:L539-L620`, `src/riot/limiter/mod.rs:L240-L242`, `src/routes/health.rs:L21-L46,L148-L200`, `.env.example:L144-L146`, `docs/_meta/scratch/persistence.md:L350-L358`, `docs/_meta/scratch/riot-and-cache.md:L188`, `docs/_meta/scratch/siblings.md:L186,L191`
-**Last verified:** 2026-10-26 against commit `220cdef`
+**Sources:** `docs/design/07-deployment.md:L165-L173,L185-L206,L216`, `docs/design/12-object-storage-and-hosting.md:L13-L18,L366-L369,L459-L487,L780-L786,L827-L836,L957-L959`, `deploy/README.md:L36,L222-L270`, `PROGRESS.md:L325`, `docs/DECISIONS.md:L1513`, `reports/OBJ implementation handoff.md:L20,L24`, `src/db/mod.rs:L28-L42,L160-L172,L195-L198,L285-L316`, `src/db/disk.rs:L70-L73`, `src/cli/mod.rs:L123-L126`, `src/config.rs:L115,L727,L731,L735,L745-L747,L754,L759,L766,L771,L773`, `src/cache/l1.rs:L117-L118`, `src/cache/l2.rs:L24-L28`, `src/http/auth.rs:L206-L209`, `src/jobs/activity.rs:L40-L42`, `src/jobs/maintenance.rs:L34,L57-L76,L294-L306`, `src/jobs/offload.rs:L204-L215`, `src/jobs/scheduler.rs:L49,L1226-L1245`, `src/jobs/analytics.rs:L539-L620`, `src/riot/limiter/mod.rs:L240-L242`, `src/routes/health.rs:L21-L46,L148-L200`, `.env.example:L148-L150`, `docs/_meta/scratch/persistence.md:L350-L358`, `docs/_meta/scratch/riot-and-cache.md:L188`, `docs/_meta/scratch/siblings.md:L186,L191`
+**Last verified:** 2026-10-26 against commit `c9e1b33`

@@ -119,5 +119,5 @@ These files are written for a static site generator served from the dev box. The
 The files under [scratch/](./scratch/) are the Phase 0 inventories the set was written from: `routes.md`, `config.md`, `riot-and-cache.md`, `jobs-and-observability.md`, `persistence.md`, `siblings.md`, `tests-tooling-history.md`, plus `WRITING-BRIEF.md` (the writers' shared contract) and `openapi-generated.json` (the unpatched generator output). They are dense, cite line numbers that drift with every change, and are not meant for readers; refresh or delete them when the pages that cite them are re-verified.
 
 ---
-**Sources:** `docs/_meta/scratch/WRITING-BRIEF.md`, `src/routes/analytics.rs:L1031`, `src/routes/players.rs:L1005`, `tests/openapi.rs`, `scripts/compare-openapi.py`, `src/config/tests.rs:L433-L452`
-**Last verified:** 2026-10-21 against commit `32c4672`
+**Sources:** `docs/_meta/scratch/WRITING-BRIEF.md`, `src/routes/analytics.rs:L1031`, `src/routes/players.rs:L1005`, `tests/openapi.rs`, `scripts/compare-openapi.py`, `src/config/tests.rs:L434-L453`
+**Last verified:** 2026-10-26 against commit `c9e1b33`

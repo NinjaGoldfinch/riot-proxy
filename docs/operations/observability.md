@@ -6,8 +6,8 @@ What riot-proxy emits (logs, metrics, request ids, health bodies, in-memory ring
 
 `serve` is the only command that installs a `tracing` subscriber (`src/cli/serve.rs:45`; `src/telemetry.rs:41-51`). Output is stdout; under the systemd unit (`docs/design/07-deployment.md:74-95`) that is journald, read with `sudo journalctl -u riot-proxy -o cat`.
 
-- `LOG_FORMAT`: `json` or `pretty`; default `pretty` when stdout is a TTY, else `json` (`src/config.rs:662-669`).
-- `LOG_LEVEL`: a `tracing_subscriber::EnvFilter` directive, default `info` (`src/config.rs:714`; `src/telemetry.rs:42`). Examples: `info`, `riot_proxy=debug,info`, `riot_proxy::jobs::ladder=debug,riot_proxy=info,tower_http=warn`. An invalid filter fails `serve` with `invalid LOG_LEVEL filter: …` (`src/telemetry.rs:31`).
+- `LOG_FORMAT`: `json` or `pretty`; default `pretty` when stdout is a TTY, else `json` (`src/config.rs:667-674`).
+- `LOG_LEVEL`: a `tracing_subscriber::EnvFilter` directive, default `info` (`src/config.rs:719`; `src/telemetry.rs:42`). Examples: `info`, `riot_proxy=debug,info`, `riot_proxy::jobs::ladder=debug,riot_proxy=info,tower_http=warn`. An invalid filter fails `serve` with `invalid LOG_LEVEL filter: …` (`src/telemetry.rs:31`).
 
 The JSON layer flattens event fields to the top level and puts the innermost span's fields under `span`, with no span list (`src/telemetry.rs:53-66`). Every line has `timestamp`, `level`, `message`, `target`, the event's own fields, and `span` when inside one. Two lines from the scratch run (ids and paths real to that run):
 
@@ -19,18 +19,18 @@ The JSON layer flattens event fields to the top level and puts the innermost spa
 - The per-request line is tower-http's `finished processing request` at INFO with `latency` and `status` (`src/app.rs:107-116`); the `http` span carries `request_id`, `method`, `path` and `consumer` (recorded after auth, `src/http/auth.rs:325`). No `x_cache` or `upstream_ms` field is on that line; design/07's claim of both (`docs/design/07-deployment.md:218`) is not what the code does.
 - Error envelopes log `request failed` with `code` (the enum's Debug name, `BadRegion` not `BAD_REGION`), `status`, `message`: `warn` for 4xx, `error` for 5xx (`src/http/error.rs:176-181`).
 - Boot prints refinery's own lines first (`schema history table is empty…`, `going to batch apply 27 migrations in single transaction.`), then `database ready path=` (`src/cli/serve.rs:55`).
-- The bootstrap admin key is written to stderr with `eprintln!`, not through tracing (`src/cli/serve.rs:421-427`); the unit does not redirect stderr, so it is in the journal once and nowhere else.
+- The bootstrap admin key is written to stderr with `eprintln!`, not through tracing (`src/cli/serve.rs:422-428`); the unit does not redirect stderr, so it is in the journal once and nowhere else.
 
 Fixed-text lines operators should recognise (level, text, source):
 
 | Level | Text | Source |
 |---|---|---|
-| info | `database ready`, `listening`, `starting job workers` (`workers=`, `kind_limits=`) | `src/cli/serve.rs:55`, `:148`, `:341-345` |
+| info | `database ready`, `listening`, `starting job workers` (`workers=`, `kind_limits=`) | `src/cli/serve.rs:55`, `:148`, `:342-346` |
 | info / warn | `limiter checkpoint restored` / `limiter checkpoint could not be read; starting fresh` | `src/cli/serve.rs:77-79` |
 | info / warn | `L1 warmed from L2` / `L2 warm failed; starting with a cold cache` / `L2 sweep failed` | `src/cli/serve.rs:87-91` |
 | info | `object store configured` (`store=`) | `src/cli/serve.rs:103` |
 | warn | `DEV_UI=true ignored: /dev is never served when ENV=production`; `CACHE_TTL_OVERRIDES key matches no cacheable endpoint; ignored` | `src/cli/serve.rs:96`, `:107` |
-| info | `re-queued jobs a previous process left running`, `queued the missing halves of archived matches`, `queued archive:offload` | `src/cli/serve.rs:284-340` |
+| info | `re-queued jobs a previous process left running`, `queued the missing halves of archived matches`, `queued archive:offload` | `src/cli/serve.rs:285-341` |
 | warn | `AUTH_DISABLED=true: every request runs as the synthetic dev-local consumer (read+admin)`; `ADMIN_IP_ALLOWLIST entry is not an IP or CIDR; ignored` | `src/http/auth.rs:197-204` |
 | warn | `rejected unknown key`; `admin request from disallowed IP` | `src/http/auth.rs:273`, `:283` |
 | error | `RIOT KEY REJECTED` (then `check RIOT_API_KEY`) | `src/riot/client.rs:305` |
@@ -42,14 +42,14 @@ Fixed-text lines operators should recognise (level, text, source):
 | warn | `slow SQLite write` (`duration_ms=`, `queued=`): a write that ran over 1 s on the writer thread, logged when it finishes | `src/db/writer.rs:272` |
 | warn | `L2 write queue full; entry not persisted`; `L2 flush failed; entries stay in L1 only` | `src/cache/l2.rs:110`, `:154` |
 | warn | `… reading from Riot` (six variants) | `src/archive/matches.rs:250-317` |
-| info | `ladder crawl started` / `moved on` / `finished` / `collecting match ids`; `ladder matches handed to the archive queue` | `src/jobs/ladder.rs:315-931` |
-| info | `analytics recomputed`, `facts re-extracted`, `builds extracted`, `match tiers stamped`; `analytics counted` (an `aggregate:delta` ladder), `full rebuilds queued for ladders not stamped yet`, `rebuilds queued after the re-extraction`, and at boot `queued full analytics rebuilds to stamp counted matches` (THR-03) | `src/jobs/analytics.rs:410-838`; `src/cli/serve.rs:327-330` |
+| info | `ladder crawl started` / `moved on` / `finished` / `collecting match ids`; `ladder matches handed to the archive queue` | `src/jobs/ladder.rs:319-981` |
+| info | `analytics recomputed`, `facts re-extracted`, `builds extracted`, `match tiers stamped`; `analytics counted` (an `aggregate:delta` ladder), `full rebuilds queued for ladders not stamped yet`, `rebuilds queued after the re-extraction`, and at boot `queued full analytics rebuilds to stamp counted matches` (THR-03) | `src/jobs/analytics.rs:410-838`; `src/cli/serve.rs:328-331` |
 | info / warn | `backup written`, `maintenance done` / `backup skipped: not enough disk`, `backup failed; maintenance goes on` | `src/jobs/maintenance.rs:304-315`, `:263` |
 | info | `pack written`, `offload done`, `index snapshot written` | `src/jobs/offload.rs:163`, `:193`; `src/jobs/index_snapshot.rs:598` |
 | info | `syncing Data Dragon`, `Data Dragon sync complete` | `src/jobs/ddragon.rs:241`, `:258` |
-| info | `SIGTERM` / `SIGINT`; `shutdown signal received; draining`; `limiter checkpoint and L2 flushed; stopped` | `src/app.rs:244-245`, `:217`; `src/cli/serve.rs:413` |
+| info | `SIGTERM` / `SIGINT`; `shutdown signal received; draining`; `limiter checkpoint and L2 flushed; stopped` | `src/app.rs:244-245`, `:217`; `src/cli/serve.rs:414` |
 
-What is not logged: the Riot key (a sensitive header value, `src/riot/client.rs:26`, `:234-236`; absent even from the redacted config, `src/config.rs:393-397`), consumer keys (only their hash is stored, `src/consumers.rs:105-107`; `rejected unknown key` carries the path only), object-storage keys (`[REDACTED]`, `src/config.rs:454-465`; `describe()` prints bucket and endpoint only, `src/archive/objects.rs:134`), request bodies and query strings (the recent ring keeps the path cut to 200 characters, no query, `src/http/recent.rs:22`, `:104-106`).
+What is not logged: the Riot key (a sensitive header value, `src/riot/client.rs:26`, `:234-236`; absent even from the redacted config, `src/config.rs:397-401`), consumer keys (only their hash is stored, `src/consumers.rs:105-107`; `rejected unknown key` carries the path only), object-storage keys (`[REDACTED]`, `src/config.rs:458-469`; `describe()` prints bucket and endpoint only, `src/archive/objects.rs:134`), request bodies and query strings (the recent ring keeps the path cut to 200 characters, no query, `src/http/recent.rs:22`, `:104-106`).
 
 ## Metrics
 
@@ -67,11 +67,11 @@ What is not logged: the Riot key (a sensitive header value, `src/riot/client.rs:
 | `proxy_jobs_total` | counter | job, status | job outcomes completed/failed (yields excluded) | `src/jobs/scheduler.rs:1079`, `:1086` |
 | `proxy_backfills_queued_total` | counter | reason, status | backfill requests (lookup/track/catchup/admin × queued/already-queued) | `src/jobs/archive.rs:241` |
 | `proxy_refresh_claims_total` | counter | part, outcome | `?refresh=true` windows claimed/coalesced | `src/routes/players/refresh.rs:53`, `:61` |
-| `proxy_ladder_pages_total` | counter | platform, queue | ladder pages fetched | `src/jobs/ladder.rs:543` |
-| `proxy_ladder_entries_total` | counter | platform, queue | entries upserted | `src/jobs/ladder.rs:546` |
-| `proxy_ladder_match_ids_total` | counter | platform, queue | distinct ids collected | `src/jobs/ladder.rs:638` |
-| `proxy_ladder_matches_queued_total` | counter | platform, queue | unarchived ids handed to `archive:match` | `src/jobs/ladder.rs:772` |
-| `proxy_ladder_crawl_duration_seconds` | histogram | platform, queue, status | crawl wall time; buckets 10 to 28 800 | `src/jobs/ladder.rs:847` |
+| `proxy_ladder_pages_total` | counter | platform, queue | ladder pages fetched | `src/jobs/ladder.rs:547` |
+| `proxy_ladder_entries_total` | counter | platform, queue | entries upserted | `src/jobs/ladder.rs:550` |
+| `proxy_ladder_match_ids_total` | counter | platform, queue | distinct ids collected | `src/jobs/ladder.rs:652` |
+| `proxy_ladder_matches_queued_total` | counter | platform, queue | unarchived ids handed to `archive:match` | `src/jobs/ladder.rs:812` |
+| `proxy_ladder_crawl_duration_seconds` | histogram | platform, queue, status | crawl wall time; buckets 10 to 28 800 | `src/jobs/ladder.rs:887` |
 | `proxy_rank_lookups_total` | counter | platform, queue | `ranks:lookup` lookups | `src/jobs/ladder/ranks.rs:135` |
 | `proxy_aggregate_runs_total` | counter | platform, queue, status, kind | analytics recomputes; `kind` is `rebuild` or `delta` (THR-03) | `src/jobs/analytics.rs:382`, `:834` |
 | `proxy_aggregate_duration_seconds` | histogram | platform, queue, step | per rebuild step; buckets 1 to 1200 | `src/jobs/analytics.rs:486` |
@@ -103,7 +103,7 @@ What is not logged: the Riot key (a sensitive header value, `src/riot/client.rs:
 
 The four disk gauges are sampled once at boot and then with each history point, every `METRICS_HISTORY_INTERVAL_S` (60 s) (`src/stats.rs:863`, `:1041-1072`).
 
-**History in SQLite.** The sampler writes a `HistoryPoint` (`t`, `totals`, `queues{active,pending,failed}`, `analytics{rows,ageSeconds}`, `cache{hit,miss,neg,stale}`, `disk`, `requests`, `upstream`; `src/stats.rs:357-372`) to `metrics_history(at, point)` every 60 s and keeps the newest 1440 rows, 24 hours (`HISTORY_MAX_POINTS`, `src/stats.rs:43`, `:996-1018`; `src/db/migrations/V0001__init.sql:47-50`); `maintenance` also deletes rows older than 24 h (`src/jobs/maintenance.rs:38`, `:241-244`). `GET /v1/admin/metrics/history` returns `{"intervalS":60,"maxPoints":1440,"points":[…]}` (`src/routes/admin.rs:2409-2427`). `GET /v1/admin/metrics` returns the live `Snapshot` (`v:1`) with the keys `keyScope, totals, queues, ws, events, cache, limiter, worker, flows, ladder, analytics, process{uptimeSeconds,rssBytes}, sampledAt, cacheStore{l1Entries,l1Bytes,l1MaxBytes,l2Rows,l2Dropped}, gates, inflight, quotas, sqlite{readers,readersFree}, sqliteWriter{busySince,busyMs,lastProgress,lastFinished,queued}, disk{dbBytes,walBytes,freelistBytes,freeBytes,totalBytes}, requests, upstream` (observed; `src/stats.rs:297-335`). `/dashboard` (`DASHBOARD_UI`, default on) renders these and needs an admin key for everything it calls (`src/routes/ui.rs:5-8`, `:218-221`).
+**History in SQLite.** The sampler writes a `HistoryPoint` (`t`, `totals`, `queues{active,pending,failed}`, `analytics{rows,ageSeconds}`, `cache{hit,miss,neg,stale}`, `disk`, `requests`, `upstream`; `src/stats.rs:357-372`) to `metrics_history(at, point)` every 60 s and keeps the newest 1440 rows, 24 hours (`HISTORY_MAX_POINTS`, `src/stats.rs:43`, `:996-1018`; `src/db/migrations/V0001__init.sql:47-50`); `maintenance` also deletes rows older than 24 h (`src/jobs/maintenance.rs:38`, `:241-244`). `GET /v1/admin/metrics/history` returns `{"intervalS":60,"maxPoints":1440,"points":[…]}` (`src/routes/admin.rs:2413-2431`). `GET /v1/admin/metrics` returns the live `Snapshot` (`v:1`) with the keys `keyScope, totals, queues, ws, events, cache, limiter, worker, flows, ladder, analytics, process{uptimeSeconds,rssBytes}, sampledAt, cacheStore{l1Entries,l1Bytes,l1MaxBytes,l2Rows,l2Dropped}, gates, inflight, quotas, sqlite{readers,readersFree}, sqliteWriter{busySince,busyMs,lastProgress,lastFinished,queued}, disk{dbBytes,walBytes,freelistBytes,freeBytes,totalBytes}, requests, upstream` (observed; `src/stats.rs:297-335`). `/dashboard` (`DASHBOARD_UI`, default on) renders these and needs an admin key for everything it calls (`src/routes/ui.rs:5-8`, `:218-221`).
 
 ## Tracing and request ids
 
@@ -125,7 +125,7 @@ GET /readyz   → 200 {"ok":true,"sqlite":true,"limiter":true,"keyScope":"95b708
 
 ## Recent requests and errors
 
-Two process-global rings: the last 500 requests (`{at,method,route,path,status,cache,latencyMs,consumer,requestId}`) and the last 200 error envelopes (`{at,code,status,message,requestId}`) (`src/http/recent.rs:18-22`, `:36-57`). `/healthz`, `/readyz`, `/metrics`, `/v1/admin/recent` and `/v1/admin/metrics` are not recorded (`:25`). Read with `GET /v1/admin/recent?kind=requests|errors&limit=1..500` (`src/routes/admin.rs:2546-2558`). The rings are process memory only, so nothing survives a restart (`:81-82`). Observed:
+Two process-global rings: the last 500 requests (`{at,method,route,path,status,cache,latencyMs,consumer,requestId}`) and the last 200 error envelopes (`{at,code,status,message,requestId}`) (`src/http/recent.rs:18-22`, `:36-57`). `/healthz`, `/readyz`, `/metrics`, `/v1/admin/recent` and `/v1/admin/metrics` are not recorded (`:25`). Read with `GET /v1/admin/recent?kind=requests|errors&limit=1..500` (`src/routes/admin.rs:2550-2562`). The rings are process memory only, so nothing survives a restart (`:81-82`). Observed:
 
 ```json
 {"kind":"errors","capacity":200,"errors":[{"at":1792365749319,"code":"NOT_FOUND","status":404,"message":"No route for GET /v1/nothing","requestId":"docs-trace-001"}]}
@@ -133,7 +133,7 @@ Two process-global rings: the last 500 requests (`{at,method,route,path,status,c
 
 ## The `metrics` WebSocket topic
 
-Subscribe on `/v1/ws` with an admin-capable key to `metrics`; the server publishes `metrics.snapshot` (the same `Snapshot` as `/v1/admin/metrics`) every `METRICS_INTERVAL_S` (5 s) only while at least one socket holds the topic (`src/ws/metrics.rs:14-35`; `src/config.rs:734`). Frame shape `{"op":"event","event":"metrics.snapshot","topic":"metrics","at":<unix ms>,"data":{…}}` (`src/events.rs:159-172`). The dashboard unsubscribes while hidden so no snapshots are built for it (`docs/design/13-admin-dashboard.md:341`).
+Subscribe on `/v1/ws` with an admin-capable key to `metrics`; the server publishes `metrics.snapshot` (the same `Snapshot` as `/v1/admin/metrics`) every `METRICS_INTERVAL_S` (5 s) only while at least one socket holds the topic (`src/ws/metrics.rs:14-35`; `src/config.rs:739`). Frame shape `{"op":"event","event":"metrics.snapshot","topic":"metrics","at":<unix ms>,"data":{…}}` (`src/events.rs:159-172`). The dashboard unsubscribes while hidden so no snapshots are built for it (`docs/design/13-admin-dashboard.md:341`).
 
 ## How each is consumed today
 
@@ -165,5 +165,5 @@ flowchart LR
 Logs reach journald and are read over SSH; the dashboard reaches the admin JSON routes and the `metrics` topic through the tunnel on `admin.ninjagoldfinch.lol` behind Cloudflare Access, while the WAF blocks `/metrics`, `/dashboard*`, `/dev*` and `/v1/admin*` on `api.` (`PROGRESS.md:342`; `docs/design/07-deployment.md:221`); ninja-monitor samples the service's cgroup and data directory and alerts to Discord without calling any endpoint (`docs/_meta/scratch/siblings.md` §2.2); Prometheus and Grafana on `ngf-mon-syd1`, scraping `/metrics` over WireGuard, are planned and not done (`docs/design/12-object-storage-and-hosting.md:846-848`; `docs/design/13-admin-dashboard.md:69`). `ops/grafana/riot-proxy-dashboard.json` (uid `riot-proxy`, 12 panels over nine `proxy_*` metrics) and `ops/prometheus-alerts.yml` (five rules) are ready for that day.
 
 ---
-**Sources:** `src/telemetry.rs:24,27,31,41-66,91-121`, `src/cli/serve.rs:45,55,77-107,148,284-345,413,421-427`, `src/app.rs:103-118,121-171,217,244-245`, `src/http/auth.rs:197-204,273,283,325`, `src/http/error.rs:133,176-187`, `src/http/request_id.rs:14,31-41,57-64`, `src/http/recent.rs:18-25,36-57,81-82,100-106`, `src/config.rs:393-397,454-465,662-669,714,734`, `src/consumers.rs:105-107`, `src/riot/client.rs:26,234-236,267-275,305-362`, `src/riot/limiter/mod.rs:240-283,416-428`, `src/fetcher.rs:401-403,462-602`, `src/metrics.rs:1-4,47,98-434,486-499`, `src/db/writer.rs:244-275`, `src/stats.rs:43,297-372,863,996-1072`, `src/routes/health.rs:1,21-46,75-200`, `src/routes/admin.rs:2409-2427,2546-2558`, `src/routes/ui.rs:5-8,218-221`, `src/ws/metrics.rs:14-35`, `src/events.rs:159-172,198`, `src/jobs/scheduler.rs:49,1079-1092,1156,1219,1226-1245,1296`, `src/jobs/maintenance.rs:38,241-244,263,304-315`, `src/jobs/offload.rs:163-215`, `src/jobs/ladder.rs:315-931`, `src/jobs/analytics.rs:382-951`, `src/jobs/ddragon.rs:241,258`, `src/jobs/index_snapshot.rs:598`, `src/archive/matches.rs:250-317,419`, `src/archive/objects.rs:134`, `src/cache/l2.rs:109-154`, `src/db/mod.rs:123,328`, `src/db/disk.rs:70-116`, `src/db/migrations/V0001__init.sql:47-50`, `docs/design/07-deployment.md:74-95,218,221`, `docs/design/12-object-storage-and-hosting.md:846-848`, `docs/design/13-admin-dashboard.md:69,341`, `docs/design/metrics.md`, `ops/grafana/riot-proxy-dashboard.json`, `ops/prometheus-alerts.yml`, `PROGRESS.md:342`
-**Last verified:** 2026-10-26 against commit `220cdef`
+**Sources:** `src/telemetry.rs:24,27,31,41-66,91-121`, `src/cli/serve.rs:45,55,77-107,148,285-346,414,422-428`, `src/app.rs:103-118,121-171,217,244-245`, `src/http/auth.rs:197-204,273,283,325`, `src/http/error.rs:133,176-187`, `src/http/request_id.rs:14,31-41,57-64`, `src/http/recent.rs:18-25,36-57,81-82,100-106`, `src/config.rs:397-401,458-469,667-674,719,739`, `src/consumers.rs:105-107`, `src/riot/client.rs:26,234-236,267-275,305-362`, `src/riot/limiter/mod.rs:240-283,416-428`, `src/fetcher.rs:401-403,462-602`, `src/metrics.rs:1-4,47,98-434,486-499`, `src/db/writer.rs:244-275`, `src/stats.rs:43,297-372,863,996-1072`, `src/routes/health.rs:1,21-46,75-200`, `src/routes/admin.rs:2413-2431,2550-2562`, `src/routes/ui.rs:5-8,218-221`, `src/ws/metrics.rs:14-35`, `src/events.rs:159-172,198`, `src/jobs/scheduler.rs:49,1079-1092,1156,1219,1226-1245,1296`, `src/jobs/maintenance.rs:38,241-244,263,304-315`, `src/jobs/offload.rs:163-215`, `src/jobs/ladder.rs:319-981`, `src/jobs/analytics.rs:382-951`, `src/jobs/ddragon.rs:241,258`, `src/jobs/index_snapshot.rs:598`, `src/archive/matches.rs:250-317,419`, `src/archive/objects.rs:134`, `src/cache/l2.rs:109-154`, `src/db/mod.rs:123,328`, `src/db/disk.rs:70-116`, `src/db/migrations/V0001__init.sql:47-50`, `docs/design/07-deployment.md:74-95,218,221`, `docs/design/12-object-storage-and-hosting.md:846-848`, `docs/design/13-admin-dashboard.md:69,341`, `docs/design/metrics.md`, `ops/grafana/riot-proxy-dashboard.json`, `ops/prometheus-alerts.yml`, `PROGRESS.md:342`
+**Last verified:** 2026-10-26 against commit `c9e1b33`

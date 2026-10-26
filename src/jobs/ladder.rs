@@ -77,6 +77,9 @@ pub struct LadderContext {
     /// `LOOKUP_BACKFILL_LIMIT`: a collect walk at least this deep stamps the
     /// player's history done (v1 `walkIsComplete`).
     pub lookup_backfill_limit: u32,
+    /// `LADDER_COLLECT_OVERLAP_S`: how far before a player's last collect a
+    /// cursor walk's `startTime` reaches, for games in progress then (THR-04).
+    pub collect_overlap_s: u32,
     /// `ARCHIVE_TIMELINES`, for the archive jobs the crawl queues.
     pub archive_timelines: bool,
     /// `RANK_LOOKUP_LIMIT`: players one `ranks:lookup` run looks up; 0 queues
@@ -85,7 +88,8 @@ pub struct LadderContext {
     /// `RANK_LOOKUP_RECHECK_S`: a player looked up this recently is left off.
     pub rank_lookup_recheck_s: u32,
     /// `TIER_LATE_STAMP_DAYS`: how far back a ladder page places its players'
-    /// `UNKNOWN` tier stamps (THR-02).
+    /// `UNKNOWN` tier stamps (THR-02), and the oldest collect cursor a crawl
+    /// walks from (THR-04).
     pub late_stamp_days: u32,
     /// `AGGREGATE_DELTA_S` > 0: a completed crawl queues `aggregate:delta`
     /// instead of a rebuild (THR-03).
@@ -604,11 +608,21 @@ impl LadderContext {
                 break;
             }
             let now = Clock::now().unix_ms;
-            store::mark_walk_started(self.db(), &self.key_scope, puuid, now)
+            let cursor = store::cursor(self.db(), &self.key_scope, &batch.platform, &batch.queue, puuid)
                 .await
-                .map_err(|e| store_err(&e))?;
-            match self.collect_one(&batch.crawl_id, platform, queue_id, puuid).await {
-                Ok(n) => new_ids += n,
+                .map_err(|e| store_err(&e))?
+                .filter(|at| cursor_is_live(*at, now, self.late_stamp_days));
+            // Only a first sight is a walk lookups care about (ADR-185).
+            if cursor.is_none() {
+                store::mark_walk_started(self.db(), &self.key_scope, puuid, now)
+                    .await
+                    .map_err(|e| store_err(&e))?;
+            }
+            match self
+                .collect_one(batch, platform, queue_id, puuid, cursor, &mut new_ids)
+                .await
+            {
+                Ok(()) => {}
                 // Re-queued with only the players still to do, this one
                 // first (its ids so far are in the set; re-adding is a no-op).
                 Err(JobError::Yield { retry_at, .. }) => {
@@ -642,19 +656,33 @@ impl LadderContext {
         outcome
     }
 
-    /// One player's ranked ids for this ladder's queue, up to
-    /// `LADDER_BACKFILL_LIMIT`, into the set; returns how many were new. A 404
-    /// skips the player: a ladder of thousands holds accounts moved or deleted
-    /// since the page that named them, and one must not cost the run (v1).
+    /// One player's ranked ids for this ladder's queue into the set, adding
+    /// how many were new to `new_ids` page by page, so a walk that stops
+    /// part-way still counts what it added. A first sight reads the newest
+    /// `LADDER_BACKFILL_LIMIT` (v1). A player with a cursor is asked for every
+    /// id since it, less `LADDER_COLLECT_OVERLAP_S`, a page at a time to the
+    /// end: no depth limit (THR-04). A walk that reaches its end stamps the
+    /// cursor with the time it began. A 404 skips the player, unstamped: a
+    /// ladder of thousands holds accounts moved or deleted since the page that
+    /// named them, and one must not cost the run (v1).
     async fn collect_one(
         &self,
-        crawl_id: &str,
+        batch: &CollectJob,
         platform: Platform,
         queue_id: u32,
         puuid: &str,
-    ) -> Result<i64, JobError> {
-        let limit = self.backfill_limit;
-        let (mut start, mut new_ids) = (0u32, 0i64);
+        cursor: Option<i64>,
+        new_ids: &mut i64,
+    ) -> Result<(), JobError> {
+        let limit = if cursor.is_some() {
+            u32::MAX
+        } else {
+            self.backfill_limit
+        };
+        let start_time = cursor.map(|at| (at / 1000 - i64::from(self.collect_overlap_s)).max(0));
+        // Before the first request: every id Riot lists is from then or later.
+        let began_at = Clock::now().unix_ms;
+        let mut start = 0u32;
         while start < limit {
             let count = ID_PAGE.min(limit - start);
             let target =
@@ -667,6 +695,7 @@ impl LadderContext {
                     ("start", Some(start.to_string())),
                     ("count", Some(count.to_string())),
                     ("queue", Some(queue_id.to_string())),
+                    ("startTime", start_time.map(|t| t.to_string())),
                 ],
             )
             .map_err(|api| retry(&api.into()))?;
@@ -674,24 +703,25 @@ impl LadderContext {
                 Ok(r) => serde_json::from_slice(&r.body).unwrap_or_default(),
                 Err(e) if e.api.code == ErrorCode::NotFound => {
                     tracing::warn!(%puuid, "ladder collect skipping a player match-v5 does not know");
-                    return Ok(new_ids);
+                    return Ok(());
                 }
                 Err(e) => return Err(retry(&e)),
             };
             let n = u32::try_from(ids.len()).unwrap_or(u32::MAX);
             if n > 0 {
-                new_ids += store::add_match_ids(self.db(), crawl_id, ids)
+                *new_ids += store::add_match_ids(self.db(), &batch.crawl_id, ids)
                     .await
                     .map_err(|e| store_err(&e))?;
             }
-            start += n;
+            start = start.saturating_add(n);
             if n < count {
                 break;
             }
         }
         // v1 `walkIsComplete` for a queue-filtered walk: running out of ranked
-        // ids says nothing of the rest, so only a lookup-deep walk counts.
-        if limit >= self.lookup_backfill_limit {
+        // ids says nothing of the rest, so only a lookup-deep walk counts. A
+        // cursor walk reads a list cut by time, so its depth is no depth.
+        if cursor.is_none() && limit >= self.lookup_backfill_limit {
             store::mark_walk_complete(
                 self.db(),
                 &self.key_scope,
@@ -702,7 +732,17 @@ impl LadderContext {
             .await
             .map_err(|e| store_err(&e))?;
         }
-        Ok(new_ids)
+        store::stamp_cursor(
+            self.db(),
+            &self.key_scope,
+            &batch.platform,
+            &batch.queue,
+            puuid,
+            began_at,
+        )
+        .await
+        .map_err(|e| store_err(&e))?;
+        Ok(())
     }
 
     // ── archive ─────────────────────────────────────────────────────────────
@@ -867,6 +907,15 @@ impl LadderContext {
     }
 }
 
+/// Whether a collect cursor is recent enough to walk from. One older than
+/// `TIER_LATE_STAMP_DAYS` belongs to a player back on the ladder after a long
+/// time away: they are walked as a first sight, the newest
+/// `LADDER_BACKFILL_LIMIT`, not every game since (ADR-185). 0 days sets no
+/// bound.
+fn cursor_is_live(at: i64, now: i64, late_stamp_days: u32) -> bool {
+    late_stamp_days == 0 || at >= crate::archive::tiers::late_since(now, late_stamp_days)
+}
+
 /// Where a stage's end leads. Enumeration leads to collection, unless
 /// `LADDER_BACKFILL_LIMIT=0` walks nobody: then the crawl is done (v1).
 fn next_stage(crawl: &Crawl, backfill_limit: u32) -> Stage {
@@ -892,13 +941,14 @@ fn advance(
     let stage = next_stage(crawl, backfill_limit);
     match (crawl.phase.as_str(), &stage) {
         ("enumerate", Stage::Phase(_)) => {
-            let players = store::collect_candidates(tx, key_scope, crawl)?;
+            let (players, skipped) = store::collect_candidates(tx, key_scope, crawl)?;
             store::bump(
                 tx,
                 &crawl.id,
                 store::Counter::BackfillsEnqueued,
                 i64::try_from(players.len()).unwrap_or(0),
             )?;
+            store::bump(tx, &crawl.id, store::Counter::PlayersSkipped, skipped)?;
             if players.is_empty() {
                 queue_archive(tx, crawl, now)?;
                 return Ok(Stage::Phase("archive"));
@@ -928,7 +978,7 @@ fn advance(
                 .dedupe(format!("{}:{}", crawl.id, job.leg()));
                 enqueue_on(tx, &new, now)?;
             }
-            tracing::info!(crawl = %crawl.id, players = players.len(), jobs = jobs.len(), "ladder crawl collecting match ids");
+            tracing::info!(crawl = %crawl.id, players = players.len(), skipped, jobs = jobs.len(), "ladder crawl collecting match ids");
         }
         ("collect", Stage::Phase(_)) => queue_archive(tx, crawl, now)?,
         _ => {}

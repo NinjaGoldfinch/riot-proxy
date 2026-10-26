@@ -10,7 +10,7 @@ A consumer key is `rpx_` followed by 24 random bytes in unpadded base64url: 36 c
 
 | Way | Command or call | Notes |
 |---|---|---|
-| First boot | `riot-proxy serve` prints `bootstrap admin key (shown once): rpx_…` on stderr when the `consumers` table is empty | scopes `read,admin`, quota 600; `BOOTSTRAP_ADMIN_KEY` imports a chosen key instead and prints nothing (`src/cli/serve.rs:57-68,421-427`, `src/consumers.rs:308-333`) |
+| First boot | `riot-proxy serve` prints `bootstrap admin key (shown once): rpx_…` on stderr when the `consumers` table is empty | scopes `read,admin`, quota 600; `BOOTSTRAP_ADMIN_KEY` imports a chosen key instead and prints nothing (`src/cli/serve.rs:57-68,422-428`, `src/consumers.rs:308-333`) |
 | CLI | `riot-proxy key create --name ninjagoldfinch-lol [--scopes read,admin] [--quota 600]` | prints id, name, scopes, quota and the key once (`src/cli/key.rs:46-57`) |
 | Admin API | `POST /v1/admin/consumers {"name":"…","scopes":["read"],"quotaPerMin":600}` | 200 with `{id,name,scopes,quotaPerMin,key,warning}` (`src/routes/admin.rs:180-219`) |
 
@@ -57,7 +57,7 @@ Key lookups are cached in memory for 60 s per found consumer and 30 s per unknow
 
 ## The no-auth development mode
 
-`AUTH_DISABLED=true` makes every guarded request and socket run as the synthetic consumer `dev-local` with both scopes and a 100 000/min quota; the IP allowlist is not consulted; the server logs a warning at start (`src/http/auth.rs:43-52,201-205,267-270`). Configuration refuses it when `ENV=production` (`src/config.rs:671-675`). It is how the showcase and the site's local development run against a local proxy, and how the dormant LAN dev VM was configured. `/dev/config.json` reports `authDisabled` so the dev explorer knows whether to ask for a key.
+`AUTH_DISABLED=true` makes every guarded request and socket run as the synthetic consumer `dev-local` with both scopes and a 100 000/min quota; the IP allowlist is not consulted; the server logs a warning at start (`src/http/auth.rs:43-52,201-205,267-270`). Configuration refuses it when `ENV=production` (`src/config.rs:676-680`). It is how the showcase and the site's local development run against a local proxy, and how the dormant LAN dev VM was configured. `/dev/config.json` reports `authDisabled` so the dev explorer knows whether to ask for a key.
 
 ## Where keys live
 
@@ -70,5 +70,5 @@ Key lookups are cached in memory for 60 s per found consumer and 30 s per unknow
 The CI `test` job greps `src/`, `tests/` and `docs/` for `RGAPI-` key shapes and fails on a hit; fixtures are recorded with the key redacted (`.github/workflows/ci.yml:52-53`, `src/cli/record.rs:114-158`).
 
 ---
-**Sources:** `src/consumers.rs:L12,L95-L107,L154-L172,L256-L333`, `src/http/auth.rs:L29-L52,L116-L156,L201-L209,L267-L343`, `src/http/quota.rs:L320-L431`, `src/routes/admin.rs:L180-L219,L248-L326`, `src/routes/docs.rs:L86-L141`, `src/cli/key.rs:L46-L83`, `src/cli/serve.rs:L57-L68,L421-L427`, `src/config.rs:L671-L675`, `.github/workflows/ci.yml:L52-L53`, `docs/design/12-object-storage-and-hosting.md` §Admin hostname behind Access
-**Last verified:** 2026-10-26 against commit `220cdef`
+**Sources:** `src/consumers.rs:L12,L95-L107,L154-L172,L256-L333`, `src/http/auth.rs:L29-L52,L116-L156,L201-L209,L267-L343`, `src/http/quota.rs:L320-L431`, `src/routes/admin.rs:L180-L219,L248-L326`, `src/routes/docs.rs:L86-L141`, `src/cli/key.rs:L46-L83`, `src/cli/serve.rs:L57-L68,L422-L428`, `src/config.rs:L676-L680`, `.github/workflows/ci.yml:L52-L53`, `docs/design/12-object-storage-and-hosting.md` §Admin hostname behind Access
+**Last verified:** 2026-10-26 against commit `c9e1b33`

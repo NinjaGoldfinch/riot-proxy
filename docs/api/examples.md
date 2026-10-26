@@ -313,5 +313,5 @@ x-ratelimit-reset: 60
 Note that 401 and 403 carry no `X-RateLimit-*` headers (refused before metering) while the 400 does. Every response carries `X-Request-Id`; send your own with `-H 'X-Request-Id: my-trace-123'` and it is echoed back (captured).
 
 ---
-**Sources:** live capture against `target/debug/riot-proxy` 2.7.0 (`RIOT_API_KEY=RGAPI-docs-not-a-key`, port 18092, keys minted with `riot-proxy key create`), `README.md` "First run", `src/cli/mod.rs`, `src/routes/riot.rs:L127-L300`, `src/routes/lol.rs:L30-L405`, `src/routes/players.rs:L400-L671`, `src/routes/analytics.rs:L486-L614`, `src/routes/admin.rs:L180-L219,L454-L502,L838-L882,L1038,L1583-L1613,L1700-L1733,L2486`, `src/routes/ws.rs:L525-L572`, `src/ws/socket.rs:L63-L206`, `tests/snapshots/ws_hub__ws_session.snap`, `docs/_meta/scratch/routes.md`
-**Last verified:** 2026-10-21 against commit `32c4672`
+**Sources:** live capture against `target/debug/riot-proxy` 2.7.0 (`RIOT_API_KEY=RGAPI-docs-not-a-key`, port 18092, keys minted with `riot-proxy key create`), `README.md` "First run", `src/cli/mod.rs`, `src/routes/riot.rs:L127-L300`, `src/routes/lol.rs:L30-L405`, `src/routes/players.rs:L400-L671`, `src/routes/analytics.rs:L486-L614`, `src/routes/admin.rs:L180-L219,L454-L502,L838-L882,L1038,L1583-L1613,L1700-L1733,L2490`, `src/routes/ws.rs:L525-L572`, `src/ws/socket.rs:L63-L206`, `tests/snapshots/ws_hub__ws_session.snap`, `docs/_meta/scratch/routes.md`
+**Last verified:** 2026-10-26 against commit `c9e1b33`
