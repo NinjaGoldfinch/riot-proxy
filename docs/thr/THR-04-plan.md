@@ -42,9 +42,9 @@ All ten fail a test, none by a compile error. Mutation 7 failed nothing until 5b
 *Verification.*
 - `cargo fmt --check` clean; `cargo clippy --all-targets --all-features -- -D warnings` clean.
 - `cargo test --all-features`: 993 passed, 0 failed. (`cargo-nextest` isn't installed here; CI runs it.)
-- `tests/dom` (jsdom, without the two Chromium suites): 149 tests pass.
+- `tests/dom`, all suites including the two headless-Chromium ones (`admin.browser`, `showcase.browser`): 176 tests pass (2026-10-27, Chromium's libraries and fonts unpacked from Debian packages under `~/.local/chromelibs`).
 - Expected changes: the OpenAPI snapshot and `docs/api/openapi.json` gain `LadderCrawlSummary.playersSkipped` (`openapi-check.py`: 70 paths, 0 differences); the migration count is 30.
-- `docs-guard.py origin/main HEAD` and `linkcheck.py docs` are clean. `mermaidcheck.sh` can't launch Chromium on this box, so CI's `docs` job checks the diagrams. Line citations of the changed files were moved across the docs set by a script that maps old lines to new through the diff (`/home/dev/thr04/docs/shift.py`, 421 citations; three that pointed into changed hunks were fixed by hand), and the touched pages' footers say c9e1b33.
+- `docs-guard.py origin/main HEAD` and `linkcheck.py docs` are clean. `mermaidcheck.sh docs`: 65 blocks rendered, 0 failed. Line citations of the changed files were moved across the docs set by a script that maps old lines to new through the diff (`/home/dev/thr04/docs/shift.py`, 421 citations; three that pointed into changed hunks were fixed by hand), and the touched pages' footers say c9e1b33.
 - The musl build wasn't run (no musl C toolchain here); CI's `build-musl` job checks it.
 
 *Not done here.* The `startTime` check and the two-crawl drill need the production key on the dev VM. The owner's commands are in §10 and in the PR description. Production's idle share (Q4) is the owner's.
