@@ -47,7 +47,7 @@ All ten fail a test, none by a compile error. Mutation 7 failed nothing until 5b
 - `docs-guard.py origin/main HEAD` and `linkcheck.py docs` are clean. `mermaidcheck.sh docs`: 65 blocks rendered, 0 failed. Line citations of the changed files were moved across the docs set by a script that maps old lines to new through the diff (`/home/dev/thr04/docs/shift.py`, 421 citations; three that pointed into changed hunks were fixed by hand), and the touched pages' footers say c9e1b33.
 - The musl build wasn't run (no musl C toolchain here); CI's `build-musl` job checks it.
 
-*Not done here.* The `startTime` check and the two-crawl drill need the production key on the dev VM. The owner's commands are in §10 and in the PR description. Production's idle share (Q4) is the owner's.
+*Not done here.* The `startTime` check was done on 2026-10-27 (§3: the game's end). The two-crawl drill waits for the release: production's second crawl after it gives the request count and, through `playersSkipped`, the idle share (Q4).
 
 ---
 
@@ -118,7 +118,7 @@ The code wins in each case. The plan follows the right-hand column.
 
 ## 3. `startTime`: what the portal says (brief §2)
 
-**The portal is not explicit, so the safe reading stands as an assumption (brief §2, method 3). The owner runs the empirical check (owner answer 5) with the commands in §10.**
+**Settled 2026-10-27 (after approval): `startTime` compares the game's end.** The portal is not explicit (below), so the plan was approved on the safe start reading. The empirical check (brief §2, method 2) then ran through production's public match routes with a read key, so with production's Riot key: two KR Challenger players, their two newest solo games each. Each match was listed with `startTime` 60 s before `gameCreation` (the control), between creation and start, at mid-game, and 60 s and 5 s before `gameEndTimestamp`, and absent 5 s and 60 s after it. The script and its output are in `/home/dev/thr04/starttime/` (`check.py`, `edge.py`, `result.txt`, `edge.txt`). Nothing in the code changes: the 7,200 s overlap was sized for the stricter reading (owner answer 1).
 
 The portal's page is a JavaScript app, but its data endpoint answers a plain fetch. `GET https://developer.riotgames.com/api-details/match-v5` returned 200 with 168,191 bytes of JSON on 2026-10-26 (sha256 `e98cf514af94…5e0f`, kept as `/home/dev/thr04/portal/api-details-match-v5.json`). The parameter table of `GET /lol/match/v5/matches/by-puuid/{puuid}/ids`, as it reads there:
 
