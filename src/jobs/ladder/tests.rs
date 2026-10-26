@@ -340,7 +340,103 @@ async fn collect_skips_players_walked_since_the_crawl_started_and_goes_best_firs
         })
         .await
         .unwrap();
-    assert_eq!(candidates, ["high", "old", "low"]);
+    assert_eq!(
+        candidates,
+        (vec!["high".to_string(), "old".into(), "low".into()], 0)
+    );
+}
+
+/// THR-04: a player whose wins and losses are what they were at their last
+/// collect is left out and counted; a total that rose or dropped collects,
+/// and so does a player never collected.
+#[tokio::test]
+async fn collect_leaves_out_players_whose_total_has_not_moved() {
+    let (_d, db) = db();
+    let q = Queue::new(db.clone());
+    let s = start_crawl(&q, "s", "CHALLENGER", &req("kr", "RANKED_SOLO_5x5", None))
+        .await
+        .unwrap();
+    let crawl = store::get(&db, "s", &s.crawl_id).await.unwrap().unwrap();
+    let entries: Vec<store::Entry> = [("same", 900), ("rose", 800), ("dropped", 700), ("new", 600)]
+        .iter()
+        .map(|(p, lp)| store::Entry {
+            puuid: (*p).into(),
+            tier: "CHALLENGER".into(),
+            division: "I".into(),
+            league_points: *lp,
+            wins: 6,
+            losses: 4,
+            veteran: false,
+            inactive: false,
+            fresh_blood: false,
+            hot_streak: false,
+        })
+        .collect();
+    store::write_page(
+        &db,
+        store::Page {
+            key_scope: "s",
+            crawl_id: &crawl.id,
+            platform: "kr",
+            queue: "RANKED_SOLO_5x5",
+            entries: &entries,
+            cursor: None,
+            apex_tier: Some("CHALLENGER"),
+            now: crawl.started_at,
+            late_since: i64::MAX,
+        },
+    )
+    .await
+    .unwrap();
+    for p in ["same", "rose", "dropped"] {
+        store::stamp_cursor(&db, "s", "kr", "RANKED_SOLO_5x5", p, 1_000)
+            .await
+            .unwrap();
+    }
+    // As if their last collects saw 7 games, and 25 before a season reset.
+    db.write(|c| {
+        c.execute(
+            "UPDATE ladder_entries SET collected_games = 7 WHERE puuid = 'rose'",
+            [],
+        )?;
+        c.execute(
+            "UPDATE ladder_entries SET collected_games = 25 WHERE puuid = 'dropped'",
+            [],
+        )?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        store::cursor(&db, "s", "kr", "RANKED_SOLO_5x5", "same")
+            .await
+            .unwrap(),
+        Some(1_000)
+    );
+    assert_eq!(
+        store::cursor(&db, "s", "kr", "RANKED_SOLO_5x5", "new")
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        store::cursor(&db, "s", "kr", "RANKED_FLEX_SR", "same")
+            .await
+            .unwrap(),
+        None,
+        "a cursor is per ladder"
+    );
+    let candidates = db
+        .write(move |c| {
+            let tx = c.transaction()?;
+            store::collect_candidates(&tx, "s", &crawl)
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        candidates,
+        (vec!["rose".to_string(), "dropped".into(), "new".into()], 1)
+    );
 }
 
 /// `n` players of an apex `tier`, as `apex_leg` stores them.
@@ -446,4 +542,15 @@ async fn capped_tiers_are_kept_in_apex_order() {
         capped_after(&db, &id, "MASTER", RIOT_APEX_LIST_CAP).await,
         ["MASTER", "GRANDMASTER"]
     );
+}
+
+/// THR-04 (ADR-185): a cursor older than `TIER_LATE_STAMP_DAYS` is walked as
+/// a first sight; 0 days sets no bound.
+#[test]
+fn a_cursor_older_than_the_late_stamp_window_is_not_walked_from() {
+    let day = 86_400_000;
+    let now = 100 * day;
+    assert!(cursor_is_live(now - 14 * day, now, 14));
+    assert!(!cursor_is_live(now - 14 * day - 1, now, 14));
+    assert!(cursor_is_live(0, now, 0), "0 days sets no bound");
 }

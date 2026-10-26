@@ -1781,6 +1781,9 @@ pub struct LadderCrawlSummary {
     players_discovered: i64,
     /// Players whose match history the collect stage was asked to walk.
     backfills_enqueued: i64,
+    /// Players the collect stage left out because their wins and losses hadn't moved since their
+    /// last collect: nothing new to ask Riot for.
+    players_skipped: i64,
     /// Distinct matches those players have played, after de-duplication.
     match_ids_seen: i64,
     /// How many of those were not already archived, and so cost a fetch.
@@ -1803,6 +1806,7 @@ impl LadderCrawlSummary {
             entries_seen: c.counters.entries_seen,
             players_discovered: c.counters.players_discovered,
             backfills_enqueued: c.counters.backfills_enqueued,
+            players_skipped: c.counters.players_skipped,
             match_ids_seen: c.counters.match_ids_seen,
             matches_queued: c.counters.matches_queued,
             id: c.id,

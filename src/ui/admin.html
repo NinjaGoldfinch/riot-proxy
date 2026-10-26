@@ -1806,7 +1806,7 @@ function activityView(id, loading) {
   const ahead = a.ahead == null ? '' : a.ahead === 0 ? 'its next job is first in the queue' : `${fmt(a.ahead)} queued job(s) ahead of its next one`;
   const downloads = d.ready + d.delayed + d.running + d.failed + d.recent === 0 ? 'none queued'
     : `${fmt(d.ready)} ready · ${fmt(d.delayed)} waiting · ${fmt(d.running)} running · ${fmt(d.failed)} failed · ${fmt(d.recent)} fetched in 10m${d.etaSeconds != null ? ` · ~${fmtDuration(d.etaSeconds)} left` : ''}`;
-  const counters = [['pages fetched', fmt(c.pagesFetched)], ['league entries', fmt(c.entriesSeen)], ['histories queued', fmt(c.backfillsEnqueued)], ...(running ? [['legs left', fmt(c.pendingLegs)]] : []), ['started', new Date(c.startedAt).toLocaleString()], ...(c.finishedAt ? [['finished', new Date(c.finishedAt).toLocaleString()]] : [])];
+  const counters = [['pages fetched', fmt(c.pagesFetched)], ['league entries', fmt(c.entriesSeen)], ['histories queued', fmt(c.backfillsEnqueued)], ['players skipped', fmt(c.playersSkipped)], ...(running ? [['legs left', fmt(c.pendingLegs)]] : []), ['started', new Date(c.startedAt).toLocaleString()], ...(c.finishedAt ? [['finished', new Date(c.finishedAt).toLocaleString()]] : [])];
   return `<div class="stages">${stages}</div>${totals}<details class="more" data-more="${esc(c.id)}"${L.more.has(c.id) ? ' open' : ''}><summary>details${hint ? ` · ${esc(hint)}` : ''}</summary><div class="body">` +
     `<dl class="kv">${counters.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>` +
     (a.openLegs.length ? `<h3>In flight (${fmt(a.openLegs.length)})</h3><div class="legs">${a.openLegs.map((l) => `<span>${esc(legName(l))}</span>`).join('')}</div>` : '') +

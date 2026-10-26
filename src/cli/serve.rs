@@ -196,6 +196,7 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         tier_floor: config.ladder_tier_floor.clone(),
         backfill_limit: config.ladder_backfill_limit,
         lookup_backfill_limit: config.lookup_backfill_limit,
+        collect_overlap_s: config.ladder_collect_overlap_s,
         archive_timelines: config.archive_timelines,
         rank_lookup_limit: config.rank_lookup_limit,
         rank_lookup_recheck_s: config.rank_lookup_recheck_s,

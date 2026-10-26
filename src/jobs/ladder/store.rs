@@ -33,7 +33,7 @@ pub struct Crawl {
     pub apex_capped: Vec<String>,
 }
 
-/// v1's six crawl counters.
+/// v1's six crawl counters, and THR-04's `players_skipped`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Counters {
@@ -43,11 +43,14 @@ pub struct Counters {
     pub backfills_enqueued: i64,
     pub match_ids_seen: i64,
     pub matches_queued: i64,
+    /// Players left out of the collect stage because their wins and losses
+    /// hadn't moved since their last collect (THR-04).
+    pub players_skipped: i64,
 }
 
 const COLUMNS: &str = "id, platform, queue, tier_floor, status, phase, started_at, finished_at, \
     pages_fetched, entries_seen, players_discovered, backfills_enqueued, match_ids_seen, \
-    matches_queued, legs_failed, apex_capped";
+    matches_queued, legs_failed, apex_capped, players_skipped";
 
 fn crawl_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Crawl> {
     Ok(Crawl {
@@ -66,6 +69,7 @@ fn crawl_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Crawl> {
             backfills_enqueued: r.get(11)?,
             match_ids_seen: r.get(12)?,
             matches_queued: r.get(13)?,
+            players_skipped: r.get(16)?,
         },
         legs_failed: r.get(14)?,
         apex_capped: tiers_of(r.get(15)?),
@@ -434,15 +438,20 @@ pub fn finish(
 
 /// Whose match ids the collect stage walks: everyone this crawl stamped on
 /// the ladder, minus players whose walk started since the crawl did (v1
-/// `listCrawlBackfillCandidates`). Best first, so a crawl cancelled part-way
-/// has collected the top of the ladder.
+/// `listCrawlBackfillCandidates`), minus players whose wins and losses are
+/// what they were at their last collect (THR-04). Best first, so a crawl
+/// cancelled part-way has collected the top of the ladder. Returns the
+/// candidates and how many were left out as unchanged. `<>`, not `<`: a total
+/// that dropped (a season reset) still collects.
 pub fn collect_candidates(
     tx: &Transaction<'_>,
     key_scope: &str,
     crawl: &Crawl,
-) -> Result<Vec<String>, DbError> {
+) -> Result<(Vec<String>, i64), DbError> {
     let mut stmt = tx.prepare(
-        "SELECT le.puuid FROM ladder_entries le
+        "SELECT le.puuid,
+                le.collected_games IS NOT NULL AND le.collected_games = le.wins + le.losses
+           FROM ladder_entries le
            LEFT JOIN players p ON p.key_scope = le.key_scope AND p.puuid = le.puuid
           WHERE le.key_scope = ?1 AND le.platform = ?2 AND le.queue = ?3
             AND le.last_seen_crawl_id = ?4
@@ -452,10 +461,61 @@ pub fn collect_candidates(
     let rows = stmt
         .query_map(
             params![key_scope, crawl.platform, crawl.queue, crawl.id, crawl.started_at],
-            |r| r.get(0),
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, bool>(1)?)),
         )?
-        .collect::<Result<Vec<String>, _>>()?;
-    Ok(rows)
+        .collect::<Result<Vec<_>, _>>()?;
+    let (unchanged, candidates): (Vec<_>, Vec<_>) = rows.into_iter().partition(|(_, same)| *same);
+    Ok((
+        candidates.into_iter().map(|(puuid, _)| puuid).collect(),
+        i64::try_from(unchanged.len()).unwrap_or(i64::MAX),
+    ))
+}
+
+/// One ladder player's collect cursor: when their last finished walk began
+/// (THR-04). `None` for a first sight, or a player not on the ladder.
+pub async fn cursor(
+    db: &Db,
+    key_scope: &str,
+    platform: &str,
+    queue: &str,
+    puuid: &str,
+) -> Result<Option<i64>, DbError> {
+    let key = [key_scope, platform, queue, puuid].map(str::to_string);
+    db.read(move |c| {
+        Ok(c.query_row(
+            "SELECT collected_at FROM ladder_entries
+              WHERE key_scope = ?1 AND platform = ?2 AND queue = ?3 AND puuid = ?4",
+            params![key[0], key[1], key[2], key[3]],
+            |r| r.get::<_, Option<i64>>(0),
+        )
+        .optional()?
+        .flatten())
+    })
+    .await
+}
+
+/// Stamp a finished walk's cursor: the total this crawl's enumerate stored,
+/// and when the walk began. Only this ladder's enumerate writes `wins` and
+/// `losses`, and a ladder runs one crawl at a time, so the total is the one
+/// the candidate query compared (THR-04).
+pub async fn stamp_cursor(
+    db: &Db,
+    key_scope: &str,
+    platform: &str,
+    queue: &str,
+    puuid: &str,
+    began_at: i64,
+) -> Result<(), DbError> {
+    let key = [key_scope, platform, queue, puuid].map(str::to_string);
+    db.write(move |c| {
+        c.execute(
+            "UPDATE ladder_entries SET collected_games = wins + losses, collected_at = ?5
+              WHERE key_scope = ?1 AND platform = ?2 AND queue = ?3 AND puuid = ?4",
+            params![key[0], key[1], key[2], key[3], began_at],
+        )?;
+        Ok(())
+    })
+    .await
 }
 
 /// Add to a crawl's counters, in SQL: legs bump the same row concurrently (v1).
@@ -474,6 +534,7 @@ pub fn bump(tx: &rusqlite::Connection, crawl_id: &str, column: Counter, by: i64)
 #[derive(Debug, Clone, Copy)]
 pub enum Counter {
     BackfillsEnqueued,
+    PlayersSkipped,
     MatchIdsSeen,
     MatchesQueued,
 }
@@ -482,6 +543,7 @@ impl Counter {
     fn as_str(self) -> &'static str {
         match self {
             Self::BackfillsEnqueued => "backfills_enqueued",
+            Self::PlayersSkipped => "players_skipped",
             Self::MatchIdsSeen => "match_ids_seen",
             Self::MatchesQueued => "matches_queued",
         }

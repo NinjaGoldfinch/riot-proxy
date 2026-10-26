@@ -2813,6 +2813,11 @@ expression: doc
             "format": "int64",
             "type": "integer"
           },
+          "playersSkipped": {
+            "description": "Players the collect stage left out because their wins and losses hadn't moved since their\nlast collect: nothing new to ask Riot for.",
+            "format": "int64",
+            "type": "integer"
+          },
           "queue": {
             "type": "string"
           },
@@ -2843,6 +2848,7 @@ expression: doc
           "entriesSeen",
           "playersDiscovered",
           "backfillsEnqueued",
+          "playersSkipped",
           "matchIdsSeen",
           "matchesQueued",
           "pendingLegs",

@@ -36,7 +36,7 @@ test('a running crawl is a card: stage bars and totals, the rest folded under de
     assert.equal(more.open, false, 'details are folded by default');
     assert.equal(more.querySelector('summary').textContent, 'details · 1 running · 2 legs in flight · 1 failed');
     const d = p.words(`#ladderRunning details.more .body`);
-    assert.ok(d.includes('histories queued 1,982') && d.includes('legs left 30'), d);
+    assert.ok(d.includes('histories queued 1,982 players skipped 340') && d.includes('legs left 30'), d);
     assert.ok(d.includes('In flight (2) players 1250+ players 1275+'));
     assert.ok(d.includes('Running now (1) match ids for players 1,250–1,274 · oc1'));
     assert.ok(d.includes('4 queued job(s) ahead of its next one'));

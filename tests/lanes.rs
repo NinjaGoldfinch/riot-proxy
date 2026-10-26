@@ -128,6 +128,7 @@ impl Env {
             tier_floor: "MASTER".into(),
             backfill_limit,
             lookup_backfill_limit: 500,
+            collect_overlap_s: 7_200,
             archive_timelines: false,
             rank_lookup_limit: 50_000,
             rank_lookup_recheck_s: 604_800,
@@ -214,6 +215,174 @@ async fn a_collect_that_yields_resumes_with_the_players_it_has_not_done() {
     for p in &players {
         assert_eq!(e.count(&format!("/by-puuid/{p}/ids")), 1, "{p} walked once");
     }
+}
+
+/// `players` on kr's solo ladder as this crawl's enumerate leaves them: ten
+/// games each, never collected.
+async fn on_ladder(db: &Db, scope: &str, crawl_id: &str, players: &[String]) {
+    let (scope, crawl, players) = (scope.to_string(), crawl_id.to_string(), players.to_vec());
+    db.write(move |c| {
+        for p in &players {
+            c.execute(
+                "INSERT INTO ladder_entries (key_scope, platform, queue, puuid, tier, division, league_points,
+                    wins, losses, first_seen_crawl_id, last_seen_crawl_id, updated_at)
+                 VALUES (?1, 'kr', ?2, ?3, 'CHALLENGER', 'I', 0, 6, 4, ?4, ?4, 0)",
+                rusqlite::params![scope, SOLO, p, crawl],
+            )?;
+        }
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+}
+
+/// THR-04 (ADR-185): a player's cursor is stamped only by a walk that reached
+/// its end, so a batch that yields has stamped the players it finished.
+#[tokio::test]
+async fn a_collect_that_yields_stamps_only_the_players_it_finished() {
+    let e = env(0, Duration::ZERO).await;
+    let limiter = Arc::new(Limiter::new(1.0));
+    limiter.configure_app("asia", &window(2, 120));
+    let ctx = e.ctx(&limiter, 100);
+    let crawl_id = e.start("kr", "CHALLENGER").await;
+    let players: Vec<String> = (0..4).map(|i| format!("P{i}")).collect();
+    on_ladder(&e.db, &e.scope, &crawl_id, &players).await;
+    let batch = CollectJob {
+        crawl_id,
+        platform: "kr".into(),
+        queue: SOLO.into(),
+        puuids: players.clone(),
+        offset: 0,
+    };
+    let cursors = || async {
+        let mut out = Vec::new();
+        for p in &players {
+            out.push(
+                store::cursor(&e.db, &e.scope, "kr", SOLO, p)
+                    .await
+                    .unwrap()
+                    .is_some(),
+            );
+        }
+        out
+    };
+
+    let (_, payload) = yielded(ctx.collect(&job(kinds::LADDER_COLLECT, &batch)).await);
+    assert_eq!(cursors().await, [true, true, false, false], "P0 and P1 finished");
+    let rest: CollectJob = serde_json::from_str(&payload.unwrap()).unwrap();
+    limiter.configure_app("asia", &window(100, 120));
+    ctx.collect(&job(kinds::LADDER_COLLECT, &rest)).await.unwrap();
+    assert_eq!(cursors().await, [true; 4]);
+}
+
+/// A player's match ids, `total` of them, paged by `start`/`count` as Riot
+/// does; every request logged with the rest.
+struct Paged {
+    log: Log,
+    total: u32,
+}
+
+impl Respond for Paged {
+    fn respond(&self, req: &Request) -> ResponseTemplate {
+        let at = format!("{}?{}", req.url.path(), req.url.query().unwrap_or(""));
+        self.log.lock().unwrap().push(("asia".into(), at, Instant::now()));
+        let q: BTreeMap<String, String> = req.url.query_pairs().into_owned().collect();
+        let start: u32 = q.get("start").and_then(|v| v.parse().ok()).unwrap_or(0);
+        let count: u32 = q.get("count").and_then(|v| v.parse().ok()).unwrap_or(20);
+        let ids: Vec<String> = (start..self.total.min(start + count))
+            .map(|i| format!("KR_{i}"))
+            .collect();
+        ResponseTemplate::new(200).set_body_json(ids)
+    }
+}
+
+/// THR-04 (ADR-185, G3): a cursor walk that yields between pages leaves the
+/// cursor as it was; the re-run asks again from the same `startTime`, from
+/// the first page, and stamps the time it began.
+#[tokio::test]
+async fn a_cursor_walk_interrupted_between_pages_is_not_stamped_and_resumes_from_its_cursor() {
+    let e = env(0, Duration::ZERO).await;
+    Mock::given(method("GET"))
+        .and(path_regex("/by-puuid/BIG/ids$"))
+        .respond_with(Paged {
+            log: Arc::clone(&e.log),
+            total: 250,
+        })
+        .with_priority(1)
+        .mount(&e.server)
+        .await;
+    let limiter = Arc::new(Limiter::new(1.0));
+    limiter.configure_app("asia", &window(2, 120));
+    let ctx = e.ctx(&limiter, 100);
+    let crawl_id = e.start("kr", "CHALLENGER").await;
+    on_ladder(&e.db, &e.scope, &crawl_id, &["BIG".to_string()]).await;
+    let last = riot_proxy::clock::Clock::now().unix_ms - 3_600_000;
+    store::stamp_cursor(&e.db, &e.scope, "kr", SOLO, "BIG", last)
+        .await
+        .unwrap();
+    let batch = CollectJob {
+        crawl_id: crawl_id.clone(),
+        platform: "kr".into(),
+        queue: SOLO.into(),
+        puuids: vec!["BIG".into()],
+        offset: 0,
+    };
+    let since = format!("startTime={}", last / 1000 - 7_200);
+
+    let (_, payload) = yielded(ctx.collect(&job(kinds::LADDER_COLLECT, &batch)).await);
+    let first: Vec<String> = e.requests();
+    assert_eq!(first.len(), 2, "two pages, then out of room: {first:?}");
+    assert!(first.iter().all(|r| r.contains(&since)), "{first:?}");
+    assert_eq!(
+        store::cursor(&e.db, &e.scope, "kr", SOLO, "BIG").await.unwrap(),
+        Some(last),
+        "a walk that stopped part-way stamps nothing"
+    );
+
+    let rest: CollectJob = serde_json::from_str(&payload.unwrap()).unwrap();
+    limiter.configure_app("asia", &window(100, 120));
+    let resumed = riot_proxy::clock::Clock::now().unix_ms;
+    ctx.collect(&job(kinds::LADDER_COLLECT, &rest)).await.unwrap();
+    let again: Vec<String> = e.requests()[2..].to_vec();
+    let starts: Vec<&str> = again
+        .iter()
+        .map(|r| r.split('&').find(|p| p.contains("start=")).unwrap())
+        .collect();
+    // The first two pages are the same requests as before, answered from the
+    // response cache (match ids are kept 120 s); only the third reaches Riot.
+    assert_eq!(starts, ["/lol/match/v5/matches/by-puuid/BIG/ids?start=200"]);
+    assert!(
+        again.iter().all(|r| r.contains(&since)),
+        "the same cursor: {again:?}"
+    );
+    let stamped = store::cursor(&e.db, &e.scope, "kr", SOLO, "BIG")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(stamped >= resumed, "the re-run's start, not the first run's");
+    assert_eq!(e.crawl(&crawl_id).await.counters.match_ids_seen, 250);
+}
+
+/// THR-04: a `ladder:collect` row as an older binary queued it still runs.
+/// The payload shape didn't change (the cursor is read from the ladder row),
+/// and this pins it.
+#[tokio::test]
+async fn an_old_shape_collect_payload_still_runs() {
+    let e = env(0, Duration::ZERO).await;
+    let limiter = Arc::new(Limiter::new(1.0));
+    let ctx = e.ctx(&limiter, 100);
+    let crawl_id = e.start("kr", "CHALLENGER").await;
+    on_ladder(&e.db, &e.scope, &crawl_id, &["P0".to_string()]).await;
+    let payload =
+        json!({"crawlId": crawl_id, "platform": "kr", "queue": SOLO, "puuids": ["P0"], "offset": 0});
+    ctx.collect(&job(kinds::LADDER_COLLECT, &payload)).await.unwrap();
+    assert_eq!(e.count("/by-puuid/P0/ids"), 1);
+    assert!(
+        store::cursor(&e.db, &e.scope, "kr", SOLO, "P0")
+            .await
+            .unwrap()
+            .is_some()
+    );
 }
 
 #[tokio::test]
