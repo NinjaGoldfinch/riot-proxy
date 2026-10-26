@@ -8,7 +8,7 @@ Fails when, between base and head:
   2. src/, deploy/, .github/, Cargo.toml or .env.example changed and nothing under docs/ did;
   3. any page's `**Last verified:** … against commit `<sha>`` names a commit not in history,
      or a page changed in this range still cites a commit older than base (footer not refreshed).
-Pages under docs/design, docs/flt, docs/perf, docs/thr and the repo's own records (DECISIONS, IMPLEMENTATION,
+Pages under docs/design, docs/flt, docs/lad, docs/perf, docs/thr and the repo's own records (DECISIONS, IMPLEMENTATION,
 CUTOVER, contract) are exempt from 1 and 3: they are the design authority, not this set. A page that
 cites PROGRESS.md, DECISIONS.md, IMPLEMENTATION.md or CUTOVER.md is not stale when those move (rule 1).
 """
@@ -16,7 +16,7 @@ import os, re, subprocess, sys
 
 base = sys.argv[1]
 head = sys.argv[2] if len(sys.argv) > 2 else "HEAD"
-EXEMPT = ("docs/design/", "docs/flt/", "docs/perf/", "docs/thr/", "docs/contract/", "docs/adr/", "docs/img/",
+EXEMPT = ("docs/design/", "docs/flt/", "docs/lad/", "docs/perf/", "docs/thr/", "docs/contract/", "docs/adr/", "docs/img/",
           "docs/DECISIONS.md", "docs/IMPLEMENTATION.md", "docs/CUTOVER.md", "docs/_meta/scratch/")
 CODE_PREFIXES = ("src/", "deploy/", ".github/", "Cargo.toml", ".env.example")
 # Record files change with every task (ticks, ADRs); a page citing them for context is not stale when they move.
