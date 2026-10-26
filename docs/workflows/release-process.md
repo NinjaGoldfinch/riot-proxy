@@ -17,7 +17,7 @@ Everything up to the GitHub release is automated; the last step is a person.
 
 ## Versioning
 
-- Semantic versions in `Cargo.toml` (`version = "2.8.0"` at the verified commit). Tags are `v<version>`; pre-releases carry a suffix (`v2.0.0-rc.3`).
+- Semantic versions in `Cargo.toml` (`version = "2.9.0"` at the verified commit). Tags are `v<version>`; pre-releases carry a suffix (`v2.0.0-rc.3`).
 - `release.yml` refuses a tag whose name is not exactly `v` plus the `Cargo.toml` version.
 - The binary reports its version with `--version` and in `GET /v1/admin/info` together with the embedded commit (`gitSha`), `rustc` and build time (ADM-03).
 - Cadence so far: `v2.0.0` on 2026-10-10 after four release candidates, then `v2.1.0` to `v2.7.0` between 2026-10-11 and 2026-10-19 (`git tag -l --format='%(refname:short) %(creatordate:short)'`). Minor versions carry features; `v2.4.1` was a fix release.
@@ -79,4 +79,4 @@ ninjagoldfinch.lol pins the proxy contract it was verified against (its generate
 
 ---
 **Sources:** `.github/workflows/release.yml`, `.github/workflows/edge.yml`, `Cargo.toml:L3`, `git show --stat v2.7.0` (commit `10cf81d`), `git tag -l`, `docs/design/07-deployment.md#upgrade-procedure`, `docs/design/07-deployment.md#build-identity-adm-03`, `deploy/README.md`, `deploy/proxmox/README.md`, `deploy/proxmox/files/riot-proxy-update`
-**Last verified:** 2026-10-21 against commit `f8384be`
+**Last verified:** 2026-10-27 against commit `c5110ff`
