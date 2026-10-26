@@ -15635,6 +15635,7 @@
           "entriesSeen",
           "playersDiscovered",
           "backfillsEnqueued",
+          "playersSkipped",
           "matchIdsSeen",
           "matchesQueued",
           "pendingLegs",
@@ -15690,6 +15691,11 @@
             "type": "integer",
             "format": "int64",
             "description": "Players whose match history the collect stage was asked to walk."
+          },
+          "playersSkipped": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Players the collect stage left out because their wins and losses hadn't moved since their\nlast collect: nothing new to ask Riot for."
           },
           "matchIdsSeen": {
             "type": "integer",

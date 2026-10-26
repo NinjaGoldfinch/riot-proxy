@@ -280,6 +280,7 @@ async fn a_collect_that_yields_stamps_only_the_players_it_finished() {
 struct Paged {
     log: Log,
     total: u32,
+    delay: Duration,
 }
 
 impl Respond for Paged {
@@ -292,7 +293,9 @@ impl Respond for Paged {
         let ids: Vec<String> = (start..self.total.min(start + count))
             .map(|i| format!("KR_{i}"))
             .collect();
-        ResponseTemplate::new(200).set_body_json(ids)
+        ResponseTemplate::new(200)
+            .set_body_json(ids)
+            .set_delay(self.delay)
     }
 }
 
@@ -307,6 +310,7 @@ async fn a_cursor_walk_interrupted_between_pages_is_not_stamped_and_resumes_from
         .respond_with(Paged {
             log: Arc::clone(&e.log),
             total: 250,
+            delay: Duration::from_millis(500),
         })
         .with_priority(1)
         .mount(&e.server)
@@ -360,6 +364,13 @@ async fn a_cursor_walk_interrupted_between_pages_is_not_stamped_and_resumes_from
         .unwrap()
         .unwrap();
     assert!(stamped >= resumed, "the re-run's start, not the first run's");
+    // When the walk began, before its one 500 ms request reached Riot, not
+    // when it ended: every id it read was listed at or after the stamp.
+    assert!(
+        stamped - resumed < 400,
+        "stamped {} ms into the re-run",
+        stamped - resumed
+    );
     assert_eq!(e.crawl(&crawl_id).await.counters.match_ids_seen, 250);
 }
 

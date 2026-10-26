@@ -10,6 +10,45 @@ Written 2026-10-26 against `origin/main` **c9e1b33** (6eda84e v2.8.0, plus #235 
 - Branch `feat/THR-04-collect-cursor`, cut from c9e1b33: this plan first, then the code on the same branch once the plan is approved, in one PR.
 - There is no Riot key in this session (no `.env`, no `RGAPI-` in the environment) and no browser. §3 says what that means for the `startTime` check.
 
+
+**Implementation record** (2026-10-26, branch `feat/THR-04-collect-cursor`, ADR-185).
+
+*Owner answers.* Plan approved with Q1–Q5 as recommended: the cursor read from the ladder row, a stale cursor (older than `TIER_LATE_STAMP_DAYS`) walked as a first sight, `players_skipped` counting only unchanged players, the production snapshot left to the owner, and `main`'s `ops` job re-run (run 40226768474 re-queued on 2026-10-26).
+
+*Deviations from the plan.*
+- **`match_ids_seen` is counted page by page.** `collect_one` adds to the batch's count as each page lands, instead of returning a total on success. A walk that yielded part-way had added its ids to the set but not to the counter. One-page walks rarely showed that; three-page cursor walks did (found by test 5b).
+- **The response cache shortens the overlap by up to 120 s.** A walk re-run after a yield reads its first pages from the fetcher's cache (`match.idsByPuuid` is kept 120 s, `src/riot/endpoints.rs:181`), so they can be older than that run's `collected_at`. That comes out of the 7,200 s overlap. ADR-185 says so, and test 5b asserts it.
+- **`TIER_LATE_STAMP_DAYS=0` sets no bound on a cursor's age.** `late_since` treats 0 as "nothing is late", which would have made every cursor stale and switched THR-04 off.
+- **No crawl-view assertion for an all-skipped crawl** (plan §8 test 1). The view's collect total comes from `backfills_enqueued`, which is 0. The stage state for a zero total is the code path an all-walked crawl already takes (`advance()`'s empty branch), so the test checks the counters and the missing collect jobs instead.
+- **design/04's DDL gained `apex_capped`** (V0008) beside V0030's columns: it was missing there.
+
+*Mutation checks* (`/home/dev/thr04/mut/run.py`; each applied alone, then reverted; the `tests/it.rs` ladder and lanes modules and the lib's `jobs::ladder` tests run):
+
+| # | mutation | caught by |
+|---|---|---|
+| 1 | drop the unchanged partition (every player a candidate) | `a_second_crawl_over_an_unchanged_ladder_…`, `a_player_whose_total_rose_by_three_…`, `a_remake_waits_…`, `collect_leaves_out_players_whose_total_has_not_moved` |
+| 2 | `<` for `<>` (unchanged when `collected_games >= total`) | `a_total_that_dropped_is_collected`, `collect_leaves_out_…` |
+| 3 | stamp on 404 | `a_404_player_is_not_stamped` |
+| 4 | stamp before the page loop | `a_404_…`, `a_collect_that_yields_stamps_only_the_players_it_finished`, `a_cursor_walk_interrupted_between_pages_…` |
+| 5 | a cursor walk sends no `startTime` | `a_player_whose_total_rose_by_three_…`, `a_first_sight_stamps_and_the_overlap_follows_the_setting`, `a_cursor_walk_interrupted_…` |
+| 6 | a cursor walk capped at `LADDER_BACKFILL_LIMIT` | `a_player_with_250_new_games_is_paged_three_times`, `a_cursor_walk_interrupted_…` |
+| 7 | `collected_at` taken after the walk | `a_cursor_walk_interrupted_…` (the stamp within 400 ms of the re-run's start, before its 500 ms request) |
+| 8 | a cursor walk calls `mark_walk_started` | `a_player_whose_total_rose_by_three_…` (`backfill_state` unchanged) |
+| 9 | `players_skipped` not bumped | `a_second_crawl_over_an_unchanged_ladder_…`, `a_player_whose_total_rose_by_three_…` |
+| 10 | a stale cursor is walked from | `a_cursor_older_than_the_late_stamp_window_walks_as_a_first_sight`, `a_cursor_older_than_the_late_stamp_window_is_not_walked_from` |
+
+All ten fail a test, none by a compile error. Mutation 7 failed nothing until 5b's responder got a 500 ms delay and the assertion on the stamp's time; the plan's table had assigned it to test 2, whose arithmetic reads the stored value back and so can't tell.
+
+*Verification.*
+- `cargo fmt --check` clean; `cargo clippy --all-targets --all-features -- -D warnings` clean.
+- `cargo test --all-features`: 993 passed, 0 failed. (`cargo-nextest` isn't installed here; CI runs it.)
+- `tests/dom` (jsdom, without the two Chromium suites): 149 tests pass.
+- Expected changes: the OpenAPI snapshot and `docs/api/openapi.json` gain `LadderCrawlSummary.playersSkipped` (`openapi-check.py`: 70 paths, 0 differences); the migration count is 30.
+- `docs-guard.py origin/main HEAD` and `linkcheck.py docs` are clean. `mermaidcheck.sh` can't launch Chromium on this box, so CI's `docs` job checks the diagrams. Line citations of the changed files were moved across the docs set by a script that maps old lines to new through the diff (`/home/dev/thr04/docs/shift.py`, 421 citations; three that pointed into changed hunks were fixed by hand), and the touched pages' footers say c9e1b33.
+- The musl build wasn't run (no musl C toolchain here); CI's `build-musl` job checks it.
+
+*Not done here.* The `startTime` check and the two-crawl drill need the production key on the dev VM. The owner's commands are in §10 and in the PR description. Production's idle share (Q4) is the owner's.
+
 ---
 
 **The plan in one paragraph.**
