@@ -207,6 +207,7 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 - [x] Release `v2.7.1`: WR-01 a crawl's activity view seeks its indexes (V0028, #229) (owner request 2026-10-20)
 - [x] Release `v2.7.2`: WR-02 `/readyz` reports writer progress, `sqlite_write_*` metrics (#231, ADR-180) (owner request 2026-10-21)
 - [x] Release `v2.8.0`: THR-03 incremental analytics, `aggregate:delta` (V0029, #233, ADR-182) (owner request 2026-10-21)
+- [x] Release `v2.9.0`: THR-07 delta batch size carried between runs (#235, ADR-183), TL-03 boot catch-up after a crawl's collect (#236, ADR-184), THR-04 collect cursor (V0030, #237, ADR-185) (owner request 2026-10-27)
 
 ## OPS — dev environment on Proxmox (owner request 2026-10-05)
 - [x] OPS-01 `:edge` image on every push to `main` (#79, ADR-069)
