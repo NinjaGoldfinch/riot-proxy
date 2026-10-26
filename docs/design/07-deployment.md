@@ -133,6 +133,7 @@ Same variable names as v1 where the concept survives; removed variables are list
 | `RANK_LOOKUP_LIMIT` | `50000` | **new** — players one `ranks:lookup` run looks up, most archived games first; `0` turns the lookups off (ADR-111) |
 | `RANK_LOOKUP_RECHECK_S` | `604800` (7 days) | **new** — a player looked up this recently is left off the next run's list (ADR-111) |
 | `TIER_LATE_STAMP_DAYS` | `14` | **new** — a rank the ladder or a league lookup returns places that player's `UNKNOWN` tier stamps on matches that ended within this many days; a known tier is never changed; `0` places none (ADR-127) |
+| `LADDER_COLLECT_OVERLAP_S` | `7200` | **new**: a crawl skips a player whose wins + losses haven't moved since their last collect and asks the rest only for games since then (`startTime`), less this many seconds for games in progress at the time; `LADDER_BACKFILL_LIMIT` bounds only a first sight (THR-04, ADR-185) |
 | `LOOKUP_BACKFILL_LIMIT` | `4294967295` (`u32::MAX`) | v1 capped it at 10000; now the walk ends where the player's history does (ADR-081) |
 | `BULK_IDLE_CEILING` / `BULK_IDLE_AFTER_S` | `0.95` / `30` | **new** — bulk's share of a bucket on a region with no interactive request in the last `BULK_IDLE_AFTER_S` seconds. At least `BULK_USAGE_CEILING` (which it follows when unset and lower) and below 1 (ADR-126) |
 | `BACKUP_KEEP` | `14` | **new** — daily `VACUUM INTO` backups kept in `$DATA_DIR/backups`; `0` takes none. A backup is skipped, with a warning, when the disk has under 1.2 × the database's size free (DSK-02, ADR-136) |

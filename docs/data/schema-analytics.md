@@ -1,6 +1,6 @@
 # SQLite schema: ladder, rank and analytics tables
 
-The second half of the schema after V0029: the ladder crawl tables, the rank lookups that place archived players, the analytics tables rebuilt from `match_facts`, and the bookkeeping that lets `aggregate:delta` add new matches to them (THR-03, ADR-182). The core and archive groups, and the conventions that apply to every table, are in [schema.md](schema.md).
+The second half of the schema after V0030: the ladder crawl tables, the rank lookups that place archived players, the analytics tables rebuilt from `match_facts`, and the bookkeeping that lets `aggregate:delta` add new matches to them (THR-03, ADR-182). The core and archive groups, and the conventions that apply to every table, are in [schema.md](schema.md).
 
 ## Ladder and rank tables
 
@@ -34,6 +34,7 @@ erDiagram
         TEXT queue PK
         TEXT puuid PK
         TEXT tier
+        INTEGER collected_at
     }
     player_ranks {
         TEXT key_scope PK
@@ -74,7 +75,7 @@ Only the two crawl children have declared foreign keys. The dotted edges are the
 
 ### ladder_crawls
 
-[`V0004__ladder.sql`](../../src/db/migrations/V0004__ladder.sql) (`V0004:14-35`); `apex_capped` from [`V0008`](../../src/db/migrations/V0008__apex_capped.sql).
+[`V0004__ladder.sql`](../../src/db/migrations/V0004__ladder.sql) (`V0004:14-35`); `apex_capped` from [`V0008`](../../src/db/migrations/V0008__apex_capped.sql); `players_skipped` from [`V0030`](../../src/db/migrations/V0030__collect_cursor.sql).
 
 | Column | Type | Constraints | Notes |
 |---|---|---|---|
@@ -87,12 +88,13 @@ Only the two crawl children have declared foreign keys. The dotted edges are the
 | `finished_at` | INTEGER | nullable | unix ms |
 | `pages_fetched`, `entries_seen`, `players_discovered`, `backfills_enqueued`, `match_ids_seen`, `matches_queued`, `legs_failed` | INTEGER | NOT NULL DEFAULT 0 | v1's counters |
 | `apex_capped` | TEXT | nullable | JSON list of apex tiers cut at Riot's 10 000 cap, e.g. `["MASTER"]` (`V0008:1-4`) |
+| `players_skipped` | INTEGER | NOT NULL DEFAULT 0 | players the collect stage left out because their wins + losses equal their `collected_games` (THR-04, ADR-185; `V0030:8`) |
 
-Indexes: `ladder_crawls_live UNIQUE (key_scope, platform, queue) WHERE status = 'running'` (one live crawl per ladder, `V0004:33-34`); `ladder_crawls_recent (key_scope, platform, queue, started_at)`. Written by `src/jobs/ladder/store.rs:97-103` (insert) and the counter, phase and finish updates (`:277-423`). Read by the crawl routes and the stats snapshot. Retention: a run log, never deleted (`V0004:5-6`).
+Indexes: `ladder_crawls_live UNIQUE (key_scope, platform, queue) WHERE status = 'running'` (one live crawl per ladder, `V0004:33-34`); `ladder_crawls_recent (key_scope, platform, queue, started_at)`. Written by `src/jobs/ladder/store.rs:101-107` (insert) and the counter, phase and finish updates (`:277-423`). Read by the crawl routes and the stats snapshot. Retention: a run log, never deleted (`V0004:5-6`).
 
 ### ladder_entries
 
-`V0004:37-59`. The ladder's latest state per player; outlives the crawl rows.
+`V0004:37-59`, and the collect cursor from [`V0030`](../../src/db/migrations/V0030__collect_cursor.sql). The ladder's latest state per player; outlives the crawl rows.
 
 | Column | Type | Constraints | Notes |
 |---|---|---|---|
@@ -103,8 +105,10 @@ Indexes: `ladder_crawls_live UNIQUE (key_scope, platform, queue) WHERE status = 
 | `first_seen_crawl_id` | TEXT | NOT NULL | set once |
 | `last_seen_crawl_id` | TEXT | NOT NULL | restamped by every crawl that sees the player |
 | `updated_at` | INTEGER | NOT NULL | unix ms |
+| `collected_games` | INTEGER | nullable | `wins + losses` when the player's last collect walk finished; NULL until a first one does (THR-04, ADR-185; `V0030:6`) |
+| `collected_at` | INTEGER | nullable | unix ms, when that walk began; the next crawl asks for games since then less `LADDER_COLLECT_OVERLAP_S` (`V0030:7`) |
 
-Indexes: `ladder_entries_ladder (key_scope, platform, queue, tier, division, league_points)`, `ladder_entries_last_seen (last_seen_crawl_id)`, `ladder_entries_puuid (key_scope, puuid)` (`V0004:56-59`). Written by the apex and walk legs' page upsert (`src/jobs/ladder/store.rs:230-241`). Read by the tier stamp, the rank planner and the ladder routes. Retention: never deleted.
+Indexes: `ladder_entries_ladder (key_scope, platform, queue, tier, division, league_points)`, `ladder_entries_last_seen (last_seen_crawl_id)`, `ladder_entries_puuid (key_scope, puuid)` (`V0004:56-59`). Written by the apex and walk legs' page upsert (`src/jobs/ladder/store.rs:234-245`), which leaves the cursor alone, and the cursor by `store::stamp_cursor` after a finished collect walk. Read by the collect candidates (a player whose total equals `collected_games` is skipped), the tier stamp, the rank planner and the ladder routes. Retention: never deleted.
 
 ### crawl_legs and crawl_match_ids
 
@@ -235,7 +239,7 @@ Every dotted edge is an `INSERT … SELECT` in `src/archive/analytics.rs`; nothi
 
 ### How a rebuild writes them
 
-`Scope::clear` deletes a table's rows for `(key_scope, platform, queue)` and the rebuilt patches, then `Scope::insert` runs an `INSERT … SELECT` binding `?1`–`?6` = key scope, platform, queue, queue id, patches JSON, now (`src/archive/analytics.rs:70-97`). The source is `ladder_facts`: facts of the platform's matches in the queue with a stamped tier and `team_id IN (100, 200)`, `tier` = `f.tier`, `side` = `blue` for team 100 else `red` (`analytics.rs:104-152`). Patches = the newest `AGGREGATE_PATCH_LIMIT` (default 4; 0 = all, `src/config.rs:766`); rows for older patches are kept (`analytics.rs:15-17`). A ladder on `analytics_unsplit`, or one not stamped in `analytics_stamped` while `AGGREGATE_DELTA_S` > 0, is rebuilt over every patch (`src/jobs/analytics.rs:438-457`). `remake` is a key everywhere, so a read excludes remakes (the default) or sums both (`V0005:9-10`). Six transactions, one per step of `STEPS` (`analytics.rs:205-256`): champions (`:346-418`), matchups (`:493-556`), then items, runes, spells and set builds (`:577-734`). Each step ends by setting its bit in `analytics_counted` for every match it read and deleting that step's `analytics_retract` rows for them (`stamp_step`, `src/archive/analytics/delta.rs:61-96`). A rebuild over every patch then writes the ladder's `analytics_stamped` row (`src/jobs/analytics.rs:498-518`). Nothing trims by age; `/dev/reset` wipes all.
+`Scope::clear` deletes a table's rows for `(key_scope, platform, queue)` and the rebuilt patches, then `Scope::insert` runs an `INSERT … SELECT` binding `?1`–`?6` = key scope, platform, queue, queue id, patches JSON, now (`src/archive/analytics.rs:70-97`). The source is `ladder_facts`: facts of the platform's matches in the queue with a stamped tier and `team_id IN (100, 200)`, `tier` = `f.tier`, `side` = `blue` for team 100 else `red` (`analytics.rs:104-152`). Patches = the newest `AGGREGATE_PATCH_LIMIT` (default 4; 0 = all, `src/config.rs:772`); rows for older patches are kept (`analytics.rs:15-17`). A ladder on `analytics_unsplit`, or one not stamped in `analytics_stamped` while `AGGREGATE_DELTA_S` > 0, is rebuilt over every patch (`src/jobs/analytics.rs:438-457`). `remake` is a key everywhere, so a read excludes remakes (the default) or sums both (`V0005:9-10`). Six transactions, one per step of `STEPS` (`analytics.rs:205-256`): champions (`:346-418`), matchups (`:493-556`), then items, runes, spells and set builds (`:577-734`). Each step ends by setting its bit in `analytics_counted` for every match it read and deleting that step's `analytics_retract` rows for them (`stamp_step`, `src/archive/analytics/delta.rs:61-96`). A rebuild over every patch then writes the ladder's `analytics_stamped` row (`src/jobs/analytics.rs:498-518`). Nothing trims by age; `/dev/reset` wipes all.
 
 ### How a delta adds to them
 
@@ -282,8 +286,8 @@ Common key prefix on every aggregate: `key_scope TEXT`, `platform TEXT`, `queue 
 
 ### analytics_unsplit
 
-[`V0017__tier_side_keys.sql`](../../src/db/migrations/V0017__tier_side_keys.sql) (`V0017:17-28`), a rowid table: `key_scope`, `platform`, `queue TEXT NOT NULL`, primary key over all three. Seeded by the migration with every ladder that had analytics rows; a listed ladder's next rebuild covers every patch and then deletes its row (`src/archive/analytics.rs:730-751`). Boot queues those rebuilds (`src/cli/serve.rs:310-318`). Drains itself.
+[`V0017__tier_side_keys.sql`](../../src/db/migrations/V0017__tier_side_keys.sql) (`V0017:17-28`), a rowid table: `key_scope`, `platform`, `queue TEXT NOT NULL`, primary key over all three. Seeded by the migration with every ladder that had analytics rows; a listed ladder's next rebuild covers every patch and then deletes its row (`src/archive/analytics.rs:730-751`). Boot queues those rebuilds (`src/cli/serve.rs:311-319`). Drains itself.
 
 ---
-**Sources:** `src/db/migrations/V0004__ladder.sql`, `V0005__analytics.sql`, `V0006__analytics_runs.sql`, `V0008__apex_capped.sql`, `V0010__player_ranks.sql`, `V0011__rank_lookups.sql`, `V0014__champion_builds.sql`, `V0015__analytics_totals.sql`, `V0017__tier_side_keys.sql`, `V0020__without_rowid_derived.sql`, `V0025__champion_stats_totals.sql`, `V0026__floor_totals.sql`, `V0027__matchup_builds.sql`, `V0029__analytics_counted.sql`, `src/archive/analytics.rs:L1-L152`, `src/archive/analytics.rs:L204-L386`, `src/archive/analytics.rs:L449-L751`, `src/archive/analytics/delta.rs:L1-L559`, `src/archive/tiers.rs:L37-L57`, `src/archive/ranks.rs:L53-L81`, `src/archive/mod.rs:L180-L198`, `src/jobs/ladder/store.rs:L97-L103`, `src/jobs/ladder/store.rs:L230-L241`, `src/jobs/analytics.rs:L109-L137`, `src/jobs/analytics.rs:L215-L239`, `src/jobs/analytics.rs:L438-L518`, `src/cli/serve.rs:L310-L332`, `src/config.rs:L766`, `docs/_meta/scratch/persistence.md`
-**Last verified:** 2026-10-26 against commit `220cdef`
+**Sources:** `src/db/migrations/V0004__ladder.sql`, `V0005__analytics.sql`, `V0006__analytics_runs.sql`, `V0008__apex_capped.sql`, `V0010__player_ranks.sql`, `V0011__rank_lookups.sql`, `V0014__champion_builds.sql`, `V0015__analytics_totals.sql`, `V0017__tier_side_keys.sql`, `V0020__without_rowid_derived.sql`, `V0025__champion_stats_totals.sql`, `V0026__floor_totals.sql`, `V0027__matchup_builds.sql`, `V0029__analytics_counted.sql`, `src/archive/analytics.rs:L1-L152`, `src/archive/analytics.rs:L204-L386`, `src/archive/analytics.rs:L449-L751`, `src/archive/analytics/delta.rs:L1-L559`, `src/archive/tiers.rs:L37-L57`, `src/archive/ranks.rs:L53-L81`, `src/archive/mod.rs:L180-L198`, `src/jobs/ladder/store.rs:L101-L107`, `src/jobs/ladder/store.rs:L234-L245`, `src/jobs/analytics.rs:L109-L137`, `src/jobs/analytics.rs:L215-L239`, `src/jobs/analytics.rs:L438-L518`, `src/cli/serve.rs:L311-L333`, `src/config.rs:L772`, `docs/_meta/scratch/persistence.md`
+**Last verified:** 2026-10-26 against commit `c9e1b33`

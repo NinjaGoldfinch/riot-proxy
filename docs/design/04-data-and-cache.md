@@ -314,7 +314,9 @@ CREATE TABLE ladder_crawls (                      -- the run log
   started_at INTEGER NOT NULL, finished_at INTEGER,
   pages_fetched INTEGER, entries_seen INTEGER, players_discovered INTEGER,   -- v1's counters,
   backfills_enqueued INTEGER, match_ids_seen INTEGER, matches_queued INTEGER, -- all NOT NULL DEFAULT 0
-  legs_failed INTEGER NOT NULL DEFAULT 0
+  legs_failed INTEGER NOT NULL DEFAULT 0,
+  apex_capped TEXT,                               -- V0008 (LAD-01)
+  players_skipped INTEGER NOT NULL DEFAULT 0      -- V0030 (THR-04): left out, wins + losses unchanged
 );
 CREATE UNIQUE INDEX ladder_crawls_live ON ladder_crawls (key_scope, platform, queue) WHERE status = 'running';
 CREATE TABLE ladder_entries (                     -- the ladder: latest state, outlives crawl rows
@@ -322,6 +324,8 @@ CREATE TABLE ladder_entries (                     -- the ladder: latest state, o
   tier TEXT, division TEXT, league_points INTEGER, wins INTEGER, losses INTEGER,
   veteran INTEGER, inactive INTEGER, fresh_blood INTEGER, hot_streak INTEGER,
   first_seen_crawl_id TEXT, last_seen_crawl_id TEXT, updated_at INTEGER,
+  collected_games INTEGER, collected_at INTEGER,  -- V0030 (THR-04, ADR-185): the collect cursor, wins + losses
+                                                  -- and when the last finished match-id walk began
   PRIMARY KEY (key_scope, platform, queue, puuid)
 );
 CREATE TABLE crawl_legs (                         -- a crawl's outstanding jobs

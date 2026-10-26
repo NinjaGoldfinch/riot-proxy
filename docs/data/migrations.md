@@ -1,6 +1,6 @@
 # Migrations
 
-How schema migrations are written, applied and recorded, the complete list V0001 to V0029, and what to expect from the expensive ones in production. The resulting tables are in [schema.md](schema.md) and [schema-analytics.md](schema-analytics.md); the procedure for adding one is in [../workflows/adding-a-migration.md](../workflows/adding-a-migration.md).
+How schema migrations are written, applied and recorded, the complete list V0001 to V0030, and what to expect from the expensive ones in production. The resulting tables are in [schema.md](schema.md) and [schema-analytics.md](schema-analytics.md); the procedure for adding one is in [../workflows/adding-a-migration.md](../workflows/adding-a-migration.md).
 
 ## How they run
 
@@ -50,6 +50,7 @@ PR numbers from `PROGRESS.md`; dates are the accepting ADR's in `docs/DECISIONS.
 | [`V0027__matchup_builds.sql`](../../src/db/migrations/V0027__matchup_builds.sql) | 2026-10-19, #218 | `champion_matchup_builds`, `champion_matchup_build_parts`, not backfilled | FLT-04, ADR-171 |
 | [`V0028__jobs_crawl_matches.sql`](../../src/db/migrations/V0028__jobs_crawl_matches.sql) | 2026-10-20, WR-01 | `jobs_crawl_matches` partial covering index on `archive:match` | WR-01, ADR-179 |
 | [`V0029__analytics_counted.sql`](../../src/db/migrations/V0029__analytics_counted.sql) | 2026-10-21, THR-03 | `analytics_counted` + partial index `analytics_uncounted`, `analytics_retract`, `analytics_stamped`, trigger `match_facts_tier_moved`; `analytics_runs` rebuilt with `kind` in its primary key | THR-03, ADR-182 |
+| [`V0030__collect_cursor.sql`](../../src/db/migrations/V0030__collect_cursor.sql) | 2026-10-26, THR-04 | `ladder_entries.collected_games`, `ladder_entries.collected_at` (the collect cursor) and `ladder_crawls.players_skipped`; added columns only | THR-04, ADR-185 |
 
 ## Expensive migrations
 
@@ -65,6 +66,7 @@ Every migration runs in the boot transaction before the listener opens, so a slo
 | V0026 | 1.36 s at 200 000 facts, 3.70 s at 600 000; estimated 25–30 s for production's 2.3 M facts | `docs/DECISIONS.md:1841` |
 | V0028 | builds one index over `archive:match` rows: 1.3 s for 1.18 M jobs on a synthetic queue | ADR-179 |
 | V0029 | pure DDL on empty tables plus a copy of `analytics_runs`' eight rows at most; reads no other data (6–25 ms in the plan's runs; about 10 ms at boot with the release binary on a synthetic 100 000-match archive, 2026-10-21). The cost comes after it: with `AGGREGATE_DELTA_S` > 0 the first boot queues one full rebuild of every configured ladder, one at a time, before its deltas start. By the 2026-10-20 production runs (oc1 532 s, na1 970 s, kr 1012 s, euw1 980 s) that is about 58 minutes of writer time | `V0029:1-4`, `docs/thr/THR-03-plan.md` |
+| V0030 | three `ADD COLUMN`s, nullable or with a constant default: no row is rewritten | ADR-185 |
 
 > **TODO (unverified):** the actual V0026 and V0027 timings on production were not found in `docs/DECISIONS.md`, `PROGRESS.md` or `docs/flt/`; the v2.7.0 release line in `PROGRESS.md` was ticked by #226 (`52fa67d`) without recording them.
 
@@ -86,4 +88,4 @@ The full procedure, with the test and ADR steps, is in [../workflows/adding-a-mi
 
 ---
 **Sources:** `src/db/mod.rs:L22-L24`, `src/db/mod.rs:L147-L171`, `src/db/mod.rs:L361-L365`, `src/db/store.rs:L172-L206`, `src/cli/mod.rs:L136-L168`, `src/cli/serve.rs:L51-L54`, `src/db/migrations/V0001__init.sql` to `V0029__analytics_counted.sql`, `docs/thr/THR-03-plan.md`, `docs/DECISIONS.md:L15-L17`, `docs/DECISIONS.md:L51`, `docs/DECISIONS.md:L1388`, `docs/DECISIONS.md:L1700`, `docs/DECISIONS.md:L1714`, `docs/DECISIONS.md:L1776`, `docs/DECISIONS.md:L1841`, `docs/flt/FLT-03-plan.md:L573`, `PROGRESS.md:L10-L365`, `docs/design/12-object-storage-and-hosting.md:L159-L162`, `deploy/README.md:L222-L270`, `docs/_meta/scratch/persistence.md`
-**Last verified:** 2026-10-26 against commit `220cdef`
+**Last verified:** 2026-10-26 against commit `c9e1b33`

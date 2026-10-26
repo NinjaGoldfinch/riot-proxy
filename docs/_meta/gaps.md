@@ -64,7 +64,7 @@ Found while writing; not gaps in these docs but worth a fix in the repository.
 
 | What | Where | Recommendation |
 |---|---|---|
-| `JOB_KIND_LIMITS` default: `.env.example:34` and `README.md` show `aggregate:analytics=1`; the code default is `aggregate:analytics=1,archive:offload=1` (`src/config.rs:114`) | `deployment/configuration.md` | Update `.env.example` and `README.md` |
+| `JOB_KIND_LIMITS` default: `.env.example:34` and `README.md` show `aggregate:analytics=1`; the code default is `aggregate:analytics=1,archive:offload=1` (`src/config.rs:115`) | `deployment/configuration.md` | Update `.env.example` and `README.md` |
 | The generated OpenAPI document emits `operationId: champions` twice (`src/routes/analytics.rs:1031`, `src/routes/players.rs:1005`), which fails Redocly's lint; the docs copy is patched | `api/openapi.json`, `_meta/doc-maintenance.md` | Rename one handler, for example `player_champions`, and re-snapshot |
 | `docs/design/07-deployment.md:218` says request logs carry `x_cache` and `upstream_ms`; the observed line carries `latency`, `status` and the span's `request_id`, `method`, `path`, `consumer` | `operations/observability.md` | Fix design/07 or add the fields to the response log |
 | `docs/design/12` describes the offload job in the bulk lane, a counter seeded at boot, store errors ending the job `failed`, and `ARCHIVE_COMPACT_BELOW`; the code has no lane, seeds nothing, retries, and has no compaction | `integration/object-storage.md` | Add an "as built" note to design/12 for OBJ-03; build or drop OBJ-06 |
@@ -78,4 +78,4 @@ Found while writing; not gaps in these docs but worth a fix in the repository.
 
 ---
 **Sources:** every `TODO (unverified)` marker under `docs/` on 2026-10-19; `docs/_meta/scratch/*.md` "design vs code" sections
-**Last verified:** 2026-10-21 against commit `32c4672`
+**Last verified:** 2026-10-26 against commit `c9e1b33`
