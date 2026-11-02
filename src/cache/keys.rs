@@ -113,56 +113,130 @@ pub fn scoped_purge_pattern(scope: &KeyScope, pattern: &str) -> String {
     }
 }
 
-/// Redis `MATCH` glob semantics, which v1's purge used (`SCAN … MATCH`): `*`,
-/// `?`, `[abc]`, `[^a]`, `[a-z]` and `\\` escapes.
-pub fn glob_match(pattern: &str, key: &str) -> bool {
-    fn go(p: &[char], k: &[char]) -> bool {
-        match p.first() {
-            None => k.is_empty(),
-            Some('*') => (0..=k.len()).any(|i| go(&p[1..], &k[i..])),
-            Some('?') => !k.is_empty() && go(&p[1..], &k[1..]),
-            Some('[') => {
-                let Some(&c) = k.first() else { return false };
-                let mut i = 1;
-                let negate = p.get(1) == Some(&'^');
-                if negate {
-                    i += 1;
-                }
-                let mut hit = false;
-                let mut closed = false;
-                while i < p.len() {
-                    match p[i] {
-                        ']' => {
-                            closed = true;
-                            break;
-                        }
-                        '\\' if i + 1 < p.len() => {
-                            hit |= p[i + 1] == c;
-                            i += 2;
-                        }
-                        lo if p.get(i + 1) == Some(&'-') && i + 2 < p.len() && p[i + 2] != ']' => {
-                            let hi = p[i + 2];
-                            let (lo, hi) = if lo <= hi { (lo, hi) } else { (hi, lo) };
-                            hit |= (lo..=hi).contains(&c);
-                            i += 3;
-                        }
-                        other => {
-                            hit |= other == c;
-                            i += 1;
-                        }
-                    }
-                }
-                // Redis treats an unclosed class as running to the end.
-                let rest = if closed { &p[i + 1..] } else { &p[p.len()..] };
-                hit != negate && go(rest, &k[1..])
+/// A compiled Redis `MATCH` glob, the semantics v1's purge used (`SCAN … MATCH`):
+/// `*`, `?`, `[abc]`, `[^a]`, `[a-z]` and `\\` escapes. Every token but `*`
+/// matches one character, so a mismatch backtracks only to the last `*`: a
+/// match costs at most the pattern's length times the key's, where the old
+/// recursive matcher was exponential in the number of stars (REV-03).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Glob(Vec<Tok>);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Tok {
+    Star,
+    Any,
+    Char(char),
+    /// Inclusive ranges; a single character is a range of one.
+    Class {
+        negate: bool,
+        ranges: Vec<(char, char)>,
+    },
+}
+
+impl Tok {
+    fn matches(&self, c: char) -> bool {
+        match self {
+            Self::Star | Self::Any => true,
+            Self::Char(x) => *x == c,
+            Self::Class { negate, ranges } => {
+                ranges.iter().any(|(lo, hi)| (*lo..=*hi).contains(&c)) != *negate
             }
-            Some('\\') if p.len() > 1 => k.first() == Some(&p[1]) && go(&p[2..], &k[1..]),
-            Some(c) => k.first() == Some(c) && go(&p[1..], &k[1..]),
         }
     }
-    let p: Vec<char> = pattern.chars().collect();
-    let k: Vec<char> = key.chars().collect();
-    go(&p, &k)
+}
+
+impl Glob {
+    pub fn new(pattern: &str) -> Self {
+        let p: Vec<char> = pattern.chars().collect();
+        let mut toks = Vec::new();
+        let mut i = 0;
+        while i < p.len() {
+            match p[i] {
+                '*' => {
+                    // A run of stars matches what one does.
+                    if toks.last() != Some(&Tok::Star) {
+                        toks.push(Tok::Star);
+                    }
+                    i += 1;
+                }
+                '?' => {
+                    toks.push(Tok::Any);
+                    i += 1;
+                }
+                '[' => {
+                    i += 1;
+                    let negate = p.get(i) == Some(&'^');
+                    if negate {
+                        i += 1;
+                    }
+                    let mut ranges = Vec::new();
+                    // Redis treats an unclosed class as running to the end.
+                    while i < p.len() {
+                        match p[i] {
+                            ']' => {
+                                i += 1;
+                                break;
+                            }
+                            '\\' if i + 1 < p.len() => {
+                                ranges.push((p[i + 1], p[i + 1]));
+                                i += 2;
+                            }
+                            lo if p.get(i + 1) == Some(&'-') && i + 2 < p.len() && p[i + 2] != ']' => {
+                                let hi = p[i + 2];
+                                ranges.push(if lo <= hi { (lo, hi) } else { (hi, lo) });
+                                i += 3;
+                            }
+                            other => {
+                                ranges.push((other, other));
+                                i += 1;
+                            }
+                        }
+                    }
+                    toks.push(Tok::Class { negate, ranges });
+                }
+                '\\' if i + 1 < p.len() => {
+                    toks.push(Tok::Char(p[i + 1]));
+                    i += 2;
+                }
+                c => {
+                    toks.push(Tok::Char(c));
+                    i += 1;
+                }
+            }
+        }
+        Self(toks)
+    }
+
+    pub fn matches(&self, key: &str) -> bool {
+        let k: Vec<char> = key.chars().collect();
+        let t = &self.0;
+        let (mut ti, mut ki) = (0, 0);
+        // After the last star: the token that follows it, and the key index the
+        // star's match currently ends at.
+        let mut resume: Option<(usize, usize)> = None;
+        while ki < k.len() {
+            match t.get(ti) {
+                Some(Tok::Star) => {
+                    ti += 1;
+                    resume = Some((ti, ki));
+                }
+                Some(tok) if tok.matches(k[ki]) => {
+                    ti += 1;
+                    ki += 1;
+                }
+                _ => match resume {
+                    // Let the last star take one more character and retry.
+                    Some((after, end)) => {
+                        resume = Some((after, end + 1));
+                        ti = after;
+                        ki = end + 1;
+                    }
+                    None => return false,
+                },
+            }
+        }
+        t[ti..].iter().all(|tok| *tok == Tok::Star)
+    }
 }
 
 #[cfg(test)]
@@ -193,7 +267,103 @@ mod tests {
             ("exact", "exact", true),
             ("exact", "exactly", false),
         ] {
-            assert_eq!(glob_match(p, k), want, "{p} ~ {k}");
+            assert_eq!(Glob::new(p).matches(k), want, "{p} ~ {k}");
+        }
+    }
+
+    #[test]
+    fn globs_keep_redis_edge_cases() {
+        for (p, k, want) in [
+            ("a*b*c", "aXbYbZc", true),
+            ("a*b*c", "aXbYbZ", false),
+            ("**a**", "bab", true),
+            ("*", "", true),
+            ("?", "", false),
+            ("[]x", "x", false),
+            ("[^]x", "yx", true),
+            ("h[a-", "ha", true),
+            ("h[a-", "h-", true),
+            ("h[z-a]llo", "hmllo", true),
+            ("h[\\]]llo", "h]llo", true),
+            ("[ab", "b", true),
+            ("x\\", "x\\", true),
+            ("ab*", "ab", true),
+        ] {
+            assert_eq!(Glob::new(p).matches(k), want, "{p} ~ {k}");
+        }
+    }
+
+    /// REV-03: the old recursive matcher never finished this (about 100 stars
+    /// against a 100-character key); a purge ran it once per cache row on the
+    /// single writer.
+    #[test]
+    fn a_pattern_of_many_stars_matches_in_linear_time() {
+        let pattern = format!("{}b", "*a".repeat(99));
+        let key = "a".repeat(100);
+        assert!(!Glob::new(&pattern).matches(&key));
+        assert!(Glob::new(&pattern).matches(&format!("{key}b")));
+    }
+
+    /// The recursive matcher the purge used before REV-03, as the reference.
+    fn reference(pattern: &str, key: &str) -> bool {
+        fn go(p: &[char], k: &[char]) -> bool {
+            match p.first() {
+                None => k.is_empty(),
+                Some('*') => (0..=k.len()).any(|i| go(&p[1..], &k[i..])),
+                Some('?') => !k.is_empty() && go(&p[1..], &k[1..]),
+                Some('[') => {
+                    let Some(&c) = k.first() else { return false };
+                    let mut i = 1;
+                    let negate = p.get(1) == Some(&'^');
+                    if negate {
+                        i += 1;
+                    }
+                    let (mut hit, mut closed) = (false, false);
+                    while i < p.len() {
+                        match p[i] {
+                            ']' => {
+                                closed = true;
+                                break;
+                            }
+                            '\\' if i + 1 < p.len() => {
+                                hit |= p[i + 1] == c;
+                                i += 2;
+                            }
+                            lo if p.get(i + 1) == Some(&'-') && i + 2 < p.len() && p[i + 2] != ']' => {
+                                let hi = p[i + 2];
+                                let (lo, hi) = if lo <= hi { (lo, hi) } else { (hi, lo) };
+                                hit |= (lo..=hi).contains(&c);
+                                i += 3;
+                            }
+                            other => {
+                                hit |= other == c;
+                                i += 1;
+                            }
+                        }
+                    }
+                    let rest = if closed { &p[i + 1..] } else { &p[p.len()..] };
+                    hit != negate && go(rest, &k[1..])
+                }
+                Some('\\') if p.len() > 1 => k.first() == Some(&p[1]) && go(&p[2..], &k[1..]),
+                Some(c) => k.first() == Some(c) && go(&p[1..], &k[1..]),
+            }
+        }
+        let p: Vec<char> = pattern.chars().collect();
+        let k: Vec<char> = key.chars().collect();
+        go(&p, &k)
+    }
+
+    ::proptest::proptest! {
+        #![proptest_config(::proptest::prelude::ProptestConfig { cases: 5000, ..Default::default() })]
+
+        /// Same answers as the old matcher on every pattern built from the
+        /// syntax's characters, against keys over a small alphabet.
+        #[test]
+        fn globs_agree_with_the_old_matcher(
+            pattern in r"[ab\-\]\[*?^\\]{0,10}",
+            key in r"[ab\-\]\[^\\]{0,10}",
+        ) {
+            ::proptest::prop_assert_eq!(Glob::new(&pattern).matches(&key), reference(&pattern, &key));
         }
     }
 
