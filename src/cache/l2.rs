@@ -222,8 +222,8 @@ pub async fn sweep(db: &Db) -> Result<usize, DbError> {
         .await
 }
 
-/// Delete rows whose key matches `pred` (admin purge, P5-05).
-/// Keys matching `pred`, deleting nothing (a purge's dry run, ADM-10).
+/// Keys matching `pred`, deleting nothing (a purge's dry run, ADM-10, and the
+/// selection before [`delete_keys`]).
 pub async fn keys_where(
     db: &Db,
     pred: impl Fn(&str) -> bool + Send + 'static,
@@ -238,20 +238,22 @@ pub async fn keys_where(
     .await
 }
 
-pub async fn delete_where(
-    db: &Db,
-    pred: impl Fn(&str) -> bool + Send + 'static,
-) -> Result<Vec<String>, DbError> {
+/// Delete these rows in one transaction (admin purge, P5-05). Returns the keys
+/// that were there. The caller selects them with [`keys_where`] on a reader, so
+/// the writer runs no matching (REV-03).
+pub async fn delete_keys(db: &Db, keys: Vec<String>) -> Result<Vec<String>, DbError> {
+    if keys.is_empty() {
+        return Ok(keys);
+    }
     db.write(move |c| {
-        let keys: Vec<String> = {
-            let mut stmt = c.prepare("SELECT key FROM cache")?;
-            stmt.query_map([], |r| r.get(0))?.collect::<Result<Vec<_>, _>>()?
-        };
         let tx = c.transaction()?;
         let mut deleted = Vec::new();
-        for k in keys.into_iter().filter(|k| pred(k)) {
-            if tx.execute("DELETE FROM cache WHERE key = ?1", [&k])? > 0 {
-                deleted.push(k);
+        {
+            let mut stmt = tx.prepare("DELETE FROM cache WHERE key = ?1")?;
+            for k in keys {
+                if stmt.execute([&k])? > 0 {
+                    deleted.push(k);
+                }
             }
         }
         tx.commit()?;

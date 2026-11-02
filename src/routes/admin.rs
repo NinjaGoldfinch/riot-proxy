@@ -21,7 +21,7 @@ use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
 use crate::app::AppState;
-use crate::cache::keys::{cache_key, glob_match, scoped_purge_pattern};
+use crate::cache::keys::{Glob, cache_key, scoped_purge_pattern};
 use crate::cache::l1::Lookup;
 use crate::cache::l2;
 use crate::clock::{Clock, iso_ms};
@@ -848,19 +848,25 @@ async fn purge_cache(State(state): State<AppState>, Extension(_c): Who, bytes: B
         Err(e) => return e.into_response(),
     };
     let scoped = scoped_purge_pattern(state.fetcher.key_scope(), &pattern);
+    let glob = Arc::new(Glob::new(&scoped));
+    // The persisted keys are matched on a reader; the writer only deletes by key
+    // (REV-03).
+    let persisted = {
+        let glob = Arc::clone(&glob);
+        match l2::keys_where(&state.db, move |k| glob.matches(k)).await {
+            Ok(keys) => keys,
+            Err(e) => return internal(&e, "could not read the persisted cache"),
+        }
+    };
     if dry_run {
         let mut matched: HashSet<String> = state
             .fetcher
             .cache()
             .l1
-            .keys_where(|k| glob_match(&scoped, k))
+            .keys_where(|k| glob.matches(k))
             .into_iter()
             .collect();
-        let matcher = scoped.clone();
-        match l2::keys_where(&state.db, move |k| glob_match(&matcher, k)).await {
-            Ok(rows) => matched.extend(rows),
-            Err(e) => return internal(&e, "could not read the persisted cache"),
-        }
+        matched.extend(persisted);
         return ok(
             &serde_json::json!({"ok": true, "pattern": pattern, "matched": matched.len(), "dryRun": true}),
         );
@@ -869,12 +875,11 @@ async fn purge_cache(State(state): State<AppState>, Extension(_c): Who, bytes: B
         .fetcher
         .cache()
         .l1
-        .invalidate_where(|k| glob_match(&scoped, k))
+        .invalidate_where(|k| glob.matches(k))
         .await
         .into_iter()
         .collect();
-    let matcher = scoped.clone();
-    match l2::delete_where(&state.db, move |k| glob_match(&matcher, k)).await {
+    match l2::delete_keys(&state.db, persisted).await {
         Ok(rows) => gone.extend(rows),
         Err(e) => return internal(&e, "could not purge the persisted cache"),
     }

@@ -177,7 +177,7 @@ async fn flushes_on_the_timer_with_a_partial_batch() {
 }
 
 #[tokio::test]
-async fn upserts_replace_and_delete_where_purges() {
+async fn upserts_replace_and_delete_keys_purges() {
     let dir = tempfile::tempdir().unwrap();
     let db = Db::open(&dir.path().join("riot-proxy.db"), 1).unwrap();
     let cache = ResponseCache::new(l1(), Some(L2Writer::spawn(db.clone())));
@@ -205,11 +205,15 @@ async fn upserts_replace_and_delete_where_purges() {
         .await
         .unwrap();
     assert_eq!(body, b"2");
-    assert_eq!(
-        l2::delete_where(&db, |k| k.ends_with(":Q")).await.unwrap().len(),
-        1
-    );
+    let selected = l2::keys_where(&db, |k| k.ends_with(":Q")).await.unwrap();
+    assert_eq!(selected, ["s:a:h:Q"]);
+    // A key that is not there (purged meanwhile) is not reported as deleted.
+    let gone = l2::delete_keys(&db, vec!["s:a:h:Q".into(), "s:a:h:gone".into()])
+        .await
+        .unwrap();
+    assert_eq!(gone, ["s:a:h:Q"]);
     assert_eq!(rows(&db).await, 1);
+    assert!(l2::delete_keys(&db, Vec::new()).await.unwrap().is_empty());
 }
 
 #[tokio::test]
