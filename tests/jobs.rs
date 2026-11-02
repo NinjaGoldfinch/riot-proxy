@@ -174,7 +174,7 @@ async fn a_restart_resumes_a_job_the_old_process_left_running() {
 
     let db = Db::open(&path, 2).unwrap();
     let s = Scheduler::new(db.clone(), registry());
-    assert_eq!(s.recover().await.unwrap(), 1);
+    assert_eq!(s.recover().await.unwrap().requeued, 1);
     let workers = s.start(2);
     until("the job to resume and finish", async || {
         states(&db).await.get("done") == Some(&1)

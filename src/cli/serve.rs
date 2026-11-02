@@ -281,8 +281,20 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         .with_limiter(Arc::clone(&limiter))
         .with_activity(activity.clone());
     match scheduler.recover().await {
-        Ok(0) => {}
-        Ok(n) => tracing::info!(jobs = n, "re-queued jobs a previous process left running"),
+        Ok(r) => {
+            if r.requeued > 0 {
+                tracing::info!(
+                    jobs = r.requeued,
+                    "re-queued jobs a previous process left running"
+                );
+            }
+            if r.failed > 0 {
+                tracing::warn!(
+                    jobs = r.failed,
+                    "failed jobs a previous process left running on their last attempt"
+                );
+            }
+        }
         Err(e) => tracing::warn!(error = %e, "could not re-queue interrupted jobs"),
     }
     match scheduler.assign_lanes().await {

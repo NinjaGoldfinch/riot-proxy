@@ -209,10 +209,56 @@ async fn recover_requeues_rows_a_dead_process_left_running() {
     let id = s.enqueue(NewJob::new("k", 1, json!({}))).await.unwrap().id;
     s.claim(i64::MAX).await.unwrap().unwrap();
     assert_eq!(state(&db, &id).await.0, "running");
-    assert_eq!(s.recover().await.unwrap(), 1);
+    assert_eq!(
+        s.recover().await.unwrap(),
+        Recovered {
+            requeued: 1,
+            failed: 0
+        }
+    );
     assert_eq!(state(&db, &id).await.0, "pending");
     let again = s.claim(i64::MAX).await.unwrap().unwrap();
     assert_eq!(again.attempts, 2, "the interrupted attempt still counts");
+}
+
+/// REV-04: a job that kills the process on every run must not crash-loop it.
+/// Its interrupted fifth attempt is its last, as a fifth `Retry` would be.
+#[tokio::test]
+async fn recover_fails_a_row_interrupted_on_its_last_attempt() {
+    let (_d, db) = db();
+    let s = sched(&db);
+    let poison = s.enqueue(NewJob::new("poison", 2, json!({}))).await.unwrap().id;
+    let other = s.enqueue(NewJob::new("other", 1, json!({}))).await.unwrap().id;
+    let last = i64::from(MAX_ATTEMPTS - 1);
+    db.write(move |c| {
+        c.execute("UPDATE jobs SET attempts = ?1 WHERE kind = 'poison'", [last])
+            .map_err(DbError::from)
+    })
+    .await
+    .unwrap();
+    for _ in 0..2 {
+        s.claim(i64::MAX).await.unwrap().unwrap();
+    }
+    assert_eq!(state(&db, &poison).await.1, MAX_ATTEMPTS);
+
+    assert_eq!(
+        s.recover().await.unwrap(),
+        Recovered {
+            requeued: 1,
+            failed: 1
+        }
+    );
+    let (st, attempts, _, error) = state(&db, &poison).await;
+    assert_eq!((st.as_str(), attempts), ("failed", MAX_ATTEMPTS));
+    assert_eq!(error.as_deref(), Some(INTERRUPTED));
+    assert_eq!(
+        state(&db, &other).await.0,
+        "pending",
+        "an earlier attempt resumes"
+    );
+    // Failed for good: nothing left to claim but the other job.
+    assert_eq!(s.claim(i64::MAX).await.unwrap().unwrap().id, other);
+    assert!(s.claim(i64::MAX).await.unwrap().is_none());
 }
 
 #[tokio::test]
