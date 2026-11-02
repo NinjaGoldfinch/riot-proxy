@@ -394,6 +394,10 @@ ninjagoldfinch.lol's `/champions` data took 3.9 s, all of it the proxy's analyti
 - [ ] PAIR-02 the pairings route with `allyRole`, `winRateLow` and `delta` (IMPLEMENTATION.md §Post-release — PAIR)
 - [ ] PAIR-03 the showcase's *Best with* card (IMPLEMENTATION.md §Post-release — PAIR)
 
+## REV — fixes from the code review (owner request 2026-11-03)
+The review's findings, one task each, most severe first.
+- [~] REV-01 an unrouted request's `?token=` is redacted from the 404 message, which is logged and kept in the error ring (`fix/REV-01-404-path-only`, ADR-186)
+
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
 

@@ -230,6 +230,37 @@ async fn wrong_method_on_a_known_path_is_also_a_404_envelope() {
 }
 
 #[tokio::test]
+async fn an_unrouted_requests_token_is_redacted_from_the_message() {
+    // The message is logged and kept in the admin error ring (REV-01).
+    for (uri, message) in [
+        (
+            "/nope?x=1&token=rpx_secret&y=2",
+            "No route for GET /nope?x=1&token=<redacted>&y=2",
+        ),
+        (
+            "/nope?token=rpx_secret",
+            "No route for GET /nope?token=<redacted>",
+        ),
+        (
+            "/nope?token=a&token=b",
+            "No route for GET /nope?token=<redacted>&token=<redacted>",
+        ),
+        // Only the key auth reads is redacted.
+        (
+            "/nope?tokens=1&x=token",
+            "No route for GET /nope?tokens=1&x=token",
+        ),
+    ] {
+        let (_dir, _state, router) = app();
+        let res = get(router, uri).await;
+        assert_eq!(res.status, StatusCode::NOT_FOUND);
+        let body = res.json();
+        assert_eq!(body["error"]["message"], message, "{uri}");
+        assert!(!body.to_string().contains("rpx_secret"), "{uri}");
+    }
+}
+
+#[tokio::test]
 async fn responses_are_compressed_when_asked() {
     let (_dir, _state, router) = app();
     let req = Request::get("/metrics")

@@ -2,7 +2,7 @@
 
 Every `> **TODO (unverified):**` marker in this documentation set, collected in one place and ordered by how much it matters, with the file and line it lives on and a suggested way to close it. Regenerate the raw list with `python3 docs/_meta/tools/gaps.py` (only the blockquote form counts; prose that mentions the phrase does not).
 
-Counts on 2026-10-20: 50 markers across 29 files.
+Counts on 2026-11-03: 49 markers across 29 files.
 
 ## 1. Production state that lives only on the box
 
@@ -41,7 +41,6 @@ These matter most: the docs describe production from the design record and dated
 | `operations/runbook.md:113` | What the hourly `rclone sync` does when the Onidel source is unreachable (can it delete from R2?) | Read rclone's sync semantics for a listing failure; add `--max-delete` or a check to the unit |
 | `api/endpoints.md:110`, `api/errors.md:96` | The exact response when a body exceeds the 1 MiB limit (axum's rejection, outside the envelope) | One test in `tests/http.rs` |
 | `api/endpoints-riot-lol.md:119` | Whether `ServeDir` sends `Last-Modified` and honours `If-Modified-Since` on filled images | One test in `tests/ddragon.rs` |
-| `deployment/security.md:31` | Whether the `http` span's `path` includes the query string, so a `?token=` key could land in journald | Read `src/app.rs:109-116`'s extractor; if it does, strip the query or drop `?token=` support outside `/v1/ws` |
 | `deployment/security.md:97` | No Dependabot, Renovate, `cargo audit` or `cargo deny` in the repo | Decide a policy; add a workflow if wanted |
 | `workflows/adding-an-endpoint.md:82`, `workflows/testing.md:74` | How insta snapshots are meant to be accepted (`cargo insta` is mentioned nowhere) | Document the chosen flow in `testing.md` and the PR template |
 
@@ -78,4 +77,4 @@ Found while writing; not gaps in these docs but worth a fix in the repository.
 
 ---
 **Sources:** every `TODO (unverified)` marker under `docs/` on 2026-10-19; `docs/_meta/scratch/*.md` "design vs code" sections
-**Last verified:** 2026-10-26 against commit `c9e1b33`
+**Last verified:** 2026-11-03 against commit `b7ab034`
