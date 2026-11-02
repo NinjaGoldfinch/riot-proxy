@@ -2490,3 +2490,98 @@ mod cursor {
         assert_eq!(asked[0]["count"], "100", "the newest LADDER_BACKFILL_LIMIT");
     }
 }
+
+/// REV-07: a crawl whose last leg job ended without ending its leg (a panic
+/// retried to `failed`, an admin cancel or purge, a job a dead process left
+/// on its last attempt) never finished, and the live-crawl index handed its id
+/// to every later start. The next crawl tick fails it and starts afresh.
+mod orphaned {
+    use super::*;
+
+    async fn count(e: &Env, sql: &'static str) -> i64 {
+        e.db.read(move |c| Ok::<_, DbError>(c.query_row(sql, [], |r| r.get(0))?))
+            .await
+            .unwrap()
+    }
+
+    fn tick() -> Job {
+        Job {
+            id: "t".into(),
+            kind: kinds::LADDER_CRAWL.into(),
+            dedupe_key: None,
+            priority: 0,
+            payload: json!({"platform": "kr", "queue": SOLO, "tierFloor": "CHALLENGER"}).to_string(),
+            attempts: 1,
+            run_after: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_crawl_whose_jobs_are_gone_fails_and_the_next_tick_starts_a_new_one() {
+        let e = env().await;
+        let ctx = e.ctx(100);
+        let mut rx = e.hub.subscribe(&Topic::named(LADDER));
+        let stuck = e.start("CHALLENGER").await;
+        // Its one leg job ends without settle: what a panic retried to the end leaves.
+        e.db.write(|c| {
+            c.execute(
+                "UPDATE jobs SET state = 'failed', error = 'handler panicked' WHERE kind = 'ladder:apex'",
+                [],
+            )
+            .map_err(DbError::from)
+        })
+        .await
+        .unwrap();
+        assert_eq!(e.crawl(&stuck).await.status, "running");
+
+        ctx.crawl(&tick()).await.unwrap();
+        let old = e.crawl(&stuck).await;
+        assert_eq!(old.status, "failed");
+        assert!(old.finished_at.is_some());
+        assert_eq!(
+            count(&e, "SELECT COUNT(*) FROM crawl_legs").await,
+            1,
+            "only the new crawl's leg"
+        );
+        assert_eq!(
+            count(&e, "SELECT COUNT(*) FROM ladder_crawls WHERE status = 'running'").await,
+            1
+        );
+        assert_eq!(
+            count(
+                &e,
+                "SELECT COUNT(*) FROM jobs WHERE kind = 'names:backfill' AND state = 'pending'"
+            )
+            .await,
+            1,
+            "as any crawl that ends"
+        );
+        let frames = drain(&mut rx);
+        assert!(
+            frames.iter().any(|f| f["event"] == "crawl.phase"
+                && f["data"]["crawlId"] == stuck.as_str()
+                && f["data"]["phase"] == "failed"),
+            "{frames:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_crawl_with_a_live_job_is_left_alone() {
+        let e = env().await;
+        let ctx = e.ctx(100);
+        let live = e.start("CHALLENGER").await;
+        assert_eq!(ctx.fail_orphaned().await.unwrap(), 0);
+        // A leg retried after backoff is still pending: still live.
+        e.db.write(|c| {
+            c.execute(
+                "UPDATE jobs SET attempts = 3, run_after = 9223372036854775807 WHERE kind = 'ladder:apex'",
+                [],
+            )
+            .map_err(DbError::from)
+        })
+        .await
+        .unwrap();
+        assert_eq!(ctx.fail_orphaned().await.unwrap(), 0);
+        assert_eq!(e.crawl(&live).await.status, "running");
+    }
+}

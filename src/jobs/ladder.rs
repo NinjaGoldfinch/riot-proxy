@@ -420,6 +420,9 @@ impl LadderContext {
 
     pub async fn crawl(&self, job: &Job) -> Result<(), JobError> {
         let req: CrawlRequest = job.payload()?;
+        // Before the start: an orphaned crawl would hold the ladder's live-crawl
+        // slot for good (REV-07).
+        self.fail_orphaned().await.map_err(|e| store_err(&e))?;
         match start_crawl(&self.queue, &self.key_scope, &self.tier_floor, &req).await {
             Ok(_) => Ok(()),
             Err(StartError::Invalid(e)) => Err(JobError::Fail(e.message)),
@@ -874,6 +877,35 @@ impl LadderContext {
         }
         self.announce(&ended);
         Ok(ended)
+    }
+
+    /// Fail the running crawls no live job can move any more
+    /// ([`store::fail_orphaned`]), as a crawl whose last leg failed ends: the
+    /// names backfill queued, events and metrics announced. Returns how many.
+    pub async fn fail_orphaned(&self) -> Result<usize, DbError> {
+        let scope = self.key_scope.clone();
+        let now = Clock::now().unix_ms;
+        let failed = self
+            .db()
+            .write(move |c| {
+                let tx = c.transaction()?;
+                let failed = store::fail_orphaned(&tx, &scope, now)?;
+                if !failed.is_empty() {
+                    enqueue_on(&tx, &crate::jobs::names::job(), now)?;
+                }
+                tx.commit()?;
+                Ok::<_, DbError>(failed)
+            })
+            .await?;
+        for crawl in failed.iter().cloned() {
+            tracing::warn!(crawl = %crawl.id, platform = %crawl.platform, queue = %crawl.queue,
+                "ladder crawl failed: no job left to finish it");
+            self.announce(&Ended::Finished(crawl));
+        }
+        if !failed.is_empty() {
+            self.queue.wake_all();
+        }
+        Ok(failed.len())
     }
 
     /// Events and metrics for a committed transition.

@@ -402,6 +402,7 @@ The review's findings, one task each, most severe first.
 - [x] REV-04 a job a dead process interrupted on its last attempt is failed at boot instead of re-queued, so it cannot crash-loop the service (#242, ADR-189)
 - [x] REV-05 a Riot 200 a job cannot parse is retried, never read as an empty list, rank or game (#243, ADR-190)
 - [x] REV-06 a body archived again is packed again unless its bytes are unchanged, so a body whose pack went bad heals instead of being freed back onto it (#244, ADR-191)
+- [x] REV-07 the crawl tick fails a running crawl that no live job can finish, so one lost leg no longer holds its ladder for good (#245, ADR-192)
 
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
