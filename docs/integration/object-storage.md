@@ -167,7 +167,7 @@ In production `file://` is refused and `s3://` without both keys is refused (`co
 
 | Store away | Effect |
 |---|---|
-| Onidel, reads | an offloaded body cannot be fetched: one warning per pack, the archive answers `None`, the fetcher fetches from Riot and re-archives the body locally; local and packed-but-not-freed bodies are unaffected |
+| Onidel, reads | an offloaded body cannot be fetched: one warning per pack, the archive answers `None`, the fetcher fetches from Riot and re-archives the body locally, and the next offload packs it again, moving its location off the unreadable pack (ADR-191); local and packed-but-not-freed bodies are unaffected |
 | Onidel, writes | `archive:offload` fails its PUT or HEAD, records nothing, returns `Retry`; local bodies stay in SQLite and are packed on a later run; `archive:index-snapshot` likewise retries. Nothing is lost, SQLite simply stops shrinking |
 | Onidel gone for good | point `ARCHIVE_OBJECT_ENDPOINT` at `https://<account id>.r2.cloudflarestorage.com`, set `ARCHIVE_OBJECT_REGION=auto` and keys for R2, restart; nothing else changes (`deploy/README.md:140-142`) |
 | R2 away | the proxy does not notice; the hourly sync fails and `Persistent=true` catches up the missed run; the replica lags by the outage |
@@ -187,4 +187,4 @@ The quarterly restore drill against R2 (`deploy/README.md:144-220`) exercises an
 
 ---
 **Sources:** `src/archive/objects.rs:L1-L139`, `src/archive/objects.rs:L173-L338`, `src/archive/pack.rs:L1-L134`, `src/archive/pack.rs:L140-L262`, `src/archive/pack.rs:L356-L367`, `src/archive/offload.rs:L1-L223`, `src/archive/offload.rs:L300-L306`, `src/archive/matches.rs:L191-L328`, `src/archive/matches.rs:L390-L399`, `src/archive/mod.rs:L128-L144`, `src/archive/recovery.rs:L1-L88`, `src/archive/recovery.rs:L179-L271`, `src/archive/recovery.rs:L468-L493`, `src/archive/recovery.rs:L592-L622`, `src/jobs/offload.rs:L41-L111`, `src/jobs/offload.rs:L146-L217`, `src/jobs/index_snapshot.rs:L16-L47`, `src/jobs/maintenance.rs:L204-L211`, `src/jobs/scheduler.rs:L13`, `src/jobs/scheduler.rs:L39`, `src/cli/serve.rs:L98-L105`, `src/cli/serve.rs:L257-L279`, `src/cli/serve.rs:L335-L341`, `src/config.rs:L750-L756`, `src/config.rs:L906-L948`, `src/config.rs:L1001-L1021`, `src/db/migrations/V0023__body_packs.sql:L1-L48`, `deploy/README.md:L12-L142`, `deploy/README.md:L144-L220`, `deploy/riot-proxy-replica.service`, `deploy/riot-proxy-replica.timer`, `docs/design/12-object-storage-and-hosting.md:L58-L157`, `docs/design/12-object-storage-and-hosting.md:L223-L435`, `docs/design/12-object-storage-and-hosting.md:L809-L823`, `docs/design/12-object-storage-and-hosting.md:L938-L976`, `docs/_meta/scratch/persistence.md`, `docs/_meta/scratch/config.md`
-**Last verified:** 2026-11-03 against commit `3c27e29`
+**Last verified:** 2026-11-03 against commit `85969f4`

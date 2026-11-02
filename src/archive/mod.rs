@@ -166,7 +166,8 @@ impl Archive for SqliteArchive {
             };
             match result {
                 Ok((kind, stored)) => {
-                    if let Some(pending) = &self.pending {
+                    // 0: a body already packed, archived again unchanged.
+                    if let Some(pending) = self.pending.as_ref().filter(|_| stored > 0) {
                         pending.add(kind, stored as u64).await;
                     }
                     self.queue_missing_half(id).await;

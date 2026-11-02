@@ -397,6 +397,98 @@ async fn a_local_directory_store_round_trips() {
     );
 }
 
+/// REV-06: a body whose pack fails its digest is fetched from Riot and
+/// archived again. Before, the row kept `packed_at` and its location, so the
+/// offload freed the new copy again and reads went back to the bad pack.
+#[tokio::test]
+async fn a_body_archived_again_after_a_bad_pack_is_packed_again_and_reads_from_the_new_pack() {
+    let (_dir, db) = db();
+    let objects = attach(&db);
+    matches::put(&db, MATCH_ID, "asia", "s", Bytes::from_static(MATCH), 1)
+        .await
+        .unwrap();
+    let old = offload(&db, &objects, Kind::Match, &[MATCH_ID], 10).await;
+    // The stored pack goes bad: same length, one byte changed in the body.
+    let mut bytes = objects.get_range(&old.key, 0..old.bytes).await.unwrap().to_vec();
+    let at: i64 = db
+        .read(|c| Ok::<_, DbError>(c.query_row("SELECT offset FROM body_locations", [], |r| r.get(0))?))
+        .await
+        .unwrap();
+    bytes[at as usize + 4] ^= 0xff;
+    objects.put(&old.key, bytes.into(), &[]).await.unwrap();
+    assert!(matches::get(&db, MATCH_ID).await.unwrap().is_none());
+
+    // The fetcher's answer from Riot is archived again: the same bytes.
+    let (_, waiting) = matches::put_stored(&db, MATCH_ID, "asia", "s", Bytes::from_static(MATCH), 20)
+        .await
+        .unwrap();
+    assert!(waiting > 0, "counted towards the next pack");
+    assert_eq!(
+        free(&db, Kind::Match, &ids(&[MATCH_ID]), 30).await.unwrap(),
+        0,
+        "not freed until it is packed again"
+    );
+    assert_eq!(
+        next_pack(&db, Kind::Match, 1, i64::MAX).await.unwrap(),
+        Some(ids(&[MATCH_ID]))
+    );
+    let new = offload(&db, &objects, Kind::Match, &[MATCH_ID], 40).await;
+    assert_ne!(new.key, old.key);
+    assert_eq!(
+        one(&db, "SELECT pack_id FROM body_locations").await,
+        crate::archive::pack::parse_key(&new.key).unwrap().1.to_string()
+    );
+    assert_eq!(
+        one(&db, "SELECT group_concat(live_bytes, ' ') FROM (SELECT live_bytes FROM body_packs ORDER BY created_at)").await,
+        format!("0 {}", one(&db, "SELECT len || '' FROM body_locations").await),
+        "the old pack holds nothing live"
+    );
+    assert_eq!(
+        matches::get(&db, MATCH_ID).await.unwrap().unwrap().as_ref(),
+        MATCH
+    );
+}
+
+/// REV-06: a packed body still local, archived again with the same bytes,
+/// stays packed and is not counted towards another pack.
+#[tokio::test]
+async fn a_packed_body_archived_again_unchanged_stays_packed() {
+    let (_dir, db) = db();
+    let objects = attach(&db);
+    matches::put(&db, MATCH_ID, "asia", "s", Bytes::from_static(MATCH), 1)
+        .await
+        .unwrap();
+    write_pack(&db, &objects, Kind::Match, &ids(&[MATCH_ID]), 10)
+        .await
+        .unwrap()
+        .unwrap();
+    let (_, waiting) = matches::put_stored(&db, MATCH_ID, "asia", "s", Bytes::from_static(MATCH), 20)
+        .await
+        .unwrap();
+    assert_eq!(waiting, 0);
+    assert_eq!(one(&db, "SELECT packed_at || '' FROM matches").await, "10");
+
+    seed(&db, Kind::Timeline, &["KR_9"]).await;
+    write_pack(&db, &objects, Kind::Timeline, &ids(&["KR_9"]), 30)
+        .await
+        .unwrap()
+        .unwrap();
+    let waiting = matches::put_timeline_stored(&db, "KR_9", Bytes::from(body("KR_9")))
+        .await
+        .unwrap();
+    assert_eq!(waiting, 0);
+    assert_eq!(one(&db, "SELECT packed_at || '' FROM timelines").await, "30");
+    // Changed bytes are packed again.
+    let waiting = matches::put_timeline_stored(&db, "KR_9", Bytes::from_static(b"{\"changed\":true}"))
+        .await
+        .unwrap();
+    assert!(waiting > 0);
+    assert_eq!(
+        one(&db, "SELECT coalesce(packed_at, '-') FROM timelines").await,
+        "-"
+    );
+}
+
 #[tokio::test]
 async fn archiving_an_offloaded_match_again_makes_it_local() {
     let (_dir, db) = db();
@@ -409,9 +501,9 @@ async fn archiving_an_offloaded_match_again_makes_it_local() {
         .await
         .unwrap();
     assert_eq!(
-        one(&db, "SELECT packed_at || ' ' || coalesce(offloaded_at, '-') || ' ' || (length(body_zstd) > 0) FROM matches").await,
-        "10 - 1",
-        "packed (its location is still good), no longer offloaded"
+        one(&db, "SELECT coalesce(packed_at, '-') || ' ' || coalesce(offloaded_at, '-') || ' ' || (length(body_zstd) > 0) FROM matches").await,
+        "- - 1",
+        "local again, and to be packed again: a freed body is only archived again when its pack could not be read (REV-06)"
     );
     seed(&db, Kind::Timeline, &["KR_9"]).await;
     offload(&db, &objects, Kind::Timeline, &["KR_9"], 30).await;
@@ -419,8 +511,12 @@ async fn archiving_an_offloaded_match_again_makes_it_local() {
         .await
         .unwrap();
     assert_eq!(
-        one(&db, "SELECT coalesce(offloaded_at, '-') FROM timelines").await,
-        "-"
+        one(
+            &db,
+            "SELECT coalesce(packed_at, '-') || ' ' || coalesce(offloaded_at, '-') FROM timelines"
+        )
+        .await,
+        "- -"
     );
     // Read from the local copy: no pack is needed any more.
     for o in objects.list("packs/").await.unwrap() {

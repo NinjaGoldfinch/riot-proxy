@@ -229,7 +229,7 @@ A timeline may exist before its match (`V0013:1-5`), which is why that edge is o
 | `game_duration` | INTEGER | nullable | `info.gameDuration`, seconds (`V0003:5`) |
 | `remake` | INTEGER | nullable | 1 when any participant has `gameEndedInEarlySurrender` (`V0005:4-7`) |
 | `facts_version` | INTEGER | nullable | `FACTS_VERSION` that derived this match's rows; NULL before V0005 |
-| `packed_at` | INTEGER | nullable | unix ms; in a verified pack |
+| `packed_at` | INTEGER | nullable | unix ms; in a verified pack. Cleared when the body is archived again with different bytes, or after it was freed, so it is packed again (ADR-191) |
 | `offloaded_at` | INTEGER | nullable | unix ms; local copy freed |
 
 Indexes: `matches_patch_queue (patch, queue_id)`, `matches_end (game_end_ms)` (`V0002:32-33`); `matches_facts_version (facts_version)` (`V0005:17`); `matches_to_pack (archived_at, packed_at) WHERE packed_at IS NULL` and `matches_to_free (archived_at, packed_at, offloaded_at) WHERE packed_at IS NOT NULL AND offloaded_at IS NULL` (`V0023:41-44`); `matches_archived (match_id, archived_at)` (`V0024:7`). Written by `put_stored` (upsert, clears `offloaded_at`; `src/archive/matches.rs:390-411`), `write_derived` (`:151-159`; it also inserts the match's `analytics_counted` row, `:162-168`), `pack::locate_on` (`packed_at`, `src/archive/pack.rs:337-351`) and `offload::free` (`body_zstd = X''`, `offloaded_at`; `src/archive/offload.rs:147-170`). Read by the archive read path (`matches.rs:193-230`), the player routes, analytics and the offload selectors. Retention: never deleted by any job; a body moves local, then packed, then offloaded (`V0023:2-5`).
@@ -244,7 +244,7 @@ Rebuilt without its foreign key by [`V0013__timelines_standalone.sql`](../../src
 | `body_zstd` | BLOB | NOT NULL | zstd frame of the timeline body; `X''` once offloaded |
 | `packed_at`, `offloaded_at` | INTEGER | nullable | as on `matches` |
 
-Indexes: `timelines_to_pack (match_id, packed_at) WHERE packed_at IS NULL`, `timelines_to_free (match_id, packed_at, offloaded_at) WHERE packed_at IS NOT NULL AND offloaded_at IS NULL`. Written by `put_timeline_stored` (`matches.rs:440-446`), `locate_on` and `free`. Read by the archive read path, `builds:extract` and `timelines:backfill`. Retention: never deleted.
+Indexes: `timelines_to_pack (match_id, packed_at) WHERE packed_at IS NULL`, `timelines_to_free (match_id, packed_at, offloaded_at) WHERE packed_at IS NOT NULL AND offloaded_at IS NULL`. Written by `put_timeline_stored`, `locate_on` and `free`. Read by the archive read path, `builds:extract` and `timelines:backfill`. Retention: never deleted.
 
 ### match_facts
 
@@ -326,4 +326,4 @@ Index `body_locations_pack (pack_id)` (`V0023:30`). Written by `locate_on` (upse
 
 ---
 **Sources:** `src/db/migrations/V0001__init.sql`, `V0002__archive.sql`, `V0003__cs_and_duration.sql`, `V0005__analytics.sql`, `V0007__job_lane.sql`, `V0009__cache_fetched_at.sql`, `V0012__match_builds.sql`, `V0013__timelines_standalone.sql`, `V0018__timeline_gaps.sql`, `V0019__tier_on_facts.sql`, `V0020__without_rowid_derived.sql`, `V0021__facts_without_rowid.sql`, `V0022__jobs_state_kind.sql`, `V0023__body_packs.sql`, `V0024__matches_archived.sql`, `V0028__jobs_crawl_matches.sql`, `V0029__analytics_counted.sql`, `src/db/mod.rs:L26-L42`, `src/db/mod.rs:L363-L365`, `src/archive/matches.rs:L33-L103`, `src/archive/matches.rs:L193-L230`, `src/archive/matches.rs:L390-L446`, `src/archive/analytics/delta.rs:L98-L145`, `src/archive/facts.rs:L19`, `src/archive/facts.rs:L292-L379`, `src/archive/builds.rs:L24`, `src/archive/pack.rs:L287-L354`, `src/archive/offload.rs:L147-L170`, `src/archive/tiers.rs:L37-L57`, `src/cache/l2.rs:L159-L223`, `src/riot/limiter/persist.rs:L23-L25`, `src/riot/limiter/persist.rs:L178-L213`, `src/consumers.rs:L105-L107`, `src/consumers.rs:L141-L155`, `src/consumers.rs:L213-L283`, `src/jobs/maintenance.rs:L36-L38`, `src/jobs/maintenance.rs:L237-L251`, `src/stats.rs:L43`, `src/stats.rs:L357-L372`, `src/stats.rs:L1001-L1017`, `src/routes/dev.rs:L41-L84`, `docs/_meta/scratch/persistence.md`, `docs/design/04-data-and-cache.md`, `docs/design/12-object-storage-and-hosting.md:L159-L221`
-**Last verified:** 2026-11-03 against commit `39c9794`
+**Last verified:** 2026-11-03 against commit `85969f4`
