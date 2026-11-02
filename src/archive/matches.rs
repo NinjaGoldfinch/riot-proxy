@@ -361,8 +361,9 @@ pub async fn put(
     Ok(put_stored(db, match_id, region, key_scope, body, now_ms).await?.0)
 }
 
-/// [`put`], also giving the zstd bytes stored: what the offload counts
-/// towards a pack (OBJ-03).
+/// [`put`], also giving the zstd bytes now waiting to be packed: what the
+/// offload counts towards a pack (OBJ-03). 0 when the row was already packed
+/// and its bytes did not change, so it stays packed (REV-06).
 pub async fn put_stored(
     db: &Db,
     match_id: &str,
@@ -387,16 +388,19 @@ pub async fn put_stored(
         key_scope.to_string(),
         meta.clone(),
     );
-    db.write(move |conn| {
+    let unpacked = db.write(move |conn| {
         let tx = conn.transaction()?;
-        tx.execute(
-            "INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size, archived_at, game_duration)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-             ON CONFLICT (match_id) DO UPDATE SET
-               region = excluded.region, patch = excluded.patch, queue_id = excluded.queue_id,
-               game_end_ms = excluded.game_end_ms, body_zstd = excluded.body_zstd,
-               body_size = excluded.body_size, archived_at = excluded.archived_at,
-               game_duration = excluded.game_duration, offloaded_at = NULL",
+        let unpacked: bool = tx.query_row(
+            &format!(
+                "INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size, archived_at, game_duration)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                 ON CONFLICT (match_id) DO UPDATE SET
+                   region = excluded.region, patch = excluded.patch, queue_id = excluded.queue_id,
+                   game_end_ms = excluded.game_end_ms, body_zstd = excluded.body_zstd,
+                   body_size = excluded.body_size, archived_at = excluded.archived_at,
+                   game_duration = excluded.game_duration, offloaded_at = NULL, {REPACK}
+                 RETURNING packed_at IS NULL"
+            ),
             rusqlite::params![
                 id,
                 region,
@@ -408,17 +412,28 @@ pub async fn put_stored(
                 now_ms,
                 row.game_duration_s
             ],
+            |r| r.get(0),
         )?;
         write_derived(&tx, &id, &scope, &derived)?;
         // Each participant's tier as it is now, kept from then on (THR-02).
         crate::archive::tiers::stamp(&tx, &id, row.queue_id)?;
         tx.commit()?;
-        Ok::<_, ArchiveError>(())
+        Ok::<_, ArchiveError>(unpacked)
     })
     .await?;
     metrics::counter!(crate::metrics::ARCHIVED_MATCHES_TOTAL).increment(1);
-    Ok((meta, stored))
+    Ok((meta, if unpacked { stored } else { 0 }))
 }
+
+/// The `packed_at` of a body archived again (an `ON CONFLICT … DO UPDATE SET`
+/// item, where a bare column is the row before the update). The same bytes
+/// stay packed. Changed bytes, or a body that was freed (`X''`) and is back
+/// because its pack could not be read, must be packed again: left set, the
+/// row kept its old location, `free` dropped the new local copy and reads
+/// went back to the old pack for good. Packing again moves the location to
+/// the new pack and takes the bytes off the old one's `live_bytes`
+/// (`pack::locate_on`) (REV-06).
+const REPACK: &str = "packed_at = CASE WHEN body_zstd = excluded.body_zstd THEN packed_at ELSE NULL END";
 
 /// The archived timeline body, if any, wherever it is kept.
 pub async fn get_timeline(db: &Db, match_id: &str) -> Result<Option<Bytes>, ArchiveError> {
@@ -433,20 +448,25 @@ pub async fn put_timeline(db: &Db, match_id: &str, body: Bytes) -> Result<(), Ar
     put_timeline_stored(db, match_id, body).await.map(|_| ())
 }
 
-/// [`put_timeline`], giving the zstd bytes stored.
+/// [`put_timeline`], giving the zstd bytes now waiting to be packed (0 when
+/// it stays packed, as [`put_stored`]).
 pub async fn put_timeline_stored(db: &Db, match_id: &str, body: Bytes) -> Result<usize, ArchiveError> {
     let blob = compress(body).await?;
     let (id, stored) = (match_id.to_string(), blob.len());
-    db.write(move |conn| {
-        conn.execute(
-            "INSERT INTO timelines (match_id, body_zstd) VALUES (?1, ?2)
-             ON CONFLICT (match_id) DO UPDATE SET body_zstd = excluded.body_zstd, offloaded_at = NULL",
-            rusqlite::params![id, blob],
-        )?;
-        Ok::<_, ArchiveError>(())
-    })
-    .await?;
-    Ok(stored)
+    let unpacked = db
+        .write(move |conn| {
+            Ok::<bool, ArchiveError>(conn.query_row(
+                &format!(
+                    "INSERT INTO timelines (match_id, body_zstd) VALUES (?1, ?2)
+                     ON CONFLICT (match_id) DO UPDATE SET body_zstd = excluded.body_zstd, offloaded_at = NULL, {REPACK}
+                     RETURNING packed_at IS NULL"
+                ),
+                rusqlite::params![id, blob],
+                |r| r.get(0),
+            )?)
+        })
+        .await?;
+    Ok(if unpacked { stored } else { 0 })
 }
 
 /// How many bodies of one kind are in each state (design/12 §SQLite).

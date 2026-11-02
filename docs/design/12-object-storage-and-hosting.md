@@ -249,7 +249,9 @@ database, so every caller of `get_many` reads offloaded bodies with no change.
 A read logs one warning per pack, not per body, when a pack read fails. A
 match or timeline archived again after it was offloaded (a fallback to Riot)
 is local again: `offloaded_at` is cleared and its location, still valid,
-stays. `archive::offload` holds the two steps OBJ-03's job drives:
+stays. (Superseded by REV-06, ADR-191: such a body is packed again, since it
+is only archived again when its pack could not be read; a still-local packed
+body archived again with the same bytes stays packed.) `archive::offload` holds the two steps OBJ-03's job drives:
 `write_pack` (build, upload, HEAD-verify, record in one transaction; a store
 without metadata is read back and hashed) and `free` (packed and located rows
 only).
