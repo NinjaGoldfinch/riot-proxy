@@ -436,6 +436,36 @@ pub fn finish(
     Ok(crawl)
 }
 
+/// Fail every running crawl of `key_scope` that no live job can move any more,
+/// and return them (REV-07). A crawl's row, legs and leg jobs are written
+/// together and each stage hands over in the transaction that ends the last,
+/// so a running crawl always has a `pending` or `running` leg job naming it.
+/// One without is orphaned: its last job ended without `settle` ending its leg
+/// (a panic retried to `failed`, an admin cancel or purge of the job, a job a
+/// dead process left on its last attempt), so the leg never ends, the crawl
+/// never finishes, and the live-crawl index hands its id to every later start.
+pub fn fail_orphaned(tx: &Transaction<'_>, key_scope: &str, now: i64) -> Result<Vec<Crawl>, DbError> {
+    let ids: Vec<String> = tx
+        .prepare(
+            "SELECT c.id FROM ladder_crawls c
+              WHERE c.key_scope = ?1 AND c.status = 'running'
+                AND NOT EXISTS (
+                  SELECT 1 FROM jobs j
+                   WHERE j.state IN ('pending', 'running')
+                     AND j.kind IN ('ladder:apex', 'ladder:walk', 'ladder:collect', 'ladder:archive')
+                     AND json_extract(j.payload, '$.crawlId') = c.id)",
+        )?
+        .query_map([key_scope], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    let mut failed = Vec::new();
+    for id in ids {
+        if let Some(crawl) = finish(tx, &id, "failed", now)? {
+            failed.push(crawl);
+        }
+    }
+    Ok(failed)
+}
+
 /// Whose match ids the collect stage walks: everyone this crawl stamped on
 /// the ladder, minus players whose walk started since the crawl did (v1
 /// `listCrawlBackfillCandidates`), minus players whose wins and losses are
