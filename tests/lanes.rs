@@ -302,6 +302,46 @@ impl Respond for Paged {
 /// THR-04 (ADR-185, G3): a cursor walk that yields between pages leaves the
 /// cursor as it was; the re-run asks again from the same `startTime`, from
 /// the first page, and stamps the time it began.
+/// REV-05: a 200 that does not parse read as the end of the list, and the
+/// cursor was stamped past games never collected.
+#[tokio::test]
+async fn a_malformed_ids_page_is_retried_and_stamps_nothing() {
+    let e = env(0, Duration::ZERO).await;
+    Mock::given(method("GET"))
+        .and(path_regex("/by-puuid/BAD/ids$"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("<html>upstream hiccup</html>"))
+        .with_priority(1)
+        .mount(&e.server)
+        .await;
+    let limiter = Arc::new(Limiter::new(1.0));
+    limiter.configure_app("asia", &window(100, 120));
+    let ctx = e.ctx(&limiter, 100);
+    let crawl_id = e.start("kr", "CHALLENGER").await;
+    on_ladder(&e.db, &e.scope, &crawl_id, &["BAD".to_string()]).await;
+    let last = riot_proxy::clock::Clock::now().unix_ms - 3_600_000;
+    store::stamp_cursor(&e.db, &e.scope, "kr", SOLO, "BAD", last)
+        .await
+        .unwrap();
+    let batch = CollectJob {
+        crawl_id: crawl_id.clone(),
+        platform: "kr".into(),
+        queue: SOLO.into(),
+        puuids: vec!["BAD".into()],
+        offset: 0,
+    };
+
+    let err = ctx
+        .collect(&job(kinds::LADDER_COLLECT, &batch))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, JobError::Retry(_)), "{err:?}");
+    assert_eq!(
+        store::cursor(&e.db, &e.scope, "kr", SOLO, "BAD").await.unwrap(),
+        Some(last),
+        "the cursor stays where it was"
+    );
+}
+
 #[tokio::test]
 async fn a_cursor_walk_interrupted_between_pages_is_not_stamped_and_resumes_from_its_cursor() {
     let e = env(0, Duration::ZERO).await;

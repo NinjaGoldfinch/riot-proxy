@@ -210,6 +210,37 @@ async fn a_walk_that_fails_part_way_resumes_from_its_cursor() {
     assert!(e.walk().await.done_at.is_some());
 }
 
+/// REV-05: a 200 that does not parse read as the end of the history, and the
+/// walk was stamped done at page one.
+#[tokio::test]
+async fn a_malformed_page_is_retried_not_read_as_the_end_of_the_history() {
+    let e = env().await;
+    e.page(0, 100, 0..100).await;
+    Mock::given(method("GET"))
+        .and(path(IDS))
+        .and(query_param("start", "100"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("<html>upstream hiccup</html>"))
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&e.server)
+        .await;
+    e.page(100, 100, 100..200).await;
+    e.page(200, 100, 200..250).await;
+
+    let err = e.ctx().backfill_player(&backfill(10_000)).await.unwrap_err();
+    assert!(matches!(err, JobError::Retry(_)), "{err:?}");
+    let walk = e.walk().await;
+    assert_eq!(
+        (walk.cursor, walk.depth, walk.done_at),
+        (Some(100), 100, None),
+        "not done"
+    );
+
+    e.ctx().backfill_player(&backfill(10_000)).await.unwrap();
+    assert_eq!(e.archive_jobs().await.len(), 250);
+    assert!(e.walk().await.done_at.is_some());
+}
+
 #[tokio::test]
 async fn a_shallow_walk_that_hits_its_limit_is_not_complete() {
     let e = env().await;

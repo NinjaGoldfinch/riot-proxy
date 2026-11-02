@@ -700,7 +700,12 @@ impl LadderContext {
             )
             .map_err(|api| retry(&api.into()))?;
             let ids: Vec<String> = match self.fetcher.fetch(req, FetchOptions::JOB).await {
-                Ok(r) => serde_json::from_slice(&r.body).unwrap_or_default(),
+                // A body that does not parse is retried, never read as the
+                // end of the list: that would stamp the cursor past games
+                // never collected (REV-05).
+                Ok(r) => {
+                    serde_json::from_slice(&r.body).map_err(|e| JobError::Retry(format!("match ids: {e}")))?
+                }
                 Err(e) if e.api.code == ErrorCode::NotFound => {
                     tracing::warn!(%puuid, "ladder collect skipping a player match-v5 does not know");
                     return Ok(());

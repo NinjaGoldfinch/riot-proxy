@@ -374,7 +374,9 @@ impl ArchiveContext {
             .map_err(|api| retry(&api.into()))?;
             // An error here is retried; the saved cursor makes the retry resume.
             let body = self.fetcher.fetch(req, BULK).await.map_err(|e| retry(&e))?.body;
-            let ids: Vec<String> = serde_json::from_slice(&body).unwrap_or_default();
+            // Not parsed is retried, not read as the end of the history (REV-05).
+            let ids: Vec<String> =
+                serde_json::from_slice(&body).map_err(|e| JobError::Retry(format!("match ids: {e}")))?;
             if ids.is_empty() {
                 ran_out = true;
                 break;

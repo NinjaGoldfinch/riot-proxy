@@ -100,6 +100,18 @@ impl Env {
         self.ctx.fetcher.cache().l1.invalidate_where(|_| true).await;
     }
 
+    /// Answer `p` with a 200 whose body is not JSON (an HTML error page, a
+    /// truncated read), and forget cached answers.
+    async fn riot_malformed(&self, p: &str) {
+        self.server.reset().await;
+        Mock::given(method("GET"))
+            .and(path(p))
+            .respond_with(ResponseTemplate::new(200).set_body_string("<html>upstream hiccup</html>"))
+            .mount(&self.server)
+            .await;
+        self.ctx.fetcher.cache().l1.invalidate_where(|_| true).await;
+    }
+
     /// Events published since the last call, as `(name, data)`.
     fn published(&mut self) -> Vec<(String, Value)> {
         let mut out = Vec::new();
@@ -194,6 +206,22 @@ async fn a_failing_spectator_call_is_retried_not_misread_as_offline() {
     assert!(matches!(err, riot_proxy::jobs::JobError::Retry(_)), "{err:?}");
 }
 
+/// REV-05: a 200 that does not parse was read as "not in game" and ended it.
+#[tokio::test]
+async fn a_malformed_spectator_body_is_retried_not_misread_as_the_game_ending() {
+    let mut e = env(500).await;
+    let live = job("poll:live");
+    e.riot(SPECTATOR, 200, game(7)).await;
+    e.ctx.poll_live(&live).await.unwrap();
+    assert_eq!(e.published().len(), 1, "game.started");
+
+    e.riot_malformed(SPECTATOR).await;
+    let err = e.ctx.poll_live(&live).await.unwrap_err();
+    assert!(matches!(err, riot_proxy::jobs::JobError::Retry(_)), "{err:?}");
+    assert!(e.published().is_empty(), "no game.ended");
+    assert_eq!(e.player().await.in_game_id, Some(7));
+}
+
 fn entry(queue: &str, tier: &str, lp: i64) -> Value {
     json!({"queueType": queue, "tier": tier, "rank": "I", "leaguePoints": lp, "wins": 1, "losses": 1})
 }
@@ -237,6 +265,28 @@ async fn rank_polls_publish_one_event_per_queue_that_moved() {
     );
     e.ctx.poll_rank(&rank).await.unwrap();
     assert!(e.published().is_empty());
+}
+
+/// REV-05: a 200 that does not parse stored `{}` as the baseline, and the
+/// next good poll reported every queue as changed.
+#[tokio::test]
+async fn a_malformed_league_body_is_retried_and_keeps_the_baseline() {
+    let mut e = env(500).await;
+    let rank = job("poll:rank");
+    e.riot(LEAGUE, 200, json!([entry("RANKED_SOLO_5x5", "CHALLENGER", 2178)]))
+        .await;
+    e.ctx.poll_rank(&rank).await.unwrap();
+    let baseline = e.player().await.last_rank;
+
+    e.riot_malformed(LEAGUE).await;
+    let err = e.ctx.poll_rank(&rank).await.unwrap_err();
+    assert!(matches!(err, riot_proxy::jobs::JobError::Retry(_)), "{err:?}");
+    assert_eq!(e.player().await.last_rank, baseline);
+
+    e.riot(LEAGUE, 200, json!([entry("RANKED_SOLO_5x5", "CHALLENGER", 2178)]))
+        .await;
+    e.ctx.poll_rank(&rank).await.unwrap();
+    assert!(e.published().is_empty(), "nothing moved");
 }
 
 fn ids(range: std::ops::Range<u32>) -> Value {
@@ -290,6 +340,22 @@ async fn match_polls_queue_whats_new_and_advance_the_cursor() {
     e.ctx.poll_matches(&poll).await.unwrap();
     assert_eq!(e.jobs().await.len(), 7);
     assert_eq!(e.player().await.last_seen_match_id.as_deref(), Some("KR_9002"));
+}
+
+/// REV-05: a 200 that does not parse read as an empty list.
+#[tokio::test]
+async fn a_malformed_ids_body_is_retried_and_leaves_the_cursor() {
+    let e = env(500).await;
+    let poll = job("poll:matches");
+    e.riot(IDS, 200, ids(0..5)).await;
+    e.ctx.poll_matches(&poll).await.unwrap();
+    assert_eq!(e.jobs().await.len(), 5);
+
+    e.riot_malformed(IDS).await;
+    let err = e.ctx.poll_matches(&poll).await.unwrap_err();
+    assert!(matches!(err, riot_proxy::jobs::JobError::Retry(_)), "{err:?}");
+    assert_eq!(e.jobs().await.len(), 5);
+    assert_eq!(e.player().await.last_seen_match_id.as_deref(), Some("KR_9000"));
 }
 
 #[tokio::test]

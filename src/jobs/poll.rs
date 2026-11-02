@@ -126,7 +126,11 @@ impl PollContext {
             .get("spectator.activeGame", platform, &[&p.puuid], &[], false)
             .await
         {
-            Ok(body) => serde_json::from_slice::<ActiveGame>(&body).ok(),
+            // Not parsed is retried: read as "not in game", it ended the game (REV-05).
+            Ok(body) => Some(
+                serde_json::from_slice::<ActiveGame>(&body)
+                    .map_err(|e| JobError::Retry(format!("active game: {e}")))?,
+            ),
             // 404 is the normal "not in game" answer, negatively cached (v1).
             Err(e) if e.api.code == ErrorCode::NotFound => None,
             Err(e) => return Err(retry(&e)),
@@ -215,7 +219,10 @@ impl PollContext {
             .get("league.entriesByPuuid", platform, &[&p.puuid], &[], false)
             .await
             .map_err(|e| retry(&e))?;
-        let entries: Vec<Entry> = serde_json::from_slice(&body).unwrap_or_default();
+        // Not parsed is retried: read as no entries, it stored `{}` and the next
+        // poll reported every queue's rank as changed (REV-05).
+        let entries: Vec<Entry> =
+            serde_json::from_slice(&body).map_err(|e| JobError::Retry(format!("league entries: {e}")))?;
         let snapshot: BTreeMap<String, Rank> = entries
             .into_iter()
             .filter_map(|e| {
@@ -289,7 +296,9 @@ impl PollContext {
                 )
                 .await
                 .map_err(|e| retry(&e))?;
-            let ids: Vec<String> = serde_json::from_slice(&body).unwrap_or_default();
+            // Not parsed is retried, not read as the end of the list (REV-05).
+            let ids: Vec<String> =
+                serde_json::from_slice(&body).map_err(|e| JobError::Retry(format!("match ids: {e}")))?;
             if ids.is_empty() {
                 break true;
             }

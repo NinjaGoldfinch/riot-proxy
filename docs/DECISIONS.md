@@ -2114,3 +2114,15 @@ Accepted (owner request 2026-11-03, the code review; task REV-04). design/06 §R
 - **What.** In one transaction, `recover` first marks `failed` the `running` rows with `attempts >= MAX_ATTEMPTS`, with error `interrupted on its last attempt: the process stopped while it ran` and `finished_at`, then re-queues the rest as before. That follows the existing rule that an interrupted attempt counts: its fifth is final, as a fifth `Retry` from `finish` is. Each such row counts in `proxy_jobs_total{status="failed"}` and logs `job failed` at warn, as `finish` does. `serve` logs `failed jobs a previous process left running on their last attempt jobs=n` at warn. `recover` returns `Recovered { requeued, failed }`.
 - **Accepted cost.** A deploy that aborts a job during its fifth attempt fails it; it can be retried from `/v1/admin/jobs`. Returning the attempt on a graceful abort (so only crashes count) was rejected for now: it changes what a shutdown leaves behind, which `tests/jobs.rs` relies on to simulate a crash, for a case that needs four earlier failures first.
 - **Tests.** `src/jobs/scheduler/tests.rs`: `recover_fails_a_row_interrupted_on_its_last_attempt`; `recover_requeues_rows_a_dead_process_left_running` checks the new counts.
+
+## ADR-190 — A Riot 200 a job cannot parse is retried, never read as empty (2026-11-03)
+Accepted (owner request 2026-11-03, the code review; task REV-05). design/06 §Retries.
+- **Why.** Five job reads parsed Riot's body with `unwrap_or_default()` (or `.ok()`), so a 200 that was not the expected JSON (an HTML error page from an edge, a truncated read) read as an empty answer:
+  - `ladder:collect` (`collect_one`): an empty id list ended the walk, and the THR-04 cursor was stamped at that moment, so the next crawl skipped the player or walked only from the new cursor; the games in between were never collected.
+  - `backfill:player`: the walk ran out at that page and could be stamped done.
+  - `poll:matches`: the page read as nothing new.
+  - `poll:rank`: `{}` was stored as the baseline, and the next good poll published `rank.changed` for every queue.
+  - `poll:live`: the game read as over, so a player in game got `game.ended`.
+- **What.** Each read maps a parse error to `JobError::Retry("<what>: <serde error>")`, as the ladder's league reads already did, so the job backs off and nothing is stamped, stored or published. A malformed body the fetcher cached is read again until its TTL ends (120 s for match ids); the backoff (30 s, then 60 s, 120 s, 240 s) outlasts it within the five attempts.
+- **Not changed.** The `/v1/players/{puuid}/matches` route still reads a malformed id list as an empty page; that is a response-shape decision for a separate task.
+- **Tests.** `tests/poll.rs`: `a_malformed_spectator_body_is_retried_not_misread_as_the_game_ending`, `a_malformed_league_body_is_retried_and_keeps_the_baseline`, `a_malformed_ids_body_is_retried_and_leaves_the_cursor`. `tests/archive_jobs.rs`: `a_malformed_page_is_retried_not_read_as_the_end_of_the_history`. `tests/lanes.rs`: `a_malformed_ids_page_is_retried_and_stamps_nothing`. All five fail on the code before.
