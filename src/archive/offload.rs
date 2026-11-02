@@ -86,9 +86,12 @@ pub async fn write_pack(
     }))
 }
 
-/// The stored object must be the pack: the same size, and the same sha256 in
-/// its metadata. A store that keeps no metadata (a local directory) is read
-/// back and hashed instead.
+/// The stored object must be the pack: the same size, the same sha256 in its
+/// metadata when the store keeps metadata, and the same bytes when read back
+/// and hashed. The metadata only echoes what the upload sent, so it proves the
+/// upload completed, not what the store holds; only the read-back does, and
+/// once a pack is recorded `free` may drop the bodies' last local copies
+/// (REV-08, ADR-193). It costs one GET of the pack, which is still in memory.
 async fn verify(objects: &Objects, built: &Pack) -> Result<(), OffloadError> {
     let key = built.key();
     let fail = |why: String| OffloadError::Verify {
@@ -103,17 +106,14 @@ async fn verify(objects: &Objects, built: &Pack) -> Result<(), OffloadError> {
         return Err(fail(format!("{} bytes stored, {size} written", head.size)));
     }
     let want = hex::encode(built.sha256);
-    match head.metadata.get("sha256") {
-        Some(got) if *got == want => Ok(()),
-        Some(got) => Err(fail(format!("sha256 metadata {got}, expected {want}"))),
-        None => {
-            let stored = objects.get_range(&key, 0..size).await?;
-            if hex::encode(pack::sha256(&stored)) == want {
-                Ok(())
-            } else {
-                Err(fail("stored bytes differ from the pack".into()))
-            }
-        }
+    if let Some(got) = head.metadata.get("sha256").filter(|got| **got != want) {
+        return Err(fail(format!("sha256 metadata {got}, expected {want}")));
+    }
+    let stored = objects.get_range(&key, 0..size).await?;
+    if hex::encode(pack::sha256(&stored)) == want {
+        Ok(())
+    } else {
+        Err(fail("stored bytes differ from the pack".into()))
     }
 }
 
