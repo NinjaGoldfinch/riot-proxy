@@ -2092,3 +2092,9 @@ Accepted (owner request 2026-11-03, the code review; task REV-01). Amends ADR-01
 - **What.** `app::not_found` replaces the value of every `token` query pair with `<redacted>`. The key is matched as `http::auth` matches it (exactly `token`, not decoded), so every key auth would accept is covered. Every other request's message is unchanged, v1's included (`unknown_route_404.snap` still reads `/nope?x=1`).
 - **Rejected.** Dropping the query from the message (path only): it breaks v1's message for requests that carry no secret, for no gain.
 - **Tests.** `tests/http.rs`: `an_unrouted_requests_token_is_redacted_from_the_message`.
+
+## ADR-187 — A single-flight call frees its slot from its own task (2026-11-03)
+Accepted (owner request 2026-11-03, the code review; task REV-02). Corrects ADR-030 / P3-04's implementation, not its design.
+- **Why.** The slot was removed by the shared future that wraps the spawned work, and a `Shared` future only runs while someone polls it. When every caller left before the work ended (a client that disconnects during the limiter wait), the work finished on its task but nothing removed the slot. The next caller for that key, however much later, joined the dead slot: it got the old result, an error included, with `did_work = false` and no Riot call, against "errors are never cached here". A key never asked for again stayed in the map for good.
+- **What.** The spawned task holds a drop guard that removes the slot when the work ends: on success, on failure, and on a panic, since the guard is dropped as the task unwinds. Only that task removes its key, and `entry().or_insert_with` cannot insert another call for the key while the slot exists, so the removal needs no generation check. Callers already waiting keep sharing the result through their `Shared` clone.
+- **Tests.** `src/singleflight.rs`: `a_call_whose_callers_all_left_frees_its_slot_when_the_work_ends` fails on the old code ("freed with no caller left").

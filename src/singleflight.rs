@@ -5,8 +5,9 @@
 //! work; later callers join the same future. The work runs on its own spawned
 //! task, so it finishes, and its result is cached by the caller's code, even if
 //! every waiting request is cancelled; the rate-limit token it spent is not wasted.
-//! The slot is freed as soon as the work completes, success or failure, so errors
-//! are never cached here (plan P3-04).
+//! The slot is freed by that task as soon as the work completes, success, failure
+//! or panic, whether or not anyone still waits, so errors are never cached here
+//! (plan P3-04, REV-02).
 //!
 //! v1 also coordinated *across* processes through a Redis lock. v2 is one process,
 //! so that half has no equivalent (ADR-030).
@@ -36,6 +37,18 @@ pub struct Flight<T, E> {
 
 pub struct SingleFlight<K, T, E> {
     inflight: Arc<DashMap<K, Slot<T, E>>>,
+}
+
+/// Removes a call's slot when dropped, at the end of its spawned work.
+struct Release<K: Eq + Hash, T, E> {
+    inflight: Arc<DashMap<K, Slot<T, E>>>,
+    key: K,
+}
+
+impl<K: Eq + Hash, T, E> Drop for Release<K, T, E> {
+    fn drop(&mut self) {
+        self.inflight.remove(&self.key);
+    }
 }
 
 impl<K, T, E> Default for SingleFlight<K, T, E>
@@ -83,19 +96,22 @@ where
             .entry(key.clone())
             .or_insert_with(|| {
                 did_work = true;
-                let inflight = Arc::clone(&self.inflight);
-                let key = key.clone();
-                let task = tokio::spawn(work());
-                async move {
-                    let out = task.await.unwrap_or_else(|_| Err(E::from(WorkFailed)));
-                    // Free the slot from inside the work, so it is freed even if
-                    // no caller is still waiting. Errors are therefore never shared
-                    // with later callers.
-                    inflight.remove(&key);
-                    out
-                }
-                .boxed()
-                .shared()
+                // Free the slot from the spawned task itself, so it is freed even
+                // when every caller has gone and nothing polls the shared future
+                // (REV-02); dropped on a panic too. Only this task removes this
+                // key, and nothing can insert for it until it does.
+                let release = Release {
+                    inflight: Arc::clone(&self.inflight),
+                    key: key.clone(),
+                };
+                let work = work();
+                let task = tokio::spawn(async move {
+                    let _release = release;
+                    work.await
+                });
+                async move { task.await.unwrap_or_else(|_| Err(E::from(WorkFailed))) }
+                    .boxed()
+                    .shared()
             })
             .clone();
         Flight {
@@ -230,6 +246,37 @@ mod tests {
         assert_eq!(joiner.value, Ok("done".to_string()));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(sf.inflight_count(), 0);
+    }
+
+    /// REV-02: with every caller cancelled, nothing polls the shared future, so
+    /// the work must free its slot itself. Before, the slot stayed and the next
+    /// caller, however much later, got the stale result without doing any work.
+    #[tokio::test(start_paused = true)]
+    async fn a_call_whose_callers_all_left_frees_its_slot_when_the_work_ends() {
+        let sf = Arc::new(Sf::new());
+        let mut callers = Vec::new();
+        for _ in 0..3 {
+            let sf = Arc::clone(&sf);
+            callers.push(tokio::spawn(async move {
+                sf.run("key".into(), || async {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    Err::<String, _>(Error::Upstream("stale"))
+                })
+                .await
+            }));
+        }
+        tokio::task::yield_now().await;
+        for caller in callers {
+            caller.abort();
+            let _ = caller.await;
+        }
+        assert_eq!(sf.inflight_count(), 1, "the work runs on");
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(sf.inflight_count(), 0, "freed with no caller left");
+        let later = sf.run("key".into(), || async { Ok("fresh".to_string()) }).await;
+        assert!(later.did_work);
+        assert_eq!(later.value, Ok("fresh".to_string()));
     }
 
     #[tokio::test(start_paused = true)]
