@@ -185,9 +185,31 @@ fn fastify_style(template: &str) -> String {
         .join("/")
 }
 
-/// v1 `setNotFoundHandler`: `No route for <METHOD> <url>`.
+/// v1 `setNotFoundHandler`: `No route for <METHOD> <url>`, with a `token` query
+/// parameter's value redacted: the message is logged and kept in the admin
+/// error ring, and auth accepts `?token=` on every route (REV-01, ADR-186).
 async fn not_found(method: Method, uri: Uri) -> ApiError {
-    ApiError::not_found(format!("No route for {method} {uri}"))
+    ApiError::not_found(format!("No route for {method} {}", redact_token(&uri)))
+}
+
+/// `uri` as displayed, with the value of every `token` query pair replaced by
+/// `<redacted>`. The key is matched as `http::auth` matches it: exactly.
+fn redact_token(uri: &Uri) -> String {
+    let full = uri.to_string();
+    let Some(query) = uri.query() else { return full };
+    let is_token = |pair: &str| pair.split_once('=').is_some_and(|(k, _)| k == "token");
+    if !query.split('&').any(is_token) {
+        return full;
+    }
+    let redacted = query
+        .split('&')
+        .map(|pair| if is_token(pair) { "token=<redacted>" } else { pair })
+        .collect::<Vec<_>>()
+        .join("&");
+    match full.strip_suffix(query) {
+        Some(head) => format!("{head}{redacted}"),
+        None => format!("{}?{redacted}", uri.path()),
+    }
 }
 
 fn panic_response() -> Response {

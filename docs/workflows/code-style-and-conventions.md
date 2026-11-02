@@ -28,7 +28,7 @@ Run `just lint` before pushing; it is exactly what CI runs.
 
 - Library code returns `Result` with `thiserror` enums; `anyhow` only at the CLI edge (`src/cli/`). Prefer `?` over `unwrap`/`expect`, which clippy flags.
 - HTTP handlers return `http::ApiError`. Its codes, statuses and the envelope `{"error":{"code","message","requestId","retryAfter?"}}` are byte-identical to v1 (ADR-011); see [../api/errors.md](../api/errors.md). `requestId` is filled in by the middleware.
-- An unknown route or wrong method is `404 NOT_FOUND` with `No route for <METHOD> <url>`, as in v1's Fastify handler (`src/app.rs`).
+- An unknown route or wrong method is `404 NOT_FOUND` with `No route for <METHOD> <url>`, as in v1's Fastify handler (`src/app.rs`), except that a `token` query value reads `<redacted>` (ADR-186).
 - A panic in a handler becomes `500 INTERNAL` through `CatchPanicLayer` (`src/app.rs`).
 - A failing archive or object store never fails a request: the fetcher falls through to Riot (design/12 §Goals).
 
@@ -78,4 +78,4 @@ Never invent them. Every header, route, status code and TTL comes from `docs/des
 
 ---
 **Sources:** `CLAUDE.md`, `docs/IMPLEMENTATION.md` §0.1–0.6, `rustfmt.toml`, `clippy.toml`, `Cargo.toml` `[lints.clippy]`, `.github/workflows/ci.yml`, `src/app.rs:L190-L201`, `.github/PULL_REQUEST_TEMPLATE.md`, `PROGRESS.md` (Owner review at the P0 gate; Notes for the next task)
-**Last verified:** 2026-10-27 against commit `c5110ff`
+**Last verified:** 2026-11-03 against commit `b7ab034`

@@ -2085,3 +2085,10 @@ Accepted (owner, task THR-04; plan approved 2026-10-26 with its answers Q1–Q5,
   - `tests/lanes.rs`: `a_collect_that_yields_stamps_only_the_players_it_finished`, `a_cursor_walk_interrupted_between_pages_is_not_stamped_and_resumes_from_its_cursor`, `an_old_shape_collect_payload_still_runs`.
   - `src/jobs/ladder/tests.rs`: `collect_leaves_out_players_whose_total_has_not_moved`, `a_cursor_older_than_the_late_stamp_window_is_not_walked_from`. `src/db/tests.rs`: `v0030_adds_the_collect_cursor`. `src/config/tests.rs`: `ladder_collect_overlap_defaults_and_bounds`. `tests/dom/admin-ladder.test.mjs`: the card's "players skipped".
   - Ten mutations, each applied alone, each fail a test (plan, Implementation record).
+
+## ADR-186 — An unrouted request's `token` is redacted from the 404 message (2026-11-03)
+Accepted (owner request 2026-11-03, the code review; task REV-01). Amends ADR-011 §404s.
+- **Why.** The unrouted 404 quotes the request as v1 did, `No route for <METHOD> <path?query>` (ADR-011), and `ApiError` logs that message at `warn` and keeps it in the admin error ring (`/v1/admin/recent?kind=errors`). Auth accepts a consumer key as `?token=` on every guarded route (`http::auth::bearer`), so a mistyped path carrying a key wrote that key into journald and into the ring.
+- **What.** `app::not_found` replaces the value of every `token` query pair with `<redacted>`. The key is matched as `http::auth` matches it (exactly `token`, not decoded), so every key auth would accept is covered. Every other request's message is unchanged, v1's included (`unknown_route_404.snap` still reads `/nope?x=1`).
+- **Rejected.** Dropping the query from the message (path only): it breaks v1's message for requests that carry no secret, for no gain.
+- **Tests.** `tests/http.rs`: `an_unrouted_requests_token_is_redacted_from_the_message`.
