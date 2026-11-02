@@ -399,6 +399,7 @@ The review's findings, one task each, most severe first.
 - [x] REV-01 an unrouted request's `?token=` is redacted from the 404 message, which is logged and kept in the error ring (#239, ADR-186)
 - [x] REV-02 a single-flight call frees its slot from its own task, so a call every caller left does not hand its stale result to the next (#240, ADR-187)
 - [x] REV-03 the purge glob matches in linear time and the writer only deletes by key (#241, ADR-188)
+- [x] REV-04 a job a dead process interrupted on its last attempt is failed at boot instead of re-queued, so it cannot crash-loop the service (#242, ADR-189)
 
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.

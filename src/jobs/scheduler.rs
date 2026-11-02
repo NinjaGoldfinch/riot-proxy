@@ -38,6 +38,18 @@ use crate::riot::limiter::Limiter;
 
 /// design/06: `failed` after five attempts.
 pub const MAX_ATTEMPTS: u32 = 5;
+/// The error of a job whose last attempt a dead process interrupted (REV-04).
+pub const INTERRUPTED: &str = "interrupted on its last attempt: the process stopped while it ran";
+
+/// What [`Scheduler::recover`] did with the rows a dead process left `running`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Recovered {
+    /// Back to `pending`, their interrupted attempt still counted.
+    pub requeued: usize,
+    /// `failed` with [`INTERRUPTED`]: the interrupted attempt was their last.
+    pub failed: usize,
+}
+
 /// design/06: backoff base, `2^attempts × 30 s`.
 pub const BACKOFF_BASE: Duration = Duration::from_secs(30);
 /// How long an idle worker sleeps when nothing is delayed or blocked (and
@@ -958,18 +970,41 @@ impl Scheduler {
         &self.db
     }
 
-    /// Boot: rows a dead process left `running` go back to `pending`. Their
-    /// attempt stays counted. Returns how many.
-    pub async fn recover(&self) -> Result<usize, DbError> {
-        self.db
-            .write(|c| {
-                c.execute(
+    /// Boot: rows a dead process left `running` go back to `pending`, their
+    /// attempt still counted. A row whose interrupted attempt was its last
+    /// ([`MAX_ATTEMPTS`]) is `failed` instead, as a last `Retry` would be:
+    /// re-queued, a job that kills the process would crash every boot (REV-04).
+    pub async fn recover(&self) -> Result<Recovered, DbError> {
+        let now_ms = Clock::now().unix_ms;
+        let (failed, requeued) = self
+            .db
+            .write(move |c| {
+                let tx = c.transaction()?;
+                let failed = tx
+                    .prepare(
+                        "UPDATE jobs SET state = 'failed', finished_at = ?1, error = ?2
+                          WHERE state = 'running' AND attempts >= ?3 RETURNING id, kind",
+                    )?
+                    .query_map(params![now_ms, INTERRUPTED, MAX_ATTEMPTS], |r| {
+                        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                let requeued = tx.execute(
                     "UPDATE jobs SET state = 'pending', claimed_at = NULL WHERE state = 'running'",
                     [],
-                )
-                .map_err(DbError::from)
+                )?;
+                tx.commit()?;
+                Ok::<_, DbError>((failed, requeued))
             })
-            .await
+            .await?;
+        for (id, kind) in &failed {
+            metrics::counter!(JOBS_TOTAL, "job" => kind.clone(), "status" => "failed").increment(1);
+            tracing::warn!(job = %kind, %id, attempts = MAX_ATTEMPTS, next = "failed", error = INTERRUPTED, "job failed");
+        }
+        Ok(Recovered {
+            requeued,
+            failed: failed.len(),
+        })
     }
 
     /// Claim the best ready job the limiter has room for (design/06
