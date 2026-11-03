@@ -75,7 +75,8 @@ async fn healthz() -> Json<Health> {
 /// the two backend booleans, and `limiter` says the checkpoint was restored
 /// (design/07). `keyScope` is v1's (ADR-011). `sqliteReaders`/`sqliteReadersFree`
 /// show the read pool, so a leak shows before reads fail (ADR-113). `writer*` say
-/// what the writer thread is doing (WR-02).
+/// what the writer thread is doing (WR-02). `version` names the running binary, so a
+/// deploy can tell the new process from the old one (DEP-01, ADR-194).
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Ready {
@@ -94,6 +95,8 @@ pub struct Ready {
     pub writer_busy_ms: u64,
     /// Writes queued behind it.
     pub writer_queued: usize,
+    /// The running binary's version, as `riot-proxy --version` prints it without the name.
+    pub version: &'static str,
 }
 
 /// Readiness: the writer thread is alive and can take SQLite's write lock (or, while
@@ -141,6 +144,7 @@ async fn readyz(State(state): State<AppState>) -> (StatusCode, Json<Ready>) {
                 .busy_for
                 .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX)),
             writer_queued: writer.queued,
+            version: crate::build_info::VERSION,
         }),
     )
 }

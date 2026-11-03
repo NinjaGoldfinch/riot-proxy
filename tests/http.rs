@@ -30,8 +30,16 @@ async fn readyz_is_200_when_sqlite_is_writable() {
     assert_eq!(res.status, StatusCode::OK);
     assert_eq!(
         res.json(),
-        serde_json::json!({"ok": true, "sqlite": true, "limiter": true, "keyScope": key_scope(), "sqliteReaders": 2, "sqliteReadersFree": 2, "writerBusy": false, "writerBusyMs": 0, "writerQueued": 0})
+        serde_json::json!({"ok": true, "sqlite": true, "limiter": true, "keyScope": key_scope(), "sqliteReaders": 2, "sqliteReadersFree": 2, "writerBusy": false, "writerBusyMs": 0, "writerQueued": 0, "version": riot_proxy::build_info::VERSION})
     );
+}
+
+/// A deploy reads it to tell the new process from the old one still answering (DEP-01).
+#[tokio::test]
+async fn readyz_reports_the_running_version() {
+    let (_dir, _state, router) = app();
+    let res = get(router, "/readyz").await;
+    assert_eq!(res.json()["version"], env!("CARGO_PKG_VERSION"));
 }
 
 #[tokio::test]
@@ -46,7 +54,7 @@ async fn readyz_is_503_with_the_same_body_when_sqlite_is_not_writable() {
     assert_eq!(res.status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(
         res.json(),
-        serde_json::json!({"ok": false, "sqlite": false, "limiter": true, "keyScope": key_scope(), "sqliteReaders": 2, "sqliteReadersFree": 2, "writerBusy": false, "writerBusyMs": 0, "writerQueued": 0})
+        serde_json::json!({"ok": false, "sqlite": false, "limiter": true, "keyScope": key_scope(), "sqliteReaders": 2, "sqliteReadersFree": 2, "writerBusy": false, "writerBusyMs": 0, "writerQueued": 0, "version": riot_proxy::build_info::VERSION})
     );
     blocker.execute_batch("ROLLBACK;").unwrap();
 }
@@ -322,6 +330,6 @@ async fn readyz_is_503_until_the_limiter_is_restored() {
     assert_eq!(res.status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(
         res.json(),
-        serde_json::json!({"ok": false, "sqlite": true, "limiter": false, "keyScope": key_scope(), "sqliteReaders": 2, "sqliteReadersFree": 2, "writerBusy": false, "writerBusyMs": 0, "writerQueued": 0})
+        serde_json::json!({"ok": false, "sqlite": true, "limiter": false, "keyScope": key_scope(), "sqliteReaders": 2, "sqliteReadersFree": 2, "writerBusy": false, "writerBusyMs": 0, "writerQueued": 0, "version": riot_proxy::build_info::VERSION})
     );
 }
