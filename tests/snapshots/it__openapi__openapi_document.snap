@@ -4292,7 +4292,7 @@ expression: doc
         "type": "object"
       },
       "Ready": {
-        "description": "v1 returned `{ok, redis, postgres, keyScope}`. v2 has one store, so `sqlite` replaces\nthe two backend booleans, and `limiter` says the checkpoint was restored\n(design/07). `keyScope` is v1's (ADR-011). `sqliteReaders`/`sqliteReadersFree`\nshow the read pool, so a leak shows before reads fail (ADR-113). `writer*` say\nwhat the writer thread is doing (WR-02).",
+        "description": "v1 returned `{ok, redis, postgres, keyScope}`. v2 has one store, so `sqlite` replaces\nthe two backend booleans, and `limiter` says the checkpoint was restored\n(design/07). `keyScope` is v1's (ADR-011). `sqliteReaders`/`sqliteReadersFree`\nshow the read pool, so a leak shows before reads fail (ADR-113). `writer*` say\nwhat the writer thread is doing (WR-02). `version` names the running binary, so a\ndeploy can tell the new process from the old one (DEP-01, ADR-194).",
         "properties": {
           "keyScope": {
             "type": "string"
@@ -4315,6 +4315,10 @@ expression: doc
             "description": "Of those, how many are idle now. Informational: 0 under load is normal and\ndoesn't make the probe fail.",
             "minimum": 0,
             "type": "integer"
+          },
+          "version": {
+            "description": "The running binary's version, as `riot-proxy --version` prints it without the name.",
+            "type": "string"
           },
           "writerBusy": {
             "description": "The writer thread is running a write now.",
@@ -4341,7 +4345,8 @@ expression: doc
           "sqliteReadersFree",
           "writerBusy",
           "writerBusyMs",
-          "writerQueued"
+          "writerQueued",
+          "version"
         ],
         "type": "object"
       },

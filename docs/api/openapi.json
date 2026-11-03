@@ -17158,7 +17158,7 @@
       },
       "Ready": {
         "type": "object",
-        "description": "v1 returned `{ok, redis, postgres, keyScope}`. v2 has one store, so `sqlite` replaces\nthe two backend booleans, and `limiter` says the checkpoint was restored\n(design/07). `keyScope` is v1's (ADR-011). `sqliteReaders`/`sqliteReadersFree`\nshow the read pool, so a leak shows before reads fail (ADR-113). `writer*` say\nwhat the writer thread is doing (WR-02).",
+        "description": "v1 returned `{ok, redis, postgres, keyScope}`. v2 has one store, so `sqlite` replaces\nthe two backend booleans, and `limiter` says the checkpoint was restored\n(design/07). `keyScope` is v1's (ADR-011). `sqliteReaders`/`sqliteReadersFree`\nshow the read pool, so a leak shows before reads fail (ADR-113). `writer*` say\nwhat the writer thread is doing (WR-02). `version` names the running binary, so a\ndeploy can tell the new process from the old one (DEP-01, ADR-194).",
         "required": [
           "ok",
           "sqlite",
@@ -17168,7 +17168,8 @@
           "sqliteReadersFree",
           "writerBusy",
           "writerBusyMs",
-          "writerQueued"
+          "writerQueued",
+          "version"
         ],
         "properties": {
           "ok": {
@@ -17207,6 +17208,10 @@
             "type": "integer",
             "description": "Writes queued behind it.",
             "minimum": 0
+          },
+          "version": {
+            "type": "string",
+            "description": "The running binary's version, as `riot-proxy --version` prints it without the name."
           }
         }
       },
