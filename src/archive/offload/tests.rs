@@ -613,3 +613,113 @@ async fn state_counts_read_only_the_partial_indexes() {
         ]
     );
 }
+
+/// REV-08: a store whose copy differs from what was sent, with the metadata
+/// intact: a byte lost in transit, or kept wrong by the provider.
+mod corrupted_upload {
+    use async_trait::async_trait;
+    use futures_util::stream::BoxStream;
+    use object_store::memory::InMemory;
+    use object_store::path::Path;
+    use object_store::{
+        CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+        PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions,
+    };
+
+    use super::*;
+
+    /// Flips one byte in the middle of every single-part upload.
+    #[derive(Debug, Default)]
+    struct FlipsAByte(InMemory);
+
+    impl std::fmt::Display for FlipsAByte {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("FlipsAByte")
+        }
+    }
+
+    #[async_trait]
+    impl ObjectStore for FlipsAByte {
+        async fn put_opts(
+            &self,
+            location: &Path,
+            payload: PutPayload,
+            opts: PutOptions,
+        ) -> object_store::Result<PutResult> {
+            let mut bytes = Bytes::from(payload).to_vec();
+            let mid = bytes.len() / 2;
+            bytes[mid] ^= 0x01;
+            self.0.put_opts(location, Bytes::from(bytes).into(), opts).await
+        }
+
+        async fn put_multipart_opts(
+            &self,
+            location: &Path,
+            opts: PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
+            self.0.put_multipart_opts(location, opts).await
+        }
+
+        async fn get_opts(&self, location: &Path, options: GetOptions) -> object_store::Result<GetResult> {
+            self.0.get_opts(location, options).await
+        }
+
+        fn delete_stream(
+            &self,
+            locations: BoxStream<'static, object_store::Result<Path>>,
+        ) -> BoxStream<'static, object_store::Result<Path>> {
+            self.0.delete_stream(locations)
+        }
+
+        fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+            self.0.list(prefix)
+        }
+
+        async fn list_with_delimiter(&self, prefix: Option<&Path>) -> object_store::Result<ListResult> {
+            self.0.list_with_delimiter(prefix).await
+        }
+
+        async fn copy_opts(&self, from: &Path, to: &Path, options: CopyOptions) -> object_store::Result<()> {
+            self.0.copy_opts(from, to, options).await
+        }
+
+        async fn rename_opts(
+            &self,
+            from: &Path,
+            to: &Path,
+            options: RenameOptions,
+        ) -> object_store::Result<()> {
+            self.0.rename_opts(from, to, options).await
+        }
+    }
+
+    /// Before, the size and the echoed `sha256` metadata matched, so the pack
+    /// was recorded and its bodies later freed onto bytes that fail their digest.
+    #[tokio::test]
+    async fn a_pack_stored_wrong_with_good_metadata_is_never_recorded() {
+        let (_dir, db) = db();
+        let objects = Objects::from_store(Arc::new(FlipsAByte::default()), true, "memory://");
+        assert!(db.attach_objects(objects.clone()));
+        seed(&db, Kind::Match, &["KR_1", "KR_2"]).await;
+
+        let err = write_pack(&db, &objects, Kind::Match, &ids(&["KR_1", "KR_2"]), 10)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, OffloadError::Verify { why, .. } if why.contains("stored bytes differ")),
+            "{err:?}"
+        );
+        let stored = objects.list("packs/").await.unwrap();
+        assert_eq!(stored.len(), 1, "uploaded");
+        let head = objects.head(&stored[0].key).await.unwrap().unwrap();
+        assert!(head.metadata.contains_key("sha256"), "the metadata looked right");
+
+        assert_eq!(one(&db, "SELECT COUNT(*) || '' FROM body_packs").await, "0");
+        assert_eq!(one(&db, "SELECT COUNT(*) || '' FROM body_locations").await, "0");
+        assert_eq!(
+            free(&db, Kind::Match, &ids(&["KR_1", "KR_2"]), 20).await.unwrap(),
+            0,
+            "nothing is freed: the local copies are the only good ones"
+        );
+    }
+}

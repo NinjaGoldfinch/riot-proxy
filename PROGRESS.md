@@ -403,6 +403,7 @@ The review's findings, one task each, most severe first.
 - [x] REV-05 a Riot 200 a job cannot parse is retried, never read as an empty list, rank or game (#243, ADR-190)
 - [x] REV-06 a body archived again is packed again unless its bytes are unchanged, so a body whose pack went bad heals instead of being freed back onto it (#244, ADR-191)
 - [x] REV-07 the crawl tick fails a running crawl that no live job can finish, so one lost leg no longer holds its ladder for good (#245, ADR-192)
+- [~] REV-08 every uploaded pack is read back and hashed before it is recorded, so `free` never drops bodies onto a pack the bucket holds wrong (`fix/REV-08-offload-readback-verify`, ADR-193)
 
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.

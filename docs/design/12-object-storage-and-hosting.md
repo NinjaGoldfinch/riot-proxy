@@ -253,7 +253,8 @@ stays. (Superseded by REV-06, ADR-191: such a body is packed again, since it
 is only archived again when its pack could not be read; a still-local packed
 body archived again with the same bytes stays packed.) `archive::offload` holds the two steps OBJ-03's job drives:
 `write_pack` (build, upload, HEAD-verify, record in one transaction; a store
-without metadata is read back and hashed) and `free` (packed and located rows
+without metadata is read back and hashed; since REV-08, ADR-193, every pack is
+read back and hashed) and `free` (packed and located rows
 only).
 
 The 14-day local window (`ARCHIVE_BODY_LOCAL_DAYS`) is a read cache, not a
