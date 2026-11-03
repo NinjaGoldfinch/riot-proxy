@@ -4,7 +4,7 @@ How a new release reaches `ngf-prod-syd1`, what the proxy does on its first boot
 
 ## Where automation stops
 
-`release.yml` builds the binaries, writes `sha256sums`, publishes the GitHub release and pushes the image tags (`.github/workflows/release.yml:202-217`). Nothing in the repository deploys to production: once the GitHub release is published, a person downloads the asset and installs it (`docs/workflows/release-process.md`, "Deploying to production"). The dev VM follows the `:edge` image on its own and is not part of this (`docs/workflows/release-process.md`, "The dev VM").
+`release.yml` builds the binaries and the deploy tarball, writes `sha256sums`, publishes the GitHub release and pushes the image tags (`.github/workflows/release.yml:202-217`). `deploy.yml` puts a release on production, but only when the owner starts it and approves it on the `prod` environment; the host restarts the service, waits for `/readyz` to report the new version and rolls back by itself if it does not (`docs/workflows/release-process.md`, "Deploying to production"; DEP-03, ADR-196). The dev VM follows the `:edge` image on its own and is not part of this (`docs/workflows/release-process.md`, "The dev VM").
 
 ## What an upgrade does on boot
 
@@ -35,54 +35,40 @@ On the way down, `SIGTERM` drains requests for up to 10 s, running jobs get 10 s
 
 These follow `docs/workflows/release-process.md`, `docs/design/07-deployment.md:225-231` and `deploy/README.md:121-122`.
 
-1. Download the asset and verify it:
+1. If the release carries a migration, take a manual backup while serving, before starting the deploy (the same `VACUUM INTO` as the daily one, `src/cli/backup.rs:10-21`). `/usr/local/bin/riot-proxy` is a symlink to the live release, so `rp` runs the binary that serves:
 
    ```bash
    v=X.Y.Z
-   curl -fsSLO https://github.com/NinjaGoldfinch/riot-proxy/releases/download/v$v/riot-proxy-linux-amd64
-   curl -fsSLO https://github.com/NinjaGoldfinch/riot-proxy/releases/download/v$v/sha256sums
-   sha256sum -c --ignore-missing sha256sums
-   ```
-
-2. Keep the running binary as the rollback copy: `sudo cp /usr/local/bin/riot-proxy /usr/local/bin/riot-proxy.<old version>` (production keeps `riot-proxy.2.5.0` and the like; `docs/workflows/release-process.md` step 2).
-3. If the release carries a migration, take a manual backup while serving (the same `VACUUM INTO` as the daily one, `src/cli/backup.rs:10-21`):
-
-   ```bash
    rp() { sudo systemd-run --quiet --wait --pipe --uid=riot-proxy -p EnvironmentFile=/etc/riot-proxy/env \
             /usr/local/bin/riot-proxy --data-dir /var/lib/riot-proxy/data "$@"; }
    rp backup /var/lib/riot-proxy/data/pre-$v.db      # OUT must not exist; prints <out>: <size> bytes
    ```
 
-4. Install: `sudo install -m 0755 riot-proxy-linux-amd64 /usr/local/bin/riot-proxy`.
-5. Restart: `sudo systemctl restart riot-proxy`.
-6. Verify:
+2. Deploy: `ngf-deploy riot-proxy` (or `-v vX.Y.Z`), then approve the run (`docs/workflows/release-process.md`, "Deploying to production"). The host waits up to its health wait (`HEALTH_WAIT` in `/etc/ninja-deploy/riot-proxy.conf`) for `/readyz` to report the new version; set it to cover the slowest migration a release brings, because a rollback after a migration has applied starts a binary that refuses the database ("Rolling back the binary", below).
+3. Verify:
 
    ```bash
    sudo journalctl -u riot-proxy -n 50 --no-pager     # database ready … listening … starting job workers
-   curl -s localhost:8080/readyz                        # {"ok":true,…}
+   curl -s localhost:8080/readyz                        # {"ok":true,…,"version":"X.Y.Z"}
    curl -s -H "Authorization: Bearer $ADMIN_KEY" localhost:8080/v1/admin/info | jq '.version,.gitSha'
    ```
 
    A boot-queued analytics rebuild holds the writer for minutes; `/readyz` stays 200 through it with `"writerBusy":true` and `writerBusyMs` climbing (WR-02; `src/routes/health.rs:152-204`). Before WR-02 it answered `"sqlite":false` until `analytics recomputed` (session note, 2026-10-15).
-7. Delete `pre-$v.db` once the next daily backup has run and reached R2; delete the old binary after a few days of stable running (`reports/OBJ implementation handoff.md:23`).
+4. Delete `pre-$v.db` once the next daily backup has run and reached R2. Old releases need no cleanup: the host keeps the last five in `/srv/riot-proxy/releases/`.
 
 ## Rolling back the binary
 
-When the new version misbehaves and no migration needs undoing:
+When the new version misbehaves and no migration needs undoing, deploy the previous tag: `ngf-deploy riot-proxy -v v<old version>`, then approve. It is still on the host, so nothing is uploaded; the restart and the health check are the same as for an upgrade. Without GitHub, the same step on the host: `sudo -u deploy env SSH_ORIGINAL_COMMAND="activate v<old version>" /usr/local/sbin/ninja-deploy riot-proxy` (`ninja-deploy list` shows what is on disk).
 
-1. `sudo systemctl stop riot-proxy`.
-2. `sudo cp /usr/local/bin/riot-proxy.<old version> /usr/local/bin/riot-proxy`.
-3. `sudo systemctl start riot-proxy`, then the verification above.
-
-> **TODO (unverified):** how an older binary behaves when the database already carries migrations it does not embed. `refinery` is run with `set_grouped(true)` (`src/db/mod.rs:343-345`) and nothing in `src/db/mod.rs` handles a history newer than the embedded set; whether it errors or ignores the extra versions was not exercised. Treat "new migration, then downgrade" as the restore case below.
+A binary older than the database's newest migration does not start. `migrate` runs refinery with its defaults (`src/db/mod.rs:361-365`), and refinery aborts with `MissingVersion` when the history in `refinery_schema_history` holds a version the binary does not embed (`abort_missing` defaults to true: refinery-core 0.9.2 `src/runner.rs:240-241`, `src/traits/mod.rs:26-28`). So after a release that migrated, going back is the restore below, not a redeploy; the same holds for the automatic rollback, which is why the health wait must cover the migration. A rollback that interrupts a migration is safe: the migrations apply in one transaction (`set_grouped(true)`), which the stopped process never commits.
 
 ## Rolling back a migration
 
-Migrations are forward-only, so undoing one means restoring the pre-upgrade backup (`docs/design/07-deployment.md:231`). The backup must come from before the upgrade: the daily backup runs first in `maintenance`, which is why it precedes the day's other steps, and step 3 above exists for the same reason.
+Migrations are forward-only, so undoing one means restoring the pre-upgrade backup (`docs/design/07-deployment.md:231`). The backup must come from before the upgrade: the daily backup runs first in `maintenance`, which is why it precedes the day's other steps, and step 1 above exists for the same reason.
 
-1. Stop the service, put the old binary back (above, steps 1 and 2).
+1. `sudo systemctl stop riot-proxy`.
 2. Restore the file: [backup-and-restore.md](./backup-and-restore.md), "Restoring the database". With the service stopped, fold the current file's WAL in before moving it aside; never delete a non-empty `-wal` (`deploy/README.md:246-265`).
-3. Start, verify, then rebuild the pack map for packs written since the backup: `rp packs reindex --since <max pack_id in the restored file>` (`deploy/README.md:136-138`).
+3. Start the old release on the restored file by deploying its tag ("Rolling back the binary", above), verify, then rebuild the pack map for packs written since the backup: `rp packs reindex --since <max pack_id in the restored file>` (`deploy/README.md:136-138`).
 
 What a restore costs, by table:
 
@@ -100,5 +86,5 @@ What a restore costs, by table:
 Rolling back only the object-storage feature is configuration, not a restore: unset `ARCHIVE_OBJECT_URL` and offloaded rows read as misses and re-fetch from Riot; the bucket keeps everything and re-setting the URL restores reads (`docs/design/12-object-storage-and-hosting.md:941-943`).
 
 ---
-**Sources:** `.github/workflows/release.yml:L202-L217`, `docs/workflows/release-process.md`, `docs/design/07-deployment.md:L177,L216,L225-L231`, `docs/design/12-object-storage-and-hosting.md:L941-L949`, `deploy/README.md:L121-L138,L246-L265`, `src/cli/serve.rs:L43-L429`, `src/cli/backup.rs:L10-L21`, `src/db/mod.rs:L148-L155,L343-L345`, `src/jobs/scheduler.rs:L977-L1008,L1326-L1335`, `src/jobs/ticks.rs:L172,L200-L204`, `src/jobs/maintenance.rs:L34,L36,L237-L240,L294-L306`, `src/jobs/archive.rs:L186-L191`, `src/riot/limiter/persist.rs:L23,L92-L94`, `src/cache/l2.rs:L186-L216`, `src/consumers.rs:L228-L283`, `src/routes/health.rs:L152-L204`, `src/routes/admin.rs:L2489-L2516`, `src/app.rs:L35,L240-L253`, `docs/DECISIONS.md:L1722-L1730`, `reports/OBJ implementation handoff.md:L23`, `docs/_meta/scratch/jobs-and-observability.md`, `docs/_meta/scratch/persistence.md`, `docs/_meta/scratch/routes.md:L157,L168,L187`
-**Last verified:** 2026-11-03 against commit `26b3818`
+**Sources:** `.github/workflows/release.yml:L202-L217`, `.github/workflows/deploy.yml`, `docs/workflows/release-process.md`, `docs/design/07-deployment.md:L177,L216,L225-L231`, `docs/design/12-object-storage-and-hosting.md:L941-L949`, `deploy/README.md:L121-L138,L246-L265`, `src/cli/serve.rs:L43-L429`, `src/cli/backup.rs:L10-L21`, `src/db/mod.rs:L148-L155,L361-L365`, refinery-core 0.9.2 `src/runner.rs:L240-L241` and `src/traits/mod.rs:L26-L28`, `src/jobs/scheduler.rs:L977-L1008,L1326-L1335`, `src/jobs/ticks.rs:L172,L200-L204`, `src/jobs/maintenance.rs:L34,L36,L237-L240,L294-L306`, `src/jobs/archive.rs:L186-L191`, `src/riot/limiter/persist.rs:L23,L92-L94`, `src/cache/l2.rs:L186-L216`, `src/consumers.rs:L228-L283`, `src/routes/health.rs:L152-L204`, `src/routes/admin.rs:L2489-L2516`, `src/app.rs:L35,L240-L253`, `docs/DECISIONS.md:L1722-L1730`, `docs/_meta/scratch/jobs-and-observability.md`, `docs/_meta/scratch/persistence.md`, `docs/_meta/scratch/routes.md:L157,L168,L187`
+**Last verified:** 2026-11-03 against commit `2b01bd0`

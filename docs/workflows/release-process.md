@@ -47,27 +47,17 @@ What CI checks on the way is in [ci.md](./ci.md).
 
 ## Deploying to production
 
-Production (`ngf-prod-syd1`) runs the static amd64 binary under systemd, not Docker. Nothing in the repository deploys it; the owner does, after the release workflow finishes. The procedure follows `docs/design/07-deployment.md#upgrade-procedure` and `deploy/README.md`:
+Production (`ngf-prod-syd1`) runs the static amd64 binary under systemd, not Docker, from `/srv/riot-proxy/current/` (`/usr/local/bin/riot-proxy` is a symlink to it). `.github/workflows/deploy.yml` deploys a release there through the shared pipeline in `NinjaGoldfinch/ninja-actions`, and only when the owner starts and approves it (DEP-03, ADR-196):
 
-1. On the box, download the asset and check it:
+1. If the release carries a migration, take the manual backup first ([../deployment/upgrade-and-rollback.md](../deployment/upgrade-and-rollback.md), "Upgrade procedure", step 1).
+2. Start the deploy: `ngf-deploy riot-proxy` on the owner's machine (the latest release; `-v vX.Y.Z` for another), or Actions → `deploy` → Run workflow with the tag, or `gh workflow run deploy.yml -f env=prod -f version=vX.Y.Z`.
+3. Approve it: the run waits on the `prod` environment.
+4. The job runs on the Proxmox runner. It downloads `riot-proxy-x86_64-linux.tar.gz` and checks it against `sha256sums`, uploads it to `/srv/riot-proxy/releases/vX.Y.Z/` over SSH unless the host already has it, and has the host point `current` at it, restart `riot-proxy` and wait for `/readyz` to report the new `version` (ADR-194). If it does not within the host's health wait, the host points `current` back, restarts, and the job fails. The run's summary holds the host's log.
+5. Verify as in [../deployment/upgrade-and-rollback.md](../deployment/upgrade-and-rollback.md), "Upgrade procedure", step 3.
 
-   ```bash
-   v=X.Y.Z
-   curl -fsSLO https://github.com/NinjaGoldfinch/riot-proxy/releases/download/v$v/riot-proxy-linux-amd64
-   curl -fsSLO https://github.com/NinjaGoldfinch/riot-proxy/releases/download/v$v/sha256sums
-   sha256sum -c --ignore-missing sha256sums
-   ```
+Rolling back on purpose is deploying the previous tag: the host keeps the last five releases, so there is no upload. A migration is not undone that way (same page, "Rolling back a migration").
 
-2. Keep the running binary as the rollback: `sudo cp /usr/local/bin/riot-proxy /usr/local/bin/riot-proxy.<old version>`.
-3. Install: `sudo install -m 0755 riot-proxy-linux-amd64 /usr/local/bin/riot-proxy`.
-4. If the release adds a migration that rewrites a large table, take a manual backup first: `riot-proxy backup /var/lib/riot-proxy/data/pre-$v.db` (run as the service user with its environment; `deploy/README.md` defines an `rp` helper for this).
-5. `sudo systemctl restart riot-proxy`. Migrations apply on boot; the limiter checkpoint is restored; L1 warms from L2. Downtime is the restart, under a second plus any migration.
-6. Verify: `curl -s localhost:8080/readyz` is `{"ok":true,…}`; `curl -s -H "Authorization: Bearer $ADMIN_KEY" localhost:8080/v1/admin/info | jq '.version,.gitSha'` shows the new version; `sudo journalctl -u riot-proxy -n 50` shows `database ready` and `listening`.
-7. Note the deployment in `PROGRESS.md` if the release line asks for it.
-
-Rollback is the reverse: stop, copy `riot-proxy.<old version>` back, start. Migrations are forward-only, so a release whose migration must be undone needs the backup from step 4 (see [../deployment/upgrade-and-rollback.md](../deployment/upgrade-and-rollback.md)).
-
-> **TODO (unverified):** the exact commands the owner uses on `ngf-prod-syd1` are not in the repository. The steps above are assembled from design/07 §Upgrade procedure, deploy/README.md and the rollback copy naming (`/usr/local/bin/riot-proxy.2.5.0`) recorded in the session notes for the v2.6.0 deploy. Confirm against the owner's own notes.
+The host side is set up once with `infra/deploy-host-setup.sh` and `infra/deploy-host-add.sh` from `NinjaGoldfinch/ninja-actions` (its README, "Setting up a host"); for riot-proxy, `--adopt` moved the running binary into `/srv` as the first release and `--link` left the symlink.
 
 ## The dev VM
 
@@ -78,5 +68,5 @@ The Proxmox dev VM (`deploy/proxmox/`) is not part of the release: it follows `:
 ninjagoldfinch.lol pins the proxy contract it was verified against (its generated client comes from `riot-proxy spec`; the site's SPD series records `2.6.0`). A release that changes a response shape the site reads needs a matching site change and the site's own manual deploy; see [../integration/contract.md](../integration/contract.md).
 
 ---
-**Sources:** `.github/workflows/release.yml`, `.github/workflows/edge.yml`, `Cargo.toml:L3`, `git show --stat v2.7.0` (commit `10cf81d`), `git tag -l`, `docs/design/07-deployment.md#upgrade-procedure`, `docs/design/07-deployment.md#build-identity-adm-03`, `deploy/README.md`, `deploy/proxmox/README.md`, `deploy/proxmox/files/riot-proxy-update`
-**Last verified:** 2026-11-03 against commit `26b3818`
+**Sources:** `.github/workflows/release.yml`, `.github/workflows/deploy.yml`, `.github/workflows/edge.yml`, `Cargo.toml:L3`, `git show --stat v2.7.0` (commit `10cf81d`), `git tag -l`, `docs/design/07-deployment.md#upgrade-procedure`, `docs/design/07-deployment.md#build-identity-adm-03`, `deploy/README.md`, `deploy/proxmox/README.md`, `deploy/proxmox/files/riot-proxy-update`
+**Last verified:** 2026-11-03 against commit `2b01bd0`

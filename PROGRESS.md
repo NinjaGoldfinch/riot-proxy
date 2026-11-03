@@ -408,8 +408,8 @@ The review's findings, one task each, most severe first.
 ## DEP — deploys through CI (owner request 2026-11-03)
 Production deploys move to the shared pipeline in `NinjaGoldfinch/ninja-actions` (`deploy/` action, `ninja-deploy` on the host), as ninja-monitor's did: a release is uploaded to `/srv/riot-proxy/releases/`, activated behind the owner's approval on the `prod` environment, health-checked on `/readyz` and rolled back automatically if it fails. Staging comes later, as its own step.
 - [x] DEP-01 `/readyz` reports the running `version`, so a deploy waits for the new binary rather than the old one (#247, ADR-194)
-- [~] DEP-02 a release also ships `riot-proxy-x86_64-linux.tar.gz` (the binary and `version.json`, listed in `sha256sums`), the form `ninja-deploy` uploads (`ci/DEP-02-deploy-tarball`, ADR-195)
-- [ ] DEP-03 `deploy.yml`: a release to `prod` through `ninja-actions/deploy@v1`, on the Proxmox runner, behind the owner's approval
+- [x] DEP-02 a release also ships `riot-proxy-x86_64-linux.tar.gz` (the binary and `version.json`, listed in `sha256sums`), the form `ninja-deploy` uploads (#248, ADR-195)
+- [~] DEP-03 `deploy.yml`: a release to `prod` through `ninja-actions/deploy@v1`, on the Proxmox runner, behind the owner's approval; the upgrade and rollback docs follow it (`ci/DEP-03-deploy-workflow`, ADR-196)
 
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
