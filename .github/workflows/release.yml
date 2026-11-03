@@ -2,7 +2,7 @@ name: release
 
 # Plan P8-05 (design/07). A `v*` tag builds three static or native binaries,
 # pushes the image to GHCR and publishes a GitHub release with the binaries,
-# `sha256sums` and the image digest. A tag with a pre-release suffix
+# `sha256sums` and the image digest, plus the amd64 deploy tarball (DEP-02, ADR-195). A tag with a pre-release suffix
 # (`v2.0.0-rc.0`) makes a pre-release and does not move `:2`.
 # A pull request that touches this file runs the builds and publishes nothing.
 # See ADR-063. The image's description lists the commits since the previous
@@ -80,10 +80,33 @@ jobs:
           bin=dist/${{ matrix.asset }}
           file "$bin" | grep -qE "static(ally|-pie) linked"
           test "$(stat -c %s "$bin")" -lt $((24 * 1024 * 1024))
+      # DEP-02 (ADR-195): the form ninja-deploy uploads to a host. One top-level
+      # directory with the binary and version.json; the release lists it in sha256sums.
+      - if: matrix.asset == 'riot-proxy-linux-amd64'
+        name: the deploy tarball holds the binary and version.json
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          tgz=dist/riot-proxy-x86_64-linux.tar.gz
+          mkdir -p pkg/riot-proxy
+          cp dist/${{ matrix.asset }} pkg/riot-proxy/riot-proxy
+          printf '{"version":"v%s","commit":"%s","built_at":"%s"}\n' \
+            "$VERSION" "$GITHUB_SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > pkg/riot-proxy/version.json
+          tar -czf "$tgz" -C pkg riot-proxy
+          test "$(tar -tzf "$tgz" | sort | tr '\n' ' ')" = "riot-proxy/ riot-proxy/riot-proxy riot-proxy/version.json "
+          tar -xzOf "$tgz" riot-proxy/version.json | tee /dev/stderr | grep -q "\"version\":\"v$VERSION\""
+          mkdir unpacked && tar -xzf "$tgz" -C unpacked
+          unpacked/riot-proxy/riot-proxy --version | grep -qx "riot-proxy $VERSION"
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.asset }}
           path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+      - if: matrix.asset == 'riot-proxy-linux-amd64'
+        uses: actions/upload-artifact@v7
+        with:
+          name: riot-proxy-x86_64-linux.tar.gz
+          path: dist/riot-proxy-x86_64-linux.tar.gz
           if-no-files-found: error
 
   image:

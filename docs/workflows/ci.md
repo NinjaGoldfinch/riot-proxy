@@ -183,6 +183,7 @@ Extracts `version = "…"` from `Cargo.toml`. On a tag, fails unless the tag is 
 2. `cargo build --release --locked --target <target>`.
 3. `--version` must print exactly `riot-proxy <version>`; the binary must contain the 12-character `GIT_SHA` (ADM-03).
 4. On Linux: static and under 24 MiB.
+5. On x86_64: `riot-proxy-x86_64-linux.tar.gz`, the binary as `riot-proxy/riot-proxy` with `riot-proxy/version.json` (`version`, `commit`, `built_at`), the form `ninja-deploy` uploads to a host. The step checks it holds exactly those two files, that `version.json` names the tag, and that the unpacked binary reports it (DEP-02, ADR-195). Uploaded as its own artifact; the `release` job's `riot-proxy-*` pattern picks it up with the binaries, so it is in `sha256sums`.
 5. Uploads `dist/<asset>` as an artifact (`if-no-files-found: error`).
 
 ### `image`
@@ -225,4 +226,4 @@ Extracts `version = "…"` from `Cargo.toml`. On a tag, fails unless the tag is 
 
 ---
 **Sources:** `.github/workflows/ci.yml`, `docs/_meta/tools/docs-guard.py`, `docs/_meta/tools/openapi-check.py`, `.github/workflows/edge.yml`, `.github/workflows/release.yml`, `.config/nextest.toml`, `scripts/docker-paths.sh`, `scripts/edge-tags.sh`, `scripts/image-description.sh`, `scripts/check-image-description.sh`, `justfile`, `Dockerfile.release`
-**Last verified:** 2026-10-19 against commit `52fa67d`
+**Last verified:** 2026-11-03 against commit `26b3818`

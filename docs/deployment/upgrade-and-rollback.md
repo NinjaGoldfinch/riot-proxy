@@ -4,11 +4,11 @@ How a new release reaches `ngf-prod-syd1`, what the proxy does on its first boot
 
 ## Where automation stops
 
-`release.yml` builds the binaries, writes `sha256sums`, publishes the GitHub release and pushes the image tags (`.github/workflows/release.yml:179-194`). Nothing in the repository deploys to production: once the GitHub release is published, a person downloads the asset and installs it (`docs/workflows/release-process.md`, "Deploying to production"). The dev VM follows the `:edge` image on its own and is not part of this (`docs/workflows/release-process.md`, "The dev VM").
+`release.yml` builds the binaries, writes `sha256sums`, publishes the GitHub release and pushes the image tags (`.github/workflows/release.yml:202-217`). Nothing in the repository deploys to production: once the GitHub release is published, a person downloads the asset and installs it (`docs/workflows/release-process.md`, "Deploying to production"). The dev VM follows the `:edge` image on its own and is not part of this (`docs/workflows/release-process.md`, "The dev VM").
 
 ## What an upgrade does on boot
 
-The first `serve` of a new binary runs the boot sequence in `src/cli/serve.rs:43-417` (`docs/_meta/scratch/jobs-and-observability.md:7-36`). The steps that matter for an upgrade:
+The first `serve` of a new binary runs the boot sequence in `src/cli/serve.rs:43-429` (`docs/_meta/scratch/jobs-and-observability.md:7-36`). The steps that matter for an upgrade:
 
 | Step | What happens | Evidence |
 |---|---|---|
@@ -20,7 +20,7 @@ The first `serve` of a new binary runs the boot sequence in `src/cli/serve.rs:43
 | Catch-ups | boot also queues `archive:match` for stored matches missing their timeline, `facts:reextract` if any match has an older facts version, `tiers:backfill` for unstamped facts, analytics rebuilds for unsplit ladders, with `AGGREGATE_DELTA_S` > 0 one full rebuild per configured ladder not yet stamped (after V0029, every one: about 58 minutes of writer time on production by the 2026-10-20 runs; see [../operations/runbook.md](../operations/runbook.md#19-analytics-deltas-rebuilds-and-recompute-now)), and one `archive:offload` | `src/cli/serve.rs:293-341` |
 | Ticks | every tick fires immediately at boot: `maintenance` (and so the daily backup, if today's is missing), `ddragon:sync`, `names:backfill`, the poll fan-outs, `aggregate:delta` (unless `AGGREGATE_DELTA_S=0`) and, when enabled, `ladder:crawl` | `src/jobs/ticks.rs:172,200-204`; `docs/_meta/scratch/jobs-and-observability.md:32` |
 
-On the way down, `SIGTERM` drains requests for up to 10 s, running jobs get 10 s to finish or are aborted and stay `running` for the next boot's `recover`, then the limiter checkpoint and the L2 queue are flushed (`limiter checkpoint and L2 flushed; stopped`) (`src/app.rs:35,240-253`; `src/cli/serve.rs:406-420`; `src/jobs/scheduler.rs:1291-1300`). Downtime is the restart plus any migration; `V0025` took 3 s on production, `V0026` and `V0027` applied together at the first start of v2.7.0 (session notes, 2026-10-15 and 2026-10-19).
+On the way down, `SIGTERM` drains requests for up to 10 s, running jobs get 10 s to finish or are aborted and stay `running` for the next boot's `recover`, then the limiter checkpoint and the L2 queue are flushed (`limiter checkpoint and L2 flushed; stopped`) (`src/app.rs:35,240-253`; `src/cli/serve.rs:418-432`; `src/jobs/scheduler.rs:1326-1335`). Downtime is the restart plus any migration; `V0025` took 3 s on production, `V0026` and `V0027` applied together at the first start of v2.7.0 (session notes, 2026-10-15 and 2026-10-19).
 
 ## Pre-upgrade checklist
 
@@ -63,7 +63,7 @@ These follow `docs/workflows/release-process.md`, `docs/design/07-deployment.md:
    curl -s -H "Authorization: Bearer $ADMIN_KEY" localhost:8080/v1/admin/info | jq '.version,.gitSha'
    ```
 
-   A boot-queued analytics rebuild holds the writer for minutes; `/readyz` stays 200 through it with `"writerBusy":true` and `writerBusyMs` climbing (WR-02; `src/routes/health.rs:148-200`). Before WR-02 it answered `"sqlite":false` until `analytics recomputed` (session note, 2026-10-15).
+   A boot-queued analytics rebuild holds the writer for minutes; `/readyz` stays 200 through it with `"writerBusy":true` and `writerBusyMs` climbing (WR-02; `src/routes/health.rs:152-204`). Before WR-02 it answered `"sqlite":false` until `analytics recomputed` (session note, 2026-10-15).
 7. Delete `pre-$v.db` once the next daily backup has run and reached R2; delete the old binary after a few days of stable running (`reports/OBJ implementation handoff.md:23`).
 
 ## Rolling back the binary
@@ -100,5 +100,5 @@ What a restore costs, by table:
 Rolling back only the object-storage feature is configuration, not a restore: unset `ARCHIVE_OBJECT_URL` and offloaded rows read as misses and re-fetch from Riot; the bucket keeps everything and re-setting the URL restores reads (`docs/design/12-object-storage-and-hosting.md:941-943`).
 
 ---
-**Sources:** `.github/workflows/release.yml:L179-L194`, `docs/workflows/release-process.md`, `docs/design/07-deployment.md:L177,L216,L225-L231`, `docs/design/12-object-storage-and-hosting.md:L938-L946`, `deploy/README.md:L121-L138,L246-L265`, `src/cli/serve.rs:L43-L417`, `src/cli/backup.rs:L10-L21`, `src/db/mod.rs:L148-L155,L343-L345`, `src/jobs/scheduler.rs:L963-L973,L1291-L1300`, `src/jobs/ticks.rs:L172,L200-L204`, `src/jobs/maintenance.rs:L34,L36,L237-L240,L294-L306`, `src/jobs/archive.rs:L186-L191`, `src/riot/limiter/persist.rs:L23,L92-L94`, `src/cache/l2.rs:L186-L216`, `src/consumers.rs:L228-L283`, `src/routes/health.rs:L148-L200`, `src/routes/admin.rs:L2489-L2516`, `src/app.rs:L35,L240-L253`, `docs/DECISIONS.md:L1722-L1730`, `reports/OBJ implementation handoff.md:L23`, `docs/_meta/scratch/jobs-and-observability.md`, `docs/_meta/scratch/persistence.md`, `docs/_meta/scratch/routes.md:L157,L168,L187`
-**Last verified:** 2026-11-03 against commit `3c27e29`
+**Sources:** `.github/workflows/release.yml:L202-L217`, `docs/workflows/release-process.md`, `docs/design/07-deployment.md:L177,L216,L225-L231`, `docs/design/12-object-storage-and-hosting.md:L941-L949`, `deploy/README.md:L121-L138,L246-L265`, `src/cli/serve.rs:L43-L429`, `src/cli/backup.rs:L10-L21`, `src/db/mod.rs:L148-L155,L343-L345`, `src/jobs/scheduler.rs:L977-L1008,L1326-L1335`, `src/jobs/ticks.rs:L172,L200-L204`, `src/jobs/maintenance.rs:L34,L36,L237-L240,L294-L306`, `src/jobs/archive.rs:L186-L191`, `src/riot/limiter/persist.rs:L23,L92-L94`, `src/cache/l2.rs:L186-L216`, `src/consumers.rs:L228-L283`, `src/routes/health.rs:L152-L204`, `src/routes/admin.rs:L2489-L2516`, `src/app.rs:L35,L240-L253`, `docs/DECISIONS.md:L1722-L1730`, `reports/OBJ implementation handoff.md:L23`, `docs/_meta/scratch/jobs-and-observability.md`, `docs/_meta/scratch/persistence.md`, `docs/_meta/scratch/routes.md:L157,L168,L187`
+**Last verified:** 2026-11-03 against commit `26b3818`
