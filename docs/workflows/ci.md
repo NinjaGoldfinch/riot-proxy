@@ -226,4 +226,4 @@ Extracts `version = "…"` from `Cargo.toml`. On a tag, fails unless the tag is 
 
 ---
 **Sources:** `.github/workflows/ci.yml`, `docs/_meta/tools/docs-guard.py`, `docs/_meta/tools/openapi-check.py`, `.github/workflows/edge.yml`, `.github/workflows/release.yml`, `.config/nextest.toml`, `scripts/docker-paths.sh`, `scripts/edge-tags.sh`, `scripts/image-description.sh`, `scripts/check-image-description.sh`, `justfile`, `Dockerfile.release`
-**Last verified:** 2026-10-19 against commit `52fa67d`
+**Last verified:** 2026-11-03 against commit `26b3818`
