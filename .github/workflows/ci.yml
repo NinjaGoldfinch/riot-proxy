@@ -250,4 +250,3 @@ jobs:
       - run: scripts/image-description.test.sh
       - run: scripts/edge-tags.test.sh
       - run: scripts/docker-paths.test.sh
-      - run: scripts/deploy-workflow.test.sh

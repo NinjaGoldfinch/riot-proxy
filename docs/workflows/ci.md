@@ -130,9 +130,9 @@ Shell and unit-file tests for the operational kit. Not a required check (ADR-070
 
 1. `apt-get install shellcheck python3-yaml cloud-init rclone`.
 2. `deploy/proxmox/test.sh` (the dev VM kit, OPS-02).
-3. `deploy/test.sh` (the archive replica units, OBJ-04).
+3. `deploy/test.sh` (the archive replica units, OBJ-04; and `scripts/deploy-workflow.test.sh`, below).
 4. `scripts/image-description.test.sh`, `scripts/edge-tags.test.sh`, `scripts/docker-paths.test.sh`.
-5. `scripts/deploy-workflow.test.sh`: `deploy.yml` deploys the tarball `release.yml` builds, against the checksum file it writes, on the Proxmox runner behind the chosen environment, through `ninja-actions/deploy@v1` (DEP-03, ADR-196).
+5. `scripts/deploy-workflow.test.sh`, run by `deploy/test.sh`: `deploy.yml` deploys the tarball `release.yml` builds, against the checksum file it writes, on the Proxmox runner behind the chosen environment, through `ninja-actions/deploy@v1` (DEP-03, ADR-196).
 
 ## `edge.yml`
 
@@ -228,7 +228,7 @@ Extracts `version = "…"` from `Cargo.toml`. On a tag, fails unless the tag is 
 ---
 ## `deploy.yml`
 
-Deploys a release to production (DEP-03, ADR-196). `workflow_dispatch` only, with `env` (`prod`; staging comes later) and `version` (a release tag); the owner starts it, with `ngf-deploy riot-proxy` or from the Actions tab, and approves it on the `prod` environment. Concurrency group `deploy-<env>`, never cancelled. One job on the Proxmox runner (`self-hosted, linux, proxmox`), 30-minute timeout, calling `NinjaGoldfinch/ninja-actions/deploy@v1` with `riot-proxy-x86_64-linux.tar.gz`, `sha256sums`, and the environment's `DEPLOY_HOST`, `DEPLOY_KNOWN_HOSTS` and `DEPLOY_SSH_KEY`. What happens on the host is in [release-process.md](./release-process.md), "Deploying to production"; `scripts/deploy-workflow.test.sh` (the `ops` job) checks the workflow's wiring, since it cannot run in CI.
+Deploys a release to production (DEP-03, ADR-196). `workflow_dispatch` only, with `env` (`prod`; staging comes later) and `version` (a release tag); the owner starts it, with `ngf-deploy riot-proxy` or from the Actions tab, and approves it on the `prod` environment. Concurrency group `deploy-<env>`, never cancelled. One job on the Proxmox runner (`self-hosted, linux, proxmox`), 30-minute timeout, calling `NinjaGoldfinch/ninja-actions/deploy@v1` with `riot-proxy-x86_64-linux.tar.gz`, `sha256sums`, and the environment's `DEPLOY_HOST`, `DEPLOY_KNOWN_HOSTS` and `DEPLOY_SSH_KEY`. What happens on the host is in [release-process.md](./release-process.md), "Deploying to production"; `scripts/deploy-workflow.test.sh` (the `ops` job, through `deploy/test.sh`) checks the workflow's wiring, since it cannot run in CI.
 
 **Sources:** `.github/workflows/ci.yml`, `.github/workflows/deploy.yml`, `scripts/deploy-workflow.test.sh`, `docs/_meta/tools/docs-guard.py`, `docs/_meta/tools/openapi-check.py`, `.github/workflows/edge.yml`, `.github/workflows/release.yml`, `.config/nextest.toml`, `scripts/docker-paths.sh`, `scripts/edge-tags.sh`, `scripts/image-description.sh`, `scripts/check-image-description.sh`, `justfile`, `Dockerfile.release`
 **Last verified:** 2026-11-03 against commit `2b01bd0`
