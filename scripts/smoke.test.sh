@@ -70,7 +70,8 @@ run() {
   for _ in $(seq 50); do [[ -s $tmp/port ]] && break; sleep 0.1; done
   port=$(cat "$tmp/port")
   env SMOKE_PAUSE=0 "$@" "$smoke" "http://127.0.0.1:$port/" "$version" > "$tmp/out" 2>&1 || code=$?
-  kill "$pid" && wait "$pid" 2>/dev/null || true
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
   pid=''
   : > "$tmp/port"
   if [[ $code == "$want" ]] && grep -qF -- "$grep_for" "$tmp/out"; then ok "$name"; else
