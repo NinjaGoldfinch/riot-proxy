@@ -2,23 +2,25 @@
 
 Every GitHub Actions workflow in `.github/workflows/`, job by job: what triggers it, what each step checks, which secrets it needs, how to run the same checks locally, and how to read a failed run.
 
-There are three workflows. None of them deploys to production; see [release-process.md](./release-process.md) for the manual hand-off.
+There are four workflows. `release.yml` deploys every release to staging through `deploy.yml`; production is deployed only by hand, behind an approval, and only a version that passed on staging (see [release-process.md](./release-process.md)).
 
 | File | Name | Runs on | Produces |
 |---|---|---|---|
 | `ci.yml` | `ci` | every push to `main`, every pull request | pass/fail checks, a coverage summary, showcase screenshots, the documentation gate |
 | `edge.yml` | `edge` | every push to `main` (and pull requests that touch the workflow or its scripts) | `ghcr.io/ninjagoldfinch/riot-proxy:edge` and `:sha-<short>` |
-| `release.yml` | `release` | a pushed `v*` tag (and pull requests that touch the workflow or its scripts) | three binaries, `sha256sums`, a GitHub release, `ghcr.io/ninjagoldfinch/riot-proxy:<version>` and `:2` |
+| `release.yml` | `release` | a pushed `v*` tag (and pull requests that touch the workflow or its scripts) | three binaries, `sha256sums`, a GitHub release, `ghcr.io/ninjagoldfinch/riot-proxy:<version>` and `:2`, a staging deploy and its `staging/smoke` status |
+| `deploy.yml` | `deploy` | called by `release.yml` for staging; started by hand for either | a release live on staging or production; the statuses `staging/smoke` and `prod/deployed` |
 
 ## Secrets and variables
 
-No repository secret is required. Every workflow uses only the automatic `GITHUB_TOKEN`:
+No repository secret is required. `deploy.yml` reads its environment's secrets (`DEPLOY_SSH_KEY`; on `staging` also `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET`, the Access service token) and variables (`DEPLOY_HOST`, `DEPLOY_KNOWN_HOSTS`); `release.yml`'s `staging` job passes them on with `secrets: inherit`. Otherwise every workflow uses only the automatic `GITHUB_TOKEN`:
 
 | Workflow | Use of `GITHUB_TOKEN` | Permission requested |
 |---|---|---|
 | `ci.yml` | none | default |
 | `edge.yml` | `docker/login-action` to GHCR on push events | `contents: read`, `packages: write` |
-| `release.yml` | GHCR login (job `image`), `gh release create` (job `release`) | `packages: write`, `contents: write` |
+| `release.yml` | GHCR login (job `image`), `gh release create` (job `release`), the staging deploy's status (job `staging`) | `packages: write`, `contents: write`, `statuses: write` |
+| `deploy.yml` | reads and sets the commit statuses `staging/smoke` and `prod/deployed` | `contents: read`, `statuses: write` |
 
 The Riot key is never used in CI. Smoke tests start the binary with the literal `RIOT_API_KEY=ci-dummy-key-not-a-riot-key` (`ci.yml`, `build-musl` and `docker` jobs). The `test` job greps `tests/`, `src/` and `docs/` for anything matching `RGAPI-[0-9a-f-]{20,}` and fails if a key leaked.
 
@@ -130,9 +132,10 @@ Shell and unit-file tests for the operational kit. Not a required check (ADR-070
 
 1. `apt-get install shellcheck python3-yaml cloud-init rclone`.
 2. `deploy/proxmox/test.sh` (the dev VM kit, OPS-02).
-3. `deploy/test.sh` (the archive replica units, OBJ-04; and `scripts/deploy-workflow.test.sh`, below).
+3. `deploy/test.sh` (the archive replica units, OBJ-04; and `scripts/deploy-workflow.test.sh` and `scripts/smoke.test.sh`, below).
 4. `scripts/image-description.test.sh`, `scripts/edge-tags.test.sh`, `scripts/docker-paths.test.sh`.
-5. `scripts/deploy-workflow.test.sh`, run by `deploy/test.sh`: `deploy.yml` deploys the tarball `release.yml` builds, against the checksum file it writes, on the Proxmox runner behind the chosen environment, through `ninja-actions/deploy@v1` (DEP-03, ADR-196).
+5. `scripts/deploy-workflow.test.sh`, run by `deploy/test.sh`: `deploy.yml` deploys the tarball `release.yml` builds, against the checksum file it writes, on the Proxmox runner behind the chosen environment, through `ninja-actions/deploy@v1` (DEP-03, ADR-196); prod requires `staging/smoke` or `prod/deployed` and sets `prod/deployed`; staging is smoke-tested and records `staging/smoke`; `release.yml` calls it for staging with `secrets: inherit` (DEP-05, ADR-198).
+6. `scripts/smoke.test.sh`, run by `deploy/test.sh`: `scripts/smoke.sh` against a stub server, one case for each way a release can be wrong and for Access refusing the token (DEP-05).
 
 ## `edge.yml`
 
@@ -164,10 +167,11 @@ flowchart LR
     version --> b3["build-darwin: aarch64 darwin<br/>macos-15"]
     b1 & b2 --> image["image: multi-arch<br/>ghcr.io :version, :2"]
     image --> release["release: Linux binaries, tarball,<br/>sha256sums, notes"]
-    release & b3 --> attach["attach-darwin: macOS binary,<br/>sha256sums again"]
+    release --> staging["staging: deploy.yml to staging,<br/>smoke test, staging/smoke"]
+    staging & b3 --> attach["attach-darwin: macOS binary,<br/>sha256sums again"]
 ```
 
-The Linux matrix fans out after the version check and joins again before the image and release jobs. The macOS build runs beside it but the release does not wait for it: GitHub's macOS arm64 runners can go unacquired long enough to cancel the job, which held v2.10.0 back. `attach-darwin` adds the binary to the published release once it exists (DEP-04, ADR-197).
+The Linux matrix fans out after the version check and joins again before the image and release jobs. The macOS build runs beside it but the release does not wait for it: GitHub's macOS arm64 runners can go unacquired long enough to cancel the job, which held v2.10.0 back. `attach-darwin` adds the binary to the published release once it exists (DEP-04, ADR-197), after the staging deploy (DEP-05, ADR-198).
 
 ### `version`
 
@@ -197,7 +201,7 @@ Extracts `version = "…"` from `Cargo.toml`. On a tag, fails unless the tag is 
 2. Describes the image with the commits since the previous `v*` tag (`git describe --tags --abbrev=0 --match 'v*' "$GITHUB_SHA^"`).
 3. `docker/metadata-action@v6` with semver tags `{{version}}` and `{{major}}`; `{{major}}` is skipped for pre-releases so an rc never moves `:2`.
 4. Logs in to GHCR on push; `docker/build-push-action@v7` for `linux/amd64,linux/arm64` from `Dockerfile.release` (which copies `dist/riot-proxy-linux-${TARGETARCH}`).
-5. Checks the index description; builds and smoke-tests the amd64 image locally as `riot-proxy:release`.
+5. Checks the index description; builds and smoke-tests the amd64 image locally as `riot-proxy:release`: its own healthcheck, then `scripts/smoke.sh http://127.0.0.1:8080 v<version>`, the test staging's deploy runs, which needs no Riot key (DEP-05).
 
 ### `release` (push only)
 
@@ -205,9 +209,13 @@ Extracts `version = "…"` from `Cargo.toml`. On a tag, fails unless the tag is 
 2. `sha256sum riot-proxy-* > sha256sums`.
 3. `gh release create <tag> dist/* --title <tag> --notes-file notes.md --generate-notes --verify-tag [--prerelease]`. The notes name the image tag and digest, say the binaries are static (Linux) or native (macOS), and that the macOS binary is attached once built.
 
+### `staging` (push only)
+
+Calls `deploy.yml` with `env: staging` and the tag, `secrets: inherit` (without it the called job's `DEPLOY_SSH_KEY` is empty) and `contents: read`, `statuses: write`. A failure fails the release run: that version does not go to production (`deploy.yml`, below).
+
 ### `attach-darwin` (push only)
 
-Needs `build-darwin` and `release`. Downloads the macOS artifact and the release's `sha256sums`, replaces any earlier `riot-proxy-darwin-arm64` line with the binary's checksum, checks the file, and uploads both with `gh release upload --clobber`. Re-running a failed or cancelled `build-darwin` (`gh run rerun <id> --failed`) runs it again; it is idempotent.
+Needs `build-darwin`, `release` and `staging`, and runs unless the run was cancelled once the first two succeeded, whatever the staging deploy did: `--clobber` deletes `sha256sums` for a moment, and a deploy reading it then would fail (DEP-05, ADR-198). Downloads the macOS artifact and the release's `sha256sums`, replaces any earlier `riot-proxy-darwin-arm64` line with the binary's checksum, checks the file, and uploads both with `gh release upload --clobber`. Re-running a failed or cancelled `build-darwin` (`gh run rerun <id> --failed`) runs it again; it is idempotent.
 
 ## Running the same checks locally
 
@@ -237,7 +245,14 @@ Needs `build-darwin` and `release`. Downloads the macOS artifact and the release
 ---
 ## `deploy.yml`
 
-Deploys a release to production (DEP-03, ADR-196). `workflow_dispatch` only, with `env` (`prod`; staging comes later) and `version` (a release tag); the owner starts it, with `ngf-deploy riot-proxy` or from the Actions tab, and approves it on the `prod` environment. Concurrency group `deploy-<env>`, never cancelled. One job on the Proxmox runner (`self-hosted, linux, proxmox`), 30-minute timeout, calling `NinjaGoldfinch/ninja-actions/deploy@v1` with `riot-proxy-x86_64-linux.tar.gz`, `sha256sums`, and the environment's `DEPLOY_HOST`, `DEPLOY_KNOWN_HOSTS` and `DEPLOY_SSH_KEY`. What happens on the host is in [release-process.md](./release-process.md), "Deploying to production"; `scripts/deploy-workflow.test.sh` (the `ops` job, through `deploy/test.sh`) checks the workflow's wiring, since it cannot run in CI.
+Deploys a release to staging or production (DEP-03, ADR-196; DEP-05, ADR-198). `workflow_dispatch` with `env` (`staging`, the default, or `prod`), `version` (a release tag) and `break_glass`, and `workflow_call` with `env` and `version`, which is how `release.yml` deploys every release to staging. The owner starts a production deploy, with `ngf-deploy riot-proxy` or from the Actions tab, and approves it on the `prod` environment.
 
-**Sources:** `.github/workflows/ci.yml`, `.github/workflows/deploy.yml`, `scripts/deploy-workflow.test.sh`, `docs/_meta/tools/docs-guard.py`, `docs/_meta/tools/openapi-check.py`, `.github/workflows/edge.yml`, `.github/workflows/release.yml`, `.config/nextest.toml`, `scripts/docker-paths.sh`, `scripts/edge-tags.sh`, `scripts/image-description.sh`, `scripts/check-image-description.sh`, `justfile`, `Dockerfile.release`
-**Last verified:** 2026-11-05 against commit `08d6e9f`
+1. `check`: refuses an `env` other than `staging` or `prod`, before a called workflow could create an unprotected environment by that name.
+2. `deploy`, on the Proxmox runner (`self-hosted, linux, proxmox`) behind the chosen environment, 30-minute timeout, concurrency group `deploy-<env>` on the job (so it holds when called), never cancelled, `contents: read` and `statuses: write`. It calls `NinjaGoldfinch/ninja-actions/deploy@v1` with `riot-proxy-x86_64-linux.tar.gz`, `sha256sums`, and the environment's `DEPLOY_HOST`, `DEPLOY_KNOWN_HOSTS` and `DEPLOY_SSH_KEY`. For prod it also passes `require-status: staging/smoke prod/deployed` (a version with neither at success is refused before anything is downloaded), `set-status: prod/deployed`, and `break_glass` as `unverified-reason` (skips the check; the reason goes to the log and the summary).
+3. On staging, after the action: checkout, then `scripts/smoke.sh https://riot-proxy-staging.ninjagoldfinch.com <tag>` with the `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` secrets as the Access service token. It calls nothing that needs Riot, so staging's expiring development key cannot fail it.
+4. On staging, whether the smoke test passed or failed: the commit status `staging/smoke` on the tag's commit, linking the run.
+
+What happens on the host is in [release-process.md](./release-process.md), "Staging" and "Deploying to production"; `scripts/deploy-workflow.test.sh` and `scripts/smoke.test.sh` (the `ops` job, through `deploy/test.sh`) check the wiring and the smoke test, since the workflow cannot run in CI.
+
+**Sources:** `.github/workflows/ci.yml`, `.github/workflows/deploy.yml`, `scripts/deploy-workflow.test.sh`, `scripts/smoke.sh`, `scripts/smoke.test.sh`, `deploy/test.sh`, `docs/_meta/tools/docs-guard.py`, `docs/_meta/tools/openapi-check.py`, `.github/workflows/edge.yml`, `.github/workflows/release.yml`, `.config/nextest.toml`, `scripts/docker-paths.sh`, `scripts/edge-tags.sh`, `scripts/image-description.sh`, `scripts/check-image-description.sh`, `justfile`, `Dockerfile.release`
+**Last verified:** 2026-11-05 against commit `18669d3`
