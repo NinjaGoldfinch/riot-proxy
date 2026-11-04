@@ -2,7 +2,7 @@
 
 Every `> **TODO (unverified):**` marker in this documentation set, collected in one place and ordered by how much it matters, with the file and line it lives on and a suggested way to close it. Regenerate the raw list with `python3 docs/_meta/tools/gaps.py` (only the blockquote form counts; prose that mentions the phrase does not).
 
-Counts on 2026-11-03: 49 markers across 29 files.
+Counts on 2026-11-03: 47 markers across 27 files.
 
 ## 1. Production state that lives only on the box
 
@@ -10,14 +10,13 @@ These matter most: the docs describe production from the design record and dated
 
 | Where | Gap | How to resolve |
 |---|---|---|
-| `deployment/overview.md:83`, `deployment/install.md:84`, `deployment/security.md:103`, `integration/environments.md:27` | The live `/etc/systemd/system/riot-proxy.service` is not in the repository; the design's unit (`docs/design/07-deployment.md` §Option C) is assumed | Commit the unit to `deploy/` (secrets are in the env file, not the unit) and reproduce it in `install.md` |
-| `deployment/configuration.md:198`, `operations/performance.md:69`, `integration/environments.md:27` | `/etc/riot-proxy/env` was not read; the "last known" values are session notes from 2026-10-10 to 2026-10-18 (`JOB_CONCURRENCY`, `BACKUP_KEEP`, `ARCHIVE_BODY_LOCAL_DAYS` among them) | Record the non-secret variables in `deployment/configuration.md` with the date |
+| `deployment/overview.md:83`, `deployment/install.md:84`, `deployment/security.md:101`, `integration/environments.md:27` | The live `/etc/systemd/system/riot-proxy.service` is not in the repository; the design's unit (`docs/design/07-deployment.md` §Option C) is assumed | Commit the unit to `deploy/` (secrets are in the env file, not the unit) and reproduce it in `install.md` |
+| `deployment/configuration.md:203`, `operations/performance.md:74`, `integration/environments.md:27` | `/etc/riot-proxy/env` was not read; the "last known" values are session notes from 2026-10-10 to 2026-10-18 (`JOB_CONCURRENCY`, `BACKUP_KEEP`, `ARCHIVE_BODY_LOCAL_DAYS` among them) | Record the non-secret variables in `deployment/configuration.md` with the date |
 | `deployment/backup-and-restore.md:53`, `deployment/overview.md:83` | `riot-proxy-offsite.{service,timer}` and its `verify.conf` drop-in (the 6-hourly backup copy to R2) exist only on the box | Commit them beside `riot-proxy-replica.*` in `deploy/`; add them to `deploy/test.sh` |
 | `integration/service-communication.md:104`, `deployment/install.md:161` | The site's production `PROXY_URL` and the name of its consumer key | Record the key name (never the key) in the site's README or here |
-| `operations/runbook.md:165`, `integration/monitoring-hooks.md:77`, `integration/monitoring-hooks.md:83`, `deployment/overview.md:135` | The live `/etc/ninja-monitor/config.toml` on both boxes; design/12 and ninja-monitor's example disagree on thresholds; whether the unit has `SupplementaryGroups=riot-proxy` or an ACL on `/var/lib/riot-proxy`; whether `ninja-ingest` is deployed | Commit a redacted copy of the config to ninja-monitor's repo or `deploy/` |
-| `deployment/security.md:44`, `deployment/security.md:118` | Whether the Onidel key is bucket-scoped; the R2 token's IP filter (a session note); whether R2 versioning or a deletion grace is on | Check the two consoles; note the answer in `deploy/README.md` §1 |
+| `operations/runbook.md:166`, `integration/monitoring-hooks.md:79`, `integration/monitoring-hooks.md:85`, `deployment/overview.md:135` | The live `/etc/ninja-monitor/config.toml` on both boxes; design/12 and ninja-monitor's example disagree on thresholds; whether the unit has `SupplementaryGroups=riot-proxy` or an ACL on `/var/lib/riot-proxy`; whether `ninja-ingest` is deployed | Commit a redacted copy of the config to ninja-monitor's repo or `deploy/` |
+| `deployment/security.md:42`, `deployment/security.md:116` | Whether the Onidel key is bucket-scoped; the R2 token's IP filter (a session note); whether R2 versioning or a deletion grace is on | Check the two consoles; note the answer in `deploy/README.md` §1 |
 | `deployment/install.md:23` | No host package manifest; `unattended-upgrades` and `chrony` are provisioning intent | `dpkg -l` on the box, then a short list in `install.md` |
-| `workflows/release-process.md:70` | The exact deploy commands the owner runs for a release | Paste the owner's procedure into `release-process.md` |
 | `workflows/ci.md:29` | Whether `ui` is now a required check on `main` | GitHub branch protection settings |
 
 ## 2. Measurements the repository does not hold
@@ -26,8 +25,9 @@ These matter most: the docs describe production from the design record and dated
 |---|---|---|
 | `deployment/capacity.md:26`, `:52` | The proxy's RSS and CPU or PSI readings on the 6-vCPU host; only 2-vCPU figures exist | Read ninja-monitor's local API once under load; add a dated row |
 | `deployment/capacity.md:101`, `operations/runbook.md:128` | Whether Onidel counts ingress against the 6 TB; the site's traffic; how outbound traffic is measured on the box (nothing in the repo does) | Onidel console or `vnstat`; record the method in the runbook |
-| `operations/performance.md:34` | Production `/champions` latency after PERF-03 (PROGRESS says done without a number) | One timed curl on the box |
-| `data/migrations.md:65` | Production timings for V0026 and V0027 | From the deploy journal |
+| `operations/performance.md:36` | Production `/champions` latency after PERF-03 (PROGRESS says done without a number) | One timed curl on the box |
+| `data/migrations.md:71` | Production timings for V0026 and V0027 | From the deploy journal |
+| `deployment/capacity.md:52` | CPU utilisation or pressure-stall (PSI) readings on `ngf-prod-syd1` after the move; only the pre-move 2-vCPU figures are recorded | `uptime`, `cat /proc/pressure/cpu` and `/v1/admin/stats` over a busy hour, noted in `capacity.md` with the date |
 
 ## 3. Behaviour not pinned down in code or tests
 
@@ -35,13 +35,12 @@ These matter most: the docs describe production from the design record and dated
 |---|---|---|
 | `integration/object-storage.md:186` | OBJ-06 (orphan-pack sweep, compaction, `ARCHIVE_COMPACT_BELOW`) is designed but not implemented; an orphan pack from a crash mid-offload stays in the bucket | Build OBJ-06, or document the manual sweep |
 | `integration/object-storage.md:156` | `object_store`'s effective timeouts and retry count (crate defaults; nothing set in `src/archive/objects.rs`) | Read the pinned crate's defaults or set them explicitly |
-| `deployment/upgrade-and-rollback.md:77` | What an older binary does against a database with newer migrations in `refinery_schema_history` | Test it once against a backup; document, or guard in `db::migrate` |
 | `data/migrations.md:14`, `workflows/adding-a-migration.md:18` | What refinery 0.9 does when an applied migration file's checksum changes | Same test; or add a CI guard that migrations never change |
 | `operations/runbook.md:54` | Whether `match_facts` under an old key scope are ever re-derived after a Riot-key rotation (`facts:reextract` selects on `facts_version` only) | Decide and document a rotation procedure; probably a task |
 | `operations/runbook.md:113` | What the hourly `rclone sync` does when the Onidel source is unreachable (can it delete from R2?) | Read rclone's sync semantics for a listing failure; add `--max-delete` or a check to the unit |
 | `api/endpoints.md:110`, `api/errors.md:96` | The exact response when a body exceeds the 1 MiB limit (axum's rejection, outside the envelope) | One test in `tests/http.rs` |
 | `api/endpoints-riot-lol.md:119` | Whether `ServeDir` sends `Last-Modified` and honours `If-Modified-Since` on filled images | One test in `tests/ddragon.rs` |
-| `deployment/security.md:97` | No Dependabot, Renovate, `cargo audit` or `cargo deny` in the repo | Decide a policy; add a workflow if wanted |
+| `deployment/security.md:95` | No Dependabot, Renovate, `cargo audit` or `cargo deny` in the repo | Decide a policy; add a workflow if wanted |
 | `workflows/adding-an-endpoint.md:82`, `workflows/testing.md:74` | How insta snapshots are meant to be accepted (`cargo insta` is mentioned nowhere) | Document the chosen flow in `testing.md` and the PR template |
 
 ## 4. Documentation of shapes and examples
@@ -50,12 +49,13 @@ These matter most: the docs describe production from the design record and dated
 |---|---|---|
 | `api/endpoints-riot-lol.md:38` | `GET /v1/riot/accounts/region/by-puuid/{puuid}` has no typed 200 body in the OpenAPI document | Add `AccountRegionDTO` to `RIOT_BODIES` in `src/routes/docs.rs` |
 | `api/endpoints-admin.md:89`, `:101` | Field names of the job activity views, `stats::Snapshot` and `jobs::timelines::Progress` are given by schema reference only | Read `src/jobs/activity.rs`, `src/stats.rs`, `src/jobs/timelines.rs`; or point readers at `components.schemas` in `openapi.json` |
-| `workflows/adding-an-endpoint.md:9`, `adding-a-riot-call.md:107`, `adding-a-job.md:154`, `adding-a-migration.md:109` | The worked examples use a hypothetical clash-v1 endpoint whose path, TTL and fields were not checked against the portal | Keep them labelled hypothetical, or replace with a real past change (for example ADR-095's `league.expEntries`) |
-| `workflows/development-setup.md:202` | The first-run output of a release binary built without `dev-cli` was not captured | Run a release asset once |
+| `workflows/adding-an-endpoint.md:9`, `workflows/adding-a-riot-call.md:107`, `workflows/adding-a-job.md:154`, `workflows/adding-a-migration.md:109` | The worked examples use a hypothetical clash-v1 endpoint whose path, TTL and fields were not checked against the portal | Keep them labelled hypothetical, or replace with a real past change (for example ADR-095's `league.expEntries`) |
+| `workflows/development-setup.md:203` | The first-run output of a release binary built without `dev-cli` was not captured | Run a release asset once |
 | `reference/dependencies.md:65` | The Node package lists for `tests/dom` and `acceptance` | Read the two lockfiles if wanted |
-| `reference/riot-api-usage.md:96` | The repo calls the production host's key "the production key" while ADRs describe a personal key's limits; whether a Riot production key exists | Owner statement (session notes say: no production key yet) |
+| `reference/riot-api-usage.md:100` | The repo calls the production host's key "the production key" while ADRs describe a personal key's limits; whether a Riot production key exists | Owner statement (session notes say: no production key yet) |
 | `integration/contract.md:96` | Whether the site's unseen remote commits regenerated against 2.7.0 | `git fetch` the site repo |
 | `integration/environments.md:46` | Whether Proxmox VM 102 (the dormant LAN proxy) still exists stopped or was deleted | Owner's Proxmox host |
+| `api/endpoints-admin.md:101` | The field names of `jobs::timelines::Progress` returned by `GET /v1/admin/timelines/backfill` | Read the struct in `src/jobs/timelines.rs` (or call the route on a dev box) and list the fields |
 
 ## Code and existing documentation that disagree
 
@@ -77,4 +77,4 @@ Found while writing; not gaps in these docs but worth a fix in the repository.
 
 ---
 **Sources:** every `TODO (unverified)` marker under `docs/` on 2026-10-19; `docs/_meta/scratch/*.md` "design vs code" sections
-**Last verified:** 2026-11-03 against commit `b7ab034`
+**Last verified:** 2026-11-03 against commit `2b01bd0`
