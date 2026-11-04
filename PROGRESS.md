@@ -208,6 +208,7 @@ Owner items still open from P8: P8-06 runbook sign-off. (P8-03's real-domain TLS
 - [x] Release `v2.7.2`: WR-02 `/readyz` reports writer progress, `sqlite_write_*` metrics (#231, ADR-180) (owner request 2026-10-21)
 - [x] Release `v2.8.0`: THR-03 incremental analytics, `aggregate:delta` (V0029, #233, ADR-182) (owner request 2026-10-21)
 - [x] Release `v2.9.0`: THR-07 delta batch size carried between runs (#235, ADR-183), TL-03 boot catch-up after a crawl's collect (#236, ADR-184), THR-04 collect cursor (V0030, #237, ADR-185) (owner request 2026-10-27)
+- [x] Release `v2.10.0`: the code review's fixes REV-01 to REV-08 (#239 to #246, ADR-186 to ADR-193), and deploys through CI: `/readyz` reports `version` (DEP-01, #247, ADR-194), the deploy tarball (DEP-02, #248, ADR-195), `deploy.yml` (DEP-03, #249, ADR-196); no migrations (owner request 2026-11-03)
 
 ## OPS — dev environment on Proxmox (owner request 2026-10-05)
 - [x] OPS-01 `:edge` image on every push to `main` (#79, ADR-069)
@@ -403,13 +404,13 @@ The review's findings, one task each, most severe first.
 - [x] REV-05 a Riot 200 a job cannot parse is retried, never read as an empty list, rank or game (#243, ADR-190)
 - [x] REV-06 a body archived again is packed again unless its bytes are unchanged, so a body whose pack went bad heals instead of being freed back onto it (#244, ADR-191)
 - [x] REV-07 the crawl tick fails a running crawl that no live job can finish, so one lost leg no longer holds its ladder for good (#245, ADR-192)
-- [~] REV-08 every uploaded pack is read back and hashed before it is recorded, so `free` never drops bodies onto a pack the bucket holds wrong (`fix/REV-08-offload-readback-verify`, ADR-193)
+- [x] REV-08 every uploaded pack is read back and hashed before it is recorded, so `free` never drops bodies onto a pack the bucket holds wrong (#246, ADR-193)
 
 ## DEP — deploys through CI (owner request 2026-11-03)
 Production deploys move to the shared pipeline in `NinjaGoldfinch/ninja-actions` (`deploy/` action, `ninja-deploy` on the host), as ninja-monitor's did: a release is uploaded to `/srv/riot-proxy/releases/`, activated behind the owner's approval on the `prod` environment, health-checked on `/readyz` and rolled back automatically if it fails. Staging comes later, as its own step.
 - [x] DEP-01 `/readyz` reports the running `version`, so a deploy waits for the new binary rather than the old one (#247, ADR-194)
 - [x] DEP-02 a release also ships `riot-proxy-x86_64-linux.tar.gz` (the binary and `version.json`, listed in `sha256sums`), the form `ninja-deploy` uploads (#248, ADR-195)
-- [~] DEP-03 `deploy.yml`: a release to `prod` through `ninja-actions/deploy@v1`, on the Proxmox runner, behind the owner's approval; the upgrade and rollback docs follow it (`ci/DEP-03-deploy-workflow`, ADR-196)
+- [x] DEP-03 `deploy.yml`: a release to `prod` through `ninja-actions/deploy@v1`, on the Proxmox runner, behind the owner's approval; the upgrade and rollback docs follow it (#249, ADR-196). Host adopted 2026-11-04: `/srv/riot-proxy` from v2.9.0, `/usr/local/bin/riot-proxy` a link to `current`, `HEALTH_WAIT=600` (a restart took 4 m 58 s to `/readyz` 200)
 
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.

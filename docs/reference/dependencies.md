@@ -66,4 +66,4 @@ The third-party crates riot-proxy builds on, what each is for, and why some are 
 
 ---
 **Sources:** `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `Dockerfile`, `src/cli/mod.rs:L139-L142`, `docs/design/03-architecture.md#cross-cutting-decisions`
-**Last verified:** 2026-10-27 against commit `c5110ff`
+**Last verified:** 2026-11-05 against commit `df109e7`

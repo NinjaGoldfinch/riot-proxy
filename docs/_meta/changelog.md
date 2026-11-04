@@ -2,6 +2,16 @@
 
 Dated log of changes to this documentation set. One line per change; the newest first.
 
+## 2026-11-05
+
+- Release 2.10.0: `api/openapi.json` `info.version` is `2.10.0`; the version examples in `deploy/proxmox` and `workflows/release-process.md` follow. `_meta/inventory.md` and `workflows/code-style-and-conventions.md` cite `src/cli/serve.rs` and `src/app.rs` (the 404 handler, now with REV-01's `redact_token`) at their current lines.
+
+## 2026-11-03
+
+- DEP-03 (ADR-196): production deploys through `deploy.yml`. `workflows/release-process.md` "Deploying to production", `deployment/upgrade-and-rollback.md` (upgrade procedure, rolling back; the older-binary-newer-database gap settled from refinery's defaults), `workflows/ci.md` (`deploy.yml`, the `ops` check). `_meta/gaps.md`: two gaps closed, 16 rows re-pointed at their markers' current lines, two unlisted markers added.
+- DEP-02 (ADR-195): the deploy tarball in `workflows/ci.md` and `workflows/release-process.md`; `deployment/upgrade-and-rollback.md`'s citations of `release.yml`, `serve.rs`, `scheduler.rs`, `health.rs` and design/12 moved with their code.
+- DEP-01 (ADR-194): `/readyz` reports `version` (`api/openapi.json`, design/07).
+
 ## 2026-10-27
 
 - Release 2.9.0: `api/openapi.json` `info.version` is `2.9.0`; the version examples in `deploy/proxmox` and `workflows/release-process.md` follow.
@@ -34,4 +44,4 @@ Dated log of changes to this documentation set. One line per change; the newest 
 
 ---
 **Sources:** this documentation set
-**Last verified:** 2026-10-27 against commit `c5110ff`
+**Last verified:** 2026-11-05 against commit `df109e7`
