@@ -161,12 +161,13 @@ flowchart LR
     tag["push tag v*"] --> version
     version --> b1["build: x86_64 musl<br/>ubuntu-latest"]
     version --> b2["build: aarch64 musl<br/>ubuntu-24.04-arm"]
-    version --> b3["build: aarch64 darwin<br/>macos-15"]
-    b1 & b2 & b3 --> image["image: multi-arch<br/>ghcr.io :version, :2"]
-    image --> release["release: binaries,<br/>sha256sums, notes"]
+    version --> b3["build-darwin: aarch64 darwin<br/>macos-15"]
+    b1 & b2 --> image["image: multi-arch<br/>ghcr.io :version, :2"]
+    image --> release["release: Linux binaries, tarball,<br/>sha256sums, notes"]
+    release & b3 --> attach["attach-darwin: macOS binary,<br/>sha256sums again"]
 ```
 
-The matrix fans out after the version check and joins again before the image and release jobs.
+The Linux matrix fans out after the version check and joins again before the image and release jobs. The macOS build runs beside it but the release does not wait for it: GitHub's macOS arm64 runners can go unacquired long enough to cancel the job, which held v2.10.0 back. `attach-darwin` adds the binary to the published release once it exists (DEP-04, ADR-197).
 
 ### `version`
 
@@ -178,14 +179,17 @@ Extracts `version = "…"` from `Cargo.toml`. On a tag, fails unless the tag is 
 |---|---|---|
 | `x86_64-unknown-linux-musl` | `ubuntu-latest` | `riot-proxy-linux-amd64` |
 | `aarch64-unknown-linux-musl` | `ubuntu-24.04-arm` | `riot-proxy-linux-arm64` |
-| `aarch64-apple-darwin` | `macos-15` | `riot-proxy-darwin-arm64` |
 
-1. Toolchain plus the matrix target; `musl-tools` on Linux.
+1. Toolchain plus the matrix target; `musl-tools`.
 2. `cargo build --release --locked --target <target>`.
 3. `--version` must print exactly `riot-proxy <version>`; the binary must contain the 12-character `GIT_SHA` (ADM-03).
-4. On Linux: static and under 24 MiB.
-5. On x86_64: `riot-proxy-x86_64-linux.tar.gz`, the binary as `riot-proxy/riot-proxy` with `riot-proxy/version.json` (`version`, `commit`, `built_at`), the form `ninja-deploy` uploads to a host. The step checks it holds exactly those two files, that `version.json` names the tag, and that the unpacked binary reports it (DEP-02, ADR-195). Uploaded as its own artifact; the `release` job's `riot-proxy-*` pattern picks it up with the binaries, so it is in `sha256sums`.
-5. Uploads `dist/<asset>` as an artifact (`if-no-files-found: error`).
+4. Static and under 24 MiB.
+5. On x86_64: `riot-proxy-x86_64-linux.tar.gz`, the binary as `riot-proxy/riot-proxy` with `riot-proxy/version.json` (`version`, `commit`, `built_at`), the form `ninja-deploy` uploads to a host. The step checks it holds exactly those two files, that `version.json` names the tag, and that the unpacked binary reports it (DEP-02, ADR-195). Uploaded as its own artifact, which the `release` job downloads by name, so it is in `sha256sums`.
+6. Uploads `dist/<asset>` as an artifact (`if-no-files-found: error`).
+
+### `build-darwin`
+
+`aarch64-apple-darwin` on `macos-15`, 60-minute timeout: the toolchain, `cargo build --release --locked`, the same `--version` and `GIT_SHA` checks, then the artifact `riot-proxy-darwin-arm64`. No job but `attach-darwin` needs it (DEP-04).
 
 ### `image`
 
@@ -197,9 +201,13 @@ Extracts `version = "…"` from `Cargo.toml`. On a tag, fails unless the tag is 
 
 ### `release` (push only)
 
-1. Downloads every `riot-proxy-*` artifact.
+1. Downloads the `riot-proxy-linux-*` artifacts and `riot-proxy-x86_64-linux.tar.gz` by name, never the macOS binary, so what the first publish holds does not depend on how far `build-darwin` got.
 2. `sha256sum riot-proxy-* > sha256sums`.
-3. `gh release create <tag> dist/* --title <tag> --notes-file notes.md --generate-notes --verify-tag [--prerelease]`. The notes name the image tag and digest and say the binaries are static (Linux) or native (macOS).
+3. `gh release create <tag> dist/* --title <tag> --notes-file notes.md --generate-notes --verify-tag [--prerelease]`. The notes name the image tag and digest, say the binaries are static (Linux) or native (macOS), and that the macOS binary is attached once built.
+
+### `attach-darwin` (push only)
+
+Needs `build-darwin` and `release`. Downloads the macOS artifact and the release's `sha256sums`, replaces any earlier `riot-proxy-darwin-arm64` line with the binary's checksum, checks the file, and uploads both with `gh release upload --clobber`. Re-running a failed or cancelled `build-darwin` (`gh run rerun <id> --failed`) runs it again; it is idempotent.
 
 ## Running the same checks locally
 
@@ -224,6 +232,7 @@ Extracts `version = "…"` from `Cargo.toml`. On a tag, fails unless the tag is 
 5. `docker` skipped on a pull request is expected unless the diff touched a path in `scripts/docker-paths.sh`; the step log on stderr says why.
 6. `edge` logging "is no longer the head of main" is expected when commits land close together; only `:sha-<short>` is pushed and `:edge` stays on the newer image.
 7. A `release` failure at `version` means the tag and `Cargo.toml` disagree; retag after bumping the version (see [release-process.md](./release-process.md)).
+8. `build-darwin` cancelled with "The job was not acquired by Runner of type hosted" is GitHub's macOS capacity, not the build. The release is already out without it; `gh run rerun <id> --failed` builds and attaches it later (DEP-04).
 
 ---
 ## `deploy.yml`
@@ -231,4 +240,4 @@ Extracts `version = "…"` from `Cargo.toml`. On a tag, fails unless the tag is 
 Deploys a release to production (DEP-03, ADR-196). `workflow_dispatch` only, with `env` (`prod`; staging comes later) and `version` (a release tag); the owner starts it, with `ngf-deploy riot-proxy` or from the Actions tab, and approves it on the `prod` environment. Concurrency group `deploy-<env>`, never cancelled. One job on the Proxmox runner (`self-hosted, linux, proxmox`), 30-minute timeout, calling `NinjaGoldfinch/ninja-actions/deploy@v1` with `riot-proxy-x86_64-linux.tar.gz`, `sha256sums`, and the environment's `DEPLOY_HOST`, `DEPLOY_KNOWN_HOSTS` and `DEPLOY_SSH_KEY`. What happens on the host is in [release-process.md](./release-process.md), "Deploying to production"; `scripts/deploy-workflow.test.sh` (the `ops` job, through `deploy/test.sh`) checks the workflow's wiring, since it cannot run in CI.
 
 **Sources:** `.github/workflows/ci.yml`, `.github/workflows/deploy.yml`, `scripts/deploy-workflow.test.sh`, `docs/_meta/tools/docs-guard.py`, `docs/_meta/tools/openapi-check.py`, `.github/workflows/edge.yml`, `.github/workflows/release.yml`, `.config/nextest.toml`, `scripts/docker-paths.sh`, `scripts/edge-tags.sh`, `scripts/image-description.sh`, `scripts/check-image-description.sh`, `justfile`, `Dockerfile.release`
-**Last verified:** 2026-11-03 against commit `2b01bd0`
+**Last verified:** 2026-11-05 against commit `08d6e9f`

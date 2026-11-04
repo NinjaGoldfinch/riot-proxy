@@ -411,6 +411,7 @@ Production deploys move to the shared pipeline in `NinjaGoldfinch/ninja-actions`
 - [x] DEP-01 `/readyz` reports the running `version`, so a deploy waits for the new binary rather than the old one (#247, ADR-194)
 - [x] DEP-02 a release also ships `riot-proxy-x86_64-linux.tar.gz` (the binary and `version.json`, listed in `sha256sums`), the form `ninja-deploy` uploads (#248, ADR-195)
 - [x] DEP-03 `deploy.yml`: a release to `prod` through `ninja-actions/deploy@v1`, on the Proxmox runner, behind the owner's approval; the upgrade and rollback docs follow it (#249, ADR-196). Host adopted 2026-11-04: `/srv/riot-proxy` from v2.9.0, `/usr/local/bin/riot-proxy` a link to `current`, `HEALTH_WAIT=600` (a restart took 4 m 58 s to `/readyz` 200)
+- [~] DEP-04 the release waits for the Linux builds only and the macOS binary is attached when built, so GitHub's macOS capacity cannot hold a release back (`ci/DEP-04-darwin-off-release-path`, ADR-197)
 
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.

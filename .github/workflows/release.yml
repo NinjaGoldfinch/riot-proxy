@@ -2,7 +2,9 @@ name: release
 
 # Plan P8-05 (design/07). A `v*` tag builds three static or native binaries,
 # pushes the image to GHCR and publishes a GitHub release with the binaries,
-# `sha256sums` and the image digest, plus the amd64 deploy tarball (DEP-02, ADR-195). A tag with a pre-release suffix
+# `sha256sums` and the image digest, plus the amd64 deploy tarball (DEP-02, ADR-195).
+# The release waits for the Linux builds only; the macOS binary is attached when
+# it is built (DEP-04, ADR-197). A tag with a pre-release suffix
 # (`v2.0.0-rc.0`) makes a pre-release and does not move `:2`.
 # A pull request that touches this file runs the builds and publishes nothing.
 # See ADR-063. The image's description lists the commits since the previous
@@ -56,9 +58,6 @@ jobs:
           - target: aarch64-unknown-linux-musl
             os: ubuntu-24.04-arm
             asset: riot-proxy-linux-arm64
-          - target: aarch64-apple-darwin
-            os: macos-15
-            asset: riot-proxy-darwin-arm64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -107,6 +106,33 @@ jobs:
         with:
           name: riot-proxy-x86_64-linux.tar.gz
           path: dist/riot-proxy-x86_64-linux.tar.gz
+          if-no-files-found: error
+
+  # DEP-04 (ADR-197): the macOS binary is not on the release's path. GitHub's
+  # macOS arm64 runners can go unacquired for long enough to cancel the job
+  # (v2.10.0's first run); the release publishes without it and `attach-darwin`
+  # adds it, with its checksum, once it is built. Re-running this job after a
+  # failure runs `attach-darwin` again too.
+  build-darwin:
+    needs: version
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install && rustup target add aarch64-apple-darwin
+      - run: cargo build --release --locked --target aarch64-apple-darwin
+      - name: the binary runs and reports the release version
+        run: |
+          bin=target/aarch64-apple-darwin/release/riot-proxy
+          file "$bin"
+          "$bin" --version | tee /dev/stderr | grep -qx "riot-proxy ${{ needs.version.outputs.version }}"
+          # The commit is embedded, not `unknown` (ADM-03).
+          grep -qa "${GIT_SHA:0:12}" "$bin"
+          mkdir dist && cp "$bin" dist/riot-proxy-darwin-arm64
+      - uses: actions/upload-artifact@v7
+        with:
+          name: riot-proxy-darwin-arm64
+          path: dist/riot-proxy-darwin-arm64
           if-no-files-found: error
 
   image:
@@ -193,12 +219,18 @@ jobs:
     permissions:
       contents: write
     steps:
-      # Only the binaries: build-push-action also uploads a `.dockerbuild` record.
+      # Only the Linux binaries and the deploy tarball, by name: build-push-action
+      # also uploads a `.dockerbuild` record, and the macOS binary comes later
+      # (`attach-darwin`), whether or not it is already built (DEP-04).
       - uses: actions/download-artifact@v8
         with:
-          pattern: riot-proxy-*
+          pattern: riot-proxy-linux-*
           path: dist
           merge-multiple: true
+      - uses: actions/download-artifact@v8
+        with:
+          name: riot-proxy-x86_64-linux.tar.gz
+          path: dist
       - run: cd dist && sha256sum riot-proxy-* > sha256sums && cat sha256sums
       - name: publish
         env:
@@ -213,6 +245,32 @@ jobs:
           Digest: \`$IMAGE@$DIGEST\`
 
           Binaries are static (Linux, musl) or native (macOS); check them against \`sha256sums\`.
+          The macOS binary is attached once its build finishes, and \`sha256sums\` then lists it too.
           NOTES
           gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
             --title "$GITHUB_REF_NAME" --notes-file notes.md --generate-notes --verify-tag $prerelease
+
+  # DEP-04 (ADR-197): adds the macOS binary to the published release and its line
+  # to `sha256sums` (replacing an earlier one), so a late macOS build never holds
+  # the release back.
+  attach-darwin:
+    if: github.event_name == 'push'
+    needs: [build-darwin, release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: riot-proxy-darwin-arm64
+          path: dist
+      - name: attach it and add it to sha256sums
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd dist
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" -p sha256sums --clobber
+          { grep -v ' riot-proxy-darwin-arm64$' sha256sums || true; sha256sum riot-proxy-darwin-arm64; } | sort -k2 > sums.new
+          mv sums.new sha256sums && cat sha256sums
+          sha256sum --strict -c --ignore-missing sha256sums
+          gh release upload "$GITHUB_REF_NAME" riot-proxy-darwin-arm64 sha256sums --clobber --repo "$GITHUB_REPOSITORY"

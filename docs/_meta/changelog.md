@@ -4,6 +4,7 @@ Dated log of changes to this documentation set. One line per change; the newest 
 
 ## 2026-11-05
 
+- DEP-04 (ADR-197): the release no longer waits for the macOS build. `workflows/ci.md` (the diagram, `build-darwin`, `attach-darwin`, a debugging note), `workflows/release-process.md` step 7, the release-pipeline ADR page; `deployment/install.md`'s and `deployment/upgrade-and-rollback.md`'s line citations of `release.yml`, design/12, `config.rs`, `config/tests.rs` and `health.rs` moved with their code.
 - Release 2.10.0: `api/openapi.json` `info.version` is `2.10.0`; the version examples in `deploy/proxmox` and `workflows/release-process.md` follow. `_meta/inventory.md` and `workflows/code-style-and-conventions.md` cite `src/cli/serve.rs` and `src/app.rs` (the 404 handler, now with REV-01's `redact_token`) at their current lines.
 
 ## 2026-11-03
@@ -44,4 +45,4 @@ Dated log of changes to this documentation set. One line per change; the newest 
 
 ---
 **Sources:** this documentation set
-**Last verified:** 2026-11-05 against commit `df109e7`
+**Last verified:** 2026-11-05 against commit `08d6e9f`
