@@ -69,6 +69,9 @@ jobs:
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
       - run: cargo build --release --locked --target ${{ matrix.target }}
+        env:
+          # /status's `version`: the tag's on a tag build, else empty, so `dev` (STS-01, design/14).
+          RELEASE_VERSION: ${{ github.ref_type == 'tag' && needs.version.outputs.version || '' }}
       - name: the binary runs and reports the release version
         run: |
           bin=target/${{ matrix.target }}/release/riot-proxy
@@ -125,6 +128,9 @@ jobs:
       - uses: actions/checkout@v7
       - run: rustup toolchain install && rustup target add aarch64-apple-darwin
       - run: cargo build --release --locked --target aarch64-apple-darwin
+        env:
+          # /status's `version`: the tag's on a tag build, else empty, so `dev` (STS-01, design/14).
+          RELEASE_VERSION: ${{ github.ref_type == 'tag' && needs.version.outputs.version || '' }}
       - name: the binary runs and reports the release version
         run: |
           bin=target/aarch64-apple-darwin/release/riot-proxy
@@ -214,6 +220,17 @@ jobs:
           docker run -d --name rp -e RIOT_API_KEY=ci-dummy-key-not-a-riot-key -p 8080:8080 riot-proxy:release
           for i in $(seq 1 30); do docker exec rp /riot-proxy healthcheck && break; sleep 1; done
           docker exec rp /riot-proxy healthcheck
+      # STS-01: the startup line carries /status's build identity: the tag's
+      # version on a tag build, `dev` on a pull request, and the commit.
+      - name: the startup log line names the version and commit
+        env:
+          WANT: ${{ github.ref_type == 'tag' && needs.version.outputs.version || 'dev' }}
+        run: |
+          line=$(docker logs rp 2>&1 | grep '"message":"riot-proxy starting"')
+          echo "$line"
+          grep -q "\"version\":\"$WANT\"" <<<"$line"
+          grep -q "\"commit\":\"${GIT_SHA:0:7}\"" <<<"$line"
+          grep -qE '"built_at":"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z"' <<<"$line"
       # The smoke test staging's deploy runs, against the release binary here
       # (DEP-05): it needs no Riot key, so the dummy one passes it.
       - name: the amd64 image passes the staging smoke test

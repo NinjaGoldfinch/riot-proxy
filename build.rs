@@ -6,6 +6,8 @@
 //!   `unknown`. Shortened to 12 characters.
 //! - `RUSTC_VERSION`: `rustc --version` of the compiler cargo runs.
 //! - `BUILD_UNIX_MS`: `SOURCE_DATE_EPOCH` (seconds) when set, else now.
+//! - `RELEASE_VERSION`: the environment's, which `release.yml` sets on a tag
+//!   build only; empty otherwise, so `/status` says `dev` (STS-01, design/14).
 //!
 //! Nothing here can fail a build: every probe falls back.
 
@@ -19,6 +21,7 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=GIT_SHA");
     println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
+    println!("cargo:rerun-if-env-changed=RELEASE_VERSION");
 
     let sha = std::env::var("GIT_SHA")
         .ok()
@@ -44,6 +47,9 @@ fn main() {
         })
         .unwrap_or(0);
     println!("cargo:rustc-env=BUILD_UNIX_MS={built_ms}");
+
+    let release = std::env::var("RELEASE_VERSION").unwrap_or_default();
+    println!("cargo:rustc-env=RELEASE_VERSION={}", release.trim());
 }
 
 /// The checked-out commit, and the files that change when it does, so a local

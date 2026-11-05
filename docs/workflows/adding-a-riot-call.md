@@ -117,4 +117,4 @@ Then the tests above (`documented_ttl_table` gains `("clash.playerByPuuid", 300,
 
 ---
 **Sources:** `src/riot/endpoints.rs:L1-L6`, `L13-L86`, `L91-L135`, `L185-L204`, `L257-L288`, `L316-L325`, `L362-L420`, `L424-L444`, `L476-L512`, `L538-L578`, `L597-L696`, `L742-L823`, `src/riot/routing.rs:L108-L121`, `src/riot/limiter/headers.rs:L1-L40`, `src/jobs/lanes.rs:L44-L64`, `src/cli/riot.rs:L63-L81`, `src/cli/record.rs:L1-L29`, `L106-L158`, `src/routes/riot.rs:L43-L47`, `src/config.rs:L766-L767`, `docs/contract/v1-endpoints.txt`, `docs/design/04-data-and-cache.md:L384`, `L392-L407`, `docs/IMPLEMENTATION.md:L18`, `tests/fixtures/replay/README.md:L1-L26`, `tests/replay.rs:L1-L60`, `.github/workflows/ci.yml:L52-L53`, `justfile:L45-L47`, `PROGRESS.md:L403`
-**Last verified:** 2026-11-05 against commit `a3d8c3e`
+**Last verified:** 2026-11-06 against commit `587438c`

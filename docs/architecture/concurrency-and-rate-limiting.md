@@ -65,7 +65,7 @@ stateDiagram-v2
     Known --> Busy: interactive acquire sets last_interactive; idle after BULK_IDLE_AFTER_S
 ```
 
-A scope is never evicted (`src/riot/limiter/mod.rs`, no removal path). The restore on boot sets `limiter_restored` even when the checkpoint could not be read, so `/readyz` reports `limiter:true` after a fresh start (`src/cli/serve.rs:75-81`).
+A scope is never evicted (`src/riot/limiter/mod.rs`, no removal path). The restore on boot sets `limiter_restored` even when the checkpoint could not be read, so `/readyz` reports `limiter:true` after a fresh start (`src/cli/serve.rs:82-88`).
 
 ## What happens on a 429
 
@@ -121,5 +121,5 @@ Every job kind, its trigger, priority and tables is tabulated in `docs/_meta/scr
 | Request body | 1 MiB | `src/app.rs:30-31` |
 
 ---
-**Sources:** `src/riot/limiter/mod.rs:L50-L175,L229-L300,L307-L431,L520-L594`, `src/riot/limiter/bucket.rs:L15-L162`, `src/riot/limiter/headers.rs:L30-L41`, `src/riot/limiter/persist.rs:L21-L25,L141-L175`, `src/http/quota.rs:L320-L431`, `src/fetcher.rs:L40-L45,L133-L151,L356-L361,L508-L547,L610-L648`, `src/riot/routing.rs:L148-L181`, `src/cache/keys.rs:L81-L88`, `src/jobs/scheduler.rs:L40-L42,L124-L171,L225-L269,L963-L1025,L1070-L1084`, `src/jobs/lanes.rs:L425-L468`, `src/jobs/mod.rs:L74-L94`, `src/db/store.rs:L98-L133`, `src/db/mod.rs:L41-L42,L82-L89,L158-L198`, `src/cli/serve.rs:L75-L81`, `ops/prometheus-alerts.yml`, `docs/design/05-rate-limiter.md`, `docs/design/06-jobs-and-realtime.md`
-**Last verified:** 2026-11-05 against commit `79ed267`
+**Sources:** `src/riot/limiter/mod.rs:L50-L175,L229-L300,L307-L431,L520-L594`, `src/riot/limiter/bucket.rs:L15-L162`, `src/riot/limiter/headers.rs:L30-L41`, `src/riot/limiter/persist.rs:L21-L25,L141-L175`, `src/http/quota.rs:L320-L431`, `src/fetcher.rs:L40-L45,L133-L151,L356-L361,L508-L547,L610-L648`, `src/riot/routing.rs:L148-L181`, `src/cache/keys.rs:L81-L88`, `src/jobs/scheduler.rs:L40-L42,L124-L171,L225-L269,L963-L1025,L1070-L1084`, `src/jobs/lanes.rs:L425-L468`, `src/jobs/mod.rs:L74-L94`, `src/db/store.rs:L98-L133`, `src/db/mod.rs:L41-L42,L82-L89,L158-L198`, `src/cli/serve.rs:L82-L88`, `ops/prometheus-alerts.yml`, `docs/design/05-rate-limiter.md`, `docs/design/06-jobs-and-realtime.md`
+**Last verified:** 2026-11-06 against commit `587438c`

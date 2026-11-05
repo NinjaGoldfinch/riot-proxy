@@ -2,6 +2,10 @@
 
 Dated log of changes to this documentation set. One line per change; the newest first.
 
+## 2026-11-06
+
+- STS-01 (ADR-203): the build identity `/status` will report. `workflows/release-process.md` (`RELEASE_VERSION`, `dev` off a tag), `workflows/ci.md` (the build steps, the image job's startup-line check, `scripts/release-workflow.test.sh` in `ops`), `operations/observability.md` (the `riot-proxy starting` line). Line citations of `src/cli/serve.rs`, `release.yml` and `ci.yml` moved with their code in every page that cites them; each such page's `Last verified` is refreshed.
+
 ## 2026-11-05
 
 - STG-04 (ADR-204): seeding staging from production. `workflows/release-process.md` (the staging host's settings for a seeded staging, "Seeding staging from production", migrations on production's data first, staging's 1800 s health wait), `deployment/backup-and-restore.md` ("Seeding staging"), `workflows/ci.md` (`ops` installs `sqlite3` and runs `deploy/staging-seed.test.sh`).
@@ -52,4 +56,4 @@ Dated log of changes to this documentation set. One line per change; the newest 
 
 ---
 **Sources:** this documentation set
-**Last verified:** 2026-11-05 against commit `a3d8c3e`
+**Last verified:** 2026-11-06 against commit `587438c`

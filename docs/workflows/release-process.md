@@ -22,6 +22,7 @@ Everything up to the staging smoke test is automated; production waits for a per
 - Semantic versions in `Cargo.toml` (`version = "2.10.0"` at the verified commit). Tags are `v<version>`; pre-releases carry a suffix (`v2.0.0-rc.3`).
 - `release.yml` refuses a tag whose name is not exactly `v` plus the `Cargo.toml` version.
 - The binary reports its version with `--version` and in `GET /v1/admin/info` together with the embedded commit (`gitSha`), `rustc` and build time (ADM-03).
+- `/status` and the `riot-proxy starting` log line carry a separate build identity (STS-01, design/14): `version` is the tag without `v` only when `release.yml` built from a tag (it sets `RELEASE_VERSION` on the build steps, and `build.rs` embeds it), and `dev` for every other build; `commit` is the first 7 characters of the embedded sha; `built_at` is the build time in RFC 3339. Nothing reads git at run time.
 - Cadence so far: `v2.0.0` on 2026-10-10 after four release candidates, then `v2.1.0` to `v2.7.0` between 2026-10-11 and 2026-10-19 (`git tag -l --format='%(refname:short) %(creatordate:short)'`). Minor versions carry features; `v2.4.1` was a fix release.
 
 ## Changelog
@@ -129,5 +130,5 @@ The Proxmox dev VM (`deploy/proxmox/`) is not part of the release: it follows `:
 ninjagoldfinch.lol pins the proxy contract it was verified against (its generated client comes from `riot-proxy spec`; the site's SPD series records `2.6.0`). A release that changes a response shape the site reads needs a matching site change and the site's own manual deploy; see [../integration/contract.md](../integration/contract.md).
 
 ---
-**Sources:** `.github/workflows/release.yml`, `.github/workflows/deploy.yml`, `scripts/smoke.sh`, `src/routes/health.rs`, ninja-actions README at `9d6ce2f` ("Staging", "Nothing reaches production without passing staging"), `infra/deploy-host-add.sh` at `9d6ce2f`, `.github/workflows/edge.yml`, `Cargo.toml:L3`, `git show --stat v2.7.0` (commit `10cf81d`), `git tag -l`, `docs/design/07-deployment.md#upgrade-procedure`, `docs/design/07-deployment.md#build-identity-adm-03`, `deploy/README.md`, `deploy/proxmox/README.md`, `deploy/proxmox/files/riot-proxy-update`
-**Last verified:** 2026-11-05 against commit `a3d8c3e`
+**Sources:** `.github/workflows/release.yml`, `build.rs`, `src/build_info.rs`, `scripts/release-workflow.test.sh`, `.github/workflows/deploy.yml`, `scripts/smoke.sh`, `src/routes/health.rs`, ninja-actions README at `9d6ce2f` ("Staging", "Nothing reaches production without passing staging"), `infra/deploy-host-add.sh` at `9d6ce2f`, `.github/workflows/edge.yml`, `Cargo.toml:L3`, `git show --stat v2.7.0` (commit `10cf81d`), `git tag -l`, `docs/design/07-deployment.md#upgrade-procedure`, `docs/design/07-deployment.md#build-identity-adm-03`, `deploy/README.md`, `deploy/proxmox/README.md`, `deploy/proxmox/files/riot-proxy-update`
+**Last verified:** 2026-11-06 against commit `587438c`

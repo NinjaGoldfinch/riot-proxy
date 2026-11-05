@@ -58,7 +58,7 @@ impl Handler for ClashSyncHandler {
 }
 ```
 
-Register it in `jobs::handlers`, which builds the `Registry` with `.with(kinds::X, handler)` and is called once by `serve` (`src/jobs/mod.rs:96-174`). A kind that exists only under some configuration is added afterwards in `serve`, as the two bucket kinds are (`src/cli/serve.rs:267-289`). A job whose kind has no handler fails with `no handler for job kind '…'` (`src/jobs/scheduler.rs:1126-1129`).
+Register it in `jobs::handlers`, which builds the `Registry` with `.with(kinds::X, handler)` and is called once by `serve` (`src/jobs/mod.rs:96-174`). A kind that exists only under some configuration is added afterwards in `serve`, as the two bucket kinds are (`src/cli/serve.rs:274-296`). A job whose kind has no handler fails with `no handler for job kind '…'` (`src/jobs/scheduler.rs:1126-1129`).
 
 ### 4. Priority, dedupe, payload
 
@@ -166,5 +166,5 @@ Then: `jobs::handlers` gets `.with(kinds::CLASH_SYNC, clash::ClashSyncHandler(Ar
 9. design/06 catalogue row, concurrency and runbook docs, ADR, `PROGRESS.md`.
 
 ---
-**Sources:** `src/jobs/mod.rs:L19-L179`, `src/jobs/scheduler.rs:L1-L19`, `L36-L165`, `L225-L254`, `L418-L450`, `L1070-L1144`, `src/jobs/lanes.rs:L1-L78`, `src/jobs/ticks.rs:L1-L4`, `L44-L80`, `L108-L139`, `L180-L202`, `src/jobs/activity.rs:L363-L378`, `src/jobs/archive.rs:L245-L288`, `L423`, `src/jobs/names.rs:L193`, `L208-L232`, `src/fetcher.rs:L123-L140`, `src/cli/serve.rs:L267-L289`, `src/routes/admin.rs:L2292-L2303`, `src/app.rs:L53`, `src/events.rs:L113-L124`, `src/ws/hub.rs:L100-L103`, `src/metrics.rs:L96-L98`, `L460-L471`, `src/config.rs:L118`, `src/config/tests.rs:L434-L453`, `src/db/migrations/V0001__init.sql:L44`, `tests/jobs.rs:L43-L101`, `src/jobs/ticks/tests.rs:L36-L45`, `src/jobs/scheduler/tests.rs:L31-L40`, `docs/design/06-jobs-and-realtime.md:L84-L158`, `docs/DECISIONS.md:L1443-L1452` (ADR-134), `.env.example:L35-L38`, `PROGRESS.md:L387`
-**Last verified:** 2026-11-05 against commit `7ec9262`
+**Sources:** `src/jobs/mod.rs:L19-L179`, `src/jobs/scheduler.rs:L1-L19`, `L36-L165`, `L225-L254`, `L418-L450`, `L1070-L1144`, `src/jobs/lanes.rs:L1-L78`, `src/jobs/ticks.rs:L1-L4`, `L44-L80`, `L108-L139`, `L180-L202`, `src/jobs/activity.rs:L363-L378`, `src/jobs/archive.rs:L245-L288`, `L423`, `src/jobs/names.rs:L193`, `L208-L232`, `src/fetcher.rs:L123-L140`, `src/cli/serve.rs:L274-L296`, `src/routes/admin.rs:L2292-L2303`, `src/app.rs:L53`, `src/events.rs:L113-L124`, `src/ws/hub.rs:L100-L103`, `src/metrics.rs:L96-L98`, `L460-L471`, `src/config.rs:L118`, `src/config/tests.rs:L434-L453`, `src/db/migrations/V0001__init.sql:L44`, `tests/jobs.rs:L43-L101`, `src/jobs/ticks/tests.rs:L36-L45`, `src/jobs/scheduler/tests.rs:L31-L40`, `docs/design/06-jobs-and-realtime.md:L84-L158`, `docs/DECISIONS.md:L1443-L1452` (ADR-134), `.env.example:L35-L38`, `PROGRESS.md:L387`
+**Last verified:** 2026-11-06 against commit `587438c`
