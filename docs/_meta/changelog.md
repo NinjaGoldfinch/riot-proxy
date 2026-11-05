@@ -48,4 +48,4 @@ Dated log of changes to this documentation set. One line per change; the newest 
 
 ---
 **Sources:** this documentation set
-**Last verified:** 2026-11-05 against commit `5746e62`
+**Last verified:** 2026-11-05 against commit `1616c00`

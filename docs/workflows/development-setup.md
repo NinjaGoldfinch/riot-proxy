@@ -12,9 +12,9 @@ From a clean machine to a running local `riot-proxy serve`, a minted key, a firs
 | Chromium headless shell | installed by `npx playwright-core install chromium-headless-shell` (`justfile:25`) | the browser layout suites in `tests/dom/*.browser.test.mjs`; without it they skip locally and fail in CI (`tests/dom/showcase.browser.test.mjs:12-13`) | part of `just ui-test` |
 | `cargo-nextest` (optional) | 0.9.148 here | `just nextest`, the way CI runs the Rust suite (`justfile:19-21`, `.config/nextest.toml`) | `cargo install cargo-nextest` |
 | `cargo-llvm-cov` (optional) | not installed here | `just cov` (`justfile:32-34`); coverage is reported, not gated | `cargo install cargo-llvm-cov` |
-| `musl-tools` (optional) | not installed here | `just musl`, the static release binary (`justfile:36-39`); CI builds it, so a dev box can skip it (`PROGRESS.md:420`) | `apt install musl-tools` |
+| `musl-tools` (optional) | not installed here | `just musl`, the static release binary (`justfile:36-39`); CI builds it, so a dev box can skip it (`PROGRESS.md:424`) | `apt install musl-tools` |
 | `sqlite3` CLI (optional) | not installed here | per-table sizes through `dbstat`, which the bundled SQLite lacks (ADR-135, `docs/DECISIONS.md:1457`) | a package |
-| Docker (optional) | not installed here | `just docker` and the Proxmox dev VM; image behaviour is verified in CI only (`PROGRESS.md:422`) | a package |
+| Docker (optional) | not installed here | `just docker` and the Proxmox dev VM; image behaviour is verified in CI only (`PROGRESS.md:426`) | a package |
 
 Nothing else is needed: there is no Redis, no Postgres and no Node runtime in the service itself (`README.md:3`).
 
@@ -204,4 +204,4 @@ Not re-executed here: `cargo build`, `cargo test` and `just nextest` (a full run
 
 ---
 **Sources:** `rust-toolchain.toml:L1-L5`, `justfile:L1-L52`, `.env.example:L1-L182`, `README.md:L60-L112`, `src/config.rs:L3`, `L586-L600`, `L628-L638`, `L676-L702`, `L906-L932`, `L1009-L1021`, `src/cli/mod.rs:L82-L88`, `src/cli/serve.rs:L52-L68`, `L76-L108`, `L143-L148`, `L341-L346`, `L421-L427`, `src/cli/key.rs:L13-L57`, `src/consumers.rs:L12-L14`, `L95-L96`, `src/http/auth.rs:L201-L204`, `src/jobs/ticks.rs:L1-L4`, `L44-L80`, `L108-L139`, `src/cli/riot.rs:L1-L32`, `L63-L81`, `src/archive/objects.rs:L102-L113`, `acceptance/helpers/env.ts:L19-L25`, `L244-L275`, `acceptance/helpers/setup.ts:L23-L54`, `acceptance/helpers/mock-riot.ts:L7`, `tests/ui.rs:L42-L64`, `tests/dom/package.json`, `acceptance/package.json`, `.github/workflows/ci.yml:L52-L53`, `PROGRESS.md:L390`, `L400`, `L420-L422`, `docs/IMPLEMENTATION.md:L434`, `docs/design/11-showcase.md:L15`, `docs/DECISIONS.md:L1457`, `docs/_meta/scratch/config.md`, `docs/_meta/scratch/persistence.md` §5, `docs/_meta/scratch/siblings.md` §1.2, §1.8
-**Last verified:** 2026-11-03 against commit `3c27e29`
+**Last verified:** 2026-11-05 against commit `1616c00`
