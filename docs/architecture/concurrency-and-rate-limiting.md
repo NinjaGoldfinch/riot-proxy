@@ -86,7 +86,7 @@ An accountable 429 means the limiter's accounting diverged from Riot's and is lo
 
 ## Account clusters
 
-Account-v1 is served by three clusters. A request without a region tries `asia`, `americas`, `europe` in that order, taking the first with a token available now and avoiding a cluster that just answered a service 429; all three share one cache entry keyed on the literal host `account` (`src/riot/routing.rs:148-153`, `src/fetcher.rs:610-648`, `src/cache/keys.rs:72-79`; ADR-066). `sea` platforms route account calls to `asia` (`src/riot/routing.rs:174-181`).
+Account-v1 is served by three clusters. A request without a region tries `asia`, `americas`, `europe` in that order, taking the first with a token available now and avoiding a cluster that just answered a service 429; all three share one cache entry keyed on the literal host `account` (`src/riot/routing.rs:148-153`, `src/fetcher.rs:610-648`, `src/cache/keys.rs:81-88`; ADR-066). `sea` platforms route account calls to `asia` (`src/riot/routing.rs:174-181`).
 
 ## The job queue
 
@@ -121,5 +121,5 @@ Every job kind, its trigger, priority and tables is tabulated in `docs/_meta/scr
 | Request body | 1 MiB | `src/app.rs:30-31` |
 
 ---
-**Sources:** `src/riot/limiter/mod.rs:L50-L175,L229-L300,L307-L431,L520-L594`, `src/riot/limiter/bucket.rs:L15-L162`, `src/riot/limiter/headers.rs:L30-L41`, `src/riot/limiter/persist.rs:L21-L25,L141-L175`, `src/http/quota.rs:L320-L431`, `src/fetcher.rs:L40-L45,L133-L151,L356-L361,L508-L547,L610-L648`, `src/riot/routing.rs:L148-L181`, `src/cache/keys.rs:L72-L79`, `src/jobs/scheduler.rs:L40-L42,L124-L171,L225-L269,L963-L1025,L1070-L1084`, `src/jobs/lanes.rs:L425-L468`, `src/jobs/mod.rs:L74-L94`, `src/db/store.rs:L98-L133`, `src/db/mod.rs:L41-L42,L82-L89,L158-L198`, `src/cli/serve.rs:L75-L81`, `ops/prometheus-alerts.yml`, `docs/design/05-rate-limiter.md`, `docs/design/06-jobs-and-realtime.md`
-**Last verified:** 2026-10-26 against commit `220cdef`
+**Sources:** `src/riot/limiter/mod.rs:L50-L175,L229-L300,L307-L431,L520-L594`, `src/riot/limiter/bucket.rs:L15-L162`, `src/riot/limiter/headers.rs:L30-L41`, `src/riot/limiter/persist.rs:L21-L25,L141-L175`, `src/http/quota.rs:L320-L431`, `src/fetcher.rs:L40-L45,L133-L151,L356-L361,L508-L547,L610-L648`, `src/riot/routing.rs:L148-L181`, `src/cache/keys.rs:L81-L88`, `src/jobs/scheduler.rs:L40-L42,L124-L171,L225-L269,L963-L1025,L1070-L1084`, `src/jobs/lanes.rs:L425-L468`, `src/jobs/mod.rs:L74-L94`, `src/db/store.rs:L98-L133`, `src/db/mod.rs:L41-L42,L82-L89,L158-L198`, `src/cli/serve.rs:L75-L81`, `ops/prometheus-alerts.yml`, `docs/design/05-rate-limiter.md`, `docs/design/06-jobs-and-realtime.md`
+**Last verified:** 2026-11-05 against commit `1616c00`

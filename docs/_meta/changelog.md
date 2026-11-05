@@ -4,6 +4,7 @@ Dated log of changes to this documentation set. One line per change; the newest 
 
 ## 2026-11-05
 
+- STG-01 (ADR-200): `KEY_SCOPE` pins the key scope. `deployment/configuration.md` (the variable), `operations/runbook.md` §4 (keeping the old scope on a renewal), `data/caching.md` (key scope), design 04; every page citing `config.rs`, `serve.rs`, `keys.rs`, `health.rs`, `.env.example` or `tests/common` re-verified, line citations moved with the code.
 - DEP-05 follow-up: `deployment/upgrade-and-rollback.md` no longer says v2.9.0 and v2.10.0 are already marked `prod/deployed`; until the owner backfills them, a rollback to them needs `break_glass`.
 - DEP-05 (ADR-198): every release deploys to staging and is smoke-tested there; production takes only a version that passed. `workflows/release-process.md` (the diagram, "Staging" and the staging host, the gate, `break_glass`, the `prod/deployed` backfill), `workflows/ci.md` (four workflows, the environment's secrets, `staging`, `attach-darwin`'s order, `deploy.yml`, the `ops` tests), `deployment/upgrade-and-rollback.md` (the gate on upgrade and rollback), the release-pipeline ADR page; `deployment/install.md`'s `release.yml` citation moved with the code.
 - DEP-04 (ADR-197): the release no longer waits for the macOS build. `workflows/ci.md` (the diagram, `build-darwin`, `attach-darwin`, a debugging note), `workflows/release-process.md` step 7, the release-pipeline ADR page; `deployment/install.md`'s and `deployment/upgrade-and-rollback.md`'s line citations of `release.yml`, design/12, `config.rs`, `config/tests.rs` and `health.rs` moved with their code.
@@ -47,4 +48,4 @@ Dated log of changes to this documentation set. One line per change; the newest 
 
 ---
 **Sources:** this documentation set
-**Last verified:** 2026-11-05 against commit `5746e62`
+**Last verified:** 2026-11-05 against commit `1616c00`

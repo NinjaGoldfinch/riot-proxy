@@ -414,6 +414,10 @@ Production deploys move to the shared pipeline in `NinjaGoldfinch/ninja-actions`
 - [~] DEP-04 the release waits for the Linux builds only and the macOS binary is attached when built, so GitHub's macOS capacity cannot hold a release back (`ci/DEP-04-darwin-off-release-path`, ADR-197)
 - [~] DEP-05 every release deploys to staging (`ngf-mon-syd1`) and is smoke-tested there without calling Riot; `staging/smoke` on the tag's commit; prod requires `staging/smoke` or `prod/deployed`, sets `prod/deployed`, `break_glass` for emergencies (owner rule 2026-11-05: nothing reaches production unless it passed on staging; `ci/DEP-05-staging-deploy`, ADR-198)
 
+## STG — staging seeded from production (owner request 2026-11-05)
+Staging is seeded from production's daily backup and reads production's packs from the bucket, read-only; its development key is used only for live calls.
+- [~] STG-01 `KEY_SCOPE` pins the key scope, so staging reads production's players, facts and analytics across development-key renewals (`feat/STG-01-key-scope-pin`, ADR-200)
+
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
 
