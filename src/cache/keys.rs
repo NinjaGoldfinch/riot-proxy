@@ -17,7 +17,7 @@ use std::fmt;
 
 use sha2::{Digest, Sha256};
 
-use crate::config::Secret;
+use crate::config::{Config, Secret};
 use crate::riot::client::RiotRequest;
 use crate::riot::endpoints::{HostKind, encode_component};
 
@@ -34,6 +34,15 @@ impl KeyScope {
     pub fn from_key(key: &Secret) -> Self {
         let digest = Sha256::digest(key.expose().as_bytes());
         Self(hex::encode(digest)[..8].to_string())
+    }
+
+    /// The scope this process runs under: `KEY_SCOPE` when it is set
+    /// (validated at boot), otherwise the key's own (STG-01).
+    pub fn for_config(config: &Config) -> Self {
+        match &config.key_scope {
+            Some(pinned) => Self(pinned.clone()),
+            None => Self::from_key(&config.riot_api_key),
+        }
     }
 
     pub fn as_str(&self) -> &str {

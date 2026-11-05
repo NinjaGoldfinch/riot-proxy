@@ -23,6 +23,7 @@ use figment::providers::Serialized;
 pub const VARS: &[&str] = &[
     "RIOT_API_KEY",
     "RIOT_USER_AGENT",
+    "KEY_SCOPE",
     "ENV",
     "HOST",
     "PORT",
@@ -271,6 +272,11 @@ impl fmt::Display for ObjectUrl {
 #[derive(Debug, Clone)]
 pub struct Config {
     pub riot_api_key: Secret,
+    /// `KEY_SCOPE`: 8 lowercase hex characters that replace the scope derived
+    /// from `RIOT_API_KEY` (STG-01). Unset derives it, as before. Staging pins
+    /// production's scope so a copy of production's data stays readable
+    /// across development-key renewals.
+    pub key_scope: Option<String>,
     pub riot_user_agent: String,
     pub env: Environment,
     pub host: String,
@@ -420,6 +426,7 @@ impl Config {
         let platforms: Vec<&str> = self.ladder_platforms.iter().map(|p| p.as_str()).collect();
         BTreeMap::from([
             ("RIOT_USER_AGENT", s(&self.riot_user_agent)),
+            ("KEY_SCOPE", self.key_scope.clone()),
             ("ENV", s(self.env.as_str())),
             ("HOST", s(&self.host)),
             ("PORT", s(self.port)),
@@ -631,6 +638,17 @@ impl Config {
             None => v.error("RIOT_API_KEY", "is required"),
         };
 
+        let key_scope = v.opt_string("KEY_SCOPE").and_then(|raw| {
+            let valid = raw.len() == 8 && raw.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+            if !valid {
+                v.push(
+                    "KEY_SCOPE",
+                    &format!("'{raw}' must be 8 lowercase hex characters"),
+                );
+            }
+            valid.then_some(raw)
+        });
+
         let env = match (v.opt_string("ENV"), v.opt_string(LEGACY_ENV_VAR)) {
             (Some(raw), _) => v.parse_or("ENV", &raw, Environment::Development),
             (None, Some(raw)) => v.parse_or(LEGACY_ENV_VAR, &raw, Environment::Development),
@@ -712,6 +730,7 @@ impl Config {
 
         let mut config = Config {
             riot_api_key: Secret::new(riot_api_key),
+            key_scope,
             riot_user_agent: v.string("RIOT_USER_AGENT", DEFAULT_USER_AGENT),
             env,
             host: v.string("HOST", "0.0.0.0"),

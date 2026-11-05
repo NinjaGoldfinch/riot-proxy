@@ -136,7 +136,7 @@ async fn readyz(State(state): State<AppState>) -> (StatusCode, Json<Ready>) {
             ok,
             sqlite,
             limiter,
-            key_scope: KeyScope::from_key(&state.config.riot_api_key).to_string(),
+            key_scope: KeyScope::for_config(&state.config).to_string(),
             sqlite_readers: state.db.readers(),
             sqlite_readers_free: state.db.readers_free(),
             writer_busy: writer.busy(),

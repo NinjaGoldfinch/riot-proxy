@@ -39,7 +39,7 @@ Only the L1 lookup decides freshness; L2 is never read on the request path, it i
 
 ## L1
 
-- A `moka::future::Cache<String, Arc<CacheEntry>>` with `max_capacity = CACHE_L1_MAX_MB × 1024 × 1024` bytes (default 128, range 1–1 048 576, `src/config.rs:731`) and a weigher of `key.len() + body.len() + 128` (`src/cache/l1.rs:18-19,102-119`). An entry heavier than the whole budget is not kept.
+- A `moka::future::Cache<String, Arc<CacheEntry>>` with `max_capacity = CACHE_L1_MAX_MB × 1024 × 1024` bytes (default 128, range 1–1 048 576, `src/config.rs:747`) and a weigher of `key.len() + body.len() + 128` (`src/cache/l1.rs:18-19,102-119`). An entry heavier than the whole budget is not kept.
 - Freshness is the entry's own instants on tokio time: `Fresh` before `soft_expires`, `Stale` before `hard_expires`, else invalidated and `Miss` (`l1.rs:121-134`). moka's per-entry expiry is set to the hard TTL only to reclaim memory (`l1.rs:64-86`).
 - Soft and hard TTLs come from the endpoint registry; hard = soft × 4 while `STALE_WHILE_REVALIDATE=true` (default), else hard = soft (`src/riot/endpoints.rs:13-14,476-489`, `config.rs:738`). A `Stale` hit is served and a bulk-priority refresh runs in the background with a 15-minute budget (`fetcher.rs:332-338,376-390`).
 - A refresh that returns byte-identical bytes keeps `content_at` and restarts `fetched_at` and both expiries (`l1.rs:161-176`).
@@ -74,7 +74,7 @@ From the registry (`src/riot/endpoints.rs:93-284`); hard TTLs assume stale-while
 
 ## Cache keys
 
-`{key_scope}:{endpoint id}:{host}[:{param}]…[:{query hash}]` (`src/cache/keys.rs:72-90`): the host is the request's target host, or the literal `account` for account-v1 so every cluster shares one entry; path parameters stay readable (percent-encoded, so a value can never contain a bare `:`); the query is sorted, empty values dropped, both sides `encodeURIComponent`-encoded, then hashed to 16 hex characters of sha256 (`keys.rs:50-69`).
+`{key_scope}:{endpoint id}:{host}[:{param}]…[:{query hash}]` (`src/cache/keys.rs:81-99`): the host is the request's target host, or the literal `account` for account-v1 so every cluster shares one entry; path parameters stay readable (percent-encoded, so a value can never contain a bare `:`); the query is sorted, empty values dropped, both sides `encodeURIComponent`-encoded, then hashed to 16 hex characters of sha256 (`keys.rs:50-69`).
 
 ```text
 3f9a1c2e:summoner.byPuuid:oc1.api.riotgames.com:AbC…
@@ -83,7 +83,7 @@ From the registry (`src/riot/endpoints.rs:93-284`); hard TTLs assume stale-while
 3f9a1c2e:derived:pool:1a2b3c4d5e6f7a8b
 ```
 
-`KeyScope` is the first 8 hex characters of `sha256(RIOT_API_KEY)`, derived at boot and stored nowhere (`keys.rs:24-42`). Changing the Riot key changes the scope: every L1 and L2 entry, every `players`, `match_facts`, `ladder_entries` and rank row written under the old key becomes inert rather than wrong, because PUUIDs are encrypted per key; the archive, keyed by plain match id, is untouched (`docs/design/04-data-and-cache.md:417-423`).
+`KeyScope` is the first 8 hex characters of `sha256(RIOT_API_KEY)`, derived at boot and stored nowhere (`keys.rs:24-42`), unless `KEY_SCOPE` pins it (`KeyScope::for_config`, ADR-200): staging pins production's scope so a copy of production's database stays readable. Changing the Riot key changes the scope: every L1 and L2 entry, every `players`, `match_facts`, `ladder_entries` and rank row written under the old key becomes inert rather than wrong, because PUUIDs are encrypted per key; the archive, keyed by plain match id, is untouched (`docs/design/04-data-and-cache.md:417-423`).
 
 ## The archive as a cache
 
@@ -132,8 +132,8 @@ Consumer lookups are cached in a moka cache of 10 000 entries keyed by the key's
 | Analytics responses | cold until the next rebuild's or delta's warm; the first visitor computes |
 | Auth cache, refresh windows, single-flight map | empty |
 | Recent-request ring, live job activity | empty (in memory only) |
-| Offload trigger counter | 0; boot queues an `archive:offload` run to compensate (`src/cli/serve.rs:335-341`) |
+| Offload trigger counter | 0; boot queues an `archive:offload` run to compensate (`src/cli/serve.rs:342-348`) |
 
 ---
-**Sources:** `src/fetcher.rs:L301-L367`, `src/fetcher.rs:L376-L390`, `src/fetcher.rs:L415-L428`, `src/cache/l1.rs:L18-L19`, `src/cache/l1.rs:L64-L146`, `src/cache/l1.rs:L161-L204`, `src/cache/l2.rs:L23-L28`, `src/cache/l2.rs:L102-L223`, `src/cache/mod.rs:L39-L64`, `src/cache/keys.rs:L24-L114`, `src/riot/endpoints.rs:L13-L14`, `src/riot/endpoints.rs:L93-L284`, `src/riot/endpoints.rs:L424-L512`, `src/config.rs:L731-L738`, `src/config.rs:L773`, `src/cli/serve.rs:L84-L92`, `src/cli/serve.rs:L335-L341`, `src/cli/serve.rs:L413`, `src/routes/analytics.rs:L52`, `src/routes/analytics.rs:L577-L616`, `src/routes/analytics.rs:L749-L765`, `src/routes/analytics.rs:L947-L983`, `src/archive/analytics.rs:L1375-L1404`, `src/jobs/analytics.rs:L815-L818`, `src/routes/analytics/cache.rs:L1-L264`, `src/routes/players.rs:L883-L884`, `src/routes/players.rs:L1050-L1078`, `src/routes/players/refresh.rs:L5-L71`, `src/routes/passthrough.rs:L126-L167`, `src/routes/admin.rs:L816-L883`, `src/routes/statics.rs:L26`, `src/routes/statics.rs:L79`, `src/routes/ui.rs:L8-L9`, `src/routes/ui.rs:L108-L128`, `src/http/auth.rs:L29-L32`, `src/http/auth.rs:L206-L209`, `src/archive/matches.rs:L232-L328`, `src/archive/mod.rs:L128-L144`, `src/riot/limiter/persist.rs:L23`, `src/jobs/maintenance.rs:L251`, `src/jobs/ddragon.rs:L239-L285`, `docs/design/04-data-and-cache.md:L372-L436`, `docs/_meta/scratch/riot-and-cache.md`
-**Last verified:** 2026-11-03 against commit `85969f4`
+**Sources:** `src/fetcher.rs:L301-L367`, `src/fetcher.rs:L376-L390`, `src/fetcher.rs:L415-L428`, `src/cache/l1.rs:L18-L19`, `src/cache/l1.rs:L64-L146`, `src/cache/l1.rs:L161-L204`, `src/cache/l2.rs:L23-L28`, `src/cache/l2.rs:L102-L223`, `src/cache/mod.rs:L39-L64`, `src/cache/keys.rs:L24-L123`, `src/riot/endpoints.rs:L13-L14`, `src/riot/endpoints.rs:L93-L284`, `src/riot/endpoints.rs:L424-L512`, `src/config.rs:L747-L754`, `src/config.rs:L789`, `src/cli/serve.rs:L84-L92`, `src/cli/serve.rs:L342-L348`, `src/cli/serve.rs:L420`, `src/routes/analytics.rs:L52`, `src/routes/analytics.rs:L577-L616`, `src/routes/analytics.rs:L749-L765`, `src/routes/analytics.rs:L947-L983`, `src/archive/analytics.rs:L1375-L1404`, `src/jobs/analytics.rs:L815-L818`, `src/routes/analytics/cache.rs:L1-L264`, `src/routes/players.rs:L883-L884`, `src/routes/players.rs:L1050-L1078`, `src/routes/players/refresh.rs:L5-L71`, `src/routes/passthrough.rs:L126-L167`, `src/routes/admin.rs:L816-L883`, `src/routes/statics.rs:L26`, `src/routes/statics.rs:L79`, `src/routes/ui.rs:L8-L9`, `src/routes/ui.rs:L108-L128`, `src/http/auth.rs:L29-L32`, `src/http/auth.rs:L206-L209`, `src/archive/matches.rs:L232-L328`, `src/archive/mod.rs:L128-L144`, `src/riot/limiter/persist.rs:L23`, `src/jobs/maintenance.rs:L251`, `src/jobs/ddragon.rs:L239-L285`, `docs/design/04-data-and-cache.md:L372-L436`, `docs/_meta/scratch/riot-and-cache.md`
+**Last verified:** 2026-11-05 against commit `79ed267`
