@@ -78,4 +78,4 @@ Never invent them. Every header, route, status code and TTL comes from `docs/des
 
 ---
 **Sources:** `CLAUDE.md`, `docs/IMPLEMENTATION.md` §0.1–0.6, `rustfmt.toml`, `clippy.toml`, `Cargo.toml` `[lints.clippy]`, `.github/workflows/ci.yml`, `src/app.rs:L188-L213`, `.github/PULL_REQUEST_TEMPLATE.md`, `PROGRESS.md` (Owner review at the P0 gate; Notes for the next task)
-**Last verified:** 2026-11-05 against commit `df109e7`
+**Last verified:** 2026-11-05 against commit `79ed267`

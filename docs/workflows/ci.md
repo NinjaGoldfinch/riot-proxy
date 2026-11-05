@@ -133,7 +133,7 @@ Shell and unit-file tests for the operational kit. Not a required check (ADR-070
 1. `apt-get install shellcheck python3-yaml cloud-init rclone`.
 2. `deploy/proxmox/test.sh` (the dev VM kit, OPS-02).
 3. `deploy/test.sh` (the archive replica units, OBJ-04; and `scripts/deploy-workflow.test.sh` and `scripts/smoke.test.sh`, below).
-4. `scripts/image-description.test.sh`, `scripts/edge-tags.test.sh`, `scripts/docker-paths.test.sh`.
+4. `scripts/image-description.test.sh`, `scripts/edge-tags.test.sh`, `scripts/docker-paths.test.sh`, `scripts/release-identity.test.sh` (STS-01: `release.yml` sets `RELEASE_VERSION` on tag pushes only and every release build checks `build-info`; with a local `target/debug/riot-proxy` it also checks that build reports `dev` and the checkout's commit).
 5. `scripts/deploy-workflow.test.sh`, run by `deploy/test.sh`: `deploy.yml` deploys the tarball `release.yml` builds, against the checksum file it writes, on the Proxmox runner behind the chosen environment, through `ninja-actions/deploy@v1` (DEP-03, ADR-196); prod requires `staging/smoke` or `prod/deployed` and sets `prod/deployed`; staging is smoke-tested and records `staging/smoke`; `release.yml` calls it for staging with `secrets: inherit` (DEP-05, ADR-198).
 6. `scripts/smoke.test.sh`, run by `deploy/test.sh`: `scripts/smoke.sh` against a stub server, one case for each way a release can be wrong and for Access refusing the token (DEP-05).
 
@@ -186,14 +186,14 @@ Extracts `version = "…"` from `Cargo.toml`. On a tag, fails unless the tag is 
 
 1. Toolchain plus the matrix target; `musl-tools`.
 2. `cargo build --release --locked --target <target>`.
-3. `--version` must print exactly `riot-proxy <version>`; the binary must contain the 12-character `GIT_SHA` (ADM-03).
+3. `--version` must print exactly `riot-proxy <version>`; the binary must contain the 12-character `GIT_SHA` (ADM-03); `riot-proxy build-info` must print the tag's version on a tag push and `dev` otherwise, with the 7-character commit (STS-01, ADR-203). The workflow sets `RELEASE_VERSION` to the tag on a tag push and to nothing on a pull request, and `build.rs` embeds it.
 4. Static and under 24 MiB.
 5. On x86_64: `riot-proxy-x86_64-linux.tar.gz`, the binary as `riot-proxy/riot-proxy` with `riot-proxy/version.json` (`version`, `commit`, `built_at`), the form `ninja-deploy` uploads to a host. The step checks it holds exactly those two files, that `version.json` names the tag, and that the unpacked binary reports it (DEP-02, ADR-195). Uploaded as its own artifact, which the `release` job downloads by name, so it is in `sha256sums`.
 6. Uploads `dist/<asset>` as an artifact (`if-no-files-found: error`).
 
 ### `build-darwin`
 
-`aarch64-apple-darwin` on `macos-15`, 60-minute timeout: the toolchain, `cargo build --release --locked`, the same `--version` and `GIT_SHA` checks, then the artifact `riot-proxy-darwin-arm64`. No job but `attach-darwin` needs it (DEP-04).
+`aarch64-apple-darwin` on `macos-15`, 60-minute timeout: the toolchain, `cargo build --release --locked`, the same `--version`, `GIT_SHA` and `build-info` checks, then the artifact `riot-proxy-darwin-arm64`. No job but `attach-darwin` needs it (DEP-04).
 
 ### `image`
 
@@ -254,5 +254,5 @@ Deploys a release to staging or production (DEP-03, ADR-196; DEP-05, ADR-198). `
 
 What happens on the host is in [release-process.md](./release-process.md), "Staging" and "Deploying to production"; `scripts/deploy-workflow.test.sh` and `scripts/smoke.test.sh` (the `ops` job, through `deploy/test.sh`) check the wiring and the smoke test, since the workflow cannot run in CI.
 
-**Sources:** `.github/workflows/ci.yml`, `.github/workflows/deploy.yml`, `scripts/deploy-workflow.test.sh`, `scripts/smoke.sh`, `scripts/smoke.test.sh`, `deploy/test.sh`, `docs/_meta/tools/docs-guard.py`, `docs/_meta/tools/openapi-check.py`, `.github/workflows/edge.yml`, `.github/workflows/release.yml`, `.config/nextest.toml`, `scripts/docker-paths.sh`, `scripts/edge-tags.sh`, `scripts/image-description.sh`, `scripts/check-image-description.sh`, `justfile`, `Dockerfile.release`
-**Last verified:** 2026-11-05 against commit `18669d3`
+**Sources:** `.github/workflows/ci.yml`, `.github/workflows/deploy.yml`, `scripts/deploy-workflow.test.sh`, `scripts/release-identity.test.sh`, `build.rs`, `scripts/smoke.sh`, `scripts/smoke.test.sh`, `deploy/test.sh`, `docs/_meta/tools/docs-guard.py`, `docs/_meta/tools/openapi-check.py`, `.github/workflows/edge.yml`, `.github/workflows/release.yml`, `.config/nextest.toml`, `scripts/docker-paths.sh`, `scripts/edge-tags.sh`, `scripts/image-description.sh`, `scripts/check-image-description.sh`, `justfile`, `Dockerfile.release`
+**Last verified:** 2026-11-05 against commit `79ed267`

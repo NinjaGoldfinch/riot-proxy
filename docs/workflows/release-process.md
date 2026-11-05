@@ -22,6 +22,7 @@ Everything up to the staging smoke test is automated; production waits for a per
 - Semantic versions in `Cargo.toml` (`version = "2.10.0"` at the verified commit). Tags are `v<version>`; pre-releases carry a suffix (`v2.0.0-rc.3`).
 - `release.yml` refuses a tag whose name is not exactly `v` plus the `Cargo.toml` version.
 - The binary reports its version with `--version` and in `GET /v1/admin/info` together with the embedded commit (`gitSha`), `rustc` and build time (ADM-03).
+- `riot-proxy build-info` prints `{"version","commit","built_at"}`, the identity `GET /status` reports (STS-01, design/14): the version is the tag's only for a build `release.yml` made from a tag (`RELEASE_VERSION`), `dev` for any other build, with the 7-character commit and the build time in RFC 3339 UTC. `serve` logs the same three fields in its first line, `starting riot-proxy`.
 - Cadence so far: `v2.0.0` on 2026-10-10 after four release candidates, then `v2.1.0` to `v2.7.0` between 2026-10-11 and 2026-10-19 (`git tag -l --format='%(refname:short) %(creatordate:short)'`). Minor versions carry features; `v2.4.1` was a fix release.
 
 ## Changelog
@@ -113,4 +114,4 @@ ninjagoldfinch.lol pins the proxy contract it was verified against (its generate
 
 ---
 **Sources:** `.github/workflows/release.yml`, `.github/workflows/deploy.yml`, `scripts/smoke.sh`, `src/routes/health.rs`, ninja-actions README at `9d6ce2f` ("Staging", "Nothing reaches production without passing staging"), `infra/deploy-host-add.sh` at `9d6ce2f`, `.github/workflows/edge.yml`, `Cargo.toml:L3`, `git show --stat v2.7.0` (commit `10cf81d`), `git tag -l`, `docs/design/07-deployment.md#upgrade-procedure`, `docs/design/07-deployment.md#build-identity-adm-03`, `deploy/README.md`, `deploy/proxmox/README.md`, `deploy/proxmox/files/riot-proxy-update`
-**Last verified:** 2026-11-05 against commit `18669d3`
+**Last verified:** 2026-11-05 against commit `79ed267`

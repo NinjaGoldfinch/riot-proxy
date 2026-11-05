@@ -49,6 +49,8 @@ pub enum Command {
     },
     /// Print the OpenAPI document (JSON) to stdout.
     Spec,
+    /// Print this build's version, commit and build time as JSON, as GET /status reports them.
+    BuildInfo,
     /// Import v1's archive and players from a Postgres dump (consumers are not migrated).
     MigrateV1(migrate_v1::Args),
     /// Write a consistent copy of the database to OUT (`VACUUM INTO`), safe while serving.
@@ -79,6 +81,18 @@ pub fn run() -> ExitCode {
         }
         return ExitCode::SUCCESS;
     }
+    if let Command::BuildInfo = cli.command {
+        return match serde_json::to_string(&crate::build_info::Identity::current()) {
+            Ok(json) => {
+                println!("{json}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     let config = match Config::load(cli.config) {
         Ok(config) => config,
         Err(e) => {
@@ -103,7 +117,7 @@ pub fn run() -> ExitCode {
             Command::Migrate => migrate(&config).await,
             Command::Key(cmd) => key::run(&config, cmd).await,
             Command::Healthcheck { timeout } => healthcheck::run(&config, timeout).await,
-            Command::Spec => Ok(()),
+            Command::Spec | Command::BuildInfo => Ok(()),
             Command::Backup { out } => backup::run(&config, &out).await,
             Command::MigrateV1(args) => migrate_v1::run(&config, &args).await,
             Command::Packs(cmd) => packs::run(&config, cmd).await,

@@ -39,6 +39,13 @@ impl Clock {
         }
     }
 }
+/// Unix ms as RFC 3339 UTC to the second (`2026-11-04T09:12:00Z`), the form the
+/// shared status contract uses (STS-01, design/14).
+pub fn rfc3339_s(ms: i64) -> Option<String> {
+    let t = jiff::Timestamp::from_millisecond(ms).ok()?;
+    Some(t.strftime("%Y-%m-%dT%H:%M:%SZ").to_string())
+}
+
 /// Unix ms as JavaScript's `toISOString` printed it (UTC, milliseconds), which is
 /// how v1 serialised every timestamp in its JSON.
 pub fn iso_ms(ms: i64) -> Option<String> {

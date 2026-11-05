@@ -29,6 +29,9 @@ env:
   IMAGE: ghcr.io/ninjagoldfinch/riot-proxy
   # build.rs embeds it for GET /v1/admin/info (ADM-03).
   GIT_SHA: ${{ github.sha }}
+  # build.rs embeds it for GET /status (STS-01, ADR-203): the tag on a tag push,
+  # empty on a pull request, so a build that is not a release reports `dev`.
+  RELEASE_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
 
 permissions:
   contents: read
@@ -76,6 +79,10 @@ jobs:
           "$bin" --version | tee /dev/stderr | grep -qx "riot-proxy ${{ needs.version.outputs.version }}"
           # The commit is embedded, not `unknown` (ADM-03).
           grep -qa "${GIT_SHA:0:12}" "$bin"
+          # GET /status's identity (STS-01): the tag's version, or `dev` off a tag.
+          expected=dev
+          if [ "$GITHUB_REF_TYPE" = tag ]; then expected=${{ needs.version.outputs.version }}; fi
+          "$bin" build-info | tee /dev/stderr | grep -q "^{\"version\":\"$expected\",\"commit\":\"${GIT_SHA:0:7}\","
           mkdir dist && cp "$bin" dist/${{ matrix.asset }}
       - if: runner.os == 'Linux'
         name: static and under 24 MiB
@@ -132,6 +139,10 @@ jobs:
           "$bin" --version | tee /dev/stderr | grep -qx "riot-proxy ${{ needs.version.outputs.version }}"
           # The commit is embedded, not `unknown` (ADM-03).
           grep -qa "${GIT_SHA:0:12}" "$bin"
+          # GET /status's identity (STS-01): the tag's version, or `dev` off a tag.
+          expected=dev
+          if [ "$GITHUB_REF_TYPE" = tag ]; then expected=${{ needs.version.outputs.version }}; fi
+          "$bin" build-info | tee /dev/stderr | grep -q "^{\"version\":\"$expected\",\"commit\":\"${GIT_SHA:0:7}\","
           mkdir dist && cp "$bin" dist/riot-proxy-darwin-arm64
       - uses: actions/upload-artifact@v7
         with:

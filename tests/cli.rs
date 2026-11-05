@@ -70,6 +70,7 @@ fn every_subcommand_has_help() {
         vec!["key", "revoke", "--help"],
         vec!["healthcheck", "--help"],
         vec!["spec", "--help"],
+        vec!["build-info", "--help"],
         vec!["backup", "--help"],
         vec!["packs", "--help"],
         vec!["packs", "reindex", "--help"],
@@ -171,6 +172,51 @@ fn spec_prints_a_json_document() {
     assert!(out.status.success());
     let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(doc["openapi"], "3.1.0");
+}
+
+/// STS-01: the identity `/status` reports, without any configuration.
+#[test]
+fn build_info_prints_the_contract_identity() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = Command::new(BIN)
+        .env_clear()
+        .current_dir(tmp.path())
+        .arg("build-info")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let id: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let keys: Vec<&str> = id.as_object().unwrap().keys().map(String::as_str).collect();
+    assert_eq!(keys, ["built_at", "commit", "version"], "{id}");
+    let version = id["version"].as_str().unwrap();
+    assert!(version == "dev" || version == env!("CARGO_PKG_VERSION"), "{id}");
+    assert!(id["commit"].as_str().unwrap().len() <= 7, "{id}");
+    let built_at = id["built_at"].as_str().unwrap();
+    assert!(
+        built_at.parse::<jiff::Timestamp>().is_ok() && built_at.ends_with('Z'),
+        "{id}"
+    );
+}
+
+/// STS-01: one line at start names the build.
+#[test]
+fn serve_logs_its_build_at_start() {
+    let tmp = tempfile::tempdir().unwrap();
+    let server = Server::start(&tmp.path().join("data"), free_port());
+    let log = server.stop(Vec::new());
+    let line = log
+        .lines()
+        .find(|l| l.contains("starting riot-proxy"))
+        .unwrap_or_else(|| panic!("{log}"));
+    let line: serde_json::Value = serde_json::from_str(line).unwrap();
+    assert!(
+        line["version"].is_string() && line["commit"].is_string(),
+        "{line}"
+    );
+    assert!(
+        line["built_at"].as_str().is_some_and(|s| s.ends_with('Z')),
+        "{line}"
+    );
 }
 
 #[test]

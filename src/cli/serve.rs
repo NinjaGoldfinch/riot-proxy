@@ -44,6 +44,8 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
     if !options.skip_tracing_init {
         telemetry::init_tracing(&config)?;
     }
+    let build = crate::build_info::Identity::current();
+    tracing::info!(version = build.version, commit = build.commit, built_at = %build.built_at, "starting riot-proxy");
     let started = std::time::Instant::now();
     let metrics = telemetry::metrics_handle()?;
     telemetry::spawn_upkeep(metrics.clone());
