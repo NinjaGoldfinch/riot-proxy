@@ -641,7 +641,10 @@ impl Config {
         let key_scope = v.opt_string("KEY_SCOPE").and_then(|raw| {
             let valid = raw.len() == 8 && raw.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
             if !valid {
-                v.push("KEY_SCOPE", &format!("'{raw}' must be 8 lowercase hex characters"));
+                v.push(
+                    "KEY_SCOPE",
+                    &format!("'{raw}' must be 8 lowercase hex characters"),
+                );
             }
             valid.then_some(raw)
         });

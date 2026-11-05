@@ -591,7 +591,11 @@ async fn a_pinned_key_scope_reads_the_players_stored_under_it() {
         .unwrap();
     let s = e.get("/v1/admin/stats").await.json();
     assert_eq!(
-        (s["keyScope"].clone(), s["trackedPlayers"].clone(), s["knownPlayers"].clone()),
+        (
+            s["keyScope"].clone(),
+            s["trackedPlayers"].clone(),
+            s["knownPlayers"].clone()
+        ),
         (json!(pinned), json!(1), json!(1))
     );
     assert_eq!(e.state.fetcher.key_scope().as_str(), pinned);
