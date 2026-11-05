@@ -94,7 +94,7 @@ Path values are **case-sensitive** ajv enums: `EUW1` is refused with `400 BAD_RE
 
 Source: `src/riot/routing.rs:L86-L121`. `sea` has no account-v1 cluster, so account routes pinned to `sea` go to `asia` (`src/riot/routing.rs:L174-L181`).
 
-**Account-cluster picking (ADR-066).** Riot serves every account from each of `americas`, `asia` and `europe`. The region-less `/v1/riot/accounts/*` routes, and the internal account lookups of the player profile and admin tracking, take a token from the first cluster with room now in the order `asia`, `americas`, `europe`; if none has room they wait for the soonest, inside the usual budget; a cluster that answered a 429 goes last for the rest of the request (`src/riot/routing.rs:L151-L153`, `src/fetcher.rs:L612-L650`). All clusters share one cache entry keyed on the literal host `account` (`src/cache/keys.rs:L72-L79`). The `/{region}/` variants pin a cluster and never move.
+**Account-cluster picking (ADR-066).** Riot serves every account from each of `americas`, `asia` and `europe`. The region-less `/v1/riot/accounts/*` routes, and the internal account lookups of the player profile and admin tracking, take a token from the first cluster with room now in the order `asia`, `americas`, `europe`; if none has room they wait for the soonest, inside the usual budget; a cluster that answered a 429 goes last for the rest of the request (`src/riot/routing.rs:L151-L153`, `src/fetcher.rs:L612-L650`). All clusters share one cache entry keyed on the literal host `account` (`src/cache/keys.rs:L81-L88`). The `/{region}/` variants pin a cluster and never move.
 
 ### Other headers
 
@@ -142,7 +142,7 @@ No key. Not listed in the document itself. `riot-proxy spec` prints the same JSO
 
 ## Dev and dashboard pages (toggles)
 
-`DEV_UI` defaults on but is forced off when `ENV=production`; `DASHBOARD_UI` defaults on (`src/config.rs:L682-L684`, `L784-L787`). None of these are in the OpenAPI document.
+`DEV_UI` defaults on but is forced off when `ENV=production`; `DASHBOARD_UI` defaults on (`src/config.rs:L708-L710`, `L784-L787`). None of these are in the OpenAPI document.
 
 | Method | Path | Toggle | Auth | Response | Handler |
 |---|---|---|---|---|---|
@@ -239,4 +239,4 @@ The frame shape is `src/events.rs:L159-L172`; data fields per event are listed i
 
 ---
 **Sources:** `src/app.rs:L30-L35,L69-L119,L189-L195`, `src/routes/docs.rs:L86-L141,L374-L387`, `src/routes/health.rs:L21-L200`, `src/routes/ui.rs:L94-L233`, `src/routes/dev.rs:L33-L253`, `src/routes/ws.rs:L497-L572`, `src/ws/protocol.rs:L23-L147`, `src/ws/socket.rs:L38-L206`, `src/ws/hub.rs:L20-L205`, `src/http/auth.rs:L141-L353`, `src/http/quota.rs:L320-L431`, `src/http/request_id.rs:L287-L339`, `src/http/validate.rs:L21-L88`, `src/routes/passthrough.rs:L401-L476`, `src/fetcher.rs:L50-L69,L301-L367,L612-L650`, `src/riot/routing.rs:L46-L181`, `docs/_meta/scratch/routes.md`, `docs/design/12-object-storage-and-hosting.md:L904-L925`, `tests/snapshots/http__unknown_route_404.snap`, `tests/snapshots/ws_hub__ws_session.snap`, live capture against `target/debug/riot-proxy` 2.7.0
-**Last verified:** 2026-10-26 against commit `c9e1b33`
+**Last verified:** 2026-11-05 against commit `7ec9262`

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Seed staging riot-proxy with production's newest daily backup (STG-04,
-# ADR-203). Run on the staging host (ngf-mon-syd1) as root; safe to rerun,
+# ADR-204). Run on the staging host (ngf-mon-syd1) as root; safe to rerun,
 # each run replaces staging's database with a fresh copy.
 #
 #   sudo ./staging-seed.sh --dry-run     # what it would do, nothing changed

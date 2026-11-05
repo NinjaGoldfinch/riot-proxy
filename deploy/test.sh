@@ -25,7 +25,7 @@ check "shellcheck" shellcheck "$here/test.sh"
 check "deploy.yml wiring" "$here/../scripts/deploy-workflow.test.sh"
 # The smoke test staging's deploy runs, against a stub (DEP-05, ADR-198).
 check "smoke.sh" "$here/../scripts/smoke.test.sh"
-# Seeding staging from production's backup (STG-04, ADR-203).
+# Seeding staging from production's backup (STG-04, ADR-204).
 check "shellcheck staging-seed" shellcheck "$here/staging-seed.sh" "$here/staging-seed.test.sh"
 check "staging-seed.sh" "$here/staging-seed.test.sh"
 
@@ -66,6 +66,9 @@ printf 'pack one' > "$src/packs/matches/2026/10/01JA.pack"
 printf 'pack two' > "$src/packs/matches/2026/10/01JB.pack"
 printf 'snapshot' > "$src/index/packs-2026-10-14.jsonl.zst"
 printf 'pack one' > "$dst/packs/matches/2026/10/01JA.pack"
+# A replica's copy has its source's mtime (rclone compares size and mtime). Two
+# writes can straddle a coarse filesystem tick, and the pack would then differ.
+touch -r "$src/packs/matches/2026/10/01JA.pack" "$dst/packs/matches/2026/10/01JA.pack"
 printf 'expired' > "$dst/index/packs-2026-09-01.jsonl.zst"
 
 # shellcheck disable=SC2016 # the unit's literal ${…}, replaced here

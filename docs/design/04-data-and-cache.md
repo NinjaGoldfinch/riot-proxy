@@ -60,7 +60,7 @@ The daily `maintenance` job runs `VACUUM INTO 'backups/riot-proxy-YYYY-MM-DD.db'
 
 ## Schema (v2 DDL)
 
-Ported from `src/db/schema.ts` with Postgres-isms removed. `key_scope` semantics are unchanged: any row holding an encrypted ID carries it.
+Ported from `src/db/schema.ts` with Postgres-isms removed. `key_scope` semantics are unchanged: any row holding an encrypted ID carries it. `KEY_SCOPE` can pin the scope instead of deriving it from the key (STG-01, ADR-200), so staging reads a copy of production's rows.
 
 ```sql
 -- Consumers & auth ─────────────────────────────────────────────────────────

@@ -23,6 +23,7 @@ use figment::providers::Serialized;
 pub const VARS: &[&str] = &[
     "RIOT_API_KEY",
     "RIOT_USER_AGENT",
+    "KEY_SCOPE",
     "ENV",
     "HOST",
     "PORT",
@@ -58,6 +59,7 @@ pub const VARS: &[&str] = &[
     "ARCHIVE_OBJECT_ACCESS_KEY",
     "ARCHIVE_OBJECT_SECRET_KEY",
     "ARCHIVE_OBJECT_CONCURRENCY",
+    "ARCHIVE_OBJECT_READ_ONLY",
     "ARCHIVE_BODY_LOCAL_DAYS",
     "ARCHIVE_PACK_TARGET_BYTES",
     "ARCHIVE_OFFLOAD_PACE_MS",
@@ -68,6 +70,7 @@ pub const VARS: &[&str] = &[
     "LADDER_PLATFORMS",
     "LADDER_TIER_FLOOR",
     "LADDER_BACKFILL_LIMIT",
+    "LADDER_CRAWL_MATCH_LIMIT",
     "LADDER_COLLECT_OVERLAP_S",
     "RANK_LOOKUP_LIMIT",
     "RANK_LOOKUP_RECHECK_S",
@@ -271,6 +274,11 @@ impl fmt::Display for ObjectUrl {
 #[derive(Debug, Clone)]
 pub struct Config {
     pub riot_api_key: Secret,
+    /// `KEY_SCOPE`: 8 lowercase hex characters that replace the scope derived
+    /// from `RIOT_API_KEY` (STG-01). Unset derives it, as before. Staging pins
+    /// production's scope so a copy of production's data stays readable
+    /// across development-key renewals.
+    pub key_scope: Option<String>,
     pub riot_user_agent: String,
     pub env: Environment,
     pub host: String,
@@ -327,6 +335,10 @@ pub struct Config {
     pub archive_object_secret_key: Option<Secret>,
     /// Ranged GETs `get_many` runs at once against the bucket.
     pub archive_object_concurrency: u32,
+    /// `ARCHIVE_OBJECT_READ_ONLY` (STG-02): read packed bodies from the
+    /// bucket and never write it. No offload or index snapshot runs, so no
+    /// local body is freed. Needs `ARCHIVE_OBJECT_URL`.
+    pub archive_object_read_only: bool,
     /// How long SQLite keeps its own copy of a body already in the bucket,
     /// counted from when its match was archived; 0 frees every packed body.
     pub archive_body_local_days: u32,
@@ -342,6 +354,9 @@ pub struct Config {
     pub ladder_platforms: Vec<Platform>,
     pub ladder_tier_floor: String,
     pub ladder_backfill_limit: u32,
+    /// `LADDER_CRAWL_MATCH_LIMIT` (STG-03): the most matches a platform may
+    /// hold, archived or queued, before its crawls queue no more; 0 is no cap.
+    pub ladder_crawl_match_limit: u32,
     /// How far before a player's last collect a crawl's `startTime` reaches,
     /// in seconds, for games in progress then (THR-04, ADR-185).
     pub ladder_collect_overlap_s: u32,
@@ -420,6 +435,7 @@ impl Config {
         let platforms: Vec<&str> = self.ladder_platforms.iter().map(|p| p.as_str()).collect();
         BTreeMap::from([
             ("RIOT_USER_AGENT", s(&self.riot_user_agent)),
+            ("KEY_SCOPE", self.key_scope.clone()),
             ("ENV", s(self.env.as_str())),
             ("HOST", s(&self.host)),
             ("PORT", s(self.port)),
@@ -468,6 +484,7 @@ impl Config {
                     .map(|_| REDACTED.to_string()),
             ),
             ("ARCHIVE_OBJECT_CONCURRENCY", s(self.archive_object_concurrency)),
+            ("ARCHIVE_OBJECT_READ_ONLY", s(self.archive_object_read_only)),
             ("ARCHIVE_BODY_LOCAL_DAYS", s(self.archive_body_local_days)),
             ("ARCHIVE_PACK_TARGET_BYTES", s(self.archive_pack_target_bytes)),
             ("ARCHIVE_OFFLOAD_PACE_MS", s(self.archive_offload_pace_ms)),
@@ -478,6 +495,7 @@ impl Config {
             ("LADDER_PLATFORMS", s(platforms.join(","))),
             ("LADDER_TIER_FLOOR", s(&self.ladder_tier_floor)),
             ("LADDER_BACKFILL_LIMIT", s(self.ladder_backfill_limit)),
+            ("LADDER_CRAWL_MATCH_LIMIT", s(self.ladder_crawl_match_limit)),
             ("LADDER_COLLECT_OVERLAP_S", s(self.ladder_collect_overlap_s)),
             ("RANK_LOOKUP_LIMIT", s(self.rank_lookup_limit)),
             ("RANK_LOOKUP_RECHECK_S", s(self.rank_lookup_recheck_s)),
@@ -631,6 +649,17 @@ impl Config {
             None => v.error("RIOT_API_KEY", "is required"),
         };
 
+        let key_scope = v.opt_string("KEY_SCOPE").and_then(|raw| {
+            let valid = raw.len() == 8 && raw.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+            if !valid {
+                v.push(
+                    "KEY_SCOPE",
+                    &format!("'{raw}' must be 8 lowercase hex characters"),
+                );
+            }
+            valid.then_some(raw)
+        });
+
         let env = match (v.opt_string("ENV"), v.opt_string(LEGACY_ENV_VAR)) {
             (Some(raw), _) => v.parse_or("ENV", &raw, Environment::Development),
             (None, Some(raw)) => v.parse_or(LEGACY_ENV_VAR, &raw, Environment::Development),
@@ -707,11 +736,19 @@ impl Config {
             .collect();
 
         let objects = v.object_store(env);
+        let archive_object_read_only = v.bool("ARCHIVE_OBJECT_READ_ONLY", false);
+        if archive_object_read_only && objects.url.is_none() {
+            v.push(
+                "ARCHIVE_OBJECT_READ_ONLY",
+                "needs ARCHIVE_OBJECT_URL: there is no bucket to read",
+            );
+        }
 
         let bulk_idle_ceiling_set = v.opt_string("BULK_IDLE_CEILING").is_some();
 
         let mut config = Config {
             riot_api_key: Secret::new(riot_api_key),
+            key_scope,
             riot_user_agent: v.string("RIOT_USER_AGENT", DEFAULT_USER_AGENT),
             env,
             host: v.string("HOST", "0.0.0.0"),
@@ -751,6 +788,7 @@ impl Config {
             archive_object_access_key: objects.access_key,
             archive_object_secret_key: objects.secret_key,
             archive_object_concurrency: v.int("ARCHIVE_OBJECT_CONCURRENCY", 16, 1, 256),
+            archive_object_read_only,
             archive_body_local_days: v.int("ARCHIVE_BODY_LOCAL_DAYS", 14, 0, 365),
             archive_pack_target_bytes: v.int("ARCHIVE_PACK_TARGET_BYTES", 64 << 20, 1 << 20, 1 << 30),
             archive_offload_pace_ms: v.int("ARCHIVE_OFFLOAD_PACE_MS", 50, 0, 60_000),
@@ -764,6 +802,7 @@ impl Config {
             ladder_platforms,
             ladder_tier_floor: v.tier("LADDER_TIER_FLOOR", "MASTER"),
             ladder_backfill_limit: v.int("LADDER_BACKFILL_LIMIT", 100, 0, 10_000),
+            ladder_crawl_match_limit: v.int("LADDER_CRAWL_MATCH_LIMIT", 0, 0, 100_000_000),
             ladder_collect_overlap_s: v.int("LADDER_COLLECT_OVERLAP_S", 7_200, 0, 86_400),
             rank_lookup_limit: v.int("RANK_LOOKUP_LIMIT", 50_000, 0, 10_000_000),
             rank_lookup_recheck_s: v.int("RANK_LOOKUP_RECHECK_S", 604_800, 0, 31_536_000),

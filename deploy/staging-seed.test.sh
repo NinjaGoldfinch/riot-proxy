@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for deploy/staging-seed.sh (STG-04, ADR-203): rclone, systemctl and
+# Tests for deploy/staging-seed.sh (STG-04, ADR-204): rclone, systemctl and
 # curl are stubs over a temporary directory; sqlite3 is the real one. Each
 # refusal leaves staging untouched; a seed replaces and scrubs the database,
 # starts the service and checks /readyz's keyScope; a second seed works the

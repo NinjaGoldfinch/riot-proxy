@@ -94,6 +94,9 @@ pub struct LadderContext {
     /// `AGGREGATE_DELTA_S` > 0: a completed crawl queues `aggregate:delta`
     /// instead of a rebuild (THR-03).
     pub delta_on: bool,
+    /// `LADDER_CRAWL_MATCH_LIMIT`: the most matches a platform may hold before
+    /// the archive hand-off queues no more; 0 is no cap (STG-03).
+    pub crawl_match_limit: u32,
 }
 
 /// Players one `ladder:collect` job walks (v1 `COLLECT_BATCH`).
@@ -767,7 +770,8 @@ impl LadderContext {
     }
 
     async fn archive_set(&self, leg: &ArchiveLeg) -> Result<(), JobError> {
-        let (mut seen, mut queued) = (0usize, 0usize);
+        let (mut seen, mut queued, mut skipped) = (0usize, 0usize, 0usize);
+        let limit = self.crawl_match_limit;
         loop {
             if self.running(&leg.crawl_id).await?.is_none() {
                 tracing::info!(crawl = %leg.crawl_id, seen, "ladder archive stopping; crawl is not running");
@@ -783,13 +787,28 @@ impl LadderContext {
             let unarchived = crate::archive::matches::filter_unarchived(self.db(), &batch)
                 .await
                 .map_err(|e| store_err(&e))?;
-            let (n, batch_len) = (unarchived.len(), batch.len());
-            let (crawl, timelines, now) =
-                (leg.crawl_id.clone(), self.archive_timelines, Clock::now().unix_ms);
-            self.db()
+            let batch_len = batch.len();
+            let (crawl, platform, timelines, now) = (
+                leg.crawl_id.clone(),
+                leg.platform.clone(),
+                self.archive_timelines,
+                Clock::now().unix_ms,
+            );
+            // The cap is read in the write that queues, so two crawls on one
+            // platform cannot both take the last of its room (STG-03).
+            let (n, left_out) = self
+                .db()
                 .write(move |c| {
                     let tx = c.transaction()?;
-                    for id in &unarchived {
+                    let room = if limit == 0 {
+                        unarchived.len()
+                    } else {
+                        let held = store::platform_matches_held(&tx, &platform)?;
+                        usize::try_from((i64::from(limit) - held).max(0)).unwrap_or(0)
+                    };
+                    let take = unarchived.len().min(room);
+                    let left_out = unarchived.len() - take;
+                    for id in &unarchived[..take] {
                         let payload = crate::jobs::archive::ArchiveMatch {
                             match_id: id.clone(),
                             puuid: None,
@@ -808,13 +827,31 @@ impl LadderContext {
                         &tx,
                         &crawl,
                         store::Counter::MatchesQueued,
-                        i64::try_from(unarchived.len()).unwrap_or(0),
+                        i64::try_from(take).unwrap_or(0),
                     )?;
+                    if left_out > 0 {
+                        store::bump(
+                            &tx,
+                            &crawl,
+                            store::Counter::MatchesSkipped,
+                            i64::try_from(left_out).unwrap_or(0),
+                        )?;
+                        store::mark_match_limit(&tx, &crawl, limit)?;
+                    }
                     tx.commit()?;
-                    Ok::<_, DbError>(())
+                    Ok::<_, DbError>((take, left_out))
                 })
                 .await
                 .map_err(|e| store_err(&e))?;
+            if left_out > 0 && skipped == 0 {
+                tracing::warn!(
+                    crawl = %leg.crawl_id,
+                    platform = %leg.platform,
+                    limit,
+                    "ladder crawl reached LADDER_CRAWL_MATCH_LIMIT; queueing no more of its matches"
+                );
+            }
+            skipped += left_out;
             if n > 0 {
                 self.queue.wake_all();
                 metrics::counter!(crate::metrics::LADDER_MATCHES_QUEUED_TOTAL,
@@ -824,7 +861,7 @@ impl LadderContext {
             seen += batch_len;
             queued += n;
         }
-        tracing::info!(crawl = %leg.crawl_id, seen, queued, "ladder matches handed to the archive queue");
+        tracing::info!(crawl = %leg.crawl_id, seen, queued, skipped, "ladder matches handed to the archive queue");
         Ok(())
     }
 

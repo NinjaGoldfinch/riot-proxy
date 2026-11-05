@@ -134,6 +134,7 @@ impl Env {
             rank_lookup_recheck_s: 604_800,
             late_stamp_days: 14,
             delta_on: false,
+            crawl_match_limit: 0,
         })
     }
 
