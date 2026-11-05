@@ -58,6 +58,7 @@ pub const VARS: &[&str] = &[
     "ARCHIVE_OBJECT_ACCESS_KEY",
     "ARCHIVE_OBJECT_SECRET_KEY",
     "ARCHIVE_OBJECT_CONCURRENCY",
+    "ARCHIVE_OBJECT_READ_ONLY",
     "ARCHIVE_BODY_LOCAL_DAYS",
     "ARCHIVE_PACK_TARGET_BYTES",
     "ARCHIVE_OFFLOAD_PACE_MS",
@@ -327,6 +328,10 @@ pub struct Config {
     pub archive_object_secret_key: Option<Secret>,
     /// Ranged GETs `get_many` runs at once against the bucket.
     pub archive_object_concurrency: u32,
+    /// `ARCHIVE_OBJECT_READ_ONLY` (STG-02): read packed bodies from the
+    /// bucket and never write it. No offload or index snapshot runs, so no
+    /// local body is freed. Needs `ARCHIVE_OBJECT_URL`.
+    pub archive_object_read_only: bool,
     /// How long SQLite keeps its own copy of a body already in the bucket,
     /// counted from when its match was archived; 0 frees every packed body.
     pub archive_body_local_days: u32,
@@ -468,6 +473,7 @@ impl Config {
                     .map(|_| REDACTED.to_string()),
             ),
             ("ARCHIVE_OBJECT_CONCURRENCY", s(self.archive_object_concurrency)),
+            ("ARCHIVE_OBJECT_READ_ONLY", s(self.archive_object_read_only)),
             ("ARCHIVE_BODY_LOCAL_DAYS", s(self.archive_body_local_days)),
             ("ARCHIVE_PACK_TARGET_BYTES", s(self.archive_pack_target_bytes)),
             ("ARCHIVE_OFFLOAD_PACE_MS", s(self.archive_offload_pace_ms)),
@@ -707,6 +713,13 @@ impl Config {
             .collect();
 
         let objects = v.object_store(env);
+        let archive_object_read_only = v.bool("ARCHIVE_OBJECT_READ_ONLY", false);
+        if archive_object_read_only && objects.url.is_none() {
+            v.push(
+                "ARCHIVE_OBJECT_READ_ONLY",
+                "needs ARCHIVE_OBJECT_URL: there is no bucket to read",
+            );
+        }
 
         let bulk_idle_ceiling_set = v.opt_string("BULK_IDLE_CEILING").is_some();
 
@@ -751,6 +764,7 @@ impl Config {
             archive_object_access_key: objects.access_key,
             archive_object_secret_key: objects.secret_key,
             archive_object_concurrency: v.int("ARCHIVE_OBJECT_CONCURRENCY", 16, 1, 256),
+            archive_object_read_only,
             archive_body_local_days: v.int("ARCHIVE_BODY_LOCAL_DAYS", 14, 0, 365),
             archive_pack_target_bytes: v.int("ARCHIVE_PACK_TARGET_BYTES", 64 << 20, 1 << 20, 1 << 30),
             archive_offload_pace_ms: v.int("ARCHIVE_OFFLOAD_PACE_MS", 50, 0, 60_000),

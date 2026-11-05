@@ -45,6 +45,8 @@ const CONTENT_TYPE: &str = "application/octet-stream";
 pub enum ObjectsError {
     #[error("object store: {0}")]
     Store(#[from] object_store::Error),
+    #[error("object store: refused to write '{0}': ARCHIVE_OBJECT_READ_ONLY is set")]
+    ReadOnly(String),
     #[error("object store: '{0}' is not a valid object key")]
     Key(String),
     #[error("object store: ARCHIVE_OBJECT_URL is not set")]
@@ -85,11 +87,16 @@ pub struct Objects {
     describe: String,
     /// Packs read at once by a batch read (`ARCHIVE_OBJECT_CONCURRENCY`).
     concurrency: usize,
+    /// `ARCHIVE_OBJECT_READ_ONLY`: `put` and `delete` refuse (STG-02).
+    read_only: bool,
 }
 
 impl fmt::Debug for Objects {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Objects").field("store", &self.describe).finish()
+        f.debug_struct("Objects")
+            .field("store", &self.describe)
+            .field("read_only", &self.read_only)
+            .finish()
     }
 }
 
@@ -109,7 +116,8 @@ impl Objects {
                     false,
                     &format!("file://{}", dir.display()),
                 )
-                .with_concurrency(config.archive_object_concurrency as usize))
+                .with_concurrency(config.archive_object_concurrency as usize)
+                .with_read_only(config.archive_object_read_only))
             }
             Some(ObjectUrl::S3 { bucket }) => {
                 let endpoint = config.archive_object_endpoint.as_deref().unwrap_or_default();
@@ -133,7 +141,8 @@ impl Objects {
                     true,
                     &format!("s3://{bucket} at {endpoint}"),
                 )
-                .with_concurrency(config.archive_object_concurrency as usize))
+                .with_concurrency(config.archive_object_concurrency as usize)
+                .with_read_only(config.archive_object_read_only))
             }
         }
     }
@@ -151,7 +160,31 @@ impl Objects {
             metadata,
             describe: describe.to_string(),
             concurrency: DEFAULT_CONCURRENCY,
+            read_only: false,
         }
+    }
+
+    /// Refuse every write: `put` and `delete` fail with
+    /// [`ObjectsError::ReadOnly`] before any request (STG-02).
+    #[must_use]
+    pub fn with_read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        if read_only && !self.describe.ends_with(" (read-only)") {
+            self.describe.push_str(" (read-only)");
+        }
+        self
+    }
+
+    /// Whether `put` and `delete` refuse (`ARCHIVE_OBJECT_READ_ONLY`).
+    pub fn read_only(&self) -> bool {
+        self.read_only
+    }
+
+    fn writable(&self, key: &str) -> Result<(), ObjectsError> {
+        if self.read_only {
+            return Err(ObjectsError::ReadOnly(key.to_string()));
+        }
+        Ok(())
     }
 
     /// How many packs a batch read fetches at once; at least 1.
@@ -174,6 +207,7 @@ impl Objects {
     /// Above [`MULTIPART_THRESHOLD`] it goes up in parts; a failed part
     /// aborts the upload, so nothing is left half-written.
     pub async fn put(&self, key: &str, body: Bytes, metadata: &[(&str, &str)]) -> Result<(), ObjectsError> {
+        self.writable(key)?;
         let path = path(key)?;
         let attributes = self.attributes(metadata);
         if body.len() <= MULTIPART_THRESHOLD {
@@ -269,6 +303,7 @@ impl Objects {
 
     /// Remove `key`. Removing a key that isn't there succeeds.
     pub async fn delete(&self, key: &str) -> Result<(), ObjectsError> {
+        self.writable(key)?;
         match self.store.delete(&path(key)?).await {
             Ok(()) | Err(object_store::Error::NotFound { .. }) => Ok(()),
             Err(e) => Err(e.into()),

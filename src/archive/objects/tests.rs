@@ -312,6 +312,50 @@ async fn delete_removes_and_a_missing_key_is_fine() {
     objects.delete(KEY).await.unwrap();
 }
 
+/// STG-02: a read-only handle refuses `put` and `delete` before any request
+/// and still reads, heads and lists.
+#[tokio::test]
+async fn a_read_only_store_refuses_writes_and_still_reads() {
+    let writer = Objects::in_memory();
+    writer.put(KEY, body(10), &[]).await.unwrap();
+    let reader = writer.clone().with_read_only(true);
+    assert!(reader.read_only() && !writer.read_only());
+    assert!(reader.describe().ends_with(" (read-only)"));
+
+    let put = reader.put("packs/other.pack", body(1), &[]).await.unwrap_err();
+    assert!(
+        matches!(&put, ObjectsError::ReadOnly(k) if k == "packs/other.pack"),
+        "{put}"
+    );
+    assert!(put.to_string().contains("ARCHIVE_OBJECT_READ_ONLY"), "{put}");
+    let delete = reader.delete(KEY).await.unwrap_err();
+    assert!(matches!(delete, ObjectsError::ReadOnly(_)), "{delete}");
+    assert_eq!(writer.head("packs/other.pack").await.unwrap(), None);
+
+    assert_eq!(reader.get_range(KEY, 2..5).await.unwrap(), body(10).slice(2..5));
+    assert_eq!(reader.head(KEY).await.unwrap().unwrap().size, 10);
+    assert_eq!(reader.list("packs/").await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn read_only_comes_from_the_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let url = format!("file://{}", dir.path().join("bucket").display());
+    let objects = Objects::from_config(&config(&[
+        ("ARCHIVE_OBJECT_URL", &url),
+        ("ARCHIVE_OBJECT_READ_ONLY", "true"),
+    ]))
+    .unwrap();
+    assert!(objects.read_only());
+    assert_eq!(objects.describe(), format!("{url} (read-only)"));
+    assert!(matches!(
+        objects.put(KEY, body(1), &[]).await,
+        Err(ObjectsError::ReadOnly(_))
+    ));
+    let plain = Objects::from_config(&config(&[("ARCHIVE_OBJECT_URL", &url)])).unwrap();
+    assert!(!plain.read_only());
+}
+
 #[tokio::test]
 async fn malformed_keys_are_refused_before_any_request() {
     let objects = Objects::in_memory();
