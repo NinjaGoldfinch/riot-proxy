@@ -73,11 +73,28 @@ Set up once by the owner (ninja-actions README, "Setting up a host"): a fresh in
 | `ENV` | `development` | config takes only `development`, `test` or `production` |
 | `RIOT_API_KEY` | a development key | renewed by hand every 24 hours |
 | `HOST` | `127.0.0.1` | only the tunnel reaches it |
-| `ARCHIVE_OBJECT_URL` | unset | bodies stay in SQLite; never the production bucket. No R2 replica timer |
-| `JOB_CONCURRENCY`, `CACHE_L1_MAX_MB`, `ANALYTICS_CACHE_ENTRIES`, `BACKUP_KEEP` | `2`, `32`, `64`, `1` | the box is shared (3.7 GiB RAM) |
-| `LOOKUP_BACKFILL_LIMIT`, `ARCHIVE_TIMELINES` | `100`, `false` | a development key's rate limit |
+| `KEY_SCOPE` | production's `/readyz` `keyScope` | staging reads a copy of production's database, whose rows are under production's scope; the pin also survives each development-key renewal (STG-01, ADR-200) |
+| `ARCHIVE_OBJECT_URL`, `ARCHIVE_OBJECT_ENDPOINT`, `ARCHIVE_OBJECT_REGION` | `s3://riot-proxy-archive`, `https://<account id>.r2.cloudflarestorage.com`, `auto` | production's packs, from the R2 replica |
+| `ARCHIVE_OBJECT_READ_ONLY`, `ARCHIVE_OBJECT_ACCESS_KEY`, `ARCHIVE_OBJECT_SECRET_KEY` | `true`, a read-only R2 token | reads only: no offload, no index snapshot, nothing freed, and the token can write nothing (STG-02, ADR-201). No R2 replica timer |
+| `JOB_CONCURRENCY`, `CACHE_L1_MAX_MB`, `ANALYTICS_CACHE_ENTRIES` | `2`, `32`, `64` | the box is shared (3.7 GiB RAM) |
+| `BACKUP_KEEP` | `0` | staging is reseeded, never restored; a daily backup of a production-sized copy would need 1.2 times its size free |
+| `LOOKUP_BACKFILL_LIMIT`, `ARCHIVE_TIMELINES` | `100`, `false` | a development key's rate limit; with timelines on, boot would queue a download for every production match without one (TL-03) |
+| `LADDER_CRAWL_MATCH_LIMIT` | `10000` | a crawl started by hand cannot fill the box; every match on a platform counts, so a platform production crawls is already full and its crawls archive nothing (STG-03, ADR-202) |
 
-The unit is design/07's Option C with `ExecStart=/srv/riot-proxy/current/riot-proxy serve` and `MemoryMax=1G`. `deploy-host-add.sh riot-proxy --unit riot-proxy.service --health-url http://127.0.0.1:8080/readyz --health-wait 600` registers it, without `--smoke-urls`: every other page needs Riot or a client key. Nothing is live until the first deploy creates `current`. The first boot prints the bootstrap admin key to the journal (`journalctl -u riot-proxy`).
+The unit is design/07's Option C with `ExecStart=/srv/riot-proxy/current/riot-proxy serve` and `MemoryMax=1G`. `deploy-host-add.sh riot-proxy --unit riot-proxy.service --health-url http://127.0.0.1:8080/readyz --health-wait 600` registers it (raised to 1800 in `/etc/ninja-deploy/riot-proxy.conf` once staging holds production's data, below), without `--smoke-urls`: every other page needs Riot or a client key. Nothing is live until the first deploy creates `current`. The first boot prints the bootstrap admin key to the journal (`journalctl -u riot-proxy`).
+
+### Seeding staging from production
+
+Staging does not crawl on its development key: it runs on a copy of production's newest daily backup, reads production's packed bodies from the R2 replica, and uses the key only for live calls (STG-04, ADR-204). `deploy/staging-seed.sh`, run as root on `ngf-mon-syd1`, makes the copy, and running it again refreshes it:
+
+1. It refuses before changing anything unless `/etc/riot-proxy/env` has `KEY_SCOPE`, `ARCHIVE_OBJECT_READ_ONLY=true` with any bucket, and not `ENV=production`; the installed binary knows those settings; the newest `riot-proxy-YYYY-MM-DD.db` under `r2:ngf-backups/riot-proxy` is at most 3 days old (`--allow-old` overrides); and the disk has room for the copy plus 4 GiB, plus 1.2 times the copy if `BACKUP_KEEP` is not 0. The database and staging's own backups it replaces count as free.
+2. It stops `riot-proxy`, deletes the database and staging's backups, downloads the backup with a read-only token for `ngf-backups` (`/etc/riot-proxy/seed-rclone.conf`, remote `r2`), and checks its size and header.
+3. It scrubs the copy: production's consumer keys, its job queue, the response cache (production-key PUUIDs a development key cannot use), the limiter checkpoint, metrics history and rank-lookup queue are deleted; every player is untracked, so no poll asks Riot about a production PUUID; a running crawl is cancelled and its working set dropped.
+4. It starts the service and waits up to 30 minutes for `/readyz`, which must report `KEY_SCOPE`. It prints how long that took and where the new bootstrap admin key is (`journalctl -u riot-proxy --since … | grep -A2 'shown once'`), unless `BOOTSTRAP_ADMIN_KEY` fixes one.
+
+`--dry-run` shows the backup, the room and the plan. On staging, production's players, matches, facts, ladders and analytics read as they do in production; a body freed in production reads from R2. A Riot call with a production PUUID fails under the development key, so anything that needs one (a player's match history, their rank) is fetched live. Rows staging writes from live calls carry development-key PUUIDs and last until the next seed.
+
+**Migrations run on production's data first.** Each release's staging deploy migrates this copy before production sees the release. If `/readyz` is not up within the health wait, `ninja-deploy` rolls back. If the migration had not committed (migrations apply in one transaction), the previous release starts on the unchanged copy and the deploy fails, so `staging/smoke` is not set and production refuses the version. If it had committed but boot was still running, the previous release refuses the newer database (`MissingVersion`, [../deployment/upgrade-and-rollback.md](../deployment/upgrade-and-rollback.md#rolling-back-the-binary)) and staging stays down until the version is redeployed with a longer wait or staging is reseeded. Either way production is not touched. Staging's wait is 1800 s because the box is smaller than production's and its page cache starts cold. When a staging deploy's boot takes more than about two thirds of production's `HEALTH_WAIT` (600 s), raise production's before promoting the version.
 
 The `staging` GitHub environment has no reviewer, deployment branches `main` and the tag pattern `v*`, the variables `DEPLOY_HOST` and `DEPLOY_KNOWN_HOSTS`, and the secrets `DEPLOY_SSH_KEY` (`ci-riot-proxy-staging`, forced to `ninja-deploy riot-proxy` on that host), `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` (a service token in the `staging` Access application's Service Auth policy).
 
@@ -113,4 +130,4 @@ ninjagoldfinch.lol pins the proxy contract it was verified against (its generate
 
 ---
 **Sources:** `.github/workflows/release.yml`, `.github/workflows/deploy.yml`, `scripts/smoke.sh`, `src/routes/health.rs`, ninja-actions README at `9d6ce2f` ("Staging", "Nothing reaches production without passing staging"), `infra/deploy-host-add.sh` at `9d6ce2f`, `.github/workflows/edge.yml`, `Cargo.toml:L3`, `git show --stat v2.7.0` (commit `10cf81d`), `git tag -l`, `docs/design/07-deployment.md#upgrade-procedure`, `docs/design/07-deployment.md#build-identity-adm-03`, `deploy/README.md`, `deploy/proxmox/README.md`, `deploy/proxmox/files/riot-proxy-update`
-**Last verified:** 2026-11-05 against commit `79ed267`
+**Last verified:** 2026-11-05 against commit `a3d8c3e`

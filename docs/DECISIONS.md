@@ -2225,3 +2225,29 @@ Accepted (owner request 2026-11-05, series STS, task STS-00). design/14 is the s
 - **`riot_key_rejected` at boot.** The brief says "on the first 403/401 after a success", and its acceptance test starts the proxy with an invalid key, which never has a success. The key's state starts *unknown*; a 401 or 403 from *unknown* or *accepted* fires the event, a further one does not, and a 2xx re-arms it. That gives exactly one event for the acceptance test and one per real revocation.
 - **Events never slow a request.** A bounded queue (64) between the transition and one delivery task; a full queue drops with a warning instead of blocking. Five attempts, backoff 1/2/4/8 s, 5 s timeout. The reqwest client uses the webpki roots like every other (ADR-007/013).
 - **Not done.** The bot itself; per-route latency in `/status` (Prometheus has the histograms); coordinating state across separate `ROLE=worker` processes (each process answers for itself, as the limiter does).
+
+## ADR-204 — Staging runs on a scrubbed copy of production's newest backup (2026-11-05)
+Accepted (owner request 2026-11-05, relayed by the ninja-monitor session; task STG-04). ADR-198 (staging), ADR-200 (`KEY_SCOPE`), ADR-201 (read-only bucket), ADR-202 (crawl cap); the restore drill (`deploy/README.md`). ADR-199 is held by LAD-02's branch.
+- **Why.** Crawling on a development key fills staging slowly and only with what that key allows. A copy of production's data tests releases against the data they will meet, and leaves the key for what it is for: live fetches, the ladder, ranks, rate limits.
+- **What.** `deploy/staging-seed.sh`, run as root on the staging host, safe to rerun.
+  - **Before it changes anything** it checks:
+    - the env file pins a scope (`KEY_SCOPE`), keeps any bucket read-only and is not production's;
+    - the installed binary contains both setting names, since an older one would ignore them and could write the bucket if the token allowed it;
+    - the newest `riot-proxy-YYYY-MM-DD.db` in `ngf-backups` is at most 3 days old (production's backup skips when the disk is short);
+    - the copy fits beside 4 GiB of headroom, plus 1.2 times the copy while `BACKUP_KEEP` is not 0. The database and staging's backups that it replaces count as free.
+  - **Then** it stops the service, replaces the database, checks the download's size and SQLite header, and scrubs the copy in one transaction:
+    - consumers deleted: production's client and admin keys never work on staging, and the next boot prints a new bootstrap admin key;
+    - jobs deleted: production's queue would call Riot with production PUUIDs;
+    - the response cache deleted: its entries hold production PUUIDs;
+    - the limiter checkpoint, metrics history and rank-lookup queue deleted;
+    - every player untracked, so no poll fans out to them;
+    - running crawls cancelled, with their legs and id sets.
+  - **Finally** it starts the service and waits up to 30 minutes for `/readyz` to report the pinned scope.
+- **Disk.** Production's database was 21.6 GB on 2026-10-13 and 53.8 GB on 2026-10-18, before the offload freed bodies and a reclaim compacted the file, which should bring it under 8 GB. The box has about 31 GB free before riot-proxy. A copy of up to about 25 GB fits with `BACKUP_KEEP=0`; with a backup it would need 2.2 times its size. If production's file is still larger than that, the script refuses and says so; the alternatives are a reclaim on production first, or a smaller copy (only recent patches) that this ADR does not build.
+- **Players stay readable but untracked.** Tracking is what makes the poll ticks call Riot with each player's PUUID, and production's PUUIDs fail under the development key. `trackedPlayers` reads 0 on staging; `knownPlayers` is production's.
+- **Migrations.** Each release's staging deploy now migrates a production-sized database before production. Staging's health wait becomes 1800 s. The cases that wait does not cover are in `docs/workflows/release-process.md`, "Seeding staging from production"; in each of them production is not touched and does not get the version.
+- **Not done here.** A subset copy for a production database too large for staging, and a scheduled reseed. The owner runs the script when staging should be refreshed.
+- **Tests.** `deploy/staging-seed.test.sh` (CI's `ops` job, via `deploy/test.sh`, with shellcheck) stubs `rclone`, `systemctl` and `curl` and uses the real `sqlite3`.
+  - Each refusal leaves staging's database untouched and never calls `systemctl`: no `KEY_SCOPE`, an upper-case one, a writable bucket, `ENV=production`, a binary without the settings, a 300-day-old backup, no room, an unconfirmed run. A dry run changes nothing, and `BACKUP_KEEP` adds a backup's room.
+  - A seed, and a second one over it, leave exactly the scrubbed rows, production's players and matches, no old database, backup or partial download, and stop then start the service.
+  - A served scope other than `KEY_SCOPE` fails.

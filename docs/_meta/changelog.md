@@ -4,6 +4,7 @@ Dated log of changes to this documentation set. One line per change; the newest 
 
 ## 2026-11-05
 
+- STG-04 (ADR-204): seeding staging from production. `workflows/release-process.md` (the staging host's settings for a seeded staging, "Seeding staging from production", migrations on production's data first, staging's 1800 s health wait), `deployment/backup-and-restore.md` ("Seeding staging"), `workflows/ci.md` (`ops` installs `sqlite3` and runs `deploy/staging-seed.test.sh`).
 - STG-03 (ADR-202): `LADDER_CRAWL_MATCH_LIMIT`. `deployment/configuration.md`, `operations/runbook.md` (a disk lever), `data/schema-analytics.md` and `data/migrations.md` (V0032), `workflows/adding-a-migration.md` (next free V0033), `api/endpoints-admin.md` and `api/openapi.json` (`matchesSkipped`, `matchLimit`, `crawlMatchLimit`); line citations moved with the code.
 - STG-02 (ADR-201): `ARCHIVE_OBJECT_READ_ONLY`. `integration/object-storage.md` (the variable, staging's token), `deployment/configuration.md`, `deployment/security.md`; every page citing `config.rs`, `objects.rs`, `serve.rs` or `.env.example` re-verified, line citations moved with the code.
 - STG-01 (ADR-200): `KEY_SCOPE` pins the key scope. `deployment/configuration.md` (the variable), `operations/runbook.md` §4 (keeping the old scope on a renewal), `data/caching.md` (key scope), design 04; every page citing `config.rs`, `serve.rs`, `keys.rs`, `health.rs`, `.env.example` or `tests/common` re-verified, line citations moved with the code.
@@ -51,4 +52,4 @@ Dated log of changes to this documentation set. One line per change; the newest 
 
 ---
 **Sources:** this documentation set
-**Last verified:** 2026-11-05 against commit `7ec9262`
+**Last verified:** 2026-11-05 against commit `a3d8c3e`

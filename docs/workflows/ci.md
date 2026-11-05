@@ -130,12 +130,13 @@ The `test` job also regenerates the OpenAPI document from the built binary and c
 
 Shell and unit-file tests for the operational kit. Not a required check (ADR-070).
 
-1. `apt-get install shellcheck python3-yaml cloud-init rclone`.
+1. `apt-get install shellcheck python3-yaml cloud-init rclone sqlite3`.
 2. `deploy/proxmox/test.sh` (the dev VM kit, OPS-02).
 3. `deploy/test.sh` (the archive replica units, OBJ-04; and `scripts/deploy-workflow.test.sh` and `scripts/smoke.test.sh`, below).
 4. `scripts/image-description.test.sh`, `scripts/edge-tags.test.sh`, `scripts/docker-paths.test.sh`.
 5. `scripts/deploy-workflow.test.sh`, run by `deploy/test.sh`: `deploy.yml` deploys the tarball `release.yml` builds, against the checksum file it writes, on the Proxmox runner behind the chosen environment, through `ninja-actions/deploy@v1` (DEP-03, ADR-196); prod requires `staging/smoke` or `prod/deployed` and sets `prod/deployed`; staging is smoke-tested and records `staging/smoke`; `release.yml` calls it for staging with `secrets: inherit` (DEP-05, ADR-198).
 6. `scripts/smoke.test.sh`, run by `deploy/test.sh`: `scripts/smoke.sh` against a stub server, one case for each way a release can be wrong and for Access refusing the token (DEP-05).
+7. `deploy/staging-seed.test.sh`, run by `deploy/test.sh` after shellcheck: `deploy/staging-seed.sh` with `rclone`, `systemctl` and `curl` stubbed and the real `sqlite3`. Each refusal leaves staging untouched: no `KEY_SCOPE`, a writable bucket, a production env file, an older binary, an old backup, no room, no confirmation. A seed and a reseed replace and scrub the database and start the service, and a served scope other than `KEY_SCOPE` fails (STG-04).
 
 ## `edge.yml`
 
@@ -228,7 +229,7 @@ Needs `build-darwin`, `release` and `staging`, and runs unless the run was cance
 | `acceptance` | `just acceptance` (needs Node 22) |
 | `build-musl` | `just musl` (needs `musl-tools`); `just docker` for the scratch image |
 | `docs` | `python3 docs/_meta/tools/linkcheck.py docs && python3 docs/_meta/tools/docs-guard.py origin/main HEAD && docs/_meta/tools/mermaidcheck.sh docs` (see the script header for the dev box's Chromium) |
-| `ops` | `deploy/proxmox/test.sh && deploy/test.sh && scripts/*.test.sh` (needs `shellcheck`, `rclone`, `cloud-init`, `python3-yaml`) |
+| `ops` | `deploy/proxmox/test.sh && deploy/test.sh && scripts/*.test.sh` (needs `shellcheck`, `rclone`, `cloud-init`, `python3-yaml`, `sqlite3`) |
 | `edge` / `release` image | `cargo build --release --locked --target x86_64-unknown-linux-musl`, copy to `dist/riot-proxy-linux-amd64`, `docker buildx build -f Dockerfile.release .` |
 
 ## Debugging a failed run
@@ -255,4 +256,4 @@ Deploys a release to staging or production (DEP-03, ADR-196; DEP-05, ADR-198). `
 What happens on the host is in [release-process.md](./release-process.md), "Staging" and "Deploying to production"; `scripts/deploy-workflow.test.sh` and `scripts/smoke.test.sh` (the `ops` job, through `deploy/test.sh`) check the wiring and the smoke test, since the workflow cannot run in CI.
 
 **Sources:** `.github/workflows/ci.yml`, `.github/workflows/deploy.yml`, `scripts/deploy-workflow.test.sh`, `scripts/smoke.sh`, `scripts/smoke.test.sh`, `deploy/test.sh`, `docs/_meta/tools/docs-guard.py`, `docs/_meta/tools/openapi-check.py`, `.github/workflows/edge.yml`, `.github/workflows/release.yml`, `.config/nextest.toml`, `scripts/docker-paths.sh`, `scripts/edge-tags.sh`, `scripts/image-description.sh`, `scripts/check-image-description.sh`, `justfile`, `Dockerfile.release`
-**Last verified:** 2026-11-05 against commit `25a8e52`
+**Last verified:** 2026-11-05 against commit `a3d8c3e`
