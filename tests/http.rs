@@ -34,6 +34,14 @@ async fn readyz_is_200_when_sqlite_is_writable() {
     );
 }
 
+/// STG-01: the scope in effect, so staging can be checked against production's.
+#[tokio::test]
+async fn readyz_reports_a_pinned_key_scope() {
+    let (_dir, _state, router) = common::app_with(&[("KEY_SCOPE", "0123abcd")], "http://127.0.0.1:9");
+    let res = get(router, "/readyz").await;
+    assert_eq!(res.json()["keyScope"], "0123abcd");
+}
+
 /// A deploy reads it to tell the new process from the old one still answering (DEP-01).
 #[tokio::test]
 async fn readyz_reports_the_running_version() {

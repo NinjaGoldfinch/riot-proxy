@@ -4,7 +4,7 @@ Which Riot endpoints riot-proxy calls, how it routes them, how it reads Riot's r
 
 ## Endpoints
 
-The registry is `ENDPOINTS` in `src/riot/endpoints.rs:L91-L288`: v1's sixteen ids (`docs/contract/v1-endpoints.txt`) plus two added in v2. Soft TTL is the registry default; hard TTL is soft × 4 while `STALE_WHILE_REVALIDATE=true` (`src/riot/endpoints.rs:L13-L14`, `L476-L497`); `CACHE_TTL_OVERRIDES` can replace a soft TTL by override key. Negative TTL is `NEG_TTL_SECONDS` (30) or `NEG_TTL_ACCOUNT_SECONDS` (300) (`src/config.rs:L737-L738`). L2 means the entry is also written to the SQLite `cache` table and survives restarts.
+The registry is `ENDPOINTS` in `src/riot/endpoints.rs:L91-L288`: v1's sixteen ids (`docs/contract/v1-endpoints.txt`) plus two added in v2. Soft TTL is the registry default; hard TTL is soft × 4 while `STALE_WHILE_REVALIDATE=true` (`src/riot/endpoints.rs:L13-L14`, `L476-L497`); `CACHE_TTL_OVERRIDES` can replace a soft TTL by override key. Negative TTL is `NEG_TTL_SECONDS` (30) or `NEG_TTL_ACCOUNT_SECONDS` (300) (`src/config.rs:L766-L767`). L2 means the entry is also written to the SQLite `cache` table and survives restarts.
 
 | id | Riot path | Routing | soft / hard TTL (s) | neg | L2 | Called by |
 |---|---|---|---|---|---|---|
@@ -57,7 +57,7 @@ Hosts are `<platform>.api.riotgames.com` or `<region>.api.riotgames.com` (`src/r
 
 `src/riot/routing.rs:L108-L121`, `L174-L181`. Match ids route by their prefix (`EUW1_` is `europe`); `ME1_` is not a platform the proxy serves but `europe` answers for it, verified live on 2026-10-13 (ADR-143, `src/riot/routing.rs:L132-L143`).
 
-**Account-cluster rule (ADR-066).** Riot serves every account from each of `americas`, `asia`, `europe`. When the caller names no region the proxy tries `asia`, `americas`, `europe` (`Region::ACCOUNT_PICK`), taking the first with a limiter token free now, waiting for the soonest otherwise, and demoting a cluster that answered a service 429 for the rest of the request (`src/riot/routing.rs:L151-L153`, `src/fetcher.rs:L612-L650`). All clusters share one cache entry (`src/cache/keys.rs:L72-L79`). Pinned `/{region}/` routes never move.
+**Account-cluster rule (ADR-066).** Riot serves every account from each of `americas`, `asia`, `europe`. When the caller names no region the proxy tries `asia`, `americas`, `europe` (`Region::ACCOUNT_PICK`), taking the first with a limiter token free now, waiting for the soonest otherwise, and demoting a cluster that answered a service 429 for the rest of the request (`src/riot/routing.rs:L151-L153`, `src/fetcher.rs:L612-L650`). All clusters share one cache entry (`src/cache/keys.rs:L81-L88`). Pinned `/{region}/` routes never move.
 
 ## Request shape
 
@@ -65,7 +65,7 @@ Hosts are `<platform>.api.riotgames.com` or `<region>.api.riotgames.com` (`src/r
 |---|---|
 | `X-Riot-Token` | the configured key, marked sensitive so it never appears in debug output (`src/riot/client.rs:L26,L234-L236,L268`) |
 | `Accept` | `application/json` (`src/riot/client.rs:L269`) |
-| `User-Agent` | `RIOT_USER_AGENT`, default `riot-proxy/2.0 (+https://github.com/NinjaGoldfinch/riot-proxy)` (`src/config.rs:L104,L720`) |
+| `User-Agent` | `RIOT_USER_AGENT`, default `riot-proxy/2.0 (+https://github.com/NinjaGoldfinch/riot-proxy)` (`src/config.rs:L106,L749`) |
 
 The key never goes in the URL (`src/riot/client.rs:L267`). Client settings: 10 s connect, 25 s total timeout, 32 idle connections per host, embedded Mozilla roots only (`src/riot/client.rs:L20-L24`, `L237-L245`; ADR-007). Path params are percent-encoded like `encodeURIComponent`; query strings like `URLSearchParams` (`src/riot/endpoints.rs:L362-L382`, `src/riot/client.rs:L87-L127`).
 
@@ -113,5 +113,5 @@ Through the running server, `GET /v1/admin/debug/riot?scope=<platform|region>&pa
 - Data Dragon version list: <https://ddragon.leagueoflegends.com/api/versions.json>
 
 ---
-**Sources:** `src/riot/endpoints.rs:L13-L14,L91-L288,L362-L382,L476-L497`, `src/riot/routing.rs:L108-L203`, `src/riot/client.rs:L20-L26,L87-L127,L143,L234-L275,L305`, `src/riot/limiter/headers.rs:L31-L42,L80-L154`, `src/riot/limiter/mod.rs:L370-L431`, `src/riot/ladder.rs:L14-L20`, `src/fetcher.rs:L34-L44,L544-L650`, `src/cache/keys.rs:L72-L79`, `src/jobs/ddragon.rs:L22-L25,L83-L97,L108-L152,L255-L285`, `src/static/mod.rs:L28-L35`, `src/static/images.rs:L32-L39`, `src/routes/admin.rs:L1075-L1204`, `src/cli/riot.rs`, `src/config.rs:L104,L720,L737-L738`, `docs/contract/v1-endpoints.txt`, `docs/design/03-architecture.md:L32-L36`, `docs/DECISIONS.md` ADR-001, ADR-007, ADR-023, ADR-024, ADR-059, ADR-066, ADR-143, `docs/_meta/scratch/riot-and-cache.md` §1-§4, `docs/_meta/scratch/jobs-and-observability.md` §3, `docs/_meta/scratch/WRITING-BRIEF.md`, `README.md`
-**Last verified:** 2026-11-05 against commit `1616c00`
+**Sources:** `src/riot/endpoints.rs:L13-L14,L91-L288,L362-L382,L476-L497`, `src/riot/routing.rs:L108-L203`, `src/riot/client.rs:L20-L26,L87-L127,L143,L234-L275,L305`, `src/riot/limiter/headers.rs:L31-L42,L80-L154`, `src/riot/limiter/mod.rs:L370-L431`, `src/riot/ladder.rs:L14-L20`, `src/fetcher.rs:L34-L44,L544-L650`, `src/cache/keys.rs:L81-L88`, `src/jobs/ddragon.rs:L22-L25,L83-L97,L108-L152,L255-L285`, `src/static/mod.rs:L28-L35`, `src/static/images.rs:L32-L39`, `src/routes/admin.rs:L1075-L1204`, `src/cli/riot.rs`, `src/config.rs:L106,L749,L766-L767`, `docs/contract/v1-endpoints.txt`, `docs/design/03-architecture.md:L32-L36`, `docs/DECISIONS.md` ADR-001, ADR-007, ADR-023, ADR-024, ADR-059, ADR-066, ADR-143, `docs/_meta/scratch/riot-and-cache.md` §1-§4, `docs/_meta/scratch/jobs-and-observability.md` §3, `docs/_meta/scratch/WRITING-BRIEF.md`, `README.md`
+**Last verified:** 2026-11-05 against commit `7ec9262`

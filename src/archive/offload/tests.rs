@@ -140,6 +140,24 @@ async fn an_offloaded_match_reads_from_its_range_byte_identical() {
     assert_eq!(many[MATCH_ID].as_ref(), MATCH);
 }
 
+/// STG-02: staging reads production's packs through a read-only handle; a
+/// freed body still comes back byte-identical.
+#[tokio::test]
+async fn a_read_only_store_still_reads_an_offloaded_body() {
+    let (_dir, db) = db();
+    let writer = Objects::in_memory();
+    assert!(db.attach_objects(writer.clone().with_read_only(true)));
+    matches::put(&db, MATCH_ID, "asia", "s", Bytes::from_static(MATCH), 1)
+        .await
+        .unwrap();
+    offload(&db, &writer, Kind::Match, &[MATCH_ID], 10).await;
+    assert!(db.objects().unwrap().read_only());
+    assert_eq!(
+        matches::get(&db, MATCH_ID).await.unwrap().unwrap().as_ref(),
+        MATCH
+    );
+}
+
 #[tokio::test]
 async fn a_packed_body_keeps_its_local_copy_and_still_reads_without_the_store() {
     let (_dir, db) = db();

@@ -55,6 +55,7 @@ Everything else in these docs follows from that observation.
 | 11 | [Showcase](11-showcase.md) | The dev-only `/dev/showcase` example frontend: page map and the coverage rule |
 | 12 | [Object storage & hosting](12-object-storage-and-hosting.md) | The move to Onidel and how it ran; raw bodies packed into an S3 bucket and the offload job (designed, OBJ-01..06) |
 | 13 | [Admin dashboard](13-admin-dashboard.md) | The operator page at `/dashboard`: reach through Cloudflare Access, what it calls, layout and page map (proposal) |
+| 14 | [Status endpoint and outbound events](14-status.md) | `GET /status` in the shared ninjagoldfinch contract, the rate-limit table, background checks, JSON events on state changes |
 | — | [img/](img/) | Standalone SVG diagrams used above |
 
 All diagrams are Mermaid (rendered natively by GitHub) except the two in `img/`, which are plain SVG so they work in any viewer.

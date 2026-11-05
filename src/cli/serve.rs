@@ -107,9 +107,11 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         tracing::warn!(key = %key, "CACHE_TTL_OVERRIDES key matches no cacheable endpoint; ignored");
     }
     // The archive queues what a stored match or timeline lacks (TL-01), and
-    // the offload once a full pack of bodies is waiting (OBJ-03).
+    // the offload once a full pack of bodies is waiting (OBJ-03). A read-only
+    // bucket gets neither the offload nor the snapshot, so nothing is packed,
+    // freed or written to it (STG-02).
     let queue = crate::jobs::Queue::new(db.clone()).with_kind_limits(config.job_kind_limits.clone());
-    let pending = db.objects().map(|_| {
+    let pending = db.objects().filter(|o| !o.read_only()).map(|_| {
         Arc::new(crate::jobs::offload::Pending::new(
             queue.clone(),
             config.archive_pack_target_bytes,
@@ -123,7 +125,7 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         limiter: Arc::clone(&limiter),
         cache: Arc::clone(&cache),
         archive: Arc::new({
-            let archive = SqliteArchive::new(db.clone(), KeyScope::from_key(&config.riot_api_key))
+            let archive = SqliteArchive::new(db.clone(), KeyScope::for_config(&config))
                 .queue_missing_halves(queue.clone(), config.archive_timelines)
                 .late_stamp_days(config.tier_late_stamp_days);
             match &pending {
@@ -131,7 +133,7 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
                 None => archive,
             }
         }),
-        scope: KeyScope::from_key(&config.riot_api_key),
+        scope: KeyScope::for_config(&config),
         policy,
         interactive_budget: Duration::from_millis(config.client_wait_budget_ms),
         job_budget: Duration::from_millis(config.job_yield_budget_ms),
@@ -170,7 +172,14 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         mirror: Arc::clone(&mirror),
         hub: hub.clone(),
     });
-    let scope = KeyScope::from_key(&config.riot_api_key).as_str().to_string();
+    let scope = KeyScope::for_config(&config).as_str().to_string();
+    if config.key_scope.is_some() {
+        tracing::warn!(
+            key_scope = %scope,
+            key_own_scope = %KeyScope::from_key(&config.riot_api_key),
+            "KEY_SCOPE pins the key scope; players, facts and cache keys are read and written under it"
+        );
+    }
     let poll = Arc::new(crate::jobs::poll::PollContext {
         fetcher: fetcher.clone(),
         queue: queue.clone(),
