@@ -10,7 +10,7 @@ A consumer key is `rpx_` followed by 24 random bytes in unpadded base64url: 36 c
 
 | Way | Command or call | Notes |
 |---|---|---|
-| First boot | `riot-proxy serve` prints `bootstrap admin key (shown once): rpx_…` on stderr when the `consumers` table is empty | scopes `read,admin`, quota 600; `BOOTSTRAP_ADMIN_KEY` imports a chosen key instead and prints nothing (`src/cli/serve.rs:64-75,440-446`, `src/consumers.rs:308-333`) |
+| First boot | `riot-proxy serve` prints `bootstrap admin key (shown once): rpx_…` on stderr when the `consumers` table is empty | scopes `read,admin`, quota 600; `BOOTSTRAP_ADMIN_KEY` imports a chosen key instead and prints nothing (`src/cli/serve.rs:64-75,441-447`, `src/consumers.rs:308-333`) |
 | CLI | `riot-proxy key create --name ninjagoldfinch-lol [--scopes read,admin] [--quota 600]` | prints id, name, scopes, quota and the key once (`src/cli/key.rs:46-57`) |
 | Admin API | `POST /v1/admin/consumers {"name":"…","scopes":["read"],"quotaPerMin":600}` | 200 with `{id,name,scopes,quotaPerMin,key,warning}` (`src/routes/admin.rs:180-219`) |
 
@@ -21,7 +21,7 @@ Names are unique; a duplicate name or a duplicate key hash is a `VALIDATION` err
 | Form | Where accepted | Source |
 |---|---|---|
 | `Authorization: Bearer rpx_…` | every guarded HTTP route and the WebSocket handshake | `src/http/auth.rs:141-156` |
-| `?token=rpx_…` | the same (documented for the WebSocket handshake only) | `src/http/auth.rs:335-341`, `src/routes/docs.rs:86-113` |
+| `?token=rpx_…` | the same (documented for the WebSocket handshake only) | `src/http/auth.rs:361-369`, `src/routes/docs.rs:86-113` |
 
 The scheme is matched case-insensitively; an empty token is refused. Prefer the header: a query-string key can be written to logs by anything in front of the proxy.
 
@@ -32,7 +32,7 @@ The scheme is matched case-insensitively; an empty token is refused. Prefer the 
 | `read` | `/v1/riot/*`, `/v1/lol/*` (analytics included), `/v1/players/*`, `/v1/static/*`, the `player:<puuid>` and `patch` WebSocket topics |
 | `admin` | everything under `/v1/admin/*`, `/dev/reset`, the `metrics`, `ladder` and `firehose` topics, and `?refresh=true` on passthrough routes |
 
-Routes are wrapped at registration in `require_read` or `require_admin` (`src/routes/docs.rs:118-147`); a missing scope is `403 FORBIDDEN` with `This key lacks the '<scope>' scope` (`src/http/auth.rs:297-302`). Unguarded: `/healthz`, `/readyz`, `/metrics`, `/ddragon/*`, `/docs`, `/openapi.json`, `/dev*` (except reset) and `/dashboard` (the page is inert without a key).
+Routes are wrapped at registration in `require_read` or `require_admin` (`src/routes/docs.rs:118-153`); a missing scope is `403 FORBIDDEN` with `This key lacks the '<scope>' scope` (`src/http/auth.rs:330-335`). Unguarded: `/healthz`, `/readyz`, `/metrics`, `/ddragon/*`, `/docs`, `/openapi.json`, `/dev*` (except reset) and `/dashboard` (the page is inert without a key).
 
 ## Admin address check
 
@@ -44,7 +44,7 @@ Each consumer has `quota_per_min` (default 600; `AUTH_DISABLED`'s synthetic cons
 
 ## Caching of lookups
 
-Key lookups are cached in memory for 60 s per found consumer and 30 s per unknown key, up to 10 000 entries (`src/http/auth.rs:29-32,209-212`). Revocation invalidates the entry immediately through the admin route; a revocation done by the CLI on the box is seen by the running server within 60 s.
+Key lookups are cached in memory for 60 s per found consumer and 30 s per unknown key, up to 10 000 entries (`src/http/auth.rs:29-32,212-221`). Revocation invalidates the entry immediately through the admin route; a revocation done by the CLI on the box is seen by the running server within 60 s.
 
 ## Rotation and revocation
 
@@ -57,7 +57,7 @@ Key lookups are cached in memory for 60 s per found consumer and 30 s per unknow
 
 ## The no-auth development mode
 
-`AUTH_DISABLED=true` makes every guarded request and socket run as the synthetic consumer `dev-local` with both scopes and a 100 000/min quota; the IP allowlist is not consulted; the server logs a warning at start (`src/http/auth.rs:43-52,204-208,288-291`). Configuration refuses it when `ENV=production` (`src/config.rs:718-722`). It is how the showcase and the site's local development run against a local proxy, and how the dormant LAN dev VM was configured. `/dev/config.json` reports `authDisabled` so the dev explorer knows whether to ask for a key.
+`AUTH_DISABLED=true` makes every guarded request and socket run as the synthetic consumer `dev-local` with both scopes and a 100 000/min quota; the IP allowlist is not consulted; the server logs a warning at start (`src/http/auth.rs:43-52,207-211,309-312`). Configuration refuses it when `ENV=production` (`src/config.rs:734-738`). It is how the showcase and the site's local development run against a local proxy, and how the dormant LAN dev VM was configured. `/dev/config.json` reports `authDisabled` so the dev explorer knows whether to ask for a key.
 
 ## Where keys live
 
@@ -70,5 +70,5 @@ Key lookups are cached in memory for 60 s per found consumer and 30 s per unknow
 The CI `test` job greps `src/`, `tests/` and `docs/` for `RGAPI-` key shapes and fails on a hit; fixtures are recorded with the key redacted (`.github/workflows/ci.yml:52-53`, `src/cli/record.rs:114-158`).
 
 ---
-**Sources:** `src/consumers.rs:L12,L95-L107,L154-L172,L256-L333`, `src/http/auth.rs:L29-L52,L116-L156,L204-L212,L288-L390`, `src/http/quota.rs:L320-L431`, `src/routes/admin.rs:L180-L219,L248-L326`, `src/routes/docs.rs:L86-L147`, `src/cli/key.rs:L46-L83`, `src/cli/serve.rs:L64-L75,L440-L446`, `src/config.rs:L718-L722`, `.github/workflows/ci.yml:L52-L53`, `docs/design/12-object-storage-and-hosting.md` §Admin hostname behind Access
+**Sources:** `src/consumers.rs:L12,L95-L107,L154-L172,L256-L333`, `src/http/auth.rs:L29-L52,L116-L156,L207-L221,L309-L437`, `src/http/quota.rs:L320-L431`, `src/routes/admin.rs:L180-L219,L248-L326`, `src/routes/docs.rs:L86-L153`, `src/cli/key.rs:L46-L83`, `src/cli/serve.rs:L64-L75,L441-L447`, `src/config.rs:L734-L738`, `.github/workflows/ci.yml:L52-L53`, `docs/design/12-object-storage-and-hosting.md` §Admin hostname behind Access
 **Last verified:** 2026-11-06 against commit `e5d5c1d`

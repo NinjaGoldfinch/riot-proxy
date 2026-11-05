@@ -94,7 +94,7 @@ Index: `cache_hard ON cache(hard_expires)` (`V0001:24`). Written by the write-be
 | `frozen_until` | INTEGER | nullable | unix ms |
 | `updated_at` | INTEGER | NOT NULL | unix ms |
 
-No secondary index. Written by `persist::save`, which deletes every row and re-inserts the current set in one transaction (`src/riot/limiter/persist.rs:178-194`) every 10 s and at shutdown (`persist.rs:25`, `src/cli/serve.rs:89,430`). Read once at boot (`persist.rs:196-213`, `serve.rs:83`); a checkpoint older than 120 s restores every window as full (`persist.rs:23,92-94`). Retention: replaced whole on every checkpoint; not wiped by `/dev/reset`.
+No secondary index. Written by `persist::save`, which deletes every row and re-inserts the current set in one transaction (`src/riot/limiter/persist.rs:178-194`) every 10 s and at shutdown (`persist.rs:25`, `src/cli/serve.rs:89,431`). Read once at boot (`persist.rs:196-213`, `serve.rs:83`); a checkpoint older than 120 s restores every window as full (`persist.rs:23,92-94`). Retention: replaced whole on every checkpoint; not wiped by `/dev/reset`.
 
 ### jobs
 
