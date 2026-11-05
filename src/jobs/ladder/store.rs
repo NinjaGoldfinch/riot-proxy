@@ -31,6 +31,9 @@ pub struct Crawl {
     /// ([`RIOT_APEX_LIST_CAP`]), in [`APEX_TIERS`] order: the crawl may be
     /// missing the bottom of those tiers (LAD-01).
     pub apex_capped: Vec<String>,
+    /// `LADDER_CRAWL_MATCH_LIMIT` when it first held this crawl's archive
+    /// hand-off back; `None` while it never has (STG-03).
+    pub match_limit: Option<i64>,
 }
 
 /// v1's six crawl counters, and THR-04's `players_skipped`.
@@ -46,11 +49,14 @@ pub struct Counters {
     /// Players left out of the collect stage because their wins and losses
     /// hadn't moved since their last collect (THR-04).
     pub players_skipped: i64,
+    /// Unarchived matches the archive hand-off left out because the platform
+    /// was at `LADDER_CRAWL_MATCH_LIMIT` (STG-03).
+    pub matches_skipped: i64,
 }
 
 const COLUMNS: &str = "id, platform, queue, tier_floor, status, phase, started_at, finished_at, \
     pages_fetched, entries_seen, players_discovered, backfills_enqueued, match_ids_seen, \
-    matches_queued, legs_failed, apex_capped, players_skipped";
+    matches_queued, legs_failed, apex_capped, players_skipped, matches_skipped, match_limit";
 
 fn crawl_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Crawl> {
     Ok(Crawl {
@@ -70,9 +76,11 @@ fn crawl_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Crawl> {
             match_ids_seen: r.get(12)?,
             matches_queued: r.get(13)?,
             players_skipped: r.get(16)?,
+            matches_skipped: r.get(17)?,
         },
         legs_failed: r.get(14)?,
         apex_capped: tiers_of(r.get(15)?),
+        match_limit: r.get(18)?,
     })
 }
 
@@ -567,6 +575,38 @@ pub enum Counter {
     PlayersSkipped,
     MatchIdsSeen,
     MatchesQueued,
+    MatchesSkipped,
+}
+
+/// Matches `platform` holds against `LADDER_CRAWL_MATCH_LIMIT` (STG-03):
+/// archived, plus queued or running `archive:match` jobs for one not archived
+/// yet, whatever queued them. Both seek on their id ranges (`OC1_…`).
+pub fn platform_matches_held(tx: &rusqlite::Connection, platform: &str) -> Result<i64, DbError> {
+    let prefix = platform.to_ascii_uppercase();
+    let (from, to) = (format!("{prefix}_"), format!("{prefix}`"));
+    let archived: i64 = tx.query_row(
+        "SELECT count(*) FROM matches WHERE match_id >= ?1 AND match_id < ?2",
+        params![from, to],
+        |r| r.get(0),
+    )?;
+    let queued: i64 = tx.query_row(
+        "SELECT count(*) FROM jobs j
+          WHERE j.kind = 'archive:match' AND j.state IN ('pending', 'running')
+            AND j.dedupe_key >= ?1 AND j.dedupe_key < ?2
+            AND NOT EXISTS (SELECT 1 FROM matches m WHERE m.match_id = j.dedupe_key)",
+        params![from, to],
+        |r| r.get(0),
+    )?;
+    Ok(archived + queued)
+}
+
+/// Record the cap that held a crawl back, the first time it does.
+pub fn mark_match_limit(tx: &rusqlite::Connection, crawl_id: &str, limit: u32) -> Result<(), DbError> {
+    tx.execute(
+        "UPDATE ladder_crawls SET match_limit = ?2 WHERE id = ?1 AND match_limit IS NULL",
+        params![crawl_id, limit],
+    )?;
+    Ok(())
 }
 
 impl Counter {
@@ -576,6 +616,7 @@ impl Counter {
             Self::PlayersSkipped => "players_skipped",
             Self::MatchIdsSeen => "match_ids_seen",
             Self::MatchesQueued => "matches_queued",
+            Self::MatchesSkipped => "matches_skipped",
         }
     }
 }

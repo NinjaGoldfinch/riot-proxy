@@ -211,6 +211,7 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         rank_lookup_recheck_s: config.rank_lookup_recheck_s,
         late_stamp_days: config.tier_late_stamp_days,
         delta_on: config.aggregate_delta_s > 0,
+        crawl_match_limit: config.ladder_crawl_match_limit,
     });
     let names = Arc::new(crate::jobs::names::NamesBackfill {
         db: db.clone(),

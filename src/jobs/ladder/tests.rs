@@ -255,6 +255,7 @@ fn stages_follow_v1s_order() {
         counters: store::Counters::default(),
         legs_failed: 0,
         apex_capped: Vec::new(),
+        match_limit: None,
     };
     let name = |s: Stage| match s {
         Stage::Phase(p) => p,
@@ -553,4 +554,44 @@ fn a_cursor_older_than_the_late_stamp_window_is_not_walked_from() {
     assert!(cursor_is_live(now - 14 * day, now, 14));
     assert!(!cursor_is_live(now - 14 * day - 1, now, 14));
     assert!(cursor_is_live(0, now, 0), "0 days sets no bound");
+}
+
+/// STG-03: what a platform holds against the cap: archived matches, and
+/// pending or running downloads of ones not archived yet, whatever queued
+/// them. Finished jobs, other platforms and a download of an archived match
+/// (its timeline) do not count.
+#[tokio::test]
+async fn a_platform_holds_its_archived_and_queued_matches() {
+    let (_dir, db) = db();
+    db.write(|c| {
+        c.execute_batch(
+            "INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size, archived_at)
+             VALUES ('KR_1', 'asia', '16.19', 420, 1, x'00', 1, 1),
+                    ('KR_2', 'asia', '16.19', 420, 1, x'00', 1, 1),
+                    ('EUW1_1', 'europe', '16.19', 420, 1, x'00', 1, 1),
+                    ('KRX_1', 'asia', '16.19', 420, 1, x'00', 1, 1);
+             INSERT INTO jobs (id, kind, dedupe_key, priority, payload, state, run_after) VALUES
+               ('a', 'archive:match', 'KR_2', 0, '{}', 'pending', 0),
+               ('b', 'archive:match', 'KR_3', 0, '{}', 'pending', 0),
+               ('c', 'archive:match', 'KR_4', 0, '{}', 'running', 0),
+               ('d', 'archive:match', 'KR_5', 0, '{}', 'done', 0),
+               ('e', 'archive:match', 'KR_6', 0, '{}', 'failed', 0),
+               ('f', 'archive:match', 'EUW1_2', 0, '{}', 'pending', 0),
+               ('g', 'backfill:player', 'KR_7', 0, '{}', 'pending', 0);",
+        )?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    let held = |platform: &'static str| {
+        let db = db.clone();
+        async move {
+            db.read(move |c| store::platform_matches_held(c, platform))
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(held("kr").await, 4, "KR_1, KR_2 archived; KR_3, KR_4 queued");
+    assert_eq!(held("euw1").await, 2);
+    assert_eq!(held("na1").await, 0);
 }

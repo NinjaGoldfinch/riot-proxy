@@ -418,6 +418,7 @@ Production deploys move to the shared pipeline in `NinjaGoldfinch/ninja-actions`
 Staging is seeded from production's daily backup and reads production's packs from the bucket, read-only; its development key is used only for live calls.
 - [~] STG-01 `KEY_SCOPE` pins the key scope, so staging reads production's players, facts and analytics across development-key renewals (`feat/STG-01-key-scope-pin`, ADR-200)
 - [~] STG-02 `ARCHIVE_OBJECT_READ_ONLY`: staging reads production's packed bodies from the R2 replica and never writes the bucket: no offload, no index snapshot, no body freed, writes refused (`feat/STG-02-read-only-bucket`, ADR-201)
+- [~] STG-03 `LADDER_CRAWL_MATCH_LIMIT`: a platform's crawls queue no more matches once it holds that many, archived or queued; skipped matches and the cap on the crawl row, the cap in the ladder options; staging runs 10000 (`feat/STG-03-crawl-match-cap`, V0032, ADR-202)
 
 ## STS — a status endpoint and outbound events (owner request 2026-11-05)
 `GET /status` in the shared ninjagoldfinch status contract for the owner's status bot, the rate-limit table at `GET /status/ratelimits`, background checks, and plain JSON events on state changes (IMPLEMENTATION.md §Post-release — STS, design/14, ADR-203).

@@ -35,7 +35,7 @@ The `warning` text (`src/routes/admin.rs:L214`) says the key cannot be retrieved
 | DELETE | `/v1/admin/tracked-players/{puuid}` | puuid | `{"ok":true,"puuid":…,"tracked":false}`; row kept; unknown is `404` `No such player for the current key scope` | `src/routes/admin.rs:L580` |
 | GET | `/v1/admin/players/{puuid}/archive` | puuid | `{player, archive{matches,remakes,wins,timelines,oldestGameEnd,newestGameEnd,byQueue[]}, jobs{kind→{pending,running,done,failed}}, latestJobs[]}` for `archive:match` and `backfill:player` | `src/routes/admin.rs:L664` |
 | GET | `/v1/admin/players/{puuid}/archive/matches` | `?start` 0 to 1 000 000 (default 0); `?count` 1 to 100 (default 25); `?queue` 0 to 5000 | `{puuid,total,start,count,matches[ArchivedLine]}` | `src/routes/admin.rs:L764` |
-| POST | `/v1/admin/players/names/backfill` | none | **202** `{"ok":true,"unnamed":n}`; queues `names:backfill` | `src/routes/admin.rs:L2281` |
+| POST | `/v1/admin/players/names/backfill` | none | **202** `{"ok":true,"unnamed":n}`; queues `names:backfill` | `src/routes/admin.rs:L2291` |
 | POST | `/v1/admin/backfill` | body `puuid`, `platform` **required**; `limit` 1 to 10 000 (default 500); `fetchTimeline` bool (default false) | **200** `{"ok":true,"jobId":…,"status":"queued"\|"already-queued"}` | `src/routes/admin.rs:L1583` |
 
 Captured `PlayerRecord` (tracking by PUUID on a scratch server):
@@ -73,9 +73,9 @@ GET /v1/admin/debug/cache?scope=euw1&path=/lol/status/v4/platform-data&method=st
 | GET | `/v1/admin/jobs` | `?state` in `pending`, `running`, `done`, `failed`; `?kind` ≤ 40 chars; `?limit` 1 to 500 (default 50) | `{jobs:[{id,kind,dedupeKey,priority,state,attempts,runAfter,claimedAt,finishedAt,error,payload}]}`, newest first | `src/routes/admin.rs:L1334` |
 | DELETE | `/v1/admin/jobs` | `?kind` **required** (a known kind); `?state` **required** in `pending`, `failed`; `?minPriority` ≥ 0 (default 0); `?dryRun` bool | `{kind,state,minPriority,matched,deleted,dryRun}`; running rows untouched | `src/routes/admin.rs:L1504` |
 | GET | `/v1/admin/jobs/stats` | none | `{kinds{kind→{pending,running,done,failed}},totals{…}}` | `src/routes/admin.rs:L1401` |
-| GET | `/v1/admin/jobs/queue` | `?limit` 1 to 100 (default 15) | `{running[],next[],ready,delayed,nextDelayedAt,heldKinds[],held}` | `src/routes/admin.rs:L1940` |
-| GET | `/v1/admin/jobs/activity` | `?limit` 1 to 200 (default 50) | `{workers[],finished[]}`, in-memory, lost on restart | `src/routes/admin.rs:L1979` |
-| GET | `/v1/admin/jobs/{id}/activity` | `id` ULID; `?after` ≥ 0 | `{job,trace}`; both null is `404` `No such job` | `src/routes/admin.rs:L2013` |
+| GET | `/v1/admin/jobs/queue` | `?limit` 1 to 100 (default 15) | `{running[],next[],ready,delayed,nextDelayedAt,heldKinds[],held}` | `src/routes/admin.rs:L1950` |
+| GET | `/v1/admin/jobs/activity` | `?limit` 1 to 200 (default 50) | `{workers[],finished[]}`, in-memory, lost on restart | `src/routes/admin.rs:L1989` |
+| GET | `/v1/admin/jobs/{id}/activity` | `id` ULID; `?after` ≥ 0 | `{job,trace}`; both null is `404` `No such job` | `src/routes/admin.rs:L2023` |
 | POST | `/v1/admin/jobs/{id}/retry` | `id` ULID | the job summary; `404` `No such job`; wrong state is `400 VALIDATION` `Job {id} is {state}`; `An identical job is already queued ({other})` | `src/routes/admin.rs:L1426` |
 | DELETE | `/v1/admin/jobs/{id}` | `id` ULID | the job summary with state `failed`, error `cancelled`; same error mapping | `src/routes/admin.rs:L1455` |
 
@@ -92,11 +92,11 @@ Captured job summary:
 
 | Method | Path | Params / body | Response | Handler |
 |---|---|---|---|---|
-| POST | `/v1/admin/maintenance/run` | none | **202** `{"ok":true,"jobId":…,"status":"queued"\|"already-queued"}`; dedupe key `maintenance` | `src/routes/admin.rs:L2666` |
+| POST | `/v1/admin/maintenance/run` | none | **202** `{"ok":true,"jobId":…,"status":"queued"\|"already-queued"}`; dedupe key `maintenance` | `src/routes/admin.rs:L2676` |
 | POST | `/v1/admin/ddragon/sync` | body `force` bool (default false) | **200** `{"ok":true,"jobId":…}`; dedupe `ddragon:sync` or `ddragon:sync:force` | `src/routes/admin.rs:L1634` |
-| POST | `/v1/admin/analytics/recompute` | body `platform` **required**; `queue` in `RANKED_SOLO_5x5`, `RANKED_FLEX_SR` (default first of `LADDER_QUEUES`) | **202** `{"ok":true,"platform":…,"queue":…}`; queues `aggregate:analytics` at priority 0, ahead of everything; a full rebuild, the repair path since `aggregate:delta` (THR-03) keeps the tables current | `src/routes/admin.rs:L2344` |
-| POST | `/v1/admin/analytics/reextract` | none | **202** `{"ok":true,"stale":n}`; queues `facts:reextract` | `src/routes/admin.rs:L2379` |
-| GET | `/v1/admin/timelines/backfill` | `?patches` 1 to 1000 (default `TIMELINE_BACKFILL_PATCHES`, 0) | the timeline backfill progress document; read-only | `src/routes/admin.rs:L2310` |
+| POST | `/v1/admin/analytics/recompute` | body `platform` **required**; `queue` in `RANKED_SOLO_5x5`, `RANKED_FLEX_SR` (default first of `LADDER_QUEUES`) | **202** `{"ok":true,"platform":…,"queue":…}`; queues `aggregate:analytics` at priority 0, ahead of everything; a full rebuild, the repair path since `aggregate:delta` (THR-03) keeps the tables current | `src/routes/admin.rs:L2354` |
+| POST | `/v1/admin/analytics/reextract` | none | **202** `{"ok":true,"stale":n}`; queues `facts:reextract` | `src/routes/admin.rs:L2389` |
+| GET | `/v1/admin/timelines/backfill` | `?patches` 1 to 1000 (default `TIMELINE_BACKFILL_PATCHES`, 0) | the timeline backfill progress document; read-only | `src/routes/admin.rs:L2320` |
 
 > **TODO (unverified):** the field names of `jobs::timelines::Progress` returned by `GET /v1/admin/timelines/backfill` (schema reference only in the inventory).
 
@@ -105,11 +105,11 @@ Captured job summary:
 | Method | Path | Params / body | Riot | Response | Handler |
 |---|---|---|---|---|---|
 | POST | `/v1/admin/ladder/crawl` | body `platform` **required**; `queue`; `tierFloor` in `IRON`…`CHALLENGER` (default `LADDER_TIER_FLOOR`, `MASTER`) | none at request time (the legs call league-v4 later) | **202** `{"crawlId","status":"started"\|"already-running","platform","queue","legs"}`; a duplicate is not a 409 | `src/routes/admin.rs:L1700` |
-| GET | `/v1/admin/ladder/options` | none | none | `{platforms[{id,label}],queues[],tiers[],defaults{platform,queue,tierFloor,backfillLimit}}` | `src/routes/admin.rs:L1746` |
+| GET | `/v1/admin/ladder/options` | none | none | `{platforms[{id,label}],queues[],tiers[],defaults{platform,queue,tierFloor,backfillLimit,crawlMatchLimit}}` | `src/routes/admin.rs:L1746` |
 | POST | `/v1/admin/ladder/probe` | body `platform` **required**; `queue` | about 55 live calls: the three apex leagues, `league.expEntries` `MASTER/I` pages 1 to 100, `league.entriesByTier` `MASTER/I?page=1`, all bypassing the cache at interactive priority | **200** report `{cap,churnTolerance,summary,checks[{id,title,verdict,detail}],lists[],exp{…},pagedMaster{…},platform,queue,tookMs}`; verdicts `confirmed`, `not-seen`, `changed`, `error`; stores nothing | `src/routes/admin/ladder_probe.rs:L464` |
-| GET | `/v1/admin/ladder/crawls` | `?platform`; `?queue`; `?limit` 1 to 100 (default 20) | none | `{crawls:[LadderCrawlSummary]}` for the current key scope | `src/routes/admin.rs:L1835` |
-| GET | `/v1/admin/ladder/crawls/{id}` | `id` ULID | none | `{crawl,asOf,stages[],openLegs[],running[],next[],ahead,failed[],downloads{…}}`; `404` `No such ladder crawl for the current key scope` | `src/routes/admin.rs:L2201` |
-| DELETE | `/v1/admin/ladder/crawls/{id}` | `id` ULID | none | `{"ok":true,"crawlId":…,"status":"cancelled","droppedJobs":n}`; not running is `400 VALIDATION` `Crawl {id} is already {status}`; publishes `crawl.phase` | `src/routes/admin.rs:L1874` |
+| GET | `/v1/admin/ladder/crawls` | `?platform`; `?queue`; `?limit` 1 to 100 (default 20) | none | `{crawls:[LadderCrawlSummary]}` for the current key scope; `matchesSkipped` and `matchLimit` show a crawl `LADDER_CRAWL_MATCH_LIMIT` held back (STG-03) | `src/routes/admin.rs:L1845` |
+| GET | `/v1/admin/ladder/crawls/{id}` | `id` ULID | none | `{crawl,asOf,stages[],openLegs[],running[],next[],ahead,failed[],downloads{…}}`; `404` `No such ladder crawl for the current key scope` | `src/routes/admin.rs:L2211` |
+| DELETE | `/v1/admin/ladder/crawls/{id}` | `id` ULID | none | `{"ok":true,"crawlId":…,"status":"cancelled","droppedJobs":n}`; not running is `400 VALIDATION` `Crawl {id} is already {status}`; publishes `crawl.phase` | `src/routes/admin.rs:L1884` |
 
 Captured:
 
@@ -130,11 +130,11 @@ A probe on a Riot key that is rejected answers `502 UPSTREAM_ERROR`, as any Riot
 
 | Method | Path | Params | Response | Handler |
 |---|---|---|---|---|
-| GET | `/v1/admin/metrics` | none | the `stats::Snapshot` document the `metrics` WebSocket topic sends, including `sqliteWriter{busySince,busyMs,lastProgress,lastFinished,queued}` (WR-02) and `analytics.lastRuns[]`, one entry per ladder and `kind` (`rebuild` or `delta`, THR-03; a delta's `steps` is `{"delta": seconds}` and its `rows` the rows upserted per table); not recorded in the recent ring | `src/routes/admin.rs:L2403` |
-| GET | `/v1/admin/metrics/history` | none | `{intervalS,maxPoints,points[]}`; `intervalS` is `METRICS_HISTORY_INTERVAL_S` (60) | `src/routes/admin.rs:L2428` |
-| GET | `/v1/admin/info` | none | `{version,gitSha,rustc,builtAt,startedAt,uptimeSeconds,env,role,keyScope,features{devUi,docsUi,dashboardUi,authDisabled,archiveTimelines,staleWhileRevalidate,trustProxy,postgres},workers,config{…}}`; `RIOT_API_KEY` is never listed and other secrets read `[REDACTED]` | `src/routes/admin.rs:L2490` |
-| GET | `/v1/admin/recent` | `?kind` in `requests` (default), `errors`; `?limit` 1 to 500 (default 100) | `{kind,capacity,requests?[{at,method,route,path,status,cache,latencyMs,consumer,requestId}],errors?[{at,code,status,message,requestId}]}`; rings of 500 requests and 200 errors, lost on restart | `src/routes/admin.rs:L2550` |
-| GET | `/v1/admin/backups` | none | `{dir,keep,files[{name,bytes,modifiedAt}],lastRun,diskFreeBytes}`, metadata only | `src/routes/admin.rs:L2620` |
+| GET | `/v1/admin/metrics` | none | the `stats::Snapshot` document the `metrics` WebSocket topic sends, including `sqliteWriter{busySince,busyMs,lastProgress,lastFinished,queued}` (WR-02) and `analytics.lastRuns[]`, one entry per ladder and `kind` (`rebuild` or `delta`, THR-03; a delta's `steps` is `{"delta": seconds}` and its `rows` the rows upserted per table); not recorded in the recent ring | `src/routes/admin.rs:L2413` |
+| GET | `/v1/admin/metrics/history` | none | `{intervalS,maxPoints,points[]}`; `intervalS` is `METRICS_HISTORY_INTERVAL_S` (60) | `src/routes/admin.rs:L2438` |
+| GET | `/v1/admin/info` | none | `{version,gitSha,rustc,builtAt,startedAt,uptimeSeconds,env,role,keyScope,features{devUi,docsUi,dashboardUi,authDisabled,archiveTimelines,staleWhileRevalidate,trustProxy,postgres},workers,config{…}}`; `RIOT_API_KEY` is never listed and other secrets read `[REDACTED]` | `src/routes/admin.rs:L2500` |
+| GET | `/v1/admin/recent` | `?kind` in `requests` (default), `errors`; `?limit` 1 to 500 (default 100) | `{kind,capacity,requests?[{at,method,route,path,status,cache,latencyMs,consumer,requestId}],errors?[{at,code,status,message,requestId}]}`; rings of 500 requests and 200 errors, lost on restart | `src/routes/admin.rs:L2560` |
+| GET | `/v1/admin/backups` | none | `{dir,keep,files[{name,bytes,modifiedAt}],lastRun,diskFreeBytes}`, metadata only | `src/routes/admin.rs:L2630` |
 
 Captured `/v1/admin/info`, shortened:
 
@@ -149,5 +149,5 @@ Captured `/v1/admin/info`, shortened:
 ```
 
 ---
-**Sources:** `src/stats.rs:L254-L268`, `src/routes/admin.rs:L44-L107,L114-L171,L180-L326,L336-L435,L454-L502,L524-L571,L580-L594,L630-L653,L664,L717-L780,L832-L882,L890-L924,L969,L1010-L1038,L1075-L1204,L1212-L1248,L1262-L1354,L1369-L1536,L1583-L1613,L1634-L1652,L1674-L1689,L1700-L1758,L1764-L1798,L1835-L1852,L1874-L1898,L1908-L1929,L1940-L2001,L2013-L2037,L2096-L2114,L2201-L2229,L2281-L2315,L2344-L2366,L2379-L2388,L2398-L2419,L2428,L2442-L2490,L2526-L2562,L2587-L2628,L2666-L2674`, `src/routes/admin/ladder_probe.rs:L42-L44,L121-L149,L351-L355,L387-L434,L458-L496`, `src/http/body.rs:L341-L391`, `src/http/validate.rs:L81-L88,L253-L259`, `src/http/auth.rs:L276-L288,L327-L342`, `src/http/recent.rs:L109-L122`, `docs/_meta/scratch/routes.md` §1.8, live capture against `target/debug/riot-proxy` 2.7.0
-**Last verified:** 2026-10-26 against commit `c9e1b33`
+**Sources:** `src/stats.rs:L254-L268`, `src/routes/admin.rs:L44-L107,L114-L171,L180-L326,L336-L435,L454-L502,L524-L571,L580-L594,L630-L653,L664,L717-L780,L832-L882,L890-L924,L969,L1010-L1038,L1075-L1204,L1212-L1248,L1262-L1354,L1369-L1536,L1583-L1613,L1634-L1652,L1674-L1689,L1700-L1758,L1766-L1806,L1845-L1862,L1884-L1908,L1918-L1939,L1950-L2011,L2023-L2047,L2106-L2124,L2211-L2239,L2291-L2325,L2354-L2376,L2389-L2398,L2408-L2429,L2438,L2452-L2500,L2536-L2572,L2597-L2638,L2676-L2684`, `src/routes/admin/ladder_probe.rs:L42-L44,L121-L149,L351-L355,L387-L434,L458-L496`, `src/http/body.rs:L341-L391`, `src/http/validate.rs:L81-L88,L253-L259`, `src/http/auth.rs:L276-L288,L327-L342`, `src/http/recent.rs:L109-L122`, `docs/_meta/scratch/routes.md` §1.8, live capture against `target/debug/riot-proxy` 2.7.0
+**Last verified:** 2026-11-05 against commit `7ec9262`

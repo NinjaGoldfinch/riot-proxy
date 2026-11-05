@@ -70,6 +70,7 @@ pub const VARS: &[&str] = &[
     "LADDER_PLATFORMS",
     "LADDER_TIER_FLOOR",
     "LADDER_BACKFILL_LIMIT",
+    "LADDER_CRAWL_MATCH_LIMIT",
     "LADDER_COLLECT_OVERLAP_S",
     "RANK_LOOKUP_LIMIT",
     "RANK_LOOKUP_RECHECK_S",
@@ -353,6 +354,9 @@ pub struct Config {
     pub ladder_platforms: Vec<Platform>,
     pub ladder_tier_floor: String,
     pub ladder_backfill_limit: u32,
+    /// `LADDER_CRAWL_MATCH_LIMIT` (STG-03): the most matches a platform may
+    /// hold, archived or queued, before its crawls queue no more; 0 is no cap.
+    pub ladder_crawl_match_limit: u32,
     /// How far before a player's last collect a crawl's `startTime` reaches,
     /// in seconds, for games in progress then (THR-04, ADR-185).
     pub ladder_collect_overlap_s: u32,
@@ -491,6 +495,7 @@ impl Config {
             ("LADDER_PLATFORMS", s(platforms.join(","))),
             ("LADDER_TIER_FLOOR", s(&self.ladder_tier_floor)),
             ("LADDER_BACKFILL_LIMIT", s(self.ladder_backfill_limit)),
+            ("LADDER_CRAWL_MATCH_LIMIT", s(self.ladder_crawl_match_limit)),
             ("LADDER_COLLECT_OVERLAP_S", s(self.ladder_collect_overlap_s)),
             ("RANK_LOOKUP_LIMIT", s(self.rank_lookup_limit)),
             ("RANK_LOOKUP_RECHECK_S", s(self.rank_lookup_recheck_s)),
@@ -797,6 +802,7 @@ impl Config {
             ladder_platforms,
             ladder_tier_floor: v.tier("LADDER_TIER_FLOOR", "MASTER"),
             ladder_backfill_limit: v.int("LADDER_BACKFILL_LIMIT", 100, 0, 10_000),
+            ladder_crawl_match_limit: v.int("LADDER_CRAWL_MATCH_LIMIT", 0, 0, 100_000_000),
             ladder_collect_overlap_s: v.int("LADDER_COLLECT_OVERLAP_S", 7_200, 0, 86_400),
             rank_lookup_limit: v.int("RANK_LOOKUP_LIMIT", 50_000, 0, 10_000_000),
             rank_lookup_recheck_s: v.int("RANK_LOOKUP_RECHECK_S", 604_800, 0, 31_536_000),

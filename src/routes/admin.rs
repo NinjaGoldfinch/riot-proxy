@@ -1759,6 +1759,8 @@ async fn ladder_options(State(state): State<AppState>, Extension(_c): Who) -> Re
             "queue": default_ladder_queue(&state),
             "tierFloor": state.config.ladder_tier_floor,
             "backfillLimit": state.config.ladder_backfill_limit,
+            // STG-03: 0 is no cap.
+            "crawlMatchLimit": state.config.ladder_crawl_match_limit,
         },
     }))
 }
@@ -1793,6 +1795,12 @@ pub struct LadderCrawlSummary {
     match_ids_seen: i64,
     /// How many of those were not already archived, and so cost a fetch.
     matches_queued: i64,
+    /// Not-yet-archived matches left out because the platform already held `LADDER_CRAWL_MATCH_LIMIT`
+    /// matches, archived or queued. 0 when the cap is off or never reached.
+    matches_skipped: i64,
+    /// The `LADDER_CRAWL_MATCH_LIMIT` that held this crawl back, or `null` if none did.
+    #[schema(required = true)]
+    match_limit: Option<i64>,
     /// Legs of the current stage still outstanding — apex leagues and (tier, division) walks,
     /// then match-id batches, then the archive hand-off. 0 for a finished run.
     pending_legs: i64,
@@ -1814,6 +1822,8 @@ impl LadderCrawlSummary {
             players_skipped: c.counters.players_skipped,
             match_ids_seen: c.counters.match_ids_seen,
             matches_queued: c.counters.matches_queued,
+            matches_skipped: c.counters.matches_skipped,
+            match_limit: c.match_limit,
             id: c.id,
             platform: c.platform,
             queue: c.queue,
