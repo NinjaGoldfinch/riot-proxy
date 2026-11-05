@@ -4,6 +4,7 @@ Dated log of changes to this documentation set. One line per change; the newest 
 
 ## 2026-11-05
 
+- STG-02 (ADR-201): `ARCHIVE_OBJECT_READ_ONLY`. `integration/object-storage.md` (the variable, staging's token), `deployment/configuration.md`, `deployment/security.md`; every page citing `config.rs`, `objects.rs`, `serve.rs` or `.env.example` re-verified, line citations moved with the code.
 - STG-01 (ADR-200): `KEY_SCOPE` pins the key scope. `deployment/configuration.md` (the variable), `operations/runbook.md` §4 (keeping the old scope on a renewal), `data/caching.md` (key scope), design 04; every page citing `config.rs`, `serve.rs`, `keys.rs`, `health.rs`, `.env.example` or `tests/common` re-verified, line citations moved with the code.
 - STS-00 (ADR-203): the status series is specified in `docs/design/14-status.md`; no page in this set changes until STS-01 lands code.
 - DEP-05 follow-up: `deployment/upgrade-and-rollback.md` no longer says v2.9.0 and v2.10.0 are already marked `prod/deployed`; until the owner backfills them, a rollback to them needs `break_glass`.
@@ -49,4 +50,4 @@ Dated log of changes to this documentation set. One line per change; the newest 
 
 ---
 **Sources:** this documentation set
-**Last verified:** 2026-11-05 against commit `79ed267`
+**Last verified:** 2026-11-05 against commit `25a8e52`

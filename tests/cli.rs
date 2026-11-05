@@ -372,6 +372,75 @@ fn serve_with_a_bucket_runs_the_offload_at_boot() {
     );
 }
 
+/// STG-02: a read-only bucket gets no offload at boot, so a local body is
+/// neither packed nor freed and nothing is written to the bucket; `packs
+/// snapshot` is refused.
+#[tokio::test]
+async fn serve_with_a_read_only_bucket_writes_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("data");
+    let bucket = tmp.path().join("bucket");
+    let url = format!("file://{}", bucket.display());
+    run(&data, &["migrate"]);
+    let body = zstd::encode_all(&b"{\"metadata\":{}}"[..], 3).unwrap();
+    rusqlite::Connection::open(data.join("riot-proxy.db"))
+        .unwrap()
+        .execute(
+            "INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size, archived_at)
+             VALUES ('OC1_1', 'sea', '16.19', 420, 1, ?1, 1, 1)",
+            [body],
+        )
+        .unwrap();
+    let env = [
+        ("ARCHIVE_OBJECT_URL", url.as_str()),
+        ("ARCHIVE_OBJECT_READ_ONLY", "true"),
+        ("ARCHIVE_BODY_LOCAL_DAYS", "0"),
+        ("ARCHIVE_PACK_TARGET_BYTES", "1048576"),
+    ];
+    let server = Server::start_with(&data, free_port(), &env);
+    std::thread::sleep(Duration::from_secs(2));
+    let log = server.stop(Vec::new());
+    assert!(log.contains("(read-only)"), "{log}");
+    assert!(
+        !log.contains("queued archive:offload") && !log.contains("offload done"),
+        "{log}"
+    );
+    let files = walk(&bucket);
+    assert!(files.is_empty(), "nothing written to the bucket: {files:?}");
+    let local: Option<Vec<u8>> = rusqlite::Connection::open(data.join("riot-proxy.db"))
+        .unwrap()
+        .query_row("SELECT body_zstd FROM matches", [], |r| r.get(0))
+        .unwrap();
+    assert!(local.is_some(), "the local body is kept");
+
+    let out = cmd(&data)
+        .envs(env.iter().copied())
+        .args(["packs", "snapshot"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("ARCHIVE_OBJECT_READ_ONLY"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(walk(&bucket).is_empty());
+}
+
+/// Every file under `dir`, or none if it does not exist.
+fn walk(dir: &Path) -> Vec<std::path::PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .flat_map(|e| {
+            let p = e.path();
+            if p.is_dir() { walk(&p) } else { vec![p] }
+        })
+        .collect()
+}
+
 #[test]
 fn healthcheck_fails_when_nothing_listens() {
     let tmp = tempfile::tempdir().unwrap();

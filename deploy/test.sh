@@ -62,6 +62,9 @@ printf 'pack one' > "$src/packs/matches/2026/10/01JA.pack"
 printf 'pack two' > "$src/packs/matches/2026/10/01JB.pack"
 printf 'snapshot' > "$src/index/packs-2026-10-14.jsonl.zst"
 printf 'pack one' > "$dst/packs/matches/2026/10/01JA.pack"
+# A replica's copy has its source's mtime (rclone compares size and mtime). Two
+# writes can straddle a coarse filesystem tick, and the pack would then differ.
+touch -r "$src/packs/matches/2026/10/01JA.pack" "$dst/packs/matches/2026/10/01JA.pack"
 printf 'expired' > "$dst/index/packs-2026-09-01.jsonl.zst"
 
 # shellcheck disable=SC2016 # the unit's literal ${…}, replaced here

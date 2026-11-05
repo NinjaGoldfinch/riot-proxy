@@ -277,6 +277,10 @@ musl build: it uses `reqwest` with rustls, same as the proxy.
 
 ## Offload job
 
+A process with `ARCHIVE_OBJECT_READ_ONLY=true` (staging, reading production's
+packs) runs neither this job nor the index snapshot, and its `Objects` handle
+refuses every write (STG-02, ADR-201).
+
 `archive:offload`, one job kind, bulk lane, priority 30 000 (beside
 `facts:reextract`). It is queued **when a pack is full**, not on a timer
 (owner, 2026-10-13): the archive keeps a running total of unpacked bytes per

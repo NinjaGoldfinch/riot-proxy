@@ -107,9 +107,11 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         tracing::warn!(key = %key, "CACHE_TTL_OVERRIDES key matches no cacheable endpoint; ignored");
     }
     // The archive queues what a stored match or timeline lacks (TL-01), and
-    // the offload once a full pack of bodies is waiting (OBJ-03).
+    // the offload once a full pack of bodies is waiting (OBJ-03). A read-only
+    // bucket gets neither the offload nor the snapshot, so nothing is packed,
+    // freed or written to it (STG-02).
     let queue = crate::jobs::Queue::new(db.clone()).with_kind_limits(config.job_kind_limits.clone());
-    let pending = db.objects().map(|_| {
+    let pending = db.objects().filter(|o| !o.read_only()).map(|_| {
         Arc::new(crate::jobs::offload::Pending::new(
             queue.clone(),
             config.archive_pack_target_bytes,

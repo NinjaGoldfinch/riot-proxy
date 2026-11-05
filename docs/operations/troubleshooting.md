@@ -14,7 +14,7 @@ Failures an operator or integrator meets with riot-proxy, each as symptom, likel
 
 - **Cause:** `limiter_restored` is set after `restore_from` returns, success or failure (`src/cli/serve.rs:75-81`; `src/riot/limiter/persist.rs:224-229`), so `false` means boot has not reached step 5 yet (migrations or the L2 warm still running).
 - **Diagnose:** `sudo journalctl -u riot-proxy -n 50 -o cat` for `limiter checkpoint restored rows=` or `limiter checkpoint could not be read; starting fresh` (`src/cli/serve.rs:77-79`).
-- **Fix:** wait for `listening` (`src/cli/serve.rs:148`). A persistent `false` after `listening` is a bug.
+- **Fix:** wait for `listening` (`src/cli/serve.rs:150`). A persistent `false` after `listening` is a bug.
 
 ## Authentication and authorisation
 
@@ -44,7 +44,7 @@ Failures an operator or integrator meets with riot-proxy, each as symptom, likel
 
 ### 7. 503 `RATE_LIMITED`
 
-- **Cause:** two messages. `Upstream rate limited` means Riot answered 429 and the fetcher gave up (`src/riot/client.rs:179-182`, `:308-318`); `Upstream rate limit budget exceeded` means the proxy's own limiter had no token within the caller's budget, 2 s for a request (`CLIENT_WAIT_BUDGET_MS`, `src/config.rs:750`; `src/riot/limiter/mod.rs:58-80`; `src/fetcher.rs:460-466`). A cached copy inside its hard TTL is served as `STALE` instead when one exists.
+- **Cause:** two messages. `Upstream rate limited` means Riot answered 429 and the fetcher gave up (`src/riot/client.rs:179-182`, `:308-318`); `Upstream rate limit budget exceeded` means the proxy's own limiter had no token within the caller's budget, 2 s for a request (`CLIENT_WAIT_BUDGET_MS`, `src/config.rs:763`; `src/riot/limiter/mod.rs:58-80`; `src/fetcher.rs:460-466`). A cached copy inside its hard TTL is served as `STALE` instead when one exists.
 - **Diagnose:** `GET /v1/admin/limits/{scope}` for `usage` and `frozenMs` (`src/routes/admin.rs:1010-1027`); `/metrics` `proxy_rl_429_total{type}` and `limiter_interactive_waiters`.
 - **Fix:** for the budget message, bulk work is starving interactive calls: lower `BULK_USAGE_CEILING` or pause crawls (`runbook.md` §13); for Riot's 429, see `runbook.md` §9.
 
@@ -118,7 +118,7 @@ Failures an operator or integrator meets with riot-proxy, each as symptom, likel
 
 ### 18. `archive:offload` keeps failing
 
-- **Cause:** credentials or endpoint. Boot refuses `http://` in production (`ARCHIVE_OBJECT_ENDPOINT: must be https:// when ENV=production`, `src/config.rs:952-964`), an `s3://` URL without an endpoint (`is required with an s3:// ARCHIVE_OBJECT_URL`, `:1004`), one key without the other (`set both or neither`, `:997-1000`), or a production URL without keys (`:1006-1011`). A boot that passes logs `object store configured store=s3://riot-proxy-archive at <endpoint>` (`src/cli/serve.rs:103`; `src/archive/objects.rs:134`); a store that then rejects requests makes every run `Retry` (`src/jobs/offload.rs:147`).
+- **Cause:** credentials or endpoint. Boot refuses `http://` in production (`ARCHIVE_OBJECT_ENDPOINT: must be https:// when ENV=production`, `src/config.rs:969-981`), an `s3://` URL without an endpoint (`is required with an s3:// ARCHIVE_OBJECT_URL`, `:1023`), one key without the other (`set both or neither`, `:1016-1019`), or a production URL without keys (`:1025-1030`). A boot that passes logs `object store configured store=s3://riot-proxy-archive at <endpoint>` (`src/cli/serve.rs:103`; `src/archive/objects.rs:142`); a store that then rejects requests makes every run `Retry` (`src/jobs/offload.rs:147`).
 - **Diagnose:** `GET /v1/admin/jobs?kind=archive:offload` → `error`; `rp packs snapshot` exercises a PUT with the service's credentials (`src/cli/packs.rs:55-65`); `sudo rclone --config /etc/riot-proxy/rclone.conf lsf onidel:riot-proxy-archive --max-depth 1`.
 - **Fix:** correct the env file and restart (`runbook.md` §6); `archive_offload_pending` falls on the next run.
 
@@ -132,22 +132,22 @@ Failures an operator or integrator meets with riot-proxy, each as symptom, likel
 
 ### 20. `TLS: built-in TLS was removed; terminate HTTPS in a reverse proxy`
 
-- **Cause:** `TLS=true` or `1` in the env (`src/config.rs:701-706`); built-in TLS went in ADR-067 (`docs/design/07-deployment.md:59-61`).
-- **Fix:** remove `TLS`, `TLS_DOMAIN`, `ACME_EMAIL`, `TLS_PORT` (the last three are dropped silently, `src/config.rs:911-918`).
+- **Cause:** `TLS=true` or `1` in the env (`src/config.rs:707-712`); built-in TLS went in ADR-067 (`docs/design/07-deployment.md:59-61`).
+- **Fix:** remove `TLS`, `TLS_DOMAIN`, `ACME_EMAIL`, `TLS_PORT` (the last three are dropped silently, `src/config.rs:925-932`).
 
 ### 21. `AUTH_DISABLED cannot be enabled when ENV=production`
 
-- **Cause:** `src/config.rs:691-695`. `AUTH_DISABLED` is for local work only; it runs every request as `dev-local` with `read,admin` (`src/http/auth.rs:43-52`).
+- **Cause:** `src/config.rs:697-701`. `AUTH_DISABLED` is for local work only; it runs every request as `dev-local` with `read,admin` (`src/http/auth.rs:43-52`).
 - **Fix:** remove it from `/etc/riot-proxy/env`; mint keys instead.
 
 ### 22. `warn` `DEV_UI=true ignored: /dev is never served when ENV=production`
 
-- **Cause:** `DEV_UI` is forced off in production (`src/config.rs:697-699`, `:784-785`; `src/cli/serve.rs:95-97`). Not an error; `/dev` and `/dev/reset` are simply absent.
+- **Cause:** `DEV_UI` is forced off in production (`src/config.rs:706-708`, `:817-818`; `src/cli/serve.rs:95-97`). Not an error; `/dev` and `/dev/reset` are simply absent.
 - **Fix:** remove the variable to silence the warning. The dashboard (`/dashboard`, `DASHBOARD_UI`) is unaffected.
 
 ### 23. Boot fails with `binding 127.0.0.1:8080: Address already in use`
 
-- **Cause:** another process holds the port; the bind error carries that context (`src/cli/serve.rs:143-146`) and exits 1.
+- **Cause:** another process holds the port; the bind error carries that context (`src/cli/serve.rs:145-148`) and exits 1.
 - **Diagnose:** `sudo ss -ltnp 'sport = :8080'`; often a previous instance still draining (10 s grace, `src/app.rs:35`) or a stray `rp … serve`.
 - **Fix:** wait or stop the other process, then `sudo systemctl restart riot-proxy`.
 
@@ -166,7 +166,7 @@ Failures an operator or integrator meets with riot-proxy, each as symptom, likel
 
 ### 26. The container `HEALTHCHECK` fails with `error: Invalid environment configuration: RIOT_API_KEY: is required`
 
-- **Cause:** `riot-proxy healthcheck` loads the full configuration before it GETs `/healthz` (`src/cli/mod.rs:82-88`; `src/cli/healthcheck.rs`), so it needs the same env as `serve` (`src/config.rs:635-639`). Docker runs it as `CMD ["/riot-proxy","healthcheck"]` (`Dockerfile:24`).
+- **Cause:** `riot-proxy healthcheck` loads the full configuration before it GETs `/healthz` (`src/cli/mod.rs:82-88`; `src/cli/healthcheck.rs`), so it needs the same env as `serve` (`src/config.rs:641-645`). Docker runs it as `CMD ["/riot-proxy","healthcheck"]` (`Dockerfile:24`).
 - **Diagnose:** `docker exec <ctr> /riot-proxy healthcheck`; `docker inspect --format '{{json .State.Health}}' <ctr>`.
 - **Fix:** pass `RIOT_API_KEY` (and the rest of `.env`) into the container's environment, not only into a mounted file the health command cannot see.
 
@@ -178,7 +178,7 @@ Failures an operator or integrator meets with riot-proxy, each as symptom, likel
 
 ### 28. The bootstrap admin key was never shown
 
-- **Cause:** it is printed only when the `consumers` table is empty at `serve` and `BOOTSTRAP_ADMIN_KEY` is unset (`src/consumers.rs:308-333`; `src/cli/serve.rs:57-68`, `:422-428`). With `BOOTSTRAP_ADMIN_KEY` set, that key is imported silently; with any consumer already present, nothing is created. It goes to stderr, not the log (`src/cli/serve.rs:431`).
+- **Cause:** it is printed only when the `consumers` table is empty at `serve` and `BOOTSTRAP_ADMIN_KEY` is unset (`src/consumers.rs:308-333`; `src/cli/serve.rs:57-68`, `:443-449`). With `BOOTSTRAP_ADMIN_KEY` set, that key is imported silently; with any consumer already present, nothing is created. It goes to stderr, not the log (`src/cli/serve.rs:445`).
 - **Diagnose:** `rp key list` shows whether `bootstrap-admin` exists (`src/consumers.rs:16`).
 - **Fix:** mint a new admin key with `rp key create --name admin-2026-10 --scopes read,admin`; a lost key cannot be recovered (only its hash is stored, `src/consumers.rs:105-107`).
 
@@ -187,7 +187,7 @@ Failures an operator or integrator meets with riot-proxy, each as symptom, likel
 ### 29. A ladder's analytics stop moving after crawls, or `lastRuns` has no `delta` for it
 
 - **Cause:** since THR-03 (ADR-182) a completed crawl of a stamped ladder queues `aggregate:delta`, not a rebuild, and the delta counts only ladders stamped by a full rebuild with nothing marked dirty since, of any platform (`src/jobs/analytics.rs:779-811`; `src/archive/analytics/delta.rs:199-222`). A ladder is unstamped after the upgrade to V0029 until its first full rebuild finishes, and dirty after a `facts:reextract` or a `BUILDS_VERSION` bump rewrote matches already counted; either way a full rebuild is queued for it and the delta skips it until then. A crawl of an unstamped ladder (a platform outside `LADDER_PLATFORMS`, started from the admin route, or one before its first full rebuild) queues that rebuild at its end, which stamps it; deltas count it from then on. Boot and each delta queue the rebuild only for configured ladders.
-- **Diagnose:** `GET /v1/admin/metrics | jq '.analytics.lastRuns[] | {platform,queue,kind,at,status}'`; `GET /v1/admin/jobs/queue` for a pending or running `aggregate:analytics`; the journal's `full rebuilds queued for ladders not stamped yet queued=n` (`src/jobs/analytics.rs:805`) or, at boot, `queued full analytics rebuilds to stamp counted matches ladders=n` (`src/cli/serve.rs:335-338`). `GET /v1/admin/info` shows `AGGREGATE_DELTA_S`; at `0` crawls queue rebuilds as before.
+- **Diagnose:** `GET /v1/admin/metrics | jq '.analytics.lastRuns[] | {platform,queue,kind,at,status}'`; `GET /v1/admin/jobs/queue` for a pending or running `aggregate:analytics`; the journal's `full rebuilds queued for ladders not stamped yet queued=n` (`src/jobs/analytics.rs:805`) or, at boot, `queued full analytics rebuilds to stamp counted matches ladders=n` (`src/cli/serve.rs:337-340`). `GET /v1/admin/info` shows `AGGREGATE_DELTA_S`; at `0` crawls queue rebuilds as before.
 - **Fix:** let the queued rebuild finish (minutes per ladder on production; `runbook.md` §19 step 1). For an unconfigured platform, run a crawl of it or press Recompute now for it (`POST /v1/admin/analytics/recompute {"platform":"…"}`): its rebuild stamps it.
 
 ### 30. `aggregate_delta_pending` keeps rising
@@ -209,5 +209,5 @@ Failures an operator or integrator meets with riot-proxy, each as symptom, likel
 - **Fix:** on 2.8.0 or earlier, wait: the backlog drains at about 2 500 jobs an hour per region. From 2.9.0 (TL-03) on, collect goes first.
 
 ---
-**Sources:** `src/routes/health.rs:21-46,148-200`, `src/db/writer.rs:22,158-206,214-230,244-275`, `src/db/mod.rs:29,38,41-42,160-172,229-257,367-373`, `src/jobs/analytics.rs:354-520,410,779-811`, `src/archive/analytics/delta.rs:199-270`, `src/cli/serve.rs:327-340,57-68,75-81,95-97,101-108,143-148,292,429-435`, `src/riot/limiter/persist.rs:224-229`, `src/http/auth.rs:32,43-52,118-139,193-199,267-288`, `src/http/error.rs:107`, `src/http/quota.rs:131,320,339-399`, `src/http/validate.rs:53-78,194-208`, `src/riot/routing.rs:46-63,132-143`, `src/riot/client.rs:176-183,304-318`, `src/riot/limiter/mod.rs:58-80`, `src/fetcher.rs:460-466`, `src/riot/endpoints.rs:185-204,424-444,500-512`, `src/routes/passthrough.rs:159-167`, `src/routes/players.rs:635`, `src/routes/statics.rs:213,289-292`, `src/cache/l1.rs:106-119`, `src/cache/l2.rs:102-112`, `src/jobs/maintenance.rs:34,254-268,294-306`, `src/jobs/scheduler.rs:40-42,160-171,963-973,1070-1092`, `src/jobs/archive.rs:263-307`, `src/jobs/ladder.rs:824-872`, `src/jobs/ladder/store.rs:355-410`, `src/jobs/ddragon.rs:111-112,241-304`, `src/jobs/offload.rs:147`, `src/jobs/ticks.rs:195-211`, `src/archive/matches.rs:250-317,399`, `src/archive/mod.rs:128-144`, `src/archive/objects.rs:134`, `src/config.rs:635-639,691-706,750,800-801,911-918,952-964,1019-1033`, `src/consumers.rs:16,105-107,308-333`, `src/cli/mod.rs:82-88`, `src/cli/key.rs:59-79`, `src/cli/packs.rs:32-35,55-83`, `src/routes/admin.rs:44-82,181-200,1010-1027,1232-1248,1700-1733,1912-1929,2096-2114,2442-2481,2587-2610`, `src/db/migrations/V0004__ladder.sql:7,33-34`, `src/app.rs:35`, `Dockerfile:24`, `deploy/README.md:12-18,258-265`, `deploy/proxmox/README.md:72-85`, `deploy/proxmox/files/riot-proxy-update:69-96`, `docs/design/07-deployment.md:59-61,171,221`, `docs/design/12-object-storage-and-hosting.md:943`, `docs/design/metrics.md:56`, `PROGRESS.md:342`, `docs/thr/THR-03-plan.md`
-**Last verified:** 2026-11-05 against commit `79ed267`
+**Sources:** `src/routes/health.rs:21-46,148-200`, `src/db/writer.rs:22,158-206,214-230,244-275`, `src/db/mod.rs:29,38,41-42,160-172,229-257,367-373`, `src/jobs/analytics.rs:354-520,410,779-811`, `src/archive/analytics/delta.rs:199-270`, `src/cli/serve.rs:329-342,57-68,75-81,95-97,101-108,145-150,294,443-449`, `src/riot/limiter/persist.rs:224-229`, `src/http/auth.rs:32,43-52,118-139,193-199,267-288`, `src/http/error.rs:107`, `src/http/quota.rs:131,320,339-399`, `src/http/validate.rs:53-78,194-208`, `src/riot/routing.rs:46-63,132-143`, `src/riot/client.rs:176-183,304-318`, `src/riot/limiter/mod.rs:58-80`, `src/fetcher.rs:460-466`, `src/riot/endpoints.rs:185-204,424-444,500-512`, `src/routes/passthrough.rs:159-167`, `src/routes/players.rs:635`, `src/routes/statics.rs:213,289-292`, `src/cache/l1.rs:106-119`, `src/cache/l2.rs:102-112`, `src/jobs/maintenance.rs:34,254-268,294-306`, `src/jobs/scheduler.rs:40-42,160-171,963-973,1070-1092`, `src/jobs/archive.rs:263-307`, `src/jobs/ladder.rs:824-872`, `src/jobs/ladder/store.rs:355-410`, `src/jobs/ddragon.rs:111-112,241-304`, `src/jobs/offload.rs:147`, `src/jobs/ticks.rs:195-211`, `src/archive/matches.rs:250-317,399`, `src/archive/mod.rs:128-144`, `src/archive/objects.rs:142`, `src/config.rs:641-645,697-712,763,814-815,925-932,966-978,1033-1047`, `src/consumers.rs:16,105-107,308-333`, `src/cli/mod.rs:82-88`, `src/cli/key.rs:59-79`, `src/cli/packs.rs:32-35,55-83`, `src/routes/admin.rs:44-82,181-200,1010-1027,1232-1248,1700-1733,1912-1929,2096-2114,2442-2481,2587-2610`, `src/db/migrations/V0004__ladder.sql:7,33-34`, `src/app.rs:35`, `Dockerfile:24`, `deploy/README.md:12-18,258-265`, `deploy/proxmox/README.md:72-85`, `deploy/proxmox/files/riot-proxy-update:69-96`, `docs/design/07-deployment.md:59-61,171,221`, `docs/design/12-object-storage-and-hosting.md:943`, `docs/design/metrics.md:56`, `PROGRESS.md:342`, `docs/thr/THR-03-plan.md`
+**Last verified:** 2026-11-05 against commit `25a8e52`

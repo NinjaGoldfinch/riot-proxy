@@ -988,3 +988,19 @@ fn key_scope_must_be_8_lowercase_hex() {
         );
     }
 }
+
+/// STG-02: off by default, and meaningless without a bucket.
+#[test]
+fn archive_object_read_only_needs_a_bucket() {
+    assert!(!load(env(&[])).archive_object_read_only);
+    assert_eq!(
+        errors(env(&[("ARCHIVE_OBJECT_READ_ONLY", "true")])),
+        vec!["ARCHIVE_OBJECT_READ_ONLY: needs ARCHIVE_OBJECT_URL: there is no bucket to read".to_string()]
+    );
+    let c = load(env(&[
+        ("ARCHIVE_OBJECT_URL", "file:///tmp/riot-proxy-bucket"),
+        ("ARCHIVE_OBJECT_READ_ONLY", "true"),
+    ]));
+    assert!(c.archive_object_read_only);
+    assert_eq!(c.redacted()["ARCHIVE_OBJECT_READ_ONLY"].as_deref(), Some("true"));
+}

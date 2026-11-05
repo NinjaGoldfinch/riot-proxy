@@ -54,7 +54,7 @@ Derived tables keyed by most of their row are `WITHOUT ROWID`, so the key is sto
 
 ### Partial indexes end with their state columns
 
-A partial index whose `WHERE` names state columns still lists those columns last: SQLite checks a query's terms against the row unless the index holds the columns, and in `matches` and `timelines` the state columns sit after the body, so a count would otherwise read every body (`V0023__body_packs.sql:32-36`, `41-48`; `docs/design/12-object-storage-and-hosting.md:196-202`). Tests assert the counts run as `SCAN … USING COVERING INDEX matches_to_pack` / `matches_to_free` (`src/archive/offload/tests.rs:501-514`; `src/jobs/offload/tests.rs:497-512`), so a new state column on a body table gets the same treatment.
+A partial index whose `WHERE` names state columns still lists those columns last: SQLite checks a query's terms against the row unless the index holds the columns, and in `matches` and `timelines` the state columns sit after the body, so a count would otherwise read every body (`V0023__body_packs.sql:32-36`, `41-48`; `docs/design/12-object-storage-and-hosting.md:196-202`). Tests assert the counts run as `SCAN … USING COVERING INDEX matches_to_pack` / `matches_to_free` (`src/archive/offload/tests.rs:519-532`; `src/jobs/offload/tests.rs:497-512`), so a new state column on a body table gets the same treatment.
 
 ## Tests to update
 
@@ -70,7 +70,7 @@ Every integration test opens a fresh tempfile database through `Db::open` (`test
 Outside `src/db/`:
 
 - **The dev reset lists.** `routes::dev::WIPED` and `KEPT` must together name every table; a test fails otherwise, "so a new migration has to choose" (`src/routes/dev.rs:38-86`; `tests/dev_reset.rs`). Derived and fetched data go in `WIPED`, children before parents; only consumers, the limiter checkpoint and refinery's history are `KEPT`.
-- **A `/v1/admin/stats` or dashboard count** over the new table needs its own `EXPLAIN QUERY PLAN` test, as the pack counts (`src/archive/offload/tests.rs:501-514`) and the job counts (`src/db/tests.rs:1221`) have.
+- **A `/v1/admin/stats` or dashboard count** over the new table needs its own `EXPLAIN QUERY PLAN` test, as the pack counts (`src/archive/offload/tests.rs:519-532`) and the job counts (`src/db/tests.rs:1221`) have.
 - Run `cargo test --lib db::` then `cargo test --test it dev_reset::` and the lot ([testing.md](./testing.md)).
 
 ## Documents to update
@@ -119,5 +119,5 @@ Then: add `"clash_teams"` to the sorted list in `migrations_create_exactly_the_d
 7. `just lint`, `just test`; a backup before the first production boot ([../deployment/backup-and-restore.md](../deployment/backup-and-restore.md)).
 
 ---
-**Sources:** `src/db/mod.rs:L22-L31`, `L131-L147`, `L294-L296`, `src/cli/mod.rs:L136-L165`, `src/db/migrations/V0001__init.sql:L1-L2`, `V0003__cs_and_duration.sql`, `V0021__facts_without_rowid.sql:L1-L33`, `V0023__body_packs.sql:L1-L48`, `V0027__matchup_builds.sql:L1-L19`, `src/db/tests.rs:L92-L152`, `L170`, `L401-L453`, `L542-L565`, `L734`, `L876-L918`, `L1221`, `src/archive/offload/tests.rs:L501-L514`, `src/jobs/offload/tests.rs:L497-L512`, `src/routes/dev.rs:L38-L86`, `tests/common/mod.rs:L32-L33`, `docs/design/04-data-and-cache.md:L61-L63`, `L417-L423`, `docs/design/12-object-storage-and-hosting.md:L196-L221`, `docs/DECISIONS.md:L49-L51` (ADR-010), `L1455` (ADR-135), `L1460-L1462` (ADR-136), `L1490-L1505` (ADR-140, ADR-141), `L1510` (ADR-142), `README.md:L142`, `docs/_meta/scratch/persistence.md` §1
-**Last verified:** 2026-11-05 against commit `79ed267`
+**Sources:** `src/db/mod.rs:L22-L31`, `L131-L147`, `L294-L296`, `src/cli/mod.rs:L136-L165`, `src/db/migrations/V0001__init.sql:L1-L2`, `V0003__cs_and_duration.sql`, `V0021__facts_without_rowid.sql:L1-L33`, `V0023__body_packs.sql:L1-L48`, `V0027__matchup_builds.sql:L1-L19`, `src/db/tests.rs:L92-L152`, `L170`, `L401-L453`, `L542-L565`, `L734`, `L876-L918`, `L1221`, `src/archive/offload/tests.rs:L519-L532`, `src/jobs/offload/tests.rs:L497-L512`, `src/routes/dev.rs:L38-L86`, `tests/common/mod.rs:L32-L33`, `docs/design/04-data-and-cache.md:L61-L63`, `L417-L423`, `docs/design/12-object-storage-and-hosting.md:L196-L221`, `docs/DECISIONS.md:L49-L51` (ADR-010), `L1455` (ADR-135), `L1460-L1462` (ADR-136), `L1490-L1505` (ADR-140, ADR-141), `L1510` (ADR-142), `README.md:L142`, `docs/_meta/scratch/persistence.md` §1
+**Last verified:** 2026-11-05 against commit `25a8e52`

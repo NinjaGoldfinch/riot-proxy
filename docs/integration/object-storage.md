@@ -50,14 +50,14 @@ Example: `packs/matches/2026/10/01K7Q2M3N4P5R6S7T8Z9V0W1X2.pack`. `parse_key` ac
 
 ### Content type and metadata
 
-Every object the proxy writes is `Content-Type: application/octet-stream` plus user metadata, which `object_store` sends as `x-amz-meta-<name>` (`objects.rs:42,278-291`):
+Every object the proxy writes is `Content-Type: application/octet-stream` plus user metadata, which `object_store` sends as `x-amz-meta-<name>` (`objects.rs:42,313-326`):
 
 | Object | Metadata | Source |
 |---|---|---|
 | a pack | `x-amz-meta-sha256` (hex of the whole object), `x-amz-meta-bodies` (count) | `pack.rs:115-121` |
 | a snapshot | `x-amz-meta-last-pack` (newest pack id covered, empty with no packs), `x-amz-meta-rows` (lines in that object) | `recovery.rs:207-264` |
 
-A `file://` store keeps no metadata, so `put` drops it and `head` returns none there (`objects.rs:8-9,278-282`). `rclone sync --metadata` carries the metadata to R2 so a reindex against the replica can read `sha256` instead of hashing every pack (`deploy/README.md:103`).
+A `file://` store keeps no metadata, so `put` drops it and `head` returns none there (`objects.rs:8-9,313-317`). `rclone sync --metadata` carries the metadata to R2 so a reindex against the replica can read `sha256` instead of hashing every pack (`deploy/README.md:103`).
 
 ## Pack format
 
@@ -71,8 +71,8 @@ A pack is the bodies of one kind, back to back in match-id order, then a zstd-co
 - Index lines are `{"kind":"match","matchId":"OC1_700000001","offset":0,"len":10724,"sha256":"<hex>"}`, one per body (`pack.rs:89-97,166-177`). The index alone rebuilds every `body_locations` row.
 - `TRAILER_LEN` is 16: the index length as little-endian u64, then `MAGIC = b"RPXPACK1"` (`pack.rs:20-23,183-184`). A reader fetches the trailer, computes the index range, fetches the index, and validates kind, bounds, match-id order and non-overlap (`pack.rs:195-262`).
 - `build` refuses an empty input, a duplicate id and an empty body, so an offloaded row's `X''` can never be packed as a body (`pack.rs:140-158`).
-- Target size `ARCHIVE_PACK_TARGET_BYTES`, default 64 MiB; a single larger body is a pack of its own (`src/config.rs:771`, `src/archive/offload.rs:175-223`). The pack id is `Ulid::from_parts(now_ms, random)` (`offload.rs:64,300-306`).
-- Uploads above 8 MiB go as multipart with 8 MiB parts, 4 in flight, aborted on failure; R2 requires equal parts and S3 at least 5 MiB (`objects.rs:33-41,173-205`).
+- Target size `ARCHIVE_PACK_TARGET_BYTES`, default 64 MiB; a single larger body is a pack of its own (`src/config.rs:784`, `src/archive/offload.rs:175-223`). The pack id is `Ulid::from_parts(now_ms, random)` (`offload.rs:64,300-306`).
+- Uploads above 8 MiB go as multipart with 8 MiB parts, 4 in flight, aborted on failure; R2 requires equal parts and S3 at least 5 MiB (`objects.rs:33-41,206-239`).
 
 ## Reads: an offloaded body
 
@@ -94,7 +94,7 @@ sequenceDiagram
     end
 ```
 
-The empty blob alone marks a row as offloaded; `offloaded_at` is not consulted (`matches.rs:212-222`). Offloaded ids are grouped by pack and each pack is fetched with one `get_ranges` call, `object_store` merging close ranges, with `ARCHIVE_OBJECT_CONCURRENCY` (default 16) packs in flight (`matches.rs:265-269`, `config.rs:753`). A range that comes back short is an error, never a short body (`objects.rs:232-249,294-308`). Any failure logs one warning and drops that body, so the archive returns `None` and the fetcher goes to Riot; a body re-fetched from Riot is archived locally again with `offloaded_at = NULL` and its location kept (`matches.rs:232-328,390-399`, `src/archive/mod.rs:128-144`). A body read from the bucket is not written back to SQLite.
+The empty blob alone marks a row as offloaded; `offloaded_at` is not consulted (`matches.rs:212-222`). Offloaded ids are grouped by pack and each pack is fetched with one `get_ranges` call, `object_store` merging close ranges, with `ARCHIVE_OBJECT_CONCURRENCY` (default 16) packs in flight (`matches.rs:265-269`, `config.rs:785`). A range that comes back short is an error, never a short body (`objects.rs:266-283,329-343`). Any failure logs one warning and drops that body, so the archive returns `None` and the fetcher goes to Riot; a body re-fetched from Riot is archived locally again with `offloaded_at = NULL` and its location kept (`matches.rs:232-328,390-399`, `src/archive/mod.rs:128-144`). A body read from the bucket is not written back to SQLite.
 
 ## Writes: one offload turn
 
@@ -121,7 +121,7 @@ sequenceDiagram
     J->>DB: backlog counts → archive_offload_pending, archive_packs gauges
 ```
 
-Verification compares the HEAD size and the `sha256` metadata the uploader set, then reads the pack back whole and hashes it (`offload.rs`, `verify`): the metadata only echoes the upload, so the read-back is what proves the bucket holds the pack's bytes before `free` can drop the local copies. It costs one GET per pack, about as many bytes down as up (ADR-193). Nothing is recorded until that passes, so a crash between the PUT and the transaction leaves an orphan object no row names; the bodies stay unpacked and the next turn packs them again (`offload.rs:6-9`). The free step makes no store call and cannot fail halfway. The job is queued when a kind's unpacked bytes reach a full pack, at boot, and after each daily `maintenance` (`src/jobs/offload.rs:51-111`, `src/cli/serve.rs:342-348`, `src/jobs/maintenance.rs:204-211`). A store or database error returns `JobError::Retry`, so the scheduler backs off and retries, giving up after the fifth attempt (`src/jobs/offload.rs:147`, `src/jobs/scheduler.rs:13,39`).
+Verification compares the HEAD size and the `sha256` metadata the uploader set, then reads the pack back whole and hashes it (`offload.rs`, `verify`): the metadata only echoes the upload, so the read-back is what proves the bucket holds the pack's bytes before `free` can drop the local copies. It costs one GET per pack, about as many bytes down as up (ADR-193). Nothing is recorded until that passes, so a crash between the PUT and the transaction leaves an orphan object no row names; the bodies stay unpacked and the next turn packs them again (`offload.rs:6-9`). The free step makes no store call and cannot fail halfway. The job is queued when a kind's unpacked bytes reach a full pack, at boot, and after each daily `maintenance` (`src/jobs/offload.rs:51-111`, `src/cli/serve.rs:344-350`, `src/jobs/maintenance.rs:204-211`). A store or database error returns `JobError::Retry`, so the scheduler backs off and retries, giving up after the fifth attempt (`src/jobs/offload.rs:147`, `src/jobs/scheduler.rs:13,39`).
 
 ## Index snapshots
 
@@ -134,26 +134,28 @@ Verification compares the HEAD size and the `sha256` metadata the uploader set, 
 | Onidel access key and secret | `/etc/riot-proxy/env` as `ARCHIVE_OBJECT_ACCESS_KEY` / `ARCHIVE_OBJECT_SECRET_KEY` (0600); also in `/etc/riot-proxy/rclone.conf` `[onidel]` | the `riot-proxy-archive` bucket | the proxy; `rclone` as the sync source (`deploy/README.md:24-25,51-62`) |
 | R2 API token for the replica | `/etc/riot-proxy/rclone.conf` `[r2]`, root-only, handed to the unit as a systemd credential | Object Read & Write on `riot-proxy-archive` only, so it cannot touch `ngf-backups` (`deploy/README.md:26-28`) | `riot-proxy-replica.service` (`DynamicUser=yes`, `LoadCredential=`) |
 | R2 token for backups | `/etc/rclone/r2.conf` on the box, not in this repo | the `ngf-backups` bucket only (`docs/design/12-object-storage-and-hosting.md:815-818`) | the offsite backup timer; the restore drill reads with it (`deploy/README.md:151-152`) |
+| Staging's archive token | `/etc/riot-proxy/env` on `ngf-mon-syd1` as `ARCHIVE_OBJECT_ACCESS_KEY` / `ARCHIVE_OBJECT_SECRET_KEY` | read-only on R2 `riot-proxy-archive` (Object Read), beside `ARCHIVE_OBJECT_READ_ONLY=true`, so neither a bug nor a setting can write production's replica (ADR-201) | staging's `serve` |
 | Restore-drill token | typed into a scratch `env`, never echoed | read-only on R2 `riot-proxy-archive` (Object Read), so the drill's own `archive:offload` cannot write into the replica (`deploy/README.md:156-160`) | a throwaway `riot-proxy serve` on port 8081 |
 
-`Config` redacts both keys in logs and `/v1/admin/config`; boot logs only `s3://<bucket> at <endpoint>` (`objects.rs:84-85,168-171`, `docs/_meta/scratch/config.md`). The client trusts only the bundled webpki roots, never the host store (`objects.rs:328-338`).
+`Config` redacts both keys in logs and `/v1/admin/config`; boot logs only `s3://<bucket> at <endpoint>` (`objects.rs:86-87,201-204`, `docs/_meta/scratch/config.md`). The client trusts only the bundled webpki roots, never the host store (`objects.rs:363-373`).
 
 ## Configuration
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `ARCHIVE_OBJECT_URL` | unset | `s3://riot-proxy-archive` or `file:///abs/dir`; unset keeps every body in SQLite and registers neither `archive:offload` nor `archive:index-snapshot` (`src/cli/serve.rs:264-286`) |
-| `ARCHIVE_OBJECT_ENDPOINT` | unset, required with `s3://` | `https://s3.ap-southeast-2.onidel.cloud`; a host starting with `<bucket>.` is addressed virtual-hosted, anything else path style; `http://` only outside production (`objects.rs:319-326`, `config.rs:936-948`) |
-| `ARCHIVE_OBJECT_REGION` | `auto` | signing region; `ap-southeast-2` for Onidel, `auto` for R2 (`config.rs:750`) |
-| `ARCHIVE_OBJECT_ACCESS_KEY`, `ARCHIVE_OBJECT_SECRET_KEY` | unset | both or neither; required with `s3://` when `ENV=production` (`config.rs:1001-1017`) |
+| `ARCHIVE_OBJECT_URL` | unset | `s3://riot-proxy-archive` or `file:///abs/dir`; unset keeps every body in SQLite and registers neither `archive:offload` nor `archive:index-snapshot` (`src/cli/serve.rs:266-288`) |
+| `ARCHIVE_OBJECT_ENDPOINT` | unset, required with `s3://` | `https://s3.ap-southeast-2.onidel.cloud`; a host starting with `<bucket>.` is addressed virtual-hosted, anything else path style; `http://` only outside production (`objects.rs:354-361`, `config.rs:969-981`) |
+| `ARCHIVE_OBJECT_REGION` | `auto` | signing region; `ap-southeast-2` for Onidel, `auto` for R2 (`config.rs:782`) |
+| `ARCHIVE_OBJECT_ACCESS_KEY`, `ARCHIVE_OBJECT_SECRET_KEY` | unset | both or neither; required with `s3://` when `ENV=production` (`config.rs:1034-1050`) |
 | `ARCHIVE_OBJECT_CONCURRENCY` | 16 (1–256) | packs read at once by a batch read |
+| `ARCHIVE_OBJECT_READ_ONLY` | `false` | read packed bodies and never write the bucket: neither `archive:offload` nor `archive:index-snapshot` is registered or queued, so no body is packed or freed, and `put`/`delete` refuse before any request (`ObjectsError::ReadOnly`), so `packs snapshot` fails too. Needs `ARCHIVE_OBJECT_URL`. Staging sets it to read production's packs from the R2 replica (STG-02, ADR-201) |
 | `ARCHIVE_BODY_LOCAL_DAYS` | 14 (0–365) | how long SQLite keeps a body already in a verified pack; 0 frees every packed body on the next run |
 | `ARCHIVE_PACK_TARGET_BYTES` | 67 108 864 (1 MiB–1 GiB) | a pack closes at this size |
 | `ARCHIVE_OFFLOAD_PACE_MS` | 50 (0–60 000) | pause between packs and between free batches |
 
-In production `file://` is refused and `s3://` without both keys is refused (`config.rs:1012-1021`). The `file://` form is for development and tests: a directory that holds `packs/` and `index/` exactly as a bucket would, via `object_store::LocalFileSystem`, with no metadata (`objects.rs:102-113`).
+In production `file://` is refused and `s3://` without both keys is refused (`config.rs:1045-1054`). The `file://` form is for development and tests: a directory that holds `packs/` and `index/` exactly as a bucket would, via `object_store::LocalFileSystem`, with no metadata (`objects.rs:109-121`).
 
-> **TODO (unverified):** the effective request timeout, connect timeout and retry count against the bucket are `object_store`'s defaults for the version pinned in `Cargo.lock`; `src/archive/objects.rs:328-338` configures only the root certificates.
+> **TODO (unverified):** the effective request timeout, connect timeout and retry count against the bucket are `object_store`'s defaults for the version pinned in `Cargo.lock`; `src/archive/objects.rs:363-373` configures only the root certificates.
 
 ## Cost-relevant access patterns
 
@@ -186,5 +188,5 @@ The quarterly restore drill against R2 (`deploy/README.md:144-220`) exercises an
 > **TODO (unverified):** OBJ-06 (orphan-pack sweep and compaction of packs under half live, `ARCHIVE_COMPACT_BELOW`) is described in `docs/design/12-object-storage-and-hosting.md:328-333,448` but no implementation was found in `src/archive/` or `src/jobs/`; `Objects::delete` has no caller. Until it exists, an orphan pack from a crash mid-offload stays in the bucket.
 
 ---
-**Sources:** `src/archive/objects.rs:L1-L139`, `src/archive/objects.rs:L173-L338`, `src/archive/pack.rs:L1-L134`, `src/archive/pack.rs:L140-L262`, `src/archive/pack.rs:L356-L367`, `src/archive/offload.rs:L1-L223`, `src/archive/offload.rs:L300-L306`, `src/archive/matches.rs:L191-L328`, `src/archive/matches.rs:L390-L399`, `src/archive/mod.rs:L128-L144`, `src/archive/recovery.rs:L1-L88`, `src/archive/recovery.rs:L179-L271`, `src/archive/recovery.rs:L468-L493`, `src/archive/recovery.rs:L592-L622`, `src/jobs/offload.rs:L41-L111`, `src/jobs/offload.rs:L146-L217`, `src/jobs/index_snapshot.rs:L16-L47`, `src/jobs/maintenance.rs:L204-L211`, `src/jobs/scheduler.rs:L13`, `src/jobs/scheduler.rs:L39`, `src/cli/serve.rs:L98-L105`, `src/cli/serve.rs:L264-L286`, `src/cli/serve.rs:L342-L348`, `src/config.rs:L766-L772`, `src/config.rs:L922-L964`, `src/config.rs:L1017-L1037`, `src/db/migrations/V0023__body_packs.sql:L1-L48`, `deploy/README.md:L12-L142`, `deploy/README.md:L144-L220`, `deploy/riot-proxy-replica.service`, `deploy/riot-proxy-replica.timer`, `docs/design/12-object-storage-and-hosting.md:L58-L157`, `docs/design/12-object-storage-and-hosting.md:L223-L435`, `docs/design/12-object-storage-and-hosting.md:L809-L823`, `docs/design/12-object-storage-and-hosting.md:L938-L976`, `docs/_meta/scratch/persistence.md`, `docs/_meta/scratch/config.md`
-**Last verified:** 2026-11-05 against commit `79ed267`
+**Sources:** `src/archive/objects.rs:L1-L148`, `src/archive/objects.rs:L206-L373`, `src/archive/pack.rs:L1-L134`, `src/archive/pack.rs:L140-L262`, `src/archive/pack.rs:L356-L367`, `src/archive/offload.rs:L1-L223`, `src/archive/offload.rs:L300-L306`, `src/archive/matches.rs:L191-L328`, `src/archive/matches.rs:L390-L399`, `src/archive/mod.rs:L128-L144`, `src/archive/recovery.rs:L1-L88`, `src/archive/recovery.rs:L179-L271`, `src/archive/recovery.rs:L468-L493`, `src/archive/recovery.rs:L592-L622`, `src/jobs/offload.rs:L41-L111`, `src/jobs/offload.rs:L146-L217`, `src/jobs/index_snapshot.rs:L16-L47`, `src/jobs/maintenance.rs:L204-L211`, `src/jobs/scheduler.rs:L13`, `src/jobs/scheduler.rs:L39`, `src/cli/serve.rs:L98-L105`, `src/cli/serve.rs:L266-L288`, `src/cli/serve.rs:L344-L350`, `src/config.rs:L779-L785`, `src/config.rs:L936-L978`, `src/config.rs:L1031-L1051`, `src/db/migrations/V0023__body_packs.sql:L1-L48`, `deploy/README.md:L12-L142`, `deploy/README.md:L144-L220`, `deploy/riot-proxy-replica.service`, `deploy/riot-proxy-replica.timer`, `docs/design/12-object-storage-and-hosting.md:L58-L157`, `docs/design/12-object-storage-and-hosting.md:L223-L435`, `docs/design/12-object-storage-and-hosting.md:L809-L823`, `docs/design/12-object-storage-and-hosting.md:L938-L976`, `docs/_meta/scratch/persistence.md`, `docs/_meta/scratch/config.md`
+**Last verified:** 2026-11-05 against commit `25a8e52`
