@@ -120,4 +120,4 @@ Then: add `"clash_teams"` to the sorted list in `migrations_create_exactly_the_d
 
 ---
 **Sources:** `src/db/mod.rs:L22-L31`, `L131-L147`, `L294-L296`, `src/cli/mod.rs:L136-L165`, `src/db/migrations/V0001__init.sql:L1-L2`, `V0003__cs_and_duration.sql`, `V0021__facts_without_rowid.sql:L1-L33`, `V0023__body_packs.sql:L1-L48`, `V0027__matchup_builds.sql:L1-L19`, `src/db/tests.rs:L92-L152`, `L170`, `L401-L453`, `L542-L565`, `L734`, `L876-L918`, `L1221`, `src/archive/offload/tests.rs:L519-L532`, `src/jobs/offload/tests.rs:L497-L512`, `src/routes/dev.rs:L38-L86`, `tests/common/mod.rs:L32-L33`, `docs/design/04-data-and-cache.md:L61-L63`, `L417-L423`, `docs/design/12-object-storage-and-hosting.md:L196-L221`, `docs/DECISIONS.md:L49-L51` (ADR-010), `L1455` (ADR-135), `L1460-L1462` (ADR-136), `L1490-L1505` (ADR-140, ADR-141), `L1510` (ADR-142), `README.md:L142`, `docs/_meta/scratch/persistence.md` §1
-**Last verified:** 2026-11-05 against commit `1616c00`
+**Last verified:** 2026-11-05 against commit `25a8e52`

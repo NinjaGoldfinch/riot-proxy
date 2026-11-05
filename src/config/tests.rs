@@ -962,6 +962,33 @@ fn ladder_collect_overlap_defaults_and_bounds() {
     }
 }
 
+/// STG-01: `KEY_SCOPE` replaces the derived scope; unset derives it as before.
+#[test]
+fn key_scope_pins_the_scope_or_is_derived() {
+    use crate::cache::keys::KeyScope;
+    let derived = load(env(&[]));
+    assert_eq!(derived.key_scope, None);
+    assert_eq!(
+        KeyScope::for_config(&derived),
+        KeyScope::from_key(&Secret::new(KEY))
+    );
+    let pinned = load(env(&[("KEY_SCOPE", "0a1b2c3d")]));
+    assert_eq!(KeyScope::for_config(&pinned).as_str(), "0a1b2c3d");
+    assert_eq!(pinned.redacted()["KEY_SCOPE"].as_deref(), Some("0a1b2c3d"));
+    assert_eq!(derived.redacted()["KEY_SCOPE"], None);
+}
+
+#[test]
+fn key_scope_must_be_8_lowercase_hex() {
+    for bad in ["0a1b2c3", "0a1b2c3d4", "0A1B2C3D", "0a1b2c3g", "rgapi-xx"] {
+        assert_eq!(
+            errors(env(&[("KEY_SCOPE", bad)])),
+            vec![format!("KEY_SCOPE: '{bad}' must be 8 lowercase hex characters")],
+            "{bad}"
+        );
+    }
+}
+
 /// STG-02: off by default, and meaningless without a bucket.
 #[test]
 fn archive_object_read_only_needs_a_bucket() {

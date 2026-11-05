@@ -381,7 +381,7 @@ pub async fn run(config: &Config, args: &Args) -> anyhow::Result<()> {
     let scope = args
         .key_scope
         .clone()
-        .unwrap_or_else(|| KeyScope::from_key(&config.riot_api_key).as_str().to_string());
+        .unwrap_or_else(|| KeyScope::for_config(config).as_str().to_string());
     let (input, child) = open(&args.from)?;
     let started = Instant::now();
     let report = import(&db, input, &scope).await?;

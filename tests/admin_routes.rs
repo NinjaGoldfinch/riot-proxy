@@ -32,6 +32,10 @@ struct Env {
 }
 
 async fn env() -> Env {
+    env_with(&[]).await
+}
+
+async fn env_with(vars: &[(&str, &str)]) -> Env {
     let server = MockServer::start().await;
     let ok = |body: Vec<u8>| ResponseTemplate::new(200).set_body_raw(body, "application/json");
     for (p, body) in [
@@ -69,7 +73,7 @@ async fn env() -> Env {
         .mount(&server)
         .await;
 
-    let (dir, state, router) = common::app_with(&[], &server.uri());
+    let (dir, state, router) = common::app_with(vars, &server.uri());
     let mint = |name: &str, scopes: Vec<Scope>| NewConsumer {
         name: name.into(),
         scopes,
@@ -563,6 +567,38 @@ async fn purge_drops_matching_entries_from_memory_and_disk() {
         error(&e.post("/v1/admin/cache/purge", json!({})).await),
         bad("body must have required property 'pattern'")
     );
+}
+
+/// STG-01: a pinned scope reads the players stored under it (production's, on
+/// staging), and nothing under the key's own scope.
+#[tokio::test]
+async fn a_pinned_key_scope_reads_the_players_stored_under_it() {
+    let pinned = "0123abcd";
+    let e = env_with(&[("KEY_SCOPE", pinned)]).await;
+    let own = riot_proxy::cache::keys::KeyScope::from_key(&e.state.config.riot_api_key).to_string();
+    assert_ne!(own, pinned);
+    e.state
+        .db
+        .write(move |c: &mut rusqlite::Connection| {
+            c.execute(
+                "INSERT INTO players (key_scope, puuid, platform, tracked, updated_at)
+                 VALUES (?1, 'prod-puuid', 'kr', 1, 0), (?2, 'own-puuid', 'kr', 1, 0)",
+                [pinned, own.as_str()],
+            )?;
+            Ok::<_, riot_proxy::db::DbError>(())
+        })
+        .await
+        .unwrap();
+    let s = e.get("/v1/admin/stats").await.json();
+    assert_eq!(
+        (
+            s["keyScope"].clone(),
+            s["trackedPlayers"].clone(),
+            s["knownPlayers"].clone()
+        ),
+        (json!(pinned), json!(1), json!(1))
+    );
+    assert_eq!(e.state.fetcher.key_scope().as_str(), pinned);
 }
 
 #[tokio::test]
