@@ -415,8 +415,8 @@ Production deploys move to the shared pipeline in `NinjaGoldfinch/ninja-actions`
 - [~] DEP-05 every release deploys to staging (`ngf-mon-syd1`) and is smoke-tested there without calling Riot; `staging/smoke` on the tag's commit; prod requires `staging/smoke` or `prod/deployed`, sets `prod/deployed`, `break_glass` for emergencies (owner rule 2026-11-05: nothing reaches production unless it passed on staging; `ci/DEP-05-staging-deploy`, ADR-198)
 
 ## STS — a status endpoint and outbound events (owner request 2026-11-05)
-`GET /status` in the shared ninjagoldfinch status contract for the owner's status bot, the rate-limit table at `GET /status/ratelimits`, background checks, and plain JSON events on state changes (IMPLEMENTATION.md §Post-release — STS, design/14, ADR-199).
-- [ ] STS-00 series spec: design/14, the plan section, ADR-199
+`GET /status` in the shared ninjagoldfinch status contract for the owner's status bot, the rate-limit table at `GET /status/ratelimits`, background checks, and plain JSON events on state changes (IMPLEMENTATION.md §Post-release — STS, design/14, ADR-203).
+- [ ] STS-00 series spec: design/14, the plan section, ADR-203
 - [ ] STS-01 build identity: `version` (`dev` off a release tag), `commit`, `built_at`; the startup log line
 - [ ] STS-02 `consumer_requests_total`, the checks (`riot_api`, `riot_key`, `cache`, `storage`) and `GET /status`
 - [ ] STS-03 the rate-limit table and `GET /status/ratelimits`

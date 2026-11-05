@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Accepted (owner request 2026-11-05, series STS, ADR-199) |
+| **Status** | Accepted (owner request 2026-11-05, series STS, ADR-203) |
 | **Consumers** | the ninjagoldfinch status bot (Discord, polls `/status`), the planned self-hosted dev pipeline, ninja-monitor |
 | **Contract** | the shared ninjagoldfinch status contract, `schema: 1` (every ninjagoldfinch service answers it) |
 
@@ -166,4 +166,4 @@ When `EVENTS_URL` is set, state transitions are POSTed there as the contract's e
 
 ## Tasks
 
-STS-00 (this document, ADR-199) → STS-01 build identity → STS-02 metrics, checks and `GET /status` → STS-03 the rate-limit table and `GET /status/ratelimits` → STS-04 outbound events. Each is one PR off `origin/main`.
+STS-00 (this document, ADR-203) → STS-01 build identity → STS-02 metrics, checks and `GET /status` → STS-03 the rate-limit table and `GET /status/ratelimits` → STS-04 outbound events. Each is one PR off `origin/main`.
