@@ -40,7 +40,7 @@ pub fn app_with(env: &[(&str, &str)], upstream: &str) -> (tempfile::TempDir, App
     let jobs = riot_proxy::jobs::Queue::new(db.clone()).with_kind_limits(config.job_kind_limits.clone());
     let archive = riot_proxy::archive::SqliteArchive::new(
         db.clone(),
-        riot_proxy::cache::keys::KeyScope::from_key(&config.riot_api_key),
+        riot_proxy::cache::keys::KeyScope::for_config(&config),
     )
     .queue_missing_halves(jobs.clone(), config.archive_timelines);
     let fetcher = fetcher(
@@ -57,7 +57,7 @@ pub fn app_with(env: &[(&str, &str)], upstream: &str) -> (tempfile::TempDir, App
     let stats = std::sync::Arc::new(riot_proxy::stats::Stats {
         hub: hub.clone(),
         db: db.clone(),
-        key_scope: riot_proxy::cache::keys::KeyScope::from_key(&config.riot_api_key)
+        key_scope: riot_proxy::cache::keys::KeyScope::for_config(&config)
             .as_str()
             .to_string(),
         limiter: std::sync::Arc::clone(&limiter),
@@ -153,7 +153,7 @@ pub fn fetcher(
             None,
         )),
         archive: archive.unwrap_or_else(|| std::sync::Arc::new(NoArchive)),
-        scope: riot_proxy::cache::keys::KeyScope::from_key(&config.riot_api_key),
+        scope: riot_proxy::cache::keys::KeyScope::for_config(config),
         policy: riot_proxy::riot::endpoints::TtlPolicy::from_config(config),
         interactive_budget: std::time::Duration::from_millis(config.client_wait_budget_ms),
         job_budget: std::time::Duration::from_millis(config.job_yield_budget_ms),
