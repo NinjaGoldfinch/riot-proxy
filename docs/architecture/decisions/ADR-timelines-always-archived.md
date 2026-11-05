@@ -12,4 +12,4 @@
 
 ---
 **Sources:** `docs/DECISIONS.md:L968-L973,L1094-L1101,L1274-L1283,L1443-L1452`, `src/config.rs:L761`, `src/archive/mod.rs:L88-L110`, `src/jobs/archive.rs:L263-L307`, `docs/design/12-object-storage-and-hosting.md` §Why
-**Last verified:** 2026-11-05 against commit `1616c00`
+**Last verified:** 2026-11-05 against commit `79ed267`

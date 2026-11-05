@@ -77,4 +77,4 @@ Found while writing; not gaps in these docs but worth a fix in the repository.
 
 ---
 **Sources:** every `TODO (unverified)` marker under `docs/` on 2026-10-19; `docs/_meta/scratch/*.md` "design vs code" sections
-**Last verified:** 2026-11-05 against commit `1616c00`
+**Last verified:** 2026-11-05 against commit `79ed267`
