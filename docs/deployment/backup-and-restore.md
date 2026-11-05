@@ -115,6 +115,10 @@ The replica is a full copy of the bucket, so the proxy can read from it directly
 
 The token the proxy then uses must be Object Read & Write on `riot-proxy-archive`, since the offload keeps writing new packs. There is no R2-specific code in the proxy; the only accommodation is equal 8 MiB multipart parts (`docs/_meta/scratch/persistence.md:378`).
 
+## Seeding staging
+
+Staging is a copy of production's newest backup in `ngf-backups`, made and refreshed by `deploy/staging-seed.sh` on `ngf-mon-syd1` with a read-only token, and scrubbed of production's keys and queue before it boots (STG-04, ADR-203; [../workflows/release-process.md](../workflows/release-process.md#seeding-staging-from-production)). It reads production's packs from the R2 replica with `ARCHIVE_OBJECT_READ_ONLY=true`. A backup that is days old because production's backup is skipping on disk space is refused unless `--allow-old`.
+
 ## The quarterly restore drill
 
 `deploy/README.md:144-220` has the drill in full. In summary, on the box in `/var/tmp/restore-drill`, against R2 with a **read-only** token so the drill's own boot-time `archive:offload` cannot write into the replica:

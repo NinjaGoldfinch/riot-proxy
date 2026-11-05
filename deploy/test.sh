@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Tests for the deploy kit: deploy.yml's wiring (DEP-03, DEP-05, via
 # scripts/deploy-workflow.test.sh), the staging smoke test (DEP-05, via
-# scripts/smoke.test.sh), and the archive replica units (OBJ-04): the unit files parse, and the
+# scripts/smoke.test.sh), the staging seed (STG-04, via
+# deploy/staging-seed.test.sh), and the archive replica units (OBJ-04): the unit files parse, and the
 # unit's own rclone command, pointed at two local directories, does what an
 # hourly sync must (a --dry-run changes nothing; a real run mirrors the source,
 # deletions included). Run by CI's `ops` job; locally: deploy/test.sh
@@ -24,6 +25,9 @@ check "shellcheck" shellcheck "$here/test.sh"
 check "deploy.yml wiring" "$here/../scripts/deploy-workflow.test.sh"
 # The smoke test staging's deploy runs, against a stub (DEP-05, ADR-198).
 check "smoke.sh" "$here/../scripts/smoke.test.sh"
+# Seeding staging from production's backup (STG-04, ADR-203).
+check "shellcheck staging-seed" shellcheck "$here/staging-seed.sh" "$here/staging-seed.test.sh"
+check "staging-seed.sh" "$here/staging-seed.test.sh"
 
 rclone=$(command -v rclone || true)
 if [[ -z $rclone ]]; then
