@@ -15638,6 +15638,8 @@
           "playersSkipped",
           "matchIdsSeen",
           "matchesQueued",
+          "matchesSkipped",
+          "matchLimit",
           "pendingLegs",
           "apexCapped"
         ],
@@ -15706,6 +15708,19 @@
             "type": "integer",
             "format": "int64",
             "description": "How many of those were not already archived, and so cost a fetch."
+          },
+          "matchesSkipped": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Not-yet-archived matches left out because the platform already held `LADDER_CRAWL_MATCH_LIMIT`\nmatches, archived or queued. 0 when the cap is off or never reached."
+          },
+          "matchLimit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The `LADDER_CRAWL_MATCH_LIMIT` that held this crawl back, or `null` if none did."
           },
           "pendingLegs": {
             "type": "integer",

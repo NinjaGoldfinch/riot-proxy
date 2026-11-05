@@ -92,6 +92,7 @@ impl Env {
             rank_lookup_recheck_s: 604_800,
             late_stamp_days: 14,
             delta_on: false,
+            crawl_match_limit: 0,
         })
     }
 
@@ -601,6 +602,7 @@ async fn the_options_route_lists_what_a_crawl_can_be_asked_for() {
         ("LADDER_PLATFORMS", "kr,na1"),
         ("LADDER_TIER_FLOOR", "emerald"),
         ("LADDER_BACKFILL_LIMIT", "50"),
+        ("LADDER_CRAWL_MATCH_LIMIT", "10000"),
     ])
     .await;
     let r = a.call("GET", "/v1/admin/ladder/options", &a.admin, None).await;
@@ -620,7 +622,7 @@ async fn the_options_route_lists_what_a_crawl_can_be_asked_for() {
     assert_eq!(body["tiers"][9], "CHALLENGER");
     assert_eq!(
         body["defaults"],
-        json!({"platform": "kr", "queue": SOLO, "tierFloor": "EMERALD", "backfillLimit": 50}),
+        json!({"platform": "kr", "queue": SOLO, "tierFloor": "EMERALD", "backfillLimit": 50, "crawlMatchLimit": 10000}),
         "the form preselects the first scheduled ladder"
     );
     let none = app(&[]).await;
@@ -632,6 +634,7 @@ async fn the_options_route_lists_what_a_crawl_can_be_asked_for() {
         json!(null),
         "no ladder, no preselection"
     );
+    assert_eq!(r.json()["defaults"]["crawlMatchLimit"], 0, "no cap by default");
     assert_eq!(
         a.call("GET", "/v1/admin/ladder/options", &a.reader, None)
             .await
@@ -742,6 +745,7 @@ impl Env {
             rank_lookup_recheck_s: 604_800,
             late_stamp_days: 14,
             delta_on: false,
+            crawl_match_limit: config.ladder_crawl_match_limit,
         });
         let archiving = Arc::new(riot_proxy::jobs::archive::ArchiveContext {
             fetcher,
@@ -874,6 +878,95 @@ impl Env {
             .filter(|r| r.ends_with(path_part))
             .count()
     }
+}
+
+/// STG-03: a crawl queues only the room `LADDER_CRAWL_MATCH_LIMIT` leaves on
+/// its platform, counts the rest as skipped and names the cap; a crawl after
+/// the platform is full queues nothing.
+#[tokio::test]
+async fn a_crawl_stops_queueing_at_the_platforms_match_limit() {
+    let e = env().await;
+    e.ladder_of_thirty().await;
+    for k in [0, 7] {
+        riot_proxy::archive::matches::put(&e.db, &match_id(k), "asia", &e.scope, match_body(k).into(), 1)
+            .await
+            .unwrap();
+    }
+    let vars = [("ARCHIVE_TIMELINES", "false"), ("LADDER_CRAWL_MATCH_LIMIT", "5")];
+    let first = e.start("CHALLENGER").await;
+    e.drain_jobs(6, &vars).await;
+    let crawl = e.crawl(&first).await;
+    assert_eq!(crawl.status, "completed");
+    assert_eq!(
+        (
+            crawl.counters.match_ids_seen,
+            crawl.counters.matches_queued,
+            crawl.counters.matches_skipped,
+            crawl.match_limit
+        ),
+        (12, 3, 7, Some(5)),
+        "2 archived leave room for 3 of the 10 unarchived"
+    );
+    assert_eq!(e.count("SELECT COUNT(*) FROM matches").await, 5);
+    let fetched: usize = {
+        let mut n = 0;
+        for k in 0..12 {
+            n += e.fetches_of(&format!("/matches/{}", match_id(k))).await;
+        }
+        n
+    };
+    assert_eq!(fetched, 3, "only the queued matches are fetched");
+    assert_eq!(
+        e.count("SELECT COUNT(*) FROM crawl_match_ids").await,
+        0,
+        "set drained"
+    );
+
+    // Forget the collect cursor (THR-04), so the second crawl walks the same
+    // players and meets the same seven unarchived matches.
+    sql(
+        &e.db,
+        "UPDATE ladder_entries SET collected_games = NULL, collected_at = NULL",
+        vec![],
+    )
+    .await;
+    let second = e.start("CHALLENGER").await;
+    e.drain_jobs(6, &vars).await;
+    let crawl = e.crawl(&second).await;
+    assert_eq!(
+        (
+            crawl.status.as_str(),
+            crawl.counters.matches_queued,
+            crawl.counters.matches_skipped,
+            crawl.match_limit
+        ),
+        ("completed", 0, 7, Some(5)),
+        "the platform is full: nothing more is queued"
+    );
+    assert_eq!(e.count("SELECT COUNT(*) FROM matches").await, 5);
+}
+
+/// STG-03: `LADDER_CRAWL_MATCH_LIMIT=0` is no cap, as before.
+#[tokio::test]
+async fn no_match_limit_queues_every_unarchived_match() {
+    let e = env().await;
+    e.ladder_of_thirty().await;
+    let id = e.start("CHALLENGER").await;
+    e.drain_jobs(
+        6,
+        &[("ARCHIVE_TIMELINES", "false"), ("LADDER_CRAWL_MATCH_LIMIT", "0")],
+    )
+    .await;
+    let crawl = e.crawl(&id).await;
+    assert_eq!(
+        (
+            crawl.counters.matches_queued,
+            crawl.counters.matches_skipped,
+            crawl.match_limit
+        ),
+        (12, 0, None)
+    );
+    assert_eq!(e.count("SELECT COUNT(*) FROM matches").await, 12);
 }
 
 #[tokio::test]
@@ -1126,6 +1219,11 @@ async fn crawls_are_listed_and_a_running_one_can_be_cancelled() {
     );
     assert!(row["startedAt"].as_str().unwrap().ends_with('Z'));
     assert_eq!(row["apexCapped"], json!([]), "no apex league stored yet");
+    assert_eq!(
+        (&row["matchesSkipped"], &row["matchLimit"]),
+        (&json!(0), &Value::Null),
+        "STG-03: no cap reached"
+    );
     assert_eq!(
         a.call("GET", "/v1/admin/ladder/crawls?platform=euw1", &a.admin, None)
             .await
