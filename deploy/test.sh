@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Tests for the deploy kit: deploy.yml's wiring (DEP-03, via
-# scripts/deploy-workflow.test.sh), and the archive replica units (OBJ-04): the unit files parse, and the
+# Tests for the deploy kit: deploy.yml's wiring (DEP-03, DEP-05, via
+# scripts/deploy-workflow.test.sh), the staging smoke test (DEP-05, via
+# scripts/smoke.test.sh), and the archive replica units (OBJ-04): the unit files parse, and the
 # unit's own rclone command, pointed at two local directories, does what an
 # hourly sync must (a --dry-run changes nothing; a real run mirrors the source,
 # deletions included). Run by CI's `ops` job; locally: deploy/test.sh
@@ -21,6 +22,8 @@ timer="$here/riot-proxy-replica.timer"
 check "shellcheck" shellcheck "$here/test.sh"
 # deploy.yml's wiring against release.yml (DEP-03, ADR-196).
 check "deploy.yml wiring" "$here/../scripts/deploy-workflow.test.sh"
+# The smoke test staging's deploy runs, against a stub (DEP-05, ADR-198).
+check "smoke.sh" "$here/../scripts/smoke.test.sh"
 
 rclone=$(command -v rclone || true)
 if [[ -z $rclone ]]; then

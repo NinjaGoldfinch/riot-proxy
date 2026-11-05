@@ -1,45 +1,91 @@
 name: deploy
 
-# DEP-03 (ADR-196). Deploys a release to production through the shared pipeline,
-# NinjaGoldfinch/ninja-actions/deploy: it checks the release's deploy tarball
-# against sha256sums, uploads it to /srv/riot-proxy/releases/ unless the host
-# already has it, and activates it. The host restarts riot-proxy, waits for
-# /readyz to report the new version and rolls back by itself if it does not.
-# Rolling back on purpose is deploying the previous version: it is still on the
-# host, so there is no upload. The prod environment waits for the owner's
-# approval. Started by hand or with ngf-deploy (ninja-actions tools/).
+# DEP-03 (ADR-196), DEP-05 (ADR-198). Deploys a release to staging or production
+# through the shared pipeline, NinjaGoldfinch/ninja-actions/deploy: it checks the
+# release's deploy tarball against sha256sums, uploads it to
+# /srv/riot-proxy/releases/ unless the host already has it, and activates it. The
+# host restarts riot-proxy, waits for /readyz to report the new version and rolls
+# back by itself if it does not. Rolling back on purpose is deploying the
+# previous version: it is still on the host, so there is no upload.
+#
+# release.yml calls this with env staging for every release, with no approval.
+# After a staging deploy, scripts/smoke.sh tests staging through Cloudflare
+# Access, without calling Riot (staging's development key expires daily), and
+# records the result as the commit status `staging/smoke` on the version's
+# commit. The prod environment waits for the owner's approval, and the action
+# deploys to prod only a version whose commit has `staging/smoke` or
+# `prod/deployed` (live in prod before, so rolling back to it is allowed) at
+# success; it sets `prod/deployed` once the version is live. `break_glass` skips
+# that check in an emergency, with the reason in the log and the job summary.
+# Started by hand or with ngf-deploy (ninja-actions tools/).
 on:
   workflow_dispatch:
     inputs:
       env:
-        description: Where to deploy (staging comes later)
+        description: Where to deploy
         type: choice
-        options: [prod]
-        default: prod
+        options: [staging, prod]
+        default: staging
       version:
         description: Release tag, e.g. v2.10.0
+        required: true
+      break_glass:
+        description: Emergency only. Deploy to prod without the staging check; give the reason (it is logged)
+        type: string
+        default: ''
+  workflow_call:
+    inputs:
+      env:
+        description: staging or prod
+        type: string
+        required: true
+      version:
+        description: Release tag, e.g. v2.10.0
+        type: string
         required: true
 
 permissions:
   contents: read
-
-concurrency:
-  group: deploy-${{ inputs.env }}
-  cancel-in-progress: false
 
 env:
   SERVICE: riot-proxy
   # Built and checked by release.yml (DEP-02, ADR-195).
   ASSET: riot-proxy-x86_64-linux.tar.gz
   CHECKSUMS: sha256sums
+  # Served by the ngf-staging tunnel, behind the `staging` Access application.
+  STAGING_URL: https://riot-proxy-staging.ninjagoldfinch.com
 
 jobs:
+  # A called workflow takes any string; an unknown environment name would be
+  # created on the fly, without protection, before the deploy job could refuse it.
+  check:
+    name: Check the environment
+    runs-on: [self-hosted, linux, proxmox]
+    timeout-minutes: 2
+    steps:
+      - env:
+          ENV_NAME: ${{ inputs.env }}
+        run: |
+          case $ENV_NAME in
+          staging | prod) echo "deploying to $ENV_NAME" ;;
+          *) echo "::error::unknown environment '$ENV_NAME' (want staging or prod)"; exit 1 ;;
+          esac
+
   deploy:
     name: Deploy ${{ inputs.version }} to ${{ inputs.env }}
+    needs: check
     runs-on: [self-hosted, linux, proxmox]
     environment: ${{ inputs.env }}
+    # On the job, not the workflow, so it also holds when release.yml calls it.
+    concurrency:
+      group: deploy-${{ inputs.env }}
+      cancel-in-progress: false
     # The host's health wait covers a migrating boot, and a rollback waits again.
     timeout-minutes: 30
+    permissions:
+      contents: read
+      # The action reads and sets prod's statuses; the smoke step sets staging/smoke.
+      statuses: write
     steps:
       - uses: NinjaGoldfinch/ninja-actions/deploy@v1
         with:
@@ -50,3 +96,35 @@ jobs:
           host: ${{ vars.DEPLOY_HOST }}
           known-hosts: ${{ vars.DEPLOY_KNOWN_HOSTS }}
           ssh-key: ${{ secrets.DEPLOY_SSH_KEY }}
+          require-status: ${{ inputs.env == 'prod' && 'staging/smoke prod/deployed' || '' }}
+          set-status: ${{ inputs.env == 'prod' && 'prod/deployed' || '' }}
+          unverified-reason: ${{ inputs.break_glass }}
+
+      # Staging only, once the release is live there. The script comes from this
+      # workflow's commit, so a smoke test can be rerun for an older release.
+      - if: inputs.env == 'staging'
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Smoke test staging
+        id: smoke
+        if: inputs.env == 'staging'
+        env:
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          VERSION: ${{ inputs.version }}
+        run: scripts/smoke.sh "$STAGING_URL" "$VERSION"
+      # Success or failure, on the version's commit; prod accepts only success.
+      - name: Record staging/smoke
+        if: always() && inputs.env == 'staging' && (steps.smoke.outcome == 'success' || steps.smoke.outcome == 'failure')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          OUTCOME: ${{ steps.smoke.outcome }}
+        run: |
+          sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$VERSION" --jq .sha)
+          gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$sha" \
+            -f state="$OUTCOME" -f context=staging/smoke \
+            -f description="Smoke test of $VERSION on staging: $OUTCOME" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null
+          echo "staging/smoke=$OUTCOME on $VERSION ($sha)"

@@ -34,7 +34,7 @@ These are the commands the host move used (`docs/design/12-object-storage-and-ho
 
 ## 3. The binary
 
-Fetch the release asset and verify it against the `sha256sums` the release workflow publishes (`.github/workflows/release.yml:232-249`; `README.md:11-12`):
+Fetch the release asset and verify it against the `sha256sums` the release workflow publishes (`.github/workflows/release.yml:245-262`; `README.md:11-12`):
 
 ```bash
 v=2.7.0
@@ -237,5 +237,5 @@ docker compose logs | grep -i "admin key"                     # the bootstrap ad
 The image is `FROM scratch` with the static binary, `DATA_DIR=/data`, port 8080 and a `HEALTHCHECK` that runs `riot-proxy healthcheck` (`Dockerfile:19-26`). `healthcheck` loads the configuration first, so `RIOT_API_KEY` must be in the container environment (`src/cli/healthcheck.rs`; `docs/_meta/scratch/config.md:215`). The Proxmox dev VM in `deploy/proxmox/` follows the `:edge` image; it is optional and currently dormant (`README.md:27-58`).
 
 ---
-**Sources:** `docs/design/07-deployment.md:L15,L74-L95`, `docs/design/12-object-storage-and-hosting.md:L547-L561,L588-L644,L797-L810,L818-L821,L896-L906`, `deploy/README.md:L20-L100,L121-L122,L151-L152`, `deploy/riot-proxy-replica.service:L12-L33`, `deploy/riot-proxy-replica.timer:L6-L8`, `.github/workflows/release.yml:L232-L249`, `README.md:L11-L24,L27-L58`, `Dockerfile:L19-L26`, `docker-compose.yml:L1-L11`, `src/config.rs:L120-L121,L645,L681-L707,L722,L854-L905,L1015-L1027`, `src/cli/mod.rs:L82-L88,L144-L168`, `src/cli/serve.rs:L52-L148,L342-L347,L422-L428`, `src/cli/key.rs:L46-L57`, `src/consumers.rs:L95-L107,L154-L157`, `src/http/auth.rs:L30,L263-L265`, `src/routes/health.rs:L122-L204`, `docs/_meta/scratch/siblings.md`, `docs/_meta/scratch/routes.md:L137-L140`
-**Last verified:** 2026-11-05 against commit `08d6e9f`
+**Sources:** `docs/design/07-deployment.md:L15,L74-L95`, `docs/design/12-object-storage-and-hosting.md:L547-L561,L588-L644,L797-L810,L818-L821,L896-L906`, `deploy/README.md:L20-L100,L121-L122,L151-L152`, `deploy/riot-proxy-replica.service:L12-L33`, `deploy/riot-proxy-replica.timer:L6-L8`, `.github/workflows/release.yml:L245-L262`, `README.md:L11-L24,L27-L58`, `Dockerfile:L19-L26`, `docker-compose.yml:L1-L11`, `src/config.rs:L120-L121,L645,L681-L707,L722,L854-L905,L1015-L1027`, `src/cli/mod.rs:L82-L88,L144-L168`, `src/cli/serve.rs:L52-L148,L342-L347,L422-L428`, `src/cli/key.rs:L46-L57`, `src/consumers.rs:L95-L107,L154-L157`, `src/http/auth.rs:L30,L263-L265`, `src/routes/health.rs:L122-L204`, `docs/_meta/scratch/siblings.md`, `docs/_meta/scratch/routes.md:L137-L140`
+**Last verified:** 2026-11-05 against commit `18669d3`

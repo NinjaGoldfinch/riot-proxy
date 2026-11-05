@@ -407,11 +407,12 @@ The review's findings, one task each, most severe first.
 - [x] REV-08 every uploaded pack is read back and hashed before it is recorded, so `free` never drops bodies onto a pack the bucket holds wrong (#246, ADR-193)
 
 ## DEP — deploys through CI (owner request 2026-11-03)
-Production deploys move to the shared pipeline in `NinjaGoldfinch/ninja-actions` (`deploy/` action, `ninja-deploy` on the host), as ninja-monitor's did: a release is uploaded to `/srv/riot-proxy/releases/`, activated behind the owner's approval on the `prod` environment, health-checked on `/readyz` and rolled back automatically if it fails. Staging comes later, as its own step.
+Production deploys move to the shared pipeline in `NinjaGoldfinch/ninja-actions` (`deploy/` action, `ninja-deploy` on the host), as ninja-monitor's did: a release is uploaded to `/srv/riot-proxy/releases/`, activated behind the owner's approval on the `prod` environment, health-checked on `/readyz` and rolled back automatically if it fails. Every release goes to staging first, and production takes only a version that passed there (DEP-05).
 - [x] DEP-01 `/readyz` reports the running `version`, so a deploy waits for the new binary rather than the old one (#247, ADR-194)
 - [x] DEP-02 a release also ships `riot-proxy-x86_64-linux.tar.gz` (the binary and `version.json`, listed in `sha256sums`), the form `ninja-deploy` uploads (#248, ADR-195)
 - [x] DEP-03 `deploy.yml`: a release to `prod` through `ninja-actions/deploy@v1`, on the Proxmox runner, behind the owner's approval; the upgrade and rollback docs follow it (#249, ADR-196). Host adopted 2026-11-04: `/srv/riot-proxy` from v2.9.0, `/usr/local/bin/riot-proxy` a link to `current`, `HEALTH_WAIT=600` (a restart took 4 m 58 s to `/readyz` 200)
 - [~] DEP-04 the release waits for the Linux builds only and the macOS binary is attached when built, so GitHub's macOS capacity cannot hold a release back (`ci/DEP-04-darwin-off-release-path`, ADR-197)
+- [~] DEP-05 every release deploys to staging (`ngf-mon-syd1`) and is smoke-tested there without calling Riot; `staging/smoke` on the tag's commit; prod requires `staging/smoke` or `prod/deployed`, sets `prod/deployed`, `break_glass` for emergencies (owner rule 2026-11-05: nothing reaches production unless it passed on staging; `ci/DEP-05-staging-deploy`, ADR-198)
 
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.

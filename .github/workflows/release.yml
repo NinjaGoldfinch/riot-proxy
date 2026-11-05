@@ -9,6 +9,10 @@ name: release
 # A pull request that touches this file runs the builds and publishes nothing.
 # See ADR-063. The image's description lists the commits since the previous
 # `v*` tag, and the release notes list its pull requests (OPS-05, ADR-107).
+# Once published, the release deploys to staging through deploy.yml, which
+# smoke-tests it there; production takes only a version that passed (DEP-05,
+# ADR-198). A release created with this workflow's token starts no other
+# workflow, so the deploy is called here rather than on `release: published`.
 on:
   push:
     tags: ["v*"]
@@ -210,6 +214,13 @@ jobs:
           docker run -d --name rp -e RIOT_API_KEY=ci-dummy-key-not-a-riot-key -p 8080:8080 riot-proxy:release
           for i in $(seq 1 30); do docker exec rp /riot-proxy healthcheck && break; sleep 1; done
           docker exec rp /riot-proxy healthcheck
+      # The smoke test staging's deploy runs, against the release binary here
+      # (DEP-05): it needs no Riot key, so the dummy one passes it.
+      - name: the amd64 image passes the staging smoke test
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          scripts/smoke.sh http://127.0.0.1:8080 "v$VERSION"
           docker stop -t 15 rp
 
   release:
@@ -250,12 +261,34 @@ jobs:
           gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
             --title "$GITHUB_REF_NAME" --notes-file notes.md --generate-notes --verify-tag $prerelease
 
+  # Every release goes to staging without approval and is smoke-tested there;
+  # prod is deployed by hand with deploy.yml, waits for the owner, and takes only
+  # a version whose staging/smoke passed (DEP-05, ADR-198).
+  staging:
+    name: Deploy to staging
+    if: github.event_name == 'push'
+    needs: release
+    permissions:
+      contents: read
+      # The staging deploy records its smoke test as a commit status.
+      statuses: write
+    uses: ./.github/workflows/deploy.yml
+    with:
+      env: staging
+      version: ${{ github.ref_name }}
+    # Without it the called deploy job gets the staging environment's variables
+    # but an empty DEPLOY_SSH_KEY: a called workflow sees only the secrets its
+    # caller passes on, even its own environment's (ninja-actions README).
+    secrets: inherit
+
   # DEP-04 (ADR-197): adds the macOS binary to the published release and its line
   # to `sha256sums` (replacing an earlier one), so a late macOS build never holds
-  # the release back.
+  # the release back. After the staging deploy, whatever its result: replacing
+  # `sha256sums` deletes it for a moment, and a deploy that downloaded it then
+  # would fail (DEP-05).
   attach-darwin:
-    if: github.event_name == 'push'
-    needs: [build-darwin, release]
+    if: ${{ !cancelled() && github.event_name == 'push' && needs.build-darwin.result == 'success' && needs.release.result == 'success' }}
+    needs: [build-darwin, release, staging]
     runs-on: ubuntu-latest
     permissions:
       contents: write
