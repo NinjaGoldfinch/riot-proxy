@@ -418,6 +418,14 @@ Production deploys move to the shared pipeline in `NinjaGoldfinch/ninja-actions`
 Staging is seeded from production's daily backup and reads production's packs from the bucket, read-only; its development key is used only for live calls.
 - [~] STG-01 `KEY_SCOPE` pins the key scope, so staging reads production's players, facts and analytics across development-key renewals (`feat/STG-01-key-scope-pin`, ADR-200)
 
+## STS — a status endpoint and outbound events (owner request 2026-11-05)
+`GET /status` in the shared ninjagoldfinch status contract for the owner's status bot, the rate-limit table at `GET /status/ratelimits`, background checks, and plain JSON events on state changes (IMPLEMENTATION.md §Post-release — STS, design/14, ADR-203).
+- [ ] STS-00 series spec: design/14, the plan section, ADR-203
+- [ ] STS-01 build identity: `version` (`dev` off a release tag), `commit`, `built_at`; the startup log line
+- [ ] STS-02 `consumer_requests_total`, the checks (`riot_api`, `riot_key`, `cache`, `storage`) and `GET /status`
+- [ ] STS-03 the rate-limit table and `GET /status/ratelimits`
+- [ ] STS-04 outbound events to `EVENTS_URL`
+
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
 
