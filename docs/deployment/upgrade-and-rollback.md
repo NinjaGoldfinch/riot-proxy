@@ -8,7 +8,7 @@ How a new release reaches `ngf-prod-syd1`, what the proxy does on its first boot
 
 ## What an upgrade does on boot
 
-The first `serve` of a new binary runs the boot sequence in `src/cli/serve.rs:43-446` (`docs/_meta/scratch/jobs-and-observability.md:7-36`). The steps that matter for an upgrade:
+The first `serve` of a new binary runs the boot sequence in `src/cli/serve.rs:43-447` (`docs/_meta/scratch/jobs-and-observability.md:7-36`). The steps that matter for an upgrade:
 
 | Step | What happens | Evidence |
 |---|---|---|
@@ -20,7 +20,7 @@ The first `serve` of a new binary runs the boot sequence in `src/cli/serve.rs:43
 | Catch-ups | boot also queues `archive:match` for stored matches missing their timeline, `facts:reextract` if any match has an older facts version, `tiers:backfill` for unstamped facts, analytics rebuilds for unsplit ladders, with `AGGREGATE_DELTA_S` > 0 one full rebuild per configured ladder not yet stamped (after V0029, every one: about 58 minutes of writer time on production by the 2026-10-20 runs; see [../operations/runbook.md](../operations/runbook.md#19-analytics-deltas-rebuilds-and-recompute-now)), and one `archive:offload` | `src/cli/serve.rs:310-358` |
 | Ticks | every tick fires immediately at boot: `maintenance` (and so the daily backup, if today's is missing), `ddragon:sync`, `names:backfill`, the poll fan-outs, `aggregate:delta` (unless `AGGREGATE_DELTA_S=0`) and, when enabled, `ladder:crawl` | `src/jobs/ticks.rs:172,200-204`; `docs/_meta/scratch/jobs-and-observability.md:32` |
 
-On the way down, `SIGTERM` drains requests for up to 10 s, running jobs get 10 s to finish or are aborted and stay `running` for the next boot's `recover`, then the limiter checkpoint and the L2 queue are flushed (`limiter checkpoint and L2 flushed; stopped`) (`src/app.rs:35,240-253`; `src/cli/serve.rs:435-449`; `src/jobs/scheduler.rs:1326-1335`). Downtime is the restart plus any migration; `V0025` took 3 s on production, `V0026` and `V0027` applied together at the first start of v2.7.0 (session notes, 2026-10-15 and 2026-10-19).
+On the way down, `SIGTERM` drains requests for up to 10 s, running jobs get 10 s to finish or are aborted and stay `running` for the next boot's `recover`, then the limiter checkpoint and the L2 queue are flushed (`limiter checkpoint and L2 flushed; stopped`) (`src/app.rs:35,309-322`; `src/cli/serve.rs:436-450`; `src/jobs/scheduler.rs:1326-1335`). Downtime is the restart plus any migration; `V0025` took 3 s on production, `V0026` and `V0027` applied together at the first start of v2.7.0 (session notes, 2026-10-15 and 2026-10-19).
 
 ## Pre-upgrade checklist
 
@@ -86,5 +86,5 @@ What a restore costs, by table:
 Rolling back only the object-storage feature is configuration, not a restore: unset `ARCHIVE_OBJECT_URL` and offloaded rows read as misses and re-fetch from Riot; the bucket keeps everything and re-setting the URL restores reads (`docs/design/12-object-storage-and-hosting.md:941-943`).
 
 ---
-**Sources:** `.github/workflows/release.yml:L262-L279`, `.github/workflows/deploy.yml`, `docs/workflows/release-process.md`, `docs/design/07-deployment.md:L177,L216,L225-L231`, `docs/design/12-object-storage-and-hosting.md:L941-L949`, `deploy/README.md:L121-L138,L246-L265`, `src/cli/serve.rs:L43-L446`, `src/cli/backup.rs:L10-L21`, `src/db/mod.rs:L148-L155,L361-L365`, refinery-core 0.9.2 `src/runner.rs:L240-L241` and `src/traits/mod.rs:L26-L28`, `src/jobs/scheduler.rs:L977-L1008,L1326-L1335`, `src/jobs/ticks.rs:L172,L200-L204`, `src/jobs/maintenance.rs:L34,L36,L237-L240,L294-L306`, `src/jobs/archive.rs:L186-L191`, `src/riot/limiter/persist.rs:L23,L92-L94`, `src/cache/l2.rs:L186-L216`, `src/consumers.rs:L228-L283`, `src/routes/health.rs:L152-L204`, `src/routes/admin.rs:L2499-L2526`, `src/app.rs:L35,L240-L253`, `docs/DECISIONS.md:L1722-L1730`, `docs/_meta/scratch/jobs-and-observability.md`, `docs/_meta/scratch/persistence.md`, `docs/_meta/scratch/routes.md:L157,L168,L187`
-**Last verified:** 2026-11-06 against commit `587438c`
+**Sources:** `.github/workflows/release.yml:L262-L279`, `.github/workflows/deploy.yml`, `docs/workflows/release-process.md`, `docs/design/07-deployment.md:L177,L216,L225-L231`, `docs/design/12-object-storage-and-hosting.md:L941-L949`, `deploy/README.md:L121-L138,L246-L265`, `src/cli/serve.rs:L43-L447`, `src/cli/backup.rs:L10-L21`, `src/db/mod.rs:L148-L155,L361-L365`, refinery-core 0.9.2 `src/runner.rs:L240-L241` and `src/traits/mod.rs:L26-L28`, `src/jobs/scheduler.rs:L977-L1008,L1326-L1335`, `src/jobs/ticks.rs:L172,L200-L204`, `src/jobs/maintenance.rs:L34,L36,L237-L240,L294-L306`, `src/jobs/archive.rs:L186-L191`, `src/riot/limiter/persist.rs:L23,L92-L94`, `src/cache/l2.rs:L186-L216`, `src/consumers.rs:L228-L283`, `src/routes/health.rs:L152-L204`, `src/routes/admin.rs:L2499-L2526`, `src/app.rs:L35,L309-L322`, `docs/DECISIONS.md:L1722-L1730`, `docs/_meta/scratch/jobs-and-observability.md`, `docs/_meta/scratch/persistence.md`, `docs/_meta/scratch/routes.md:L157,L168,L187`
+**Last verified:** 2026-11-06 against commit `e5d5c1d`

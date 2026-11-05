@@ -123,7 +123,12 @@ pub fn api_router(auth: Option<AppState>) -> OpenApiRouter<AppState> {
         .merge(routes::statics::router())
         .merge(routes::analytics::router());
     let mut admin = routes::admin::router();
+    let mut status = crate::status::router();
     if let Some(state) = auth {
+        status = status.route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::http::auth::require_status,
+        ));
         read = read.route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::http::auth::require_read,
@@ -138,6 +143,7 @@ pub fn api_router(auth: Option<AppState>) -> OpenApiRouter<AppState> {
         .merge(routes::ws::router())
         .merge(read)
         .merge(admin)
+        .merge(status)
 }
 
 /// The response headers (SITE-04): name, schema, description.

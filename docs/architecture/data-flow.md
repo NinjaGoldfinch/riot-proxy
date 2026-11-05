@@ -33,7 +33,7 @@ The archive is the only source for facts; the ladder and rank lookups add the ti
 
 ### 1. Riot payload to cache or archive
 
-The fetcher stores a 2xx body in one of two ways (`src/fetcher.rs:487-506`):
+The fetcher stores a 2xx body in one of two ways (`src/fetcher.rs:492-511`):
 
 - **Mutable endpoints** (summoner, league, mastery, spectator, match ids, rotations, status, account) go to L1 under `{keyScope}:{endpoint}:{host}:{params}[:{queryHash}]` with the endpoint's soft and hard TTL (`src/cache/keys.rs:81-99`). Endpoints flagged `persist_l2` (account, summoner, mastery, the ladder reads) are also queued for the SQLite `cache` table so they survive a restart (`src/riot/endpoints.rs:88-285`, `src/cache/l2.rs:23-28`). Bodies are stored as the bytes Riot sent; passthrough routes forward them untouched.
 - **Immutable endpoints** (`match.byId`, `match.timeline`) go to the archive: zstd level 3 into `matches.body_zstd` or `timelines.body_zstd`, with `region`, `patch` (`major.minor` from `gameVersion`), `queue_id`, `game_end_ms`, `game_duration`, `body_size` and `archived_at` (`src/archive/matches.rs:33,366-411`). The two halves are archived together: storing one queues the other as an `archive:match` job at priority 0 (`src/archive/mod.rs:88-110`, ADR-118).
@@ -83,5 +83,5 @@ Within hours of being archived a body is packed: `archive:offload` builds a 64 M
 The table in [../data/schema.md](../data/schema.md) gives every column; [../data/caching.md](../data/caching.md) gives every TTL.
 
 ---
-**Sources:** `src/fetcher.rs:L487-L506`, `src/cache/keys.rs:L81-L99`, `src/cache/l2.rs:L23-L28`, `src/riot/endpoints.rs:L88-L285`, `src/archive/matches.rs:L33,L137-L169,L366-L411`, `src/archive/mod.rs:L88-L110,L180-L201`, `src/archive/facts.rs:L19,L329-L379`, `src/archive/builds.rs:L24,L382-L419`, `src/archive/tiers.rs:L33-L90`, `src/archive/ranks.rs:L53-L66`, `src/jobs/analytics.rs:L354-L520,L539-L723,L772-L951`, `src/archive/analytics.rs:L62-L97,L204-L702`, `src/archive/analytics/delta.rs`, `src/routes/analytics.rs:L577-L629`, `src/archive/offload.rs:L72-L170`, `src/jobs/offload.rs:L146-L195`, `docs/_meta/scratch/persistence.md`, `docs/_meta/scratch/siblings.md` §1.5
-**Last verified:** 2026-11-05 against commit `7ec9262`
+**Sources:** `src/fetcher.rs:L492-L511`, `src/cache/keys.rs:L81-L99`, `src/cache/l2.rs:L23-L28`, `src/riot/endpoints.rs:L88-L285`, `src/archive/matches.rs:L33,L137-L169,L366-L411`, `src/archive/mod.rs:L88-L110,L180-L201`, `src/archive/facts.rs:L19,L329-L379`, `src/archive/builds.rs:L24,L382-L419`, `src/archive/tiers.rs:L33-L90`, `src/archive/ranks.rs:L53-L66`, `src/jobs/analytics.rs:L354-L520,L539-L723,L772-L951`, `src/archive/analytics.rs:L62-L97,L204-L702`, `src/archive/analytics/delta.rs`, `src/routes/analytics.rs:L577-L629`, `src/archive/offload.rs:L72-L170`, `src/jobs/offload.rs:L146-L195`, `docs/_meta/scratch/persistence.md`, `docs/_meta/scratch/siblings.md` §1.5
+**Last verified:** 2026-11-06 against commit `e5d5c1d`

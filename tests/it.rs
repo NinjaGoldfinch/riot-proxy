@@ -44,6 +44,7 @@ mod replay;
 mod riot_client;
 mod riot_routes;
 mod shutdown;
+mod status;
 mod timelines;
 mod ui;
 mod ws_hub;

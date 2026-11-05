@@ -39,7 +39,8 @@ fn release_or_dev(release: &str) -> &str {
     if release.is_empty() { "dev" } else { release }
 }
 
-fn rfc3339(ms: i64) -> String {
+/// Unix ms as RFC 3339, UTC, to the second: every `/status` timestamp.
+pub fn rfc3339(ms: i64) -> String {
     jiff::Timestamp::from_millisecond(ms)
         .unwrap_or(jiff::Timestamp::UNIX_EPOCH)
         .strftime("%Y-%m-%dT%H:%M:%SZ")

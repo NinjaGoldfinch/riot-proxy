@@ -28,6 +28,8 @@ pub const UPSTREAM_LATENCY_SECONDS: &str = "proxy_upstream_latency_seconds";
 pub const RL_WAIT_SECONDS: &str = "proxy_rl_wait_seconds";
 pub const RL_429_TOTAL: &str = "proxy_rl_429_total";
 pub const CACHE_READS_TOTAL: &str = "proxy_cache_reads_total";
+/// `/status`'s request counts (STS-02, design/14 §Metrics).
+pub const CONSUMER_REQUESTS_TOTAL: &str = "consumer_requests_total";
 pub const WS_CONNECTIONS: &str = "proxy_ws_connections";
 pub const JOBS_TOTAL: &str = "proxy_jobs_total";
 pub const BACKFILLS_QUEUED_TOTAL: &str = "proxy_backfills_queued_total";
@@ -321,6 +323,15 @@ pub const CATALOGUE: &[MetricDef] = &[
         Kind::Gauge,
         &[],
         "Free space on the data directory's file system, as an unprivileged writer sees it",
+        &[],
+    ),
+    // `/status` (STS-02, ADR-203): every answered request by consumer name,
+    // route group and status class.
+    def(
+        CONSUMER_REQUESTS_TOTAL,
+        Kind::Counter,
+        &["consumer", "group", "class"],
+        "Requests answered, by consumer name (anonymous without a key), route group and status class",
         &[],
     ),
     def(

@@ -26,6 +26,8 @@ pub const SKIPPED: &[&str] = &[
     "/healthz",
     "/readyz",
     "/metrics",
+    "/status",
+    "/status/ratelimits",
     "/v1/admin/recent",
     "/v1/admin/metrics",
 ];

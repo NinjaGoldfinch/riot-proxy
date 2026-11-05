@@ -21,5 +21,6 @@ pub mod routes;
 pub mod singleflight;
 pub mod r#static;
 pub mod stats;
+pub mod status;
 pub mod telemetry;
 pub mod ws;

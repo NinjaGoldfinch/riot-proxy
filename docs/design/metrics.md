@@ -66,6 +66,27 @@ Owner decision (2026-09-24, ADR-014): these use the names **exactly as design/07
 | `aggregate_delta_batch_size` | gauge | — | `aggregate:delta` (THR-03), implemented; matches in the last batch, sized to `AGGREGATE_DELTA_TARGET_MS` within 5 and `AGGREGATE_DELTA_BATCH` |
 | `aggregate_delta_pending` | gauge | — | `aggregate:delta` (THR-03), implemented; matches no rebuild or delta has fully counted (`analytics_counted.bits <> 63`), at the start of the last run |
 | `timeline_backfill_fetched_total` | counter | region | `timelines:backfill` (TL-02), implemented; timelines fetched and archived by the backfill. Left to do: `GET /v1/admin/timelines/backfill` (ADR-133) |
+| `consumer_requests_total` | counter | consumer, group, class | `/status` (STS-02, ADR-203), implemented in `app::record_request`; every answered request, auth refusals included. `consumer` is the consumer's **name** (never the key or its hash; `anonymous` when no consumer was attached: a keyless `/status`, a public route, a 401 or 403 refusal; a quota 429 names its consumer). `group` per design/14 §Metrics (`riot`, `lol`, `analytics`, `players`, `admin`, `ws`, `ops`, `ui`, `other`; `ui` holds `/dashboard`, `/dev*`, `/v1/static` and `/ddragon`, ADR-205). `class` ∈ `1xx` (a WebSocket upgrade's 101), `2xx`, `3xx`, `4xx`, `5xx` |
 | `timeline_backfill_not_found_total` | counter | region | `timelines:backfill` (TL-02), implemented; timelines Riot answered 404 for, marked in `timeline_gaps` and never asked for again |
+
+## `/status` keys (STS-02)
+
+`GET /status`'s `metrics` (design/14 §Metrics) are read from one rendering of this recorder (`src/status/snapshot.rs`), so the two cannot disagree. The label values behind each key:
+
+| `metrics` key | From |
+|---|---|
+| `requests_total`, `requests_errors_total` | `consumer_requests_total`, every series; errors are `class="5xx"` |
+| `requests_total_<consumer>`, `requests_errors_total_<consumer>` | the same, by `consumer`, the name flattened (lowercase, every character outside `[a-z0-9]` → `_`). Two names that flatten alike share a key. A name that flattens to a group's name is `consumer_<name>` (ADR-205) |
+| `requests_total_<group>`, `requests_errors_total_<group>` | the same, by `group`; all nine are present from boot |
+| `riot_requests_total` | `proxy_upstream_requests_total`, every series |
+| `riot_requests_2xx_total`, `riot_requests_4xx_total`, `riot_requests_5xx_total` | the same, `status` 200–299, 400–499, 500–599 |
+| `riot_errors_total` | the same, every `status` outside 200–299, `network` included |
+| `riot_429_total`, `riot_403_total`, `riot_401_total` | the same, `status` `429`, `403`, `401` |
+| `matches_fetched_total`, `timelines_fetched_total` | the same, `status` 200–299 and `method` `match.byId`, `match.timeline` |
+| `cache_hits_total`, `cache_misses_total` | `proxy_cache_reads_total`, `state` `hit`, `miss` (`neg` and `stale` are in neither) |
+| `cache_entries`, `cache_bytes` | not the recorder: L1's `entry_count()` and `weighted_size()` |
+| `fetch_queue_depth` | `jobs_pending`, `kind` `archive:match` and `timelines:backfill` (sampled every 15 s) |
+
+`metrics_meta.riot_last_success_at` is not the recorder either: the Riot client's last 2xx (`riot::client::UpstreamWatch`).
 
 Labels are provisional until the implementing task confirms them. `limiter_interactive_waiters` comes from P2-05 and `events_published_total` from the plan's P6-02; the others from design/07 §Observability.

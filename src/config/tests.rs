@@ -1004,3 +1004,32 @@ fn archive_object_read_only_needs_a_bucket() {
     assert!(c.archive_object_read_only);
     assert_eq!(c.redacted()["ARCHIVE_OBJECT_READ_ONLY"].as_deref(), Some("true"));
 }
+
+/// STS-02: `/status`'s keyless peers default to loopback; every entry must
+/// parse, and `none` lets nobody in keyless.
+#[test]
+fn status_allow_cidr() {
+    let c = load(env(&[]));
+    assert_eq!(c.status_allow_cidr, vec!["127.0.0.1/32", "::1/128"]);
+    assert_eq!(
+        c.redacted()["STATUS_ALLOW_CIDR"].as_deref(),
+        Some("127.0.0.1/32,::1/128")
+    );
+    let c = load(env(&[("STATUS_ALLOW_CIDR", " 10.0.0.0/8 , 192.168.1.4 ")]));
+    assert_eq!(c.status_allow_cidr, vec!["10.0.0.0/8", "192.168.1.4"]);
+    // An empty value is unset, as everywhere else.
+    assert_eq!(load(env(&[("STATUS_ALLOW_CIDR", "")])).status_allow_cidr.len(), 2);
+    let none = load(env(&[("STATUS_ALLOW_CIDR", "none")]));
+    assert!(none.status_allow_cidr.is_empty());
+    assert_eq!(none.redacted()["STATUS_ALLOW_CIDR"].as_deref(), Some("none"));
+    let errs = errors(env(&[(
+        "STATUS_ALLOW_CIDR",
+        "127.0.0.1/32,localhost,10.0.0.0/33",
+    )]));
+    assert!(
+        errs.iter()
+            .any(|e| e == "STATUS_ALLOW_CIDR: 'localhost' is not an IP address or CIDR"),
+        "{errs:?}"
+    );
+    assert!(errs.iter().any(|e| e.contains("'10.0.0.0/33'")), "{errs:?}");
+}

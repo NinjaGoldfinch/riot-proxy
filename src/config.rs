@@ -86,6 +86,7 @@ pub const VARS: &[&str] = &[
     "DDRAGON_LOCALE",
     "ADMIN_IP_ALLOWLIST",
     "TRUST_PROXY",
+    "STATUS_ALLOW_CIDR",
     "ADMIN_CORS_ORIGINS",
     "BOOTSTRAP_ADMIN_KEY",
     "AUTH_DISABLED",
@@ -115,6 +116,9 @@ pub const DEFAULT_BULK_IDLE_CEILING: f64 = 0.95;
 /// SQLite's write lock.
 /// `archive:offload` packs one kind at a time and must never race itself
 /// (OBJ-03).
+/// `/status` without a key: loopback only (design/14 §Configuration).
+pub const DEFAULT_STATUS_ALLOW_CIDR: &str = "127.0.0.1/32,::1/128";
+
 pub const DEFAULT_JOB_KIND_LIMITS: &str = "aggregate:analytics=1,archive:offload=1";
 
 #[derive(Debug, thiserror::Error)]
@@ -386,6 +390,10 @@ pub struct Config {
     /// Take the client address from `X-Forwarded-For` (a trusted proxy in front).
     /// Off: the TCP peer, which a caller cannot forge (ADR-068).
     pub trust_proxy: bool,
+    /// TCP peers (IPs or CIDRs) that may read `/status` without a key, given
+    /// no `Cf-Connecting-IP` header (STS-02, design/14). Empty (`none`):
+    /// none may.
+    pub status_allow_cidr: Vec<String>,
     /// Exact origins (`https://host[:port]`) allowed to call the admin API,
     /// `/v1/ws` and the health routes from a browser; empty sends no CORS
     /// headers at all (ADM-07, ADR-014's deferral closed).
@@ -511,6 +519,14 @@ impl Config {
             ("DDRAGON_LOCALE", s(&self.ddragon_locale)),
             ("ADMIN_IP_ALLOWLIST", s(self.admin_ip_allowlist.join(","))),
             ("TRUST_PROXY", s(self.trust_proxy)),
+            (
+                "STATUS_ALLOW_CIDR",
+                s(if self.status_allow_cidr.is_empty() {
+                    "none".to_string()
+                } else {
+                    self.status_allow_cidr.join(",")
+                }),
+            ),
             ("ADMIN_CORS_ORIGINS", s(self.admin_cors_origins.join(","))),
             (
                 "BOOTSTRAP_ADMIN_KEY",
@@ -817,6 +833,7 @@ impl Config {
             ddragon_locale: v.string("DDRAGON_LOCALE", "en_US"),
             admin_ip_allowlist: csv(&v.string("ADMIN_IP_ALLOWLIST", "")),
             trust_proxy: v.bool("TRUST_PROXY", false),
+            status_allow_cidr: v.cidrs("STATUS_ALLOW_CIDR", DEFAULT_STATUS_ALLOW_CIDR),
             admin_cors_origins: v.origins("ADMIN_CORS_ORIGINS"),
             bootstrap_admin_key: v.opt_string("BOOTSTRAP_ADMIN_KEY").map(Secret::new),
             auth_disabled,
@@ -1099,6 +1116,23 @@ impl Vars {
 
     fn opt_string(&self, name: &str) -> Option<String> {
         self.map.get(name).cloned()
+    }
+
+    /// A comma-separated list of IPs and CIDRs, each of which must parse: an
+    /// entry this gate silently dropped would change who it lets in. `none`
+    /// is the empty list (an empty value is unset, so the default).
+    fn cidrs(&mut self, name: &str, default: &str) -> Vec<String> {
+        let raw = self.string(name, default);
+        if raw.trim() == "none" {
+            return Vec::new();
+        }
+        let list = csv(&raw);
+        for entry in &list {
+            if crate::http::auth::AllowEntry::parse(entry).is_none() {
+                self.push(name, &format!("'{entry}' is not an IP address or CIDR"));
+            }
+        }
+        list
     }
 
     fn string(&self, name: &str, default: &str) -> String {

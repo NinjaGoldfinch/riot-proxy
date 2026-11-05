@@ -1777,6 +1777,42 @@ expression: doc
         ],
         "type": "object"
       },
+      "Check": {
+        "description": "One background check's last result (design/14 §Checks).",
+        "properties": {
+          "checked_at": {
+            "description": "RFC 3339, UTC.",
+            "type": "string"
+          },
+          "detail": {
+            "description": "Why it is not `ok`, or what it saw; empty when there is nothing to say.",
+            "type": "string"
+          },
+          "latency_ms": {
+            "description": "How long the check took; null for one that makes no call of its own.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "`riot_api`, `riot_key`, `cache` or `storage`.",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/StatusLevel"
+          }
+        },
+        "required": [
+          "name",
+          "status",
+          "checked_at",
+          "detail"
+        ],
+        "type": "object"
+      },
       "ConsumerList": {
         "properties": {
           "consumers": {
@@ -5025,6 +5061,105 @@ expression: doc
         ],
         "type": "object"
       },
+      "StatusLevel": {
+        "description": "A check's or the whole service's state, worst last.",
+        "enum": [
+          "ok",
+          "degraded",
+          "down"
+        ],
+        "type": "string"
+      },
+      "StatusReport": {
+        "description": "The shared ninjagoldfinch status contract, `schema: 1`.",
+        "properties": {
+          "built_at": {
+            "description": "RFC 3339, UTC.",
+            "type": "string"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/Check"
+            },
+            "type": "array"
+          },
+          "commit": {
+            "description": "The commit, 7 characters.",
+            "type": "string"
+          },
+          "host": {
+            "description": "The machine's hostname.",
+            "type": "string"
+          },
+          "metrics": {
+            "additionalProperties": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "description": "Flat snake_case keys to numbers. Counters count since `started_at`;\ngauges are current values. design/14 §Metrics lists every key.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "metrics_meta": {
+            "additionalProperties": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "description": "Strings: `riot_last_success_at`, the last 2xx from Riot (RFC 3339), or\nnull before the first.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "schema": {
+            "description": "Always 1.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "service": {
+            "description": "Always `riot-proxy`.",
+            "type": "string"
+          },
+          "started_at": {
+            "description": "When this process started; RFC 3339, UTC.",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/StatusLevel",
+            "description": "The worst of `checks`: any `down` is `down`, else any `degraded` is\n`degraded`, else `ok`."
+          },
+          "uptime_s": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "version": {
+            "description": "The release tag without `v`, or `dev` for a build that is not a release.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema",
+          "service",
+          "host",
+          "version",
+          "commit",
+          "built_at",
+          "started_at",
+          "uptime_s",
+          "status",
+          "checks",
+          "metrics",
+          "metrics_meta"
+        ],
+        "type": "object"
+      },
       "SummonerDTO": {
         "description": "summoner-v4 `SummonerDTO`: represents a summoner.",
         "properties": {
@@ -5704,6 +5839,69 @@ expression: doc
           {}
         ],
         "summary": "Readiness",
+        "tags": [
+          "ops"
+        ]
+      }
+    },
+    "/status": {
+      "get": {
+        "description": "The shared ninjagoldfinch status contract (`schema: 1`): build identity, uptime, the background checks, and flat counters and gauges. Answered from memory, never by calling Riot, so it is fast and costs no Riot request. **200 even when `status` is `down`**: a non-200 means this endpoint itself failed.\n\nTakes the admin key (admin scope and `ADMIN_IP_ALLOWLIST`), or no key from a TCP peer inside `STATUS_ALLOW_CIDR` (default loopback) on a request without `Cf-Connecting-IP`. Not metered by the consumer quota.",
+        "operationId": "status",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusReport"
+                }
+              }
+            },
+            "description": "The contract",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No key from outside `STATUS_ALLOW_CIDR`, or through the tunnel; or an unknown key",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A key without the admin scope, or from outside `ADMIN_IP_ALLOWLIST`",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Status",
         "tags": [
           "ops"
         ]

@@ -15,7 +15,7 @@ What riot-proxy caches, where each tier lives, how entries are keyed, how long t
 
 ## A read through the tiers
 
-The order the fetcher checks on a Riot-backed read (`src/fetcher.rs:301-367`).
+The order the fetcher checks on a Riot-backed read (`src/fetcher.rs:306-372`).
 
 ```mermaid
 flowchart TD
@@ -35,11 +35,11 @@ flowchart TD
     store --> M["200 · X-Cache: MISS or BYPASS"]
 ```
 
-Only the L1 lookup decides freshness; L2 is never read on the request path, it is loaded into L1 once at boot (`src/cli/serve.rs:91-99`). A miss or bypass goes through the single-flight map so concurrent misses for one key share one upstream call (`src/fetcher.rs:343-359`, `src/singleflight.rs:1-12`). When the limiter refuses or Riot fails, a copy inside its hard TTL is served as `STALE` (`fetcher.rs:415-428,460-466`).
+Only the L1 lookup decides freshness; L2 is never read on the request path, it is loaded into L1 once at boot (`src/cli/serve.rs:91-99`). A miss or bypass goes through the single-flight map so concurrent misses for one key share one upstream call (`src/fetcher.rs:348-364`, `src/singleflight.rs:1-12`). When the limiter refuses or Riot fails, a copy inside its hard TTL is served as `STALE` (`fetcher.rs:415-428,460-466`).
 
 ## L1
 
-- A `moka::future::Cache<String, Arc<CacheEntry>>` with `max_capacity = CACHE_L1_MAX_MB × 1024 × 1024` bytes (default 128, range 1–1 048 576, `src/config.rs:765`) and a weigher of `key.len() + body.len() + 128` (`src/cache/l1.rs:18-19,102-119`). An entry heavier than the whole budget is not kept.
+- A `moka::future::Cache<String, Arc<CacheEntry>>` with `max_capacity = CACHE_L1_MAX_MB × 1024 × 1024` bytes (default 128, range 1–1 048 576, `src/config.rs:781`) and a weigher of `key.len() + body.len() + 128` (`src/cache/l1.rs:18-19,102-119`). An entry heavier than the whole budget is not kept.
 - Freshness is the entry's own instants on tokio time: `Fresh` before `soft_expires`, `Stale` before `hard_expires`, else invalidated and `Miss` (`l1.rs:121-134`). moka's per-entry expiry is set to the hard TTL only to reclaim memory (`l1.rs:64-86`).
 - Soft and hard TTLs come from the endpoint registry; hard = soft × 4 while `STALE_WHILE_REVALIDATE=true` (default), else hard = soft (`src/riot/endpoints.rs:13-14,476-489`, `config.rs:775`). A `Stale` hit is served and a bulk-priority refresh runs in the background with a 15-minute budget (`fetcher.rs:332-338,376-390`).
 - A refresh that returns byte-identical bytes keeps `content_at` and restarts `fetched_at` and both expiries (`l1.rs:161-176`).
@@ -104,7 +104,7 @@ From the registry (`src/riot/endpoints.rs:93-284`); hard TTLs assume stale-while
 
 ## Auth cache
 
-Consumer lookups are cached in a moka cache of 10 000 entries keyed by the key's sha256: 60 s for a found consumer, 30 s for an unknown key (`src/http/auth.rs:29-32,206-209`). Revoking a consumer invalidates its entry (`auth.rs:263-265`).
+Consumer lookups are cached in a moka cache of 10 000 entries keyed by the key's sha256: 60 s for a found consumer, 30 s for an unknown key (`src/http/auth.rs:29-32,209-212`). Revoking a consumer invalidates its entry (`auth.rs:263-265`).
 
 ## Data Dragon mirror
 
@@ -135,5 +135,5 @@ Consumer lookups are cached in a moka cache of 10 000 entries keyed by the key's
 | Offload trigger counter | 0; boot queues an `archive:offload` run to compensate (`src/cli/serve.rs:352-358`) |
 
 ---
-**Sources:** `src/fetcher.rs:L301-L367`, `src/fetcher.rs:L376-L390`, `src/fetcher.rs:L415-L428`, `src/cache/l1.rs:L18-L19`, `src/cache/l1.rs:L64-L146`, `src/cache/l1.rs:L161-L204`, `src/cache/l2.rs:L23-L28`, `src/cache/l2.rs:L102-L223`, `src/cache/mod.rs:L39-L64`, `src/cache/keys.rs:L24-L123`, `src/riot/endpoints.rs:L13-L14`, `src/riot/endpoints.rs:L93-L284`, `src/riot/endpoints.rs:L424-L512`, `src/config.rs:L765-L772`, `src/config.rs:L809`, `src/cli/serve.rs:L91-L99`, `src/cli/serve.rs:L352-L358`, `src/cli/serve.rs:L430`, `src/routes/analytics.rs:L52`, `src/routes/analytics.rs:L577-L616`, `src/routes/analytics.rs:L749-L765`, `src/routes/analytics.rs:L947-L983`, `src/archive/analytics.rs:L1375-L1404`, `src/jobs/analytics.rs:L815-L818`, `src/routes/analytics/cache.rs:L1-L264`, `src/routes/players.rs:L883-L884`, `src/routes/players.rs:L1050-L1078`, `src/routes/players/refresh.rs:L5-L71`, `src/routes/passthrough.rs:L126-L167`, `src/routes/admin.rs:L816-L883`, `src/routes/statics.rs:L26`, `src/routes/statics.rs:L79`, `src/routes/ui.rs:L8-L9`, `src/routes/ui.rs:L108-L128`, `src/http/auth.rs:L29-L32`, `src/http/auth.rs:L206-L209`, `src/archive/matches.rs:L232-L328`, `src/archive/mod.rs:L128-L144`, `src/riot/limiter/persist.rs:L23`, `src/jobs/maintenance.rs:L251`, `src/jobs/ddragon.rs:L239-L285`, `docs/design/04-data-and-cache.md:L372-L436`, `docs/_meta/scratch/riot-and-cache.md`
-**Last verified:** 2026-11-06 against commit `587438c`
+**Sources:** `src/fetcher.rs:L306-L372`, `src/fetcher.rs:L381-L395`, `src/fetcher.rs:L420-L433`, `src/cache/l1.rs:L18-L19`, `src/cache/l1.rs:L64-L146`, `src/cache/l1.rs:L161-L204`, `src/cache/l2.rs:L23-L28`, `src/cache/l2.rs:L102-L223`, `src/cache/mod.rs:L39-L64`, `src/cache/keys.rs:L24-L123`, `src/riot/endpoints.rs:L13-L14`, `src/riot/endpoints.rs:L93-L284`, `src/riot/endpoints.rs:L424-L512`, `src/config.rs:L781-L788`, `src/config.rs:L825`, `src/cli/serve.rs:L91-L99`, `src/cli/serve.rs:L352-L358`, `src/cli/serve.rs:L431`, `src/routes/analytics.rs:L52`, `src/routes/analytics.rs:L577-L616`, `src/routes/analytics.rs:L749-L765`, `src/routes/analytics.rs:L947-L983`, `src/archive/analytics.rs:L1375-L1404`, `src/jobs/analytics.rs:L815-L818`, `src/routes/analytics/cache.rs:L1-L264`, `src/routes/players.rs:L883-L884`, `src/routes/players.rs:L1050-L1078`, `src/routes/players/refresh.rs:L5-L71`, `src/routes/passthrough.rs:L126-L167`, `src/routes/admin.rs:L816-L883`, `src/routes/statics.rs:L26`, `src/routes/statics.rs:L79`, `src/routes/ui.rs:L8-L9`, `src/routes/ui.rs:L108-L128`, `src/http/auth.rs:L29-L32`, `src/http/auth.rs:L209-L212`, `src/archive/matches.rs:L232-L328`, `src/archive/mod.rs:L128-L144`, `src/riot/limiter/persist.rs:L23`, `src/jobs/maintenance.rs:L251`, `src/jobs/ddragon.rs:L239-L285`, `docs/design/04-data-and-cache.md:L372-L436`, `docs/_meta/scratch/riot-and-cache.md`
+**Last verified:** 2026-11-06 against commit `e5d5c1d`

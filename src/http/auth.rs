@@ -176,6 +176,9 @@ pub struct Auth {
     disabled: bool,
     allowlist: Vec<AllowEntry>,
     trust_proxy: bool,
+    /// `STATUS_ALLOW_CIDR`: TCP peers that may read `/status` without a key.
+    /// Empty lets nobody in keyless, unlike the admin allowlist.
+    status_allow: Vec<AllowEntry>,
 }
 
 impl std::fmt::Debug for Auth {
@@ -207,13 +210,31 @@ impl Auth {
             .max_capacity(10_000)
             .expire_after(AuthTtl)
             .build();
+        // Config refuses an entry that does not parse, so none is dropped here.
+        let status_allow = config
+            .status_allow_cidr
+            .iter()
+            .filter_map(|raw| AllowEntry::parse(raw))
+            .collect();
         Self {
             db,
             cache,
             disabled: config.auth_disabled,
             allowlist,
             trust_proxy: config.trust_proxy,
+            status_allow,
         }
+    }
+
+    /// `/status` without a key (design/14 §Endpoints): the TCP peer, never
+    /// `X-Forwarded-For`, is inside `STATUS_ALLOW_CIDR`, and the request has
+    /// no `Cf-Connecting-IP`, which cloudflared adds to every request it
+    /// forwards from loopback (ADR-203).
+    pub fn status_local(&self, headers: &HeaderMap, peer: Option<SocketAddr>) -> bool {
+        let Some(addr) = peer.map(|p| normalise(p.ip())) else {
+            return false;
+        };
+        !headers.contains_key(CF_CONNECTING_IP) && self.status_allow.iter().any(|e| e.matches(addr))
     }
 
     /// The active consumer for `key`, through the cache.
@@ -290,6 +311,18 @@ impl Auth {
     }
 }
 
+/// The header cloudflared adds to every request it forwards.
+pub const CF_CONNECTING_IP: &str = "cf-connecting-ip";
+
+/// The TCP peer, as the `ConnectInfo` extractor sees it: the real one, or
+/// the address `MockConnectInfo` supplies in tests.
+fn peer(req: &Request) -> Option<SocketAddr> {
+    req.extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|c| c.0)
+        .or_else(|| req.extensions().get::<MockConnectInfo<SocketAddr>>().map(|c| c.0))
+}
+
 /// What authorisation needs from a request, taken out before any await (a
 /// `&Request` is not `Send`).
 struct Ask {
@@ -300,16 +333,9 @@ struct Ask {
 
 impl Ask {
     fn from(req: &Request, trust_proxy: bool) -> Self {
-        // What the `ConnectInfo` extractor does: the real peer, or the address
-        // `MockConnectInfo` supplies in tests.
-        let peer = req
-            .extensions()
-            .get::<ConnectInfo<SocketAddr>>()
-            .map(|c| c.0)
-            .or_else(|| req.extensions().get::<MockConnectInfo<SocketAddr>>().map(|c| c.0));
         Self {
             token: bearer(req.headers(), req.uri()),
-            ip: client_ip(req.headers(), peer, trust_proxy),
+            ip: client_ip(req.headers(), peer(req), trust_proxy),
             path: req.uri().path().to_string(),
         }
     }
@@ -337,9 +363,30 @@ async fn guard(state: AppState, required: Scope, mut req: Request, next: Next) -
         Err((err, quota)) => {
             let mut res = err.into_response();
             quota.apply(res.headers_mut());
+            res.extensions_mut()
+                .insert(crate::http::recent::ServedTo(consumer.name.clone()));
             res
         }
     }
+}
+
+/// `GET /status` (STS-02, design/14 §Endpoints): a keyless local request, or
+/// the admin key with the admin IP allowlist. No consumer quota: a 30 s poll
+/// must not spend one.
+pub async fn require_status(State(state): State<AppState>, req: Request, next: Next) -> Response {
+    if bearer(req.headers(), req.uri()).is_none() && state.auth.status_local(req.headers(), peer(&req)) {
+        return next.run(req).await;
+    }
+    let ask = Ask::from(&req, state.auth.trust_proxy);
+    let consumer = match state.auth.authorise(ask, Scope::Admin).await {
+        Ok(consumer) => consumer,
+        Err(e) => return e.into_response(),
+    };
+    tracing::Span::current().record("consumer", consumer.name.as_str());
+    let mut res = next.run(req).await;
+    res.extensions_mut()
+        .insert(crate::http::recent::ServedTo(consumer.name.clone()));
+    res
 }
 
 /// `route_layer(from_fn_with_state(state, require_read))`

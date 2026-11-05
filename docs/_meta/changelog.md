@@ -4,6 +4,7 @@ Dated log of changes to this documentation set. One line per change; the newest 
 
 ## 2026-11-06
 
+- STS-02 (ADR-203, ADR-205): `GET /status` and `consumer_requests_total`, `checks` empty until STS-02b. `integration/monitoring-hooks.md` (the probe row, a `/status` section), `operations/observability.md` (a `/status` section; the recent ring skips it), `api/endpoints.md` (the ops route), `deployment/configuration.md` (`STATUS_ALLOW_CIDR`), `deployment/security.md` (the gate and the owner's WAF rule), `api/openapi.json`. Line citations of every changed source file moved with the code in every page that cites them; each such page's `Last verified` is refreshed.
 - STS-01 (ADR-203): the build identity `/status` will report. `workflows/release-process.md` (`RELEASE_VERSION`, `dev` off a tag), `workflows/ci.md` (the build steps, the image job's startup-line check, `scripts/release-workflow.test.sh` in `ops`), `operations/observability.md` (the `riot-proxy starting` line). Line citations of `src/cli/serve.rs`, `release.yml` and `ci.yml` moved with their code in every page that cites them; each such page's `Last verified` is refreshed.
 
 ## 2026-11-05

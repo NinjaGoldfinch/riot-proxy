@@ -189,7 +189,9 @@ pub fn counter_values(
     parse_counter(&handle.render(), name)
 }
 
-fn parse_counter(text: &str, name: &str) -> Vec<(std::collections::BTreeMap<String, String>, f64)> {
+/// One metric's series by label set, read from a rendering already taken:
+/// `/status` reads several metrics from one `render()` (STS-02).
+pub fn parse_counter(text: &str, name: &str) -> Vec<(std::collections::BTreeMap<String, String>, f64)> {
     text.lines()
         .filter(|l| !l.starts_with('#'))
         .filter_map(|line| {

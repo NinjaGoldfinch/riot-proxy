@@ -316,6 +316,69 @@
         ]
       }
     },
+    "/status": {
+      "get": {
+        "tags": [
+          "ops"
+        ],
+        "summary": "Status",
+        "description": "The shared ninjagoldfinch status contract (`schema: 1`): build identity, uptime, the background checks, and flat counters and gauges. Answered from memory, never by calling Riot, so it is fast and costs no Riot request. **200 even when `status` is `down`**: a non-200 means this endpoint itself failed.\n\nTakes the admin key (admin scope and `ADMIN_IP_ALLOWLIST`), or no key from a TCP peer inside `STATUS_ALLOW_CIDR` (default loopback) on a request without `Cf-Connecting-IP`. Not metered by the consumer quota.",
+        "operationId": "status",
+        "responses": {
+          "200": {
+            "description": "The contract",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusReport"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No key from outside `STATUS_ALLOW_CIDR`, or through the tunnel; or an unknown key",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A key without the admin scope, or from outside `ADMIN_IP_ALLOWLIST`",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ]
+      }
+    },
     "/v1/admin/analytics/recompute": {
       "post": {
         "tags": [
@@ -14642,6 +14705,42 @@
           }
         }
       },
+      "Check": {
+        "type": "object",
+        "description": "One background check's last result (design/14 §Checks).",
+        "required": [
+          "name",
+          "status",
+          "checked_at",
+          "detail"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "`riot_api`, `riot_key`, `cache` or `storage`."
+          },
+          "status": {
+            "$ref": "#/components/schemas/StatusLevel"
+          },
+          "latency_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How long the check took; null for one that makes no call of its own.",
+            "minimum": 0
+          },
+          "checked_at": {
+            "type": "string",
+            "description": "RFC 3339, UTC."
+          },
+          "detail": {
+            "type": "string",
+            "description": "Why it is not `ok`, or what it saw; empty when there is nothing to say."
+          }
+        }
+      },
       "ConsumerList": {
         "type": "object",
         "required": [
@@ -17887,6 +17986,105 @@
           "failed": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "StatusLevel": {
+        "type": "string",
+        "description": "A check's or the whole service's state, worst last.",
+        "enum": [
+          "ok",
+          "degraded",
+          "down"
+        ]
+      },
+      "StatusReport": {
+        "type": "object",
+        "description": "The shared ninjagoldfinch status contract, `schema: 1`.",
+        "required": [
+          "schema",
+          "service",
+          "host",
+          "version",
+          "commit",
+          "built_at",
+          "started_at",
+          "uptime_s",
+          "status",
+          "checks",
+          "metrics",
+          "metrics_meta"
+        ],
+        "properties": {
+          "schema": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Always 1.",
+            "minimum": 0
+          },
+          "service": {
+            "type": "string",
+            "description": "Always `riot-proxy`."
+          },
+          "host": {
+            "type": "string",
+            "description": "The machine's hostname."
+          },
+          "version": {
+            "type": "string",
+            "description": "The release tag without `v`, or `dev` for a build that is not a release."
+          },
+          "commit": {
+            "type": "string",
+            "description": "The commit, 7 characters."
+          },
+          "built_at": {
+            "type": "string",
+            "description": "RFC 3339, UTC."
+          },
+          "started_at": {
+            "type": "string",
+            "description": "When this process started; RFC 3339, UTC."
+          },
+          "uptime_s": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "status": {
+            "$ref": "#/components/schemas/StatusLevel",
+            "description": "The worst of `checks`: any `down` is `down`, else any `degraded` is\n`degraded`, else `ok`."
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Check"
+            }
+          },
+          "metrics": {
+            "type": "object",
+            "description": "Flat snake_case keys to numbers. Counters count since `started_at`;\ngauges are current values. design/14 §Metrics lists every key.",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "metrics_meta": {
+            "type": "object",
+            "description": "Strings: `riot_last_success_at`, the last 2xx from Riot (RFC 3339), or\nnull before the first.",
+            "additionalProperties": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "propertyNames": {
+              "type": "string"
+            }
           }
         }
       },

@@ -77,5 +77,5 @@ Never invent them. Every header, route, status code and TTL comes from `docs/des
 - Every file here ends with a `Sources` and `Last verified` footer; see [../_meta/doc-maintenance.md](../_meta/doc-maintenance.md).
 
 ---
-**Sources:** `CLAUDE.md`, `docs/IMPLEMENTATION.md` §0.1–0.6, `rustfmt.toml`, `clippy.toml`, `Cargo.toml` `[lints.clippy]`, `.github/workflows/ci.yml`, `src/app.rs:L188-L213`, `.github/PULL_REQUEST_TEMPLATE.md`, `PROGRESS.md` (Owner review at the P0 gate; Notes for the next task)
-**Last verified:** 2026-11-06 against commit `587438c`
+**Sources:** `CLAUDE.md`, `docs/IMPLEMENTATION.md` §0.1–0.6, `rustfmt.toml`, `clippy.toml`, `Cargo.toml` `[lints.clippy]`, `.github/workflows/ci.yml`, `src/app.rs:L257-L282`, `.github/PULL_REQUEST_TEMPLATE.md`, `PROGRESS.md` (Owner review at the P0 gate; Notes for the next task)
+**Last verified:** 2026-11-06 against commit `e5d5c1d`

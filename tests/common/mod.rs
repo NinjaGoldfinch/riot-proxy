@@ -101,6 +101,7 @@ pub fn app_with(env: &[(&str, &str)], upstream: &str) -> (tempfile::TempDir, App
         stats,
         maintenance,
         analytics,
+        status: std::sync::Arc::new(riot_proxy::status::Status::new(std::time::Instant::now())),
     };
     let router = app::router(state.clone(), telemetry::metrics_handle().expect("metrics"));
     (dir, state, router)
