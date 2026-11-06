@@ -223,6 +223,28 @@ jobs_pending{kind=\"ladder:walk\"} 6
         assert_eq!(get(&m, "requests_errors_total_other"), 0);
     }
 
+    /// A consumer's name is free text; one holding the format's own `,` and
+    /// `}` keeps every count, so the totals still add up.
+    #[test]
+    fn a_consumer_name_with_commas_and_braces_keeps_its_counts() {
+        let text = "\
+consumer_requests_total{consumer=\"Acme, Inc\",group=\"riot\",class=\"2xx\"} 6
+consumer_requests_total{consumer=\"Acme, Inc\",group=\"riot\",class=\"5xx\"} 1
+consumer_requests_total{consumer=\"team}x\",group=\"lol\",class=\"2xx\"} 3
+consumer_requests_total{consumer=\"anonymous\",group=\"ops\",class=\"2xx\"} 2
+";
+        let m = metrics(text, Cache::default());
+        assert_eq!(get(&m, "requests_total_acme__inc"), 7);
+        assert_eq!(get(&m, "requests_errors_total_acme__inc"), 1);
+        assert_eq!(get(&m, "requests_total_team_x"), 3);
+        assert!(!m.contains_key("requests_total_acme"), "{m:?}");
+        assert_eq!(get(&m, "requests_total"), 12);
+        assert_eq!(get(&m, "requests_errors_total"), 1);
+        assert_eq!(get(&m, "requests_total_riot"), 7);
+        assert_eq!(get(&m, "requests_total_lol"), 3);
+        assert_eq!(get(&m, "requests_total_ops"), 2);
+    }
+
     #[test]
     fn riot_counts_by_status() {
         let m = metrics(TEXT, Cache::default());

@@ -317,3 +317,26 @@ async fn a_quota_refusal_counts_under_the_consumer() {
     let m = e.get(LOCAL, "/status", None, &[]).await.json()["metrics"].clone();
     assert_eq!(m["requests_total_status_quota_1"], 2);
 }
+
+/// A consumer's name is free text: one holding `,`, `}`, `"` and `=` keeps
+/// its counts in `/status` (it is read back from the Prometheus rendering).
+#[tokio::test]
+async fn a_consumer_named_with_the_format_s_characters_is_counted() {
+    let e = env(&[]).await;
+    Mock::given(path("/lol/status/v4/platform-data"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": "EUW1"})))
+        .mount(&e.server)
+        .await;
+    let key = e.key("Status \"Acme, Inc\"}=x", vec![Scope::Read]).await;
+    let before = e.get(LOCAL, "/status", None, &[]).await.json();
+    let read = e.get(OUTSIDE, "/v1/lol/status/euw1", Some(&key), &[]).await;
+    assert_eq!(read.status, StatusCode::OK);
+    let after = e.get(LOCAL, "/status", None, &[]).await.json();
+    let m = &after["metrics"];
+    assert_eq!(m["requests_total_status__acme__inc___x"], 1, "{m}");
+    assert_eq!(m["requests_errors_total_status__acme__inc___x"], 0);
+    assert!(m.get("requests_total_status__acme").is_none(), "{m}");
+    let delta = |k: &str| m[k].as_u64().unwrap() - before["metrics"][k].as_u64().unwrap_or(0);
+    assert!(delta("requests_total") >= 2, "the read and the first status poll");
+    assert!(delta("requests_total_lol") >= 1);
+}
