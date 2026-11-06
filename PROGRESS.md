@@ -425,7 +425,7 @@ Staging is seeded from production's daily backup and reads production's packs fr
 `GET /status` in the shared ninjagoldfinch status contract for the owner's status bot, the rate-limit table at `GET /status/ratelimits`, background checks, and plain JSON events on state changes (IMPLEMENTATION.md §Post-release — STS, design/14, ADR-203).
 - [x] STS-00 series spec: design/14, the plan section, ADR-203 (#257)
 - [x] STS-01 build identity: `version` (`dev` off a release tag), `commit`, `built_at`; the startup log line (#259; `build_info::{status_version, short_commit, built_at_rfc3339}` are what STS-02's `/status` reads)
-- [~] STS-02 `consumer_requests_total` and `GET /status` with its local-or-admin gate and `STATUS_ALLOW_CIDR`; `checks` empty until STS-02b (`feat/STS-02-status-endpoint`, ADR-205)
+- [~] STS-02 `consumer_requests_total` and `GET /status` with its local-or-admin gate and `STATUS_ALLOW_CIDR`; `checks` empty until STS-02b (#260, ADR-205)
 - [ ] STS-02b the checks (`riot_api`, `riot_key`, `cache`, `storage`) behind `/status` (split from STS-02, ADR-205)
 - [ ] STS-03 the rate-limit table and `GET /status/ratelimits`
 - [ ] STS-04 outbound events to `EVENTS_URL`

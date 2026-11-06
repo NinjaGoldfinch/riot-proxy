@@ -195,6 +195,16 @@ async fn a_forwarded_loopback_request_needs_a_key() {
     );
 }
 
+/// `AUTH_DISABLED` lets every request in as `dev-local`, as on every other
+/// guarded route, so the peer does not matter.
+#[tokio::test]
+async fn auth_disabled_lets_a_keyless_request_in_from_anywhere() {
+    let e = env(&[("AUTH_DISABLED", "true")]).await;
+    let r = e.get(OUTSIDE, "/status", None, &[]).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.json()["schema"], 1);
+}
+
 #[tokio::test]
 async fn the_allowed_peers_follow_status_allow_cidr() {
     let e = env(&[("STATUS_ALLOW_CIDR", "10.0.0.0/8")]).await;
