@@ -131,7 +131,7 @@ Use the unit in [docs/design/07](docs/design/07-deployment.md#option-c--systemd-
 | `/metrics` | Prometheus, with v1's metric names, so v1's Grafana dashboard and alerts import unchanged |
 | `/status` | The shared ninjagoldfinch status contract, for the status bot. The admin key, or no key from loopback (`STATUS_ALLOW_CIDR`) on a request with none of `Cf-Connecting-IP`, `X-Forwarded-For`, `Forwarded` or `X-Real-IP`, so a request through the Cloudflare tunnel, or a reverse proxy that adds one of them, needs the key. A proxy that adds none (nginx without `proxy_set_header X-Forwarded-For`, HAProxy without `option forwardfor`) still reads as local: set `STATUS_ALLOW_CIDR=none`. Never calls Riot; not metered by the consumer quota |
 
-`GET /status` is 200 even when `status` is `down`: a non-200 means the endpoint itself failed. `status` is the worst of `checks`. `metrics` is flat counters (since `started_at`) and gauges; [design/14](docs/design/14-status.md#metrics-sts-02) lists every key. Observed on a fresh dev build (`metrics` cut short):
+`GET /status` is 200 even when `status` is `down`: a non-200 means the endpoint itself failed. `status` is the worst of `checks`. `metrics` is flat counters (since `started_at`) and gauges; [design/14](docs/design/14-status.md#metrics-sts-02) lists every key. Observed on a dev build against Riot with a placeholder key, `LADDER_PLATFORMS=oc1,kr`, `RIOT_API_KEY_EXPIRES_AT` a day away and a `file://` bucket (`metrics` cut short):
 
 ```json
 {
@@ -139,20 +139,22 @@ Use the unit in [docs/design/07](docs/design/07-deployment.md#option-c--systemd-
   "service": "riot-proxy",
   "host": "riot-proxy-dev-container",
   "version": "dev",
-  "commit": "e5d5c1d",
-  "built_at": "2026-11-05T22:22:25Z",
-  "started_at": "2026-11-05T22:31:46Z",
-  "uptime_s": 0,
-  "status": "ok",
-  "checks": [],
+  "commit": "7cb71a2",
+  "built_at": "2026-11-06T03:26:07Z",
+  "started_at": "2026-11-06T03:32:02Z",
+  "uptime_s": 2,
+  "status": "down",
+  "checks": [
+    { "name": "riot_api", "status": "ok", "latency_ms": 373, "checked_at": "2026-11-06T03:32:03Z", "detail": "oc1: Riot answered 401; kr: Riot answered 401" },
+    { "name": "riot_key", "status": "down", "latency_ms": null, "checked_at": "2026-11-06T03:32:03Z", "detail": "Riot answered 401 to status.platformData on kr; the key expires at 2026-11-07T09:00:00Z" },
+    { "name": "cache", "status": "ok", "latency_ms": 1, "checked_at": "2026-11-06T03:32:02Z", "detail": "" },
+    { "name": "storage", "status": "ok", "latency_ms": 1, "checked_at": "2026-11-06T03:32:02Z", "detail": "" }
+  ],
   "metrics": {
-    "cache_entries": 0,
-    "fetch_queue_depth": 0,
-    "requests_total": 2,
-    "requests_total_anonymous": 2,
-    "requests_total_ops": 2,
-    "riot_errors_total": 0,
-    "riot_requests_total": 0
+    "riot_401_total": 2,
+    "riot_errors_total": 2,
+    "riot_requests_4xx_total": 2,
+    "riot_requests_total": 2
   },
   "metrics_meta": { "riot_last_success_at": null }
 }
