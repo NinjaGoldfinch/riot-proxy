@@ -4,7 +4,8 @@
 //! counters, L1's size and the stored check results are all it reads.
 //!
 //! Who may read it is `http::auth::require_status`'s: the admin key, or a
-//! keyless request from `STATUS_ALLOW_CIDR` without `Cf-Connecting-IP`.
+//! keyless request from `STATUS_ALLOW_CIDR` that no reverse proxy forwarded
+//! (none of `Cf-Connecting-IP`, `X-Forwarded-For`, `Forwarded`, `X-Real-IP`).
 //! Neither the consumer quota nor the recent-requests ring sees it.
 
 pub mod snapshot;
@@ -175,12 +176,14 @@ pub fn router() -> OpenApiRouter<AppState> {
                    Riot, so it is fast and costs no Riot request. **200 even when `status` is `down`**: \
                    a non-200 means this endpoint itself failed.\n\n\
                    Takes the admin key (admin scope and `ADMIN_IP_ALLOWLIST`), or no key from a TCP peer \
-                   inside `STATUS_ALLOW_CIDR` (default loopback) on a request without `Cf-Connecting-IP`. \
-                   Not metered by the consumer quota.",
+                   inside `STATUS_ALLOW_CIDR` (default loopback) on a request carrying none of \
+                   `Cf-Connecting-IP`, `X-Forwarded-For`, `Forwarded` or `X-Real-IP`: a request a reverse \
+                   proxy forwarded needs the key, whatever `TRUST_PROXY` says. Not metered by the consumer \
+                   quota.",
     security(("bearerAuth" = []), ()),
     responses(
         (status = 200, description = "The contract", body = StatusReport),
-        (status = 401, description = "No key from outside `STATUS_ALLOW_CIDR`, or through the tunnel; or an unknown key", body = crate::http::error::ErrorResponse),
+        (status = 401, description = "No key from outside `STATUS_ALLOW_CIDR`, or through a reverse proxy; or an unknown key", body = crate::http::error::ErrorResponse),
         (status = 403, description = "A key without the admin scope, or from outside `ADMIN_IP_ALLOWLIST`", body = crate::http::error::ErrorResponse),
     ),
 )]

@@ -169,6 +169,32 @@ async fn who_may_read_it_without_a_key() {
     assert_eq!(forged.status, StatusCode::UNAUTHORIZED);
 }
 
+/// A reverse proxy on the same host (nginx, Caddy, Traefik) reaches the
+/// proxy from loopback without `Cf-Connecting-IP`, but adds one of these:
+/// with one present, a keyless request is not local, whatever `TRUST_PROXY`
+/// says and whatever the value (ADR-205).
+#[tokio::test]
+async fn a_forwarded_loopback_request_needs_a_key() {
+    let e = env(&[("TRUST_PROXY", "true")]).await;
+    assert_eq!(e.get(LOCAL, "/status", None, &[]).await.status, StatusCode::OK);
+    for (header, value) in [
+        ("x-forwarded-for", "127.0.0.1"),
+        ("forwarded", "for=127.0.0.1"),
+        ("x-real-ip", "127.0.0.1"),
+    ] {
+        let r = e.get(LOCAL, "/status", None, &[(header, value)]).await;
+        assert_eq!(r.status, StatusCode::UNAUTHORIZED, "{header}");
+        assert_eq!(r.json()["error"]["code"], "UNAUTHORIZED", "{header}");
+    }
+    let admin = e.key("status-admin-fwd", vec![Scope::Read, Scope::Admin]).await;
+    assert_eq!(
+        e.get(LOCAL, "/status", Some(&admin), &[("x-real-ip", "198.51.100.4")])
+            .await
+            .status,
+        StatusCode::OK
+    );
+}
+
 #[tokio::test]
 async fn the_allowed_peers_follow_status_allow_cidr() {
     let e = env(&[("STATUS_ALLOW_CIDR", "10.0.0.0/8")]).await;

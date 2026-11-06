@@ -46,9 +46,9 @@ Both are at the root, beside `/healthz`, not under `/v1`: they are operational, 
 **A local request.** The admin key is `Authorization: Bearer rpx_…`, checked by the auth layer like any admin route (scope `admin`, `ADMIN_IP_ALLOWLIST`). A request without a key is let through to `/status` only when both hold:
 
 1. the TCP peer address (never `X-Forwarded-For`, whatever `TRUST_PROXY` says) is inside `STATUS_ALLOW_CIDR` (default loopback only, `127.0.0.1/32,::1/128`), and
-2. the request has no `Cf-Connecting-IP` header.
+2. the request has none of the headers a reverse proxy adds: `Cf-Connecting-IP`, `X-Forwarded-For`, `Forwarded` or `X-Real-IP`. Only their presence counts, never their values, and `TRUST_PROXY` plays no part.
 
-The second rule exists because production's `cloudflared` runs on the same host and connects to `127.0.0.1:8080`: every public request through the tunnel arrives from loopback (ADR-144 §Finding). cloudflared adds `Cf-Connecting-IP` to every request it forwards, and a client cannot remove a header the tunnel adds, so a loopback request without it came from the box itself. As a second gate, the ADM-01 WAF rule on `api.ninjagoldfinch.lol` gains `/status*` (owner runbook). A keyless request that fails either rule gets the auth layer's usual `401 UNAUTHORIZED`. `/status/ratelimits` never accepts a keyless request.
+The second rule exists because production's `cloudflared` runs on the same host and connects to `127.0.0.1:8080`: every public request through the tunnel arrives from loopback (ADR-144 §Finding). cloudflared adds `Cf-Connecting-IP` to every request it forwards, and a client cannot remove a header the tunnel adds, so a loopback request without it came from the box itself. nginx, Caddy or Traefik on the same host forward from loopback too, without `Cf-Connecting-IP` but with one of the other three, so those count the same (ADR-205). As a second gate, the ADM-01 WAF rule on `api.ninjagoldfinch.lol` gains `/status*` (owner runbook). A keyless request that fails either rule gets the auth layer's usual `401 UNAUTHORIZED`. `/status/ratelimits` never accepts a keyless request.
 
 ## Build identity (STS-01)
 
@@ -158,7 +158,7 @@ When `EVENTS_URL` is set, state transitions are POSTed there as the contract's e
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `STATUS_ALLOW_CIDR` | `127.0.0.1/32,::1/128` | peers that may read `/status` without a key (plus the `Cf-Connecting-IP` rule); `none` for none (an empty value is unset, as for every variable); an entry that does not parse refuses the boot |
+| `STATUS_ALLOW_CIDR` | `127.0.0.1/32,::1/128` | peers that may read `/status` without a key (plus the forwarding-header rule); `none` for none (an empty value is unset, as for every variable); an entry that does not parse refuses the boot |
 | `STATUS_CHECK_INTERVAL_S` | `30` | how often the checks run |
 | `STATUS_CHECK_PLATFORMS` | the `LADDER_PLATFORMS` entries | platforms probed every 60 s besides the default |
 | `RIOT_API_KEY_EXPIRES_AT` | unset | RFC 3339; `riot_key` is `degraded` within 48 h of it |

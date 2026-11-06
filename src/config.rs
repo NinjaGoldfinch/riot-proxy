@@ -391,8 +391,8 @@ pub struct Config {
     /// Off: the TCP peer, which a caller cannot forge (ADR-068).
     pub trust_proxy: bool,
     /// TCP peers (IPs or CIDRs) that may read `/status` without a key, given
-    /// no `Cf-Connecting-IP` header (STS-02, design/14). Empty (`none`):
-    /// none may.
+    /// no reverse-proxy header (`Cf-Connecting-IP`, `X-Forwarded-For`,
+    /// `Forwarded`, `X-Real-IP`; STS-02, design/14). Empty (`none`): none may.
     pub status_allow_cidr: Vec<String>,
     /// Exact origins (`https://host[:port]`) allowed to call the admin API,
     /// `/v1/ws` and the health routes from a browser; empty sends no CORS

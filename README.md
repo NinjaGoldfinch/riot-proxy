@@ -129,7 +129,7 @@ Use the unit in [docs/design/07](docs/design/07-deployment.md#option-c--systemd-
 | `/healthz` | Process up. `riot-proxy healthcheck` calls it, which suits a scratch image with no curl |
 | `/readyz` | Database writable and limiter restored |
 | `/metrics` | Prometheus, with v1's metric names, so v1's Grafana dashboard and alerts import unchanged |
-| `/status` | The shared ninjagoldfinch status contract, for the status bot. The admin key, or no key from loopback (`STATUS_ALLOW_CIDR`) on a request without `Cf-Connecting-IP`, so a request through the Cloudflare tunnel needs the key. Never calls Riot; not metered by the consumer quota |
+| `/status` | The shared ninjagoldfinch status contract, for the status bot. The admin key, or no key from loopback (`STATUS_ALLOW_CIDR`) on a request with none of `Cf-Connecting-IP`, `X-Forwarded-For`, `Forwarded` or `X-Real-IP`, so a request through the Cloudflare tunnel or any other reverse proxy needs the key. Never calls Riot; not metered by the consumer quota |
 
 `GET /status` is 200 even when `status` is `down`: a non-200 means the endpoint itself failed. `status` is the worst of `checks`. `metrics` is flat counters (since `started_at`) and gauges; [design/14](docs/design/14-status.md#metrics-sts-02) lists every key. Observed on a fresh dev build (`metrics` cut short):
 

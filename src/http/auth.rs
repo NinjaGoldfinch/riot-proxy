@@ -227,14 +227,18 @@ impl Auth {
     }
 
     /// `/status` without a key (design/14 §Endpoints): the TCP peer, never
-    /// `X-Forwarded-For`, is inside `STATUS_ALLOW_CIDR`, and the request has
-    /// no `Cf-Connecting-IP`, which cloudflared adds to every request it
-    /// forwards from loopback (ADR-203).
+    /// `X-Forwarded-For`, is inside `STATUS_ALLOW_CIDR`, and the request
+    /// carries none of [`FORWARDING_HEADERS`]. cloudflared adds
+    /// `Cf-Connecting-IP` to every request it forwards from loopback
+    /// (ADR-203); nginx, Caddy or Traefik on the same host add one of the
+    /// others (ADR-205). Only a header's presence is read, never its value,
+    /// and `TRUST_PROXY` plays no part.
     pub fn status_local(&self, headers: &HeaderMap, peer: Option<SocketAddr>) -> bool {
         let Some(addr) = peer.map(|p| normalise(p.ip())) else {
             return false;
         };
-        !headers.contains_key(CF_CONNECTING_IP) && self.status_allow.iter().any(|e| e.matches(addr))
+        !FORWARDING_HEADERS.iter().any(|h| headers.contains_key(*h))
+            && self.status_allow.iter().any(|e| e.matches(addr))
     }
 
     /// The active consumer for `key`, through the cache.
@@ -313,6 +317,10 @@ impl Auth {
 
 /// The header cloudflared adds to every request it forwards.
 pub const CF_CONNECTING_IP: &str = "cf-connecting-ip";
+
+/// Headers a reverse proxy adds to a request it forwards: a keyless
+/// `/status` carrying any of them came through one, so it is not local.
+pub const FORWARDING_HEADERS: [&str; 4] = [CF_CONNECTING_IP, "x-forwarded-for", "forwarded", "x-real-ip"];
 
 /// The TCP peer, as the `ConnectInfo` extractor sees it: the real one, or
 /// the address `MockConnectInfo` supplies in tests.
