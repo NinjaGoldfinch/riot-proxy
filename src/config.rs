@@ -87,6 +87,9 @@ pub const VARS: &[&str] = &[
     "ADMIN_IP_ALLOWLIST",
     "TRUST_PROXY",
     "STATUS_ALLOW_CIDR",
+    "STATUS_CHECK_INTERVAL_S",
+    "STATUS_CHECK_PLATFORMS",
+    "RIOT_API_KEY_EXPIRES_AT",
     "ADMIN_CORS_ORIGINS",
     "BOOTSTRAP_ADMIN_KEY",
     "AUTH_DISABLED",
@@ -394,6 +397,15 @@ pub struct Config {
     /// no reverse-proxy header (`Cf-Connecting-IP`, `X-Forwarded-For`,
     /// `Forwarded`, `X-Real-IP`; STS-02, design/14). Empty (`none`): none may.
     pub status_allow_cidr: Vec<String>,
+    /// How often `/status`'s checks run (STS-02b, design/14 §Checks).
+    pub status_check_interval_s: u32,
+    /// The platforms `riot_api` probes, the first as the one that can make it
+    /// `down` (ADR-206). Defaults to `LADDER_PLATFORMS`; `none` is empty,
+    /// which leaves `riot_api` out of the checks.
+    pub status_check_platforms: Vec<Platform>,
+    /// `RIOT_API_KEY_EXPIRES_AT` in unix ms: `riot_key` is `degraded` from
+    /// 48 h before it.
+    pub riot_api_key_expires_at_ms: Option<i64>,
     /// Exact origins (`https://host[:port]`) allowed to call the admin API,
     /// `/v1/ws` and the health routes from a browser; empty sends no CORS
     /// headers at all (ADM-07, ADR-014's deferral closed).
@@ -526,6 +538,20 @@ impl Config {
                 } else {
                     self.status_allow_cidr.join(",")
                 }),
+            ),
+            ("STATUS_CHECK_INTERVAL_S", s(self.status_check_interval_s)),
+            (
+                "STATUS_CHECK_PLATFORMS",
+                s(if self.status_check_platforms.is_empty() {
+                    "none".to_string()
+                } else {
+                    let names: Vec<&str> = self.status_check_platforms.iter().map(|p| p.as_str()).collect();
+                    names.join(",")
+                }),
+            ),
+            (
+                "RIOT_API_KEY_EXPIRES_AT",
+                self.riot_api_key_expires_at_ms.map(crate::build_info::rfc3339),
             ),
             ("ADMIN_CORS_ORIGINS", s(self.admin_cors_origins.join(","))),
             (
@@ -746,10 +772,12 @@ impl Config {
             }
         }
 
-        let ladder_platforms = csv(&v.string("LADDER_PLATFORMS", ""))
+        let ladder_platforms: Vec<Platform> = csv(&v.string("LADDER_PLATFORMS", ""))
             .iter()
             .map(|p| v.platform("LADDER_PLATFORMS", p))
             .collect();
+        let status_check_platforms = v.status_platforms(&ladder_platforms);
+        let riot_api_key_expires_at_ms = v.timestamp_ms("RIOT_API_KEY_EXPIRES_AT");
 
         let objects = v.object_store(env);
         let archive_object_read_only = v.bool("ARCHIVE_OBJECT_READ_ONLY", false);
@@ -834,6 +862,9 @@ impl Config {
             admin_ip_allowlist: csv(&v.string("ADMIN_IP_ALLOWLIST", "")),
             trust_proxy: v.bool("TRUST_PROXY", false),
             status_allow_cidr: v.cidrs("STATUS_ALLOW_CIDR", DEFAULT_STATUS_ALLOW_CIDR),
+            status_check_interval_s: v.int("STATUS_CHECK_INTERVAL_S", 30, 1, 3_600),
+            status_check_platforms,
+            riot_api_key_expires_at_ms,
             admin_cors_origins: v.origins("ADMIN_CORS_ORIGINS"),
             bootstrap_admin_key: v.opt_string("BOOTSTRAP_ADMIN_KEY").map(Secret::new),
             auth_disabled,
@@ -1187,6 +1218,36 @@ impl Vars {
     fn range_error<T: fmt::Display>(&mut self, name: &str, raw: &str, min: T, max: T, default: T) -> T {
         self.push(name, &format!("'{raw}' is outside {min}..={max}"));
         default
+    }
+
+    /// `STATUS_CHECK_PLATFORMS`: platforms in order without repeats, `none`
+    /// for none, `LADDER_PLATFORMS` when unset (design/14 §Configuration).
+    fn status_platforms(&mut self, ladder: &[Platform]) -> Vec<Platform> {
+        const NAME: &str = "STATUS_CHECK_PLATFORMS";
+        let listed: Vec<Platform> = match self.opt_string(NAME) {
+            None => ladder.to_vec(),
+            Some(raw) if raw.trim().eq_ignore_ascii_case("none") => Vec::new(),
+            Some(raw) => csv(&raw).iter().map(|p| self.platform(NAME, p)).collect(),
+        };
+        let mut out = Vec::with_capacity(listed.len());
+        for p in listed {
+            if !out.contains(&p) {
+                out.push(p);
+            }
+        }
+        out
+    }
+
+    /// An RFC 3339 instant as unix ms; one that does not parse refuses the boot.
+    fn timestamp_ms(&mut self, name: &str) -> Option<i64> {
+        let raw = self.opt_string(name)?;
+        match raw.trim().parse::<jiff::Timestamp>() {
+            Ok(t) => Some(t.as_millisecond()),
+            Err(_) => self.error(
+                name,
+                &format!("'{raw}' is not an RFC 3339 time like 2026-11-07T09:00:00Z"),
+            ),
+        }
     }
 
     /// A platform, or an error naming the variable. v1 refused unknown platforms at boot.

@@ -428,12 +428,15 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         analytics: analytics_cache,
         status: Arc::new(crate::status::Status::new(started)),
     };
+    // `/status`'s checks: a round now, then every STATUS_CHECK_INTERVAL_S (STS-02b).
+    let checks = crate::status::checks::Checker::new(&state).spawn();
     let served = app::serve(listener, app::router(state, metrics), shutdown).await;
 
     // After draining, whether or not serve failed: stop ticking, let running
     // jobs finish (the rest resume on the next boot), close sockets, then the
     // final limiter checkpoint (design/05) and pending L2 writes (design/04).
     ticks.shutdown().await;
+    checks.abort();
     metrics_topic.abort();
     history.abort();
     workers.shutdown(JOB_GRACE).await;

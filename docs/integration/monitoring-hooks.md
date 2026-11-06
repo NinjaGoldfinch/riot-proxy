@@ -24,12 +24,17 @@ GET /readyz → 200 {"ok":true,"sqlite":true,"limiter":true,"keyScope":"d63166ad
 
 ## `/status`
 
-The status bot's endpoint (STS-02, ADR-203, design/14). Its `metrics` are read from one rendering of the same Prometheus recorder `/metrics` serves, so the two cannot disagree (`src/status/snapshot.rs:73`); the keys and the label values behind them are in `docs/design/metrics.md` §`/status` keys. `metrics_meta.riot_last_success_at` is the Riot client's last 2xx (`src/riot/client.rs:241`).
+The status bot's endpoint (STS-02, ADR-203, design/14). Its `metrics` are read from one rendering of the same Prometheus recorder `/metrics` serves, so the two cannot disagree (`src/status/snapshot.rs:73`); the keys and the label values behind them are in `docs/design/metrics.md` §`/status` keys. `metrics_meta.riot_last_success_at` is the Riot client's last 2xx (`src/riot/client.rs:243-245`).
 
 - **Who may read it.** The admin key (admin scope and `ADMIN_IP_ALLOWLIST`), or no key when the TCP peer is inside `STATUS_ALLOW_CIDR` (default loopback) and the request carries none of `Cf-Connecting-IP`, `X-Forwarded-For`, `Forwarded` or `X-Real-IP` (`src/http/auth.rs:236-242,318-323`). cloudflared adds the first to every request it forwards from `127.0.0.1`, and nginx, Caddy or Traefik on the same host typically add one of the others, so a keyless request through such a proxy is 401. A proxy configured to add none of these (nginx without `proxy_set_header X-Forwarded-For`, HAProxy without `option forwardfor`) still reads as local: set `STATUS_ALLOW_CIDR=none`, or have the proxy add one of them. Only the headers' presence is read, never their values, whatever `TRUST_PROXY` says. A key that is sent is always checked: a read key is 403 and an unknown one 401, even from loopback.
 - **Cost.** No consumer quota, no entry in the recent-requests ring (`src/http/recent.rs:31`), no Riot call. A local run answered in about 2 ms.
 - **Counted.** Every answered request, `/status` included, moves `consumer_requests_total{consumer,group,class}` (`src/app.rs:175`).
-- **Checks.** `checks` is `[]` and `status` `ok` until STS-02b adds `riot_api`, `riot_key`, `cache` and `storage`.
+- **Checks** (STS-02b, ADR-206). A task runs a round at boot and every `STATUS_CHECK_INTERVAL_S` (default 30) and stores each result, which `/status` reads (`src/status/checks.rs:286-321`); a check with no result yet is `ok` with detail `pending` (`:71-98`).
+  - `riot_api`: `lol-status-v4` `platform-data` on each `STATUS_CHECK_PLATFORMS` entry (default `LADDER_PLATFORMS`), through the limiter at bulk priority with a 1 s budget and never through the response cache (`:324-359`). The first platform is probed every round while idle and every 60 s while it had real traffic in the last 60 s; the others every 60 s (`:236-243`). Only the first's 5xx or network failure is `down`. A 429, another platform's failure, or any scope frozen after a 429 degrades it, and a 401, 403 or 404 leaves it `ok` (`:186-233`, `:106-115`). Absent with no platforms.
+  - `riot_key`: the last 2xx, 401 or 403 from any Riot call, probes included (`src/riot/client.rs:259-280`): `down` on a 401 or 403, `degraded` within 48 h of `RIOT_API_KEY_EXPIRES_AT` (`src/status/checks.rs:128-164`).
+  - `cache`: a read of L2's `cache` table within 2 s, else `down` (`:366-383`).
+  - `storage`: with `ARCHIVE_OBJECT_URL`, the first entry of the bucket's listing within 5 s, else `degraded` (`:386-398`; `src/archive/objects.rs:307-313`).
+  - At most 2 + N Riot calls a minute for N platforms after the first. They count in `riot_requests_total` like any other.
 - **On production.** `curl http://127.0.0.1:8080/status` from the box needs no key. Through `api.ninjagoldfinch.lol` it needs the admin key, and the WAF rule that covers `/metrics` should gain `/status*` (owner, design/14 §Endpoints).
 
 ## `/metrics`

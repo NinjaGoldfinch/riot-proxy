@@ -1033,3 +1033,63 @@ fn status_allow_cidr() {
     );
     assert!(errs.iter().any(|e| e.contains("'10.0.0.0/33'")), "{errs:?}");
 }
+
+/// STS-02b (design/14 §Configuration, ADR-206).
+#[test]
+fn status_check_settings() {
+    use crate::riot::routing::Platform;
+    let c = load(env(&[]));
+    assert_eq!(c.status_check_interval_s, 30);
+    assert!(c.status_check_platforms.is_empty(), "no ladder, nothing to probe");
+    assert_eq!(c.riot_api_key_expires_at_ms, None);
+    assert_eq!(c.redacted()["STATUS_CHECK_PLATFORMS"].as_deref(), Some("none"));
+
+    // Unset follows LADDER_PLATFORMS, in its order.
+    let c = load(env(&[("LADDER_PLATFORMS", "kr,euw1")]));
+    assert_eq!(c.status_check_platforms, vec![Platform::Kr, Platform::Euw1]);
+    // Set, it replaces it: repeats dropped, case ignored, order kept.
+    let c = load(env(&[
+        ("LADDER_PLATFORMS", "kr,euw1"),
+        ("STATUS_CHECK_PLATFORMS", "OC1, na1, oc1"),
+    ]));
+    assert_eq!(c.status_check_platforms, vec![Platform::Oc1, Platform::Na1]);
+    assert_eq!(c.redacted()["STATUS_CHECK_PLATFORMS"].as_deref(), Some("oc1,na1"));
+    let none = load(env(&[
+        ("LADDER_PLATFORMS", "kr"),
+        ("STATUS_CHECK_PLATFORMS", "none"),
+    ]));
+    assert!(none.status_check_platforms.is_empty());
+    let errs = errors(env(&[("STATUS_CHECK_PLATFORMS", "kr,mars1")]));
+    assert!(
+        errs.iter()
+            .any(|e| e.starts_with("STATUS_CHECK_PLATFORMS: ") && e.contains("mars1")),
+        "{errs:?}"
+    );
+
+    let c = load(env(&[
+        ("STATUS_CHECK_INTERVAL_S", "10"),
+        ("RIOT_API_KEY_EXPIRES_AT", "2026-11-07T09:00:00Z"),
+    ]));
+    assert_eq!(c.status_check_interval_s, 10);
+    assert_eq!(c.riot_api_key_expires_at_ms, Some(1_794_042_000_000));
+    assert_eq!(
+        c.redacted()["RIOT_API_KEY_EXPIRES_AT"].as_deref(),
+        Some("2026-11-07T09:00:00Z")
+    );
+    // An offset is the same instant.
+    let c = load(env(&[("RIOT_API_KEY_EXPIRES_AT", "2026-11-07T22:00:00+13:00")]));
+    assert_eq!(c.riot_api_key_expires_at_ms, Some(1_794_042_000_000));
+    let errs = errors(env(&[
+        ("RIOT_API_KEY_EXPIRES_AT", "tomorrow"),
+        ("STATUS_CHECK_INTERVAL_S", "0"),
+    ]));
+    assert!(
+        errs.iter()
+            .any(|e| e.starts_with("RIOT_API_KEY_EXPIRES_AT: 'tomorrow'")),
+        "{errs:?}"
+    );
+    assert!(
+        errs.iter().any(|e| e.starts_with("STATUS_CHECK_INTERVAL_S: ")),
+        "{errs:?}"
+    );
+}

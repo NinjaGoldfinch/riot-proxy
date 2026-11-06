@@ -437,6 +437,18 @@ impl Limiter {
         (until > now).then(|| until - now)
     }
 
+    /// The longest freeze left on any scope (`riot_retry_after_s`, design/14);
+    /// `None` when nothing is frozen.
+    pub fn longest_freeze(&self) -> Option<Duration> {
+        let now = Instant::now();
+        self.lock()
+            .values()
+            .filter_map(|e| e.frozen_until)
+            .filter(|&until| until > now)
+            .max()
+            .map(|until| until - now)
+    }
+
     /// Set a scope's app windows directly (what v1 tests did with `redis.set(cfg)`).
     /// Admissions in windows of matching length are kept.
     pub fn configure_app(&self, scope: &str, windows: &[LimitWindow]) {

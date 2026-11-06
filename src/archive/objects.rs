@@ -301,6 +301,17 @@ impl Objects {
         Ok(out)
     }
 
+    /// Whether the bucket answers a listing, reading no further than its first
+    /// key: `/status`'s `storage` check (STS-02b). [`list`](Self::list) would
+    /// page through the whole bucket.
+    pub async fn probe(&self) -> Result<(), ObjectsError> {
+        use futures_util::StreamExt;
+        match self.store.list(None).next().await {
+            Some(Err(e)) => Err(e.into()),
+            _ => Ok(()),
+        }
+    }
+
     /// Remove `key`. Removing a key that isn't there succeeds.
     pub async fn delete(&self, key: &str) -> Result<(), ObjectsError> {
         self.writable(key)?;

@@ -8,6 +8,7 @@
 //! (none of `Cf-Connecting-IP`, `X-Forwarded-For`, `Forwarded`, `X-Real-IP`).
 //! Neither the consumer quota nor the recent-requests ring sees it.
 
+pub mod checks;
 pub mod snapshot;
 
 use std::collections::BTreeMap;
@@ -29,11 +30,13 @@ pub const SCHEMA: u32 = 1;
 pub const SERVICE: &str = "riot-proxy";
 
 /// What `/status` knows about this process from its start.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Status {
     started: Instant,
     started_at_ms: i64,
     host: String,
+    /// What the checks task stored last (STS-02b).
+    results: checks::Results,
 }
 
 impl Status {
@@ -44,6 +47,7 @@ impl Status {
             started,
             started_at_ms: crate::clock::Clock::now().unix_ms.saturating_sub(ago),
             host: hostname(),
+            results: checks::Results::default(),
         }
     }
 
@@ -140,7 +144,7 @@ impl StatusReport {
             },
         );
         let last_success = state.fetcher.client().watch().last_success_ms();
-        let checks = Vec::new();
+        let checks = checks::report(state);
         Self {
             schema: SCHEMA,
             service: SERVICE,

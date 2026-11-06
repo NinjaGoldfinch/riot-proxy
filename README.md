@@ -158,7 +158,16 @@ Use the unit in [docs/design/07](docs/design/07-deployment.md#option-c--systemd-
 }
 ```
 
-`checks` is empty until STS-02b adds `riot_api`, `riot_key`, `cache` and `storage`.
+`checks` holds up to four, each `ok`, `degraded` or `down` with a `detail` saying why ([design/14](docs/design/14-status.md#checks-sts-02b)):
+
+| Check | What it watches |
+|---|---|
+| `riot_api` | `lol-status-v4` on each `STATUS_CHECK_PLATFORMS` entry (default `LADDER_PLATFORMS`), outside the response cache, at bulk priority. Only the first platform's failure is `down`; absent with no platforms |
+| `riot_key` | the last 2xx, 401 or 403 from Riot on any call; `degraded` within 48 h of `RIOT_API_KEY_EXPIRES_AT` |
+| `cache` | a read of L2 (SQLite) within 2 s |
+| `storage` | a listing of the bucket within 5 s; only with `ARCHIVE_OBJECT_URL` |
+
+They run at boot and every `STATUS_CHECK_INTERVAL_S` (30 s), and read `ok` with detail `pending` until their first result.
 
 Logs are JSON on stdout. Every request carries a `request_id`, echoed as `X-Request-Id`.
 
