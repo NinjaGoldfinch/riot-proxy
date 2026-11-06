@@ -322,7 +322,7 @@
           "ops"
         ],
         "summary": "Status",
-        "description": "The shared ninjagoldfinch status contract (`schema: 1`): build identity, uptime, the background checks, and flat counters and gauges. Answered from memory, never by calling Riot, so it is fast and costs no Riot request. **200 even when `status` is `down`**: a non-200 means this endpoint itself failed.\n\nTakes the admin key (admin scope and `ADMIN_IP_ALLOWLIST`), or no key from a TCP peer inside `STATUS_ALLOW_CIDR` (default loopback) on a request carrying none of `Cf-Connecting-IP`, `X-Forwarded-For`, `Forwarded` or `X-Real-IP`: a request a reverse proxy forwarded needs the key, whatever `TRUST_PROXY` says. Not metered by the consumer quota.",
+        "description": "The shared ninjagoldfinch status contract (`schema: 1`): build identity, uptime, the background checks, and flat counters and gauges. Answered from memory, never by calling Riot, so it is fast and costs no Riot request. **200 even when `status` is `down`**: a non-200 means this endpoint itself failed.\n\nTakes the admin key (admin scope and `ADMIN_IP_ALLOWLIST`), or no key from a TCP peer inside `STATUS_ALLOW_CIDR` (default loopback) on a request carrying none of `Cf-Connecting-IP`, `X-Forwarded-For`, `Forwarded` or `X-Real-IP`: a request a reverse proxy forwarded with one of them needs the key, whatever `TRUST_PROXY` says; behind a proxy that adds none, set `STATUS_ALLOW_CIDR` to `none`. Not metered by the consumer quota.",
         "operationId": "status",
         "responses": {
           "200": {

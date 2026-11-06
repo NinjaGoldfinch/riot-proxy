@@ -63,7 +63,7 @@ With the defaults every page is on (`src/config.rs:740-742`, `784-787`):
 |---|---|---|
 | `http://127.0.0.1:8080/docs` | the OpenAPI reference (Scalar) and `/openapi.json`, `/openapi.yaml` (`src/routes/docs.rs:385-393`) | no |
 | `/dev` and `/dev/showcase` | the dev explorer and the example frontend; never served when `ENV=production` (`README.md:88`; `src/config.rs:740-742`) | the page loads without one; its API calls need a read key unless `AUTH_DISABLED` (`docs/design/11-showcase.md:15`) |
-| `/dashboard` | the operational dashboard; inert without an admin key (`.env.example:196-197`) | admin key in the page |
+| `/dashboard` | the operational dashboard; inert without an admin key (`.env.example:198-199`) | admin key in the page |
 | `/healthz`, `/readyz`, `/metrics` | ops routes | no |
 
 ### Mint a key and make the first request
@@ -125,7 +125,7 @@ ARCHIVE_OBJECT_URL=file:///absolute/path/to/bucket just dev
 | Need | Use |
 |---|---|
 | The whole server against a scripted Riot | `just acceptance` (`justfile:49-52`): builds, then `acceptance/helpers/mock-riot.ts` stands in for every Riot host (the proxy names the host it meant in `x-riot-host`, `mock-riot.ts:7`) and `serve` starts on port 18980 pointed at the mock on 18981 with a known admin key (`acceptance/helpers/env.ts:19-25`, `244-275`; `helpers/setup.ts:23-54`). `ACCEPTANCE_LIVE=1` is the real-Riot mode and spends your key's quota. |
-| Pointing any `serve` at a mock | `RIOT_BASE_URL` and `DDRAGON_BASE_URL`; both refused in production (`src/config.rs:751-760`; `.env.example:190-193`) |
+| Pointing any `serve` at a mock | `RIOT_BASE_URL` and `DDRAGON_BASE_URL`; both refused in production (`src/config.rs:751-760`; `.env.example:188-191`) |
 | Recorded real exchanges | `tests/fixtures/replay/` (`tests/fixtures/replay/README.md`), served by wiremock in `tests/replay.rs` and `tests/players_routes.rs` |
 | One raw call with your key | `just riot account/by-riot-id europe 'Hide on bush' KR1` = `cargo run --features dev-cli -- riot get …` (`justfile:45-47`). Endpoint by id or slug, routing a platform or region, `-q k=v` for queries; it bypasses the cache and the limiter, so it counts against the key (`src/cli/riot.rs:1-3`, `15-32`, `63-81`). `riot record --out <dir> …` writes a redacted fixture ([adding-a-riot-call.md](./adding-a-riot-call.md)). |
 
@@ -203,5 +203,5 @@ Not re-executed here: `cargo build`, `cargo test` and `just nextest` (a full run
 > **TODO (unverified):** the exact first-run output of a **release** binary built without `dev-cli` (`Cargo.toml:52-54`); only the local `--all-features` debug build was run, and its `--help` lists `riot`.
 
 ---
-**Sources:** `rust-toolchain.toml:L1-L5`, `justfile:L1-L52`, `.env.example:L1-L197`, `README.md:L60-L113`, `src/config.rs:L3`, `L586-L600`, `L628-L638`, `L676-L702`, `L906-L932`, `L1009-L1021`, `src/cli/mod.rs:L82-L88`, `src/cli/serve.rs:L59-L75`, `L76-L108`, `L143-L148`, `L341-L346`, `L421-L427`, `src/cli/key.rs:L13-L57`, `src/consumers.rs:L12-L14`, `L95-L96`, `src/http/auth.rs:L207-L210`, `src/jobs/ticks.rs:L1-L4`, `L44-L80`, `L108-L139`, `src/cli/riot.rs:L1-L32`, `L63-L81`, `src/archive/objects.rs:L109-L121`, `acceptance/helpers/env.ts:L19-L25`, `L244-L275`, `acceptance/helpers/setup.ts:L23-L54`, `acceptance/helpers/mock-riot.ts:L7`, `tests/ui.rs:L42-L64`, `tests/dom/package.json`, `acceptance/package.json`, `.github/workflows/ci.yml:L52-L53`, `PROGRESS.md:L390`, `L400`, `L420-L422`, `docs/IMPLEMENTATION.md:L434`, `docs/design/11-showcase.md:L15`, `docs/DECISIONS.md:L1457`, `docs/_meta/scratch/config.md`, `docs/_meta/scratch/persistence.md` §5, `docs/_meta/scratch/siblings.md` §1.2, §1.8
+**Sources:** `rust-toolchain.toml:L1-L5`, `justfile:L1-L52`, `.env.example:L1-L199`, `README.md:L60-L113`, `src/config.rs:L3`, `L586-L600`, `L628-L638`, `L676-L702`, `L906-L932`, `L1009-L1021`, `src/cli/mod.rs:L82-L88`, `src/cli/serve.rs:L59-L75`, `L76-L108`, `L143-L148`, `L341-L346`, `L421-L427`, `src/cli/key.rs:L13-L57`, `src/consumers.rs:L12-L14`, `L95-L96`, `src/http/auth.rs:L207-L210`, `src/jobs/ticks.rs:L1-L4`, `L44-L80`, `L108-L139`, `src/cli/riot.rs:L1-L32`, `L63-L81`, `src/archive/objects.rs:L109-L121`, `acceptance/helpers/env.ts:L19-L25`, `L244-L275`, `acceptance/helpers/setup.ts:L23-L54`, `acceptance/helpers/mock-riot.ts:L7`, `tests/ui.rs:L42-L64`, `tests/dom/package.json`, `acceptance/package.json`, `.github/workflows/ci.yml:L52-L53`, `PROGRESS.md:L390`, `L400`, `L420-L422`, `docs/IMPLEMENTATION.md:L434`, `docs/design/11-showcase.md:L15`, `docs/DECISIONS.md:L1457`, `docs/_meta/scratch/config.md`, `docs/_meta/scratch/persistence.md` §5, `docs/_meta/scratch/siblings.md` §1.2, §1.8
 **Last verified:** 2026-11-06 against commit `e5d5c1d`

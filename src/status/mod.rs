@@ -178,8 +178,8 @@ pub fn router() -> OpenApiRouter<AppState> {
                    Takes the admin key (admin scope and `ADMIN_IP_ALLOWLIST`), or no key from a TCP peer \
                    inside `STATUS_ALLOW_CIDR` (default loopback) on a request carrying none of \
                    `Cf-Connecting-IP`, `X-Forwarded-For`, `Forwarded` or `X-Real-IP`: a request a reverse \
-                   proxy forwarded needs the key, whatever `TRUST_PROXY` says. Not metered by the consumer \
-                   quota.",
+                   proxy forwarded with one of them needs the key, whatever `TRUST_PROXY` says; behind a proxy \
+                   that adds none, set `STATUS_ALLOW_CIDR` to `none`. Not metered by the consumer quota.",
     security(("bearerAuth" = []), ()),
     responses(
         (status = 200, description = "The contract", body = StatusReport),
