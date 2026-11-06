@@ -261,6 +261,11 @@ impl Fetcher {
         &self.inner.cache
     }
 
+    /// The Riot client every fetch goes through.
+    pub fn client(&self) -> &RiotClient {
+        &self.inner.client
+    }
+
     pub fn limiter(&self) -> &Arc<Limiter> {
         &self.inner.limiter
     }

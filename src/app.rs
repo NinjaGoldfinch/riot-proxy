@@ -64,6 +64,8 @@ pub struct AppState {
     /// The analytics routes' reads and their responses cache (PERF-03), shared
     /// with `aggregate:analytics`, which clears and warms it.
     pub analytics: Arc<crate::routes::analytics::cache::Analytics>,
+    /// What `/status` knows about this process (STS-02).
+    pub status: Arc<crate::status::Status>,
 }
 
 pub fn router(state: AppState, metrics: PrometheusHandle) -> Router {
@@ -130,6 +132,7 @@ async fn record_request(req: axum::extract::Request, next: axum::middleware::Nex
         .get::<axum::extract::MatchedPath>()
         .map_or_else(|| "unmatched".to_string(), |m| fastify_style(m.as_str()));
     let path = req.uri().path();
+    let group = route_group(path);
     let seen = crate::http::recent::recorded(path).then(|| {
         (
             req.method().to_string(),
@@ -150,6 +153,17 @@ async fn record_request(req: axum::extract::Request, next: axum::middleware::Nex
         Some("BYPASS") => "bypass",
         _ => "none",
     };
+    let consumer = res
+        .extensions()
+        .get::<crate::http::recent::ServedTo>()
+        .map(|c| c.0.clone());
+    metrics::counter!(
+        crate::metrics::CONSUMER_REQUESTS_TOTAL,
+        "consumer" => consumer.clone().unwrap_or_else(|| ANONYMOUS.to_string()),
+        "group" => group,
+        "class" => status_class(res.status()),
+    )
+    .increment(1);
     if let Some((method, path, request_id)) = seen {
         crate::http::recent::push_request(crate::http::recent::RecentRequest {
             at: crate::clock::Clock::now().unix_ms,
@@ -159,16 +173,71 @@ async fn record_request(req: axum::extract::Request, next: axum::middleware::Nex
             status: res.status().as_u16(),
             cache: cache.to_string(),
             latency_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-            consumer: res
-                .extensions()
-                .get::<crate::http::recent::ServedTo>()
-                .map(|c| c.0.clone()),
+            consumer,
             request_id,
         });
     }
     metrics::counter!(crate::metrics::REQUESTS_TOTAL, "route" => route, "status" => res.status().as_str().to_string(), "cache" => cache)
         .increment(1);
     res
+}
+
+/// `consumer_requests_total`'s `consumer` for a request no key was resolved for.
+pub const ANONYMOUS: &str = "anonymous";
+
+/// `consumer_requests_total`'s `group` (design/14 §Metrics): the path's
+/// prefix, matched on whole segments. `ui`'s "static" is Data Dragon's
+/// `/v1/static` and `/ddragon` (ADR-205).
+pub fn route_group(path: &str) -> &'static str {
+    let under = |prefix: &str| {
+        path.strip_prefix(prefix)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+    };
+    if under("/v1/lol/analytics") {
+        "analytics"
+    } else if under("/v1/lol") {
+        "lol"
+    } else if under("/v1/riot") {
+        "riot"
+    } else if under("/v1/players") {
+        "players"
+    } else if under("/v1/admin") {
+        "admin"
+    } else if under("/v1/ws") {
+        "ws"
+    } else if [
+        "/healthz",
+        "/readyz",
+        "/metrics",
+        "/status",
+        "/openapi.json",
+        "/openapi.yaml",
+        "/docs",
+    ]
+    .iter()
+    .any(|p| under(p))
+    {
+        "ops"
+    } else if ["/dashboard", "/dev", "/v1/static", "/ddragon"]
+        .iter()
+        .any(|p| under(p))
+    {
+        "ui"
+    } else {
+        "other"
+    }
+}
+
+/// `consumer_requests_total`'s `class`: `2xx`…`5xx`, and `1xx` for a
+/// WebSocket upgrade's 101.
+pub fn status_class(status: axum::http::StatusCode) -> &'static str {
+    match status.as_u16() {
+        100..=199 => "1xx",
+        200..=299 => "2xx",
+        300..=399 => "3xx",
+        400..=499 => "4xx",
+        _ => "5xx",
+    }
 }
 
 /// `/a/{b}/c` → `/a/:b/c`.
@@ -274,4 +343,53 @@ pub fn shutdown_signal() -> std::io::Result<impl Future<Output = ()> + Send + 's
     Ok(async {
         let _ = tokio::signal::ctrl_c().await;
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// design/14 §Metrics: groups by path prefix, on whole segments.
+    #[test]
+    fn route_groups() {
+        for (path, group) in [
+            ("/v1/riot/account/v1/accounts/by-riot-id/europe/a/b", "riot"),
+            ("/v1/lol/summoners/by-puuid/euw1/P", "lol"),
+            ("/v1/lol/analytics/champions", "analytics"),
+            ("/v1/lol/analytics", "analytics"),
+            ("/v1/lol/analyticsx", "lol"),
+            ("/v1/players/P/profile", "players"),
+            ("/v1/admin/info", "admin"),
+            ("/v1/ws", "ws"),
+            ("/healthz", "ops"),
+            ("/readyz", "ops"),
+            ("/metrics", "ops"),
+            ("/status", "ops"),
+            ("/status/ratelimits", "ops"),
+            ("/openapi.json", "ops"),
+            ("/openapi.yaml", "ops"),
+            ("/docs", "ops"),
+            ("/dashboard", "ui"),
+            ("/dev", "ui"),
+            ("/dev/showcase", "ui"),
+            ("/v1/static/versions", "ui"),
+            ("/ddragon/15.1.1/img/champion/Ahri.png", "ui"),
+            ("/", "other"),
+            ("/statusx", "other"),
+            ("/v1/adminx", "other"),
+            ("/nope", "other"),
+        ] {
+            assert_eq!(route_group(path), group, "{path}");
+        }
+    }
+
+    #[test]
+    fn status_classes() {
+        use axum::http::StatusCode;
+        assert_eq!(status_class(StatusCode::SWITCHING_PROTOCOLS), "1xx");
+        assert_eq!(status_class(StatusCode::OK), "2xx");
+        assert_eq!(status_class(StatusCode::NOT_MODIFIED), "3xx");
+        assert_eq!(status_class(StatusCode::TOO_MANY_REQUESTS), "4xx");
+        assert_eq!(status_class(StatusCode::BAD_GATEWAY), "5xx");
+    }
 }

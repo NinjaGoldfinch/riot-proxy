@@ -108,6 +108,7 @@ Values come from CLI flags, then the environment, then `.env`, then the built-in
 | `LADDER_CRAWL_S` / `LADDER_TIER_FLOOR` | `0` / `MASTER` | Scheduled ladder crawls (0 = on demand) and their depth |
 | `ADMIN_IP_ALLOWLIST` | — | IPs and CIDRs allowed to reach `/v1/admin/*` |
 | `TRUST_PROXY` | `false` | Take the client address from `X-Forwarded-For`. Turn on only behind a reverse proxy that sets it |
+| `STATUS_ALLOW_CIDR` | `127.0.0.1/32,::1/128` | TCP peers that may read `/status` without a key (never `X-Forwarded-For`); `none` for none |
 | `BOOTSTRAP_ADMIN_KEY` | — | Use this admin key on first run instead of generating one |
 | `DEV_UI` / `DOCS_UI` / `DASHBOARD_UI` | on (`/dev` always off in production) | The three pages |
 
@@ -128,6 +129,36 @@ Use the unit in [docs/design/07](docs/design/07-deployment.md#option-c--systemd-
 | `/healthz` | Process up. `riot-proxy healthcheck` calls it, which suits a scratch image with no curl |
 | `/readyz` | Database writable and limiter restored |
 | `/metrics` | Prometheus, with v1's metric names, so v1's Grafana dashboard and alerts import unchanged |
+| `/status` | The shared ninjagoldfinch status contract, for the status bot. The admin key, or no key from loopback (`STATUS_ALLOW_CIDR`) on a request with none of `Cf-Connecting-IP`, `X-Forwarded-For`, `Forwarded` or `X-Real-IP`, so a request through the Cloudflare tunnel, or a reverse proxy that adds one of them, needs the key. A proxy that adds none (nginx without `proxy_set_header X-Forwarded-For`, HAProxy without `option forwardfor`) still reads as local: set `STATUS_ALLOW_CIDR=none`. Never calls Riot; not metered by the consumer quota |
+
+`GET /status` is 200 even when `status` is `down`: a non-200 means the endpoint itself failed. `status` is the worst of `checks`. `metrics` is flat counters (since `started_at`) and gauges; [design/14](docs/design/14-status.md#metrics-sts-02) lists every key. Observed on a fresh dev build (`metrics` cut short):
+
+```json
+{
+  "schema": 1,
+  "service": "riot-proxy",
+  "host": "riot-proxy-dev-container",
+  "version": "dev",
+  "commit": "e5d5c1d",
+  "built_at": "2026-11-05T22:22:25Z",
+  "started_at": "2026-11-05T22:31:46Z",
+  "uptime_s": 0,
+  "status": "ok",
+  "checks": [],
+  "metrics": {
+    "cache_entries": 0,
+    "fetch_queue_depth": 0,
+    "requests_total": 2,
+    "requests_total_anonymous": 2,
+    "requests_total_ops": 2,
+    "riot_errors_total": 0,
+    "riot_requests_total": 0
+  },
+  "metrics_meta": { "riot_last_success_at": null }
+}
+```
+
+`checks` is empty until STS-02b adds `riot_api`, `riot_key`, `cache` and `storage`.
 
 Logs are JSON on stdout. Every request carries a `request_id`, echoed as `X-Request-Id`.
 

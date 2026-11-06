@@ -426,6 +426,7 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         stats,
         maintenance,
         analytics: analytics_cache,
+        status: Arc::new(crate::status::Status::new(started)),
     };
     let served = app::serve(listener, app::router(state, metrics), shutdown).await;
 

@@ -46,9 +46,9 @@ Both are at the root, beside `/healthz`, not under `/v1`: they are operational, 
 **A local request.** The admin key is `Authorization: Bearer rpx_…`, checked by the auth layer like any admin route (scope `admin`, `ADMIN_IP_ALLOWLIST`). A request without a key is let through to `/status` only when both hold:
 
 1. the TCP peer address (never `X-Forwarded-For`, whatever `TRUST_PROXY` says) is inside `STATUS_ALLOW_CIDR` (default loopback only, `127.0.0.1/32,::1/128`), and
-2. the request has no `Cf-Connecting-IP` header.
+2. the request has none of the headers a reverse proxy adds: `Cf-Connecting-IP`, `X-Forwarded-For`, `Forwarded` or `X-Real-IP`. Only their presence counts, never their values, and `TRUST_PROXY` plays no part.
 
-The second rule exists because production's `cloudflared` runs on the same host and connects to `127.0.0.1:8080`: every public request through the tunnel arrives from loopback (ADR-144 §Finding). cloudflared adds `Cf-Connecting-IP` to every request it forwards, and a client cannot remove a header the tunnel adds, so a loopback request without it came from the box itself. As a second gate, the ADM-01 WAF rule on `api.ninjagoldfinch.lol` gains `/status*` (owner runbook). A keyless request that fails either rule gets the auth layer's usual `401 UNAUTHORIZED`. `/status/ratelimits` never accepts a keyless request.
+The second rule exists because production's `cloudflared` runs on the same host and connects to `127.0.0.1:8080`: every public request through the tunnel arrives from loopback (ADR-144 §Finding). cloudflared adds `Cf-Connecting-IP` to every request it forwards, and a client cannot remove a header the tunnel adds, so a loopback request without it came from the box itself. nginx, Caddy or Traefik on the same host forward from loopback too, without `Cf-Connecting-IP` but typically with one of the other three, so those count the same (ADR-205). A proxy configured to add none of them (nginx without `proxy_set_header X-Forwarded-For`, HAProxy without `option forwardfor`) still reads as local, so a host behind one sets `STATUS_ALLOW_CIDR=none` or has the proxy add one. As a second gate, the ADM-01 WAF rule on `api.ninjagoldfinch.lol` gains `/status*` (owner runbook). A keyless request that fails either rule gets the auth layer's usual `401 UNAUTHORIZED`. `/status/ratelimits` never accepts a keyless request.
 
 ## Build identity (STS-01)
 
@@ -64,7 +64,7 @@ The second rule exists because production's `cloudflared` runs on the same host 
 
 The numbers come from the Prometheus recorder that is already there (`telemetry::metrics_handle()`, `telemetry::counter_values`), not a second registry, so `/status` and `/metrics` cannot disagree. One counter is new:
 
-- `consumer_requests_total{consumer, group, class}`: every request that reached a handler, by consumer **name** (never the key or its hash; `anonymous` without one), route group and status class (`2xx`, `3xx`, `4xx`, `5xx`). Groups: `riot` (`/v1/riot`), `lol` (`/v1/lol` but analytics), `analytics` (`/v1/lol/analytics`), `players` (`/v1/players`), `admin` (`/v1/admin`), `ws` (`/v1/ws`), `ops` (`/healthz`, `/readyz`, `/metrics`, `/status*`, `/openapi.json`, `/docs`), `ui` (`/dashboard`, `/dev`, static), `other`.
+- `consumer_requests_total{consumer, group, class}`: every request that reached a handler, by consumer **name** (never the key or its hash; `anonymous` without one), route group and status class (`2xx`, `3xx`, `4xx`, `5xx`, and `1xx` for a WebSocket upgrade's 101). Groups: `riot` (`/v1/riot`), `lol` (`/v1/lol` but analytics), `analytics` (`/v1/lol/analytics`), `players` (`/v1/players`), `admin` (`/v1/admin`), `ws` (`/v1/ws`), `ops` (`/healthz`, `/readyz`, `/metrics`, `/status*`, `/openapi.json`, `/openapi.yaml`, `/docs`), `ui` (`/dashboard`, `/dev`, static: Data Dragon's `/v1/static` and `/ddragon`), `other`. As built (STS-02, ADR-205), "reached a handler" is every request the router answered, so an auth refusal counts: as `anonymous` for a 401 or 403 (a refusal carries no consumer), and under the consumer for its quota's 429.
 
 | `metrics` key | Kind | From |
 |---|---|---|
@@ -80,7 +80,7 @@ The numbers come from the Prometheus recorder that is already there (`telemetry:
 | `riot_app_limit_remaining_pct_<scope>` | gauge | STS-03 |
 | `riot_retry_after_s` | gauge | STS-03 |
 
-`metrics_meta.riot_last_success_at` is the time of the last 2xx from Riot, RFC 3339, or `null` before the first. `<consumer>` and `<scope>` are lowercased with every character outside `[a-z0-9]` turned into `_`: `ninjagoldfinch-lol-prod` → `requests_total_ninjagoldfinch_lol_prod`. The exact recorder label values behind each row are listed in `docs/design/metrics.md` when STS-02 lands.
+`metrics_meta.riot_last_success_at` is the time of the last 2xx from Riot, RFC 3339, or `null` before the first. `<consumer>` and `<scope>` are lowercased with every character outside `[a-z0-9]` turned into `_`: `ninjagoldfinch-lol-prod` → `requests_total_ninjagoldfinch_lol_prod`. A consumer whose name flattens to a group's (`admin`, `ops`, …) is keyed `requests_total_consumer_<name>`, so it never adds to the group's count (ADR-205). The fixed keys, the nine groups' included, are present from boot at 0. The exact recorder label values behind each row are listed in `docs/design/metrics.md` when STS-02 lands.
 
 ## Rate-limit table (STS-03)
 
@@ -158,7 +158,7 @@ When `EVENTS_URL` is set, state transitions are POSTed there as the contract's e
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `STATUS_ALLOW_CIDR` | `127.0.0.1/32,::1/128` | peers that may read `/status` without a key (plus the `Cf-Connecting-IP` rule) |
+| `STATUS_ALLOW_CIDR` | `127.0.0.1/32,::1/128` | peers that may read `/status` without a key (plus the forwarding-header rule); `none` for none (an empty value is unset, as for every variable); an entry that does not parse refuses the boot |
 | `STATUS_CHECK_INTERVAL_S` | `30` | how often the checks run |
 | `STATUS_CHECK_PLATFORMS` | the `LADDER_PLATFORMS` entries | platforms probed every 60 s besides the default |
 | `RIOT_API_KEY_EXPIRES_AT` | unset | RFC 3339; `riot_key` is `degraded` within 48 h of it |
@@ -166,4 +166,4 @@ When `EVENTS_URL` is set, state transitions are POSTed there as the contract's e
 
 ## Tasks
 
-STS-00 (this document, ADR-203) → STS-01 build identity → STS-02 metrics, checks and `GET /status` → STS-03 the rate-limit table and `GET /status/ratelimits` → STS-04 outbound events. Each is one PR off `origin/main`.
+STS-00 (this document, ADR-203) → STS-01 build identity → STS-02 metrics and `GET /status` → STS-02b the checks → STS-03 the rate-limit table and `GET /status/ratelimits` → STS-04 outbound events. Each is one PR off `origin/main`.

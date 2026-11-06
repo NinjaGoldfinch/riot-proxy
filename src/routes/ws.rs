@@ -91,7 +91,9 @@ async fn socket(
         admin,
     };
     let hub = state.hub.clone();
+    let name = client.consumer.clone();
     let mut res = ws.on_upgrade(move |socket| serve_socket(hub, socket, client));
     quota.apply(res.headers_mut());
+    res.extensions_mut().insert(crate::http::recent::ServedTo(name));
     res
 }

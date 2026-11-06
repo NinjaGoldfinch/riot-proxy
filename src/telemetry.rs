@@ -189,30 +189,59 @@ pub fn counter_values(
     parse_counter(&handle.render(), name)
 }
 
-fn parse_counter(text: &str, name: &str) -> Vec<(std::collections::BTreeMap<String, String>, f64)> {
+/// One metric's series by label set, read from a rendering already taken:
+/// `/status` reads several metrics from one `render()` (STS-02). Label values
+/// are free text (a consumer's name), so the label block is read as the
+/// Prometheus text format writes it: `key="value"` pairs, with `\"`, `\\`
+/// and `\n` escaped inside the quotes, closed by the first `}` outside them.
+pub fn parse_counter(text: &str, name: &str) -> Vec<(std::collections::BTreeMap<String, String>, f64)> {
     text.lines()
         .filter(|l| !l.starts_with('#'))
         .filter_map(|line| {
             let rest = line.strip_prefix(name)?;
             let (labels, value) = match rest.strip_prefix('{') {
-                Some(r) => {
-                    let (inside, after) = r.split_once('}')?;
-                    (inside, after.trim())
-                }
-                None if rest.starts_with(' ') => ("", rest.trim()),
+                Some(r) => parse_labels(r)?,
+                None if rest.starts_with(' ') => (std::collections::BTreeMap::new(), rest),
                 None => return None,
             };
-            let labels = labels
-                .split(',')
-                .filter(|p| !p.is_empty())
-                .filter_map(|pair| {
-                    let (k, v) = pair.split_once('=')?;
-                    Some((k.trim().to_string(), v.trim().trim_matches('"').to_string()))
-                })
-                .collect();
-            Some((labels, value.parse().ok()?))
+            // The value, then an optional timestamp the exporter never writes.
+            Some((labels, value.split_whitespace().next()?.parse().ok()?))
         })
         .collect()
+}
+
+/// The pairs of a label block whose `{` is already consumed, and what follows
+/// its closing `}`. `None` when the block is not well formed.
+fn parse_labels(mut s: &str) -> Option<(std::collections::BTreeMap<String, String>, &str)> {
+    let mut labels = std::collections::BTreeMap::new();
+    loop {
+        s = s.trim_start();
+        if let Some(after) = s.strip_prefix('}') {
+            return Some((labels, after));
+        }
+        let (key, after) = s.split_once('=')?;
+        let after = after.trim_start().strip_prefix('"')?;
+        let mut value = String::new();
+        let mut chars = after.char_indices();
+        let end = loop {
+            match chars.next()? {
+                (i, '"') => break i,
+                (_, '\\') => match chars.next()? {
+                    (_, 'n') => value.push('\n'),
+                    (_, c @ ('"' | '\\')) => value.push(c),
+                    (_, c) => {
+                        value.push('\\');
+                        value.push(c);
+                    }
+                },
+                (_, c) => value.push(c),
+            }
+        };
+        labels.insert(key.trim().to_string(), value);
+        s = after[end + 1..].trim_start();
+        // A trailing comma before `}` is allowed by the format.
+        s = s.strip_prefix(',').unwrap_or(s);
+    }
 }
 
 #[cfg(test)]
@@ -234,5 +263,43 @@ mod counter_tests {
             (claims[0].0["part"].as_str(), claims[0].0["outcome"].as_str()),
             ("summoner", "claimed")
         );
+    }
+
+    /// Label values are free text: a consumer's name may hold any of the
+    /// characters the format uses for structure (STS-02).
+    #[test]
+    fn label_values_may_hold_the_format_s_own_characters() {
+        let text = concat!(
+            r#"consumer_requests_total{consumer="Acme, Inc",group="riot",class="2xx"} 4"#,
+            "\n",
+            r#"consumer_requests_total{consumer="team}x",group="ops",class="5xx"} 2"#,
+            "\n",
+            r#"consumer_requests_total{consumer="say \"hi\" a=b",group="lol",class="2xx"} 3"#,
+            "\n",
+            r#"consumer_requests_total{consumer="back\\slash\nline",group="ui",class="4xx",} 1"#,
+            "\n",
+        );
+        let got: Vec<_> = parse_counter(text, "consumer_requests_total")
+            .into_iter()
+            .map(|(l, v)| (l["consumer"].clone(), l["group"].clone(), l["class"].clone(), v))
+            .collect();
+        let want = [
+            ("Acme, Inc", "riot", "2xx", 4.0),
+            ("team}x", "ops", "5xx", 2.0),
+            ("say \"hi\" a=b", "lol", "2xx", 3.0),
+            ("back\\slash\nline", "ui", "4xx", 1.0),
+        ];
+        assert_eq!(got.len(), want.len(), "{got:?}");
+        for (g, w) in got.iter().zip(want) {
+            assert_eq!((g.0.as_str(), g.1.as_str(), g.2.as_str(), g.3), w);
+        }
+    }
+
+    /// A line that is not a well-formed series is skipped, not misread.
+    #[test]
+    fn a_broken_label_block_is_skipped() {
+        let text = "m{a=\"unterminated} 1\nm{a=b} 2\nm{a=\"ok\"} 3\nm 4\nm{} 5\n";
+        let got: Vec<f64> = parse_counter(text, "m").into_iter().map(|(_, v)| v).collect();
+        assert_eq!(got, [3.0, 4.0, 5.0]);
     }
 }

@@ -6,6 +6,8 @@
 //! logged at error; 429 → rate limited, typed or not; 5xx and network → upstream
 //! unavailable.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{Duration, Instant};
 
 use axum::http::{HeaderMap, HeaderValue, header};
@@ -206,6 +208,27 @@ pub struct RiotClient {
     http: reqwest::Client,
     token: HeaderValue,
     base: Base,
+    watch: Arc<UpstreamWatch>,
+}
+
+/// What `/status` reads about Riot's answers (STS-02, design/14), shared by
+/// every clone of a client. Plain atomics: written on the response path,
+/// never awaited.
+#[derive(Debug, Default)]
+pub struct UpstreamWatch {
+    /// Unix ms of the last 2xx; 0 before the first.
+    last_success_ms: AtomicI64,
+}
+
+impl UpstreamWatch {
+    /// When Riot last answered 2xx, in unix ms; `None` before the first.
+    pub fn last_success_ms(&self) -> Option<i64> {
+        Some(self.last_success_ms.load(Ordering::Relaxed)).filter(|&ms| ms > 0)
+    }
+
+    fn succeeded(&self, at_ms: i64) {
+        self.last_success_ms.fetch_max(at_ms, Ordering::Relaxed);
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -243,7 +266,17 @@ impl RiotClient {
             // Embedded roots only: a FROM scratch image has no system CA store (ADR-007).
             .tls_certs_only(webpki_roots())
             .build()?;
-        Ok(Self { http, token, base })
+        Ok(Self {
+            http,
+            token,
+            base,
+            watch: Arc::default(),
+        })
+    }
+
+    /// What `/status` reads about this client's responses.
+    pub fn watch(&self) -> &Arc<UpstreamWatch> {
+        &self.watch
     }
 
     fn url(&self, req: &RiotRequest) -> String {
@@ -289,6 +322,7 @@ impl RiotClient {
         record(scope, method, &status.to_string(), elapsed);
 
         if (200..300).contains(&status) {
+            self.watch.succeeded(crate::clock::Clock::now().unix_ms);
             #[allow(clippy::cast_possible_truncation)]
             let upstream_ms = elapsed.as_millis() as u64;
             return Ok(RiotResponse {
