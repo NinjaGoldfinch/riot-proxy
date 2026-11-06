@@ -230,9 +230,9 @@ impl Auth {
     /// `X-Forwarded-For`, is inside `STATUS_ALLOW_CIDR`, and the request
     /// carries none of [`FORWARDING_HEADERS`]. cloudflared adds
     /// `Cf-Connecting-IP` to every request it forwards from loopback
-    /// (ADR-203); nginx, Caddy or Traefik on the same host add one of the
-    /// others (ADR-205). Only a header's presence is read, never its value,
-    /// and `TRUST_PROXY` plays no part.
+    /// (ADR-203); nginx, Caddy or Traefik usually add one of the others, but
+    /// a proxy that adds none still reads as local (ADR-205). Only a header's
+    /// presence is read, never its value, and `TRUST_PROXY` plays no part.
     pub fn status_local(&self, headers: &HeaderMap, peer: Option<SocketAddr>) -> bool {
         let Some(addr) = peer.map(|p| normalise(p.ip())) else {
             return false;
