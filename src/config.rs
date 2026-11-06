@@ -111,14 +111,14 @@ pub const DB_FILE_NAME: &str = "riot-proxy.db";
 /// absorbs drift between our windows and Riot's.
 pub const DEFAULT_BULK_IDLE_CEILING: f64 = 0.95;
 
+/// `/status` without a key: loopback only (design/14 §Configuration).
+pub const DEFAULT_STATUS_ALLOW_CIDR: &str = "127.0.0.1/32,::1/128";
+
 /// One analytics rebuild at a time (OPS-06): rebuilds for several ladders
 /// started together run one after another instead of sharing the CPU and
 /// SQLite's write lock.
 /// `archive:offload` packs one kind at a time and must never race itself
 /// (OBJ-03).
-/// `/status` without a key: loopback only (design/14 §Configuration).
-pub const DEFAULT_STATUS_ALLOW_CIDR: &str = "127.0.0.1/32,::1/128";
-
 pub const DEFAULT_JOB_KIND_LIMITS: &str = "aggregate:analytics=1,archive:offload=1";
 
 #[derive(Debug, thiserror::Error)]
