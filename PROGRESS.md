@@ -426,7 +426,7 @@ Staging is seeded from production's daily backup and reads production's packs fr
 - [x] STS-00 series spec: design/14, the plan section, ADR-203 (#257)
 - [x] STS-01 build identity: `version` (`dev` off a release tag), `commit`, `built_at`; the startup log line (#259; `build_info::{status_version, short_commit, built_at_rfc3339}` are what STS-02's `/status` reads)
 - [x] STS-02 `consumer_requests_total` and `GET /status` with its local-or-admin gate and `STATUS_ALLOW_CIDR`; `checks` empty until STS-02b (#260, ADR-205)
-- [~] STS-02b the checks (`riot_api`, `riot_key`, `cache`, `storage`) behind `/status` (split from STS-02, ADR-205; the first of `STATUS_CHECK_PLATFORMS` stands in for the removed `DEFAULT_PLATFORM`, owner, ADR-206) (`feat/STS-02b-status-checks`)
+- [x] STS-02b the checks (`riot_api`, `riot_key`, `cache`, `storage`) behind `/status` (split from STS-02, ADR-205; the first of `STATUS_CHECK_PLATFORMS` stands in for the removed `DEFAULT_PLATFORM`, owner, ADR-206) (#261)
 - [ ] STS-03 the rate-limit table and `GET /status/ratelimits`
 - [ ] STS-04 outbound events to `EVENTS_URL`
 
