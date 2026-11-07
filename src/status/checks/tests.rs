@@ -20,7 +20,7 @@ fn result(probe: Probe) -> Platformed {
             latency_ms: 85,
             at_ms: T0,
         }),
-        skipped: false,
+        skips: 0,
     }
 }
 
@@ -145,21 +145,68 @@ fn riot_api_degrades_on_a_429_and_shrugs_at_other_answers() {
 #[test]
 fn a_skipped_probe_keeps_the_last_result() {
     let mut failed = failed();
-    failed.skipped = true;
+    failed.skips = 1;
     let c = riot_api(&[(Platform::Oc1, &failed)], 0);
     assert_eq!(c.status, StatusLevel::Down);
     assert_eq!(
         c.detail,
         "oc1: Riot answered 503; oc1: probe skipped, no room in the rate limiter"
     );
-    let never = Platformed {
-        last: None,
-        skipped: true,
-    };
+    let never = Platformed { last: None, skips: 1 };
     let c = riot_api(&[(Platform::Oc1, &never)], 0);
     assert_eq!(
         (c.status, c.detail.as_str()),
         (StatusLevel::Ok, "oc1: probe skipped, no room in the rate limiter")
+    );
+}
+
+/// The owner (ADR-206): `STALE_AFTER_SKIPS` skipped attempts in a row on a
+/// platform degrade `riot_api`; it is never `down` for it.
+#[test]
+fn a_platform_skipped_four_times_in_a_row_degrades_riot_api() {
+    let skipped = |skips: u32| {
+        let mut p = up();
+        p.skips = skips;
+        p
+    };
+    let three = skipped(STALE_AFTER_SKIPS - 1);
+    let c = riot_api(&[(Platform::Oc1, &three)], 0);
+    assert_eq!(
+        (c.status, c.detail.as_str()),
+        (StatusLevel::Ok, "oc1: probe skipped, no room in the rate limiter")
+    );
+    let four = skipped(STALE_AFTER_SKIPS);
+    let up = up();
+    for order in [
+        [(Platform::Oc1, &four), (Platform::Kr, &up)],
+        [(Platform::Kr, &up), (Platform::Oc1, &four)],
+    ] {
+        let c = riot_api(&order, 0);
+        assert_eq!(
+            (c.status, c.detail.as_str()),
+            (
+                StatusLevel::Degraded,
+                "oc1: probe skipped 4 times in a row, no room in the rate limiter"
+            ),
+            "first or not, it only degrades"
+        );
+    }
+    let never = Platformed {
+        last: None,
+        skips: STALE_AFTER_SKIPS + 1,
+    };
+    let c = riot_api(&[(Platform::Oc1, &never)], 0);
+    assert_eq!(c.status, StatusLevel::Degraded, "never probed at all");
+    assert_eq!(
+        c.detail,
+        "oc1: probe skipped 5 times in a row, no room in the rate limiter"
+    );
+    let mut down = failed();
+    down.skips = STALE_AFTER_SKIPS;
+    assert_eq!(
+        riot_api(&[(Platform::Oc1, &down)], 0).status,
+        StatusLevel::Down,
+        "never better than the last result"
     );
 }
 
@@ -210,10 +257,10 @@ async fn the_probe_cadence() {
 async fn cache_and_storage_answer() {
     let dir = tempfile::tempdir().unwrap();
     let db = Db::open(&dir.path().join("t.db"), 1).unwrap();
-    let c = cache(&db).await;
+    let (c, failed) = cache(&db, CACHE_WITHIN, true).await;
     assert_eq!(
-        (c.name.as_str(), c.status, c.detail.as_str()),
-        (CACHE, StatusLevel::Ok, "")
+        (c.name.as_str(), c.status, c.detail.as_str(), failed),
+        (CACHE, StatusLevel::Ok, "", false)
     );
     assert!(c.latency_ms.is_some());
     assert_eq!(storage(None).await, None, "no bucket, no check");
@@ -227,4 +274,202 @@ fn a_failed_check_takes_its_level() {
     assert_eq!((c.status, c.detail.as_str()), (StatusLevel::Degraded, "x"));
     let c = timed(CACHE, Instant::now(), None, StatusLevel::Down);
     assert_eq!((c.status, c.detail.as_str()), (StatusLevel::Ok, ""));
+}
+
+/// A read SQLite refuses is `down` at once, with SQLite's reason.
+#[tokio::test]
+async fn a_failing_sqlite_read_makes_cache_down() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open(&dir.path().join("t.db"), 1).unwrap();
+    db.write(|c| c.execute_batch("DROP TABLE cache").map_err(DbError::from))
+        .await
+        .unwrap();
+    let (c, failed) = cache(&db, CACHE_WITHIN, false).await;
+    assert!(failed);
+    assert_eq!(c.status, StatusLevel::Down, "an error never waits a round");
+    assert!(
+        c.detail.starts_with("SQLite read failed: ") && c.detail.contains("no such table: cache"),
+        "{}",
+        c.detail
+    );
+}
+
+/// The owner (ADR-206): with every reader held, the read times out. The
+/// first timeout is `degraded`; a second in a row is `down`; an answer
+/// clears it.
+#[tokio::test]
+async fn a_held_reader_pool_is_degraded_before_it_is_down() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open(&dir.path().join("t.db"), 1).unwrap();
+    let (release, held) = std::sync::mpsc::channel::<()>();
+    let (holding, started) = tokio::sync::oneshot::channel();
+    let holder = {
+        let db = db.clone();
+        tokio::spawn(async move {
+            db.read(move |_| {
+                let _ = holding.send(());
+                let _ = held.recv();
+                Ok::<_, DbError>(())
+            })
+            .await
+        })
+    };
+    started.await.unwrap();
+    let within = Duration::from_millis(50);
+
+    let (first, failed) = cache(&db, within, false).await;
+    assert!(failed);
+    assert_eq!(first.status, StatusLevel::Degraded, "one slow round: {first:?}");
+    assert!(
+        first.detail.starts_with("SQLite did not answer a read within "),
+        "{}",
+        first.detail
+    );
+    let (second, failed) = cache(&db, within, failed).await;
+    assert!(failed);
+    assert_eq!(second.status, StatusLevel::Down, "two in a row: {second:?}");
+    assert!(
+        second.detail.ends_with(", after a failure the round before"),
+        "{}",
+        second.detail
+    );
+
+    release.send(()).unwrap();
+    holder.await.unwrap().unwrap();
+    let (back, failed) = cache(&db, CACHE_WITHIN, failed).await;
+    assert_eq!((back.status, failed), (StatusLevel::Ok, false));
+}
+
+/// A bucket whose listing fails, or never answers, degrades `storage`.
+mod a_bucket_that {
+    use async_trait::async_trait;
+    use futures_util::stream::BoxStream;
+    use object_store::memory::InMemory;
+    use object_store::path::Path;
+    use object_store::{
+        CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+        PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions,
+    };
+
+    use super::*;
+
+    /// An in-memory bucket whose listing errors, or hangs.
+    #[derive(Debug)]
+    struct Listing {
+        inner: InMemory,
+        hangs: bool,
+    }
+
+    impl std::fmt::Display for Listing {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("Listing")
+        }
+    }
+
+    #[async_trait]
+    impl ObjectStore for Listing {
+        async fn put_opts(
+            &self,
+            location: &Path,
+            payload: PutPayload,
+            opts: PutOptions,
+        ) -> object_store::Result<PutResult> {
+            self.inner.put_opts(location, payload, opts).await
+        }
+
+        async fn put_multipart_opts(
+            &self,
+            location: &Path,
+            opts: PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
+            self.inner.put_multipart_opts(location, opts).await
+        }
+
+        async fn get_opts(&self, location: &Path, options: GetOptions) -> object_store::Result<GetResult> {
+            self.inner.get_opts(location, options).await
+        }
+
+        fn delete_stream(
+            &self,
+            locations: BoxStream<'static, object_store::Result<Path>>,
+        ) -> BoxStream<'static, object_store::Result<Path>> {
+            self.inner.delete_stream(locations)
+        }
+
+        fn list(&self, _prefix: Option<&Path>) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+            use futures_util::StreamExt;
+            if self.hangs {
+                return futures_util::stream::pending().boxed();
+            }
+            futures_util::stream::once(async {
+                Err(object_store::Error::Generic {
+                    store: "Listing",
+                    source: "access denied".into(),
+                })
+            })
+            .boxed()
+        }
+
+        async fn list_with_delimiter(&self, prefix: Option<&Path>) -> object_store::Result<ListResult> {
+            self.inner.list_with_delimiter(prefix).await
+        }
+
+        async fn copy_opts(&self, from: &Path, to: &Path, options: CopyOptions) -> object_store::Result<()> {
+            self.inner.copy_opts(from, to, options).await
+        }
+
+        async fn rename_opts(
+            &self,
+            from: &Path,
+            to: &Path,
+            options: RenameOptions,
+        ) -> object_store::Result<()> {
+            self.inner.rename_opts(from, to, options).await
+        }
+    }
+
+    fn objects(hangs: bool) -> Objects {
+        let store = Listing {
+            inner: InMemory::new(),
+            hangs,
+        };
+        Objects::from_store(Arc::new(store), true, "memory://")
+    }
+
+    #[tokio::test]
+    async fn fails_its_listing_is_degraded() {
+        let s = storage(Some(&objects(false))).await.unwrap();
+        assert_eq!(s.status, StatusLevel::Degraded);
+        assert!(
+            s.detail.starts_with("the bucket's listing failed: ") && s.detail.contains("access denied"),
+            "{}",
+            s.detail
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn never_answers_is_degraded_after_5_s() {
+        let started = Instant::now();
+        let s = storage(Some(&objects(true))).await.unwrap();
+        assert_eq!(
+            (s.status, s.detail.as_str()),
+            (
+                StatusLevel::Degraded,
+                "the bucket did not answer a listing within 5 s"
+            )
+        );
+        assert_eq!(started.elapsed(), STORAGE_WITHIN);
+    }
+}
+
+/// The probe's request builds on every platform, so `Checker::new` never
+/// refuses a boot and a round never builds one.
+#[test]
+fn the_probe_request_builds_on_every_platform() {
+    let endpoint = Endpoint::by_id(PROBE_METHOD).unwrap();
+    for platform in Platform::ALL {
+        let req = RiotRequest::new(endpoint, Target::Platform(platform), &[]).unwrap();
+        assert_eq!(req.path_and_query(), "/lol/status/v4/platform-data");
+        assert_eq!(req.target.scope(), platform.as_str());
+    }
 }

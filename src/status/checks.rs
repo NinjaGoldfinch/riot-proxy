@@ -9,7 +9,8 @@
 //! through the response cache. The first platform is the one that can make it
 //! `down` (ADR-206); it is probed every interval while idle and every 60 s
 //! while real traffic reached its scope in the last 60 s. The others are
-//! probed every 60 s and only degrade it.
+//! probed every 60 s and only degrade it. A platform whose probe was skipped
+//! `STALE_AFTER_SKIPS` attempts in a row degrades it too.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -23,7 +24,7 @@ use crate::app::AppState;
 use crate::archive::objects::Objects;
 use crate::build_info::rfc3339;
 use crate::db::{Db, DbError};
-use crate::riot::client::{KeyVerdict, RiotClient, RiotErrorKind, RiotRequest};
+use crate::riot::client::{KeyVerdict, RequestError, RiotClient, RiotErrorKind, RiotRequest};
 use crate::riot::endpoints::{Endpoint, Target};
 use crate::riot::limiter::headers::RateLimitHeaders;
 use crate::riot::limiter::{Limiter, Priority};
@@ -42,6 +43,9 @@ pub const SLOW_EVERY: Duration = Duration::from_secs(60);
 const ACTIVE_WITHIN_MS: i64 = 60_000;
 /// No limiter room within this skips a probe.
 const PROBE_ROOM: Duration = Duration::from_secs(1);
+/// A platform skipped this many attempts in a row degrades `riot_api`
+/// (owner, ADR-206): its last result is then too old to stand for Riot.
+pub const STALE_AFTER_SKIPS: u32 = 4;
 const CACHE_WITHIN: Duration = Duration::from_secs(2);
 const STORAGE_WITHIN: Duration = Duration::from_secs(5);
 /// `riot_key` is `degraded` this long before `RIOT_API_KEY_EXPIRES_AT`.
@@ -174,12 +178,13 @@ pub struct ProbeResult {
     pub at_ms: i64,
 }
 
-/// One probed platform: its last result, and whether its last attempt was
-/// skipped for want of limiter room (the result then still stands).
+/// One probed platform: its last result, and how many attempts in a row,
+/// up to the last, were skipped for want of limiter room (the result then
+/// still stands, until `STALE_AFTER_SKIPS`).
 #[derive(Debug, Clone, Default)]
 pub struct Platformed {
     pub last: Option<ProbeResult>,
-    pub skipped: bool,
+    pub skips: u32,
 }
 
 /// `riot_api` from each platform's last probe, the first platform's first.
@@ -220,7 +225,16 @@ pub fn riot_api(platforms: &[(Platform, &Platformed)], started_at_ms: i64) -> Ch
                 push(&mut check.detail, format!("{platform}: {detail}"));
             }
         }
-        if p.skipped {
+        if p.skips >= STALE_AFTER_SKIPS {
+            check.status = check.status.max(StatusLevel::Degraded);
+            push(
+                &mut check.detail,
+                format!(
+                    "{platform}: probe skipped {} times in a row, no room in the rate limiter",
+                    p.skips
+                ),
+            );
+        } else if p.skips > 0 {
             push(
                 &mut check.detail,
                 format!("{platform}: probe skipped, no room in the rate limiter"),
@@ -249,24 +263,63 @@ pub struct Checker {
     db: Db,
     status: Arc<Status>,
     interval: Duration,
-    platforms: Vec<(Platform, Platformed, Option<Instant>)>,
+    platforms: Vec<Probed>,
+    /// Whether the last round's `cache` check failed.
+    cache_failed: bool,
+}
+
+/// A platform the checks probe: its request, built once, and what it saw.
+struct Probed {
+    platform: Platform,
+    request: RiotRequest,
+    seen: Platformed,
+    /// When it was last due, probed or skipped.
+    attempted: Option<Instant>,
+}
+
+/// Why the checks task could not be built: the probe's request does not
+/// resolve, which is a bug in the endpoint table, never a runtime state.
+#[derive(Debug, thiserror::Error)]
+pub enum CheckerError {
+    #[error("the status probe's endpoint {PROBE_METHOD} is not in the endpoint table")]
+    NoEndpoint,
+    #[error("the status probe's request on {platform} does not build: {source}")]
+    Request {
+        platform: Platform,
+        #[source]
+        source: RequestError,
+    },
 }
 
 impl Checker {
-    pub fn new(state: &AppState) -> Self {
-        Self {
+    /// Builds each platform's probe request once, so a round never mistakes
+    /// a request that does not build for a skipped probe.
+    pub fn new(state: &AppState) -> Result<Self, CheckerError> {
+        let endpoint = Endpoint::by_id(PROBE_METHOD).ok_or(CheckerError::NoEndpoint)?;
+        let platforms = state
+            .config
+            .status_check_platforms
+            .iter()
+            .map(|&platform| {
+                let request = RiotRequest::new(endpoint, Target::Platform(platform), &[])
+                    .map_err(|source| CheckerError::Request { platform, source })?;
+                Ok(Probed {
+                    platform,
+                    request,
+                    seen: Platformed::default(),
+                    attempted: None,
+                })
+            })
+            .collect::<Result<_, CheckerError>>()?;
+        Ok(Self {
             client: state.fetcher.client().clone(),
             limiter: Arc::clone(&state.limiter),
             db: state.db.clone(),
             status: Arc::clone(&state.status),
             interval: Duration::from_secs(state.config.status_check_interval_s.into()),
-            platforms: state
-                .config
-                .status_check_platforms
-                .iter()
-                .map(|&p| (p, Platformed::default(), None))
-                .collect(),
-        }
+            platforms,
+            cache_failed: false,
+        })
     }
 
     /// Run a round now and then every interval, until aborted.
@@ -281,61 +334,78 @@ impl Checker {
         })
     }
 
-    /// One round at `now`: the due probes, `cache` and `storage`, each
-    /// stored as it is known.
+    /// One round at `now`: the due probes, `cache` and `storage`, run
+    /// concurrently, each stored as soon as it is known. A probe left
+    /// hanging until the client's timeout never holds back `cache` or
+    /// `storage`; the round ends when all three have.
     pub async fn round(&mut self, now: Instant) {
-        let active = self.platforms.first().is_some_and(|(p, ..)| {
+        let active = self.platforms.first().is_some_and(|p| {
             self.client
                 .watch()
-                .last_traffic_ms(p.as_str())
+                .last_traffic_ms(p.platform.as_str())
                 .is_some_and(|at| crate::clock::Clock::now().unix_ms - at < ACTIVE_WITHIN_MS)
         });
-        let last: Vec<Option<Instant>> = self.platforms.iter().map(|(.., at)| *at).collect();
+        let last: Vec<Option<Instant>> = self.platforms.iter().map(|p| p.attempted).collect();
         let due = due(&last, active, now);
-        let probes = futures_util::future::join_all(due.iter().map(|&i| {
-            let platform = self.platforms[i].0;
-            probe(&self.client, &self.limiter, platform)
-        }));
-        let (probed, cache, storage) = tokio::join!(probes, cache(&self.db), storage(self.db.objects()));
-        for (&i, result) in due.iter().zip(probed) {
-            let (_, p, at) = &mut self.platforms[i];
-            *at = Some(now);
-            p.skipped = result.is_none();
-            if let Some(r) = result {
-                p.last = Some(r);
+        let (client, limiter, db, status) = (&self.client, &*self.limiter, &self.db, &*self.status);
+        let platforms = &mut self.platforms;
+        let probes = async {
+            if platforms.is_empty() {
+                return;
             }
-        }
-        if !self.platforms.is_empty() {
+            let probed = futures_util::future::join_all(
+                due.iter().map(|&i| probe(client, limiter, &platforms[i].request)),
+            )
+            .await;
+            for (&i, result) in due.iter().zip(probed) {
+                let p = &mut platforms[i];
+                p.attempted = Some(now);
+                match result {
+                    Some(r) => {
+                        p.seen.last = Some(r);
+                        p.seen.skips = 0;
+                    }
+                    None => p.seen.skips = p.seen.skips.saturating_add(1),
+                }
+            }
             let view: Vec<(Platform, &Platformed)> =
-                self.platforms.iter().map(|(pl, p, _)| (*pl, p)).collect();
-            self.status
+                platforms.iter().map(|p| (p.platform, &p.seen)).collect();
+            status
                 .results
-                .set(RIOT_API, riot_api(&view, self.status.started_at_ms));
-        }
-        self.status.results.set(CACHE, cache);
-        if let Some(storage) = storage {
-            self.status.results.set(STORAGE, storage);
-        }
+                .set(RIOT_API, riot_api(&view, status.started_at_ms));
+        };
+        let after_failure = self.cache_failed;
+        let cache = async {
+            let (check, failed) = cache(db, CACHE_WITHIN, after_failure).await;
+            status.results.set(CACHE, check);
+            failed
+        };
+        let storage = async {
+            if let Some(check) = storage(db.objects()).await {
+                status.results.set(STORAGE, check);
+            }
+        };
+        let ((), cache_failed, ()) = tokio::join!(probes, cache, storage);
+        self.cache_failed = cache_failed;
     }
 }
 
-/// One `platform-data` call on `platform`; `None` when the limiter had no
-/// bulk room within a second. The limiter observes the answer like any.
-async fn probe(client: &RiotClient, limiter: &Limiter, platform: Platform) -> Option<ProbeResult> {
-    let endpoint = Endpoint::by_id(PROBE_METHOD)?;
-    let req = RiotRequest::new(endpoint, Target::Platform(platform), &[]).ok()?;
+/// One `platform-data` call; `None` when the limiter had no bulk room within
+/// a second. The limiter observes the answer like any.
+async fn probe(client: &RiotClient, limiter: &Limiter, req: &RiotRequest) -> Option<ProbeResult> {
     let scope = req.target.scope();
+    let method = req.endpoint.method_scope_key;
     limiter
-        .acquire(scope, endpoint.method_scope_key, Priority::Bulk, PROBE_ROOM)
+        .acquire(scope, method, Priority::Bulk, PROBE_ROOM)
         .await
         .ok()?;
     let started = Instant::now();
-    let out = client.send_probe(&req).await;
+    let out = client.send_probe(req).await;
     let headers = match &out {
         Ok(res) => RateLimitHeaders::from_headers(&res.headers),
         Err(e) => RateLimitHeaders::from_headers(&e.headers),
     };
-    limiter.observe(scope, endpoint.method_scope_key, &headers);
+    limiter.observe(scope, method, &headers);
     let probe = match out {
         Ok(res) => Probe::Answered { status: res.status },
         Err(e) => match (e.kind, e.status) {
@@ -362,8 +432,11 @@ fn millis(d: Duration) -> u64 {
     u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
 }
 
-/// `cache`: one read of L2's table within 2 s, or `down`.
-async fn cache(db: &Db) -> Check {
+/// `cache`: one read of L2's table within `within`, and whether it failed.
+/// An error is `down`. A timeout is `degraded`, and `down` only when the
+/// round before failed too (owner, ADR-206): the wait includes the one for
+/// a free reader, so a busy pool alone reads slow for a round, not gone.
+async fn cache(db: &Db, within: Duration, after_failure: bool) -> (Check, bool) {
     let started = Instant::now();
     let read = db.read(|c| {
         c.query_row("SELECT count(*) FROM (SELECT 1 FROM cache LIMIT 1)", [], |r| {
@@ -371,15 +444,18 @@ async fn cache(db: &Db) -> Check {
         })
         .map_err(DbError::from)
     });
-    let failure = match tokio::time::timeout(CACHE_WITHIN, read).await {
-        Ok(Ok(_)) => None,
-        Ok(Err(e)) => Some(format!("SQLite read failed: {e}")),
-        Err(_) => Some(format!(
-            "SQLite did not answer a read within {} s",
-            CACHE_WITHIN.as_secs()
-        )),
+    let slow = format!("SQLite did not answer a read within {} s", within.as_secs());
+    let (failure, level) = match tokio::time::timeout(within, read).await {
+        Ok(Ok(_)) => (None, StatusLevel::Ok),
+        Ok(Err(e)) => (Some(format!("SQLite read failed: {e}")), StatusLevel::Down),
+        Err(_) if after_failure => (
+            Some(format!("{slow}, after a failure the round before")),
+            StatusLevel::Down,
+        ),
+        Err(_) => (Some(slow), StatusLevel::Degraded),
     };
-    timed(CACHE, started, failure, StatusLevel::Down)
+    let failed = failure.is_some();
+    (timed(CACHE, started, failure, level), failed)
 }
 
 /// `storage`, with a bucket: one listing within 5 s, or `degraded`.

@@ -429,7 +429,7 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         status: Arc::new(crate::status::Status::new(started)),
     };
     // `/status`'s checks: a round now, then every STATUS_CHECK_INTERVAL_S (STS-02b).
-    let checks = crate::status::checks::Checker::new(&state).spawn();
+    let checks = crate::status::checks::Checker::new(&state)?.spawn();
     let served = app::serve(listener, app::router(state, metrics), shutdown).await;
 
     // After draining, whether or not serve failed: stop ticking, let running
