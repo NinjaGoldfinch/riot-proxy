@@ -18,6 +18,8 @@ use crate::config::{Config, Secret};
 use crate::http::{ApiError, ErrorCode};
 use crate::metrics::{RL_429_TOTAL, UPSTREAM_LATENCY_SECONDS, UPSTREAM_REQUESTS_TOTAL};
 use crate::riot::endpoints::{Endpoint, PathError, Target, encode_component};
+use crate::riot::limiter::headers::RateLimitHeaders;
+use crate::status::ratelimits::RateLimitTable;
 
 /// v1 undici pool: 32 connections per host, 60 s keep-alive.
 const POOL_MAX_IDLE_PER_HOST: usize = 32;
@@ -224,6 +226,8 @@ pub struct UpstreamWatch {
     /// Unix ms of the last answer on each scope, a status probe's excepted:
     /// what makes a platform *active* for the probe's cadence (design/14).
     traffic: Mutex<HashMap<&'static str, i64>>,
+    /// What Riot last said about our limits (STS-03).
+    rate_limits: RateLimitTable,
 }
 
 /// The key as Riot last judged it: a 2xx accepts it, a 401 or 403 rejects it.
@@ -252,6 +256,11 @@ impl UpstreamWatch {
     /// When `scope` last had an answer from Riot that was not a status probe.
     pub fn last_traffic_ms(&self, scope: &str) -> Option<i64> {
         lock(&self.traffic).get(scope).copied()
+    }
+
+    /// The rate-limit table: every answer's headers, probes' included.
+    pub fn rate_limits(&self) -> &RateLimitTable {
+        &self.rate_limits
     }
 
     /// One answer from Riot with `status`. `probe` is a status check's own
@@ -381,8 +390,14 @@ impl RiotClient {
         };
         let ((status, headers), elapsed) = (res, started.elapsed());
         record(scope, method, &status.to_string(), elapsed);
-        self.watch
-            .answered(scope, method, status, probe, crate::clock::Clock::now().unix_ms);
+        let at_ms = crate::clock::Clock::now().unix_ms;
+        self.watch.answered(scope, method, status, probe, at_ms);
+        self.watch.rate_limits.record(
+            scope,
+            method,
+            &RateLimitHeaders::from_headers_quiet(&headers),
+            at_ms,
+        );
 
         if (200..300).contains(&status) {
             #[allow(clippy::cast_possible_truncation)]

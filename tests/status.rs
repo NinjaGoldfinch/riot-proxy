@@ -13,7 +13,7 @@ use axum::extract::connect_info::MockConnectInfo;
 use axum::http::{Request, StatusCode};
 use riot_proxy::app::AppState;
 use riot_proxy::consumers::{self, NewConsumer, Scope};
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 struct Env {
@@ -560,5 +560,167 @@ async fn a_bucket_adds_the_storage_check() {
             .unwrap()
             .iter()
             .all(|c| c["name"] != "riot_api")
+    );
+}
+
+// ---- STS-03: the rate-limit table -------------------------------------------
+
+/// A `status.platformData` answer from `host` with Riot's rate-limit headers.
+async fn mock_platform(e: &Env, host: &str, app_count: &str, method_count: &str) {
+    Mock::given(method("GET"))
+        .and(path(PROBE))
+        .and(header("x-riot-host", host))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"id":"X"}"#)
+                // As Riot sends them: longest window first (tests/fixtures/replay).
+                .insert_header("x-app-rate-limit", "100:120,20:1")
+                .insert_header("x-app-rate-limit-count", app_count)
+                .insert_header("x-method-rate-limit", "2000:60")
+                .insert_header("x-method-rate-limit-count", method_count),
+        )
+        .mount(&e.server)
+        .await;
+}
+
+/// design/14 §Rate-limit table: after two answers on two platforms the table
+/// holds each one's windows as Riot sent them, and `/status` gains each
+/// scope's headroom.
+#[tokio::test]
+async fn the_table_after_two_responses() {
+    let e = env(&[]).await;
+    mock_platform(&e, "oc1.api.riotgames.com", "41:120,3:1", "7:60").await;
+    mock_platform(&e, "kr.api.riotgames.com", "2:120,1:1", "1:60").await;
+    let web = e.key("ratelimits-web", vec![Scope::Read]).await;
+    let admin = e.key("ratelimits-admin", vec![Scope::Read, Scope::Admin]).await;
+    for platform in ["oc1", "kr"] {
+        let r = e
+            .get(OUTSIDE, &format!("/v1/lol/status/{platform}"), Some(&web), &[])
+            .await;
+        assert_eq!(r.status, StatusCode::OK, "{platform}");
+    }
+
+    let r = e.get(OUTSIDE, "/status/ratelimits", Some(&admin), &[]).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert!(
+        r.headers.get("x-ratelimit-remaining").is_none(),
+        "no consumer quota"
+    );
+    let body = r.json();
+    assert_eq!(body["schema"], 1);
+    assert_eq!(body["retry_after_s"], 0);
+    assert!(body["at"].as_str().unwrap().parse::<jiff::Timestamp>().is_ok());
+    let oc1 = &body["scopes"]["oc1"];
+    assert_eq!(
+        oc1["app"],
+        serde_json::json!([
+            { "window_s": 1, "limit": 20, "count": 3, "remaining_pct": 85 },
+            { "window_s": 120, "limit": 100, "count": 41, "remaining_pct": 59 }
+        ])
+    );
+    assert_eq!(oc1["remaining_pct"], 59);
+    assert_eq!(oc1["retry_after"], serde_json::json!({ "s": 0, "at": null }));
+    assert!(
+        oc1["observed_at"]
+            .as_str()
+            .unwrap()
+            .parse::<jiff::Timestamp>()
+            .is_ok()
+    );
+    assert_eq!(
+        oc1["methods"]["status.platformData"]["windows"],
+        serde_json::json!([{ "window_s": 60, "limit": 2000, "count": 7, "remaining_pct": 99 }])
+    );
+    assert_eq!(body["scopes"]["kr"]["remaining_pct"], 95);
+    assert_eq!(body["scopes"].as_object().unwrap().len(), 2);
+
+    let status = e.get(LOCAL, "/status", None, &[]).await.json();
+    assert_eq!(status["metrics"]["riot_app_limit_remaining_pct_oc1"], 59);
+    assert_eq!(status["metrics"]["riot_app_limit_remaining_pct_kr"], 95);
+    assert_eq!(status["metrics"]["riot_retry_after_s"], 0);
+    let ring = riot_proxy::http::recent::requests(riot_proxy::http::recent::REQUESTS_CAP);
+    assert!(ring.iter().all(|r| r.path != "/status/ratelimits"));
+}
+
+/// A freeze after a 429 shows in both answers, rounded up; the table's own
+/// `retry_after` is the header Riot sent, with its time.
+#[tokio::test]
+async fn a_429_shows_as_retry_after() {
+    let e = env(&[]).await;
+    Mock::given(method("GET"))
+        .and(path(PROBE))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .insert_header("x-rate-limit-type", "service")
+                .insert_header("retry-after", "7"),
+        )
+        .mount(&e.server)
+        .await;
+    let admin = e.key("ratelimits-429", vec![Scope::Read, Scope::Admin]).await;
+    e.state.limiter.freeze(
+        "oc1",
+        Duration::from_millis(6_500),
+        riot_proxy::riot::limiter::headers::RateLimitType::Service,
+    );
+    let req = riot_proxy::riot::client::RiotRequest::new(
+        riot_proxy::riot::endpoints::ENDPOINTS
+            .iter()
+            .find(|ep| ep.id == "status.platformData")
+            .unwrap(),
+        riot_proxy::riot::endpoints::Target::Platform("oc1".parse().unwrap()),
+        &[],
+    )
+    .unwrap();
+    assert!(e.state.fetcher.client().send_probe(&req).await.is_err());
+
+    let body = e
+        .get(OUTSIDE, "/status/ratelimits", Some(&admin), &[])
+        .await
+        .json();
+    assert_eq!(body["retry_after_s"], 7, "6.5 s rounds up");
+    let oc1 = &body["scopes"]["oc1"];
+    assert_eq!(oc1["retry_after"]["s"], 7);
+    assert!(oc1["retry_after"]["at"].as_str().is_some());
+    assert_eq!(
+        oc1["app"],
+        serde_json::json!([]),
+        "a service 429 says nothing about our limits"
+    );
+    assert!(oc1["remaining_pct"].is_null());
+    let status = e.get(LOCAL, "/status", None, &[]).await.json();
+    assert_eq!(status["metrics"]["riot_retry_after_s"], 7);
+    assert!(
+        status["metrics"]
+            .get("riot_app_limit_remaining_pct_oc1")
+            .is_none()
+    );
+}
+
+/// design/14 §Endpoints: the admin key only, never a keyless request, not
+/// even from loopback.
+#[tokio::test]
+async fn ratelimits_takes_the_admin_key_only() {
+    let e = env(&[]).await;
+    let admin = e
+        .key("ratelimits-only-admin", vec![Scope::Read, Scope::Admin])
+        .await;
+    let read = e.key("ratelimits-reader", vec![Scope::Read]).await;
+    for peer in [LOCAL, OUTSIDE] {
+        let keyless = e.get(peer, "/status/ratelimits", None, &[]).await;
+        assert_eq!(keyless.status, StatusCode::UNAUTHORIZED, "{peer}");
+        assert_eq!(keyless.json()["error"]["code"], "UNAUTHORIZED");
+        let reader = e.get(peer, "/status/ratelimits", Some(&read), &[]).await;
+        assert_eq!(reader.status, StatusCode::FORBIDDEN, "{peer}");
+        assert_eq!(
+            e.get(peer, "/status/ratelimits", Some(&admin), &[]).await.status,
+            StatusCode::OK
+        );
+    }
+    // An empty table before Riot has answered anything.
+    let body = e.get(LOCAL, "/status/ratelimits", Some(&admin), &[]).await.json();
+    assert_eq!(body["scopes"], serde_json::json!({}));
+    assert_eq!(
+        e.get(LOCAL, "/status", None, &[]).await.json()["metrics"]["riot_retry_after_s"],
+        0
     );
 }

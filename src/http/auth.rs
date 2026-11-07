@@ -385,6 +385,17 @@ pub async fn require_status(State(state): State<AppState>, req: Request, next: N
     if bearer(req.headers(), req.uri()).is_none() && state.auth.status_local(req.headers(), peer(&req)) {
         return next.run(req).await;
     }
+    status_admin(state, req, next).await
+}
+
+/// `GET /status/ratelimits` (STS-03, design/14 §Endpoints): the admin key with
+/// the admin IP allowlist, never a keyless request. No consumer quota, as for
+/// `/status`.
+pub async fn require_status_admin(State(state): State<AppState>, req: Request, next: Next) -> Response {
+    status_admin(state, req, next).await
+}
+
+async fn status_admin(state: AppState, req: Request, next: Next) -> Response {
     let ask = Ask::from(&req, state.auth.trust_proxy);
     let consumer = match state.auth.authorise(ask, Scope::Admin).await {
         Ok(consumer) => consumer,

@@ -54,14 +54,20 @@ pub enum RateLimitType {
 
 impl RateLimitType {
     pub fn parse(raw: &str) -> Option<Self> {
+        let parsed = Self::parse_quiet(raw);
+        if parsed.is_none() {
+            tracing::warn!(value = raw.trim(), "unknown X-Rate-Limit-Type");
+        }
+        parsed
+    }
+
+    /// [`parse`](Self::parse) without the warning.
+    pub fn parse_quiet(raw: &str) -> Option<Self> {
         match raw.trim().to_ascii_lowercase().as_str() {
             "application" => Some(Self::Application),
             "method" => Some(Self::Method),
             "service" => Some(Self::Service),
-            other => {
-                tracing::warn!(value = other, "unknown X-Rate-Limit-Type");
-                None
-            }
+            _ => None,
         }
     }
 
@@ -105,26 +111,38 @@ fn warn_if_dropped(name: &str, header: &str, kept: usize) {
 /// Parse a limit header. Windows need `limit > 0` and `seconds > 0` (v1).
 /// `None` when the header is absent or has no valid window.
 pub fn parse_limits(name: &str, header: Option<&str>) -> Option<Vec<LimitWindow>> {
+    limits_of(name, header, true)
+}
+
+fn limits_of(name: &str, header: Option<&str>, warn: bool) -> Option<Vec<LimitWindow>> {
     let header = header?;
     let windows: Vec<LimitWindow> = pairs(header)
         .into_iter()
         .filter(|&(limit, seconds)| limit > 0 && seconds > 0)
         .map(|(limit, seconds)| LimitWindow { limit, seconds })
         .collect();
-    warn_if_dropped(name, header, windows.len());
+    if warn {
+        warn_if_dropped(name, header, windows.len());
+    }
     (!windows.is_empty()).then_some(windows)
 }
 
 /// Parse a count header. Counts may be zero; windows need `seconds > 0`.
 /// `None` when the header is absent or has no valid window.
 pub fn parse_counts(name: &str, header: Option<&str>) -> Option<Vec<CountWindow>> {
+    counts_of(name, header, true)
+}
+
+fn counts_of(name: &str, header: Option<&str>, warn: bool) -> Option<Vec<CountWindow>> {
     let header = header?;
     let windows: Vec<CountWindow> = pairs(header)
         .into_iter()
         .filter(|&(_, seconds)| seconds > 0)
         .map(|(count, seconds)| CountWindow { count, seconds })
         .collect();
-    warn_if_dropped(name, header, windows.len());
+    if warn {
+        warn_if_dropped(name, header, windows.len());
+    }
     (!windows.is_empty()).then_some(windows)
 }
 
@@ -142,13 +160,29 @@ pub struct RateLimitHeaders {
 
 impl RateLimitHeaders {
     pub fn from_headers(headers: &HeaderMap) -> Self {
+        Self::read(headers, true)
+    }
+
+    /// [`from_headers`](Self::from_headers) without its warnings: for a second
+    /// reader of a response the limiter also reads (`/status`'s rate-limit
+    /// table, STS-03), so a malformed header is logged once, not twice.
+    pub fn from_headers_quiet(headers: &HeaderMap) -> Self {
+        Self::read(headers, false)
+    }
+
+    fn read(headers: &HeaderMap, warn: bool) -> Self {
         let get = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+        let limit_type = if warn {
+            get(X_RATE_LIMIT_TYPE).and_then(RateLimitType::parse)
+        } else {
+            get(X_RATE_LIMIT_TYPE).and_then(RateLimitType::parse_quiet)
+        };
         Self {
-            app_limits: parse_limits(X_APP_RATE_LIMIT, get(X_APP_RATE_LIMIT)),
-            app_counts: parse_counts(X_APP_RATE_LIMIT_COUNT, get(X_APP_RATE_LIMIT_COUNT)),
-            method_limits: parse_limits(X_METHOD_RATE_LIMIT, get(X_METHOD_RATE_LIMIT)),
-            method_counts: parse_counts(X_METHOD_RATE_LIMIT_COUNT, get(X_METHOD_RATE_LIMIT_COUNT)),
-            limit_type: get(X_RATE_LIMIT_TYPE).and_then(RateLimitType::parse),
+            app_limits: limits_of(X_APP_RATE_LIMIT, get(X_APP_RATE_LIMIT), warn),
+            app_counts: counts_of(X_APP_RATE_LIMIT_COUNT, get(X_APP_RATE_LIMIT_COUNT), warn),
+            method_limits: limits_of(X_METHOD_RATE_LIMIT, get(X_METHOD_RATE_LIMIT), warn),
+            method_counts: counts_of(X_METHOD_RATE_LIMIT_COUNT, get(X_METHOD_RATE_LIMIT_COUNT), warn),
+            limit_type,
             retry_after: get(RETRY_AFTER).and_then(|v| v.trim().parse().ok()),
         }
     }
@@ -266,6 +300,26 @@ mod tests {
         assert_eq!(
             RateLimitHeaders::from_headers(&HeaderMap::new()),
             RateLimitHeaders::default()
+        );
+    }
+
+    /// The quiet read (STS-03's table) sees exactly what the limiter sees.
+    #[test]
+    fn the_quiet_read_matches_the_loud_one() {
+        let mut h = HeaderMap::new();
+        h.insert(X_APP_RATE_LIMIT, "100:120,bad,20:1".parse().unwrap());
+        h.insert(X_APP_RATE_LIMIT_COUNT, "3:1,40:120".parse().unwrap());
+        h.insert(X_METHOD_RATE_LIMIT, "2000:60".parse().unwrap());
+        h.insert(X_RATE_LIMIT_TYPE, "nope".parse().unwrap());
+        h.insert(RETRY_AFTER, "3".parse().unwrap());
+        assert_eq!(
+            RateLimitHeaders::from_headers_quiet(&h),
+            RateLimitHeaders::from_headers(&h)
+        );
+        h.insert(X_RATE_LIMIT_TYPE, "Method".parse().unwrap());
+        assert_eq!(
+            RateLimitHeaders::from_headers_quiet(&h).limit_type,
+            Some(RateLimitType::Method)
         );
     }
 

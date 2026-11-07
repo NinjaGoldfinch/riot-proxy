@@ -2938,6 +2938,28 @@ expression: doc
         ],
         "type": "object"
       },
+      "LastRetryAfter": {
+        "description": "The last `Retry-After` on a scope.",
+        "properties": {
+          "at": {
+            "description": "When it was sent; RFC 3339, null before the first.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "s": {
+            "description": "The header's value in seconds, as sent; 0 before the first.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "s"
+        ],
+        "type": "object"
+      },
       "LastRun": {
         "description": "The last run this process made (ADM-06, `GET /v1/admin/backups`).",
         "properties": {
@@ -3303,6 +3325,27 @@ expression: doc
         },
         "required": [
           "matchId"
+        ],
+        "type": "object"
+      },
+      "MethodRateLimits": {
+        "description": "One method's latest `X-Method-Rate-Limit` and its count.",
+        "properties": {
+          "observed_at": {
+            "description": "RFC 3339, UTC.",
+            "type": "string"
+          },
+          "windows": {
+            "description": "Shortest window first.",
+            "items": {
+              "$ref": "#/components/schemas/RateLimitWindow"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "observed_at",
+          "windows"
         ],
         "type": "object"
       },
@@ -4342,6 +4385,80 @@ expression: doc
         ],
         "type": "object"
       },
+      "RateLimitReport": {
+        "description": "`GET /status/ratelimits`: what Riot last said about every scope's limits.",
+        "properties": {
+          "at": {
+            "description": "When this answer was made; RFC 3339, UTC.",
+            "type": "string"
+          },
+          "retry_after_s": {
+            "description": "The longest any scope is still frozen after a 429, rounded up; 0 when\nnothing is throttled. The same as `/status`'s `riot_retry_after_s`.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema": {
+            "description": "Always 1.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "scopes": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ScopeRateLimits"
+            },
+            "description": "By scope: a platform (`oc1`) or a region (`sea`).",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "schema",
+          "at",
+          "retry_after_s",
+          "scopes"
+        ],
+        "type": "object"
+      },
+      "RateLimitWindow": {
+        "description": "One window as Riot last reported it.",
+        "properties": {
+          "count": {
+            "description": "Requests counted in the current window.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "limit": {
+            "description": "Requests allowed per window.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "remaining_pct": {
+            "description": "`(limit − count) / limit × 100`, rounded down, 0 when the count is\nat or over the limit.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "window_s": {
+            "description": "The window's length.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "window_s",
+          "limit",
+          "count",
+          "remaining_pct"
+        ],
+        "type": "object"
+      },
       "Ready": {
         "description": "v1 returned `{ok, redis, postgres, keyScope}`. v2 has one store, so `sqlite` replaces\nthe two backend booleans, and `limiter` says the checkpoint was restored\n(design/07). `keyScope` is v1's (ADR-011). `sqliteReaders`/`sqliteReadersFree`\nshow the read pool, so a leak shows before reads fail (ADR-113). `writer*` say\nwhat the writer thread is doing (WR-02). `version` names the running binary, so a\ndeploy can tell the new process from the old one (DEP-01, ADR-194).",
         "properties": {
@@ -4743,6 +4860,54 @@ expression: doc
         "required": [
           "fast",
           "slow"
+        ],
+        "type": "object"
+      },
+      "ScopeRateLimits": {
+        "description": "One scope's latest headers.",
+        "properties": {
+          "app": {
+            "description": "`X-App-Rate-Limit` with `X-App-Rate-Limit-Count`, shortest window first.",
+            "items": {
+              "$ref": "#/components/schemas/RateLimitWindow"
+            },
+            "type": "array"
+          },
+          "methods": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/MethodRateLimits"
+            },
+            "description": "By method id (`summoner.byPuuid`).",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "observed_at": {
+            "description": "When the app headers were last seen; null before the first.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "remaining_pct": {
+            "description": "The smallest `remaining_pct` in `app`; null when `app` is empty.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "retry_after": {
+            "$ref": "#/components/schemas/LastRetryAfter",
+            "description": "The last `Retry-After` Riot sent on this scope."
+          }
+        },
+        "required": [
+          "app",
+          "retry_after",
+          "methods"
         ],
         "type": "object"
       },
@@ -5902,6 +6067,63 @@ expression: doc
           {}
         ],
         "summary": "Status",
+        "tags": [
+          "ops"
+        ]
+      }
+    },
+    "/status/ratelimits": {
+      "get": {
+        "description": "What Riot's rate-limit headers last said, for people: per scope (a platform like `oc1` or a region like `sea`) the latest `X-App-Rate-Limit` with its count, per method the latest `X-Method-Rate-Limit` with its count, and the last `Retry-After` with its time. A window's `remaining_pct` is `(limit − count) / limit × 100` rounded down; a scope's is the smallest of its app windows'. `retry_after_s` is the longest any scope is still frozen after a 429.\n\nKept in memory from every answer Riot gives, empty after a restart; answered without calling Riot. Takes the admin key only (admin scope and `ADMIN_IP_ALLOWLIST`), never a keyless request. Not metered by the consumer quota.",
+        "operationId": "ratelimits",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitReport"
+                }
+              }
+            },
+            "description": "The table",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No key, or an unknown key",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A key without the admin scope, or from outside `ADMIN_IP_ALLOWLIST`",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          }
+        },
+        "summary": "Rate-limit table",
         "tags": [
           "ops"
         ]

@@ -9,6 +9,7 @@
 //! Neither the consumer quota nor the recent-requests ring sees it.
 
 pub mod checks;
+pub mod ratelimits;
 pub mod snapshot;
 
 use std::collections::BTreeMap;
@@ -28,6 +29,15 @@ use crate::build_info;
 pub const SCHEMA: u32 = 1;
 /// The contract's `service`.
 pub const SERVICE: &str = "riot-proxy";
+
+/// `metrics`' longest freeze left after a 429, in seconds (STS-03).
+pub const RIOT_RETRY_AFTER_S: &str = "riot_retry_after_s";
+
+/// The longest any scope is still frozen after a 429, rounded up; 0 when
+/// nothing is throttled (design/14 §Rate-limit table).
+pub fn retry_after_s(state: &AppState) -> u64 {
+    state.limiter.longest_freeze().map_or(0, checks::ceil_secs)
+}
 
 /// What `/status` knows about this process from its start.
 #[derive(Debug)]
@@ -136,14 +146,17 @@ impl StatusReport {
     pub fn from_state(state: &AppState) -> Self {
         let status = &state.status;
         let cache = &state.fetcher.cache().l1;
-        let metrics = snapshot::metrics(
+        let watch = state.fetcher.client().watch();
+        let mut metrics = snapshot::metrics(
             &state.stats.metrics.render(),
             snapshot::Cache {
                 entries: cache.entry_count(),
                 bytes: cache.weighted_size(),
             },
         );
-        let last_success = state.fetcher.client().watch().last_success_ms();
+        metrics.insert(RIOT_RETRY_AFTER_S.into(), retry_after_s(state));
+        metrics.extend(watch.rate_limits().metrics());
+        let last_success = watch.last_success_ms();
         let checks = checks::report(state);
         Self {
             schema: SCHEMA,
@@ -165,8 +178,14 @@ impl StatusReport {
     }
 }
 
+/// `GET /status` (`http::auth::require_status`'s gate).
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new().routes(routes!(status))
+}
+
+/// `GET /status/ratelimits` (`http::auth::require_status_admin`'s gate).
+pub fn ratelimits_router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new().routes(routes!(ratelimits))
 }
 
 /// The service's health in the shared ninjagoldfinch status contract.
@@ -193,6 +212,31 @@ pub fn router() -> OpenApiRouter<AppState> {
 )]
 async fn status(State(state): State<AppState>) -> Json<StatusReport> {
     Json(StatusReport::from_state(&state))
+}
+
+/// What Riot last said about every scope's rate limits.
+#[utoipa::path(
+    get,
+    path = "/status/ratelimits",
+    tag = "ops",
+    summary = "Rate-limit table",
+    description = "What Riot's rate-limit headers last said, for people: per scope (a platform like `oc1` or a \
+                   region like `sea`) the latest `X-App-Rate-Limit` with its count, per method the latest \
+                   `X-Method-Rate-Limit` with its count, and the last `Retry-After` with its time. A window's \
+                   `remaining_pct` is `(limit − count) / limit × 100` rounded down; a scope's is the smallest \
+                   of its app windows'. `retry_after_s` is the longest any scope is still frozen after a 429.\n\n\
+                   Kept in memory from every answer Riot gives, empty after a restart; answered without calling \
+                   Riot. Takes the admin key only (admin scope and `ADMIN_IP_ALLOWLIST`), never a keyless \
+                   request. Not metered by the consumer quota.",
+    responses(
+        (status = 200, description = "The table", body = ratelimits::RateLimitReport),
+        (status = 401, description = "No key, or an unknown key", body = crate::http::error::ErrorResponse),
+        (status = 403, description = "A key without the admin scope, or from outside `ADMIN_IP_ALLOWLIST`", body = crate::http::error::ErrorResponse),
+    ),
+)]
+async fn ratelimits(State(state): State<AppState>) -> Json<ratelimits::RateLimitReport> {
+    let table = state.fetcher.client().watch().rate_limits();
+    Json(table.report(retry_after_s(&state), crate::clock::Clock::now().unix_ms))
 }
 
 #[cfg(test)]
