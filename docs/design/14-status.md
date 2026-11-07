@@ -117,28 +117,30 @@ A background task runs every `STATUS_CHECK_INTERVAL_S` (default 30) and stores e
 
 | Check | `down` | `degraded` | How |
 |---|---|---|---|
-| `riot_api` | the first platform's probe failed on the network or with a 5xx | a probe got a 429, `riot_retry_after_s > 0`, or another probed platform is down | `lol-status-v4` `platform-data` (`status.platformData`), see cadence below |
+| `riot_api` | the first platform's probe failed on the network or with a 5xx | a probe got a 429, `riot_retry_after_s > 0`, another probed platform is down, or a platform's probe was skipped 4 times in a row | `lol-status-v4` `platform-data` (`status.platformData`), see cadence below |
 | `riot_key` | the last upstream response that was a 2xx, 401 or 403 was a 401 or 403 | `RIOT_API_KEY_EXPIRES_AT` is set and less than 48 h away | from every upstream response, not a probe of its own |
-| `cache` | L2 (SQLite) does not answer a read within 2 s | | L1 is in-process and cannot be unreachable; L2 is the backend |
+| `cache` | L2 (SQLite) fails a read, or does not answer one within 2 s two rounds in a row | L2 does not answer a read within 2 s once | L1 is in-process and cannot be unreachable; L2 is the backend |
 | `storage` | | the bucket does not answer a list of one key within 5 s | only when `ARCHIVE_OBJECT_URL` is set; absent from `checks` otherwise |
 
 **The `riot_api` probe** (owner, 2026-11-05). It calls Riot directly through the client and the limiter at bulk priority, skipping the response cache (`status.platformData` is cached for 60 s, so a cached probe would rarely reach Riot), and never writes the cache. Its response does update the rate-limit table and `riot_key`, like any other.
 
 - The **first platform** of `STATUS_CHECK_PLATFORMS` (default: the `LADDER_PLATFORMS` entries) stands in for the `DEFAULT_PLATFORM` this section first named, which ADR-065 removed from v2 (owner, ADR-206). It is probed every 60 s while the proxy is *active* (it had an upstream response on that platform's scope in the last 60 s that was not a probe, so real traffic already shows Riot answers), and every 30 s while idle.
 - Every other platform in `STATUS_CHECK_PLATFORMS` is probed every 60 s. A failure there degrades `riot_api` and is named in `detail`; it does not make it `down`, since one Riot shard being out is not the proxy being out. When the key's limits allow, the owner can list every platform.
-- If the limiter has no bulk room within 1 s, the probe is skipped and the last result stands, with `detail` saying so: a full limiter is not Riot being down.
+- If the limiter has no bulk room within 1 s, the probe is skipped and the last result stands, with `detail` saying so: a full limiter is not Riot being down. After 4 skipped attempts in a row on a platform the result is too old to stand, and `riot_api` is `degraded` (owner, ADR-206).
 - A 401 or 403 from the probe leaves `riot_api` `ok` (Riot answered) and shows on `riot_key`.
 
 With the first platform and N others this is at most 2 + N calls a minute, outside the response cache, at bulk priority.
 
 **As built (STS-02b, ADR-206).**
 
-- *Rounds.* The task runs a round at boot and every `STATUS_CHECK_INTERVAL_S` after. "Every 30 s while idle" is every round. "Every 60 s" is the first round at least 60 s after that platform's last attempt, so with an interval that does not divide 60 it rounds up to whole intervals. The probes, `cache` and `storage` run concurrently within a round. A probe is one call with no retries, under the client's 25 s timeout.
-- *No platforms.* With `STATUS_CHECK_PLATFORMS=none`, or unset with no `LADDER_PLATFORMS`, `riot_api` is absent from `checks`, as `storage` is without a bucket.
+- *Rounds.* The task runs a round at boot and every `STATUS_CHECK_INTERVAL_S` after. "Every 30 s while idle" is every round. "Every 60 s" is the first round at least 60 s after that platform's last attempt, so with an interval that does not divide 60 it rounds up to whole intervals. The probes, `cache` and `storage` run concurrently within a round, and each is stored as soon as it is known: a probe waiting out the client's 25 s timeout holds back neither `cache` nor `storage`. A probe is one call with no retries, under that timeout. Each platform's probe request is built once, at boot.
+- *No platforms.* With `STATUS_CHECK_PLATFORMS=none`, or unset with no `LADDER_PLATFORMS`, `riot_api` is absent from `checks`, as `storage` is without a bucket. Nothing in `checks` then reports a limiter freeze (`riot_retry_after_s > 0`), which this design puts on `riot_api`: by design, it shows only in STS-03's `riot_retry_after_s` metric.
+- *Skipped probes.* `detail` names each skip. A platform skipped 4 attempts in a row (`STALE_AFTER_SKIPS`) makes `riot_api` `degraded`, first platform or not, until a probe there runs.
 - *What a probe's answer means.* A 2xx is `ok`. A 401, 403, 404 or other 4xx except 429 is Riot answering, so `ok` with the status in `detail`. A 429 degrades. A 5xx, or no answer at all, is a failure.
 - *The freeze is read live.* `riot_retry_after_s > 0` is checked when `/status` is read (`Limiter::longest_freeze`), not when the round ran, so it clears as soon as the freeze does.
+- *A rejected key in the log.* The probe's 401 or 403 logs `RIOT KEY REJECTED` at error only when it turns the key's verdict to rejected, and at debug while it stays rejected; real traffic logs it every time. `RiotKeyRejected` firing on probe traffic alone is intended (ADR-206).
 - *`riot_key`* reads the client's last verdict when `/status` is read. Before any 2xx, 401 or 403 it is `ok` with detail `pending` (unless the expiry already degrades it). Its `checked_at` is the time of the response it was judged on, and `latency_ms` is null.
-- *`cache`* reads one row's worth of L2's `cache` table. *`storage`* reads only the first entry of the bucket's listing (one page), never the whole listing.
+- *`cache`* reads one row's worth of L2's `cache` table. Its 2 s include the wait for a free reader, so one timeout is `degraded` and only a second in a row is `down`; a read SQLite refuses is `down` at once. *`storage`* reads only the first entry of the bucket's listing (one page), never the whole listing.
 - `latency_ms` and `checked_at` of `riot_api` are the first platform's last probe.
 
 ## Outbound events (STS-04)
