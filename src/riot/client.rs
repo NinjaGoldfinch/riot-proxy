@@ -3,11 +3,12 @@
 //! its client (`src/riot/client.ts`); the policy moves, it doesn't disappear.
 //!
 //! Status policy is v1 spec §5.5 / §9.4: 404 → not found; 401/403 → the key is bad,
-//! logged at error; 429 → rate limited, typed or not; 5xx and network → upstream
-//! unavailable.
+//! logged at error (a status probe's only as the verdict turns); 429 → rate
+//! limited, typed or not; 5xx and network → upstream unavailable.
 
-use std::sync::Arc;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use axum::http::{HeaderMap, HeaderValue, header};
@@ -212,12 +213,29 @@ pub struct RiotClient {
 }
 
 /// What `/status` reads about Riot's answers (STS-02, design/14), shared by
-/// every clone of a client. Plain atomics: written on the response path,
-/// never awaited.
+/// every clone of a client. Written on the response path; the locks are
+/// held for one assignment and never across an await.
 #[derive(Debug, Default)]
 pub struct UpstreamWatch {
     /// Unix ms of the last 2xx; 0 before the first.
     last_success_ms: AtomicI64,
+    /// What the last 2xx, 401 or 403 said about the key (`riot_key`, STS-02b).
+    key: Mutex<Option<KeyVerdict>>,
+    /// Unix ms of the last answer on each scope, a status probe's excepted:
+    /// what makes a platform *active* for the probe's cadence (design/14).
+    traffic: Mutex<HashMap<&'static str, i64>>,
+}
+
+/// The key as Riot last judged it: a 2xx accepts it, a 401 or 403 rejects it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyVerdict {
+    pub accepted: bool,
+    /// The response's status, method id and scope.
+    pub status: u16,
+    pub method: &'static str,
+    pub scope: &'static str,
+    /// Unix ms.
+    pub at_ms: i64,
 }
 
 impl UpstreamWatch {
@@ -226,9 +244,54 @@ impl UpstreamWatch {
         Some(self.last_success_ms.load(Ordering::Relaxed)).filter(|&ms| ms > 0)
     }
 
-    fn succeeded(&self, at_ms: i64) {
-        self.last_success_ms.fetch_max(at_ms, Ordering::Relaxed);
+    /// The last 2xx, 401 or 403; `None` before the first.
+    pub fn key(&self) -> Option<KeyVerdict> {
+        lock(&self.key).clone()
     }
+
+    /// When `scope` last had an answer from Riot that was not a status probe.
+    pub fn last_traffic_ms(&self, scope: &str) -> Option<i64> {
+        lock(&self.traffic).get(scope).copied()
+    }
+
+    /// One answer from Riot with `status`. `probe` is a status check's own
+    /// call, which says nothing about real traffic. Returns whether this
+    /// answer turned the key's verdict to rejected: a 401 or 403 when the key
+    /// was not already rejected (unknown or accepted before).
+    fn answered(
+        &self,
+        scope: &'static str,
+        method: &'static str,
+        status: u16,
+        probe: bool,
+        at_ms: i64,
+    ) -> bool {
+        let accepted = (200..300).contains(&status);
+        if accepted {
+            self.last_success_ms.fetch_max(at_ms, Ordering::Relaxed);
+        }
+        let mut newly_rejected = false;
+        if accepted || matches!(status, 401 | 403) {
+            let mut key = lock(&self.key);
+            newly_rejected = !accepted && key.as_ref().is_none_or(|k| k.accepted);
+            *key = Some(KeyVerdict {
+                accepted,
+                status,
+                method,
+                scope,
+                at_ms,
+            });
+        }
+        if !probe {
+            lock(&self.traffic).insert(scope, at_ms);
+        }
+        newly_rejected
+    }
+}
+
+/// A poisoned lock still holds a whole value: each write is one assignment.
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -289,6 +352,17 @@ impl RiotClient {
     /// Perform one GET and classify it. Records `proxy_upstream_requests_total`,
     /// `proxy_upstream_latency_seconds` and, on 429, `proxy_rl_429_total`.
     pub async fn send(&self, req: &RiotRequest) -> Result<RiotResponse, RiotError> {
+        self.send_as(req, false).await
+    }
+
+    /// [`send`](Self::send) for `/status`'s own probe (STS-02b): counted and
+    /// judged like any call, but not as traffic on its scope, so a probe
+    /// never makes its platform look busy.
+    pub async fn send_probe(&self, req: &RiotRequest) -> Result<RiotResponse, RiotError> {
+        self.send_as(req, true).await
+    }
+
+    async fn send_as(&self, req: &RiotRequest, probe: bool) -> Result<RiotResponse, RiotError> {
         let scope = req.target.scope();
         let method = req.endpoint.id;
         let host = req.target.host();
@@ -320,9 +394,11 @@ impl RiotClient {
         };
         let ((status, headers), elapsed) = (res, started.elapsed());
         record(scope, method, &status.to_string(), elapsed);
+        let newly_rejected =
+            self.watch
+                .answered(scope, method, status, probe, crate::clock::Clock::now().unix_ms);
 
         if (200..300).contains(&status) {
-            self.watch.succeeded(crate::clock::Clock::now().unix_ms);
             #[allow(clippy::cast_possible_truncation)]
             let upstream_ms = elapsed.as_millis() as u64;
             return Ok(RiotResponse {
@@ -335,6 +411,12 @@ impl RiotClient {
 
         let kind = match status {
             404 => RiotErrorKind::NotFound,
+            // `/status`'s probe asks every round, so its 401 or 403 logs only
+            // when it turns the verdict to rejected (STS-02b, ADR-206).
+            401 | 403 if probe && !newly_rejected => {
+                tracing::debug!(status, method, host = %host, "status probe: the key is still rejected");
+                RiotErrorKind::UpstreamAuth
+            }
             401 | 403 => {
                 tracing::error!(status, method, host = %host, "RIOT KEY REJECTED — check RIOT_API_KEY (dev keys expire every 24h)");
                 RiotErrorKind::UpstreamAuth
@@ -535,5 +617,144 @@ mod tests {
             err(RiotErrorKind::UnexpectedStatus).to_api_error().code,
             ErrorCode::UpstreamError
         );
+    }
+
+    /// `riot_key` follows the last 2xx, 401 or 403 only; a probe's answer
+    /// judges the key but is not traffic on its scope (STS-02b).
+    #[test]
+    fn the_watch_judges_the_key_and_counts_traffic() {
+        let w = UpstreamWatch::default();
+        assert_eq!(w.key(), None);
+        assert!(!w.answered("oc1", "status.platformData", 200, true, 10));
+        assert_eq!(w.last_traffic_ms("oc1"), None, "a probe is not traffic");
+        assert!(w.key().unwrap().accepted);
+        assert_eq!(w.last_success_ms(), Some(10));
+
+        assert!(
+            w.answered("oc1", "summoner.byPuuid", 403, false, 20),
+            "accepted to rejected"
+        );
+        let k = w.key().unwrap();
+        assert_eq!(
+            (k.accepted, k.status, k.method, k.scope, k.at_ms),
+            (false, 403, "summoner.byPuuid", "oc1", 20)
+        );
+        assert_eq!(w.last_traffic_ms("oc1"), Some(20));
+        assert!(
+            !w.answered("oc1", "status.platformData", 401, true, 21),
+            "still rejected"
+        );
+
+        // Neither a 404, a 429 nor a 5xx says anything about the key.
+        for status in [404, 429, 503] {
+            w.answered("kr", "match.byId", status, false, 30);
+        }
+        assert!(!w.key().unwrap().accepted);
+        assert_eq!(w.last_traffic_ms("kr"), Some(30));
+        assert_eq!(w.last_success_ms(), Some(10));
+
+        w.answered("kr", "match.byId", 200, false, 40);
+        assert!(w.key().unwrap().accepted, "a 2xx accepts it again");
+        assert!(
+            UpstreamWatch::default().answered("kr", "match.byId", 401, true, 50),
+            "unknown to rejected"
+        );
+    }
+
+    /// Lines at `level` or above logged while `f` runs on this thread.
+    async fn logged<F: std::future::Future>(level: tracing::Level, f: F) -> (F::Output, String) {
+        use tracing_subscriber::Layer;
+        use tracing_subscriber::layer::SubscriberExt;
+        #[derive(Clone, Default)]
+        struct Buf(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Buf {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                lock(&self.0).extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let buf = Buf::default();
+        let writer = buf.clone();
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(move || writer.clone())
+                .with_ansi(false)
+                .with_filter(tracing_subscriber::filter::LevelFilter::from_level(level)),
+        );
+        let out = {
+            let _guard = tracing::subscriber::set_default(subscriber);
+            f.await
+        };
+        let text = String::from_utf8(lock(&buf.0).clone()).unwrap();
+        (out, text)
+    }
+
+    /// STS-02b (owner, ADR-206): a rejected key logs `RIOT KEY REJECTED` at
+    /// error for every real call, but `/status`'s probe, which asks every
+    /// round, logs it only when its answer turns the verdict to rejected.
+    #[tokio::test]
+    async fn a_probe_logs_a_rejected_key_once_per_change() {
+        use wiremock::matchers::path;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        const REJECTED: &str = "RIOT KEY REJECTED";
+
+        let server = MockServer::start().await;
+        let probe_path = "/lol/status/v4/platform-data";
+        let client = RiotClient::build(
+            &Secret::new("RGAPI-test"),
+            "riot-proxy-test",
+            Base::Fixed(server.uri()),
+        )
+        .unwrap();
+        let e = ep("status.platformData");
+        let probe = RiotRequest::new(e, e.target_for_platform(Platform::Oc1), &[]).unwrap();
+        let answer = |status: u16| {
+            Mock::given(path(probe_path))
+                .respond_with(ResponseTemplate::new(status))
+                .mount_as_scoped(&server)
+        };
+
+        let rejected = answer(403).await;
+        let (out, text) = logged(tracing::Level::WARN, async {
+            for _ in 0..3 {
+                let err = client.send_probe(&probe).await.unwrap_err();
+                assert!(matches!(err.kind, RiotErrorKind::UpstreamAuth), "{err:?}");
+            }
+            client.send(&probe).await
+        })
+        .await;
+        assert!(out.is_err());
+        assert_eq!(
+            text.matches(REJECTED).count(),
+            2,
+            "the first probe, then the real call; the repeat probes are quiet:\n{text}"
+        );
+        assert!(
+            text.lines().all(|l| !l.contains(REJECTED) || l.contains("ERROR")),
+            "{text}"
+        );
+
+        drop(rejected);
+        let accepted = answer(200).await;
+        client.send_probe(&probe).await.unwrap();
+        drop(accepted);
+        let _rejected = answer(401).await;
+        let (_, text) = logged(tracing::Level::WARN, async {
+            client.send_probe(&probe).await.unwrap_err();
+            client.send_probe(&probe).await.unwrap_err();
+        })
+        .await;
+        assert_eq!(
+            text.matches(REJECTED).count(),
+            1,
+            "accepted, then rejected again: one line\n{text}"
+        );
+
+        let (_, text) = logged(tracing::Level::DEBUG, client.send_probe(&probe)).await;
+        assert!(text.contains("status probe: the key is still rejected"), "{text}");
+        assert!(!text.contains(REJECTED), "{text}");
     }
 }

@@ -1,6 +1,6 @@
 # Endpoints: `/v1/admin/*`
 
-All 40 administration operations. Every one needs a key with the **admin** scope from an address on `ADMIN_IP_ALLOWLIST` (an empty list allows everyone) and counts against the consumer quota (`src/routes/docs.rs:L141-L144`, `src/http/auth.rs:L330-L336`, `L327-L342`). In production the public host `api.ninjagoldfinch.lol` blocks `/v1/admin*` at the Cloudflare WAF; use `admin.ninjagoldfinch.lol` or the loopback. Conventions are in [endpoints.md](endpoints.md#conventions).
+All 40 administration operations. Every one needs a key with the **admin** scope from an address on `ADMIN_IP_ALLOWLIST` (an empty list allows everyone) and counts against the consumer quota (`src/routes/docs.rs:L136-L139`, `src/http/auth.rs:L301-L313`, `L335-L350`). In production the public host `api.ninjagoldfinch.lol` blocks `/v1/admin*` at the Cloudflare WAF; use `admin.ninjagoldfinch.lol` or the loopback. Conventions are in [endpoints.md](endpoints.md#conventions).
 
 Shared rules (`src/routes/admin.rs:L84-L107`, `src/http/body.rs:L341-L391`, `src/http/validate.rs:L253-L259`):
 
@@ -149,5 +149,5 @@ Captured `/v1/admin/info`, shortened:
 ```
 
 ---
-**Sources:** `src/stats.rs:L254-L268`, `src/routes/admin.rs:L44-L107,L114-L171,L180-L326,L336-L435,L454-L502,L524-L571,L580-L594,L630-L653,L664,L717-L780,L832-L882,L890-L924,L969,L1010-L1038,L1075-L1204,L1212-L1248,L1262-L1354,L1369-L1536,L1583-L1613,L1634-L1652,L1674-L1689,L1700-L1758,L1766-L1806,L1845-L1862,L1884-L1908,L1918-L1939,L1950-L2011,L2023-L2047,L2106-L2124,L2211-L2239,L2291-L2325,L2354-L2376,L2389-L2398,L2408-L2429,L2438,L2452-L2500,L2536-L2572,L2597-L2638,L2676-L2684`, `src/routes/admin/ladder_probe.rs:L42-L44,L121-L149,L351-L355,L387-L434,L458-L496`, `src/http/body.rs:L341-L391`, `src/http/validate.rs:L81-L88,L253-L259`, `src/http/auth.rs:L330-L336,L400-L417`, `src/http/recent.rs:L113-L126`, `docs/_meta/scratch/routes.md` §1.8, live capture against `target/debug/riot-proxy` 2.7.0
-**Last verified:** 2026-11-06 against commit `e5d5c1d`
+**Sources:** `src/stats.rs:L254-L268`, `src/routes/admin.rs:L44-L107,L114-L171,L180-L326,L336-L435,L454-L502,L524-L571,L580-L594,L630-L653,L664,L717-L780,L832-L882,L890-L924,L969,L1010-L1038,L1075-L1204,L1212-L1248,L1262-L1354,L1369-L1536,L1583-L1613,L1634-L1652,L1674-L1689,L1700-L1758,L1766-L1806,L1845-L1862,L1884-L1908,L1918-L1939,L1950-L2011,L2023-L2047,L2106-L2124,L2211-L2239,L2291-L2325,L2354-L2376,L2389-L2398,L2408-L2429,L2438,L2452-L2500,L2536-L2572,L2597-L2638,L2676-L2684`, `src/routes/admin/ladder_probe.rs:L42-L44,L121-L149,L351-L355,L387-L434,L458-L496`, `src/http/body.rs:L341-L391`, `src/http/validate.rs:L81-L88,L253-L259`, `src/http/auth.rs:L301-L313,L361-L378`, `src/http/recent.rs:L111-L124`, `docs/_meta/scratch/routes.md` §1.8, live capture against `target/debug/riot-proxy` 2.7.0
+**Last verified:** 2026-11-06 against commit `7cb71a2`

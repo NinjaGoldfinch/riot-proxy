@@ -676,6 +676,18 @@ async fn a_typed_service_429_with_retry_after_also_freezes() {
     assert_eq!(l.frozen_for(SCOPE), Some(Duration::from_secs(2)));
 }
 
+/// `riot_retry_after_s` (design/14): the longest freeze on any scope.
+#[tokio::test(start_paused = true)]
+async fn the_longest_freeze_is_across_scopes() {
+    let l = limiter_with_app("100:10");
+    assert_eq!(l.longest_freeze(), None);
+    l.freeze("kr", Duration::from_secs(4), RateLimitType::Service);
+    l.freeze("oc1", Duration::from_secs(9), RateLimitType::Method);
+    assert_eq!(l.longest_freeze(), Some(Duration::from_secs(9)));
+    advance(Duration::from_secs(9)).await;
+    assert_eq!(l.longest_freeze(), None, "a freeze that ended is not counted");
+}
+
 /// Design/05 §Observe 3: an untyped 429 leaves the buckets alone.
 #[tokio::test(start_paused = true)]
 async fn an_untyped_429_touches_nothing() {

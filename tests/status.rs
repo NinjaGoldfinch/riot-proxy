@@ -115,7 +115,18 @@ async fn keyless_loopback_gets_the_contract() {
     }
     assert!(body["uptime_s"].is_u64());
     assert_eq!(body["status"], "ok");
-    assert_eq!(body["checks"], serde_json::json!([]));
+    // Before the first round, without a platform to probe or a bucket.
+    let checks = body["checks"].as_array().unwrap();
+    let names: Vec<&str> = checks.iter().map(|c| c["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["riot_key", "cache"]);
+    for c in checks {
+        assert_eq!(
+            (c["status"].as_str(), c["detail"].as_str()),
+            (Some("ok"), Some("pending"))
+        );
+        assert_eq!(c["checked_at"], body["started_at"]);
+        assert!(c["latency_ms"].is_null());
+    }
     let metrics = body["metrics"].as_object().unwrap();
     for k in [
         "requests_total",
@@ -375,4 +386,431 @@ async fn a_consumer_named_with_the_format_s_characters_is_counted() {
     let delta = |k: &str| m[k].as_u64().unwrap() - before["metrics"][k].as_u64().unwrap_or(0);
     assert!(delta("requests_total") >= 2, "the read and the first status poll");
     assert!(delta("requests_total_lol") >= 1);
+}
+
+// ---- the checks (STS-02b, design/14 §Checks) ----
+
+const PROBE: &str = "/lol/status/v4/platform-data";
+
+async fn mock_probe(e: &Env, status: u16) {
+    Mock::given(method("GET"))
+        .and(path(PROBE))
+        .respond_with(ResponseTemplate::new(status).set_body_string(r#"{"id":"OC1"}"#))
+        .mount(&e.server)
+        .await;
+}
+
+async fn round(e: &Env) {
+    riot_proxy::status::checks::Checker::new(&e.state)
+        .unwrap()
+        .round(tokio::time::Instant::now())
+        .await;
+}
+
+fn check<'a>(body: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {
+    body["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == name)
+        .unwrap_or_else(|| panic!("no {name} in {body}"))
+}
+
+async fn probes(e: &Env) -> usize {
+    let got = e.server.received_requests().await.unwrap();
+    got.iter().filter(|r| r.url.path() == PROBE).count()
+}
+
+#[tokio::test]
+async fn a_round_fills_every_check() {
+    let e = env(&[("STATUS_CHECK_PLATFORMS", "oc1,kr")]).await;
+    mock_probe(&e, 200).await;
+    round(&e).await;
+    assert_eq!(probes(&e).await, 2, "the first platform and the other, at boot");
+    let body = e.get(LOCAL, "/status", None, &[]).await.json();
+    let names: Vec<&str> = body["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["riot_api", "riot_key", "cache"], "no bucket, no storage");
+    assert_eq!(body["status"], "ok", "{body}");
+    for name in names {
+        let c = check(&body, name);
+        assert_eq!(
+            (c["status"].as_str(), c["detail"].as_str()),
+            (Some("ok"), Some("")),
+            "{c}"
+        );
+        assert!(
+            c["checked_at"]
+                .as_str()
+                .unwrap()
+                .parse::<jiff::Timestamp>()
+                .is_ok()
+        );
+    }
+    assert!(check(&body, "riot_api")["latency_ms"].is_u64());
+    assert!(check(&body, "riot_key")["latency_ms"].is_null());
+    assert!(body["metrics_meta"]["riot_last_success_at"].is_string());
+}
+
+/// design/14: the answer is 200 even when `status` is `down`.
+#[tokio::test]
+async fn a_check_that_is_down_is_still_a_200() {
+    let e = env(&[("STATUS_CHECK_PLATFORMS", "oc1")]).await;
+    mock_probe(&e, 503).await;
+    round(&e).await;
+    let r = e.get(LOCAL, "/status", None, &[]).await;
+    assert_eq!(r.status, StatusCode::OK);
+    let body = r.json();
+    assert_eq!(body["status"], "down");
+    let api = check(&body, "riot_api");
+    assert_eq!(
+        (api["status"].as_str(), api["detail"].as_str()),
+        (Some("down"), Some("oc1: Riot answered 503"))
+    );
+    assert_eq!(probes(&e).await, 1, "a probe is never retried");
+}
+
+/// A 403 is Riot answering: `riot_api` stays ok and `riot_key` goes down.
+#[tokio::test]
+async fn a_403_from_riot_makes_riot_key_down() {
+    let e = env(&[("STATUS_CHECK_PLATFORMS", "oc1")]).await;
+    mock_probe(&e, 403).await;
+    round(&e).await;
+    let body = e.get(LOCAL, "/status", None, &[]).await.json();
+    assert_eq!(body["status"], "down");
+    let key = check(&body, "riot_key");
+    assert_eq!(
+        (key["status"].as_str(), key["detail"].as_str()),
+        (
+            Some("down"),
+            Some("Riot answered 403 to status.platformData on oc1")
+        )
+    );
+    assert_eq!(check(&body, "riot_api")["status"], "ok");
+}
+
+/// The probe neither reads nor writes the response cache, so `/v1/lol/status`
+/// still misses after one and still hits after another.
+#[tokio::test]
+async fn the_probe_skips_the_response_cache() {
+    let e = env(&[("STATUS_CHECK_PLATFORMS", "oc1")]).await;
+    mock_probe(&e, 200).await;
+    let key = e.key("reader", vec![Scope::Read]).await;
+    round(&e).await;
+    let first = e.get(OUTSIDE, "/v1/lol/status/oc1", Some(&key), &[]).await;
+    assert_eq!(first.status, StatusCode::OK);
+    assert_eq!(first.headers["x-cache"], "MISS", "the probe wrote nothing");
+    round(&e).await;
+    assert_eq!(probes(&e).await, 3, "the second probe read nothing either");
+    assert_eq!(
+        e.get(OUTSIDE, "/v1/lol/status/oc1", Some(&key), &[])
+            .await
+            .headers["x-cache"],
+        "HIT"
+    );
+}
+
+/// No bulk room within a second skips the probe; the check says so.
+#[tokio::test]
+async fn a_full_limiter_skips_the_probe() {
+    let e = env(&[("STATUS_CHECK_PLATFORMS", "oc1")]).await;
+    mock_probe(&e, 200).await;
+    e.state.limiter.freeze(
+        "oc1",
+        Duration::from_secs(30),
+        riot_proxy::riot::limiter::headers::RateLimitType::Service,
+    );
+    let started = Instant::now();
+    round(&e).await;
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "a freeze past the budget fails at once"
+    );
+    assert_eq!(probes(&e).await, 0);
+    let body = e.get(LOCAL, "/status", None, &[]).await.json();
+    let api = check(&body, "riot_api");
+    assert_eq!(api["status"], "degraded", "the freeze itself degrades it: {api}");
+    let detail = api["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("oc1: probe skipped, no room in the rate limiter"),
+        "{detail}"
+    );
+    assert!(detail.contains("rate limited by Riot for "), "{detail}");
+}
+
+#[tokio::test]
+async fn a_bucket_adds_the_storage_check() {
+    let e = env(&[]).await;
+    e.state
+        .db
+        .attach_objects(riot_proxy::archive::objects::Objects::in_memory());
+    round(&e).await;
+    let body = e.get(LOCAL, "/status", None, &[]).await.json();
+    let storage = check(&body, "storage");
+    assert_eq!(
+        (storage["status"].as_str(), storage["detail"].as_str()),
+        (Some("ok"), Some(""))
+    );
+    assert!(
+        body["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|c| c["name"] != "riot_api")
+    );
+}
+
+// ---- one checker over several rounds (review of #261) ----
+
+use riot_proxy::status::checks::Checker;
+
+fn checker(e: &Env) -> Checker {
+    Checker::new(&e.state).unwrap()
+}
+
+/// The scopes of the probes Riot received since the last call, sorted;
+/// `seen` counts the requests already looked at.
+async fn probed(e: &Env, seen: &mut usize) -> Vec<String> {
+    let got = e.server.received_requests().await.unwrap();
+    let mut scopes: Vec<String> = got[*seen..]
+        .iter()
+        .filter(|r| r.url.path() == PROBE)
+        .map(|r| {
+            let host = r.headers.get("x-riot-host").unwrap().to_str().unwrap();
+            host.trim_end_matches(".api.riotgames.com").to_string()
+        })
+        .collect();
+    *seen = got.len();
+    scopes.sort_unstable();
+    scopes
+}
+
+/// The rounds take their `now` from the task's interval; here it is
+/// handed in. (Paused time would not do: while a probe waits on the mock's
+/// socket the runtime is idle, so tokio jumps to the client's 25 s timeout.)
+#[tokio::test]
+async fn one_checker_probes_the_others_every_other_round() {
+    let e = env(&[("STATUS_CHECK_PLATFORMS", "oc1,kr,euw1")]).await;
+    mock_probe(&e, 200).await;
+    let mut c = checker(&e);
+    let mut seen = 0;
+    let t0 = tokio::time::Instant::now();
+    c.round(t0).await;
+    assert_eq!(probed(&e, &mut seen).await, ["euw1", "kr", "oc1"], "all at boot");
+    c.round(t0 + Duration::from_secs(30)).await;
+    assert_eq!(probed(&e, &mut seen).await, ["oc1"], "idle: the first alone");
+    c.round(t0 + Duration::from_secs(60)).await;
+    assert_eq!(probed(&e, &mut seen).await, ["euw1", "kr", "oc1"]);
+    let body = e.get(LOCAL, "/status", None, &[]).await.json();
+    assert_eq!(check(&body, "riot_api")["status"], "ok", "{body}");
+}
+
+/// Real traffic on the first platform's scope, through the fetcher, makes
+/// it active: the next round leaves it alone until 60 s have passed.
+#[tokio::test]
+async fn real_traffic_puts_the_first_platform_on_the_slow_cadence() {
+    let e = env(&[("STATUS_CHECK_PLATFORMS", "oc1,kr")]).await;
+    mock_probe(&e, 200).await;
+    let key = e.key("reader", vec![Scope::Read]).await;
+    let mut c = checker(&e);
+    let mut seen = 0;
+    let t0 = tokio::time::Instant::now();
+    c.round(t0).await;
+    assert_eq!(probed(&e, &mut seen).await, ["kr", "oc1"]);
+
+    let r = e.get(OUTSIDE, "/v1/lol/status/oc1", Some(&key), &[]).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(
+        probed(&e, &mut seen).await,
+        ["oc1"],
+        "the route's own call to Riot"
+    );
+    assert!(
+        e.state.fetcher.client().watch().last_traffic_ms("oc1").is_some(),
+        "real traffic on oc1's scope"
+    );
+
+    c.round(t0 + Duration::from_secs(30)).await;
+    assert_eq!(
+        probed(&e, &mut seen).await,
+        Vec::<String>::new(),
+        "active: 30 s is too soon"
+    );
+    c.round(t0 + Duration::from_secs(60)).await;
+    assert_eq!(probed(&e, &mut seen).await, ["kr", "oc1"]);
+}
+
+/// ADR-206: with an interval that does not divide 60, "every 60 s" rounds up
+/// to whole intervals: at 25 s, the other platform every 3 rounds (75 s).
+#[tokio::test]
+async fn an_interval_of_25_s_probes_the_others_every_75_s() {
+    let e = env(&[
+        ("STATUS_CHECK_PLATFORMS", "oc1,kr"),
+        ("STATUS_CHECK_INTERVAL_S", "25"),
+    ])
+    .await;
+    mock_probe(&e, 200).await;
+    let step = Duration::from_secs(e.state.config.status_check_interval_s.into());
+    assert_eq!(step, Duration::from_secs(25));
+    let mut c = checker(&e);
+    let mut seen = 0;
+    let t0 = tokio::time::Instant::now();
+    let mut kr = Vec::new();
+    for n in 0..7u32 {
+        c.round(t0 + step * n).await;
+        let scopes = probed(&e, &mut seen).await;
+        assert!(scopes.contains(&"oc1".to_string()), "idle: oc1 every round");
+        if scopes.contains(&"kr".to_string()) {
+            kr.push(n);
+        }
+    }
+    assert_eq!(kr, [0, 3, 6], "0 s, 75 s, 150 s");
+}
+
+/// Riot not answering at all (nothing listens on the port) is a failure:
+/// `down` on the first platform.
+#[tokio::test]
+async fn no_answer_from_riot_makes_riot_api_down() {
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let upstream = format!("http://{}", closed.local_addr().unwrap());
+    drop(closed);
+    let server = MockServer::start().await;
+    let (dir, state, _) = common::app_with(&[("STATUS_CHECK_PLATFORMS", "oc1")], &upstream);
+    let e = Env {
+        _dir: dir,
+        state,
+        server,
+    };
+    checker(&e).round(tokio::time::Instant::now()).await;
+    let body = e.get(LOCAL, "/status", None, &[]).await.json();
+    assert_eq!(body["status"], "down");
+    let api = check(&body, "riot_api");
+    assert_eq!(
+        (api["status"].as_str(), api["detail"].as_str()),
+        (Some("down"), Some("oc1: no answer from Riot"))
+    );
+    assert!(api["latency_ms"].is_u64());
+}
+
+/// design/14: `riot_key` is `degraded` within 48 h of the key's expiry.
+#[tokio::test]
+async fn a_key_about_to_expire_degrades_riot_key() {
+    let now_s = jiff::Timestamp::now().as_second();
+    let expires_ms = (now_s + 3_600) * 1_000;
+    let expires = riot_proxy::build_info::rfc3339(expires_ms);
+    let e = env(&[("RIOT_API_KEY_EXPIRES_AT", expires.as_str())]).await;
+    let body = e.get(LOCAL, "/status", None, &[]).await.json();
+    assert_eq!(body["status"], "degraded", "{body}");
+    let key = check(&body, "riot_key");
+    assert_eq!(
+        (key["status"].as_str(), key["detail"].as_str()),
+        (
+            Some("degraded"),
+            Some(format!("the key expires at {expires}").as_str())
+        )
+    );
+}
+
+/// The owner (ADR-206): a platform skipped four attempts in a row, with no
+/// freeze to explain it, degrades `riot_api`.
+#[tokio::test]
+async fn four_skipped_probes_in_a_row_degrade_riot_api() {
+    use riot_proxy::riot::limiter::Priority;
+    use riot_proxy::riot::limiter::headers::LimitWindow;
+    let e = env(&[("STATUS_CHECK_PLATFORMS", "oc1")]).await;
+    mock_probe(&e, 200).await;
+    // One request per 10 min on oc1, taken by real traffic: no room for bulk.
+    e.state.limiter.configure_app(
+        "oc1",
+        &[LimitWindow {
+            limit: 1,
+            seconds: 600,
+        }],
+    );
+    e.state
+        .limiter
+        .acquire("oc1", "x", Priority::Interactive, Duration::ZERO)
+        .await
+        .unwrap();
+    let mut c = checker(&e);
+    let t0 = tokio::time::Instant::now();
+    let riot_api = |body: &serde_json::Value| check(body, "riot_api").clone();
+    for n in 0..3u32 {
+        c.round(t0 + Duration::from_secs(30) * n).await;
+    }
+    let body = e.get(LOCAL, "/status", None, &[]).await.json();
+    let api = riot_api(&body);
+    assert_eq!(
+        (api["status"].as_str(), api["detail"].as_str()),
+        (
+            Some("ok"),
+            Some("oc1: probe skipped, no room in the rate limiter")
+        ),
+        "three skips: the last result stands"
+    );
+    c.round(t0 + Duration::from_secs(90)).await;
+    let body = e.get(LOCAL, "/status", None, &[]).await.json();
+    let api = riot_api(&body);
+    assert_eq!(
+        (api["status"].as_str(), api["detail"].as_str()),
+        (
+            Some("degraded"),
+            Some("oc1: probe skipped 4 times in a row, no room in the rate limiter")
+        ),
+        "not a freeze: {body}"
+    );
+    assert_eq!(probes(&e).await, 0);
+}
+
+/// `cache` and `storage` are stored as soon as they are known, while a
+/// probe Riot never answers waits out the client's 25 s timeout.
+#[tokio::test(start_paused = true)]
+async fn cache_and_storage_do_not_wait_for_a_hung_probe() {
+    let e = env(&[("STATUS_CHECK_PLATFORMS", "oc1")]).await;
+    Mock::given(method("GET"))
+        .and(path(PROBE))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(3_600)))
+        .mount(&e.server)
+        .await;
+    e.state
+        .db
+        .attach_objects(riot_proxy::archive::objects::Objects::in_memory());
+    let started = tokio::time::Instant::now();
+    let mut c = checker(&e);
+    let round = tokio::spawn(async move { c.round(tokio::time::Instant::now()).await });
+
+    let pending = |name: &str| {
+        riot_proxy::status::checks::report(&e.state)
+            .into_iter()
+            .find(|c| c.name == name)
+            .unwrap()
+            .detail
+            == "pending"
+    };
+    // Yielding keeps the runtime busy, so paused time does not move.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while pending("cache") || pending("storage") {
+        assert!(Instant::now() < deadline, "cache and storage were never stored");
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(pending("riot_api"), "the probe is still waiting");
+    assert!(!round.is_finished());
+
+    round.await.unwrap();
+    assert!(
+        started.elapsed() >= Duration::from_secs(25),
+        "the client's timeout"
+    );
+    let checks = riot_proxy::status::checks::report(&e.state);
+    let api = checks.iter().find(|c| c.name == "riot_api").unwrap();
+    assert_eq!(api.detail, "oc1: no answer from Riot");
 }
