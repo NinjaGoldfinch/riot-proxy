@@ -35,7 +35,7 @@ The pinned and picked variants share one cache entry (`src/routes/riot.rs:L155-L
 
 A Riot ID that does not exist is `404 NOT_FOUND` `Resource not found upstream`, and the 404 is cached for 300 s, so the next call is `404` with `X-Cache: HIT-NEG` and message `Resource not found upstream (negative-cached)` (`src/fetcher.rs:L326-L332`).
 
-> **TODO (unverified):** the 200 body of `/v1/riot/accounts/region/by-puuid/{puuid}` is not typed in the OpenAPI document (it is not in `RIOT_BODIES`, `src/routes/docs.rs:L294-L327`); the proxy forwards Riot's `AccountRegionDTO` bytes unchanged.
+> **TODO (unverified):** the 200 body of `/v1/riot/accounts/region/by-puuid/{puuid}` is not typed in the OpenAPI document (it is not in `RIOT_BODIES`, `src/routes/docs.rs:L300-L333`); the proxy forwards Riot's `AccountRegionDTO` bytes unchanged.
 
 ## `/v1/lol/*`: League passthrough
 
@@ -120,4 +120,4 @@ ninjagoldfinch.lol does not use these image routes; its browser loads icons stra
 
 ---
 **Sources:** `src/routes/riot.rs:L127-L300`, `src/routes/lol.rs:L30-L405`, `src/routes/statics.rs:L4-L292`, `src/routes/passthrough.rs:L325-L476`, `src/http/validate.rs:L53-L166,L232-L244`, `src/riot/endpoints.rs:L93-L284`, `src/riot/ladder.rs:L7-L26`, `src/riot/routing.rs:L132-L195`, `src/static/mod.rs:L28-L101`, `src/fetcher.rs:L311-L332`, `tests/snapshots/lol_routes__lol_routes_upstream_calls.snap`, `tests/snapshots/ddragon__ddragon_file_headers.snap`, `tests/snapshots/ddragon__ddragon_missing_headers.snap`, `docs/_meta/scratch/routes.md` §1.2-1.3,1.6-1.7, `docs/_meta/scratch/riot-and-cache.md` §2, live capture against `target/debug/riot-proxy` 2.7.0
-**Last verified:** 2026-11-06 against commit `7cb71a2`
+**Last verified:** 2026-11-07 against commit `ac76283`

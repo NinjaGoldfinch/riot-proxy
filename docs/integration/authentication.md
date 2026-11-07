@@ -32,7 +32,7 @@ The scheme is matched case-insensitively; an empty token is refused. Prefer the 
 | `read` | `/v1/riot/*`, `/v1/lol/*` (analytics included), `/v1/players/*`, `/v1/static/*`, the `player:<puuid>` and `patch` WebSocket topics |
 | `admin` | everything under `/v1/admin/*`, `/dev/reset`, the `metrics`, `ladder` and `firehose` topics, and `?refresh=true` on passthrough routes |
 
-Routes are wrapped at registration in `require_read` or `require_admin` (`src/routes/docs.rs:118-147`); a missing scope is `403 FORBIDDEN` with `This key lacks the '<scope>' scope` (`src/http/auth.rs:301-306`). Unguarded: `/healthz`, `/readyz`, `/metrics`, `/ddragon/*`, `/docs`, `/openapi.json`, `/dev*` (except reset) and `/dashboard` (the page is inert without a key).
+Routes are wrapped at registration in `require_read` or `require_admin` (`src/routes/docs.rs:118-153`); a missing scope is `403 FORBIDDEN` with `This key lacks the '<scope>' scope` (`src/http/auth.rs:301-306`). Unguarded: `/healthz`, `/readyz`, `/metrics`, `/ddragon/*`, `/docs`, `/openapi.json`, `/dev*` (except reset) and `/dashboard` (the page is inert without a key).
 
 ## Admin address check
 
@@ -70,5 +70,5 @@ Key lookups are cached in memory for 60 s per found consumer and 30 s per unknow
 The CI `test` job greps `src/`, `tests/` and `docs/` for `RGAPI-` key shapes and fails on a hit; fixtures are recorded with the key redacted (`.github/workflows/ci.yml:52-53`, `src/cli/record.rs:114-158`).
 
 ---
-**Sources:** `src/consumers.rs:L12,L95-L107,L154-L172,L256-L333`, `src/http/auth.rs:L29-L52,L116-L156,L204-L212,L292-L398`, `src/http/quota.rs:L320-L431`, `src/routes/admin.rs:L180-L219,L248-L326`, `src/routes/docs.rs:L86-L147`, `src/cli/key.rs:L46-L83`, `src/cli/serve.rs:L64-L75,L443-L449`, `src/config.rs:L744-L748`, `.github/workflows/ci.yml:L52-L53`, `docs/design/12-object-storage-and-hosting.md` §Admin hostname behind Access
-**Last verified:** 2026-11-06 against commit `7cb71a2`
+**Sources:** `src/consumers.rs:L12,L95-L107,L154-L172,L256-L333`, `src/http/auth.rs:L29-L52,L116-L156,L204-L212,L292-L409`, `src/http/quota.rs:L320-L431`, `src/routes/admin.rs:L180-L219,L248-L326`, `src/routes/docs.rs:L86-L153`, `src/cli/key.rs:L46-L83`, `src/cli/serve.rs:L64-L75,L443-L449`, `src/config.rs:L744-L748`, `.github/workflows/ci.yml:L52-L53`, `docs/design/12-object-storage-and-hosting.md` §Admin hostname behind Access
+**Last verified:** 2026-11-07 against commit `ac76283`

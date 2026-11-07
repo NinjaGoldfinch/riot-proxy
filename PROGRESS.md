@@ -427,13 +427,14 @@ Staging is seeded from production's daily backup and reads production's packs fr
 - [x] STS-01 build identity: `version` (`dev` off a release tag), `commit`, `built_at`; the startup log line (#259; `build_info::{status_version, short_commit, built_at_rfc3339}` are what STS-02's `/status` reads)
 - [x] STS-02 `consumer_requests_total` and `GET /status` with its local-or-admin gate and `STATUS_ALLOW_CIDR`; `checks` empty until STS-02b (#260, ADR-205)
 - [x] STS-02b the checks (`riot_api`, `riot_key`, `cache`, `storage`) behind `/status` (split from STS-02, ADR-205; the first of `STATUS_CHECK_PLATFORMS` stands in for the removed `DEFAULT_PLATFORM`, owner, ADR-206) (#261)
-- [ ] STS-03 the rate-limit table and `GET /status/ratelimits`
+- [~] STS-03 the rate-limit table and `GET /status/ratelimits`; `riot_retry_after_s` and `riot_app_limit_remaining_pct_<scope>` in `/status` (`feat/STS-03-ratelimit-table`, ADR-207)
 - [ ] STS-04 outbound events to `EVENTS_URL`
 
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
 
 ## Notes for the next task
+- **STS-04 (after STS-03, ADR-207):** the rate-limit table is `UpstreamWatch::rate_limits()` (`status::ratelimits::RateLimitTable`), recorded in `RiotClient::send_as` for every answer; `status::retry_after_s(&state)` is `riot_retry_after_s`. `http::auth::require_status_admin` is the admin-only, quota-free gate if STS-04 adds a route.
 - **STS-03/04 (after STS-02b, ADR-206):** `status::checks::Checker::round(now)` runs one round and is what tests drive (`Checker::new(&state)`); `serve` spawns it. `UpstreamWatch::key()` holds the last 2xx/401/403 as a `KeyVerdict {accepted, status, method, scope, at_ms}`, which is `riot_key_rejected`'s detail; STS-04's tracker can hook `UpstreamWatch::answered`. `Limiter::longest_freeze()` plus `checks::ceil_secs` is `riot_retry_after_s` for STS-03's metric. A probe goes through `RiotClient::send_probe`, which leaves out the scope's traffic stamp and nothing else, so STS-03's rate-limit table sees it.
 - **THR-04 collect cursor (ADR-185):** a crawl skips a ladder player whose wins + losses equal `ladder_entries.collected_games` and asks the rest for games since `collected_at` less `LADDER_COLLECT_OVERLAP_S`, uncapped; a first sight (or a cursor older than `TIER_LATE_STAMP_DAYS`) is v1's newest-`LADDER_BACKFILL_LIMIT` walk. THR-05's discovered players get their cursor on their first collect through the same path, as long as discover upserts their `ladder_entries` row before the next crawl's collect. `startTime` compares the game's end (checked 2026-10-27, ADR-185).
 - **ADM (dashboard):** ADM-00 to ADM-17 are done (ADM-01 by the owner, 2026-10-14); ADM-18 (Access JWT login) is optional and waits for the owner. `admin.html` is 159,886 bytes of its 163,840-byte (160 KB) budget (2026-10-26): a new tab needs the budget raised first. Tabs register in `TABS` in `src/ui/admin.html`; DOM tests build pages with `tests/dom/admin-harness.mjs` against `fake-admin.mjs`.

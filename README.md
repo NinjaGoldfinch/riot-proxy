@@ -130,6 +130,7 @@ Use the unit in [docs/design/07](docs/design/07-deployment.md#option-c--systemd-
 | `/readyz` | Database writable and limiter restored |
 | `/metrics` | Prometheus, with v1's metric names, so v1's Grafana dashboard and alerts import unchanged |
 | `/status` | The shared ninjagoldfinch status contract, for the status bot. The admin key, or no key from loopback (`STATUS_ALLOW_CIDR`) on a request with none of `Cf-Connecting-IP`, `X-Forwarded-For`, `Forwarded` or `X-Real-IP`, so a request through the Cloudflare tunnel, or a reverse proxy that adds one of them, needs the key. A proxy that adds none (nginx without `proxy_set_header X-Forwarded-For`, HAProxy without `option forwardfor`) still reads as local: set `STATUS_ALLOW_CIDR=none`. Never calls Riot; not metered by the consumer quota |
+| `/status/ratelimits` | What Riot's rate-limit headers last said: per platform or region the app windows with their counts and headroom, per method the same, and the last `Retry-After`. The admin key only. Never calls Riot; not metered by the consumer quota |
 
 `GET /status` is 200 even when `status` is `down`: a non-200 means the endpoint itself failed. `status` is the worst of `checks`. `metrics` is flat counters (since `started_at`) and gauges; [design/14](docs/design/14-status.md#metrics-sts-02) lists every key. Observed on a dev build against Riot with a placeholder key, `LADDER_PLATFORMS=oc1,kr`, `RIOT_API_KEY_EXPIRES_AT` a day away and a `file://` bucket (`metrics` cut short):
 
@@ -170,6 +171,8 @@ Use the unit in [docs/design/07](docs/design/07-deployment.md#option-c--systemd-
 | `storage` | a listing of the bucket within 5 s; only with `ARCHIVE_OBJECT_URL` |
 
 They run at boot and every `STATUS_CHECK_INTERVAL_S` (30 s), and read `ok` with detail `pending` until their first result.
+
+`metrics` also carries `riot_retry_after_s`, how long Riot still has a scope throttled after a 429 (0 when none), and `riot_app_limit_remaining_pct_<scope>`, the least headroom across that platform's or region's app windows, for each one Riot has answered on since the start. `GET /status/ratelimits` has the windows behind them ([design/14](docs/design/14-status.md#rate-limit-table-sts-03)).
 
 Logs are JSON on stdout. Every request carries a `request_id`, echoed as `X-Request-Id`.
 

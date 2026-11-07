@@ -10,7 +10,7 @@ One `Limiter` holds a map of scopes. A scope is a routing value on a Riot host: 
 |---|---|---|
 | Bootstrap | A new scope starts with the personal-key app limits `20:1,100:120` and no method windows | `src/riot/limiter/headers.rs:30-41`, `mod.rs:307-310` |
 | Learning | After every upstream response, `X-App-Rate-Limit` and `X-Method-Rate-Limit` reconfigure the windows (same lengths keep their admissions) and the `-Count` headers pad usage upward, never down | `mod.rs:370-401`, `bucket.rs:100-105,140-162` |
-| Permit | A token once taken is spent whether or not the call succeeds | `mod.rs:50-56` |
+| Permit | A token once taken is spent whether or not the call succeeds | `mod.rs:60-66` |
 | Budget | `acquire` fails at once with `RATE_LIMITED` if the next free slot is beyond the caller's budget; it never waits out a budget it cannot meet (ADR-025) | `mod.rs:262-300` |
 | Freeze | A typed 429 (`application`, `method` or `service`) with a numeric `Retry-After` freezes the whole scope until then; freezes only extend | `mod.rs:396-431` |
 | Checkpoint | Every 10 s and at shutdown the windows are written to `limiter_state`; on boot a checkpoint older than 120 s restores every window as full | `src/riot/limiter/persist.rs:21-25,141-175` |
@@ -46,7 +46,7 @@ stateDiagram-v2
     Cancelled --> [*]
 ```
 
-`Waiting` registers a waiter so bulk stands aside; `Cancelled` withdraws it through a drop guard so a cancelled request never leaves a phantom waiter (`mod.rs:127-175`). Reasons for waiting, in evaluation order: the scope is frozen, bulk is over its ceiling, an interactive waiter is queued, or a window is full (`mod.rs:315-359`).
+`Waiting` registers a waiter so bulk stands aside; `Cancelled` withdraws it through a drop guard so a cancelled request never leaves a phantom waiter (`mod.rs:137-194`). Reasons for waiting, in evaluation order: the scope is frozen, bulk is over its ceiling, an interactive waiter is queued, or a window is full (`mod.rs:315-359`).
 
 ## Scope states
 
@@ -113,7 +113,7 @@ Every job kind, its trigger, priority and tables is tabulated in `docs/_meta/scr
 | tokio worker threads | `min(cores, 4)` | `src/cli/mod.rs:123-126` |
 | SQLite writer | one thread, queue of 1024 closures | `src/db/mod.rs:41-42,160-172` |
 | SQLite readers | `available_parallelism()` connections behind a semaphore | `src/db/mod.rs:82-89,195-198` |
-| Riot HTTP pool | 32 idle connections per host, 60 s idle | `src/riot/client.rs:30-31` |
+| Riot HTTP pool | 32 idle connections per host, 60 s idle | `src/riot/client.rs:32-33` |
 | L2 write-behind | 10 000 queued rows, flushed every 2 s or 500 rows | `src/cache/l2.rs:23-28` |
 | Object-store reads | `ARCHIVE_OBJECT_CONCURRENCY` (16) ranged GETs in flight | `src/archive/matches.rs:265-269` |
 | WebSocket | 256 events buffered per topic; 200 topics per socket; ping every 30 s, dropped after 2 missed | `src/ws/hub.rs:20`, `src/ws/protocol.rs:23-29` |
@@ -122,4 +122,4 @@ Every job kind, its trigger, priority and tables is tabulated in `docs/_meta/scr
 
 ---
 **Sources:** `src/riot/limiter/mod.rs:L50-L175,L229-L300,L307-L431,L532-L606`, `src/riot/limiter/bucket.rs:L15-L162`, `src/riot/limiter/headers.rs:L30-L41`, `src/riot/limiter/persist.rs:L21-L25,L141-L175`, `src/http/quota.rs:L320-L431`, `src/fetcher.rs:L40-L45,L133-L151,L361-L366,L513-L552,L615-L653`, `src/riot/routing.rs:L148-L181`, `src/cache/keys.rs:L81-L88`, `src/jobs/scheduler.rs:L40-L42,L124-L171,L225-L269,L963-L1025,L1070-L1084`, `src/jobs/lanes.rs:L425-L468`, `src/jobs/mod.rs:L74-L94`, `src/db/store.rs:L98-L133`, `src/db/mod.rs:L41-L42,L82-L89,L158-L198`, `src/cli/serve.rs:L82-L88`, `ops/prometheus-alerts.yml`, `docs/design/05-rate-limiter.md`, `docs/design/06-jobs-and-realtime.md`
-**Last verified:** 2026-11-06 against commit `7cb71a2`
+**Last verified:** 2026-11-07 against commit `ac76283`

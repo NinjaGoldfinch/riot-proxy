@@ -111,6 +111,8 @@ The limiter already parses Riot's headers to pace itself (`riot::limiter::header
 }
 ```
 
+**As built (STS-03, ADR-207).** Limit and count windows are paired by length, and a limit window with no count is left out. An answer without a header pair (a service 429, a bare 5xx) leaves the last values; a network failure records nothing. `remaining_pct` rounds down and is 0 at or over the limit. A scope's `retry_after` is the header Riot last sent there; the top-level `retry_after_s` is the freeze still left. A scope seen only through a method header or a `Retry-After` has `app: []` and null `observed_at` and `remaining_pct`. The table lives on the client's `UpstreamWatch`, records status probes too, and starts empty after a restart.
+
 ## Checks (STS-02b)
 
 A background task runs every `STATUS_CHECK_INTERVAL_S` (default 30) and stores each result; `/status` reads the stored results. A check that has not run yet reads `ok` with detail `pending` for the first interval after boot.

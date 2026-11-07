@@ -30,7 +30,7 @@ Riot and League of Legends terms as this service uses them, then the project's o
 | **Lane / role / team position** | `TOP`, `JUNGLE`, `MIDDLE`, `BOTTOM`, `UTILITY` (Riot's `teamPosition`). Team positions add `""` for queues without positions; a matchup is always in a lane. | `src/routes/analytics.rs:L53-L56` |
 | **Matchup** | Champion A against champion B in the same lane, with games, wins and win rate. | `src/routes/analytics.rs:L153-L178` |
 | **Set build** | A recurring item build: core items, then starter, boots, next-item slots, runes, spells and skill order, with a Wilson lower bound on the win rate. | `src/routes/analytics.rs:L326-L390,L649-L658` |
-| **Key scope** (Riot) | A Riot key's purpose: development (personal) keys versus production keys. Not to be confused with the proxy's `keyScope`. | `src/riot/client.rs:L401` (the expiry reminder) |
+| **Key scope** (Riot) | A Riot key's purpose: development (personal) keys versus production keys. Not to be confused with the proxy's `keyScope`. | `src/riot/client.rs:L416` (the expiry reminder) |
 
 ## Project terms
 
@@ -73,5 +73,5 @@ Riot and League of Legends terms as this service uses them, then the project's o
 | **Dev VM** | Proxmox VM 102 at `192.168.68.46:8080` that ran `:edge` with `AUTH_DISABLED`; dormant now. | `docs/_meta/scratch/WRITING-BRIEF.md`, `deploy/proxmox/README.md` |
 
 ---
-**Sources:** `src/http/validate.rs:L117-L250`, `src/riot/routing.rs:L46-L195`, `src/riot/ladder.rs:L7-L56`, `src/riot/endpoints.rs:L93-L204,L476-L497`, `src/riot/client.rs:L401`, `src/riot/limiter/mod.rs:L306-L431`, `src/riot/limiter/bucket.rs:L165-L181`, `src/routes/analytics.rs:L53-L56,L153-L178,L326-L390,L493-L496,L649-L658`, `src/routes/admin.rs:L99-L101,L454-L571`, `src/consumers.rs:L12-L45,L95-L162`, `src/http/auth.rs:L301-L313`, `src/http/quota.rs:L320-L431`, `src/cache/keys.rs:L31-L37`, `src/cache/l1.rs:L88-L119`, `src/cache/l2.rs:L186-L216`, `src/fetcher.rs:L42-L69,L326-L395`, `src/config.rs:L810-L834`, `src/jobs/mod.rs:L20-L71`, `src/jobs/ladder.rs:L228-L328`, `src/jobs/archive.rs:L327-L437`, `src/jobs/analytics.rs:L354-L520`, `docs/design/12-object-storage-and-hosting.md:L83-L156`, `docs/design/07-deployment.md:L183`, `docs/_meta/scratch/{jobs-and-observability,persistence,siblings,WRITING-BRIEF}.md`, `README.md`
-**Last verified:** 2026-11-06 against commit `7cb71a2`
+**Sources:** `src/http/validate.rs:L117-L250`, `src/riot/routing.rs:L46-L195`, `src/riot/ladder.rs:L7-L56`, `src/riot/endpoints.rs:L93-L204,L476-L497`, `src/riot/client.rs:L416`, `src/riot/limiter/mod.rs:L306-L431`, `src/riot/limiter/bucket.rs:L165-L181`, `src/routes/analytics.rs:L53-L56,L153-L178,L326-L390,L493-L496,L649-L658`, `src/routes/admin.rs:L99-L101,L454-L571`, `src/consumers.rs:L12-L45,L95-L162`, `src/http/auth.rs:L301-L313`, `src/http/quota.rs:L320-L431`, `src/cache/keys.rs:L31-L37`, `src/cache/l1.rs:L88-L119`, `src/cache/l2.rs:L186-L216`, `src/fetcher.rs:L42-L69,L326-L395`, `src/config.rs:L810-L834`, `src/jobs/mod.rs:L20-L71`, `src/jobs/ladder.rs:L228-L328`, `src/jobs/archive.rs:L327-L437`, `src/jobs/analytics.rs:L354-L520`, `docs/design/12-object-storage-and-hosting.md:L83-L156`, `docs/design/07-deployment.md:L183`, `docs/_meta/scratch/{jobs-and-observability,persistence,siblings,WRITING-BRIEF}.md`, `README.md`
+**Last verified:** 2026-11-07 against commit `ac76283`

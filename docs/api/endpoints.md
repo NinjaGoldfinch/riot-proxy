@@ -9,7 +9,7 @@ The human-readable reference for every route riot-proxy 2.7.0 serves. This page 
 | [endpoints-players-analytics.md](endpoints-players-analytics.md) | `/v1/players/*`, `/v1/lol/analytics/*` |
 | [endpoints-admin.md](endpoints-admin.md) | all 40 `/v1/admin/*` operations |
 
-The machine-readable contract is [openapi.json](openapi.json) (OpenAPI 3.1.0, `info.version` `2.7.0`, 70 paths, 76 operations). The server builds that document from the same router it serves, so the two cannot drift (`src/routes/docs.rs:L116-L147`). Errors are in [errors.md](errors.md); paging, filters, ETags and versioning in [pagination-filtering-and-versioning.md](pagination-filtering-and-versioning.md); copy-pasteable walkthroughs in [examples.md](examples.md).
+The machine-readable contract is [openapi.json](openapi.json) (OpenAPI 3.1.0, `info.version` `2.7.0`, 70 paths, 76 operations). The server builds that document from the same router it serves, so the two cannot drift (`src/routes/docs.rs:L116-L153`). Errors are in [errors.md](errors.md); paging, filters, ETags and versioning in [pagination-filtering-and-versioning.md](pagination-filtering-and-versioning.md); copy-pasteable walkthroughs in [examples.md](examples.md).
 
 ## Conventions
 
@@ -26,12 +26,12 @@ The proxy speaks plain HTTP only; TLS is the tunnel's or a reverse proxy's job (
 
 ### Authentication
 
-Every `/v1/*` route except `/v1/ws` sits behind a guard; `/healthz`, `/readyz`, `/metrics`, `/ddragon/*`, `/docs` and the UI pages need no key (`src/routes/docs.rs:L118-L147`, `src/app.rs:L71-L121`).
+Every `/v1/*` route except `/v1/ws` sits behind a guard; `/healthz`, `/readyz`, `/metrics`, `/ddragon/*`, `/docs` and the UI pages need no key (`src/routes/docs.rs:L118-L153`, `src/app.rs:L71-L121`).
 
 | Auth value in the tables | Meaning |
 |---|---|
 | none | No key, no quota |
-| read | A consumer key with the `read` scope (`require_read`, `src/http/auth.rs:L401-L408`) |
+| read | A consumer key with the `read` scope (`require_read`, `src/http/auth.rs:L412-L419`) |
 | admin | A consumer key with the `admin` scope **and** a source IP on `ADMIN_IP_ALLOWLIST` (empty list = everyone) (`src/http/auth.rs:L301-L313`) |
 | socket | Any active key, checked inside the handler after the upgrade (`src/http/auth.rs:L271-L285`) |
 | toggle | Served only when the named variable is on (`DEV_UI`, `DOCS_UI`, `DASHBOARD_UI`) |
@@ -115,7 +115,8 @@ Request bodies are capped at 1 MiB (`src/app.rs:L30-L31`, `L107`).
 |---|---|---|---|---|
 | GET | `/healthz` | none | `200 {"ok":true}`; touches nothing | `src/routes/health.rs:L70` |
 | GET | `/readyz` | none | `{"ok","sqlite","limiter","keyScope","sqliteReaders","sqliteReadersFree","writerBusy","writerBusyMs","writerQueued"}`; 200 when `sqlite && limiter`, else **503 with the same body**. With the writer idle, `sqlite` is a `BEGIN IMMEDIATE; ROLLBACK;` on it within 2 s; with the writer busy, nothing is queued behind it and `sqlite` says whether the running write made progress (SQLite stamps or CPU) in the last 5 s (ADR-180). `limiter` is the restored-checkpoint flag; the `writer*` fields are informational | `src/routes/health.rs:L119` (`L21-L46`, `L148-L200`) |
-| GET | `/status` | the admin key, or none from a `STATUS_ALLOW_CIDR` peer on a request no reverse proxy forwarded (no `Cf-Connecting-IP`, `X-Forwarded-For`, `Forwarded` or `X-Real-IP`) | the shared ninjagoldfinch status contract (design/14): `{"schema","service","host","version","commit","built_at","started_at","uptime_s","status","checks","metrics","metrics_meta"}`, `checks` are `riot_api` (when `STATUS_CHECK_PLATFORMS` names a platform), `riot_key`, `cache` and `storage` (with a bucket), from the last background round (`src/status/checks.rs:L71-L98`); **200 even when `status` is `down`**; 401 keyless from elsewhere or through a reverse proxy, 403 for a key without admin scope; no consumer quota | `src/status/mod.rs:L190` (`src/http/auth.rs:L381-L398`) |
+| GET | `/status` | the admin key, or none from a `STATUS_ALLOW_CIDR` peer on a request no reverse proxy forwarded (no `Cf-Connecting-IP`, `X-Forwarded-For`, `Forwarded` or `X-Real-IP`) | the shared ninjagoldfinch status contract (design/14): `{"schema","service","host","version","commit","built_at","started_at","uptime_s","status","checks","metrics","metrics_meta"}`, `checks` are `riot_api` (when `STATUS_CHECK_PLATFORMS` names a platform), `riot_key`, `cache` and `storage` (with a bucket), from the last background round (`src/status/checks.rs:L71-L98`); **200 even when `status` is `down`**; 401 keyless from elsewhere or through a reverse proxy, 403 for a key without admin scope; no consumer quota | `src/status/mod.rs:L213` (`src/http/auth.rs:L381-L389,L398-L409`) |
+| GET | `/status/ratelimits` | the admin key only; never keyless, not even from loopback | `{"schema":1,"at","retry_after_s","scopes":{<scope>:{"observed_at","app":[{"window_s","limit","count","remaining_pct"}],"remaining_pct","retry_after":{"s","at"},"methods":{<method id>:{"observed_at","windows":[…]}}}}}`: what Riot's rate-limit headers last said (design/14 §Rate-limit table, ADR-207). `remaining_pct` is `(limit − count) / limit × 100` rounded down, a scope's the least of its app windows'; `retry_after_s` the longest freeze left after a 429. Memory only, empty after a restart; never calls Riot; 401 keyless, 403 for a key without admin scope; no consumer quota | `src/status/mod.rs:L237` (`src/http/auth.rs:L391-L409`; `src/status/ratelimits.rs:L107-L160`) |
 | GET | `/metrics` | none | Prometheus text, `Content-Type: text/plain; version=0.0.4; charset=utf-8` | `src/telemetry.rs:L119` |
 
 Captured:
@@ -135,9 +136,9 @@ x-request-id: 01M5B6GNQ9SCSC5X3GTAV136MG
 
 | Method | Path | Response | Handler |
 |---|---|---|---|
-| GET | `/docs` | Scalar HTML reference | `src/routes/docs.rs:L392` |
-| GET | `/openapi.json` | the document, pretty JSON | `src/routes/docs.rs:L384-L387` |
-| GET | `/openapi.yaml` | `Content-Type: application/yaml` | `src/routes/docs.rs:L388-L391` |
+| GET | `/docs` | Scalar HTML reference | `src/routes/docs.rs:L398` |
+| GET | `/openapi.json` | the document, pretty JSON | `src/routes/docs.rs:L390-L393` |
+| GET | `/openapi.yaml` | `Content-Type: application/yaml` | `src/routes/docs.rs:L394-L397` |
 
 No key. Not listed in the document itself. `riot-proxy spec` prints the same JSON from the CLI.
 
@@ -239,5 +240,5 @@ The frame shape is `src/events.rs:L159-L172`; data fields per event are listed i
 - Gauge `proxy_ws_connections`; counter `events_published_total{name}`.
 
 ---
-**Sources:** `src/app.rs:L30-L35,L71-L121,L258-L264`, `src/routes/docs.rs:L86-L147,L380-L393`, `src/routes/health.rs:L21-L200`, `src/routes/ui.rs:L94-L233`, `src/routes/dev.rs:L33-L253`, `src/routes/ws.rs:L497-L572`, `src/ws/protocol.rs:L23-L147`, `src/ws/socket.rs:L38-L206`, `src/ws/hub.rs:L20-L205`, `src/http/auth.rs:L141-L408`, `src/http/quota.rs:L320-L431`, `src/http/request_id.rs:L287-L339`, `src/http/validate.rs:L21-L88`, `src/routes/passthrough.rs:L401-L476`, `src/fetcher.rs:L50-L69,L306-L372,L617-L655`, `src/riot/routing.rs:L46-L181`, `docs/_meta/scratch/routes.md`, `docs/design/12-object-storage-and-hosting.md:L904-L925`, `tests/snapshots/http__unknown_route_404.snap`, `tests/snapshots/ws_hub__ws_session.snap`, live capture against `target/debug/riot-proxy` 2.7.0
-**Last verified:** 2026-11-06 against commit `7cb71a2`
+**Sources:** `src/app.rs:L30-L35,L71-L121,L258-L264`, `src/routes/docs.rs:L86-L153,L386-L399`, `src/routes/health.rs:L21-L200`, `src/routes/ui.rs:L94-L233`, `src/routes/dev.rs:L33-L253`, `src/routes/ws.rs:L497-L572`, `src/ws/protocol.rs:L23-L147`, `src/ws/socket.rs:L38-L206`, `src/ws/hub.rs:L20-L205`, `src/http/auth.rs:L141-L419`, `src/http/quota.rs:L320-L431`, `src/http/request_id.rs:L287-L339`, `src/http/validate.rs:L21-L88`, `src/routes/passthrough.rs:L401-L476`, `src/fetcher.rs:L50-L69,L306-L372,L617-L655`, `src/riot/routing.rs:L46-L181`, `docs/_meta/scratch/routes.md`, `docs/design/12-object-storage-and-hosting.md:L904-L925`, `tests/snapshots/http__unknown_route_404.snap`, `tests/snapshots/ws_hub__ws_session.snap`, live capture against `target/debug/riot-proxy` 2.7.0
+**Last verified:** 2026-11-07 against commit `ac76283`
