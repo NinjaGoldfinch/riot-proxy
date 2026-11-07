@@ -113,7 +113,7 @@ Every job kind, its trigger, priority and tables is tabulated in `docs/_meta/scr
 | tokio worker threads | `min(cores, 4)` | `src/cli/mod.rs:123-126` |
 | SQLite writer | one thread, queue of 1024 closures | `src/db/mod.rs:41-42,160-172` |
 | SQLite readers | `available_parallelism()` connections behind a semaphore | `src/db/mod.rs:82-89,195-198` |
-| Riot HTTP pool | 32 idle connections per host, 60 s idle | `src/riot/client.rs:30-31` |
+| Riot HTTP pool | 32 idle connections per host, 60 s idle | `src/riot/client.rs:23-24` |
 | L2 write-behind | 10 000 queued rows, flushed every 2 s or 500 rows | `src/cache/l2.rs:23-28` |
 | Object-store reads | `ARCHIVE_OBJECT_CONCURRENCY` (16) ranged GETs in flight | `src/archive/matches.rs:265-269` |
 | WebSocket | 256 events buffered per topic; 200 topics per socket; ping every 30 s, dropped after 2 missed | `src/ws/hub.rs:20`, `src/ws/protocol.rs:23-29` |

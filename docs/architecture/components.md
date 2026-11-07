@@ -75,7 +75,7 @@ Reads from a route or a job all pass through the fetcher; the archive is the onl
 ## Boundaries worth knowing
 
 - **Auth is a route layer, not a handler concern.** The read routers are wrapped in `require_read` and the admin router in `require_admin` at registration (`src/routes/docs.rs:118-147`); `/healthz`, `/readyz`, `/metrics`, `/ddragon/*`, `/docs` and the pages are outside both.
-- **The fetcher owns upstream policy.** The client classifies and never retries (`src/riot/client.rs:8-13`); negative caching, stale fallbacks, the service-429 backoff and the 5xx retries live in the fetcher (`src/fetcher.rs:9-14`).
+- **The fetcher owns upstream policy.** The client classifies and never retries (`src/riot/client.rs:1-7`); negative caching, stale fallbacks, the service-429 backoff and the 5xx retries live in the fetcher (`src/fetcher.rs:9-14`).
 - **The archive never fails a request.** A read failure in SQLite or the bucket logs a warning and returns nothing, so the fetcher goes to Riot (`src/archive/mod.rs:128-144`, `src/archive/matches.rs:232-319`).
 - **Jobs and routes share the fetcher but not the budget.** Routes fetch at interactive priority with a 2 s wait budget; jobs at bulk priority with a 1 s yield budget, after which the job gives its worker back (`src/fetcher.rs:133-151`, `src/jobs/scheduler.rs:124-141`).
 - **The object store is attached once.** `Db::attach_objects` stores the bucket handle so every archive read can resolve an offloaded body without the callers changing (`src/db/mod.rs:188-196`).
@@ -83,5 +83,5 @@ Reads from a route or a job all pass through the fetcher; the archive is the onl
 The design these modules implement is `docs/design/03-architecture.md`; where the code has moved on from the design, the inventories under `docs/_meta/scratch/` record the differences and [../_meta/gaps.md](../_meta/gaps.md) lists them.
 
 ---
-**Sources:** `src/lib.rs`, `src/app.rs:L40-L121`, `src/cli/mod.rs:L70-L121`, `src/routes/docs.rs:L116-L147`, `src/fetcher.rs:L9-L14,L133-L151`, `src/riot/client.rs:L8-L13`, `src/archive/mod.rs:L128-L144`, `src/db/mod.rs:L188-L196,L259-L316`, `src/jobs/scheduler.rs:L124-L141`, `docs/design/03-architecture.md#component-diagram`
+**Sources:** `src/lib.rs`, `src/app.rs:L40-L121`, `src/cli/mod.rs:L70-L121`, `src/routes/docs.rs:L116-L147`, `src/fetcher.rs:L9-L14,L133-L151`, `src/riot/client.rs:L1-L7`, `src/archive/mod.rs:L128-L144`, `src/db/mod.rs:L188-L196,L259-L316`, `src/jobs/scheduler.rs:L124-L141`, `docs/design/03-architecture.md#component-diagram`
 **Last verified:** 2026-11-06 against commit `7cb71a2`

@@ -46,7 +46,7 @@ The Data Dragon client is a separate reqwest client with a 15 s connect and 60 s
 
 ## Routing
 
-Hosts are `<platform>.api.riotgames.com` or `<region>.api.riotgames.com` (`src/riot/routing.rs:L123-L125`, `L201-L203`); `RIOT_BASE_URL` replaces the host for a mock and adds `x-riot-host` so one mock can keep per-host buckets (ADR-059, `src/riot/client.rs:L364-L369`).
+Hosts are `<platform>.api.riotgames.com` or `<region>.api.riotgames.com` (`src/riot/routing.rs:L123-L125`, `L201-L203`); `RIOT_BASE_URL` replaces the host for a mock and adds `x-riot-host` so one mock can keep per-host buckets (ADR-059, `src/riot/client.rs:L377-L382`).
 
 | platform | match-v5 region | account cluster |
 |---|---|---|
@@ -63,11 +63,11 @@ Hosts are `<platform>.api.riotgames.com` or `<region>.api.riotgames.com` (`src/r
 
 | Header | Value |
 |---|---|
-| `X-Riot-Token` | the configured key, marked sensitive so it never appears in debug output (`src/riot/client.rs:L29,L307-L309,L362`) |
-| `Accept` | `application/json` (`src/riot/client.rs:L363`) |
+| `X-Riot-Token` | the configured key, marked sensitive so it never appears in debug output (`src/riot/client.rs:L29,L320-L322,L375`) |
+| `Accept` | `application/json` (`src/riot/client.rs:L376`) |
 | `User-Agent` | `RIOT_USER_AGENT`, default `riot-proxy/2.0 (+https://github.com/NinjaGoldfinch/riot-proxy)` (`src/config.rs:L110,L793`) |
 
-The key never goes in the URL (`src/riot/client.rs:L361`). Client settings: 10 s connect, 25 s total timeout, 32 idle connections per host, embedded Mozilla roots only (`src/riot/client.rs:L23-L27`, `L310-L318`; ADR-007). Path params are percent-encoded like `encodeURIComponent`; query strings like `URLSearchParams` (`src/riot/endpoints.rs:L362-L382`, `src/riot/client.rs:L90-L130`).
+The key never goes in the URL (`src/riot/client.rs:L374`). Client settings: 10 s connect, 25 s total timeout, 32 idle connections per host, embedded Mozilla roots only (`src/riot/client.rs:L23-L27`, `L323-L331`; ADR-007). Path params are percent-encoded like `encodeURIComponent`; query strings like `URLSearchParams` (`src/riot/endpoints.rs:L362-L382`, `src/riot/client.rs:L90-L130`).
 
 ## The rate-limit model
 
@@ -93,7 +93,7 @@ Interactive requests (HTTP callers) wait up to `CLIENT_WAIT_BUDGET_MS` (2 000 ms
 
 - **One key.** The proxy holds one `RIOT_API_KEY` and one limiter; two processes on the same key would split, not double, the budget (ADR-001, `docs/design/03-architecture.md:L32-L36`). No multi-key rotation exists in the code.
 - **Personal key in production.** The deployment runs on a personal (development) key with the `20:1,100:120` limits; there is no production key (`docs/_meta/scratch/WRITING-BRIEF.md`). Production keys are issued per application on the developer portal and need Riot's approval; their limits arrive in the same headers, so nothing in the proxy changes when one is granted.
-- **Development keys expire every 24 hours.** A Riot 401/403 logs `RIOT KEY REJECTED` at `error` level with that reminder, and the consumer sees `502 UPSTREAM_ERROR` `Upstream authentication failed`; the proxy never retries it (`src/riot/client.rs:L146`, `L401`).
+- **Development keys expire every 24 hours.** A Riot 401/403 logs `RIOT KEY REJECTED` at `error` level with that reminder, and the consumer sees `502 UPSTREAM_ERROR` `Upstream authentication failed`; the proxy never retries it (`src/riot/client.rs:L146`, `L421`).
 - **Apex list cap.** Riot returns at most 10 000 entries for an apex league; observed, not documented (`src/riot/ladder.rs:L14-L20`).
 - **Disclaimer.** "riot-proxy isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games" (`README.md`, last line).
 
@@ -113,5 +113,5 @@ Through the running server, `GET /v1/admin/debug/riot?scope=<platform|region>&pa
 - Data Dragon version list: <https://ddragon.leagueoflegends.com/api/versions.json>
 
 ---
-**Sources:** `src/riot/endpoints.rs:L13-L14,L91-L288,L362-L382,L476-L497`, `src/riot/routing.rs:L108-L203`, `src/riot/client.rs:L23-L29,L90-L130,L146,L307-L369,L401`, `src/riot/limiter/headers.rs:L31-L42,L80-L154`, `src/riot/limiter/mod.rs:L370-L431`, `src/riot/ladder.rs:L14-L20`, `src/fetcher.rs:L34-L44,L549-L655`, `src/cache/keys.rs:L81-L88`, `src/jobs/ddragon.rs:L22-L25,L83-L97,L108-L152,L255-L285`, `src/static/mod.rs:L28-L35`, `src/static/images.rs:L32-L39`, `src/routes/admin.rs:L1075-L1204`, `src/cli/riot.rs`, `src/config.rs:L110,L793,L810-L811`, `docs/contract/v1-endpoints.txt`, `docs/design/03-architecture.md:L32-L36`, `docs/DECISIONS.md` ADR-001, ADR-007, ADR-023, ADR-024, ADR-059, ADR-066, ADR-143, `docs/_meta/scratch/riot-and-cache.md` §1-§4, `docs/_meta/scratch/jobs-and-observability.md` §3, `docs/_meta/scratch/WRITING-BRIEF.md`, `README.md`
+**Sources:** `src/riot/endpoints.rs:L13-L14,L91-L288,L362-L382,L476-L497`, `src/riot/routing.rs:L108-L203`, `src/riot/client.rs:L23-L29,L90-L130,L146,L320-L382,L421`, `src/riot/limiter/headers.rs:L31-L42,L80-L154`, `src/riot/limiter/mod.rs:L370-L431`, `src/riot/ladder.rs:L14-L20`, `src/fetcher.rs:L34-L44,L549-L655`, `src/cache/keys.rs:L81-L88`, `src/jobs/ddragon.rs:L22-L25,L83-L97,L108-L152,L255-L285`, `src/static/mod.rs:L28-L35`, `src/static/images.rs:L32-L39`, `src/routes/admin.rs:L1075-L1204`, `src/cli/riot.rs`, `src/config.rs:L110,L793,L810-L811`, `docs/contract/v1-endpoints.txt`, `docs/design/03-architecture.md:L32-L36`, `docs/DECISIONS.md` ADR-001, ADR-007, ADR-023, ADR-024, ADR-059, ADR-066, ADR-143, `docs/_meta/scratch/riot-and-cache.md` §1-§4, `docs/_meta/scratch/jobs-and-observability.md` §3, `docs/_meta/scratch/WRITING-BRIEF.md`, `README.md`
 **Last verified:** 2026-11-06 against commit `7cb71a2`

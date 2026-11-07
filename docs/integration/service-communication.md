@@ -81,7 +81,7 @@ Two sequential round trips are the minimum because the match page needs the prof
 | `https://ddragon.leagueoflegends.com` (`/api/versions.json`, `/cdn/<v>/data/<locale>/*.json`, images) | HTTPS, no auth, connect 15 s, total 60 s | `ddragon:sync` every `DDRAGON_SYNC_S` (3600 s) and at boot; images on first request | a failed sync keeps what is on disk and retries as a job; a failed image is a 502 and nothing is kept |
 | `https://static.developer.riotgames.com/docs/lol/queues.json` | HTTPS, no auth | every sync | keeps the previous file |
 
-Sources: `src/riot/client.rs:30-34,314-335`, `src/jobs/ddragon.rs:22-32,260-261`, `src/static/images.rs`.
+Sources: `src/riot/client.rs:25-29,323-331`, `src/jobs/ddragon.rs:22-32,260-261`, `src/static/images.rs`.
 
 ## riot-proxy to object storage
 
@@ -104,5 +104,5 @@ The dashboard at `https://admin.ninjagoldfinch.lol/dashboard` (Cloudflare Access
 > **TODO (unverified):** the production value of the site's `PROXY_URL` and the name of its consumer key were not read (`/etc/ninjagoldfinch-lol/env` is not in any repo); loopback and a `read`-scoped key are inferred from the site's README and `docs/design/12-object-storage-and-hosting.md` §As executed.
 
 ---
-**Sources:** `docs/_meta/scratch/siblings.md` §1.3-§1.5, §2.2, §4, `ninjagoldfinch-lol/src/lib/server/proxy.ts:L28-L87`, `ninjagoldfinch-lol/src/lib/server/errors.ts:L16-L33`, `src/riot/client.rs:L30-L34,L314-L335`, `src/jobs/ddragon.rs:L22-L32,L260-L261`, `deploy/README.md`, `ninja-monitor/README.md:L50-L81`
+**Sources:** `docs/_meta/scratch/siblings.md` §1.3-§1.5, §2.2, §4, `ninjagoldfinch-lol/src/lib/server/proxy.ts:L28-L87`, `ninjagoldfinch-lol/src/lib/server/errors.ts:L16-L33`, `src/riot/client.rs:L25-L29,L323-L331`, `src/jobs/ddragon.rs:L22-L32,L260-L261`, `deploy/README.md`, `ninja-monitor/README.md:L50-L81`
 **Last verified:** 2026-11-06 against commit `7cb71a2`

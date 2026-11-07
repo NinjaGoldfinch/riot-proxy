@@ -138,7 +138,7 @@ The crawl is written in one transaction; a partial unique index refuses a second
 
 | Where | Value | Source |
 |---|---|---|
-| Riot connect / total | 10 s / 25 s | `src/riot/client.rs:32-34` |
+| Riot connect / total | 10 s / 25 s | `src/riot/client.rs:25-27` |
 | Interactive wait for a limiter token | `CLIENT_WAIT_BUDGET_MS` = 2000 | `src/config.rs:812` |
 | Job wait before yielding | `JOB_YIELD_BUDGET_MS` = 1000 | `src/config.rs:807` |
 | Background refresh budget | 15 min | `src/fetcher.rs:42-44` |
