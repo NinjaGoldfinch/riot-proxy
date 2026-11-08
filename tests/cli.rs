@@ -319,6 +319,31 @@ fn serve_prints_the_bootstrap_key_exactly_once_and_healthcheck_passes() {
     );
 }
 
+/// AVL-01 (ADR-209): "listening" comes before the boot catch-up, which logs
+/// its duration as it finishes and only then starts the job workers.
+#[test]
+fn serve_listens_before_the_boot_catch_up_and_logs_its_duration() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("data");
+    let server = Server::start(&data, free_port());
+    assert!(
+        !server.seen.iter().any(|l| l.contains("boot catch-up done")),
+        "{:?}",
+        server.seen
+    );
+    let after = server.wait_for("starting job workers");
+    let done = after
+        .iter()
+        .position(|l| l.contains("boot catch-up done"))
+        .unwrap_or_else(|| panic!("{after:?}"));
+    assert!(after[done].contains("\"ms\":"), "{}", after[done]);
+    assert!(
+        done < after.len() - 1,
+        "the catch-up finishes before the workers start"
+    );
+    server.stop(after);
+}
+
 /// OBJ-01: boot names the bucket and endpoint, never the keys, and makes no
 /// request to it (the endpoint here does not resolve).
 #[test]
