@@ -164,7 +164,7 @@ rp key list
 
 Three credentials, three places (`deploy/README.md:20-28`):
 
-1. **Onidel access key** for bucket `riot-proxy-archive`: created in the Onidel console, scoped to that bucket (`docs/design/12-object-storage-and-hosting.md:547-551`). It goes into `/etc/riot-proxy/env` as `ARCHIVE_OBJECT_ACCESS_KEY` and `ARCHIVE_OBJECT_SECRET_KEY` (step 5) and into the `[onidel]` remote of `rclone.conf` (step 9). Keys without a URL are accepted and inert, so they can go in before the bucket exists (`src/config/tests.rs:875-881`).
+1. **Onidel access key** for bucket `riot-proxy-archive`: created in the Onidel console, scoped to that bucket (`docs/design/12-object-storage-and-hosting.md:547-551`). It goes into `/etc/riot-proxy/env` as `ARCHIVE_OBJECT_ACCESS_KEY` and `ARCHIVE_OBJECT_SECRET_KEY` (step 5) and into the `[onidel]` remote of `rclone.conf` (step 9). Keys without a URL are accepted and inert, so they can go in before the bucket exists (`src/config/tests.rs:883-889`).
 2. **R2 API token for the replica**: Object Read & Write on R2 bucket `riot-proxy-archive` only, so it cannot touch `ngf-backups` (`deploy/README.md:26-28`). Only `rclone` uses it (`[r2]` remote).
 3. **R2 API token for backups**: scoped to `ngf-backups`, used by the hand-made offsite timer through `/etc/rclone/r2.conf` (`docs/design/12-object-storage-and-hosting.md:818-821`; `deploy/README.md:151-152`).
 
@@ -238,4 +238,4 @@ The image is `FROM scratch` with the static binary, `DATA_DIR=/data`, port 8080 
 
 ---
 **Sources:** `docs/design/07-deployment.md:L15,L74-L95`, `docs/design/12-object-storage-and-hosting.md:L547-L561,L588-L644,L797-L810,L818-L821,L896-L906`, `deploy/README.md:L20-L100,L121-L122,L151-L152`, `deploy/riot-proxy-replica.service:L12-L33`, `deploy/riot-proxy-replica.timer:L6-L8`, `.github/workflows/release.yml:L262-L279`, `README.md:L11-L24,L27-L58`, `Dockerfile:L19-L26`, `docker-compose.yml:L1-L11`, `src/config.rs:L130-L131,L713,L749-L775,L800,L938-L989,L1099-L1111`, `src/cli/mod.rs:L82-L88,L144-L168`, `src/cli/serve.rs:L59-L157,L359-L364,L443-L449`, `src/cli/key.rs:L46-L57`, `src/consumers.rs:L95-L107,L154-L157`, `src/http/auth.rs:L30,L288-L290`, `src/routes/health.rs:L122-L204`, `docs/_meta/scratch/siblings.md`, `docs/_meta/scratch/routes.md:L137-L140`
-**Last verified:** 2026-11-09 against commit `6c32ff4`
+**Last verified:** 2026-11-09 against commit `6eefe67`

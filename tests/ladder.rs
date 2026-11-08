@@ -608,7 +608,7 @@ async fn the_options_route_lists_what_a_crawl_can_be_asked_for() {
     let r = a.call("GET", "/v1/admin/ladder/options", &a.admin, None).await;
     assert_eq!(r.status, StatusCode::OK);
     let body = r.json();
-    assert_eq!(body["platforms"].as_array().unwrap().len(), 16);
+    assert_eq!(body["platforms"].as_array().unwrap().len(), 17);
     assert_eq!(
         body["platforms"][0]
             .as_object()

@@ -130,6 +130,21 @@ mod tests {
             lane(kinds::ARCHIVE_MATCH, json!({"matchId": "ME1_17228556"})),
             Some(("europe", "match.byId"))
         );
+        // me1 is a platform (ME-02): its own lane for platform hosts, europe's for match-v5.
+        let me1 = json!({"puuid": "p", "platform": "me1"});
+        assert_eq!(
+            lane(kinds::POLL_RANK, me1.clone()),
+            Some(("me1", "league.entriesByPuuid"))
+        );
+        assert_eq!(
+            lane(kinds::POLL_LIVE, me1.clone()),
+            Some(("me1", "spectator.activeGame"))
+        );
+        assert_eq!(
+            lane(kinds::POLL_MATCHES, me1),
+            Some(("europe", "match.idsByPuuid"))
+        );
+        assert!(all().any(|l| l == "me1"), "the claim looks at me1's lane");
         let leg = json!({"crawlId": "c", "platform": "euw1", "queue": "RANKED_SOLO_5x5", "tier": "DIAMOND", "division": "I"});
         assert_eq!(
             lane(kinds::LADDER_WALK, leg.clone()),

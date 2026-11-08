@@ -947,6 +947,25 @@ async fn the_pool_rejects_what_is_not_a_patch_or_platform() {
     assert_eq!(bad.json()["error"]["message"], "querystring/limit must be <= 500");
 }
 
+/// ME-02 (ADR-216): `me1` is a platform. Its profile is europe's for
+/// match-v5, and the pool filters on the `ME1_` prefix.
+#[tokio::test]
+async fn me1_is_a_platform_on_the_players_routes() {
+    let e = env(&[]).await;
+    let r = e.get(&format!("/v1/players/{PUUID}/profile?platform=me1")).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(
+        (r.json()["platform"].clone(), r.json()["region"].clone()),
+        (json!("me1"), json!("europe"))
+    );
+    let r = e.get(&pool("?platform=me1")).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(
+        (r.json()["platform"].clone(), r.json()["archivedGames"].clone()),
+        (json!("me1"), json!(0))
+    );
+}
+
 #[tokio::test]
 async fn the_players_routes_need_a_read_key() {
     let e = env(&[]).await;

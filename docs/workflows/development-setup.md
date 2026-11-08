@@ -21,7 +21,7 @@ Nothing else is needed: there is no Redis, no Postgres and no Node runtime in th
 ## Clone and configure
 
 1. Clone the public repository and enter it: `git clone https://github.com/NinjaGoldfinch/riot-proxy.git && cd riot-proxy`.
-2. Copy the documented configuration: `cp .env.example .env` (`README.md:62-63`). `.env` is git-ignored (`.gitignore`), and `.env.example` is the authoritative list of variables: a config test asserts it documents exactly the set the binary reads (`src/config/tests.rs:434-453`).
+2. Copy the documented configuration: `cp .env.example .env` (`README.md:62-63`). `.env` is git-ignored (`.gitignore`), and `.env.example` is the authoritative list of variables: a config test asserts it documents exactly the set the binary reads (`src/config/tests.rs:442-461`).
 3. Set `RIOT_API_KEY=` in `.env` to a personal development key from [developer.riotgames.com](https://developer.riotgames.com/). The key must be at least 8 characters (`src/config.rs:688-692`); development keys expire every 24 hours (`PROGRESS.md:400`). Never commit it and never paste it into a fixture: CI greps `tests/`, `src/` and `docs/` for key-shaped strings (`.github/workflows/ci.yml:52-53`).
 4. Leave everything else commented out. A commented line shows the default; an empty value (`FOO=`) also means the default (`.env.example:1-3`; `src/config.rs:977-983`).
 
@@ -204,4 +204,4 @@ Not re-executed here: `cargo build`, `cargo test` and `just nextest` (a full run
 
 ---
 **Sources:** `rust-toolchain.toml:L1-L5`, `justfile:L1-L52`, `.env.example:L1-L210`, `README.md:L60-L113`, `src/config.rs:L3`, `L612-L626`, `L654-L664`, `L702-L728`, `L937-L963`, `L1040-L1052`, `src/cli/mod.rs:L82-L88`, `src/cli/serve.rs:L59-L75`, `L76-L108`, `L143-L148`, `L341-L346`, `L421-L427`, `src/cli/key.rs:L13-L57`, `src/consumers.rs:L12-L14`, `L95-L96`, `src/http/auth.rs:L207-L210`, `src/jobs/ticks.rs:L1-L4`, `L44-L80`, `L108-L139`, `src/cli/riot.rs:L1-L32`, `L63-L81`, `src/archive/objects.rs:L109-L121`, `acceptance/helpers/env.ts:L19-L25`, `L244-L275`, `acceptance/helpers/setup.ts:L23-L54`, `acceptance/helpers/mock-riot.ts:L7`, `tests/ui.rs:L42-L64`, `tests/dom/package.json`, `acceptance/package.json`, `.github/workflows/ci.yml:L52-L53`, `PROGRESS.md:L390`, `L400`, `L420-L422`, `docs/IMPLEMENTATION.md:L434`, `docs/design/11-showcase.md:L15`, `docs/DECISIONS.md:L1457`, `docs/_meta/scratch/config.md`, `docs/_meta/scratch/persistence.md` §5, `docs/_meta/scratch/siblings.md` §1.2, §1.8
-**Last verified:** 2026-11-09 against commit `6c32ff4`
+**Last verified:** 2026-11-09 against commit `6eefe67`

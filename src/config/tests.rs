@@ -364,6 +364,14 @@ fn lists_are_split_and_trimmed() {
     assert_eq!(c.ladder_queues, vec!["RANKED_SOLO_5x5", "RANKED_FLEX_SR"]);
     assert_eq!(c.ladder_tier_floor, "DIAMOND");
 
+    // me1 is a platform (ME-02, ADR-216), for the crawl and the status probe.
+    let c = load(env(&[
+        ("LADDER_PLATFORMS", "me1"),
+        ("STATUS_CHECK_PLATFORMS", "ME1,euw1"),
+    ]));
+    assert_eq!(c.ladder_platforms, vec![Platform::Me1]);
+    assert_eq!(c.status_check_platforms, vec![Platform::Me1, Platform::Euw1]);
+
     // A v1 `.env` may still carry DEFAULT_PLATFORM: it is ignored, not a default.
     let c = load(env(&[("DEFAULT_PLATFORM", "kr")]));
     assert!(

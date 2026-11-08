@@ -2,7 +2,7 @@
 
 Every variable the proxy reads, with its type, default, validation and the line in `src/config.rs` that reads it; then how secrets are provisioned and redacted, the precedence rules, what `ENV=production` refuses, retired v1 names, the CLI flags and the last-known production values. The evidence inventory behind this page is `docs/_meta/scratch/config.md`.
 
-The authoritative list is `VARS` (`src/config.rs:23-101`); a test asserts `.env.example` documents exactly that list (`src/config/tests.rs:434-453`). Anything else in the environment or `.env` is dropped before merging (`src/config.rs:979-986`).
+The authoritative list is `VARS` (`src/config.rs:23-101`); a test asserts `.env.example` documents exactly that list (`src/config/tests.rs:442-461`). Anything else in the environment or `.env` is dropped before merging (`src/config.rs:979-986`).
 
 Notation: `int(min..=max)` means a whole number in that range, `bool` accepts `true|1|false|0` case-insensitively, `csv` splits on commas and drops empties (`src/config.rs:1034-1040,1184-1213,1315-1329`). A value that fails validation keeps the default while the error is collected; all errors print together as `Invalid environment configuration:` and the command exits 1 (`src/config.rs:129-130,891-895`).
 
@@ -82,7 +82,7 @@ Notation: `int(min..=max)` means a whole number in that range, `bool` accepts `t
 |---|---|---|---|---|---|---|
 | `LADDER_CRAWL_S` | int(0..=604800) | `0` | no | seconds between scheduled crawls; `0` is on demand only | `86400` | `src/config.rs:841` |
 | `LADDER_QUEUES` | csv of `RANKED_SOLO_5x5`, `RANKED_FLEX_SR` (case-sensitive) | `RANKED_SOLO_5x5` | no | ladders crawled; invalid entries error and are dropped | `RANKED_SOLO_5x5` | `src/config.rs:842-845,1297-1304` |
-| `LADDER_PLATFORMS` | csv of platforms (case-insensitive) | empty | no | platforms the crawl tick covers; empty schedules none even with `LADDER_CRAWL_S` set | `oc1,kr,euw1,na1` | `src/config.rs:775-778,1254-1259` |
+| `LADDER_PLATFORMS` | csv of platforms (case-insensitive): any of the 17 in `Platform::ALL`, `me1` included since ME-02 (ADR-216) | empty | no | platforms the crawl tick covers; empty schedules none even with `LADDER_CRAWL_S` set | `oc1,kr,euw1,na1` | `src/config.rs:775-778,1254-1259` |
 | `LADDER_TIER_FLOOR` | tier name, upper-cased | `MASTER` | no | lowest tier a crawl enumerates | `MASTER` | `src/config.rs:847,1307-1316` |
 | `LADDER_BACKFILL_LIMIT` | int(0..=10000) | `100` | no | matches walked per player at first sight (no collect cursor yet); `0` walks nobody | `100` | `src/config.rs:848` |
 | `LADDER_CRAWL_MATCH_LIMIT` | int(0..=100000000) | `0` | no | the most matches a platform may hold, archived or queued for download, before its crawls' archive hand-off queues no more; the rest are counted as `matchesSkipped`. Every match on the platform counts, whatever archived it. `0` is no cap. Staging sets `10000` (STG-03, ADR-202) | `10000` | `src/config.rs`, `src/jobs/ladder.rs` (`archive_set`) |
@@ -169,7 +169,7 @@ With `ENV=production` (or `--env production`), `Config::load` fails on any of th
 |---|---|---|
 | `NODE_ENV` | read only as a fallback when `ENV` is unset; `ENV` wins when both are set | `src/config.rs:107-109,702-706` |
 | `TLS` | `true`/`1` refuses to start: `TLS: built-in TLS was removed; terminate HTTPS in a reverse proxy`; `false`/`0` is ignored | `src/config.rs:103-105,754-759` |
-| `TLS_DOMAIN`, `ACME_EMAIL`, `TLS_PORT`, `REDIS_URL`, `SF_LOCK_MS`, `DEFAULT_PLATFORM`, `AGGREGATE_MIN_GAMES` | not in `VARS`: silently dropped. `DEFAULT_PLATFORM` does not seed `LADDER_PLATFORMS` | `src/config.rs:979-986`; `src/config/tests.rs:366-373,589-595` |
+| `TLS_DOMAIN`, `ACME_EMAIL`, `TLS_PORT`, `REDIS_URL`, `SF_LOCK_MS`, `DEFAULT_PLATFORM`, `AGGREGATE_MIN_GAMES` | not in `VARS`: silently dropped. `DEFAULT_PLATFORM` does not seed `LADDER_PLATFORMS` | `src/config.rs:979-986`; `src/config/tests.rs:374-381,597-603` |
 | `DATABASE_URL=postgres://…` | refused with `postgres:// needs a build with the postgres feature (not available yet)` | `src/config.rs:714-719` |
 
 ## CLI flags
@@ -210,5 +210,5 @@ From session notes, not from the live file. The box's env file was last describe
 > **TODO (unverified):** the live `/etc/riot-proxy/env` on `ngf-prod-syd1` was not read (it is root-only on the box and holds the Riot key). The values above come from dated session notes and the design record; any may have changed since.
 
 ---
-**Sources:** `src/config.rs:L3,L23-L169,L188-L253,L432-L568,L571-L631,L646-L660,L682-L906,L932-L986,L990-L1137,L1184-L1329`, `src/config/tests.rs:L44-L50,L191-L202,L268-L278,L366-L373,L434-L453,L589-L595,L874-L880`, `src/cli/mod.rs:L29-L88`, `src/cli/serve.rs:L64-L75,L102-L104,L443-L449`, `src/consumers.rs:L95-L107,L154-L157,L308-L333`, `src/http/auth.rs:L66-L77,L128-L139,L196-L202`, `src/riot/client.rs:L327-L329`, `src/riot/endpoints.rs:L424-L444`, `src/routes/admin.rs:L2499-L2526`, `src/archive/objects.rs:L142,L201-L204`, `.env.example`, `README.md:L97,L102`, `.github/workflows/ci.yml:L52-L53`, `deploy/README.md:L24-L28,L51-L72,L151`, `docs/design/07-deployment.md:L125`, `docs/design/12-object-storage-and-hosting.md:L437-L446,L484,L806-L807,L828-L830,L868-L873`, `docs/DECISIONS.md:L1862`, `reports/OBJ implementation handoff.md:L20`, `docs/_meta/scratch/config.md`
-**Last verified:** 2026-11-09 against commit `6c32ff4`
+**Sources:** `src/config.rs:L3,L23-L169,L188-L253,L432-L568,L571-L631,L646-L660,L682-L906,L932-L986,L990-L1137,L1184-L1329`, `src/config/tests.rs:L44-L50,L191-L202,L268-L278,L374-L381,L442-L461,L597-L603,L882-L888`, `src/cli/mod.rs:L29-L88`, `src/cli/serve.rs:L64-L75,L102-L104,L443-L449`, `src/consumers.rs:L95-L107,L154-L157,L308-L333`, `src/http/auth.rs:L66-L77,L128-L139,L196-L202`, `src/riot/client.rs:L327-L329`, `src/riot/endpoints.rs:L424-L444`, `src/routes/admin.rs:L2499-L2526`, `src/archive/objects.rs:L142,L201-L204`, `.env.example`, `README.md:L97,L102`, `.github/workflows/ci.yml:L52-L53`, `deploy/README.md:L24-L28,L51-L72,L151`, `docs/design/07-deployment.md:L125`, `docs/design/12-object-storage-and-hosting.md:L437-L446,L484,L806-L807,L828-L830,L868-L873`, `docs/DECISIONS.md:L1862`, `reports/OBJ implementation handoff.md:L20`, `docs/_meta/scratch/config.md`
+**Last verified:** 2026-11-09 against commit `6eefe67`

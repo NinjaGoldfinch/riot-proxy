@@ -116,7 +116,10 @@ async fn dev_config_publishes_what_the_page_needs() {
         serde_json::json!(["americas", "europe", "asia", "sea"])
     );
     let platforms = body["platforms"].as_array().unwrap();
-    assert_eq!(platforms.len(), 16);
+    assert_eq!(platforms.len(), 17);
+    assert!(
+        platforms.contains(&serde_json::json!({"value": "me1", "label": "Middle East", "region": "europe"}))
+    );
     assert!(platforms.contains(&serde_json::json!({"value": "oc1", "label": "Oceania", "region": "sea"})));
 }
 
