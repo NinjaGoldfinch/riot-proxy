@@ -292,4 +292,4 @@ Common key prefix on every aggregate: `key_scope TEXT`, `platform TEXT`, `queue 
 
 ---
 **Sources:** `src/db/migrations/V0004__ladder.sql`, `V0005__analytics.sql`, `V0006__analytics_runs.sql`, `V0008__apex_capped.sql`, `V0010__player_ranks.sql`, `V0011__rank_lookups.sql`, `V0014__champion_builds.sql`, `V0015__analytics_totals.sql`, `V0017__tier_side_keys.sql`, `V0020__without_rowid_derived.sql`, `V0025__champion_stats_totals.sql`, `V0026__floor_totals.sql`, `V0027__matchup_builds.sql`, `V0029__analytics_counted.sql`, `src/archive/analytics.rs:L1-L152`, `src/archive/analytics.rs:L204-L386`, `src/archive/analytics.rs:L449-L751`, `src/archive/analytics/delta.rs:L1-L559`, `src/archive/tiers.rs:L37-L57`, `src/archive/ranks.rs:L53-L81`, `src/archive/mod.rs:L180-L198`, `src/jobs/ladder/store.rs:L109-L115`, `src/jobs/ladder/store.rs:L242-L253`, `src/jobs/analytics.rs:L109-L137`, `src/jobs/analytics.rs:L215-L239`, `src/jobs/analytics.rs:L438-L518`, `src/cli/serve.rs:L484-L558`, `src/config.rs:L852`, `docs/_meta/scratch/persistence.md`
-**Last verified:** 2026-11-09 against commit `324c493`
+**Last verified:** 2026-11-09 against commit `6eefe67`

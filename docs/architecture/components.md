@@ -84,4 +84,4 @@ The design these modules implement is `docs/design/03-architecture.md`; where th
 
 ---
 **Sources:** `src/lib.rs`, `src/app.rs:L40-L121`, `src/cli/mod.rs:L71-L123`, `src/routes/docs.rs:L116-L153`, `src/fetcher.rs:L9-L14,L133-L151`, `src/riot/client.rs:L1-L7`, `src/archive/mod.rs:L128-L144`, `src/db/mod.rs:L188-L196,L259-L316`, `src/jobs/scheduler.rs:L124-L141`, `docs/design/03-architecture.md#component-diagram`
-**Last verified:** 2026-11-09 against commit `324c493`
+**Last verified:** 2026-11-09 against commit `6eefe67`
