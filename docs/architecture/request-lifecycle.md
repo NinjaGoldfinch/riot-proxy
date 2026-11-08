@@ -4,7 +4,7 @@ What happens between a request arriving at riot-proxy and the response leaving, 
 
 ## The middleware stack
 
-Every request passes the same layers, innermost first: metrics and the recent-requests ring, the 1 MiB body limit, compression, the tracing span, panic capture, and the request id (`src/app.rs:105-120`). The request id is taken from an inbound `X-Request-Id` when it is at most 128 characters of `[A-Za-z0-9-_.:]`, otherwise a ULID is generated; it is echoed on every response, including the 404 fallback and panics (`src/http/request_id.rs:287-338`). Guarded routes then run `require_read` or `require_admin`: key lookup through a 60 s cache, scope check, admin IP allowlist, then the per-consumer quota, whose `X-RateLimit-*` headers go on every metered response (`src/http/auth.rs:353-398`).
+Every request passes the same layers, innermost first: metrics and the recent-requests ring, the 1 MiB body limit, compression, the tracing span, panic capture, and the request id (`src/app.rs:105-120`). The request id is taken from an inbound `X-Request-Id` when it is at most 128 characters of `[A-Za-z0-9-_.:]`, otherwise a ULID is generated; it is echoed on every response, including the 404 fallback and panics (`src/http/request_id.rs:287-338`). Guarded routes then run `require_read` or `require_admin`: key lookup through a 60 s cache, scope check, admin IP allowlist, then the per-consumer quota, whose `X-RateLimit-*` headers go on every metered response (`src/http/auth.rs:353-405`).
 
 ## Passthrough read: cache hit, stale, miss
 
@@ -149,5 +149,5 @@ The crawl is written in one transaction; a partial unique index refuses a second
 | Site's budget per proxy call | 5 s analytics and static, 30 s otherwise | ninjagoldfinch-lol `src/lib/server/proxy.ts:55-64` (origin/main) |
 
 ---
-**Sources:** `src/app.rs:L105-L120`, `src/http/request_id.rs:L287-L338`, `src/http/auth.rs:L353-L398`, `src/fetcher.rs:L36-L44,L286-L372,L407-L613`, `src/riot/endpoints.rs:L112-L121,L495-L503`, `src/singleflight.rs:L1-L12`, `src/archive/mod.rs:L88-L178`, `src/archive/matches.rs:L191-L328`, `src/routes/lol.rs:L53-L64`, `src/routes/players.rs:L66-L105,L128-L147,L244-L324,L547-L599`, `src/routes/players/refresh.rs:L18-L71`, `src/routes/admin.rs:L1700-L1733`, `src/jobs/ladder.rs:L247-L328,L917-L927`, `src/db/store.rs:L98-L133`, `src/jobs/scheduler.rs:L124-L141`, `docs/_meta/scratch/riot-and-cache.md` §1.5, `docs/_meta/scratch/siblings.md` §1.3
-**Last verified:** 2026-11-06 against commit `7cb71a2`
+**Sources:** `src/app.rs:L105-L120`, `src/http/request_id.rs:L287-L338`, `src/http/auth.rs:L353-L405`, `src/fetcher.rs:L36-L44,L286-L372,L407-L613`, `src/riot/endpoints.rs:L112-L121,L495-L503`, `src/singleflight.rs:L1-L12`, `src/archive/mod.rs:L88-L178`, `src/archive/matches.rs:L191-L328`, `src/routes/lol.rs:L53-L64`, `src/routes/players.rs:L66-L105,L128-L147,L244-L324,L547-L599`, `src/routes/players/refresh.rs:L18-L71`, `src/routes/admin.rs:L1700-L1733`, `src/jobs/ladder.rs:L247-L328,L917-L927`, `src/db/store.rs:L98-L133`, `src/jobs/scheduler.rs:L124-L141`, `docs/_meta/scratch/riot-and-cache.md` §1.5, `docs/_meta/scratch/siblings.md` §1.3
+**Last verified:** 2026-11-09 against commit `6c32ff4`
