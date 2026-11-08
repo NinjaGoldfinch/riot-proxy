@@ -335,6 +335,7 @@ Before (OVH VPS, 2026-10-13 01:00 UTC): 38 GB disk at 77 %, `riot-proxy.db` 20 G
 ## ME — Middle East match ids (owner report 2026-10-13)
 
 - [x] ME-01 `ME1_` match ids archive from `europe` (#175, ADR-143)
+- [ ] ME-02 me1 as a platform (owner confirmed the host 2026-11-09; ADR-216); see IMPLEMENTATION.md §Post-release — AVL, finding 2
 - [x] OBJ-00 design/12 revised with the owner's answers: Onidel 250 GB primary, R2 replica, 14-day window, `object_store`, bodies packed with a `body_locations` index (ADR-146)
 - [x] OBJ-01 object store client and config: `archive::objects` over `object_store`, `ARCHIVE_OBJECT_*` with redaction and production checks (#196, ADR-162)
 - [x] OBJ-02 pack format, `body_locations` and reads: `archive::pack`, V0023, reads by byte range, `archive::offload` write and free steps, stats and dashboard counts (#197, ADR-163)
@@ -388,7 +389,7 @@ ninjagoldfinch.lol's `/champions` data took 3.9 s, all of it the proxy's analyti
 `/readyz` reported `sqlite: false` on production while the dashboard's crawls tab was open (IMPLEMENTATION.md §Post-release — WR).
 - [x] WR-01 a crawl's activity view seeks its indexes: exact ladder kinds, V0028 `jobs_crawl_matches` (#229, ADR-179)
 - [x] WR-02 `/readyz` reports writer progress (stamps, CPU clock) instead of queueing behind a write; `sqlite_write_seconds`, `sqlite_write_wait_seconds`, `sqlite_write_queue` (#231, ADR-180)
-- [ ] WR-03 shutdown inside systemd's stop timeout (ask first)
+- [ ] ~~WR-03 shutdown inside systemd's stop timeout~~: superseded by AVL-04 and tracked there (ADR-208)
 
 ## PAIR — team pairings (owner request 2026-10-10, outline)
 - [ ] PAIR-01 `champion_pairs`: every ally role per player, keyed by tier and side (IMPLEMENTATION.md §Post-release — PAIR)
@@ -430,10 +431,22 @@ Staging is seeded from production's daily backup and reads production's packs fr
 - [~] STS-03 the rate-limit table and `GET /status/ratelimits`, admin key only; `riot_app_limit_remaining_pct_<scope>` and `riot_retry_after_s` in `/status` (`feat/STS-03-ratelimit-table`, ADR-207)
 - [ ] STS-04 outbound events to `EVENTS_URL`
 
+## AVL — available through restarts and busy writers (owner report 2026-11-08)
+A production restart on 2026-11-08 logged `listening` and accepted nothing for minutes while the boot tier check walked the archive for `ME1_` matches it cannot stamp (ME-02); profiles then waited behind a 243 s job write, and a SIGTERM in the gap ended in SIGKILL at 90 s (IMPLEMENTATION.md §Post-release — AVL, ADR-208). Order: 00, 01, 02, 06, 04, 03, 07, 05.
+- [~] AVL-00 series spec: the plan section, ADR-208, design/03 boot order and design/06 shutdown; `scripts/restart-bench.sh` for staging (`docs/AVL-00-series-spec`, ADR-208)
+- [ ] AVL-01 accept before catching up: `app::serve` starts right after bind; `recover`, the catch-ups and the workers follow in one boot task that honours SIGTERM (ADR-209)
+- [ ] AVL-02 request-path writes are write-behind: the fetcher's archive writes and the profile routes' `players::upsert` no longer wait for the writer (ADR-210)
+- [ ] AVL-06 boot checks and the sampler cost nothing when there is nothing to do: a ranked match whose prefix is no platform stamped `UNKNOWN`, a bounded tier check and backfill query, `stale_matches` as `EXISTS`, no 60-second `SCAN matches` (ADR-213)
+- [ ] AVL-04 shutdown inside 90 s: after the job grace the writer's running statement is interrupted and its row re-queued (supersedes WR-03, ADR-211)
+- [ ] AVL-03 stale beats none for `/v1/players/*`: an expired copy served `STALE` when the refresh fails; league entries in L2 and the `refreshing` field (owner decisions pending) (ADR-212)
+- [ ] AVL-07 ticks remember their last run, so `maintenance`, `names:backfill` and `ddragon:sync` do not fire on every restart (ADR-214)
+- [ ] AVL-05 long writes in bounded, resumable transactions: `aggregate:analytics` per step and patch, `maintenance`'s trim in chunks (ADR-215)
+
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
 
 ## Notes for the next task
+- **AVL (series spec AVL-00, ADR-208):** ADR numbers are reserved per task, whatever order they merge in: ADR-208 the spec, ADR-209 AVL-01, ADR-210 AVL-02, ADR-211 AVL-04, ADR-212 AVL-03, ADR-213 AVL-06, ADR-214 AVL-07, ADR-215 AVL-05; ADR-216 is ME-02 (`me1` as a platform, the fix for the `ME1_` matches the boot tier check keeps finding). Order of work: 00, 01, 02, 06, 04, 03, 07, 05, each off `origin/main`. Every staging acceptance is a run of `scripts/restart-bench.sh` on `ngf-mon-syd1` (never production), its output pasted into the PR. Open for the owner, with the defaults the tasks assume: the `refreshing` field and composite `X-Cache: STALE` (AVL-03 proposes, merges neither without a yes), league entries persisted to L2 (yes), `HEALTH_WAIT` 600 → 120 after AVL-01 and AVL-04 reach production.
 - **STS-04 (after STS-03, ADR-207):** the rate-limit table is `UpstreamWatch::rate_limits()` (`status::ratelimits::RateLimitTable`), recorded in `RiotClient::send_as` for every answer with a status, probes included. `status::retry_after_s(&state)` is `riot_retry_after_s` (the limiter's longest freeze, rounded up): STS-04 fires `riot_rate_limited` when it goes above 10 and `riot_rate_limit_cleared` when it returns to 0 (design/14 §Outbound events). `http::auth::require_status_admin` is the admin-only, quota-free gate. Refresh the OpenAPI snapshot with `INSTA_UPDATE=always cargo test --test it openapi`, never by committing a `.snap.new`.
 - **STS-03/04 (after STS-02b, ADR-206):** `status::checks::Checker::round(now)` runs one round and is what tests drive (`Checker::new(&state)`); `serve` spawns it. `UpstreamWatch::key()` holds the last 2xx/401/403 as a `KeyVerdict {accepted, status, method, scope, at_ms}`, which is `riot_key_rejected`'s detail; STS-04's tracker can hook `UpstreamWatch::answered`. `Limiter::longest_freeze()` plus `checks::ceil_secs` is `riot_retry_after_s` for STS-03's metric. A probe goes through `RiotClient::send_probe`, which leaves out the scope's traffic stamp and nothing else, so STS-03's rate-limit table sees it.
 - **THR-04 collect cursor (ADR-185):** a crawl skips a ladder player whose wins + losses equal `ladder_entries.collected_games` and asks the rest for games since `collected_at` less `LADDER_COLLECT_OVERLAP_S`, uncapped; a first sight (or a cursor older than `TIER_LATE_STAMP_DAYS`) is v1's newest-`LADDER_BACKFILL_LIMIT` walk. THR-05's discovered players get their cursor on their first collect through the same path, as long as discover upserts their `ladder_entries` row before the next crawl's collect. `startTime` compares the game's end (checked 2026-10-27, ADR-185).
