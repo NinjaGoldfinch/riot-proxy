@@ -754,15 +754,15 @@ impl AnalyticsContext {
     /// window, so a prefix is walked once and a stopped sweep resumes where it
     /// was. Returns the matches it stamped.
     pub async fn backfill_tiers(&self) -> Result<i64, JobError> {
-        let mut pending: Option<Vec<String>> = None;
+        let mut pick = Prefixes::All;
         let mut total = TierPass::default();
         loop {
-            let pass = self.tier_pass(pending.take()).await.map_err(|e| store(&e))?;
+            let pass = self.tier_pass(pick).await.map_err(|e| store(&e))?;
             total.add(&pass);
             if pass.behind.is_empty() {
                 break;
             }
-            pending = Some(pass.behind);
+            pick = Prefixes::Listed(pass.behind);
             tokio::time::sleep(REEXTRACT_PACE).await;
         }
         total.log();
@@ -774,28 +774,27 @@ impl AnalyticsContext {
     /// boot check finds nothing past them. A prefix never swept is left to
     /// `tiers:backfill`. Returns the matches it stamped.
     pub async fn sweep_tier_tails(&self) -> Result<i64, DbError> {
-        let pass = self.tier_pass(Some(Vec::new())).await?;
+        let pass = self.tier_pass(Prefixes::Swept).await?;
         pass.log();
         Ok(pass.matches)
     }
 
     /// One pass of the tier sweep: on a reader, the next window of each
-    /// prefix (`only`: those listed, or with an empty list every prefix
-    /// already swept; `None`: every prefix), then one write that stamps
-    /// their unstamped matches and moves their cursors.
-    async fn tier_pass(&self, only: Option<Vec<String>>) -> Result<TierPass, DbError> {
+    /// picked prefix, then one write that stamps their unstamped matches and
+    /// moves their cursors.
+    async fn tier_pass(&self, pick: Prefixes) -> Result<TierPass, DbError> {
         let now = Clock::now().unix_ms;
         let windows = self
             .db()
             .read(move |c| {
                 let mut out = Vec::new();
                 for s in tiers::sweeps(c)? {
-                    let pick = match &only {
-                        None => true,
-                        Some(list) if list.is_empty() => s.swept_to.is_some(),
-                        Some(list) => list.contains(&s.prefix),
+                    let picked = match &pick {
+                        Prefixes::All => true,
+                        Prefixes::Swept => s.swept_to.is_some(),
+                        Prefixes::Listed(list) => list.contains(&s.prefix),
                     };
-                    if !pick {
+                    if !picked {
                         continue;
                     }
                     let w = tiers::window(c, &s.after(), &s.before(), TIERS_BATCH)?;
@@ -842,6 +841,17 @@ impl AnalyticsContext {
             behind,
         })
     }
+}
+
+/// Which match-id prefixes a pass of the tier sweep reads.
+#[derive(Debug)]
+enum Prefixes {
+    /// Every prefix: a sweep's first pass.
+    All,
+    /// Those a sweep has passed before: `aggregate:delta`'s tail.
+    Swept,
+    /// Those whose last window was full.
+    Listed(Vec<String>),
 }
 
 /// What a pass of the tier sweep did.

@@ -131,7 +131,7 @@ ARCHIVE_OBJECT_URL=file:///absolute/path/to/bucket just dev
 
 ## A quiet local instance
 
-The defaults already schedule no crawl and no full analytics recompute (`LADDER_CRAWL_S=0`, `LADDER_PLATFORMS` empty, `AGGREGATE_INTERVAL_S=0`, `TIMELINE_BACKFILL_PATCHES=0`; `src/jobs/ticks.rs:123-137`), and the poll ticks fan out only over tracked players (`src/jobs/ticks.rs:44-74`). What still runs at boot is `ddragon:sync` (hourly, first tick immediate, real CDN), `maintenance` and `names:backfill` (daily), and `aggregate:delta` every 60 s (`AGGREGATE_DELTA_S`, `src/jobs/ticks.rs:130-131`); with `LADDER_PLATFORMS` empty it has no ladder to count, so it only runs its `builds:extract` pass (`src/jobs/analytics.rs:879-884`). For a quiet box:
+The defaults already schedule no crawl and no full analytics recompute (`LADDER_CRAWL_S=0`, `LADDER_PLATFORMS` empty, `AGGREGATE_INTERVAL_S=0`, `TIMELINE_BACKFILL_PATCHES=0`; `src/jobs/ticks.rs:123-137`), and the poll ticks fan out only over tracked players (`src/jobs/ticks.rs:44-74`). What still runs at boot is `ddragon:sync` (hourly, first tick immediate, real CDN), `maintenance` and `names:backfill` (daily), and `aggregate:delta` every 60 s (`AGGREGATE_DELTA_S`, `src/jobs/ticks.rs:130-131`); with `LADDER_PLATFORMS` empty it has no ladder to count, so it only runs its `builds:extract` pass (`src/jobs/analytics.rs:889-894`). For a quiet box:
 
 ```ini
 LADDER_CRAWL_S=0          # already the default; stated for clarity

@@ -101,7 +101,7 @@ Jobs live in the SQLite `jobs` table; there is no in-memory queue (ADR-047, ADR-
 | Yield | A limiter wait beyond `JOB_YIELD_BUDGET_MS` re-queues the job at `retry_at` without counting an attempt; long jobs call `take_turns()` to let others in | `src/jobs/scheduler.rs:145-150,1082-1084` |
 | Recovery | Rows left `running` by a crash go back to `pending` on boot | `src/jobs/scheduler.rs:963-973` |
 | Idle | A worker with nothing claimable sleeps until the next `run_after` or blocked lane frees, at most 1 s, and is woken by any enqueue | `src/jobs/scheduler.rs:996-1025` |
-| Analytics on the writer | `aggregate:analytics` holds the writer for a step at a time and runs one at a time (`JOB_KIND_LIMITS`); `aggregate:delta` (THR-03) is one job for every ladder, deduped to one, whose batches are separate write transactions sized toward `AGGREGATE_DELTA_TARGET_MS` with a 50 ms pause between them, so other writes interleave | `src/jobs/analytics.rs:93-96,962-1056` |
+| Analytics on the writer | `aggregate:analytics` holds the writer for a step at a time and runs one at a time (`JOB_KIND_LIMITS`); `aggregate:delta` (THR-03) is one job for every ladder, deduped to one, whose batches are separate write transactions sized toward `AGGREGATE_DELTA_TARGET_MS` with a 50 ms pause between them, so other writes interleave | `src/jobs/analytics.rs:93-96,972-1066` |
 | Retention | `done` rows are deleted after 7 days by `maintenance`; `failed` rows stay until purged | `src/jobs/maintenance.rs:36,237-240` |
 
 Every job kind, its trigger, priority and tables is tabulated in `docs/_meta/scratch/jobs-and-observability.md` §3 and summarised for operators in [../operations/runbook.md](../operations/runbook.md).
