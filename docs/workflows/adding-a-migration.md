@@ -10,7 +10,7 @@ How schema changes ship: one forward-only refinery SQL file under `src/db/migrat
 | Naming | `V<nnnn>__<name>.sql`; refinery only recognises `^[UV]\d+__\w+\.sql$`, and the four-digit padding is this repository's convention (ADR-010, `docs/DECISIONS.md:51`). refinery logs them without the padding (`V27__matchup_builds`) |
 | When | `Db::open` applies pending migrations on the writer connection, after the pragmas and before the readers open (`src/db/mod.rs:135-151`). `serve` opens that way, and so does every CLI command that touches the database (`src/cli/mod.rs:136-141`). `riot-proxy migrate` applies them on a raw connection and prints `<path>: up to date` or `<path>: applied V…` (`src/cli/mod.rs:144-165`) |
 | Transaction | all pending files in **one** transaction (`set_grouped(true)`, `src/db/mod.rs:343-345`); applied versions are skipped, so running on every boot is safe |
-| History | `refinery_schema_history(version, name, applied_on, checksum)`; a fresh database has 31 rows after V0032, V0031 being unassigned on `main` (`src/db/tests.rs:898`) |
+| History | `refinery_schema_history(version, name, applied_on, checksum)`; a fresh database has 32 rows after V0033, V0031 being unassigned on `main` (`src/db/tests.rs:899`) |
 | Direction | forward only. There are no down migrations: every file is `V…`, and a change that must be undone is undone by restoring the previous backup (`README.md:194`; [../deployment/upgrade-and-rollback.md](../deployment/upgrade-and-rollback.md)) |
 
 Observed on 2026-10-19: a first `serve` logged `going to batch apply 27 migrations in single transaction.` naming `V1__init` to `V27__matchup_builds`; a second one `going to batch apply 0 migrations`; `riot-proxy migrate` printed `…/riot-proxy.db: up to date`.
@@ -19,7 +19,7 @@ Observed on 2026-10-19: a first `serve` logged `going to batch apply 27 migratio
 
 ## Numbering
 
-The files are `V0001__init.sql` to `V0032__crawl_match_limit.sql` (`src/db/migrations/`), with V0031 held by LAD-02's branch; the next free number is **V0033**. Because several sessions work on this clone and branches are always based on `origin/main`, check there before picking a number:
+The files are `V0001__init.sql` to `V0033__tiers_sweep.sql` (`src/db/migrations/`), with V0031 held by LAD-02's branch; the next free number is **V0034**. Because several sessions work on this clone and branches are always based on `origin/main`, check there before picking a number:
 
 ```bash
 git fetch origin && git ls-tree --name-only origin/main src/db/migrations/ | tail -1
@@ -85,7 +85,7 @@ Outside `src/db/`:
 A `clash_teams` table for a Clash feature: one row per (key scope, platform, team id), small rows, read by key only, so `WITHOUT ROWID`; a partial index for rows still to be refreshed, ending with its state column.
 
 ```sql
--- src/db/migrations/V0033__clash_teams.sql (hypothetical)
+-- src/db/migrations/V0034__clash_teams.sql (hypothetical)
 -- CLASH-01 (ADR-NNN): Clash teams a tracked player belongs to, refreshed by
 -- clash:sync. Keyed by the whole row, so WITHOUT ROWID (ADR-140); read by key
 -- and by what is due, never by rowid.
@@ -104,13 +104,13 @@ CREATE INDEX clash_teams_due ON clash_teams(platform, refresh_after)
   WHERE refresh_after IS NOT NULL;
 ```
 
-Then: add `"clash_teams"` to the sorted list in `migrations_create_exactly_the_design_04_tables` and to `routes::dev::WIPED` (it is derived from Riot), bump the history count to 31, add the DDL to design/04 §Schema, write the ADR, and document the table in `docs/data/schema.md` and the file in `docs/data/migrations.md`.
+Then: add `"clash_teams"` to the sorted list in `migrations_create_exactly_the_design_04_tables` and to `routes::dev::WIPED` (it is derived from Riot), bump the history count to 33, add the DDL to design/04 §Schema, write the ADR, and document the table in `docs/data/schema.md` and the file in `docs/data/migrations.md`.
 
 > **TODO (unverified):** the example's columns are illustrative; a real Clash table takes its fields from the developer portal's `TeamDto`, not from this page.
 
 ## Checklist
 
-1. `git ls-tree origin/main src/db/migrations/` for the next number; `V0033__<name>.sql` with a header comment.
+1. `git ls-tree origin/main src/db/migrations/` for the next number; `V0034__<name>.sql` with a header comment.
 2. Conventions: unix-ms `INTEGER`, JSON `TEXT`, `key_scope`, FKs only where owned, `WITHOUT ROWID` by the rule, state columns last in partial indexes.
 3. Cost stated: `ADD COLUMN` where possible; a rebuild's boot time, temp space and WAL in the ADR.
 4. `src/db/tests.rs`: table list, history count, a seeded upgrade test for anything but a new table.

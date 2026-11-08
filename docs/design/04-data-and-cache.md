@@ -164,9 +164,11 @@ CREATE TABLE match_facts (                        -- one row per participant; de
   gold INTEGER, damage INTEGER, vision INTEGER,   -- V0005 (ADR-056)
   tier         TEXT,                              -- V0019 (DSK-04, ADR-138): the player's tier when their solo/flex
                                                   -- match was archived (ADR-127): newer of ladder_entries and
-                                                  -- player_ranks then, else 'UNKNOWN'; NULL until stamped (tiers:backfill).
+                                                  -- player_ranks then, else 'UNKNOWN' (also for an id whose prefix is
+                                                  -- no platform, ADR-213); NULL until stamped (tiers:backfill).
                                                   -- Never restamped; a later rank places an UNKNOWN one on a match that
-                                                  -- ended within TIER_LATE_STAMP_DAYS. facts:reextract never writes it.
+                                                  -- ended within TIER_LATE_STAMP_DAYS. facts:reextract stamps only a
+                                                  -- fact it adds (ADR-213), never rewrites one.
   PRIMARY KEY (match_id, puuid)
 ) WITHOUT ROWID;                                  -- V0021 (DSK-07, ADR-141): the key is stored once
 -- V0005 (ADR-056): matches.remake (Riot's gameEndedInEarlySurrender) and
@@ -190,6 +192,14 @@ CREATE TABLE match_builds (                       -- V0012 (ADR-117): from the t
 ) WITHOUT ROWID;                                  -- V0020 (DSK-06, ADR-140)
 CREATE INDEX facts_player ON match_facts(key_scope, puuid, match_id);  -- holds the key's columns: no growth WITHOUT ROWID
 -- facts_champ (champion_id alone) was dropped by V0021: no reader, and it would carry the key per entry (ADR-141)
+CREATE TABLE tiers_sweep (                        -- V0033 (AVL-06, ADR-213): tiers:backfill's cursor per id prefix
+  prefix   TEXT PRIMARY KEY,                      -- a match id's part before '_', as spelled ('EUW1')
+  swept_to TEXT NOT NULL,                         -- highest id of the prefix a sweep has passed; '' = never
+  swept_at INTEGER NOT NULL                       -- unix ms
+) WITHOUT ROWID;                                  -- every id up to swept_to was stamped when the sweep passed and
+                                                  -- every later write of facts stamps them, so the boot check and
+                                                  -- the sweep read only past the cursors. A change that leaves
+                                                  -- ranked facts NULL again resets them (rows deleted or '').
 
 -- Analytics (recomputed; safe to TRUNCATE) ── v1's shape, ADR-056 ───────────
 -- Every table here is WITHOUT ROWID since V0020 (DSK-06, ADR-140): the key is
