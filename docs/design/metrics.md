@@ -69,7 +69,7 @@ Owner decision (2026-09-24, ADR-014): these use the names **exactly as design/07
 | `consumer_requests_total` | counter | consumer, group, class | `/status` (STS-02, ADR-203), implemented in `app::record_request`; every answered request, auth refusals included. `consumer` is the consumer's **name** (never the key or its hash; `anonymous` when no consumer was attached: a keyless `/status`, a public route, a 401 or 403 refusal; a quota 429 names its consumer). `group` per design/14 §Metrics (`riot`, `lol`, `analytics`, `players`, `admin`, `ws`, `ops`, `ui`, `other`; `ui` holds `/dashboard`, `/dev*`, `/v1/static` and `/ddragon`, ADR-205). `class` ∈ `1xx` (a WebSocket upgrade's 101), `2xx`, `3xx`, `4xx`, `5xx` |
 | `timeline_backfill_not_found_total` | counter | region | `timelines:backfill` (TL-02), implemented; timelines Riot answered 404 for, marked in `timeline_gaps` and never asked for again |
 
-## `/status` keys (STS-02)
+## `/status` keys (STS-02, STS-03)
 
 `GET /status`'s `metrics` (design/14 §Metrics) are read from one rendering of this recorder (`src/status/snapshot.rs`), so the two cannot disagree. The label values behind each key:
 
@@ -86,6 +86,8 @@ Owner decision (2026-09-24, ADR-014): these use the names **exactly as design/07
 | `cache_hits_total`, `cache_misses_total` | `proxy_cache_reads_total`, `state` `hit`, `miss` (`neg` and `stale` are in neither) |
 | `cache_entries`, `cache_bytes` | not the recorder: L1's `entry_count()` and `weighted_size()` |
 | `fetch_queue_depth` | `jobs_pending`, `kind` `archive:match` and `timelines:backfill` (sampled every 15 s) |
+| `riot_app_limit_remaining_pct_<scope>` | not the recorder: the rate-limit table (STS-03, ADR-207), the least `remaining_pct` across the scope's app windows in Riot's latest `X-App-Rate-Limit` and `-Count`; `<scope>` flattened as `<consumer>` is. Absent until the scope's first app headers |
+| `riot_retry_after_s` | not the recorder: the limiter's longest freeze left after a 429 (`Limiter::longest_freeze`), in seconds rounded up; 0 from boot and when nothing is throttled |
 
 `metrics_meta.riot_last_success_at` is not the recorder either: the Riot client's last 2xx (`riot::client::UpstreamWatch`).
 

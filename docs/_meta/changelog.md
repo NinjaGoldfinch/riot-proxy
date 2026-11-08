@@ -2,6 +2,10 @@
 
 Dated log of changes to this documentation set. One line per change; the newest first.
 
+## 2026-11-09
+
+- STS-03 (ADR-207): the rate-limit table and `GET /status/ratelimits`, admin key only; `/status`'s `metrics` gain `riot_app_limit_remaining_pct_<scope>` and `riot_retry_after_s`. `integration/monitoring-hooks.md` (the route row, a rate-limits bullet), `api/endpoints.md` (the ops route; path and operation counts), `operations/observability.md` (§`/status`), `deployment/security.md` (the gate), `_meta/inventory.md` (76 operations on 72 paths), `api/openapi.json`, design/14 (an as-built note), design/metrics (two `/status` keys), the README (a placeholder where the example response goes, to be captured with a development key). Line citations of `src/riot/client.rs`, `src/status/mod.rs`, `src/http/auth.rs`, `src/routes/docs.rs` and `src/riot/limiter/headers.rs` moved with the code in every page that cites them; each such page's `Last verified` is refreshed, and so is every page that cites the README; `workflows/adding-a-migration.md` cites the README's restore line where it now is.
+
 ## 2026-11-06
 
 - STS-02 review (#260, ADR-205): a keyless `/status` is refused when any of `Cf-Connecting-IP`, `X-Forwarded-For`, `Forwarded` or `X-Real-IP` is present, not only the first, so a reverse proxy on the same host cannot open it. `deployment/security.md`, `deployment/configuration.md`, `integration/monitoring-hooks.md`, `operations/observability.md`, `api/endpoints.md`, `api/openapi.json` (the route's description), design/14 §Endpoints; ADR-205 records the rule and the owner's confirmation of the `ui` group. `consumer_requests_total` is read back with a label parser that honours quotes and escapes, so a consumer name holding `,` or `}` keeps its counts.
@@ -58,4 +62,4 @@ Dated log of changes to this documentation set. One line per change; the newest 
 
 ---
 **Sources:** this documentation set
-**Last verified:** 2026-11-06 against commit `e5d5c1d`
+**Last verified:** 2026-11-09 against commit `6c32ff4`

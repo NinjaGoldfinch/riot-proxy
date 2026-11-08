@@ -12,4 +12,4 @@
 
 ---
 **Sources:** `docs/DECISIONS.md:L68-L78,L212-L229,L800-L806`, `src/consumers.rs:L12,L95-L107`, `src/http/auth.rs:L29-L32,L141-L156`, `src/routes/admin.rs:L248-L270`, `src/config.rs:L744-L748`
-**Last verified:** 2026-11-06 against commit `7cb71a2`
+**Last verified:** 2026-11-09 against commit `6c32ff4`

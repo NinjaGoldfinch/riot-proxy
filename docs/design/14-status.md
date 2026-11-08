@@ -111,6 +111,8 @@ The limiter already parses Riot's headers to pace itself (`riot::limiter::header
 }
 ```
 
+**As built (STS-03, ADR-207).** The table is `UpstreamWatch::rate_limits()` beside the key verdict, recorded in `RiotClient::send_as` for every answer that has a status, the probe's included; a network failure records nothing. It reads the headers with the limiter's parser, quietly (`RateLimitHeaders::from_headers_quiet`), since the fetcher or the probe has already read and warned on them. Limit and count windows pair by length and an unpaired window is dropped; an answer without a pair (a service 429, a bare 5xx) leaves the last one, and each pair updates on its own. `remaining_pct` is an integer, rounded down and 0 when the count is at or over the limit. A scope's `observed_at` is when its app headers were last seen; a scope seen only through a method pair or a `Retry-After` has `app: []` and null `observed_at` and `remaining_pct`. A scope's `retry_after` is the last header Riot sent on it (`{ "s": 0, "at": null }` before any); the top-level `retry_after_s` is the live longest freeze (`Limiter::longest_freeze`, the most of every scope's `frozen_for`), the same number as `/status`'s `riot_retry_after_s`. `riot_app_limit_remaining_pct_<scope>` is absent until a scope's first app headers; `riot_retry_after_s` is present from boot at 0. `/status/ratelimits` is gated by `http::auth::require_status_admin`: the admin key and `ADMIN_IP_ALLOWLIST`, no consumer quota.
+
 ## Checks (STS-02b)
 
 A background task runs every `STATUS_CHECK_INTERVAL_S` (default 30) and stores each result; `/status` reads the stored results. A check that has not run yet reads `ok` with detail `pending` for the first interval after boot.
