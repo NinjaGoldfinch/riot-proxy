@@ -27,7 +27,7 @@ Fixed-text lines operators should recognise (level, text, source):
 |---|---|---|
 | info | `riot-proxy starting` (`version=`, `dev` unless a release build; `commit=`, 7 characters; `built_at=`, RFC 3339), the first line `serve` logs (STS-01) | `src/cli/serve.rs:78-83` |
 | info | `database ready`, `listening` (the server accepts from here on, ADR-209), `starting job workers` (`workers=`, `kind_limits=`; after the boot catch-up) | `src/cli/serve.rs:92`, `:389`, `:412-416` |
-| info | `boot catch-up done` (`ms=`, the catch-up's whole duration) / `boot catch-up stopped; job workers not started` (a shutdown during it) | `src/cli/serve.rs:562-565`, `:431` |
+| info | `boot catch-up done` (`ms=`, the catch-up's whole duration) / `boot catch-up stopped; job workers not started` (`reason=shutdown signal`: a shutdown during it, the usual case; `reason=server ended`: the server task ended first and no signal had fired) | `src/cli/serve.rs:562-565`, `:431`, `:579-593` |
 | info / warn | `limiter checkpoint restored` / `limiter checkpoint could not be read; starting fresh` | `src/cli/serve.rs:114-116` |
 | info / warn | `L1 warmed from L2` / `L2 warm failed; starting with a cold cache` / `L2 sweep failed` | `src/cli/serve.rs:124-128` |
 | info | `object store configured` (`store=`) | `src/cli/serve.rs:140` |

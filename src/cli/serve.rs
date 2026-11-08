@@ -428,7 +428,7 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         );
         Some((workers, ticks, history))
     } else {
-        tracing::info!("boot catch-up stopped; job workers not started");
+        log_catch_up_stopped(ended.is_some(), shutdown.clone());
         None
     };
     let served = match ended {
@@ -574,4 +574,20 @@ fn print_bootstrap_key(key: &str) {
     eprintln!("  Scopes read,admin. Store it now; it cannot be recovered.");
     eprintln!("  Mint more keys with: riot-proxy key create --name <name>");
     eprintln!();
+}
+
+/// The catch-up did not finish. `reason=shutdown signal` is the usual case,
+/// also when the server task drained on the signal before the `select!` saw
+/// it; `reason=server ended` means the server task ended with no signal
+/// fired, and the shutdown sequence that follows is the error path.
+fn log_catch_up_stopped<F>(server_ended: bool, shutdown: F)
+where
+    F: std::future::Future<Output = ()> + Unpin,
+{
+    let reason = if server_ended && shutdown.now_or_never().is_none() {
+        "server ended"
+    } else {
+        "shutdown signal"
+    };
+    tracing::info!(reason, "boot catch-up stopped; job workers not started");
 }

@@ -38,7 +38,7 @@ Test files may `unwrap`, `expect` and `panic`: `clippy.toml:2-4` allows it in te
 | Coverage | `just cov` (= `cargo llvm-cov --all-features --workspace --summary-only`) | `justfile:32-34` |
 | Postgres stub | `cargo check --all-targets --features postgres` and `cargo test --lib --features postgres db::store` | CI `clippy` job (`.github/workflows/ci.yml:36-38`) |
 
-`tests/boot.rs` runs `serve_with` in-process and is not ignored. It holds the boot catch-up open with `ServeOptions::catch_up_hold` and stops `serve` with `ServeOptions::shutdown`, a `Notify`, rather than a signal: `tests/shutdown.rs` sends the `it` binary a real SIGTERM, which would stop any server listening for one (ADR-209).
+`tests/boot.rs` runs `serve_with` in-process and is not ignored. It holds the boot catch-up open with `ServeOptions::catch_up_hold` and stops `serve` with `ServeOptions::shutdown`, a `Notify`, rather than a signal: `tests/shutdown.rs` sends the `it` binary a real SIGTERM, which would stop any server listening for one (ADR-209). It installs the `it` binary's one global tracing subscriber, filtered to `cli::serve`'s lines (every in-process `serve` in the binary sets `skip_tracing_init`), to assert what a shutdown during the catch-up logs.
 
 What CI runs in which job, and the local equivalent of each, is in [ci.md](./ci.md#running-the-same-checks-locally). `cargo test` stops at the first failing binary; nextest reports every failure, which is why CI uses it (ADR-174, `docs/DECISIONS.md:1899`).
 

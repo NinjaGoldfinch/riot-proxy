@@ -433,8 +433,8 @@ Staging is seeded from production's daily backup and reads production's packs fr
 
 ## AVL — available through restarts and busy writers (owner report 2026-11-08)
 A production restart on 2026-11-08 logged `listening` and accepted nothing for minutes while the boot tier check walked the archive for `ME1_` matches it cannot stamp (ME-02); profiles then waited behind a 243 s job write, and a SIGTERM in the gap ended in SIGKILL at 90 s (IMPLEMENTATION.md §Post-release — AVL, ADR-208). Order: 00, 01, 02, 06, 04, 03, 07, 05.
-- [~] AVL-00 series spec: the plan section, ADR-208, design/03 boot order and design/06 shutdown; `scripts/restart-bench.sh` for staging (`docs/AVL-00-series-spec`, ADR-208)
-- [~] AVL-01 accept before catching up: `app::serve` starts right after bind; `recover`, the catch-ups and the workers follow in one boot task that honours SIGTERM (#265, ADR-209)
+- [x] AVL-00 series spec: the plan section, ADR-208, design/03 boot order and design/06 shutdown; `scripts/restart-bench.sh` for staging (#264, ADR-208)
+- [~] AVL-01 accept before catching up: `app::serve` starts right after bind; `recover`, the catch-ups and the workers follow in one boot task that honours SIGTERM (#265, ADR-209; the staging bench run, `listening` to the first `/healthz` 200 under 1 s, follows the merge under DEP-05's staging-first rule, owner decision 2026-11-09)
 - [ ] AVL-02 request-path writes are write-behind: the fetcher's archive writes and the profile routes' `players::upsert` no longer wait for the writer (ADR-210)
 - [ ] AVL-06 boot checks and the sampler cost nothing when there is nothing to do: a ranked match whose prefix is no platform stamped `UNKNOWN`, a bounded tier check and backfill query, `stale_matches` as `EXISTS`, no 60-second `SCAN matches` (ADR-213)
 - [ ] AVL-04 shutdown inside 90 s: after the job grace the writer's running statement is interrupted and its row re-queued (supersedes WR-03, ADR-211)

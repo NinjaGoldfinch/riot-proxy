@@ -10,15 +10,71 @@
 
 use crate::common;
 
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use riot_proxy::cli::serve::{CatchUpHold, ServeOptions, serve_with};
 use tokio::net::TcpStream;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
+use tracing::field::{Field, Visit};
+use tracing_subscriber::Layer;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 use wiremock::MockServer;
+
+type Lines = Arc<Mutex<Vec<String>>>;
+
+/// What `serve` logs, one `message key=value…` string per event. The `it`
+/// binary's one global tracing subscriber, installed by the first `boot`:
+/// every in-process `serve` in this binary sets `skip_tracing_init`, and the
+/// layer keeps only `riot_proxy::cli::serve`'s events, so the other tests are
+/// not affected (and a line from another in-process `serve` can only add to
+/// the vector, never remove from it).
+fn serve_log() -> Lines {
+    static LOG: OnceLock<Lines> = OnceLock::new();
+    Arc::clone(LOG.get_or_init(|| {
+        let lines: Lines = Arc::default();
+        let only_serve = tracing_subscriber::filter::Targets::new()
+            .with_target("riot_proxy::cli::serve", tracing::Level::INFO);
+        tracing_subscriber::registry()
+            .with(ServeLog(Arc::clone(&lines)).with_filter(only_serve))
+            .try_init()
+            .expect("nothing else in the it binary installs a global subscriber");
+        lines
+    }))
+}
+
+struct ServeLog(Lines);
+
+impl<S: tracing::Subscriber> Layer<S> for ServeLog {
+    fn on_event(&self, event: &tracing::Event<'_>, _ctx: tracing_subscriber::layer::Context<'_, S>) {
+        #[derive(Default)]
+        struct Line {
+            message: String,
+            fields: String,
+        }
+        impl Visit for Line {
+            fn record_str(&mut self, field: &Field, value: &str) {
+                self.fields.push_str(&format!(" {}={value}", field.name()));
+            }
+            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "message" {
+                    self.message = format!("{value:?}");
+                } else {
+                    self.fields.push_str(&format!(" {}={value:?}", field.name()));
+                }
+            }
+        }
+        let mut line = Line::default();
+        event.record(&mut line);
+        self.0
+            .lock()
+            .unwrap()
+            .push(format!("{}{}", line.message, line.fields));
+    }
+}
 
 fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")
@@ -33,6 +89,8 @@ struct Booted {
     port: u16,
     hold: CatchUpHold,
     stop: Arc<Notify>,
+    /// `serve`'s log lines, this binary's (see [`serve_log`]).
+    log: Lines,
     /// When the socket first took a connection: `serve` logs "listening"
     /// right after `bind`, and the kernel completes connects from then on,
     /// whether or not anything accepts them.
@@ -49,6 +107,8 @@ async fn boot(data_dir: &std::path::Path, riot_url: &str) -> Booted {
     ]);
     let hold = CatchUpHold::default();
     let stop = Arc::new(Notify::new());
+    // Installed before `serve` logs anything.
+    let log = serve_log();
     let options = ServeOptions {
         riot_base_url: Some(riot_url.to_string()),
         skip_tracing_init: true,
@@ -72,6 +132,7 @@ async fn boot(data_dir: &std::path::Path, riot_url: &str) -> Booted {
         port,
         hold,
         stop,
+        log,
         listening: Instant::now(),
     }
 }
@@ -99,12 +160,14 @@ async fn get(http: &reqwest::Client, port: u16, path: &str) -> reqwest::StatusCo
 async fn serves_within_a_second_of_listening_while_the_catch_up_runs() {
     let dir = tempfile::tempdir().unwrap();
     let upstream = MockServer::start().await;
-    let b = boot(dir.path(), &upstream.uri()).await;
-    // A one-second budget: a server that is not accepting fails here.
+    // A one-second budget: a server that is not accepting fails here. Built
+    // before `boot`, so the budget measures `listening` to the first 200 and
+    // nothing else.
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(1))
         .build()
         .unwrap();
+    let b = boot(dir.path(), &upstream.uri()).await;
 
     assert_eq!(get(&http, b.port, "/healthz").await, 200);
     let first = b.listening.elapsed();
@@ -160,6 +223,7 @@ async fn shutdown_during_the_catch_up_returns_promptly() {
     drop(http);
 
     // Never released: as a check still walking the archive.
+    let mark = b.log.lock().unwrap().len();
     let at = Instant::now();
     b.stop.notify_one();
     tokio::time::timeout(Duration::from_secs(5), b.task)
@@ -178,5 +242,16 @@ async fn shutdown_during_the_catch_up_returns_promptly() {
     assert!(
         TcpStream::connect(("127.0.0.1", b.port)).await.is_err(),
         "no longer listening"
+    );
+    // Logged as a shutdown, not as the server ending on its own: the line
+    // the runbook's journal grep looks for, with the reason that tells the
+    // two apart (ADR-209).
+    let since = b.log.lock().unwrap()[mark..].to_vec();
+    assert!(
+        since.iter().any(|l| {
+            l.starts_with("boot catch-up stopped; job workers not started")
+                && l.contains("reason=shutdown signal")
+        }),
+        "the stop was logged with reason=shutdown signal: {since:?}"
     );
 }
