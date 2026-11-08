@@ -4,6 +4,7 @@ Dated log of changes to this documentation set. One line per change; the newest 
 
 ## 2026-11-09
 
+- AVL-00 (ADR-208): the series AVL, from the production restart of 2026-11-08, is specified in `IMPLEMENTATION.md` §Post-release — AVL; design/03 §Process model gains the boot order bind, serve, recover, catch-ups, workers, and design/06 a §Shutdown that interrupts the writer, both as AVL-01 and AVL-04 will build them. `operations/runbook.md` §1 (a restart takes minutes today; shutdown citations moved with the code) and a new §20 Restarts (what to expect, the journal lines, `HEALTH_WAIT`, and `scripts/restart-bench.sh`, run on staging only); `operations/troubleshooting.md` §33 (`listening` but nothing accepts, the listen backlog full); `workflows/ci.md` (`scripts/restart-bench.test.sh` in `ops`, through `deploy/test.sh`).
 - STS-03 (ADR-207): the rate-limit table and `GET /status/ratelimits`, admin key only; `/status`'s `metrics` gain `riot_app_limit_remaining_pct_<scope>` and `riot_retry_after_s`. `integration/monitoring-hooks.md` (the route row, a rate-limits bullet), `api/endpoints.md` (the ops route; path and operation counts), `operations/observability.md` (§`/status`), `deployment/security.md` (the gate), `_meta/inventory.md` (76 operations on 72 paths), `api/openapi.json`, design/14 (an as-built note), design/metrics (two `/status` keys), the README (a placeholder where the example response goes, to be captured with a development key). Line citations of `src/riot/client.rs`, `src/status/mod.rs`, `src/http/auth.rs`, `src/routes/docs.rs` and `src/riot/limiter/headers.rs` moved with the code in every page that cites them; each such page's `Last verified` is refreshed, and so is every page that cites the README; `workflows/adding-a-migration.md` cites the README's restore line where it now is.
 
 ## 2026-11-06
@@ -62,4 +63,4 @@ Dated log of changes to this documentation set. One line per change; the newest 
 
 ---
 **Sources:** this documentation set
-**Last verified:** 2026-11-09 against commit `6c32ff4`
+**Last verified:** 2026-11-09 against commit `324c493`

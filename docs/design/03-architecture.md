@@ -136,23 +136,28 @@ flowchart LR
 
 `--role all` is the design target and the only mode with SQLite. The split mode exists so the door to Postgres + separate worker stays open without a rewrite — but it is a **feature flag**, not the default, and v2.0 can ship without it.
 
-Inside the process:
+Inside the process (boot order amended for series AVL, ADR-208, as built by AVL-01 / AVL-04; until then see the last paragraph):
 
 ```mermaid
 flowchart TB
     main["main()"] --> cfg[load config<br/>env + .env + flags]
     cfg --> db[open SQLite<br/>run embedded migrations]
     db --> warm[warm L1 from L2<br/>restore limiter checkpoint]
-    warm --> spawn
+    warm --> bind["bind, log listening<br/>SIGTERM honoured from here"]
+    bind --> spawn
     subgraph spawn["tokio::spawn"]
-        srv[axum server]
-        sch[scheduler loop]
+        srv[axum server<br/>accepting at once]
+        subgraph boot["boot task, gives way to SIGTERM"]
+            rec[recover] --> cu[catch-ups] --> sch[workers + ticks]
+        end
         ck[checkpoint loop<br/>limiter + L2 flush every 10 s]
         hb[metrics history<br/>every 60 s]
     end
     spawn --> sig[SIGTERM / SIGINT]
-    sig --> drain[graceful drain<br/>finish in-flight · final checkpoint · close WS]
+    sig --> drain["graceful drain<br/>finish in-flight · job grace · interrupt the writer<br/>final checkpoint · close WS"]
 ```
+
+The order is **bind → serve → recover → catch-ups → workers**. What `/readyz` reports (the writer and the limiter) is ready before bind, so the first accept follows `listening` at once and a deploy's health wait measures the time to serve. `recover`, the boot catch-ups (the missing halves, stale facts, tier stamps, analytics splits and stamps, the offload sweep) and then the workers and ticks run in one task beside the server; each catch-up must be bounded (a boot check reads an index range, never a table; AVL-06). The shutdown signal is polled from `listening` on, so a SIGTERM during the catch-ups ends the boot task and drains like any other. At shutdown, after the job grace, a job write still running on the writer thread is interrupted so the final checkpoint and L2 flush are not queued behind it (06 §Shutdown). Until AVL-01 merges, `serve_with` still awaits every catch-up between `listening` and `app::serve` (`src/cli/serve.rs:157-433` at `324c493`), the gap of the 2026-11-08 restart (IMPLEMENTATION.md §Post-release — AVL).
 
 ## Module layout
 

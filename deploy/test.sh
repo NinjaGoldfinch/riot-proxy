@@ -2,7 +2,8 @@
 # Tests for the deploy kit: deploy.yml's wiring (DEP-03, DEP-05, via
 # scripts/deploy-workflow.test.sh), the staging smoke test (DEP-05, via
 # scripts/smoke.test.sh), the staging seed (STG-04, via
-# deploy/staging-seed.test.sh), and the archive replica units (OBJ-04): the unit files parse, and the
+# deploy/staging-seed.test.sh), the restart benchmark (AVL-00, via
+# scripts/restart-bench.test.sh), and the archive replica units (OBJ-04): the unit files parse, and the
 # unit's own rclone command, pointed at two local directories, does what an
 # hourly sync must (a --dry-run changes nothing; a real run mirrors the source,
 # deletions included). Run by CI's `ops` job; locally: deploy/test.sh
@@ -28,6 +29,8 @@ check "smoke.sh" "$here/../scripts/smoke.test.sh"
 # Seeding staging from production's backup (STG-04, ADR-204).
 check "shellcheck staging-seed" shellcheck "$here/staging-seed.sh" "$here/staging-seed.test.sh"
 check "staging-seed.sh" "$here/staging-seed.test.sh"
+# The restart benchmark staging runs, without systemd (AVL-00, ADR-208).
+check "restart-bench.sh" "$here/../scripts/restart-bench.test.sh"
 
 rclone=$(command -v rclone || true)
 if [[ -z $rclone ]]; then
