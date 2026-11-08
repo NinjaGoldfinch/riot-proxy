@@ -55,7 +55,7 @@ Reads from a route or a job all pass through the fetcher; the archive is the onl
 | Module | Responsibility | Key types and entry points |
 |---|---|---|
 | `app.rs` | Builds the axum router and the middleware stack, runs the server with a 10 s graceful drain | `router()`, `serve()`, `AppState` (`src/app.rs:40-69,71-121,268-302`) |
-| `cli/` | Subcommands: `serve`, `migrate`, `key`, `healthcheck`, `spec`, `backup`, `migrate-v1`, `packs`, and `riot` behind the `dev-cli` feature | `cli::run` (`src/cli/mod.rs:70-121`); the boot sequence in `cli/serve.rs` |
+| `cli/` | Subcommands: `serve`, `migrate`, `key`, `healthcheck`, `spec`, `backup`, `migrate-v1`, `packs`, and `riot` behind the `dev-cli` feature | `cli::run` (`src/cli/mod.rs:71-123`); the boot sequence in `cli/serve.rs` |
 | `config.rs` | Flags, environment and `.env` merged by figment, validated as a whole; production refusals; `Secret` wrapper | `Config::load`, `VARS` (`src/config.rs:23-101,646-680`) |
 | `http/` | Request ids, auth guards (`require_read`, `require_admin`), per-consumer quota, CORS for the admin API, the error envelope, validators, recent-request rings | `src/http/auth.rs`, `quota.rs`, `cors.rs`, `error.rs`, `validate.rs`, `recent.rs` |
 | `routes/` | One file per prefix; handlers carry `#[utoipa::path]` so the OpenAPI document is generated from the same registration (`routes::docs::api_router`) | `src/routes/docs.rs:116-153` |
@@ -83,5 +83,5 @@ Reads from a route or a job all pass through the fetcher; the archive is the onl
 The design these modules implement is `docs/design/03-architecture.md`; where the code has moved on from the design, the inventories under `docs/_meta/scratch/` record the differences and [../_meta/gaps.md](../_meta/gaps.md) lists them.
 
 ---
-**Sources:** `src/lib.rs`, `src/app.rs:L40-L121`, `src/cli/mod.rs:L70-L121`, `src/routes/docs.rs:L116-L153`, `src/fetcher.rs:L9-L14,L133-L151`, `src/riot/client.rs:L1-L7`, `src/archive/mod.rs:L128-L144`, `src/db/mod.rs:L188-L196,L259-L316`, `src/jobs/scheduler.rs:L124-L141`, `docs/design/03-architecture.md#component-diagram`
-**Last verified:** 2026-11-09 against commit `6c32ff4`
+**Sources:** `src/lib.rs`, `src/app.rs:L40-L121`, `src/cli/mod.rs:L71-L123`, `src/routes/docs.rs:L116-L153`, `src/fetcher.rs:L9-L14,L133-L151`, `src/riot/client.rs:L1-L7`, `src/archive/mod.rs:L128-L144`, `src/db/mod.rs:L188-L196,L259-L316`, `src/jobs/scheduler.rs:L124-L141`, `docs/design/03-architecture.md#component-diagram`
+**Last verified:** 2026-11-09 against commit `324c493`
