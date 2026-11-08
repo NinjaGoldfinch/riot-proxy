@@ -14,7 +14,8 @@ pub mod ranks;
 pub mod recovery;
 pub mod tiers;
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use bytes::Bytes;
 use futures_util::future::BoxFuture;
@@ -43,6 +44,9 @@ pub struct SqliteArchive {
     /// Counts stored bytes towards the next pack and queues the offload when
     /// one is full (OBJ-03); `None` without a bucket.
     pending: Option<Arc<Pending>>,
+    /// Bodies handed to the write-behind and not yet stored, by archive key,
+    /// so [`Archive::get`] serves them meanwhile (AVL-02).
+    unstored: Arc<Mutex<HashMap<String, Bytes>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -63,6 +67,7 @@ impl SqliteArchive {
             halves: None,
             late_stamp_days: tiers::LATE_STAMP_DAYS,
             pending: None,
+            unstored: Arc::default(),
         }
     }
 
@@ -115,6 +120,51 @@ enum Kind {
     Timeline,
 }
 
+impl Kind {
+    /// The body's key among [`SqliteArchive::unstored`].
+    fn key(&self, id: &str) -> String {
+        match self {
+            Self::Match => format!("match:{id}"),
+            Self::Timeline => format!("timeline:{id}"),
+        }
+    }
+}
+
+/// A body among the unstored ones until its detached write finishes or is
+/// dropped. A later body under the same key is left alone.
+struct Unstored {
+    map: Arc<Mutex<HashMap<String, Bytes>>>,
+    key: String,
+    body: Bytes,
+}
+
+impl Unstored {
+    fn hold(map: &Arc<Mutex<HashMap<String, Bytes>>>, key: String, body: Bytes) -> Self {
+        lock(map).insert(key.clone(), body.clone());
+        Self {
+            map: Arc::clone(map),
+            key,
+            body,
+        }
+    }
+}
+
+impl Drop for Unstored {
+    fn drop(&mut self) {
+        let mut map = lock(&self.map);
+        if map
+            .get(&self.key)
+            .is_some_and(|b| b.as_ptr() == self.body.as_ptr())
+        {
+            map.remove(&self.key);
+        }
+    }
+}
+
+fn lock(map: &Mutex<HashMap<String, Bytes>>) -> std::sync::MutexGuard<'_, HashMap<String, Bytes>> {
+    map.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 /// Which archive table a request belongs to, and its match id.
 fn target(req: &RiotRequest) -> Option<(Kind, &str)> {
     let kind = match req.endpoint.id {
@@ -130,6 +180,9 @@ impl Archive for SqliteArchive {
         let Some((kind, id)) = target(req) else {
             return Box::pin(async { None });
         };
+        if let Some(body) = lock(&self.unstored).get(&kind.key(id)).cloned() {
+            return Box::pin(async move { Some(body) });
+        }
         let id = id.to_string();
         Box::pin(async move {
             let found = match kind {
@@ -179,11 +232,7 @@ impl Archive for SqliteArchive {
 
     /// League entries: the player's ranks, for analytics (ADR-105).
     fn observe(&self, req: &RiotRequest, body: Bytes) -> BoxFuture<'_, ()> {
-        let Some(puuid) = req
-            .params
-            .first()
-            .filter(|_| req.endpoint.id == "league.entriesByPuuid")
-        else {
+        let Some(puuid) = observed(req) else {
             return Box::pin(async {});
         };
         let (puuid, platform) = (puuid.clone(), req.target.scope());
@@ -197,4 +246,33 @@ impl Archive for SqliteArchive {
             }
         })
     }
+
+    /// A match or timeline body, or a player's ranks, written behind the
+    /// response (AVL-02, ADR-210): through [`Db::write_behind`], with the body
+    /// served by [`Archive::get`] until it is stored. Everything else is
+    /// nothing to write.
+    fn store_behind<'a>(&'a self, req: &'a RiotRequest, body: Bytes) -> BoxFuture<'a, ()> {
+        let bytes = body.len();
+        if let Some((kind, id)) = target(req) {
+            let unstored = Unstored::hold(&self.unstored, kind.key(id), body.clone());
+            let (this, req) = (self.clone(), req.clone());
+            self.db.write_behind("archive", bytes, async move {
+                this.put(&req, body).await;
+                drop(unstored);
+            });
+        } else if observed(req).is_some() {
+            let (this, req) = (self.clone(), req.clone());
+            self.db.write_behind("ranks", bytes, async move {
+                this.observe(&req, body).await;
+            });
+        }
+        Box::pin(async {})
+    }
+}
+
+/// The PUUID of a league-entries lookup, the one body [`Archive::observe`] reads.
+fn observed(req: &RiotRequest) -> Option<&String> {
+    req.params
+        .first()
+        .filter(|_| req.endpoint.id == "league.entriesByPuuid")
 }

@@ -65,6 +65,8 @@ pub const ARCHIVE_PACKS: &str = "archive_packs";
 pub const SQLITE_WRITE_SECONDS: &str = "sqlite_write_seconds";
 pub const SQLITE_WRITE_WAIT_SECONDS: &str = "sqlite_write_wait_seconds";
 pub const SQLITE_WRITE_QUEUE: &str = "sqlite_write_queue";
+pub const SQLITE_DETACHED_WRITES: &str = "sqlite_detached_writes";
+pub const SQLITE_DETACHED_WRITES_DROPPED_TOTAL: &str = "sqlite_detached_writes_dropped_total";
 pub const AGGREGATE_DELTA_MATCHES_TOTAL: &str = "aggregate_delta_matches_total";
 pub const AGGREGATE_DELTA_BATCH_SECONDS: &str = "aggregate_delta_batch_seconds";
 pub const AGGREGATE_DELTA_BATCH_SIZE: &str = "aggregate_delta_batch_size";
@@ -383,6 +385,21 @@ pub const CATALOGUE: &[MetricDef] = &[
         Kind::Gauge,
         &[],
         "SQLite writes queued behind the running one",
+        &[],
+    ),
+    // Request-path write-behind (AVL-02, ADR-210).
+    def(
+        SQLITE_DETACHED_WRITES,
+        Kind::Gauge,
+        &[],
+        "SQLite writes running behind the request that fetched their data, queued or running",
+        &[],
+    ),
+    def(
+        SQLITE_DETACHED_WRITES_DROPPED_TOTAL,
+        Kind::Counter,
+        &[],
+        "Detached SQLite writes dropped because 4096 writes or 256 MiB were already in flight",
         &[],
     ),
     // aggregate:delta (THR-03, ADR-182).

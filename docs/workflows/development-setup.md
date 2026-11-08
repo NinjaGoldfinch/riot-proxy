@@ -37,13 +37,13 @@ just dev            # = cargo run -- serve  (justfile:11-13)
 
 The first `serve` on an empty `DATA_DIR` prints, on stdout as JSON (pretty when stdout is a terminal, `src/config.rs:735-742`):
 
-1. refinery's lines: `schema history table is empty, going to apply all migrations`, then `going to batch apply 27 migrations in single transaction.` naming `V1__init` to `V27__matchup_builds` (`src/db/mod.rs:22-24`, `294-296`).
+1. refinery's lines: `schema history table is empty, going to apply all migrations`, then `going to batch apply 27 migrations in single transaction.` naming `V1__init` to `V27__matchup_builds` (`src/db/mod.rs:23-25`, `294-296`).
 2. `database ready` with `path=<DATA_DIR>/riot-proxy.db` (`src/cli/serve.rs:59-62`).
 3. `bootstrap admin consumer created` with its ULID id (`src/cli/serve.rs:64-75`).
 4. `limiter checkpoint restored rows=0`, `L1 warmed from L2 entries=0`, `listening addr=<HOST>:<PORT>`, `starting job workers workers=<JOB_CONCURRENCY> kind_limits=…` (`src/cli/serve.rs:83-100`, `143-148`, `341-346`).
 5. The ticks that fire immediately at boot (`src/jobs/ticks.rs:1-4`): `ddragon:sync` (downloads the current patch from `ddragon.leagueoflegends.com` into `DATA_DIR/ddragon`), `maintenance` (writes `DATA_DIR/backups/riot-proxy-<date>.db` and logs `backup written`, `maintenance done`) and `names:backfill` (`player names backfilled from archive`).
 
-On **stderr**, and only when `BOOTSTRAP_ADMIN_KEY` was not set, the one-time banner (`src/cli/serve.rs:443-449`):
+On **stderr**, and only when `BOOTSTRAP_ADMIN_KEY` was not set, the one-time banner (`src/cli/serve.rs:444-451`):
 
 ```text
 
@@ -204,4 +204,4 @@ Not re-executed here: `cargo build`, `cargo test` and `just nextest` (a full run
 
 ---
 **Sources:** `rust-toolchain.toml:L1-L5`, `justfile:L1-L52`, `.env.example:L1-L210`, `README.md:L60-L113`, `src/config.rs:L3`, `L612-L626`, `L654-L664`, `L702-L728`, `L937-L963`, `L1040-L1052`, `src/cli/mod.rs:L82-L88`, `src/cli/serve.rs:L59-L75`, `L76-L108`, `L143-L148`, `L341-L346`, `L421-L427`, `src/cli/key.rs:L13-L57`, `src/consumers.rs:L12-L14`, `L95-L96`, `src/http/auth.rs:L207-L210`, `src/jobs/ticks.rs:L1-L4`, `L44-L80`, `L108-L139`, `src/cli/riot.rs:L1-L32`, `L63-L81`, `src/archive/objects.rs:L109-L121`, `acceptance/helpers/env.ts:L19-L25`, `L244-L275`, `acceptance/helpers/setup.ts:L23-L54`, `acceptance/helpers/mock-riot.ts:L7`, `tests/ui.rs:L42-L64`, `tests/dom/package.json`, `acceptance/package.json`, `.github/workflows/ci.yml:L52-L53`, `PROGRESS.md:L390`, `L400`, `L420-L422`, `docs/IMPLEMENTATION.md:L434`, `docs/design/11-showcase.md:L15`, `docs/DECISIONS.md:L1457`, `docs/_meta/scratch/config.md`, `docs/_meta/scratch/persistence.md` §5, `docs/_meta/scratch/siblings.md` §1.2, §1.8
-**Last verified:** 2026-11-09 against commit `6c32ff4`
+**Last verified:** 2026-11-09 against commit `6eefe67`

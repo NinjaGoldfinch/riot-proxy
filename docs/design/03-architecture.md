@@ -109,12 +109,12 @@ sequenceDiagram
         R-->>SF: 200 + X-App-Rate-Limit* headers
         SF->>RL: observe(headers) → reconfigure + sync counts
         SF->>L1: put(key, body, soft, hard)
-        SF->>AR: archive if immutable
+        SF-)AR: archive if immutable, behind the response (AVL-02)
         SF-->>C: 200 X-Cache: MISS
     end
 ```
 
-`X-Cache` values, headers (`X-Cache-Age`, `X-RateLimit-*`, `X-Request-Id`) and error codes (`QUOTA_EXCEEDED` vs `RATE_LIMITED`) are carried over verbatim from v1 so downstream projects need no changes.
+`X-Cache` values, headers (`X-Cache-Age`, `X-RateLimit-*`, `X-Request-Id`) and error codes (`QUOTA_EXCEEDED` vs `RATE_LIMITED`) are carried over verbatim from v1 so downstream projects need no changes. The archive write on a miss (a match or timeline body, or a league lookup's ranks) and the `players` row a profile records run behind the response: the request returns when Riot answers, and a long job write on the SQLite writer delays only the write (AVL-02, ADR-210; design/04 §Cache tiers). A job's fetch still waits for its archive write.
 
 ## Process model
 

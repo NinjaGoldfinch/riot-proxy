@@ -19,7 +19,7 @@ The JSON layer flattens event fields to the top level and puts the innermost spa
 - The per-request line is tower-http's `finished processing request` at INFO with `latency` and `status` (`src/app.rs:109-118`); the `http` span carries `request_id`, `method`, `path` and `consumer` (recorded after auth, `src/http/auth.rs:359`). No `x_cache` or `upstream_ms` field is on that line; design/07's claim of both (`docs/design/07-deployment.md:218`) is not what the code does.
 - Error envelopes log `request failed` with `code` (the enum's Debug name, `BadRegion` not `BAD_REGION`), `status`, `message`: `warn` for 4xx, `error` for 5xx (`src/http/error.rs:176-181`).
 - Boot prints refinery's own lines first (`schema history table is empty…`, `going to batch apply 27 migrations in single transaction.`), then `database ready path=` (`src/cli/serve.rs:62`).
-- The bootstrap admin key is written to stderr with `eprintln!`, not through tracing (`src/cli/serve.rs:443-449`); the unit does not redirect stderr, so it is in the journal once and nowhere else.
+- The bootstrap admin key is written to stderr with `eprintln!`, not through tracing (`src/cli/serve.rs:444-451`); the unit does not redirect stderr, so it is in the journal once and nowhere else.
 
 Fixed-text lines operators should recognise (level, text, source):
 
@@ -38,10 +38,11 @@ Fixed-text lines operators should recognise (level, text, source):
 | error | `RIOT KEY REJECTED` (then `check RIOT_API_KEY`) | `src/riot/client.rs:431` |
 | warn | `upstream 5xx`; `unexpected upstream status`; `network failure contacting Riot API` | `src/riot/client.rs:446`, `:451`, `:474` |
 | error / warn | `accountable 429: limiter accounting is out of sync; scope frozen` / `service 429 with Retry-After; scope frozen` | `src/riot/limiter/mod.rs:416-428` |
-| info / warn | `service 429, trying the next cluster`, `service 429, backing off`, `upstream unavailable, retrying`, `serving stale on upstream failure`, `serving stale while rate limited` | `src/fetcher.rs:467-607` |
+| info / warn | `service 429, trying the next cluster`, `service 429, backing off`, `upstream unavailable, retrying`, `serving stale on upstream failure`, `serving stale while rate limited` | `src/fetcher.rs:524-663` |
 | warn | `job failed` (`job=`, `id=`, `attempts=`, `next=`, `error=`); `jobs still running at shutdown; they resume on the next boot` | `src/jobs/scheduler.rs:1092`, `:1296` |
 | error | `job claim failed`; `could not record job outcome`; `a SQLite write closure panicked` | `src/jobs/scheduler.rs:1219`, `:1156`; `src/db/writer.rs:268` |
 | warn | `slow SQLite write` (`duration_ms=`, `queued=`): a write that ran over 1 s on the writer thread, logged when it finishes | `src/db/writer.rs:272` |
+| warn | `detached SQLite write waited for the writer` (`what=`, `waited_ms=`): a write behind a response (AVL-02) that took 30 s or more, the wait included; `detached SQLite writes at their bound; write dropped` (`what=`, `bytes=`, `in_flight=`) | `src/db/mod.rs:332`, `:316` |
 | warn | `L2 write queue full; entry not persisted`; `L2 flush failed; entries stay in L1 only` | `src/cache/l2.rs:110`, `:154` |
 | warn | `… reading from Riot` (six variants) | `src/archive/matches.rs:250-317` |
 | info | `ladder crawl started` / `moved on` / `finished` / `collecting match ids`; `ladder matches handed to the archive queue` | `src/jobs/ladder.rs:322-1018` |
@@ -55,7 +56,7 @@ What is not logged: the Riot key (a sensitive header value, `src/riot/client.rs:
 
 ## Metrics
 
-`GET /metrics` serves Prometheus text exposition, `Content-Type: text/plain; version=0.0.4; charset=utf-8`, no key, no quota (`src/telemetry.rs:24`, `:101-121`). Names, types, labels and histogram buckets of the `proxy_*` set are v1's byte for byte so the Grafana board and alert rules import unchanged; v2 additions carry no prefix (ADR-014; `src/metrics.rs:1-4`, `:49`). Label-less metrics are registered at 0 on boot; labelled ones appear on their first series (`src/metrics.rs:419-445`). Histograms are drained into the render buffer every 5 s (`src/telemetry.rs:27`, `:91-99`). A unit test keeps `docs/design/metrics.md` in step with the catalogue (`src/metrics.rs:497-510`).
+`GET /metrics` serves Prometheus text exposition, `Content-Type: text/plain; version=0.0.4; charset=utf-8`, no key, no quota (`src/telemetry.rs:24`, `:101-121`). Names, types, labels and histogram buckets of the `proxy_*` set are v1's byte for byte so the Grafana board and alert rules import unchanged; v2 additions carry no prefix (ADR-014; `src/metrics.rs:1-4`, `:49`). Label-less metrics are registered at 0 on boot; labelled ones appear on their first series (`src/metrics.rs:436-462`). Histograms are drained into the render buffer every 5 s (`src/telemetry.rs:27`, `:91-99`). A unit test keeps `docs/design/metrics.md` in step with the catalogue (`src/metrics.rs:514-527`).
 
 | Name | Type | Labels | Meaning | Recorded at |
 |---|---|---|---|---|
@@ -64,7 +65,7 @@ What is not logged: the Riot key (a sensitive header value, `src/riot/client.rs:
 | `proxy_upstream_latency_seconds` | histogram | region, method | Riot round trip; buckets 0.025 to 10 | `src/riot/client.rs:488` |
 | `proxy_rl_wait_seconds` | histogram | region, priority | limiter wait before dispatch; buckets 0.001 to 10 | `src/riot/limiter/mod.rs:283` |
 | `proxy_rl_429_total` | counter | region, type | 429s; `type` = `X-Rate-Limit-Type` or `service` | `src/riot/client.rs:438-439` |
-| `proxy_cache_reads_total` | counter | state | Riot-cache reads: hit, miss, neg, stale (analytics hits excluded) | `src/fetcher.rs:406-408`; `src/routes/players.rs:733` |
+| `proxy_cache_reads_total` | counter | state | Riot-cache reads: hit, miss, neg, stale (analytics hits excluded) | `src/fetcher.rs:452-454`; `src/routes/players.rs:754` |
 | `proxy_ws_connections` | gauge | | open sockets | `src/ws/hub.rs:78`, `:180` |
 | `proxy_jobs_total` | counter | job, status | job outcomes completed/failed (yields excluded) | `src/jobs/scheduler.rs:1079`, `:1086` |
 | `proxy_backfills_queued_total` | counter | reason, status | backfill requests (lookup/track/catchup/admin × queued/already-queued) | `src/jobs/archive.rs:241` |
@@ -88,10 +89,12 @@ What is not logged: the Riot key (a sensitive header value, `src/riot/client.rs:
 | `limiter_bulk_waiters` | gauge | | bulk acquires waiting | `src/riot/limiter/mod.rs:242` |
 | `events_published_total` | counter | name | events handed to the hub | `src/events.rs:198` |
 | `jobs_pending` | gauge | kind | pending rows, sampled every 15 s; 0 once drained | `src/jobs/scheduler.rs:49`, `:1226-1245` |
-| `sqlite_readers_free` | gauge | | idle reader connections | `src/db/mod.rs:123` |
+| `sqlite_readers_free` | gauge | | idle reader connections | `src/db/mod.rs:138` |
 | `sqlite_write_seconds` | histogram | | how long each write ran on the writer thread, queue wait excluded; buckets 0.001 to 60 | `src/db/writer.rs:264` |
 | `sqlite_write_wait_seconds` | histogram | | how long each write waited in the writer's queue; same buckets | `src/db/writer.rs:255-256` |
-| `sqlite_write_queue` | gauge | | writes queued behind the running one, set on every enqueue and completion | `src/db/mod.rs:280`; `src/db/writer.rs:266` |
+| `sqlite_detached_writes` | gauge | | writes running behind the request that fetched their data (AVL-02), queued or running; returns to 0 once the writer is free | `src/db/behind.rs:118-121` |
+| `sqlite_detached_writes_dropped_total` | counter | | detached writes dropped at the bound (4,096 writes or 256 MiB) | `src/db/behind.rs:72` |
+| `sqlite_write_queue` | gauge | | writes queued behind the running one, set on every enqueue and completion | `src/db/mod.rs:296`; `src/db/writer.rs:266` |
 | `timeline_backfill_fetched_total` | counter | region | timelines fetched by the backfill | `src/jobs/timelines.rs:365` |
 | `timeline_backfill_not_found_total` | counter | region | timelines Riot answered 404 for | `src/jobs/timelines.rs:366` |
 | `sqlite_db_bytes` | gauge | | database file size | `src/db/disk.rs:70` |
@@ -173,5 +176,5 @@ flowchart LR
 Logs reach journald and are read over SSH; the dashboard reaches the admin JSON routes and the `metrics` topic through the tunnel on `admin.ninjagoldfinch.lol` behind Cloudflare Access, while the WAF blocks `/metrics`, `/dashboard*`, `/dev*` and `/v1/admin*` on `api.` (`PROGRESS.md:342`; `docs/design/07-deployment.md:221`); ninja-monitor samples the service's cgroup and data directory and alerts to Discord without calling any endpoint (`docs/_meta/scratch/siblings.md` §2.2); Prometheus and Grafana on `ngf-mon-syd1`, scraping `/metrics` over WireGuard, are planned and not done (`docs/design/12-object-storage-and-hosting.md:846-848`; `docs/design/13-admin-dashboard.md:69`). `ops/grafana/riot-proxy-dashboard.json` (uid `riot-proxy`, 12 panels over nine `proxy_*` metrics) and `ops/prometheus-alerts.yml` (five rules) are ready for that day.
 
 ---
-**Sources:** `src/telemetry.rs:24,27,31,41-66,91-121`, `src/cli/serve.rs:45,47-53,62,84-114,157,302-363,434,443-449`, `src/app.rs:105-120,123-182,286,313-314`, `src/http/auth.rs:200-207,298,308,359`, `src/status/mod.rs:36-45,160-162`, `src/status/ratelimits.rs:103-246`, `src/http/error.rs:133,176-187`, `src/http/request_id.rs:14,31-41,57-64`, `src/http/recent.rs:18-25,38-59,83-84,102-108`, `src/config.rs:432-436,494-505,735-742,797,817`, `src/consumers.rs:105-107`, `src/riot/client.rs:29,327-329,381-389,431-488`, `src/riot/limiter/mod.rs:240-283,416-428`, `src/fetcher.rs:406-408,467-607`, `src/metrics.rs:1-4,49,100-445,497-510`, `src/db/writer.rs:244-275`, `src/stats.rs:43,297-372,863,996-1072`, `src/routes/health.rs:1,21-46,75-200`, `src/routes/admin.rs:2423-2441,2560-2572`, `src/routes/ui.rs:5-8,218-221`, `src/ws/metrics.rs:14-35`, `src/events.rs:159-172,198`, `src/jobs/scheduler.rs:49,1079-1092,1156,1219,1226-1245,1296`, `src/jobs/maintenance.rs:38,241-244,263,304-315`, `src/jobs/offload.rs:163-215`, `src/jobs/ladder.rs:322-1018`, `src/jobs/analytics.rs:382-951`, `src/jobs/ddragon.rs:241,258`, `src/jobs/index_snapshot.rs:598`, `src/archive/matches.rs:250-317,419`, `src/archive/objects.rs:142`, `src/cache/l2.rs:109-154`, `src/db/mod.rs:123,328`, `src/db/disk.rs:70-116`, `src/db/migrations/V0001__init.sql:47-50`, `docs/design/07-deployment.md:74-95,218,221`, `docs/design/12-object-storage-and-hosting.md:846-848`, `docs/design/13-admin-dashboard.md:69,341`, `docs/design/metrics.md`, `ops/grafana/riot-proxy-dashboard.json`, `ops/prometheus-alerts.yml`, `PROGRESS.md:342`
-**Last verified:** 2026-11-09 against commit `6c32ff4`
+**Sources:** `src/telemetry.rs:24,27,31,41-66,91-121`, `src/cli/serve.rs:45,47-53,62,84-114,157,302-363,434,444-451`, `src/app.rs:105-120,123-182,286,313-314`, `src/http/auth.rs:200-207,298,308,359`, `src/status/mod.rs:36-45,160-162`, `src/status/ratelimits.rs:103-246`, `src/http/error.rs:133,176-187`, `src/http/request_id.rs:14,31-41,57-64`, `src/http/recent.rs:18-25,38-59,83-84,102-108`, `src/config.rs:432-436,494-505,735-742,797,817`, `src/consumers.rs:105-107`, `src/riot/client.rs:29,327-329,381-389,431-488`, `src/riot/limiter/mod.rs:240-283,416-428`, `src/fetcher.rs:452-454,524-663`, `src/metrics.rs:1-4,49,102-462,514-527`, `src/db/writer.rs:244-275`, `src/stats.rs:43,297-372,863,996-1072`, `src/routes/health.rs:1,21-46,75-200`, `src/routes/admin.rs:2423-2441,2560-2572`, `src/routes/ui.rs:5-8,218-221`, `src/ws/metrics.rs:14-35`, `src/events.rs:159-172,198`, `src/jobs/scheduler.rs:49,1079-1092,1156,1219,1226-1245,1296`, `src/jobs/maintenance.rs:38,241-244,263,304-315`, `src/jobs/offload.rs:163-215`, `src/jobs/ladder.rs:322-1018`, `src/jobs/analytics.rs:382-951`, `src/jobs/ddragon.rs:241,258`, `src/jobs/index_snapshot.rs:598`, `src/archive/matches.rs:250-317,419`, `src/archive/objects.rs:142`, `src/cache/l2.rs:109-154`, `src/db/mod.rs:138,408`, `src/db/disk.rs:70-116`, `src/db/migrations/V0001__init.sql:47-50`, `docs/design/07-deployment.md:74-95,218,221`, `docs/design/12-object-storage-and-hosting.md:846-848`, `docs/design/13-admin-dashboard.md:69,341`, `docs/design/metrics.md`, `ops/grafana/riot-proxy-dashboard.json`, `ops/prometheus-alerts.yml`, `PROGRESS.md:342`
+**Last verified:** 2026-11-09 against commit `6eefe67`
