@@ -946,9 +946,18 @@ async fn a_429_shows_as_retry_after() {
     let retry = [("retry-after".to_string(), "7".to_string())];
     mock_platform(&e, "oc1.api.riotgames.com", 429, &retry).await;
     let admin = e.key("rl-admin-429", vec![Scope::Read, Scope::Admin]).await;
+    // A 30.5 s freeze, read as what is left rounded up: 31 for the first
+    // half second, and never less than the time passed allows, so a slow
+    // runner still passes. The header's 7 s is history, kept as sent.
+    let frozen = Instant::now();
     e.state
         .limiter
-        .freeze("oc1", Duration::from_millis(6_500), RateLimitType::Service);
+        .freeze("oc1", Duration::from_millis(30_500), RateLimitType::Service);
+    let left_now = |what: &serde_json::Value| {
+        let v = what.as_u64().unwrap_or_else(|| panic!("not a number: {what}"));
+        let lowest = (30.5 - frozen.elapsed().as_secs_f64()).ceil();
+        assert!(v <= 31 && v as f64 >= lowest, "{v} s left, at least {lowest}");
+    };
     let ep = Endpoint::by_id("status.platformData").unwrap();
     let req = RiotRequest::new(ep, ep.target_for_platform(Platform::Oc1), &[]).unwrap();
     e.state.fetcher.client().send_probe(&req).await.unwrap_err();
@@ -957,7 +966,7 @@ async fn a_429_shows_as_retry_after() {
         .get(OUTSIDE, "/status/ratelimits", Some(&admin), &[])
         .await
         .json();
-    assert_eq!(body["retry_after_s"], 7, "6.5 s, rounded up: {body}");
+    left_now(&body["retry_after_s"]);
     let oc1 = &body["scopes"]["oc1"];
     assert_eq!(oc1["retry_after"]["s"], 7);
     timestamp(&oc1["retry_after"]["at"]);
@@ -967,7 +976,7 @@ async fn a_429_shows_as_retry_after() {
     assert_eq!(oc1["methods"], serde_json::json!({}));
 
     let m = e.get(LOCAL, "/status", None, &[]).await.json()["metrics"].clone();
-    assert_eq!(m["riot_retry_after_s"], 7, "{m}");
+    left_now(&m["riot_retry_after_s"]);
     assert!(m.get("riot_app_limit_remaining_pct_oc1").is_none(), "{m}");
 }
 
