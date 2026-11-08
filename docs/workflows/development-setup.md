@@ -41,7 +41,7 @@ The first `serve` on an empty `DATA_DIR` prints, on stdout as JSON (pretty when 
 2. `database ready` with `path=<DATA_DIR>/riot-proxy.db` (`src/cli/serve.rs:59-62`).
 3. `bootstrap admin consumer created` with its ULID id (`src/cli/serve.rs:64-75`).
 4. `limiter checkpoint restored rows=0`, `L1 warmed from L2 entries=0`, `listening addr=<HOST>:<PORT>`, `starting job workers workers=<JOB_CONCURRENCY> kind_limits=…` (`src/cli/serve.rs:83-100`, `143-148`, `341-346`).
-5. The ticks that fire immediately at boot (`src/jobs/ticks.rs:1-4`): `ddragon:sync` (downloads the current patch from `ddragon.leagueoflegends.com` into `DATA_DIR/ddragon`), `maintenance` (writes `DATA_DIR/backups/riot-proxy-<date>.db` and logs `backup written`, `maintenance done`) and `names:backfill` (`player names backfilled from archive`).
+5. The ticks that fire at the first boot on a fresh `DATA_DIR`, since nothing has run yet; a restart fires each again only once its period has passed since its last run, and logs `tick deferred kind=… next_in_s=…` until then (`src/jobs/ticks.rs:1-11`; ADR-214): `ddragon:sync` (downloads the current patch from `ddragon.leagueoflegends.com` into `DATA_DIR/ddragon`), `maintenance` (writes `DATA_DIR/backups/riot-proxy-<date>.db` and logs `backup written`, `maintenance done`) and `names:backfill` (`player names backfilled from archive`).
 
 On **stderr**, and only when `BOOTSTRAP_ADMIN_KEY` was not set, the one-time banner (`src/cli/serve.rs:443-449`):
 
@@ -131,13 +131,13 @@ ARCHIVE_OBJECT_URL=file:///absolute/path/to/bucket just dev
 
 ## A quiet local instance
 
-The defaults already schedule no crawl and no full analytics recompute (`LADDER_CRAWL_S=0`, `LADDER_PLATFORMS` empty, `AGGREGATE_INTERVAL_S=0`, `TIMELINE_BACKFILL_PATCHES=0`; `src/jobs/ticks.rs:123-137`), and the poll ticks fan out only over tracked players (`src/jobs/ticks.rs:44-74`). What still runs at boot is `ddragon:sync` (hourly, first tick immediate, real CDN), `maintenance` and `names:backfill` (daily), and `aggregate:delta` every 60 s (`AGGREGATE_DELTA_S`, `src/jobs/ticks.rs:130-131`); with `LADDER_PLATFORMS` empty it has no ladder to count, so it only runs its `builds:extract` pass (`src/jobs/analytics.rs:779-784`). For a quiet box:
+The defaults already schedule no crawl and no full analytics recompute (`LADDER_CRAWL_S=0`, `LADDER_PLATFORMS` empty, `AGGREGATE_INTERVAL_S=0`, `TIMELINE_BACKFILL_PATCHES=0`; `src/jobs/ticks.rs:121-135`), and the poll ticks fan out only over tracked players (`src/jobs/ticks.rs:65-95`). What still runs is `ddragon:sync` (hourly, real CDN), `maintenance` and `names:backfill` (daily), each at boot only when its period has passed since its last run (ADR-214), and `aggregate:delta` every 60 s and at every boot (`AGGREGATE_DELTA_S`, `src/jobs/ticks.rs:128-129`); with `LADDER_PLATFORMS` empty it has no ladder to count, so it only runs its `builds:extract` pass (`src/jobs/analytics.rs:779-784`). For a quiet box:
 
 ```ini
 LADDER_CRAWL_S=0          # already the default; stated for clarity
 AGGREGATE_DELTA_S=0       # no aggregate:delta tick (src/config.rs:804)
 JOB_CONCURRENCY=1         # one worker (also --job-concurrency)
-BACKUP_KEEP=0             # no backup file in data/backups at every boot (src/config.rs:776)
+BACKUP_KEEP=0             # no backup file in data/backups from the daily maintenance (src/config.rs:776)
 LOG_LEVEL=riot_proxy=debug,tower_http=info   # a tracing filter (.env.example:21-22)
 ```
 
@@ -203,5 +203,5 @@ Not re-executed here: `cargo build`, `cargo test` and `just nextest` (a full run
 > **TODO (unverified):** the exact first-run output of a **release** binary built without `dev-cli` (`Cargo.toml:52-54`); only the local `--all-features` debug build was run, and its `--help` lists `riot`.
 
 ---
-**Sources:** `rust-toolchain.toml:L1-L5`, `justfile:L1-L52`, `.env.example:L1-L210`, `README.md:L60-L113`, `src/config.rs:L3`, `L612-L626`, `L654-L664`, `L702-L728`, `L937-L963`, `L1040-L1052`, `src/cli/mod.rs:L82-L88`, `src/cli/serve.rs:L59-L75`, `L76-L108`, `L143-L148`, `L341-L346`, `L421-L427`, `src/cli/key.rs:L13-L57`, `src/consumers.rs:L12-L14`, `L95-L96`, `src/http/auth.rs:L207-L210`, `src/jobs/ticks.rs:L1-L4`, `L44-L80`, `L108-L139`, `src/cli/riot.rs:L1-L32`, `L63-L81`, `src/archive/objects.rs:L109-L121`, `acceptance/helpers/env.ts:L19-L25`, `L244-L275`, `acceptance/helpers/setup.ts:L23-L54`, `acceptance/helpers/mock-riot.ts:L7`, `tests/ui.rs:L42-L64`, `tests/dom/package.json`, `acceptance/package.json`, `.github/workflows/ci.yml:L52-L53`, `PROGRESS.md:L390`, `L400`, `L420-L422`, `docs/IMPLEMENTATION.md:L434`, `docs/design/11-showcase.md:L15`, `docs/DECISIONS.md:L1457`, `docs/_meta/scratch/config.md`, `docs/_meta/scratch/persistence.md` §5, `docs/_meta/scratch/siblings.md` §1.2, §1.8
-**Last verified:** 2026-11-09 against commit `6c32ff4`
+**Sources:** `rust-toolchain.toml:L1-L5`, `justfile:L1-L52`, `.env.example:L1-L210`, `README.md:L60-L113`, `src/config.rs:L3`, `L612-L626`, `L654-L664`, `L702-L728`, `L937-L963`, `L1040-L1052`, `src/cli/mod.rs:L82-L88`, `src/cli/serve.rs:L59-L75`, `L76-L108`, `L143-L148`, `L341-L346`, `L421-L427`, `src/cli/key.rs:L13-L57`, `src/consumers.rs:L12-L14`, `L95-L96`, `src/http/auth.rs:L207-L210`, `src/jobs/ticks.rs:L1-L11`, `L65-L101`, `L106-L137`, `L212-L289`, `src/cli/riot.rs:L1-L32`, `L63-L81`, `src/archive/objects.rs:L109-L121`, `acceptance/helpers/env.ts:L19-L25`, `L244-L275`, `acceptance/helpers/setup.ts:L23-L54`, `acceptance/helpers/mock-riot.ts:L7`, `tests/ui.rs:L42-L64`, `tests/dom/package.json`, `acceptance/package.json`, `.github/workflows/ci.yml:L52-L53`, `PROGRESS.md:L390`, `L400`, `L420-L422`, `docs/IMPLEMENTATION.md:L434`, `docs/design/11-showcase.md:L15`, `docs/DECISIONS.md:L1457`, `docs/_meta/scratch/config.md`, `docs/_meta/scratch/persistence.md` §5, `docs/_meta/scratch/siblings.md` §1.2, §1.8
+**Last verified:** 2026-11-09 against commit `6eefe67`

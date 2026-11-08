@@ -292,7 +292,7 @@ Written by `builds::write` from `builds:extract` (`src/archive/builds.rs:382-419
 
 ### timeline_gaps
 
-[`V0018__timeline_gaps.sql`](../../src/db/migrations/V0018__timeline_gaps.sql): `match_id TEXT PRIMARY KEY`, `reason TEXT NOT NULL` (`"not_found"`), `marked_at INTEGER NOT NULL` (unix ms). No FK. Written by `timelines:backfill` on a Riot 404 (`src/jobs/timelines.rs:164-171`); read by the same job so it never asks again. Retention: never trimmed.
+[`V0018__timeline_gaps.sql`](../../src/db/migrations/V0018__timeline_gaps.sql): `match_id TEXT PRIMARY KEY`, `reason TEXT NOT NULL` (`"not_found"`), `marked_at INTEGER NOT NULL` (unix ms). No FK. Written by `timelines:backfill` on a Riot 404 (`src/jobs/timelines.rs:143-150`); read by the same job so it never asks again. Retention: never trimmed.
 
 ### body_packs
 
@@ -326,4 +326,4 @@ Index `body_locations_pack (pack_id)` (`V0023:30`). Written by `locate_on` (upse
 
 ---
 **Sources:** `src/db/migrations/V0001__init.sql`, `V0002__archive.sql`, `V0003__cs_and_duration.sql`, `V0005__analytics.sql`, `V0007__job_lane.sql`, `V0009__cache_fetched_at.sql`, `V0012__match_builds.sql`, `V0013__timelines_standalone.sql`, `V0018__timeline_gaps.sql`, `V0019__tier_on_facts.sql`, `V0020__without_rowid_derived.sql`, `V0021__facts_without_rowid.sql`, `V0022__jobs_state_kind.sql`, `V0023__body_packs.sql`, `V0024__matches_archived.sql`, `V0028__jobs_crawl_matches.sql`, `V0029__analytics_counted.sql`, `src/db/mod.rs:L26-L42`, `src/db/mod.rs:L363-L365`, `src/archive/matches.rs:L33-L103`, `src/archive/matches.rs:L193-L230`, `src/archive/matches.rs:L390-L446`, `src/archive/analytics/delta.rs:L98-L145`, `src/archive/facts.rs:L19`, `src/archive/facts.rs:L292-L379`, `src/archive/builds.rs:L24`, `src/archive/pack.rs:L287-L354`, `src/archive/offload.rs:L147-L170`, `src/archive/tiers.rs:L37-L57`, `src/cache/l2.rs:L159-L223`, `src/riot/limiter/persist.rs:L23-L25`, `src/riot/limiter/persist.rs:L178-L213`, `src/consumers.rs:L105-L107`, `src/consumers.rs:L141-L155`, `src/consumers.rs:L213-L283`, `src/jobs/maintenance.rs:L36-L38`, `src/jobs/maintenance.rs:L237-L251`, `src/stats.rs:L43`, `src/stats.rs:L357-L372`, `src/stats.rs:L1001-L1017`, `src/routes/dev.rs:L41-L84`, `docs/_meta/scratch/persistence.md`, `docs/design/04-data-and-cache.md`, `docs/design/12-object-storage-and-hosting.md:L159-L221`
-**Last verified:** 2026-11-06 against commit `7cb71a2`
+**Last verified:** 2026-11-09 against commit `6eefe67`

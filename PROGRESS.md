@@ -439,7 +439,7 @@ A production restart on 2026-11-08 logged `listening` and accepted nothing for m
 - [ ] AVL-06 boot checks and the sampler cost nothing when there is nothing to do: a ranked match whose prefix is no platform stamped `UNKNOWN`, a bounded tier check and backfill query, `stale_matches` as `EXISTS`, no 60-second `SCAN matches` (ADR-213)
 - [ ] AVL-04 shutdown inside 90 s: after the job grace the writer's running statement is interrupted and its row re-queued (supersedes WR-03, ADR-211)
 - [ ] AVL-03 stale beats none for `/v1/players/*`: an expired copy served `STALE` when the refresh fails; league entries in L2, the `refreshing` field and composite `X-Cache: STALE` (owner approved 2026-11-09) (ADR-212)
-- [ ] AVL-07 ticks remember their last run, so `maintenance`, `names:backfill` and `ddragon:sync` do not fire on every restart (ADR-214)
+- [~] AVL-07 ticks remember their last run, so `maintenance`, `names:backfill` and `ddragon:sync` do not fire on every restart; per-ladder crawl and rebuild ticks read the crawl log and `analytics_runs`, timelines one loop per region (feat/AVL-07-ticks-remember-last-run, ADR-214)
 - [ ] AVL-05 long writes in bounded, resumable transactions: `aggregate:analytics` per step and patch, `maintenance`'s trim in chunks (ADR-215)
 
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)

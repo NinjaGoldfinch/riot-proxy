@@ -19,7 +19,7 @@ The database is never written to the Onidel bucket, and raw bodies are never in 
 
 ## Copy 1: the daily `VACUUM INTO` backup
 
-The `maintenance` job, ticked every 86 400 s and first at every boot, runs the backup as its first step (`src/jobs/ticks.rs:116-117`; `src/jobs/maintenance.rs:215-232`):
+The `maintenance` job, ticked every 86 400 s and first 86 400 s after its last run (at once on a boot when that is past or it never ran; a restart inside the day does not run it; ADR-214), runs the backup as its first step (`src/jobs/ticks.rs:114-115,212-289`; `src/jobs/maintenance.rs:215-232`):
 
 - Statement `VACUUM INTO ?1` from a separate read-only connection on a blocking thread, so the writer is not held (`src/jobs/maintenance.rs:57-76`). The copy is consistent and compact (freed pages are not copied).
 - Path `$DATA_DIR/backups/riot-proxy-<YYYY-MM-DD>.db`, UTC date, one per day; today's existing file skips the step (`src/jobs/maintenance.rs:40-41,78-84,280-283`).
@@ -135,5 +135,5 @@ The drill passed on 2026-10-15: the 2026-10-14 backup served a body from R2 with
 Freeing a body empties its blob; the pages go to SQLite's free list and the file does not shrink. Once `archive_offload_pending{step="free"}` is 0 for both kinds, copy the database compactly with `rp backup` and swap it in with the gated steps in `deploy/README.md:222-270` (tmux, `fuser`, header check, `quick_check`, checkpoint, swap). The 2026-10-14 incident, a swap made while the copy was still being written, is recounted there; nothing was lost, and the gates exist because of it.
 
 ---
-**Sources:** `src/jobs/maintenance.rs:L34-L41,L57-L105,L127-L139,L204-L232,L280-L322`, `src/jobs/ticks.rs:L116-L117`, `src/cli/backup.rs:L10-L21`, `src/cli/packs.rs:L32-L83`, `src/archive/recovery.rs:L1-L15,L207-L271`, `src/riot/limiter/persist.rs:L23,L92-L94`, `src/cache/l2.rs:L186-L216`, `src/db/mod.rs:L148-L155`, `src/db/migrations/V0023__body_packs.sql:L3-L5`, `src/config.rs:L825`, `deploy/README.md:L12-L47,L103-L152,L156-L160,L222-L270`, `deploy/riot-proxy-replica.service:L12-L19`, `deploy/riot-proxy-replica.timer:L6-L8`, `docs/design/07-deployment.md:L175-L206`, `docs/design/12-object-storage-and-hosting.md:L208-L212,L359-L434,L808-L830,L938-L946`, `docs/DECISIONS.md:L1459-L1464,L1722-L1730`, `README.md:L134-L142`, `PROGRESS.md:L335`, `reports/OBJ implementation handoff.md:L20`, `docs/_meta/scratch/persistence.md`
-**Last verified:** 2026-11-06 against commit `7cb71a2`
+**Sources:** `src/jobs/maintenance.rs:L34-L41,L57-L105,L127-L139,L204-L232,L280-L322`, `src/jobs/ticks.rs:L114-L115,L212-L289`, `src/cli/backup.rs:L10-L21`, `src/cli/packs.rs:L32-L83`, `src/archive/recovery.rs:L1-L15,L207-L271`, `src/riot/limiter/persist.rs:L23,L92-L94`, `src/cache/l2.rs:L186-L216`, `src/db/mod.rs:L148-L155`, `src/db/migrations/V0023__body_packs.sql:L3-L5`, `src/config.rs:L825`, `deploy/README.md:L12-L47,L103-L152,L156-L160,L222-L270`, `deploy/riot-proxy-replica.service:L12-L19`, `deploy/riot-proxy-replica.timer:L6-L8`, `docs/design/07-deployment.md:L175-L206`, `docs/design/12-object-storage-and-hosting.md:L208-L212,L359-L434,L808-L830,L938-L946`, `docs/DECISIONS.md:L1459-L1464,L1722-L1730`, `README.md:L134-L142`, `PROGRESS.md:L335`, `reports/OBJ implementation handoff.md:L20`, `docs/_meta/scratch/persistence.md`
+**Last verified:** 2026-11-09 against commit `6eefe67`

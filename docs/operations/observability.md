@@ -33,6 +33,7 @@ Fixed-text lines operators should recognise (level, text, source):
 | warn | `failed jobs a previous process left running on their last attempt` (ADR-189) | `src/cli/serve.rs` |
 | warn | `DEV_UI=true ignored: /dev is never served when ENV=production`; `CACHE_TTL_OVERRIDES key matches no cacheable endpoint; ignored` | `src/cli/serve.rs:103`, `:114` |
 | info | `re-queued jobs a previous process left running`, `queued the missing halves of archived matches`, `queued archive:offload` | `src/cli/serve.rs:302-358` |
+| info / warn | `tick deferred` (`kind=`, `key=` for a ladder or region, `next_in_s=`): at boot, a tick whose last run is within its period waits (ADR-214) / `tick could not read its last run; firing now`, `tick could not enqueue` | `src/jobs/ticks.rs:278-289`, `:345-371` |
 | warn | `AUTH_DISABLED=true: every request runs as the synthetic dev-local consumer (read+admin)`; `ADMIN_IP_ALLOWLIST entry is not an IP or CIDR; ignored` | `src/http/auth.rs:200-207` |
 | warn | `rejected unknown key`; `admin request from disallowed IP` | `src/http/auth.rs:298`, `:308` |
 | error | `RIOT KEY REJECTED` (then `check RIOT_API_KEY`) | `src/riot/client.rs:431` |
@@ -92,8 +93,8 @@ What is not logged: the Riot key (a sensitive header value, `src/riot/client.rs:
 | `sqlite_write_seconds` | histogram | | how long each write ran on the writer thread, queue wait excluded; buckets 0.001 to 60 | `src/db/writer.rs:264` |
 | `sqlite_write_wait_seconds` | histogram | | how long each write waited in the writer's queue; same buckets | `src/db/writer.rs:255-256` |
 | `sqlite_write_queue` | gauge | | writes queued behind the running one, set on every enqueue and completion | `src/db/mod.rs:280`; `src/db/writer.rs:266` |
-| `timeline_backfill_fetched_total` | counter | region | timelines fetched by the backfill | `src/jobs/timelines.rs:365` |
-| `timeline_backfill_not_found_total` | counter | region | timelines Riot answered 404 for | `src/jobs/timelines.rs:366` |
+| `timeline_backfill_fetched_total` | counter | region | timelines fetched by the backfill | `src/jobs/timelines.rs:344` |
+| `timeline_backfill_not_found_total` | counter | region | timelines Riot answered 404 for | `src/jobs/timelines.rs:345` |
 | `sqlite_db_bytes` | gauge | | database file size | `src/db/disk.rs:70` |
 | `sqlite_wal_bytes` | gauge | | `-wal` size; 0 after a truncating checkpoint | `src/db/disk.rs:71` |
 | `sqlite_freelist_bytes` | gauge | | freed pages not yet reused | `src/db/disk.rs:72` |
@@ -174,4 +175,4 @@ Logs reach journald and are read over SSH; the dashboard reaches the admin JSON 
 
 ---
 **Sources:** `src/telemetry.rs:24,27,31,41-66,91-121`, `src/cli/serve.rs:45,47-53,62,84-114,157,302-363,434,443-449`, `src/app.rs:105-120,123-182,286,313-314`, `src/http/auth.rs:200-207,298,308,359`, `src/status/mod.rs:36-45,160-162`, `src/status/ratelimits.rs:103-246`, `src/http/error.rs:133,176-187`, `src/http/request_id.rs:14,31-41,57-64`, `src/http/recent.rs:18-25,38-59,83-84,102-108`, `src/config.rs:432-436,494-505,735-742,797,817`, `src/consumers.rs:105-107`, `src/riot/client.rs:29,327-329,381-389,431-488`, `src/riot/limiter/mod.rs:240-283,416-428`, `src/fetcher.rs:406-408,467-607`, `src/metrics.rs:1-4,49,100-445,497-510`, `src/db/writer.rs:244-275`, `src/stats.rs:43,297-372,863,996-1072`, `src/routes/health.rs:1,21-46,75-200`, `src/routes/admin.rs:2423-2441,2560-2572`, `src/routes/ui.rs:5-8,218-221`, `src/ws/metrics.rs:14-35`, `src/events.rs:159-172,198`, `src/jobs/scheduler.rs:49,1079-1092,1156,1219,1226-1245,1296`, `src/jobs/maintenance.rs:38,241-244,263,304-315`, `src/jobs/offload.rs:163-215`, `src/jobs/ladder.rs:322-1018`, `src/jobs/analytics.rs:382-951`, `src/jobs/ddragon.rs:241,258`, `src/jobs/index_snapshot.rs:598`, `src/archive/matches.rs:250-317,419`, `src/archive/objects.rs:142`, `src/cache/l2.rs:109-154`, `src/db/mod.rs:123,328`, `src/db/disk.rs:70-116`, `src/db/migrations/V0001__init.sql:47-50`, `docs/design/07-deployment.md:74-95,218,221`, `docs/design/12-object-storage-and-hosting.md:846-848`, `docs/design/13-admin-dashboard.md:69,341`, `docs/design/metrics.md`, `ops/grafana/riot-proxy-dashboard.json`, `ops/prometheus-alerts.yml`, `PROGRESS.md:342`
-**Last verified:** 2026-11-09 against commit `6c32ff4`
+**Last verified:** 2026-11-09 against commit `6eefe67`
