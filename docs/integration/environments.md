@@ -35,7 +35,7 @@ Everything works against a locally started proxy; no shared dev instance exists 
 3. Open `http://127.0.0.1:8080/dev` (explorer), `/dev/showcase` (example frontend), `/docs`, `/dashboard`.
 4. For frontend work without keys, add `AUTH_DISABLED=true` to `.env`; for a quiet box add `LADDER_CRAWL_S=0`, `AGGREGATE_DELTA_S=0` and `JOB_CONCURRENCY=1`.
 5. To point ninjagoldfinch.lol at it, set `PROXY_URL=http://127.0.0.1:8080` in the site's `.env` (and `PROXY_KEY` only if auth is on).
-6. To exercise the offload locally, set `ARCHIVE_OBJECT_URL=file:///absolute/dir` (allowed outside production; `file://` and `http://` endpoints are refused when `ENV=production`, `src/config.rs:1096-1105`).
+6. To exercise the offload locally, set `ARCHIVE_OBJECT_URL=file:///absolute/dir` (allowed outside production; `file://` and `http://` endpoints are refused when `ENV=production`, `src/config.rs:1102-1111`).
 
 The mock Riot in `acceptance/helpers/mock-riot.ts` and the replay fixtures under `tests/fixtures/replay/` let the test suites run with no Riot key at all. Full steps in [../workflows/development-setup.md](../workflows/development-setup.md).
 
@@ -49,12 +49,12 @@ The mock Riot in `acceptance/helpers/mock-riot.ts` and the replay fixtures under
 
 | Difference | Effect |
 |---|---|
-| `ENV=production` | refuses `AUTH_DISABLED`, `RIOT_BASE_URL`, `DDRAGON_BASE_URL`, `file://` object URLs and `http://` endpoints; forces `/dev` off; requires both object-storage keys with an `s3://` URL (`src/config.rs:744-770,1093-1105`) |
+| `ENV=production` | refuses `AUTH_DISABLED`, `RIOT_BASE_URL`, `DDRAGON_BASE_URL`, `file://` object URLs and `http://` endpoints; forces `/dev` off; requires both object-storage keys with an `s3://` URL (`src/config.rs:749-775,1099-1111`) |
 | Key scope | cache keys and facts are scoped by the hash of the Riot key, so a local database filled with one key is invisible to another (`src/cache/keys.rs:24-46`) |
 | Object storage | locally, bodies never leave SQLite unless a `file://` store is set; in production bodies older than 14 days exist only in the bucket and its replica |
 | Limits | the same personal-key limits apply everywhere; two instances with the same key share Riot's budget without knowing it, which is why the dev VM and production should not run the same key at full load |
 | Logs | JSON in production (journald); pretty on a terminal locally |
 
 ---
-**Sources:** `docs/design/12-object-storage-and-hosting.md` §As executed, `docs/design/07-deployment.md` §Option C, `deploy/proxmox/README.md`, `README.md` §First run, `.env.example`, `src/config.rs:L744-L770,L1093-L1105`, `src/cache/keys.rs:L24-L37`, `docs/_meta/scratch/siblings.md` §1.2, §1.8, `docs/IMPLEMENTATION.md:L434`
-**Last verified:** 2026-11-09 against commit `6c32ff4`
+**Sources:** `docs/design/12-object-storage-and-hosting.md` §As executed, `docs/design/07-deployment.md` §Option C, `deploy/proxmox/README.md`, `README.md` §First run, `.env.example`, `src/config.rs:L749-L775,L1099-L1111`, `src/cache/keys.rs:L24-L37`, `docs/_meta/scratch/siblings.md` §1.2, §1.8, `docs/IMPLEMENTATION.md:L434`
+**Last verified:** 2026-11-09 against commit `6eefe67`

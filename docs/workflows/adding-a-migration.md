@@ -62,15 +62,15 @@ Every integration test opens a fresh tempfile database through `Db::open` (`test
 
 | Test | What to change | Lines |
 |---|---|---|
-| `migrations_create_exactly_the_design_04_tables` | add the new table to the sorted list | `src/db/tests.rs:92-152` |
+| `migrations_create_exactly_the_design_04_tables` | add the new table to the sorted list | `src/db/tests.rs:92-153` |
 | `migrations_apply_once_across_reopens` | the history count, 29 → 30 | `:898`, `:902` |
 | a seeded upgrade test, for anything beyond `CREATE TABLE` | run the runner with `.set_target(refinery::Target::Version(27))`, seed rows, open with `Db::open`, assert rows survive with their values and the DDL says what it should: `v0020_rebuilds_…` and `v0021_rebuilds_…` are the models | `:401-453`, `:542-565` |
 | `archive_indexes_exist` / `archive_foreign_keys_behave_as_designed` | if the migration adds an index or an FK | `:170`, `:734` |
 
 Outside `src/db/`:
 
-- **The dev reset lists.** `routes::dev::WIPED` and `KEPT` must together name every table; a test fails otherwise, "so a new migration has to choose" (`src/routes/dev.rs:38-86`; `tests/dev_reset.rs`). Derived and fetched data go in `WIPED`, children before parents; only consumers, the limiter checkpoint and refinery's history are `KEPT`.
-- **A `/v1/admin/stats` or dashboard count** over the new table needs its own `EXPLAIN QUERY PLAN` test, as the pack counts (`src/archive/offload/tests.rs:519-532`) and the job counts (`src/db/tests.rs:1221`) have.
+- **The dev reset lists.** `routes::dev::WIPED` and `KEPT` must together name every table; a test fails otherwise, "so a new migration has to choose" (`src/routes/dev.rs:38-87`; `tests/dev_reset.rs`). Derived and fetched data go in `WIPED`, children before parents; only consumers, the limiter checkpoint and refinery's history are `KEPT`.
+- **A `/v1/admin/stats` or dashboard count** over the new table needs its own `EXPLAIN QUERY PLAN` test, as the pack counts (`src/archive/offload/tests.rs:519-532`) and the job counts (`src/db/tests.rs:1222`) have.
 - Run `cargo test --lib db::` then `cargo test --test it dev_reset::` and the lot ([testing.md](./testing.md)).
 
 ## Documents to update
@@ -119,5 +119,5 @@ Then: add `"clash_teams"` to the sorted list in `migrations_create_exactly_the_d
 7. `just lint`, `just test`; a backup before the first production boot ([../deployment/backup-and-restore.md](../deployment/backup-and-restore.md)).
 
 ---
-**Sources:** `src/db/mod.rs:L22-L31`, `L131-L147`, `L294-L296`, `src/cli/mod.rs:L136-L165`, `src/db/migrations/V0001__init.sql:L1-L2`, `V0003__cs_and_duration.sql`, `V0021__facts_without_rowid.sql:L1-L33`, `V0023__body_packs.sql:L1-L48`, `V0027__matchup_builds.sql:L1-L19`, `src/db/tests.rs:L92-L152`, `L170`, `L401-L453`, `L542-L565`, `L734`, `L876-L918`, `L1221`, `src/archive/offload/tests.rs:L519-L532`, `src/jobs/offload/tests.rs:L497-L512`, `src/routes/dev.rs:L38-L86`, `tests/common/mod.rs:L32-L33`, `docs/design/04-data-and-cache.md:L61-L63`, `L417-L423`, `docs/design/12-object-storage-and-hosting.md:L196-L221`, `docs/DECISIONS.md:L49-L51` (ADR-010), `L1455` (ADR-135), `L1460-L1462` (ADR-136), `L1490-L1505` (ADR-140, ADR-141), `L1510` (ADR-142), `README.md:L194`, `docs/_meta/scratch/persistence.md` §1
-**Last verified:** 2026-11-09 against commit `6c32ff4`
+**Sources:** `src/db/mod.rs:L22-L31`, `L131-L147`, `L294-L296`, `src/cli/mod.rs:L136-L165`, `src/db/migrations/V0001__init.sql:L1-L2`, `V0003__cs_and_duration.sql`, `V0021__facts_without_rowid.sql:L1-L33`, `V0023__body_packs.sql:L1-L48`, `V0027__matchup_builds.sql:L1-L19`, `src/db/tests.rs:L92-L153`, `L170`, `L401-L453`, `L542-L565`, `L734`, `L876-L918`, `L1221`, `src/archive/offload/tests.rs:L519-L532`, `src/jobs/offload/tests.rs:L497-L512`, `src/routes/dev.rs:L38-L87`, `tests/common/mod.rs:L32-L33`, `docs/design/04-data-and-cache.md:L61-L63`, `L417-L423`, `docs/design/12-object-storage-and-hosting.md:L196-L221`, `docs/DECISIONS.md:L49-L51` (ADR-010), `L1455` (ADR-135), `L1460-L1462` (ADR-136), `L1490-L1505` (ADR-140, ADR-141), `L1510` (ADR-142), `README.md:L194`, `docs/_meta/scratch/persistence.md` §1
+**Last verified:** 2026-11-09 against commit `6eefe67`
