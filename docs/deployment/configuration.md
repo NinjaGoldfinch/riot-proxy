@@ -46,6 +46,7 @@ Notation: `int(min..=max)` means a whole number in that range, `bool` accepts `t
 | `STALE_WHILE_REVALIDATE` | bool | `true` | no | serve stale entries while refreshing | `true` | `src/config.rs:816` |
 | `METRICS_INTERVAL_S` | int(1..=300) | `5` | no | tick of the `metrics` WebSocket topic | `5` | `src/config.rs:817` |
 | `METRICS_HISTORY_INTERVAL_S` | int(10..=3600) | `60` | no | cadence of the recorded metrics history | `60` | `src/config.rs:818` |
+| `ARCHIVE_STATS_INTERVAL_S` | int(60..=86400) | `3600` | no | how often the archive's counts and byte sums for `GET /v1/admin/stats` are sampled: a pass over every stored body, so rare; reused in between, dated by `sampledAt.slow` (AVL-06, ADR-213) | `3600` | `src/config.rs:827`; `src/stats.rs:1074-1119` |
 
 ## Worker cadence
 

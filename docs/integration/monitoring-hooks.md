@@ -47,7 +47,7 @@ The status bot's endpoint (STS-02, ADR-203, design/14). Its `metrics` are read f
 - `https://api.ninjagoldfinch.lol/metrics`: blocked by the WAF rule that covers `/metrics`, `/dashboard*`, `/dev*`, `/v1/admin*` on `api.` (`PROGRESS.md:342`; `docs/design/07-deployment.md:221`);
 - from `ngf-mon-syd1` over WireGuard: planned for Prometheus, not built (`docs/design/12-object-storage-and-hosting.md:846-848`; `docs/design/13-admin-dashboard.md:69`).
 
-A scraper should sample at least every 60 s to see each disk gauge update (`METRICS_HISTORY_INTERVAL_S`, `src/stats.rs:1041-1072`) and every 15 s to see `jobs_pending` move (`src/jobs/scheduler.rs:49`).
+A scraper should sample at least every 60 s to see each disk gauge update (`METRICS_HISTORY_INTERVAL_S`, `src/stats.rs:1074-1119`) and every 15 s to see `jobs_pending` move (`src/jobs/scheduler.rs:49`).
 
 ## Admin JSON snapshots
 

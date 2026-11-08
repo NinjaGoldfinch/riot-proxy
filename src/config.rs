@@ -46,6 +46,7 @@ pub const VARS: &[&str] = &[
     "STALE_WHILE_REVALIDATE",
     "METRICS_INTERVAL_S",
     "METRICS_HISTORY_INTERVAL_S",
+    "ARCHIVE_STATS_INTERVAL_S",
     "TRACK_POLL_LIVE_S",
     "TRACK_POLL_RANK_S",
     "TRACK_POLL_MATCH_S",
@@ -318,6 +319,9 @@ pub struct Config {
     pub stale_while_revalidate: bool,
     pub metrics_interval_s: u32,
     pub metrics_history_interval_s: u32,
+    /// How often the archive's byte sums (a pass over every body) are sampled
+    /// for `GET /v1/admin/stats` (AVL-06, ADR-213).
+    pub archive_stats_interval_s: u32,
     pub track_poll_live_s: u32,
     pub track_poll_rank_s: u32,
     pub track_poll_match_s: u32,
@@ -478,6 +482,7 @@ impl Config {
             ("STALE_WHILE_REVALIDATE", s(self.stale_while_revalidate)),
             ("METRICS_INTERVAL_S", s(self.metrics_interval_s)),
             ("METRICS_HISTORY_INTERVAL_S", s(self.metrics_history_interval_s)),
+            ("ARCHIVE_STATS_INTERVAL_S", s(self.archive_stats_interval_s)),
             ("TRACK_POLL_LIVE_S", s(self.track_poll_live_s)),
             ("TRACK_POLL_RANK_S", s(self.track_poll_rank_s)),
             ("TRACK_POLL_MATCH_S", s(self.track_poll_match_s)),
@@ -819,6 +824,7 @@ impl Config {
             stale_while_revalidate: v.bool("STALE_WHILE_REVALIDATE", true),
             metrics_interval_s: v.int("METRICS_INTERVAL_S", 5, 1, 300),
             metrics_history_interval_s: v.int("METRICS_HISTORY_INTERVAL_S", 60, 10, 3600),
+            archive_stats_interval_s: v.int("ARCHIVE_STATS_INTERVAL_S", 3600, 60, 86_400),
             track_poll_live_s: v.int("TRACK_POLL_LIVE_S", 60, 10, u32::MAX),
             track_poll_rank_s: v.int("TRACK_POLL_RANK_S", 600, 30, u32::MAX),
             track_poll_match_s: v.int("TRACK_POLL_MATCH_S", 300, 30, u32::MAX),
