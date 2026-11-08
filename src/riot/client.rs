@@ -224,6 +224,8 @@ pub struct UpstreamWatch {
     /// Unix ms of the last answer on each scope, a status probe's excepted:
     /// what makes a platform *active* for the probe's cadence (design/14).
     traffic: Mutex<HashMap<&'static str, i64>>,
+    /// What Riot's rate-limit headers last said (STS-03, ADR-207).
+    rate_limits: crate::status::ratelimits::RateLimitTable,
 }
 
 /// The key as Riot last judged it: a 2xx accepts it, a 401 or 403 rejects it.
@@ -252,6 +254,11 @@ impl UpstreamWatch {
     /// When `scope` last had an answer from Riot that was not a status probe.
     pub fn last_traffic_ms(&self, scope: &str) -> Option<i64> {
         lock(&self.traffic).get(scope).copied()
+    }
+
+    /// The rate-limit table, from every answer with a status, probes included.
+    pub fn rate_limits(&self) -> &crate::status::ratelimits::RateLimitTable {
+        &self.rate_limits
     }
 
     /// One answer from Riot with `status`. `probe` is a status check's own
@@ -394,9 +401,12 @@ impl RiotClient {
         };
         let ((status, headers), elapsed) = (res, started.elapsed());
         record(scope, method, &status.to_string(), elapsed);
-        let newly_rejected =
-            self.watch
-                .answered(scope, method, status, probe, crate::clock::Clock::now().unix_ms);
+        let at_ms = crate::clock::Clock::now().unix_ms;
+        let newly_rejected = self.watch.answered(scope, method, status, probe, at_ms);
+        // Every answer with a status, a probe's included (design/14, ADR-206);
+        // the fetcher or the probe already read and warned on these headers.
+        let limits = crate::riot::limiter::headers::RateLimitHeaders::from_headers_quiet(&headers);
+        self.watch.rate_limits.record(scope, method, &limits, at_ms);
 
         if (200..300).contains(&status) {
             #[allow(clippy::cast_possible_truncation)]
@@ -756,5 +766,75 @@ mod tests {
         let (_, text) = logged(tracing::Level::DEBUG, client.send_probe(&probe)).await;
         assert!(text.contains("status probe: the key is still rejected"), "{text}");
         assert!(!text.contains(REJECTED), "{text}");
+    }
+
+    /// STS-03 (design/14 §Rate-limit table): a real answer and a probe's
+    /// both feed the rate-limit table, a 429's `Retry-After` with them; a
+    /// network failure, which carries no headers, records nothing.
+    #[tokio::test]
+    async fn every_answer_feeds_the_rate_limit_table() {
+        use wiremock::matchers::path;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let client = RiotClient::build(
+            &Secret::new("RGAPI-test"),
+            "riot-proxy-test",
+            Base::Fixed(server.uri()),
+        )
+        .unwrap();
+        let e = ep("status.platformData");
+        let req = RiotRequest::new(e, e.target_for_platform(Platform::Oc1), &[]).unwrap();
+        let now = crate::clock::Clock::now().unix_ms;
+
+        // Header values from the recorded kr exchange in
+        // tests/fixtures/replay/cold-lookup/02-summoner.byPuuid.json.
+        let ok = Mock::given(path("/lol/status/v4/platform-data"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("x-app-rate-limit", "100:120,20:1")
+                    .insert_header("x-app-rate-limit-count", "1:120,1:1")
+                    .insert_header("x-method-rate-limit", "2000:60")
+                    .insert_header("x-method-rate-limit-count", "1:60"),
+            )
+            .mount_as_scoped(&server)
+            .await;
+        client.send(&req).await.unwrap();
+        drop(ok);
+        let report = client.watch().rate_limits().report(0, now);
+        let oc1 = &report.scopes["oc1"];
+        assert_eq!(oc1.remaining_pct, Some(95));
+        assert_eq!(oc1.methods["status.platformData"].windows.len(), 1);
+        assert_eq!(oc1.retry_after.s, 0);
+
+        let _limited = Mock::given(path("/lol/status/v4/platform-data"))
+            .respond_with(ResponseTemplate::new(429).insert_header("retry-after", "7"))
+            .mount_as_scoped(&server)
+            .await;
+        client.send_probe(&req).await.unwrap_err();
+        let report = client.watch().rate_limits().report(0, now);
+        let oc1 = &report.scopes["oc1"];
+        assert_eq!(oc1.retry_after.s, 7, "the probe's 429 is recorded");
+        assert!(oc1.retry_after.at.is_some());
+        assert_eq!(
+            oc1.remaining_pct,
+            Some(95),
+            "a 429 without app headers keeps them"
+        );
+
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let upstream = format!("http://{}", closed.local_addr().unwrap());
+        drop(closed);
+        let unreachable = RiotClient::build(
+            &Secret::new("RGAPI-test"),
+            "riot-proxy-test",
+            Base::Fixed(upstream),
+        )
+        .unwrap();
+        unreachable.send(&req).await.unwrap_err();
+        assert!(
+            unreachable.watch().rate_limits().report(0, now).scopes.is_empty(),
+            "a network failure records nothing"
+        );
     }
 }

@@ -814,3 +814,189 @@ async fn cache_and_storage_do_not_wait_for_a_hung_probe() {
     let api = checks.iter().find(|c| c.name == "riot_api").unwrap();
     assert_eq!(api.detail, "oc1: no answer from Riot");
 }
+
+// ---- the rate-limit table (STS-03, design/14 §Rate-limit table) ----
+
+/// The recorded `kr` exchange (real, 2026-09-24): its rate-limit headers.
+const KR_SUMMONER: &str = include_str!("fixtures/replay/cold-lookup/02-summoner.byPuuid.json");
+
+fn recorded_headers(json: &str) -> Vec<(String, String)> {
+    let v: serde_json::Value = serde_json::from_str(json).unwrap();
+    v["headers"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .filter(|(k, _)| k.starts_with("x-") || *k == "retry-after")
+        .map(|(k, v)| (k.clone(), v.as_str().unwrap().to_string()))
+        .collect()
+}
+
+/// A platform-data mock for the one host `host` names (ADR-059's
+/// `x-riot-host`), answering `status` with `headers`.
+async fn mock_platform(e: &Env, host: &str, status: u16, headers: &[(String, String)]) {
+    let mut res = ResponseTemplate::new(status).set_body_string(r#"{"id":"X"}"#);
+    for (k, v) in headers {
+        res = res.insert_header(k.as_str(), v.as_str());
+    }
+    Mock::given(method("GET"))
+        .and(path(PROBE))
+        .and(wiremock::matchers::header("x-riot-host", host))
+        .respond_with(res)
+        .mount(&e.server)
+        .await;
+}
+
+fn timestamp(v: &serde_json::Value) -> String {
+    let at = v.as_str().unwrap_or_else(|| panic!("not a string: {v}"));
+    assert!(at.ends_with('Z') && at.parse::<jiff::Timestamp>().is_ok(), "{at}");
+    at.to_string()
+}
+
+/// The route's body after two responses on two platforms, field for field;
+/// `/status` carries each scope's headroom and `riot_retry_after_s`.
+#[tokio::test]
+async fn the_table_after_two_responses() {
+    let e = env(&[]).await;
+    // design/14's example for oc1; kr as Riot sent it.
+    let oc1 = [
+        ("x-app-rate-limit", "20:1,100:120"),
+        ("x-app-rate-limit-count", "3:1,41:120"),
+        ("x-method-rate-limit", "2000:60"),
+        ("x-method-rate-limit-count", "7:60"),
+    ]
+    .map(|(k, v)| (k.to_string(), v.to_string()));
+    mock_platform(&e, "oc1.api.riotgames.com", 200, &oc1).await;
+    mock_platform(&e, "kr.api.riotgames.com", 200, &recorded_headers(KR_SUMMONER)).await;
+    let read = e.key("rl-reader", vec![Scope::Read]).await;
+    let admin = e.key("rl-admin", vec![Scope::Read, Scope::Admin]).await;
+    for platform in ["oc1", "kr"] {
+        let uri = format!("/v1/lol/status/{platform}");
+        assert_eq!(
+            e.get(OUTSIDE, &uri, Some(&read), &[]).await.status,
+            StatusCode::OK
+        );
+    }
+
+    let r = e.get(OUTSIDE, "/status/ratelimits", Some(&admin), &[]).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert!(r.headers.get("x-ratelimit-remaining").is_none(), "not metered");
+    let body = r.json();
+    let oc1_at = timestamp(&body["scopes"]["oc1"]["observed_at"]);
+    let kr_at = timestamp(&body["scopes"]["kr"]["observed_at"]);
+    assert_eq!(
+        body,
+        serde_json::json!({
+            "schema": 1,
+            "at": timestamp(&body["at"]),
+            "retry_after_s": 0,
+            "scopes": {
+                "kr": {
+                    "observed_at": kr_at,
+                    "app": [
+                        { "window_s": 1, "limit": 20, "count": 1, "remaining_pct": 95 },
+                        { "window_s": 120, "limit": 100, "count": 1, "remaining_pct": 99 }
+                    ],
+                    "remaining_pct": 95,
+                    "retry_after": { "s": 0, "at": null },
+                    "methods": { "status.platformData": {
+                        "observed_at": kr_at,
+                        "windows": [ { "window_s": 60, "limit": 2000, "count": 1, "remaining_pct": 99 } ]
+                    } }
+                },
+                "oc1": {
+                    "observed_at": oc1_at,
+                    "app": [
+                        { "window_s": 1, "limit": 20, "count": 3, "remaining_pct": 85 },
+                        { "window_s": 120, "limit": 100, "count": 41, "remaining_pct": 59 }
+                    ],
+                    "remaining_pct": 59,
+                    "retry_after": { "s": 0, "at": null },
+                    "methods": { "status.platformData": {
+                        "observed_at": oc1_at,
+                        "windows": [ { "window_s": 60, "limit": 2000, "count": 7, "remaining_pct": 99 } ]
+                    } }
+                }
+            }
+        })
+    );
+
+    let status = e.get(LOCAL, "/status", None, &[]).await.json();
+    let m = &status["metrics"];
+    assert_eq!(m["riot_app_limit_remaining_pct_oc1"], 59, "{m}");
+    assert_eq!(m["riot_app_limit_remaining_pct_kr"], 95, "{m}");
+    assert_eq!(m["riot_retry_after_s"], 0, "{m}");
+    let ring = riot_proxy::http::recent::requests(riot_proxy::http::recent::REQUESTS_CAP);
+    assert!(
+        ring.iter().all(|r| r.path != "/status/ratelimits"),
+        "kept out of the recent-requests ring"
+    );
+}
+
+/// A 429's `Retry-After` from the status probe shows on its scope, and the
+/// limiter's freeze as `retry_after_s`; a scope seen without app headers
+/// has no windows and no headroom.
+#[tokio::test]
+async fn a_429_shows_as_retry_after() {
+    use riot_proxy::riot::client::RiotRequest;
+    use riot_proxy::riot::endpoints::Endpoint;
+    use riot_proxy::riot::limiter::headers::RateLimitType;
+    use riot_proxy::riot::routing::Platform;
+
+    let e = env(&[]).await;
+    let retry = [("retry-after".to_string(), "7".to_string())];
+    mock_platform(&e, "oc1.api.riotgames.com", 429, &retry).await;
+    let admin = e.key("rl-admin-429", vec![Scope::Read, Scope::Admin]).await;
+    e.state
+        .limiter
+        .freeze("oc1", Duration::from_millis(6_500), RateLimitType::Service);
+    let ep = Endpoint::by_id("status.platformData").unwrap();
+    let req = RiotRequest::new(ep, ep.target_for_platform(Platform::Oc1), &[]).unwrap();
+    e.state.fetcher.client().send_probe(&req).await.unwrap_err();
+
+    let body = e
+        .get(OUTSIDE, "/status/ratelimits", Some(&admin), &[])
+        .await
+        .json();
+    assert_eq!(body["retry_after_s"], 7, "6.5 s, rounded up: {body}");
+    let oc1 = &body["scopes"]["oc1"];
+    assert_eq!(oc1["retry_after"]["s"], 7);
+    timestamp(&oc1["retry_after"]["at"]);
+    assert_eq!(oc1["app"], serde_json::json!([]));
+    assert!(oc1["remaining_pct"].is_null());
+    assert!(oc1["observed_at"].is_null());
+    assert_eq!(oc1["methods"], serde_json::json!({}));
+
+    let m = e.get(LOCAL, "/status", None, &[]).await.json()["metrics"].clone();
+    assert_eq!(m["riot_retry_after_s"], 7, "{m}");
+    assert!(m.get("riot_app_limit_remaining_pct_oc1").is_none(), "{m}");
+}
+
+/// design/14 §Endpoints: the admin key only, never keyless, even from
+/// loopback; a read key is 403. Before any answer from Riot it is empty.
+#[tokio::test]
+async fn ratelimits_takes_the_admin_key_only() {
+    let e = env(&[]).await;
+    let admin = e.key("rl-admin-only", vec![Scope::Read, Scope::Admin]).await;
+    let read = e.key("rl-read-only", vec![Scope::Read]).await;
+    for peer in [LOCAL, OUTSIDE] {
+        let keyless = e.get(peer, "/status/ratelimits", None, &[]).await;
+        assert_eq!(keyless.status, StatusCode::UNAUTHORIZED, "{peer}");
+        assert_eq!(keyless.json()["error"]["code"], "UNAUTHORIZED", "{peer}");
+        let unknown = e
+            .get(peer, "/status/ratelimits", Some("rpx_not_a_key"), &[])
+            .await;
+        assert_eq!(unknown.status, StatusCode::UNAUTHORIZED, "{peer}");
+        let refused = e.get(peer, "/status/ratelimits", Some(&read), &[]).await;
+        assert_eq!(refused.status, StatusCode::FORBIDDEN, "{peer}");
+        assert_eq!(refused.json()["error"]["code"], "FORBIDDEN", "{peer}");
+        let ok = e.get(peer, "/status/ratelimits", Some(&admin), &[]).await;
+        assert_eq!(ok.status, StatusCode::OK, "{peer}");
+        assert!(ok.headers.get("x-ratelimit-remaining").is_none());
+        let body = ok.json();
+        assert_eq!(
+            (body["schema"].as_u64(), body["retry_after_s"].as_u64()),
+            (Some(1), Some(0))
+        );
+        assert_eq!(body["scopes"], serde_json::json!({}), "{peer}");
+    }
+}

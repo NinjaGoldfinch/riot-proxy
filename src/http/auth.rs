@@ -385,6 +385,13 @@ pub async fn require_status(State(state): State<AppState>, req: Request, next: N
     if bearer(req.headers(), req.uri()).is_none() && state.auth.status_local(req.headers(), peer(&req)) {
         return next.run(req).await;
     }
+    status_admin(state, req, next).await
+}
+
+/// The admin half of the status gates: the admin key with the admin IP
+/// allowlist, the consumer named on the span and for the recent ring, and
+/// no consumer quota.
+async fn status_admin(state: AppState, req: Request, next: Next) -> Response {
     let ask = Ask::from(&req, state.auth.trust_proxy);
     let consumer = match state.auth.authorise(ask, Scope::Admin).await {
         Ok(consumer) => consumer,
@@ -405,6 +412,14 @@ pub async fn require_read(State(state): State<AppState>, req: Request, next: Nex
 /// `route_layer(from_fn_with_state(state, require_admin))`
 pub async fn require_admin(State(state): State<AppState>, req: Request, next: Next) -> Response {
     guard(state, Scope::Admin, req, next).await
+}
+
+/// `GET /status/ratelimits` (STS-03, design/14 §Endpoints): the admin key
+/// only, with the admin IP allowlist, never keyless, even from loopback. No
+/// consumer quota, as for `/status` (so not [`require_admin`], whose guard
+/// meters).
+pub async fn require_status_admin(State(state): State<AppState>, req: Request, next: Next) -> Response {
+    status_admin(state, req, next).await
 }
 
 #[cfg(test)]
