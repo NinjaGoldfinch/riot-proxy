@@ -30,7 +30,7 @@ use tokio::task::JoinSet;
 
 use crate::clock::Clock;
 use crate::db::store::{ClaimFilter, SqliteStore, Store};
-use crate::db::{Db, DbError};
+use crate::db::{Db, DbError, JobWriteStop};
 use crate::fetcher::FetchError;
 use crate::jobs::activity::{self, Activity};
 use crate::metrics::{JOBS_PENDING, JOBS_TOTAL};
@@ -910,6 +910,12 @@ impl Registry {
         self.0.insert(kind, Arc::new(handler));
         self
     }
+
+    /// [`Registry::with`] for a handler already shared.
+    pub fn with_shared(mut self, kind: &'static str, handler: Arc<dyn Handler>) -> Self {
+        self.0.insert(kind, handler);
+        self
+    }
 }
 
 impl Scheduler {
@@ -1167,9 +1173,11 @@ impl Scheduler {
                 let current = activity::Current::new(self.activity.clone(), &job.id);
                 // Spawned so a panic is contained; the guard aborts the handler
                 // if this worker is itself aborted at shutdown.
-                let mut task = AbortOnDrop(tokio::spawn(activity::within(Some(current), async move {
-                    handler.run(&j).await
-                })));
+                // Its writes are job writes, which shutdown may interrupt (AVL-04).
+                let mut task = AbortOnDrop(tokio::spawn(activity::within(
+                    Some(current),
+                    crate::db::job_writes(async move { handler.run(&j).await }),
+                )));
                 let control = &self.queue.control;
                 let run = control.track(&task.0);
                 let out = (&mut task.0).await;
@@ -1278,7 +1286,11 @@ impl Scheduler {
                 }
             }
         });
-        Workers { stop, set }
+        Workers {
+            stop,
+            set,
+            db: self.db.clone(),
+        }
     }
 }
 
@@ -1318,11 +1330,20 @@ impl<T> Drop for AbortOnDrop<T> {
 pub struct Workers {
     stop: watch::Sender<bool>,
     set: JoinSet<()>,
+    db: Db,
 }
+
+/// How long [`Workers::shutdown`] keeps interrupting a job write after the
+/// grace (AVL-04, ADR-211). With the drain and the grace, under 60 s.
+pub const INTERRUPT_WAIT: Duration = Duration::from_secs(5);
 
 impl Workers {
     /// Stop claiming, let running jobs finish for up to `grace`, then abort the
     /// rest; their rows stay `running` and [`Scheduler::recover`] re-queues them.
+    /// Aborting a job does not stop a write it already handed to the writer
+    /// thread, so that write is interrupted, for up to [`INTERRUPT_WAIT`], and
+    /// the job writes queued behind it are dropped (AVL-04): what shutdown
+    /// writes next does not wait for them.
     pub async fn shutdown(mut self, grace: Duration) {
         let _ = self.stop.send(true);
         let drained =
@@ -1331,6 +1352,14 @@ impl Workers {
             tracing::warn!("jobs still running at shutdown; they resume on the next boot");
             self.set.abort_all();
             while self.set.join_next().await.is_some() {}
+            match self.db.interrupt_job_writes(INTERRUPT_WAIT).await {
+                JobWriteStop::Idle => {}
+                JobWriteStop::Interrupted => tracing::info!("interrupted a running job write"),
+                JobWriteStop::StillRunning => tracing::warn!(
+                    wait_ms = u64::try_from(INTERRUPT_WAIT.as_millis()).unwrap_or(u64::MAX),
+                    "a job write is still running after the interrupt; the final checkpoint waits for it"
+                ),
+            }
         }
     }
 }
