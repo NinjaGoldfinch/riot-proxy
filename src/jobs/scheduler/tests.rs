@@ -969,3 +969,188 @@ mod kind_limits {
         assert_eq!(most.load(Ordering::SeqCst), 1);
     }
 }
+
+// ── AVL-10: a claim queued behind the job write shutdown interrupts ─────────
+
+/// Holds the writer in a job write that runs for hours unless interrupted.
+struct HoldsWriter(Db);
+
+impl Handler for HoldsWriter {
+    fn run<'a>(&'a self, _job: &'a Job) -> futures_util::future::BoxFuture<'a, Result<(), JobError>> {
+        Box::pin(async move {
+            self.0
+                .write(|c| {
+                    c.query_row(
+                        "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 100000000000)
+                         SELECT count(*) FROM r",
+                        [],
+                        |r| r.get::<_, i64>(0),
+                    )
+                    .map_err(DbError::from)
+                })
+                .await
+                .map(drop)
+                .map_err(|e| JobError::Retry(e.to_string()))
+        })
+    }
+}
+
+struct Never;
+
+impl Handler for Never {
+    fn run<'a>(&'a self, job: &'a Job) -> futures_util::future::BoxFuture<'a, Result<(), JobError>> {
+        Box::pin(async move { Err(JobError::Fail(format!("{} must not run", job.id))) })
+    }
+}
+
+/// Until `ok` holds for the writer's status, 10 s at most.
+async fn writer_reaches(db: &Db, what: &str, ok: impl Fn(&crate::db::WriterStatus) -> bool) {
+    for _ in 0..1_000 {
+        if ok(&db.writer_status()) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("the writer never reached: {what}");
+}
+
+/// A stop during a long job write: the other workers are parked in claims
+/// queued behind it. Those claims are dropped with the interrupt, so the
+/// jobs they would have taken stay `pending` with no attempt counted,
+/// instead of `running` for a worker that is gone.
+#[tokio::test]
+async fn a_claim_queued_behind_an_interrupted_job_write_claims_nothing() {
+    let (_d, db) = db();
+    let s = Scheduler::new(
+        db.clone(),
+        Registry::new()
+            .with("hold", HoldsWriter(db.clone()))
+            .with("other", Never),
+    );
+    // Queued without the wake `Scheduler::enqueue` leaves behind: with it the
+    // idle worker claims again at once and waits out A's write parked in a
+    // claim stamped before B is due.
+    let due = Clock::now().unix_ms + 1_000;
+    let (a, b) = db
+        .write(move |c| {
+            let now = Clock::now().unix_ms;
+            let a = enqueue_on(c, &NewJob::new("hold", 1, json!({})), now)?.id;
+            // Due in a second, so the second worker claims it only once A
+            // holds the writer.
+            let mut later = NewJob::new("other", 1, json!({}));
+            later.run_after = Some(due);
+            let b = enqueue_on(c, &later, now)?.id;
+            Ok::<_, DbError>((a, b))
+        })
+        .await
+        .unwrap();
+
+    let workers = s.start(2);
+    writer_reaches(&db, "A's write executing", |w| w.busy() && w.progress_from_sqlite).await;
+    // Only once B is due can a queued write be the second worker's claim of it.
+    while Clock::now().unix_ms <= due {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    writer_reaches(&db, "the second worker's claim queued behind A's write", |w| {
+        w.busy() && w.queued >= 1
+    })
+    .await;
+    workers.shutdown(Duration::from_millis(200)).await;
+    // Whatever was still queued has run or been dropped by now.
+    db.write(|_| Ok::<_, DbError>(())).await.unwrap();
+
+    let (state_a, attempts_a, ..) = state(&db, &a).await;
+    assert_eq!(
+        (state_a.as_str(), attempts_a),
+        ("running", 1),
+        "A was interrupted mid-run"
+    );
+    let (state_b, attempts_b, ..) = state(&db, &b).await;
+    assert_eq!((state_b.as_str(), attempts_b), ("pending", 0), "B was never run");
+}
+
+/// The claim that was running, not queued, when its worker went: whatever it
+/// claimed is put back as it was, the attempt not counted.
+#[tokio::test]
+async fn a_claim_whose_worker_is_gone_is_put_back() {
+    let (_d, db) = db();
+    let s = sched(&db);
+    let id = s.enqueue(NewJob::new("other", 1, json!({}))).await.unwrap().id;
+    // Two attempts behind it, as after two retries.
+    let job = id.clone();
+    db.write(move |c| {
+        c.execute(
+            "UPDATE jobs SET attempts = 2, error = 'earlier failure' WHERE id = ?1",
+            [job],
+        )
+        .map_err(DbError::from)
+    })
+    .await
+    .unwrap();
+    let claimed = s.claim(i64::MAX).await.unwrap().unwrap();
+    assert_eq!((claimed.id.as_str(), claimed.attempts), (id.as_str(), 3));
+    let job = id.clone();
+    let was_running = db
+        .write(move |c| crate::db::store::unclaim(c, &job))
+        .await
+        .unwrap();
+    assert!(was_running);
+    let (state_now, attempts, run_after, error) = state(&db, &id).await;
+    assert_eq!((state_now.as_str(), attempts), ("pending", 2));
+    assert!(run_after <= Clock::now().unix_ms, "still due");
+    assert_eq!(error.as_deref(), Some("earlier failure"), "its history is kept");
+    let claimed_at: Option<i64> = db
+        .read({
+            let id = id.clone();
+            move |c| {
+                c.query_row("SELECT claimed_at FROM jobs WHERE id = ?1", [id], |r| r.get(0))
+                    .map_err(DbError::from)
+            }
+        })
+        .await
+        .unwrap();
+    assert_eq!(claimed_at, None);
+    // Only a `running` row is touched: a second undo, or one for a row that
+    // has moved on, changes nothing.
+    let job = id.clone();
+    assert!(
+        !db.write(move |c| crate::db::store::unclaim(c, &job))
+            .await
+            .unwrap()
+    );
+    assert_eq!(s.claim(i64::MAX).await.unwrap().unwrap().attempts, 3);
+}
+
+/// A worker aborted while its claim waits behind a write that is not a job's
+/// (so no interrupt drops it): the claim finds its worker gone and claims
+/// nothing.
+#[tokio::test]
+async fn a_claim_whose_worker_left_while_it_queued_claims_nothing() {
+    let (_d, db) = db();
+    let s = sched(&db);
+    let id = s.enqueue(NewJob::new("other", 1, json!({}))).await.unwrap().id;
+    let (release, held) = std::sync::mpsc::channel::<()>();
+    let holder = tokio::spawn({
+        let db = db.clone();
+        async move {
+            db.write(move |_| {
+                let _ = held.recv();
+                Ok::<_, DbError>(())
+            })
+            .await
+        }
+    });
+    writer_reaches(&db, "the holder running", crate::db::WriterStatus::busy).await;
+    let claim = tokio::spawn({
+        let s = s.clone();
+        async move { s.claim(i64::MAX).await }
+    });
+    writer_reaches(&db, "the claim queued", |w| w.queued >= 1).await;
+    claim.abort();
+    assert!(claim.await.unwrap_err().is_cancelled());
+    release.send(()).unwrap();
+    holder.await.unwrap().unwrap();
+    db.write(|_| Ok::<_, DbError>(())).await.unwrap();
+    let (state_now, attempts, ..) = state(&db, &id).await;
+    assert_eq!((state_now.as_str(), attempts), ("pending", 0));
+}

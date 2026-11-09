@@ -25,10 +25,11 @@ tokio::task_local! {
     static JOB_WRITES: ();
 }
 
-/// Run `fut` as a job (the scheduler wraps each handler in this): every
-/// [`Db::write`] it makes on its own task is a *job write*, which
-/// [`Db::interrupt`] cancels at shutdown (AVL-04, ADR-211). Writes from a
-/// task it spawns are not, nor are the request path's.
+/// Run `fut` as a job (the scheduler wraps each handler in this, and each
+/// worker's claim: AVL-10): every [`Db::write`] it makes on its own task is
+/// a *job write*, which [`Db::interrupt`] cancels at shutdown (AVL-04,
+/// ADR-211). Writes from a task it spawns are not, nor are the request
+/// path's.
 pub async fn job_writes<F: std::future::Future>(fut: F) -> F::Output {
     JOB_WRITES.scope((), fut).await
 }
@@ -315,15 +316,56 @@ impl Db {
         E: From<DbError> + Send + 'static,
     {
         let (tx, rx) = oneshot::channel();
+        self.submit(
+            Box::new(move |conn| {
+                let _ = tx.send(f(conn));
+            }),
+            rx,
+        )
+        .await
+    }
+
+    /// [`Db::write`] for a write only its caller can use (a job claim: the
+    /// claimed row is of use to the worker that asked, and to nobody once
+    /// that worker is gone). When the caller has gone before the write's
+    /// turn comes, `f` does not run. When it goes while `f` runs, so that
+    /// the result reaches nobody, `undo` runs with that result on the same
+    /// connection before the next write. A caller that goes after the result
+    /// was handed over is not seen (AVL-10, ADR-211 as amended).
+    pub async fn write_for_caller<T, E, F, U>(&self, f: F, undo: U) -> Result<T, E>
+    where
+        F: FnOnce(&mut Connection) -> Result<T, E> + Send + 'static,
+        U: FnOnce(&mut Connection, Result<T, E>) + Send + 'static,
+        T: Send + 'static,
+        E: From<DbError> + Send + 'static,
+    {
+        let (tx, rx) = oneshot::channel();
+        self.submit(
+            Box::new(move |conn| {
+                if tx.is_closed() {
+                    return;
+                }
+                if let Err(unsent) = tx.send(f(conn)) {
+                    undo(conn, unsent);
+                }
+            }),
+            rx,
+        )
+        .await
+    }
+
+    /// Queue `run` for the writer thread and wait for the answer it sends.
+    async fn submit<T, E>(&self, run: writer::WriteFn, rx: oneshot::Receiver<Result<T, E>>) -> Result<T, E>
+    where
+        E: From<DbError>,
+    {
         let job_epoch = JOB_WRITES
             .try_with(|()| ())
             .is_ok()
             .then(|| self.inner.jobs.epoch());
         let job = WriteJob {
             queued_at: std::time::Instant::now(),
-            run: Box::new(move |conn| {
-                let _ = tx.send(f(conn));
-            }),
+            run,
             job_epoch,
         };
         self.inner
