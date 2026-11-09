@@ -64,4 +64,4 @@ Short answers to the questions a new contributor or integrator asks first, each 
 
 ---
 **Sources:** `docs/DECISIONS.md` ADR-001, ADR-002, ADR-065, ADR-066, ADR-123, `docs/DECISIONS.md:L226`, `docs/design/03-architecture.md:L32-L36`, `docs/design/07-deployment.md:L72-L161`, `docs/design/12-object-storage-and-hosting.md:L83-L94,L151-L157,L904-L925`, `src/config.rs:L727-L733,L750-L752,L836,L868-L869`, `src/fetcher.rs:L376-L382,L522-L528,L661-L667`, `src/routes/passthrough.rs:L470-L476`, `src/http/refresh.rs:L18,L43-L71`, `src/http/quota.rs:L305-L306`, `src/http/validate.rs:L53-L78`, `src/riot/routing.rs:L151-L153`, `src/riot/client.rs:L431`, `src/riot/endpoints.rs:L195-L204`, `src/routes/players.rs:L560-L620`, `src/routes/ws.rs:L542-L555`, `src/routes/health.rs:L21-L46,L148-L200`, `src/consumers.rs:L308-L333`, `src/cache/keys.rs:L31-L37`, `src/routes/admin.rs:L386-L389,L1184,L1862`, `src/cli/riot.rs`, `README.md`, `CLAUDE.md`, `docs/_meta/scratch/{config,persistence,siblings,WRITING-BRIEF}.md`
-**Last verified:** 2026-11-09 against commit `6eefe67`
+**Last verified:** 2026-11-09 against commit `24ba99a`

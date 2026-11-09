@@ -150,4 +150,4 @@ Captured `/v1/admin/info`, shortened:
 
 ---
 **Sources:** `src/stats.rs:L254-L268`, `src/routes/admin.rs:L44-L107,L114-L171,L180-L326,L336-L435,L454-L502,L524-L571,L580-L594,L630-L653,L664,L717-L780,L832-L882,L890-L924,L969,L1010-L1038,L1075-L1204,L1212-L1248,L1262-L1354,L1369-L1536,L1583-L1613,L1634-L1652,L1674-L1689,L1700-L1758,L1766-L1806,L1845-L1862,L1884-L1908,L1918-L1939,L1950-L2011,L2023-L2047,L2106-L2124,L2211-L2239,L2291-L2325,L2354-L2376,L2389-L2398,L2408-L2429,L2438,L2452-L2500,L2536-L2572,L2597-L2638,L2676-L2684`, `src/routes/admin/ladder_probe.rs:L41-L43,L120-L148,L350-L353,L385-L432,L456-L494`, `src/http/body.rs:L341-L391`, `src/http/validate.rs:L81-L88,L253-L259`, `src/http/auth.rs:L301-L313,L361-L378`, `src/http/recent.rs:L111-L124`, `docs/_meta/scratch/routes.md` §1.8, live capture against `target/debug/riot-proxy` 2.7.0
-**Last verified:** 2026-11-09 against commit `6eefe67`
+**Last verified:** 2026-11-09 against commit `24ba99a`

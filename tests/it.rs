@@ -15,6 +15,7 @@ mod analytics;
 mod archive;
 mod archive_jobs;
 mod auth;
+mod boot;
 mod builds;
 mod cache_l2;
 mod cli;
