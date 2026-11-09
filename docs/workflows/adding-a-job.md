@@ -58,12 +58,12 @@ impl Handler for ClashSyncHandler {
 }
 ```
 
-Register it in `jobs::handlers`, which builds the `Registry` with `.with(kinds::X, handler)` and is called once by `serve` (`src/jobs/mod.rs:96-174`). A kind that exists only under some configuration is added afterwards in `serve`, as the two bucket kinds are (`src/cli/serve.rs:308-330`). A job whose kind has no handler fails with `no handler for job kind '…'` (`src/jobs/scheduler.rs:1126-1129`).
+Register it in `jobs::handlers`, which builds the `Registry` with `.with(kinds::X, handler)` and is called once by `serve` (`src/jobs/mod.rs:96-174`). A kind that exists only under some configuration is added afterwards in `serve`, as the two bucket kinds are (`src/cli/serve.rs:329-351`). A job whose kind has no handler fails with `no handler for job kind '…'` (`src/jobs/scheduler.rs:1132-1135`).
 
 ### 4. Priority, dedupe, payload
 
 - **Priority bands** are constants in `jobs::priority`: `INTERACTIVE` 0, `ARCHIVE_DEPTH` 100 (+ depth/10), `POLL` 10 000, `BACKFILL` 20 000, `MAINTENANCE` 30 000, `TIMELINE_BACKFILL` 40 000; lower runs first (`src/jobs/mod.rs:74-94`; `docs/design/06-jobs-and-realtime.md:84-97`). Pick the band by who waits for it; every enqueue sets one explicitly.
-- **Dedupe key.** `NewJob::new(kind, priority, payload).dedupe(key)`; a job without a key is never deduped (`src/jobs/scheduler.rs:51-78`). The key names the unit of work: a PUUID for polls, a match id for `archive:match`, `platform:queue` for a ladder, the kind itself for a singleton (`src/jobs/ticks.rs:58-63`, `76-80`). `Queue::enqueue` returns `Enqueued { id, created }`; `enqueue_or_promote` lifts a pending duplicate to the better priority instead (`src/jobs/scheduler.rs:80-92`, `418-450`).
+- **Dedupe key.** `NewJob::new(kind, priority, payload).dedupe(key)`; a job without a key is never deduped (`src/jobs/scheduler.rs:51-78`). The key names the unit of work: a PUUID for polls, a match id for `archive:match`, `platform:queue` for a ladder, the kind itself for a singleton (`src/jobs/ticks.rs:63-68`, `76-80`). `Queue::enqueue` returns `Enqueued { id, created }`; `enqueue_or_promote` lifts a pending duplicate to the better priority instead (`src/jobs/scheduler.rs:80-92`, `418-450`).
 - **Payload** is a `serde_json::Value`, stored as text; keep it small and camelCase as the existing ones are (`{"puuid", "platform"}`, `{"matchId", "puuid", "fetchTimeline"}`).
 
 ### 5. Calling Riot from a job
@@ -78,7 +78,7 @@ Call `activity::step("GOLD II page 12 on na1")` at each unit of progress, `activ
 
 | Return | Effect | Lines |
 |---|---|---|
-| `Ok(())` | `done`, `proxy_jobs_total{job,status="completed"}` | `src/jobs/scheduler.rs:1078-1081` |
+| `Ok(())` | `done`, `proxy_jobs_total{job,status="completed"}` | `src/jobs/scheduler.rs:1084-1087` |
 | `Err(JobError::Retry(msg))`, `attempts < 5` | `pending`, `run_after = now + 2^attempts × 30 s × [0.8, 1.2]`, `error` kept; `proxy_jobs_total{status="failed"}` counted; warn `job failed … next=pending` | `:1070-1074`, `:1086-1092`, `:159-165` |
 | the 5th `Retry`, or any `Err(JobError::Fail(msg))` | `failed`, `finished_at`, `error`; shown in `GET /v1/admin/jobs?state=failed` | `:1075`, `:1112-1115` |
 | `Err(JobError::Yield { retry_at, payload })` | `pending` at `retry_at`, attempt not counted, payload replaced if given, not in `jobs_total` | `:1082-1084`, `:1102-1107` |
@@ -88,8 +88,8 @@ Call `activity::step("GOLD II page 12 on na1")` at each unit of progress, `activ
 
 ### 8. Enqueuing
 
-- **From a tick.** `jobs::ticks::schedule` lists every tick and its period from config (`src/jobs/ticks.rs:108-139`); a kind that is off by default is chained on only when its variable is set, as `ladder:crawl` and `aggregate:analytics` are (`:123-129`); `aggregate:delta` is chained on unless its variable is 0, so it runs by default (`:130-131`). The tick loop in `Ticks::start_with` matches the kind: polls `fan_out` one job per tracked player, ladders use their helpers, and the default arm queues a deduped singleton at `priority::MAINTENANCE` (`src/jobs/ticks.rs:180-202`; `singleton`, `:76-80`). The first tick of every loop fires at boot and nothing is persisted (`src/jobs/ticks.rs:1-4`). A new period needs a config variable in `src/config.rs` and a documented line in `.env.example`, which a config test checks against `VARS` (`src/config/tests.rs:443-462`).
-- **From a route or another job.** `state.jobs` is the `Queue` (`src/app.rs:53`); `POST /v1/admin/players/names/backfill` is the model: validate, `crate::jobs::names::enqueue(&state.jobs).await`, answer `202` with `{"ok": true, …}` (`src/routes/admin.rs:2294-2305`). Inside a handler, `enqueue_on(&tx, &job, now)` queues in the same transaction as the work (`src/jobs/ticks.rs:54-68`; `src/jobs/scheduler.rs:225-254`).
+- **From a tick.** `jobs::ticks::schedule` lists every tick and its period from config (`src/jobs/ticks.rs:113-144`); a kind that is off by default is chained on only when its variable is set, as `ladder:crawl` and `aggregate:analytics` are (`:128-134`); `aggregate:delta` is chained on unless its variable is 0, so it runs by default (`:135-136`). The tick loop in `Ticks::start_with` matches the kind: polls `fan_out` one job per tracked player, ladders use their helpers, and the default arm queues a deduped singleton at `priority::MAINTENANCE` (`src/jobs/ticks.rs:185-207`; `singleton`, `:81-85`). The first tick of every loop fires at boot and nothing is persisted (`src/jobs/ticks.rs:1-4`). A new period needs a config variable in `src/config.rs` and a documented line in `.env.example`, which a config test checks against `VARS` (`src/config/tests.rs:443-462`).
+- **From a route or another job.** `state.jobs` is the `Queue` (`src/app.rs:53`); `POST /v1/admin/players/names/backfill` is the model: validate, `crate::jobs::names::enqueue(&state.jobs).await`, answer `202` with `{"ok": true, …}` (`src/routes/admin.rs:2294-2305`). Inside a handler, `enqueue_on(&tx, &job, now)` queues in the same transaction as the work (`src/jobs/ticks.rs:59-73`; `src/jobs/scheduler.rs:225-254`).
 
 ### 9. Events and metrics
 
@@ -167,4 +167,4 @@ Then: `jobs::handlers` gets `.with(kinds::CLASH_SYNC, clash::ClashSyncHandler(Ar
 
 ---
 **Sources:** `src/jobs/mod.rs:L19-L179`, `src/jobs/scheduler.rs:L1-L19`, `L36-L165`, `L225-L254`, `L418-L450`, `L1070-L1144`, `src/jobs/lanes.rs:L1-L78`, `src/jobs/ticks.rs:L1-L4`, `L44-L80`, `L108-L139`, `L180-L202`, `src/jobs/activity.rs:L363-L378`, `src/jobs/archive.rs:L276-L319`, `L454`, `src/jobs/names.rs:L193`, `L208-L232`, `src/fetcher.rs:L126-L157`, `src/cli/serve.rs:L308-L330`, `src/routes/admin.rs:L2294-L2305`, `src/app.rs:L53`, `src/events.rs:L113-L124`, `src/ws/hub.rs:L100-L103`, `src/metrics.rs:L100-L102`, `L477-L488`, `src/config.rs:L126`, `src/config/tests.rs:L443-L462`, `src/db/migrations/V0001__init.sql:L44`, `tests/jobs.rs:L43-L101`, `src/jobs/ticks/tests.rs:L36-L45`, `src/jobs/scheduler/tests.rs:L31-L40`, `docs/design/06-jobs-and-realtime.md:L84-L158`, `docs/DECISIONS.md:L1443-L1452` (ADR-134), `.env.example:L35-L38`, `PROGRESS.md:L387`
-**Last verified:** 2026-11-09 against commit `79d2bb8`
+**Last verified:** 2026-11-09 against commit `d1aa2b5`

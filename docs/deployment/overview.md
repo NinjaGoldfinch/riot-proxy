@@ -71,14 +71,14 @@ Every listener is on loopback. Nothing but `sshd` is reachable from outside the 
 
 | Unit | Runs | User | Listens | Config | State | Evidence |
 |---|---|---|---|---|---|---|
-| `riot-proxy.service` | `/usr/local/bin/riot-proxy serve` | `riot-proxy` | `127.0.0.1:8080` (`HOST=127.0.0.1`, `PORT=8080`) | `/etc/riot-proxy/env`, root-only | `/var/lib/riot-proxy/data/` | `docs/design/07-deployment.md:74-95`; `docs/design/12-object-storage-and-hosting.md:551-556,585-601,806-807` |
+| `riot-proxy.service` | `/usr/local/bin/riot-proxy serve` | `riot-proxy` | `127.0.0.1:8080` (`HOST=127.0.0.1`, `PORT=8080`) | `/etc/riot-proxy/env`, root-only | `/var/lib/riot-proxy/data/` | `docs/design/07-deployment.md:74-97`; `docs/design/12-object-storage-and-hosting.md:551-556,585-601,806-807` |
 | `ninjagoldfinch-lol.service` | `node build` (SvelteKit, adapter-node) | `ninjagoldfinch-lol` | `127.0.0.1:3000` | `/etc/ninjagoldfinch-lol/env` (`PROXY_URL`, `PROXY_KEY`, …) | checkout `/opt/ninjagoldfinch-lol`, home `/opt/ninjagoldfinch-lol-home` | `docs/design/12-object-storage-and-hosting.md:609-641`; `docs/_meta/scratch/siblings.md:134-146` |
 | `cloudflared.service` | Cloudflare Tunnel connector, token-installed, `--token-file /etc/cloudflared/token` | not recorded | none (outbound only) | `/etc/cloudflared/token` | none | `docs/design/12-object-storage-and-hosting.md:636-640,803-807` |
 | `ninja-monitor.service` | host and per-service sampler, alerts to a Discord webhook | `ninja-monitor` | `127.0.0.1:9090`, reached over an SSH local forward | `/etc/ninja-monitor/config.toml`, `/etc/ninja-monitor/env` | none on disk | `docs/design/12-object-storage-and-hosting.md:832-837`; `docs/_meta/scratch/siblings.md:182-197` |
 | `riot-proxy-replica.timer` | `rclone sync onidel:riot-proxy-archive r2:riot-proxy-archive --metadata --transfers 16`, at 17 past each hour, `Persistent=true` | `DynamicUser` | none | `/etc/riot-proxy/rclone.conf` passed as a systemd credential | none | `deploy/riot-proxy-replica.service:12-19`; `deploy/riot-proxy-replica.timer:6-8` |
 | `riot-proxy-offsite.timer` | every 6 h: `rclone copy` of `backups/` to R2 `ngf-backups/riot-proxy/`, `rclone check --one-way`, keep one local backup | not recorded | none | `/etc/rclone/r2.conf` | none | `docs/design/12-object-storage-and-hosting.md:808-826`; `deploy/README.md:151-152` |
 
-Of these, the repository holds only `deploy/riot-proxy-replica.{service,timer}` and the proxy unit as designed (`docs/design/07-deployment.md:74-95`). The site's unit, the tunnel's unit, the monitor's config and the whole `riot-proxy-offsite` unit were made by hand on the box (`docs/design/12-object-storage-and-hosting.md:627,808-810`; `docs/_meta/scratch/siblings.md:135`).
+Of these, the repository holds only `deploy/riot-proxy-replica.{service,timer}` and the proxy unit as designed (`docs/design/07-deployment.md:74-97`). The site's unit, the tunnel's unit, the monitor's config and the whole `riot-proxy-offsite` unit were made by hand on the box (`docs/design/12-object-storage-and-hosting.md:627,808-810`; `docs/_meta/scratch/siblings.md:135`).
 
 > **TODO (unverified):** the live `/etc/systemd/system/riot-proxy.service` on `ngf-prod-syd1` is not in the repository; `docs/design/12-object-storage-and-hosting.md:589-592` copied it from the previous box unchanged. The user `cloudflared` and `riot-proxy-offsite` run as, and the exact `riot-proxy-offsite.service` text, are likewise unrecorded.
 
@@ -90,7 +90,7 @@ Of these, the repository holds only `deploy/riot-proxy-replica.{service,timer}` 
 | `api.ninjagoldfinch.lol` | `http://127.0.0.1:8080`, path `*` | WAF rule "Block riot-proxy internal pages": blocks `/metrics`, `/dashboard*`, `/dev*`, `/v1/admin*` (and `/docs`); `/v1/ws`, `/healthz`, `/readyz` stay open | `docs/design/12-object-storage-and-hosting.md:863-866,905-916` |
 | `admin.ninjagoldfinch.lol` | `http://127.0.0.1:8080` | Cloudflare Access, self-hosted application, One-time PIN only, policy "Owner only", session 24 h | `docs/design/12-object-storage-and-hosting.md:850-862,897-903` |
 
-The tunnel's routes live in the Cloudflare dashboard, not in a file on the box (`docs/design/12-object-storage-and-hosting.md:893-895`). Because every request reaches the proxy from `cloudflared` at `127.0.0.1`, the proxy runs with `TRUST_PROXY=true` and an empty `ADMIN_IP_ALLOWLIST`; an allowlist of `127.0.0.1` refused every admin call through the tunnel (`docs/design/12-object-storage-and-hosting.md:868-873`; `docs/design/07-deployment.md:221`). Checks from outside after ADM-01: `api./metrics` 403, `api./v1/admin/stats` 403, `api./healthz` 200, `admin./dashboard` 302 to the Access login (`docs/design/12-object-storage-and-hosting.md:852-855`).
+The tunnel's routes live in the Cloudflare dashboard, not in a file on the box (`docs/design/12-object-storage-and-hosting.md:893-895`). Because every request reaches the proxy from `cloudflared` at `127.0.0.1`, the proxy runs with `TRUST_PROXY=true` and an empty `ADMIN_IP_ALLOWLIST`; an allowlist of `127.0.0.1` refused every admin call through the tunnel (`docs/design/12-object-storage-and-hosting.md:868-873`; `docs/design/07-deployment.md:225`). Checks from outside after ADM-01: `api./metrics` 403, `api./v1/admin/stats` 403, `api./healthz` 200, `admin./dashboard` 302 to the Access login (`docs/design/12-object-storage-and-hosting.md:852-855`).
 
 ## Object storage and backups
 
@@ -107,11 +107,11 @@ The proxy only ever talks to the Onidel bucket; R2 is reached only by `rclone` f
 | What | Where | Evidence |
 |---|---|---|
 | Proxy logs | journald, `sudo journalctl -u riot-proxy`; JSON on stdout when stdout is not a terminal (`LOG_FORMAT` default) | `docs/workflows/release-process.md` step 6; `src/config.rs:740-747`; `README.md:132` |
-| Bootstrap admin key banner | stderr on first `serve` only, so it lands in journald as well | `src/cli/serve.rs:443-450` |
+| Bootstrap admin key banner | stderr on first `serve` only, so it lands in journald as well | `src/cli/serve.rs:467-474` |
 | Site logs | `journalctl -u ninjagoldfinch-lol` | `docs/_meta/scratch/siblings.md:145` |
 | Replica logs | `journalctl -u riot-proxy-replica` | `deploy/README.md:93` |
 | SQLite | `/var/lib/riot-proxy/data/riot-proxy.db` with `-wal` and `-shm` | `docs/_meta/scratch/persistence.md:398-402` |
-| Daily backups | `/var/lib/riot-proxy/data/backups/riot-proxy-<YYYY-MM-DD>.db` | `src/jobs/maintenance.rs:40-41`; `src/cli/serve.rs:227-231` |
+| Daily backups | `/var/lib/riot-proxy/data/backups/riot-proxy-<YYYY-MM-DD>.db` | `src/jobs/maintenance.rs:40-41`; `src/cli/serve.rs:248-252` |
 | Data Dragon mirror | `/var/lib/riot-proxy/data/ddragon/<version>/…` and `meta/queues.json` | `docs/_meta/scratch/persistence.md:406-412` |
 | Site checkout | `/opt/ninjagoldfinch-lol` | `docs/design/12-object-storage-and-hosting.md:617-618` |
 
@@ -122,7 +122,7 @@ The proxy only ever talks to the Onidel bucket; R2 is reached only by `rclone` f
 | `/usr/local/bin/riot-proxy` | root | 0755 | `docs/design/12-object-storage-and-hosting.md:590` |
 | `/etc/riot-proxy/env` | root, read by systemd before dropping to `riot-proxy` | 0600 (`umask 077`) | `docs/design/12-object-storage-and-hosting.md:594-601` |
 | `/etc/riot-proxy/rclone.conf` | `root:root` | 0600 | `deploy/README.md:51` |
-| `/var/lib/riot-proxy` and `data/` | `riot-proxy:riot-proxy` | the unit's only writable path (`ProtectSystem=strict`, `ReadWritePaths`) | `docs/design/12-object-storage-and-hosting.md:587`; `docs/design/07-deployment.md:88-89` |
+| `/var/lib/riot-proxy` and `data/` | `riot-proxy:riot-proxy` | the unit's only writable path (`ProtectSystem=strict`, `ReadWritePaths`) | `docs/design/12-object-storage-and-hosting.md:587`; `docs/design/07-deployment.md:90-91` |
 | `/etc/ninjagoldfinch-lol/env` | root | 0600 (`umask 077`) | `docs/design/12-object-storage-and-hosting.md:626-627` |
 | `/opt/ninjagoldfinch-lol` | `ninjagoldfinch-lol` (system user, home `/opt/ninjagoldfinch-lol-home`) | | `docs/design/12-object-storage-and-hosting.md:613-618` |
 | `/etc/cloudflared/token` | root | | `docs/design/12-object-storage-and-hosting.md:636-640` |
@@ -136,12 +136,12 @@ The proxy only ever talks to the Onidel bucket; R2 is reached only by `rclone` f
 
 ## The monitoring box
 
-`ngf-mon-syd1` is the previous production VPS (OVH Sydney, 2 cores, 3.7 GB), wiped on 2026-10-13: login user `ninja`, key-only SSH, `ninja-monitor` watching its own host and posting to its own Discord webhook. Prometheus and Grafana there, scraping `/metrics` over WireGuard rather than through the tunnel, are planned and not done (`docs/design/12-object-storage-and-hosting.md:838-848`; `docs/design/07-deployment.md:221`). It holds no Riot key and no database (`docs/design/12-object-storage-and-hosting.md:79-80`).
+`ngf-mon-syd1` is the previous production VPS (OVH Sydney, 2 cores, 3.7 GB), wiped on 2026-10-13: login user `ninja`, key-only SSH, `ninja-monitor` watching its own host and posting to its own Discord webhook. Prometheus and Grafana there, scraping `/metrics` over WireGuard rather than through the tunnel, are planned and not done (`docs/design/12-object-storage-and-hosting.md:838-848`; `docs/design/07-deployment.md:225`). It holds no Riot key and no database (`docs/design/12-object-storage-and-hosting.md:79-80`).
 
 ## Resource expectations
 
-`ninja-monitor` on the box alerts when `riot-proxy` exceeds 2 GiB, the site 1 GiB and `cloudflared` 512 MiB of memory, when host memory falls below 15 %, disk passes 70 % and 85 %, or host CPU stays above 90 % for 20 minutes; a service counts as down after 30 s, repeating every 30 min (`docs/design/12-object-storage-and-hosting.md:832-837`). The proxy's own footprint is the SQLite page cache plus the L1 cache (`docs/design/07-deployment.md:173`); the host was chosen for RAM, not disk or cores, because the Riot key pins the request rate at 100 per 2 minutes (`docs/design/12-object-storage-and-hosting.md:480-487`). The arithmetic is in [capacity.md](./capacity.md).
+`ninja-monitor` on the box alerts when `riot-proxy` exceeds 2 GiB, the site 1 GiB and `cloudflared` 512 MiB of memory, when host memory falls below 15 %, disk passes 70 % and 85 %, or host CPU stays above 90 % for 20 minutes; a service counts as down after 30 s, repeating every 30 min (`docs/design/12-object-storage-and-hosting.md:832-837`). The proxy's own footprint is the SQLite page cache plus the L1 cache (`docs/design/07-deployment.md:177`); the host was chosen for RAM, not disk or cores, because the Riot key pins the request rate at 100 per 2 minutes (`docs/design/12-object-storage-and-hosting.md:480-487`). The arithmetic is in [capacity.md](./capacity.md).
 
 ---
-**Sources:** `docs/design/07-deployment.md:L59-L95,L173,L221`, `docs/design/12-object-storage-and-hosting.md:L58-L112,L424-L446,L474-L487,L532-L558,L585-L641,L772-L848,L850-L937`, `deploy/README.md:L24-L36,L51,L93,L140-L152`, `deploy/riot-proxy-replica.service:L12-L19`, `deploy/riot-proxy-replica.timer:L6-L8`, `README.md:L116-L132`, `PROGRESS.md:L325`, `src/config.rs:L740-L747,L759-L764`, `src/cli/serve.rs:L227-L231,L443-L450`, `src/jobs/maintenance.rs:L40-L41`, `docs/_meta/scratch/siblings.md`, `docs/_meta/scratch/persistence.md`
-**Last verified:** 2026-11-09 against commit `302025d`
+**Sources:** `docs/design/07-deployment.md:L59-L95,L173,L221`, `docs/design/12-object-storage-and-hosting.md:L58-L112,L424-L446,L474-L487,L532-L558,L585-L641,L772-L848,L850-L937`, `deploy/README.md:L24-L36,L51,L93,L140-L152`, `deploy/riot-proxy-replica.service:L12-L19`, `deploy/riot-proxy-replica.timer:L6-L8`, `README.md:L116-L132`, `PROGRESS.md:L325`, `src/config.rs:L740-L747,L759-L764`, `src/cli/serve.rs:L227-L231,L443-L449`, `src/jobs/maintenance.rs:L40-L41`, `docs/_meta/scratch/siblings.md`, `docs/_meta/scratch/persistence.md`
+**Last verified:** 2026-11-09 against commit `d1aa2b5`

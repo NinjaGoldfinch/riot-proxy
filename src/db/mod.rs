@@ -18,7 +18,32 @@ pub mod store;
 mod writer;
 
 pub use writer::WriterStatus;
-use writer::{Stamps, WriteJob};
+use writer::{JobWrites, Stamps, WriteJob};
+
+tokio::task_local! {
+    /// Set while a job's handler runs ([`job_writes`]).
+    static JOB_WRITES: ();
+}
+
+/// Run `fut` as a job (the scheduler wraps each handler in this): every
+/// [`Db::write`] it makes on its own task is a *job write*, which
+/// [`Db::interrupt`] cancels at shutdown (AVL-04, ADR-211). Writes from a
+/// task it spawns are not, nor are the request path's.
+pub async fn job_writes<F: std::future::Future>(fut: F) -> F::Output {
+    JOB_WRITES.scope((), fut).await
+}
+
+/// What [`Db::interrupt_job_writes`] found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobWriteStop {
+    /// No job write was running.
+    Idle,
+    /// A job write was running and has returned, interrupted.
+    Interrupted,
+    /// A job write still runs after the wait: its closure went on past the
+    /// interrupted statement, or one step of it does not check for an interrupt.
+    StillRunning,
+}
 
 mod embedded {
     refinery::embed_migrations!("src/db/migrations");
@@ -41,6 +66,9 @@ const WRITER_PRAGMAS: &[(&str, &str)] = &[
 
 /// Queued writes before `write()` callers start waiting for the writer.
 const WRITE_QUEUE: usize = 1024;
+
+/// How often [`Db::interrupt_job_writes`] repeats the interrupt.
+const INTERRUPT_EVERY: std::time::Duration = std::time::Duration::from_millis(20);
 
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {
@@ -90,6 +118,8 @@ struct Inner {
     reads: AtomicU64,
     /// What the writer thread is doing (WR-02).
     stamps: Arc<Stamps>,
+    /// Job writes and the shutdown interrupt (AVL-04).
+    jobs: Arc<JobWrites>,
     /// Writes run behind the request that fetched their data (AVL-02).
     detached: behind::Detached,
 }
@@ -166,6 +196,7 @@ impl Db {
         optimize(&writer)?;
         let stamps = Arc::new(Stamps::new());
         writer::install_progress(&writer, &stamps)?;
+        let jobs = Arc::new(JobWrites::new(writer.get_interrupt_handle()));
 
         let readers = readers.max(1);
         let pool = (0..readers)
@@ -174,6 +205,7 @@ impl Db {
 
         let (tx, rx) = mpsc::channel(WRITE_QUEUE);
         let writer_stamps = Arc::clone(&stamps);
+        let writer_jobs = Arc::clone(&jobs);
         // The thread records its CPU clock first, so it is there before any job.
         let (registered, wait_registered) = std::sync::mpsc::sync_channel::<()>(1);
         std::thread::Builder::new()
@@ -181,7 +213,7 @@ impl Db {
             .spawn(move || {
                 writer::register_thread(&writer_stamps);
                 let _ = registered.send(());
-                writer_loop(writer, rx, &writer_stamps);
+                writer_loop(writer, rx, &writer_stamps, &writer_jobs);
             })
             .map_err(DbError::Spawn)?;
         let _ = wait_registered.recv();
@@ -197,6 +229,7 @@ impl Db {
                 objects: OnceLock::new(),
                 reads: AtomicU64::new(0),
                 stamps,
+                jobs,
                 detached: behind::Detached::new(),
             }),
         })
@@ -282,11 +315,16 @@ impl Db {
         E: From<DbError> + Send + 'static,
     {
         let (tx, rx) = oneshot::channel();
+        let job_epoch = JOB_WRITES
+            .try_with(|()| ())
+            .is_ok()
+            .then(|| self.inner.jobs.epoch());
         let job = WriteJob {
             queued_at: std::time::Instant::now(),
             run: Box::new(move |conn| {
                 let _ = tx.send(f(conn));
             }),
+            job_epoch,
         };
         self.inner
             .writer
@@ -402,6 +440,36 @@ impl Db {
         .map_err(DbError::from)?
     }
 
+    /// Stop job writes at shutdown (AVL-04, ADR-211): the job write running on
+    /// the writer thread, if any, is interrupted (`sqlite3_interrupt` through
+    /// rusqlite's interrupt handle: its statement fails with `SQLITE_INTERRUPT`
+    /// and its transaction rolls back), and the job writes already queued are
+    /// dropped unrun. Writes made outside [`job_writes`] are never interrupted,
+    /// and job writes queued after this call run as usual. Returns whether a
+    /// job write was running.
+    pub fn interrupt(&self) -> bool {
+        self.inner.jobs.stop()
+    }
+
+    /// [`Db::interrupt`], then interrupt again every 20 ms while that job write
+    /// runs on (an interrupt cancels only the statement running at the time,
+    /// and the closure may start another), for up to `wait`.
+    pub async fn interrupt_job_writes(&self, wait: std::time::Duration) -> JobWriteStop {
+        if !self.interrupt() {
+            return JobWriteStop::Idle;
+        }
+        let deadline = tokio::time::Instant::now() + wait;
+        loop {
+            tokio::time::sleep(INTERRUPT_EVERY).await;
+            if !self.inner.jobs.cancel() {
+                return JobWriteStop::Interrupted;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return JobWriteStop::StillRunning;
+            }
+        }
+    }
+
     /// [`optimize`] on the writer.
     pub async fn optimize(&self) -> Result<(), DbError> {
         self.write(|c| optimize(c)).await
@@ -444,10 +512,10 @@ pub fn migrate(conn: &mut Connection) -> Result<refinery::Report, DbError> {
     Ok(embedded::migrations::runner().set_grouped(true).run(conn)?)
 }
 
-fn writer_loop(mut conn: Connection, mut rx: mpsc::Receiver<WriteJob>, stamps: &Stamps) {
+fn writer_loop(mut conn: Connection, mut rx: mpsc::Receiver<WriteJob>, stamps: &Stamps, jobs: &JobWrites) {
     let mut after_idle = true;
     while let Some(job) = rx.blocking_recv() {
-        after_idle = writer::run_job(&mut conn, job, stamps, &rx, after_idle);
+        after_idle = writer::run_job(&mut conn, job, stamps, jobs, &rx, after_idle);
     }
     tracing::debug!("SQLite writer stopped");
 }

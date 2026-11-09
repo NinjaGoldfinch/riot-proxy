@@ -141,7 +141,7 @@ The `Secret` wrapper prints `[REDACTED]` for `Debug` and `Display`; only `.expos
 | Secret | Provisioned how | Lives where on the host | Redaction | Evidence |
 |---|---|---|---|---|
 | `RIOT_API_KEY` | issued by the Riot developer portal; a personal key today (100 per 2 min, 20 per 1 s) | `/etc/riot-proxy/env` only | absent from `/v1/admin/info`; `X-Riot-Token` header marked sensitive so it never reaches a log; CI fails on any `RGAPI-` string in `tests/`, `src/`, `docs/` | `docs/design/12-object-storage-and-hosting.md:484`; `src/riot/client.rs:327-329`; `.github/workflows/ci.yml:52-53` |
-| `BOOTSTRAP_ADMIN_KEY` | chosen by the operator, or omitted so `serve` mints one and prints it to stderr once | `/etc/riot-proxy/env` (optional); the consumer row keeps only its sha256 | `[REDACTED]` in `/v1/admin/info`; an imported key is never printed | `src/config.rs:562-565`; `src/cli/serve.rs:64-75,443-450`; `src/consumers.rs:105-107` |
+| `BOOTSTRAP_ADMIN_KEY` | chosen by the operator, or omitted so `serve` mints one and prints it to stderr once | `/etc/riot-proxy/env` (optional); the consumer row keeps only its sha256 | `[REDACTED]` in `/v1/admin/info`; an imported key is never printed | `src/config.rs:562-565`; `src/cli/serve.rs:68-96,467-474`; `src/consumers.rs:105-107` |
 | `ARCHIVE_OBJECT_ACCESS_KEY` / `ARCHIVE_OBJECT_SECRET_KEY` | Onidel console, key scoped to bucket `riot-proxy-archive` | `/etc/riot-proxy/env` and the `[onidel]` remote of `/etc/riot-proxy/rclone.conf` | `[REDACTED]` in `/v1/admin/info`; boot logs `s3://<bucket> at <endpoint>` only | `src/config.rs:499-510`; `src/archive/objects.rs:142,201-204`; `deploy/README.md:24-25,51-62` |
 | Consumer keys (`rpx_…`) | `riot-proxy key create` or `POST /v1/admin/consumers`; shown once | only their sha256 in `consumers.key_sha256`; the site holds its own copy in `/etc/ninjagoldfinch-lol/env` as `PROXY_KEY` | never listed again; `key list` shows no keys | `src/consumers.rs:95-107,154-157`; `src/cli/key.rs:59-79`; `docs/_meta/scratch/siblings.md:141` |
 | R2 tokens | Cloudflare dashboard, one per bucket | `/etc/riot-proxy/rclone.conf` (`[r2]`, replica) and `/etc/rclone/r2.conf` (backups) | never seen by the proxy | `deploy/README.md:26-28,64-72,151` |
@@ -162,7 +162,7 @@ With `ENV=production` (or `--env production`), `Config::load` fails on any of th
 | `ARCHIVE_OBJECT_URL=file://…` | `file:// cannot be used when ENV=production` |
 | `ARCHIVE_OBJECT_URL=s3://…` without both keys | `needs ARCHIVE_OBJECT_ACCESS_KEY and ARCHIVE_OBJECT_SECRET_KEY when ENV=production` |
 | `ARCHIVE_OBJECT_ENDPOINT=http://…` | `must be https:// when ENV=production` |
-| `DEV_UI=true` | not an error: `dev_ui` is forced `false` and `serve` warns `DEV_UI=true ignored: /dev is never served when ENV=production` (`src/config.rs:874-875`; `src/cli/serve.rs:102-104`) |
+| `DEV_UI=true` | not an error: `dev_ui` is forced `false` and `serve` warns `DEV_UI=true ignored: /dev is never served when ENV=production` (`src/config.rs:874-875`; `src/cli/serve.rs:123-125`) |
 
 ## Legacy v1 variables
 
@@ -179,7 +179,7 @@ Ten global flags map onto variables and are accepted before or after any subcomm
 
 ## Known discrepancy
 
-`.env.example:38` documents `JOB_KIND_LIMITS=aggregate:analytics=1` and `README.md:102` says the same, while the code default is `aggregate:analytics=1,archive:offload=1` (`src/config.rs:126`; pinned by `src/config/tests.rs:44-50`; `docs/design/07-deployment.md:125` agrees with the code). The code is right: leave the variable unset and both caps apply.
+`.env.example:38` documents `JOB_KIND_LIMITS=aggregate:analytics=1` and `README.md:102` says the same, while the code default is `aggregate:analytics=1,archive:offload=1` (`src/config.rs:126`; pinned by `src/config/tests.rs:44-50`; `docs/design/07-deployment.md:129` agrees with the code). The code is right: leave the variable unset and both caps apply.
 
 ## Last-known production values
 
@@ -211,5 +211,5 @@ From session notes, not from the live file. The box's env file was last describe
 > **TODO (unverified):** the live `/etc/riot-proxy/env` on `ngf-prod-syd1` was not read (it is root-only on the box and holds the Riot key). The values above come from dated session notes and the design record; any may have changed since.
 
 ---
-**Sources:** `src/config.rs:L3,L23-L170,L189-L254,L436-L573,L576-L636,L651-L665,L687-L912,L938-L992,L996-L1143,L1190-L1335`, `src/config/tests.rs:L44-L50,L192-L203,L269-L279,L375-L382,L443-L462,L598-L604,L883-L889`, `src/cli/mod.rs:L30-L89`, `src/cli/serve.rs:L94-L105,L132-L134,L568-L568`, `src/consumers.rs:L95-L107,L154-L157,L308-L333`, `src/http/auth.rs:L66-L77,L128-L139,L196-L202`, `src/riot/client.rs:L327-L329`, `src/riot/endpoints.rs:L424-L444`, `src/routes/admin.rs:L2501-L2528`, `src/archive/objects.rs:L142,L201-L204`, `.env.example`, `README.md:L97,L102`, `.github/workflows/ci.yml:L52-L53`, `deploy/README.md:L24-L28,L51-L72,L151`, `docs/design/07-deployment.md:L125`, `docs/design/12-object-storage-and-hosting.md:L437-L446,L484,L806-L807,L828-L830,L868-L873`, `docs/DECISIONS.md:L1862`, `reports/OBJ implementation handoff.md:L20`, `docs/_meta/scratch/config.md`
-**Last verified:** 2026-11-09 against commit `79d2bb8`
+**Sources:** `src/config.rs:L3,L23-L170,L189-L254,L436-L573,L576-L636,L651-L665,L687-L912,L938-L992,L996-L1143,L1190-L1335`, `src/config/tests.rs:L44-L50,L192-L203,L269-L279,L367-L382,L443-L462,L598-L604,L883-L889`, `src/cli/mod.rs:L29-L88`, `src/cli/serve.rs:L64-L75,L102-L104,L443-L449`, `src/consumers.rs:L95-L107,L154-L157,L308-L333`, `src/http/auth.rs:L66-L77,L128-L139,L196-L202`, `src/riot/client.rs:L327-L329`, `src/riot/endpoints.rs:L424-L444`, `src/routes/admin.rs:L2501-L2528`, `src/archive/objects.rs:L142,L201-L204`, `.env.example`, `README.md:L97,L102`, `.github/workflows/ci.yml:L52-L53`, `deploy/README.md:L24-L28,L51-L72,L151`, `docs/design/07-deployment.md:L125`, `docs/design/12-object-storage-and-hosting.md:L437-L446,L484,L806-L807,L828-L830,L868-L873`, `docs/DECISIONS.md:L1862`, `reports/OBJ implementation handoff.md:L20`, `docs/_meta/scratch/config.md`
+**Last verified:** 2026-11-09 against commit `d1aa2b5`

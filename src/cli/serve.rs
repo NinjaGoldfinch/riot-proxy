@@ -50,6 +50,10 @@ pub struct ServeOptions {
     /// signals (another test in the binary sends itself SIGTERM).
     #[doc(hidden)]
     pub shutdown: Option<Arc<Notify>>,
+    /// Test-only: one more job kind and its handler, made from the database
+    /// (AVL-04's shutdown test runs a job that holds the writer).
+    #[doc(hidden)]
+    pub extra_handler: Option<ExtraHandler>,
 }
 
 /// Test-only (ADR-209): makes the boot catch-up observably slow, as a
@@ -64,6 +68,23 @@ pub struct CatchUpHold {
     pub release: Arc<Notify>,
     /// Set as the catch-up finishes, before the job workers start.
     pub done: Arc<AtomicBool>,
+}
+
+/// Test-only: a job kind `serve` does not have, with a handler built from its
+/// [`Db`] (AVL-04, ADR-211).
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct ExtraHandler {
+    pub kind: &'static str,
+    pub make: Arc<dyn Fn(Db) -> Arc<dyn crate::jobs::scheduler::Handler> + Send + Sync>,
+}
+
+impl std::fmt::Debug for ExtraHandler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExtraHandler")
+            .field("kind", &self.kind)
+            .finish_non_exhaustive()
+    }
 }
 
 pub async fn serve(config: Config) -> anyhow::Result<()> {
@@ -328,6 +349,9 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
                 },
             );
     }
+    if let Some(extra) = &options.extra_handler {
+        handlers = handlers.with_shared(extra.kind, (extra.make)(db.clone()));
+    }
     let scheduler = crate::jobs::Scheduler::with_queue(queue.clone(), handlers)
         .with_limiter(Arc::clone(&limiter))
         .with_activity(activity.clone());
@@ -569,6 +593,14 @@ async fn boot_catch_up(
 
 /// How long running jobs get to finish at shutdown.
 const JOB_GRACE: Duration = Duration::from_secs(10);
+
+// The drain, the job grace and the writer interrupt stay under 60 s, so a
+// stop ends well inside systemd's 90 s `TimeoutStopSec` (AVL-04, ADR-211;
+// design/07 §Option C).
+const _: () = assert!(
+    app::SHUTDOWN_GRACE.as_secs() + JOB_GRACE.as_secs() + crate::jobs::scheduler::INTERRUPT_WAIT.as_secs()
+        < 60
+);
 
 fn print_bootstrap_key(key: &str) {
     eprintln!();

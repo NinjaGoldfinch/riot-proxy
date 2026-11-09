@@ -62,6 +62,22 @@ async fn a_tick_fires_now_then_every_period_until_stopped() {
     task.await.unwrap();
 }
 
+/// AVL-04: a tick whose enqueue waits behind a long job write does not hold
+/// shutdown until that write ends.
+#[tokio::test(start_paused = true)]
+async fn a_stop_ends_a_tick_still_running() {
+    let (stop, stopped) = watch::channel(false);
+    let task = tokio::spawn(every(Duration::from_secs(60), stopped, || async {
+        tokio::time::sleep(Duration::from_secs(3600)).await;
+    }));
+    tokio::task::yield_now().await;
+    stop.send(true).unwrap();
+    tokio::time::timeout(Duration::from_secs(1), task)
+        .await
+        .expect("the stop ends the running tick")
+        .unwrap();
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_stalled_tick_is_skipped_not_burst() {
     let n = Arc::new(AtomicUsize::new(0));

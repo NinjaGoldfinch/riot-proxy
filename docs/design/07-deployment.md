@@ -84,6 +84,8 @@ ExecStart=/usr/local/bin/riot-proxy serve
 WorkingDirectory=/var/lib/riot-proxy
 Restart=always
 RestartSec=2
+# systemd's default, written down: the floor for a clean stop (ADR-211)
+TimeoutStopSec=90
 # hardening
 ProtectSystem=strict
 ReadWritePaths=/var/lib/riot-proxy
@@ -95,6 +97,8 @@ WantedBy=multi-user.target
 ```
 
 `scp` the binary, `systemctl restart`. Upgrades are a file copy.
+
+`TimeoutStopSec=90` is a floor, not a target: on SIGTERM the server drains (10 s), running jobs get 10 s, and a job write still running is then interrupted (up to 5 s), so a stop ends in about 25 s, 35 s at worst with the runtime's last 10 s for abandoned reads (design/06 §Shutdown, ADR-211). Never set it lower; raising it does not make a stop faster.
 
 ## Option D — PaaS
 

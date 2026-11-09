@@ -65,7 +65,7 @@ Found while writing; not gaps in these docs but worth a fix in the repository.
 |---|---|---|
 | `JOB_KIND_LIMITS` default: `.env.example:38` and `README.md` show `aggregate:analytics=1`; the code default is `aggregate:analytics=1,archive:offload=1` (`src/config.rs:126`) | `deployment/configuration.md` | Update `.env.example` and `README.md` |
 | The generated OpenAPI document emits `operationId: champions` twice (`src/routes/analytics.rs:1031`, `src/routes/players.rs:1034`), which fails Redocly's lint; the docs copy is patched | `api/openapi.json`, `_meta/doc-maintenance.md` | Rename one handler, for example `player_champions`, and re-snapshot |
-| `docs/design/07-deployment.md:218` says request logs carry `x_cache` and `upstream_ms`; the observed line carries `latency`, `status` and the span's `request_id`, `method`, `path`, `consumer` | `operations/observability.md` | Fix design/07 or add the fields to the response log |
+| `docs/design/07-deployment.md:222` says request logs carry `x_cache` and `upstream_ms`; the observed line carries `latency`, `status` and the span's `request_id`, `method`, `path`, `consumer` | `operations/observability.md` | Fix design/07 or add the fields to the response log |
 | `docs/design/12` describes the offload job in the bulk lane, a counter seeded at boot, store errors ending the job `failed`, and `ARCHIVE_COMPACT_BELOW`; the code has no lane, seeds nothing, retries, and has no compaction | `integration/object-storage.md` | Add an "as built" note to design/12 for OBJ-03; build or drop OBJ-06 |
 | `docs/design/04-data-and-cache.md:387` describes `limiter_state.windows` as `count/reset_at`; the code stores sliding-log stamps (`src/riot/limiter/persist.rs:37-51`) | `data/schema.md` | Fix the comment in design/04 |
 | `docs/design/06` scheduler backoff "2^attempts × 30 s" is ambiguous; `attempts` includes the current run, so the first retry waits about 60 s | `architecture/concurrency-and-rate-limiting.md` | Say so in design/06 |
@@ -77,4 +77,4 @@ Found while writing; not gaps in these docs but worth a fix in the repository.
 
 ---
 **Sources:** every `TODO (unverified)` marker under `docs/` on 2026-10-19; `docs/_meta/scratch/*.md` "design vs code" sections
-**Last verified:** 2026-11-09 against commit `302025d`
+**Last verified:** 2026-11-09 against commit `d1aa2b5`

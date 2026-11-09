@@ -2114,3 +2114,180 @@ async fn v0030_adds_the_collect_cursor() {
         .expect("read");
     assert_eq!(got, ((10, None, None), (7, 0)));
 }
+
+// ── AVL-04: the shutdown interrupt (ADR-211) ───────────────────────────────
+
+/// A recursive count that runs for hours unless something stops it.
+const ENDLESS: &str = "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 100000000000)
+                       SELECT count(*) FROM r";
+
+fn interrupted(e: &DbError) -> bool {
+    matches!(
+        e,
+        DbError::Sqlite(rusqlite::Error::SqliteFailure(f, _))
+            if f.code == rusqlite::ErrorCode::OperationInterrupted
+    )
+}
+
+/// Until SQLite is executing on the writer's behalf (a progress stamp).
+async fn executing(db: &Db) {
+    for _ in 0..500 {
+        let s = db.writer_status();
+        if s.busy() && s.progress_from_sqlite {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("the writer never started executing");
+}
+
+async fn marker_exists(db: &Db) -> bool {
+    db.read(|c| {
+        c.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE name = 'avl04_marker'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .map_err(DbError::from)
+    })
+    .await
+    .expect("read")
+        > 0
+}
+
+#[tokio::test]
+async fn interrupt_cancels_a_running_job_write_and_its_transaction_rolls_back() {
+    let (_dir, db) = open_temp(1);
+    let running = tokio::spawn(job_writes({
+        let db = db.clone();
+        async move {
+            db.write(|c| {
+                let tx = c.transaction()?;
+                tx.execute_batch("CREATE TABLE avl04_marker (x); INSERT INTO avl04_marker VALUES (1);")?;
+                tx.query_row(ENDLESS, [], |r| r.get::<_, i64>(0))?;
+                tx.commit()?;
+                Ok::<_, DbError>(())
+            })
+            .await
+        }
+    }));
+    executing(&db).await;
+    let stop = db.interrupt_job_writes(std::time::Duration::from_secs(5)).await;
+    assert_eq!(stop, JobWriteStop::Interrupted);
+    let err = running.await.expect("join").expect_err("interrupted");
+    assert!(interrupted(&err), "{err:?}");
+    assert!(!marker_exists(&db).await, "the job's transaction rolled back");
+    assert!(!db.writer_status().busy());
+    // The writer goes on: the next write is not interrupted.
+    let n: i64 = db
+        .write(|c| {
+            c.query_row("SELECT 41 + 1", [], |r| r.get(0))
+                .map_err(DbError::from)
+        })
+        .await
+        .expect("next write");
+    assert_eq!(n, 42);
+}
+
+#[tokio::test]
+async fn the_interrupt_repeats_while_the_job_write_starts_another_statement() {
+    let (_dir, db) = open_temp(1);
+    let running = tokio::spawn(job_writes({
+        let db = db.clone();
+        async move {
+            db.write(|c| {
+                // A closure that swallows the first interrupt and goes on.
+                let first = c.query_row(ENDLESS, [], |r| r.get::<_, i64>(0));
+                assert!(first.is_err());
+                c.query_row(ENDLESS, [], |r| r.get::<_, i64>(0))
+                    .map_err(DbError::from)
+            })
+            .await
+        }
+    }));
+    executing(&db).await;
+    let stop = db.interrupt_job_writes(std::time::Duration::from_secs(5)).await;
+    assert_eq!(stop, JobWriteStop::Interrupted);
+    let err = running.await.expect("join").expect_err("interrupted twice");
+    assert!(interrupted(&err), "{err:?}");
+}
+
+#[tokio::test]
+async fn interrupt_leaves_a_write_made_outside_a_job_alone() {
+    const N: i64 = 3_000_000;
+    let (_dir, db) = open_temp(1);
+    let running = tokio::spawn({
+        let db = db.clone();
+        async move {
+            db.write(|c| {
+                c.query_row(
+                    &format!(
+                        "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < {N})
+                         SELECT count(*) FROM r"
+                    ),
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )
+                .map_err(DbError::from)
+            })
+            .await
+        }
+    });
+    executing(&db).await;
+    assert!(!db.interrupt(), "no job write was running");
+    assert_eq!(
+        db.interrupt_job_writes(std::time::Duration::from_secs(1)).await,
+        JobWriteStop::Idle
+    );
+    assert_eq!(running.await.expect("join").expect("not interrupted"), N);
+}
+
+#[tokio::test]
+async fn job_writes_queued_before_the_interrupt_are_dropped_and_later_ones_run() {
+    let (_dir, db) = open_temp(1);
+    // Hold the writer with a write that is not a job's.
+    let (release, held) = std::sync::mpsc::channel::<()>();
+    let holder = tokio::spawn({
+        let db = db.clone();
+        async move {
+            db.write(move |_| {
+                let _ = held.recv();
+                Ok::<_, DbError>(())
+            })
+            .await
+        }
+    });
+    while !db.writer_status().busy() {
+        tokio::task::yield_now().await;
+    }
+    let queued = tokio::spawn(job_writes({
+        let db = db.clone();
+        async move {
+            db.write(|c| {
+                c.execute_batch("CREATE TABLE avl04_marker (x)")?;
+                Ok::<_, DbError>(())
+            })
+            .await
+        }
+    }));
+    while db.write_queued() == 0 {
+        tokio::task::yield_now().await;
+    }
+    assert!(!db.interrupt(), "the running write is not a job's");
+    release.send(()).expect("release");
+    holder
+        .await
+        .expect("join")
+        .expect("the holder is not interrupted");
+    let err = queued.await.expect("join").expect_err("dropped");
+    assert!(matches!(err, DbError::WriterGone), "{err:?}");
+    assert!(!marker_exists(&db).await, "the dropped job write never ran");
+    // A job write queued after the interrupt runs as usual.
+    job_writes(db.write(|c| {
+        c.execute_batch("CREATE TABLE avl04_marker (x)")?;
+        Ok::<_, DbError>(())
+    }))
+    .await
+    .expect("a later job write");
+    assert!(marker_exists(&db).await);
+}
