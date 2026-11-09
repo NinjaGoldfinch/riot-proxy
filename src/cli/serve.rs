@@ -442,7 +442,8 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
 
     // After draining, whether or not serve failed: stop ticking, let running
     // jobs finish (the rest resume on the next boot), close sockets, then the
-    // final limiter checkpoint (design/05) and pending L2 writes (design/04).
+    // final limiter checkpoint (design/05), the writes still running behind
+    // their requests (AVL-02) and pending L2 writes (design/04).
     let (workers, history) = match jobs {
         Some((workers, ticks, history)) => {
             ticks.shutdown().await;
@@ -461,6 +462,7 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
     hub.shutdown();
     checkpoints.abort();
     persist::checkpoint_now(&limiter, &db).await;
+    db.flush_detached().await;
     cache.shutdown().await;
     tracing::info!("limiter checkpoint and L2 flushed; stopped");
     served

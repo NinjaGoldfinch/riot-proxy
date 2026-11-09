@@ -57,7 +57,7 @@ Hosts are `<platform>.api.riotgames.com` or `<region>.api.riotgames.com` (`src/r
 
 `src/riot/routing.rs:L108-L121`, `L174-L181`. Match ids route by their prefix (`EUW1_` is `europe`); `ME1_` is not a platform the proxy serves but `europe` answers for it, verified live on 2026-10-13 (ADR-143, `src/riot/routing.rs:L132-L143`).
 
-**Account-cluster rule (ADR-066).** Riot serves every account from each of `americas`, `asia`, `europe`. When the caller names no region the proxy tries `asia`, `americas`, `europe` (`Region::ACCOUNT_PICK`), taking the first with a limiter token free now, waiting for the soonest otherwise, and demoting a cluster that answered a service 429 for the rest of the request (`src/riot/routing.rs:L151-L153`, `src/fetcher.rs:L617-L655`). All clusters share one cache entry (`src/cache/keys.rs:L81-L88`). Pinned `/{region}/` routes never move.
+**Account-cluster rule (ADR-066).** Riot serves every account from each of `americas`, `asia`, `europe`. When the caller names no region the proxy tries `asia`, `americas`, `europe` (`Region::ACCOUNT_PICK`), taking the first with a limiter token free now, waiting for the soonest otherwise, and demoting a cluster that answered a service 429 for the rest of the request (`src/riot/routing.rs:L151-L153`, `src/fetcher.rs:L673-L711`). All clusters share one cache entry (`src/cache/keys.rs:L81-L88`). Pinned `/{region}/` routes never move.
 
 ## Request shape
 
@@ -87,7 +87,7 @@ A fresh scope starts with the bootstrap limits `20:1,100:120`, which are the per
 {"scope":"euw1","usage":[{"window":"20:1","used":0,"limit":20},{"window":"100:120","used":0,"limit":100}],"frozenMs":0}
 ```
 
-Interactive requests (HTTP callers) wait up to `CLIENT_WAIT_BUDGET_MS` (2 000 ms) for a token; background jobs yield after `JOB_YIELD_BUDGET_MS` (1 000 ms) and are held below `BULK_USAGE_CEILING` (0.80) of every window while someone is using the app, `BULK_IDLE_CEILING` (0.95) after 30 s idle (`src/fetcher.rs:L42-L44`, `README.md`). A 5xx is retried twice (250 ms, 750 ms); an untyped 429 backs off 500 ms × 2ⁿ up to three times; a typed 429 waits out the freeze (`src/fetcher.rs:L34-L41`, `L549-L612`). Design detail is in [../architecture/concurrency-and-rate-limiting.md](../architecture/concurrency-and-rate-limiting.md).
+Interactive requests (HTTP callers) wait up to `CLIENT_WAIT_BUDGET_MS` (2 000 ms) for a token; background jobs yield after `JOB_YIELD_BUDGET_MS` (1 000 ms) and are held below `BULK_USAGE_CEILING` (0.80) of every window while someone is using the app, `BULK_IDLE_CEILING` (0.95) after 30 s idle (`src/fetcher.rs:L45-L47`, `README.md`). A 5xx is retried twice (250 ms, 750 ms); an untyped 429 backs off 500 ms × 2ⁿ up to three times; a typed 429 waits out the freeze (`src/fetcher.rs:L37-L44`, `L605-L668`). Design detail is in [../architecture/concurrency-and-rate-limiting.md](../architecture/concurrency-and-rate-limiting.md).
 
 ## Keys and policy, as evidenced in the repository
 
@@ -113,5 +113,5 @@ Through the running server, `GET /v1/admin/debug/riot?scope=<platform|region>&pa
 - Data Dragon version list: <https://ddragon.leagueoflegends.com/api/versions.json>
 
 ---
-**Sources:** `src/riot/endpoints.rs:L13-L14,L91-L288,L362-L382,L476-L497`, `src/riot/routing.rs:L108-L203`, `src/riot/client.rs:L23-L29,L90-L130,L146,L327-L389,L431`, `src/riot/limiter/headers.rs:L31-L42,L90-L196`, `src/riot/limiter/mod.rs:L370-L431`, `src/riot/ladder.rs:L14-L20`, `src/fetcher.rs:L34-L44,L549-L655`, `src/cache/keys.rs:L81-L88`, `src/jobs/ddragon.rs:L22-L25,L83-L97,L108-L152,L255-L285`, `src/static/mod.rs:L28-L35`, `src/static/images.rs:L32-L39`, `src/routes/admin.rs:L1075-L1204`, `src/cli/riot.rs`, `src/config.rs:L110,L793,L810-L811`, `docs/contract/v1-endpoints.txt`, `docs/design/03-architecture.md:L32-L36`, `docs/DECISIONS.md` ADR-001, ADR-007, ADR-023, ADR-024, ADR-059, ADR-066, ADR-143, `docs/_meta/scratch/riot-and-cache.md` §1-§4, `docs/_meta/scratch/jobs-and-observability.md` §3, `docs/_meta/scratch/WRITING-BRIEF.md`, `README.md`
-**Last verified:** 2026-11-09 against commit `6c32ff4`
+**Sources:** `src/riot/endpoints.rs:L13-L14,L91-L288,L362-L382,L476-L497`, `src/riot/routing.rs:L108-L203`, `src/riot/client.rs:L23-L29,L90-L130,L146,L327-L389,L431`, `src/riot/limiter/headers.rs:L31-L42,L90-L196`, `src/riot/limiter/mod.rs:L370-L431`, `src/riot/ladder.rs:L14-L20`, `src/fetcher.rs:L37-L47,L605-L711`, `src/cache/keys.rs:L81-L88`, `src/jobs/ddragon.rs:L22-L25,L83-L97,L108-L152,L255-L285`, `src/static/mod.rs:L28-L35`, `src/static/images.rs:L32-L39`, `src/routes/admin.rs:L1075-L1204`, `src/cli/riot.rs`, `src/config.rs:L110,L793,L810-L811`, `docs/contract/v1-endpoints.txt`, `docs/design/03-architecture.md:L32-L36`, `docs/DECISIONS.md` ADR-001, ADR-007, ADR-023, ADR-024, ADR-059, ADR-066, ADR-143, `docs/_meta/scratch/riot-and-cache.md` §1-§4, `docs/_meta/scratch/jobs-and-observability.md` §3, `docs/_meta/scratch/WRITING-BRIEF.md`, `README.md`
+**Last verified:** 2026-11-09 against commit `24ba99a`
