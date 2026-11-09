@@ -694,3 +694,292 @@ async fn packs_snapshot_restore_and_reindex_rebuild_the_map() {
     assert!(!out.status.success(), "no bucket, no reindex");
     assert!(String::from_utf8_lossy(&out.stderr).contains("ARCHIVE_OBJECT_URL"));
 }
+
+// ─── AVL-05: a rebuild killed mid-way resumes (ADR-215) ─────────────────────
+
+/// The key scope the rebuild tests pin, so the seeded facts are the server's.
+const REBUILD_SCOPE: &str = "a05a05a0";
+/// The patches seeded, newest first: the order the rebuild walks them in.
+const REBUILD_PATCHES: [&str; 8] = [
+    "14.18", "14.17", "14.16", "14.15", "14.14", "14.13", "14.12", "14.11",
+];
+/// The rebuild's job row, queued before the server boots.
+const REBUILD_JOB: &str = "avl05-rebuild";
+/// One table each of the rebuild steps that write rows from these facts, by
+/// step index (the sets step reads `match_builds`, which these have none of).
+const STEP_TABLES: [(usize, &str); 5] = [
+    (0, "champion_stats"),
+    (1, "champion_matchups"),
+    (2, "champion_items"),
+    (3, "champion_runes"),
+    (4, "champion_spells"),
+];
+
+/// A migrated data dir holding 12 KR solo matches a patch over
+/// [`REBUILD_PATCHES`], every fact stamped with a tier, and one queued
+/// `aggregate:analytics` for the ladder, which no rebuild has stamped.
+fn seed_rebuild(data: &Path) -> std::path::PathBuf {
+    std::fs::create_dir_all(data).unwrap();
+    run(data, &["migrate"]);
+    let path = data.join("riot-proxy.db");
+    let mut c = rusqlite::Connection::open(&path).unwrap();
+    let tx = c.transaction().unwrap();
+    let positions = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"];
+    let tiers = ["MASTER", "GRANDMASTER", "DIAMOND", "UNKNOWN"];
+    let mut n = 0_i64;
+    for patch in REBUILD_PATCHES {
+        for _ in 0..12 {
+            n += 1;
+            let id = format!("KR_{}", 7_000_000 + n);
+            tx.execute(
+                "INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size,
+                   archived_at, game_duration, remake, facts_version)
+                 VALUES (?1, 'asia', ?2, 420, ?3, x'00', 1, ?3, ?4, 0, ?5)",
+                rusqlite::params![
+                    id,
+                    patch,
+                    1_700_000_000_000 + n,
+                    900 + n * 7 % 1500,
+                    riot_proxy::archive::facts::FACTS_VERSION
+                ],
+            )
+            .unwrap();
+            for p in 0..10_i64 {
+                let team = if p < 5 { 100 } else { 200 };
+                let champion = 1 + (n * 3 + p * 7) % 11;
+                tx.execute(
+                    "INSERT INTO match_facts (match_id, key_scope, puuid, team_id, position, champion_id, win,
+                       kills, deaths, assists, cs, gold, damage, vision, items, runes, summoners, facts_version, tier)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11 * 50, ?11 * 100, ?11 / 10,
+                       ?12, '[8000,8112,8300,[],null]', ?13, ?14, ?15)",
+                    rusqlite::params![
+                        id,
+                        REBUILD_SCOPE,
+                        format!("P{}", (n + p) % 37),
+                        team,
+                        positions[usize::try_from(p % 5).unwrap()],
+                        champion,
+                        (team == 100) == (n % 2 == 0),
+                        n % 9,
+                        p % 7,
+                        (n + p) % 11,
+                        100 + (n * p) % 200,
+                        format!("[3157,{},0,0,0,0]", 3000 + (n + p) % 5),
+                        if p % 2 == 0 { "[4,14]" } else { "[4,12]" },
+                        riot_proxy::archive::facts::FACTS_VERSION,
+                        tiers[usize::try_from((n + p) % 4).unwrap()],
+                    ],
+                )
+                .unwrap();
+            }
+        }
+    }
+    tx.execute(
+        "INSERT INTO jobs (id, kind, dedupe_key, priority, payload, state, attempts, run_after)
+         VALUES (?1, 'aggregate:analytics', 'kr:RANKED_SOLO_5x5', 30000,
+                 '{\"platform\":\"kr\",\"queue\":\"RANKED_SOLO_5x5\"}', 'pending', 0, 0)",
+        [REBUILD_JOB],
+    )
+    .unwrap();
+    tx.commit().unwrap();
+    path
+}
+
+/// The rebuild server: the seeded scope, every patch rebuilt, nothing that
+/// leaves the box.
+fn start_rebuild_server(data: &Path) -> Server {
+    Server::start_with(
+        data,
+        free_port(),
+        &[
+            ("KEY_SCOPE", REBUILD_SCOPE),
+            ("AGGREGATE_PATCH_LIMIT", "0"),
+            ("RIOT_BASE_URL", "http://127.0.0.1:9"),
+            ("DDRAGON_BASE_URL", "http://127.0.0.1:9"),
+        ],
+    )
+}
+
+/// The rebuild job's state and payload.
+fn rebuild_row(db: &Path) -> (String, serde_json::Value) {
+    let c = rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    let (state, payload): (String, String) = c
+        .query_row(
+            "SELECT state, payload FROM jobs WHERE id = ?1",
+            [REBUILD_JOB],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    (state, serde_json::from_str(&payload).unwrap())
+}
+
+/// Wait until the rebuild job is `done`.
+fn wait_rebuilt(db: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while rebuild_row(db).0 != "done" {
+        assert!(Instant::now() < deadline, "never rebuilt: {:?}", rebuild_row(db));
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// `computed_at` of each step table's rows, by (step, patch): one value each,
+/// since a step writes a patch's rows in one transaction.
+fn computed_at(db: &Path) -> std::collections::BTreeMap<(usize, String), i64> {
+    let c = rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    let mut out = std::collections::BTreeMap::new();
+    for (step, table) in STEP_TABLES {
+        let mut stmt = c
+            .prepare(&format!(
+                "SELECT patch, min(computed_at), max(computed_at) FROM {table} GROUP BY patch"
+            ))
+            .unwrap();
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))
+            })
+            .unwrap();
+        for row in rows {
+            let (patch, lo, hi) = row.unwrap();
+            assert_eq!(lo, hi, "{table} {patch}: one transaction");
+            out.insert((step, patch), lo);
+        }
+    }
+    out
+}
+
+/// Every row of every analytics table and every stamp, `computed_at` left
+/// out, as text: what `diff` would compare.
+fn analytics_rows(db: &Path) -> Vec<String> {
+    let c = rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    let tables: Vec<String> = c
+        .prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table'
+               AND (name LIKE 'champion_%' OR name LIKE 'analytics_%') AND name <> 'analytics_runs'
+             ORDER BY name",
+        )
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let mut out = vec![];
+    for t in tables {
+        let cols: Vec<String> = c
+            .prepare(&format!(
+                "SELECT name FROM pragma_table_info('{t}') WHERE name NOT IN ('computed_at', 'stamped_at') ORDER BY cid"
+            ))
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let row = cols
+            .iter()
+            .map(|c| format!("quote({c})"))
+            .collect::<Vec<_>>()
+            .join(" || '|' || ");
+        let rows: Vec<String> = c
+            .prepare(&format!("SELECT '{t}|' || {row} FROM {t} ORDER BY 1"))
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        out.extend(rows);
+    }
+    out
+}
+
+/// AVL-05 (ADR-215): a SIGKILL in the middle of a rebuild leaves its row
+/// `running` with the progress its last commit saved; the next boot
+/// re-queues it and resumes at that patch and step. What was committed
+/// before the kill is not written again, everything after it is, and the
+/// analytics tables and stamps come out as a rebuild run straight through
+/// leaves them.
+#[test]
+fn a_rebuild_killed_mid_way_resumes_at_its_recorded_patch_and_step() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    // A rebuild run straight through: the reference.
+    let clean = tmp.path().join("clean");
+    let clean_db = seed_rebuild(&clean);
+    let server = start_rebuild_server(&clean);
+    wait_rebuilt(&clean_db);
+    server.stop(Vec::new());
+
+    // The same, killed once it is past its third patch's first step.
+    let data = tmp.path().join("data");
+    let db = seed_rebuild(&data);
+    let mut server = start_rebuild_server(&data);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let (state, payload) = rebuild_row(&db);
+        assert_ne!(state, "done", "finished before the kill: make the rebuild longer");
+        if payload["rebuild"]["patch"].as_u64().is_some_and(|p| p >= 2) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "never got to the third patch: {payload}"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    server.child.kill().unwrap(); // SIGKILL
+    server.child.wait().unwrap();
+
+    // What the kill left: the row as its last commit saved it.
+    let (state, payload) = rebuild_row(&db);
+    assert_eq!(state, "running", "{payload}");
+    let progress = &payload["rebuild"];
+    let at = (
+        usize::try_from(progress["patch"].as_u64().unwrap()).unwrap(),
+        usize::try_from(progress["step"].as_u64().unwrap()).unwrap(),
+    );
+    assert!(at.0 >= 2 && at.0 < REBUILD_PATCHES.len(), "{payload}");
+    assert_eq!(progress["pruned"], true, "{payload}");
+    let before = computed_at(&db);
+    let committed = |step: usize, patch: usize| (patch, step) < at;
+    for (i, patch) in REBUILD_PATCHES.iter().enumerate() {
+        for (step, _) in STEP_TABLES {
+            assert_eq!(
+                before.contains_key(&(step, (*patch).to_string())),
+                committed(step, i),
+                "step {step} of {patch} against the recorded {at:?}"
+            );
+        }
+    }
+    let killed_at = before.values().copied().max().unwrap();
+
+    // The next boot resumes it.
+    let server = start_rebuild_server(&data);
+    wait_rebuilt(&db);
+    server.stop(Vec::new());
+    let after = computed_at(&db);
+    for (i, patch) in REBUILD_PATCHES.iter().enumerate() {
+        for (step, table) in STEP_TABLES {
+            let key = (step, (*patch).to_string());
+            let now = after[&key];
+            if committed(step, i) {
+                assert_eq!(now, before[&key], "{table} {patch} was written again");
+            } else {
+                assert!(
+                    now > killed_at,
+                    "{table} {patch} was not written after the restart"
+                );
+            }
+        }
+    }
+    assert_eq!(analytics_rows(&db), analytics_rows(&clean_db));
+    let c = rusqlite::Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    let (status, stamped): (String, Option<i64>) = c
+        .query_row(
+            "SELECT r.status, s.stamped_at FROM analytics_runs r
+               LEFT JOIN analytics_stamped s USING (key_scope, platform, queue)
+              WHERE r.key_scope = ?1 AND r.platform = 'kr' AND r.kind = 'rebuild'",
+            [REBUILD_SCOPE],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(status, "completed");
+    assert!(stamped.is_some(), "a rebuild of every patch stamps the ladder");
+}

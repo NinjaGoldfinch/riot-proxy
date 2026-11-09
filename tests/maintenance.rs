@@ -284,3 +284,143 @@ async fn a_failed_run_is_remembered_with_its_error() {
     assert_eq!(last.report, None);
     assert_eq!(last.error, Some(err.to_string()));
 }
+
+/// AVL-05 (ADR-215): `done` jobs are trimmed a kind at a time and at most
+/// 5 000 rows a write, as `DELETE /v1/admin/jobs` deletes, and only those
+/// past the retention: newer `done` rows and rows in any other state stay.
+#[tokio::test]
+async fn the_trim_deletes_old_done_jobs_in_chunks_of_five_thousand() {
+    use riot_proxy::jobs::maintenance::{JOB_RETENTION_MS, Trimmed, trim_done_jobs};
+    use riot_proxy::jobs::scheduler::PURGE_CHUNK;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    let cutoff = NOW - JOB_RETENTION_MS;
+    db.write(move |c| {
+        let tx = c.transaction()?;
+        {
+            let mut add = tx.prepare(
+                "INSERT INTO jobs (id, kind, priority, payload, state, run_after, finished_at)
+                 VALUES (?1, ?2, 1, '{}', ?3, 0, ?4)",
+            )?;
+            // 12 001 old `archive:match` rows: three writes of it.
+            for i in 0..12_001 {
+                add.execute(rusqlite::params![
+                    format!("a{i}"),
+                    "archive:match",
+                    "done",
+                    cutoff - 1 - i
+                ])?;
+            }
+            // Three old `poll:live` rows: one write.
+            for i in 0..3 {
+                add.execute(rusqlite::params![
+                    format!("p{i}"),
+                    "poll:live",
+                    "done",
+                    cutoff - 1
+                ])?;
+            }
+            // Kept: done inside the retention, and old rows not `done`.
+            add.execute(rusqlite::params!["recent", "archive:match", "done", cutoff + 1])?;
+            add.execute(rusqlite::params!["edge", "poll:live", "done", cutoff])?;
+            add.execute(rusqlite::params!["failed", "archive:match", "failed", cutoff - 1])?;
+            add.execute(rusqlite::params!["pending", "poll:live", "pending", None::<i64>])?;
+        }
+        tx.commit()?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+
+    // No write deletes more than a chunk.
+    let biggest = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&biggest);
+    db.write(move |c| {
+        let rows = Arc::new(AtomicUsize::new(0));
+        let (count, reset) = (Arc::clone(&rows), Arc::clone(&rows));
+        c.update_hook(Some(
+            move |_: rusqlite::hooks::Action, _: &str, table: &str, _: i64| {
+                if table == "jobs" {
+                    count.fetch_add(1, Ordering::SeqCst);
+                }
+            },
+        ))?;
+        c.commit_hook(Some(move || {
+            seen.fetch_max(reset.swap(0, Ordering::SeqCst), Ordering::SeqCst);
+            false
+        }))?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+
+    let done = trim_done_jobs(&db, cutoff).await.unwrap();
+    db.write(|c| {
+        c.update_hook(None::<fn(rusqlite::hooks::Action, &str, &str, i64)>)?;
+        c.commit_hook(None::<fn() -> bool>)?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        done,
+        Trimmed {
+            deleted: 12_004,
+            writes: 4
+        }
+    );
+    assert_eq!(biggest.load(Ordering::SeqCst), PURGE_CHUNK);
+    let left = ids(
+        &dir.path().join("riot-proxy.db"),
+        "SELECT id FROM jobs ORDER BY id",
+    );
+    assert_eq!(left, ["edge", "failed", "pending", "recent"]);
+
+    // The daily run trims through it.
+    db.write(move |c| {
+        c.execute(
+            "INSERT INTO jobs (id, kind, priority, payload, state, run_after, finished_at)
+             VALUES ('old', 'ddragon:sync', 1, '{}', 'done', 0, ?1)",
+            [cutoff - 1],
+        )?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    let m = Maintenance::new(db.clone(), dir.path().join("backups"), 0);
+    assert_eq!(m.run_once(NOW).await.unwrap().jobs_deleted, 1);
+    assert_eq!(trim_done_jobs(&db, cutoff).await.unwrap().deleted, 0);
+}
+
+/// The trim's reads and writes seek into `jobs_state_kind`; none scans
+/// `jobs`.
+#[tokio::test]
+async fn the_trim_seeks_its_index() {
+    use riot_proxy::jobs::maintenance::{NEXT_DONE_KIND_SQL, TRIM_CHUNK_SQL};
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    for sql in [NEXT_DONE_KIND_SQL, TRIM_CHUNK_SQL] {
+        let plan: Vec<String> = db
+            .read(move |c| {
+                let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
+                let nulls = vec![rusqlite::types::Null; stmt.parameter_count()];
+                let rows = stmt
+                    .query_map(rusqlite::params_from_iter(nulls), |r| r.get(3))?
+                    .collect::<Result<Vec<String>, _>>()?;
+                Ok::<_, DbError>(rows)
+            })
+            .await
+            .unwrap();
+        assert!(
+            plan.iter()
+                .any(|l| l.contains("jobs_state_kind (state=? AND kind")),
+            "{sql}: {plan:?}"
+        );
+        assert!(
+            !plan.iter().any(|l| l.starts_with("SCAN jobs")),
+            "{sql}: {plan:?}"
+        );
+    }
+}

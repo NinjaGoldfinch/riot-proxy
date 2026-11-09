@@ -14,8 +14,9 @@
 //! reads that name none (PERF-02, ADR-168). Every table is
 //! rebuilt wholesale for the newest `AGGREGATE_PATCH_LIMIT` patches (0: all)
 //! and keeps older patches' rows; the job does it a patch and a step at a
-//! time, each its own transaction ([`rebuild_patch_step`], AVL-05, ADR-215). Every row carries `remake`, so a read can
-//! leave remakes out (the default) or add them back.
+//! time, each its own transaction ([`rebuild_patch_step`], AVL-05,
+//! ADR-215). Every row carries `remake`, so a read can leave remakes out
+//! (the default) or add them back.
 
 use std::collections::BTreeSet;
 

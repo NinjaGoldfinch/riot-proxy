@@ -82,32 +82,12 @@ pub async fn enqueue_aggregate(queue: &Queue, platform: &str, ladder: &str) -> R
 /// DEV-18): it goes ahead of every queued job, so the next free worker
 /// rebuilds from the matches archived so far instead of after a crawl's
 /// downloads. No running job is interrupted. A rebuild already queued for
-/// the ladder is moved up rather than queued twice. It makes no Riot call.
-///
-/// A rebuild part-way through (between turns, or in one) starts over
-/// (AVL-05, ADR-215): its payload loses its progress and its priority is
-/// lifted, and a running turn sees the new payload at its next commit and
-/// gives its worker back.
+/// the ladder is moved up rather than queued twice; one part-way through
+/// (between its turns, AVL-05) keeps its progress and resumes first. It
+/// makes no Riot call.
 pub async fn enqueue_aggregate_now(queue: &Queue, platform: &str, ladder: &str) -> Result<Enqueued, DbError> {
     let mut job = aggregate_job(platform, ladder);
     job.priority = priority::INTERACTIVE;
-    let (kind, key, fresh, prio) = (
-        job.kind,
-        job.dedupe_key.clone(),
-        job.payload.to_string(),
-        job.priority,
-    );
-    queue
-        .db()
-        .write(move |c| {
-            c.execute(
-                "UPDATE jobs SET payload = ?3, priority = MIN(priority, ?4)
-                  WHERE kind = ?1 AND dedupe_key = ?2 AND state IN ('pending', 'running') AND payload <> ?3",
-                params![kind, key, fresh, prio],
-            )?;
-            Ok::<_, DbError>(())
-        })
-        .await?;
     queue.enqueue_or_promote(job).await
 }
 
@@ -509,37 +489,16 @@ impl Progress {
 /// How a rebuild's turn ended.
 enum Turn {
     Done,
-    /// Give the worker back; the payload replaces the row's when set.
-    Yield(Option<String>),
-}
-
-/// What [`save_progress`] found.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Saved {
-    Written,
-    /// The row's payload is no longer the one this run last wrote: a
-    /// recompute replaced it ([`enqueue_aggregate_now`]).
-    Superseded,
-    /// No such row: a handler run outside the queue (tests).
-    NoRow,
+    /// Give the worker back, with the payload the last commit saved.
+    Yield(String),
 }
 
 /// Write a rebuild's progress into its job's row, in the transaction that
-/// made it, if the row still holds what this run last wrote (AVL-05).
-fn save_progress(c: &rusqlite::Connection, id: &str, expected: &str, body: &str) -> Result<Saved, DbError> {
-    if c.execute(
-        "UPDATE jobs SET payload = ?3 WHERE id = ?1 AND payload = ?2",
-        params![id, expected, body],
-    )? == 1
-    {
-        return Ok(Saved::Written);
-    }
-    let exists =
-        rusqlite::OptionalExtension::optional(
-            c.query_row("SELECT 1 FROM jobs WHERE id = ?1", [id], |_| Ok(())),
-        )?
-        .is_some();
-    Ok(if exists { Saved::Superseded } else { Saved::NoRow })
+/// made it (AVL-05): the row and the tables move together. A handler run
+/// outside the queue (tests) has no row, and the yield carries it instead.
+fn save_progress(c: &rusqlite::Connection, id: &str, body: &str) -> Result<(), DbError> {
+    c.execute("UPDATE jobs SET payload = ?2 WHERE id = ?1", params![id, body])?;
+    Ok(())
 }
 
 fn store(e: &dyn std::fmt::Display) -> JobError {
@@ -583,9 +542,13 @@ impl AnalyticsContext {
             .rebuild(job, &ladder, queue_id, &mut progress, started, turn)
             .await;
         if let Ok(Turn::Yield(payload)) = result {
+            // Back to `pending` behind the ready work of its band, not an
+            // attempt (design/06 §Take turns); the row already holds the
+            // payload, which the yield writes again for a run outside the
+            // queue.
             return Err(JobError::Yield {
                 retry_at: Clock::now().unix_ms,
-                payload,
+                payload: Some(payload),
             });
         }
         let status = if result.is_ok() { "completed" } else { "failed" };
@@ -722,20 +685,12 @@ impl AnalyticsContext {
         started: Instant,
         turn: Duration,
     ) -> Result<Turn, JobError> {
-        // What the row holds, for the compare-and-set in each commit.
-        let mut held = job.payload.clone();
-        let mut no_row = false;
         let base_ms = p.ms;
         while !p.done() {
             activity::step(p.describe(ladder));
-            let (id, expected, from, l, key_scope) = (
-                job.id.clone(),
-                held.clone(),
-                p.clone(),
-                ladder.clone(),
-                self.key_scope.clone(),
-            );
-            let (next, body, saved) = self
+            let (id, from, l, key_scope) =
+                (job.id.clone(), p.clone(), ladder.clone(), self.key_scope.clone());
+            let (next, body) = self
                 .db()
                 .write(move |c| {
                     let sql = Instant::now();
@@ -765,30 +720,18 @@ impl AnalyticsContext {
                         rebuild: Some(next.clone()),
                     }
                     .to_json();
-                    let saved = save_progress(&tx, &id, &expected, &body)?;
+                    save_progress(&tx, &id, &body)?;
                     tx.commit()?;
-                    Ok::<_, DbError>((next, body, saved))
+                    Ok::<_, DbError>((next, body))
                 })
                 .await
                 .map_err(|e| store(&e))?;
             *p = next;
-            match saved {
-                Saved::Written => held = body,
-                Saved::NoRow => {
-                    no_row = true;
-                    held = body;
-                }
-                // A recompute asked for since the turn began: the row holds a
-                // fresh payload, and the next turn starts over from it.
-                Saved::Superseded => return Ok(Turn::Yield(None)),
-            }
             if p.done() {
                 break;
             }
             if started.elapsed() >= turn {
-                // The row has the progress already; outside the queue, the
-                // yield carries it.
-                return Ok(Turn::Yield(no_row.then_some(held)));
+                return Ok(Turn::Yield(body));
             }
             tokio::time::sleep(REBUILD_PACE).await;
         }

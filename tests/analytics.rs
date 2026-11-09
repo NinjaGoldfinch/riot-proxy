@@ -2599,3 +2599,111 @@ async fn a_delta_run_starts_where_the_ladders_last_run_ended() {
     );
     assert_eq!(ctx.delta_sizes.start(&kr, 6), 6);
 }
+
+// ─── AVL-05: a rebuild a transaction at a time, in turns (ADR-215) ──────────
+
+/// AVL-05 (ADR-215): with a zero-length turn, every turn of a rebuild is
+/// one transaction (a patch's step) and gives its worker back with the
+/// progress in its payload; a turn picked up from that payload goes on
+/// from there. Only the last turn records the run, so a rebuild part-way
+/// through is never a completed one in `analytics_runs` (AVL-07's tick reads
+/// it), and the tables come out as a rebuild in one turn leaves them.
+#[tokio::test]
+async fn a_rebuild_in_turns_yields_after_each_transaction_and_ends_as_one_turn_does() {
+    use riot_proxy::jobs::JobError;
+    use riot_proxy::jobs::analytics::runs;
+
+    let ladder = json!({"platform": "kr", "queue": "RANKED_SOLO_5x5"});
+    let seed = |e: &Env| {
+        let db = e.state.db.clone();
+        async move {
+            // Two patches: the remake on an older one.
+            db.write(|c| {
+                c.execute(
+                    "UPDATE matches SET patch = '16.18' WHERE match_id = 'KR_8393320187'",
+                    [],
+                )?;
+                Ok::<_, DbError>(())
+            })
+            .await
+            .unwrap();
+        }
+    };
+    let uris = [
+        "/v1/lol/analytics/champions?patch=all&remakes=include",
+        "/v1/lol/analytics/champions/134/matchups?patch=all&remakes=include",
+        "/v1/lol/analytics/champions/134/builds?patch=all&remakes=include",
+        "/v1/lol/analytics/patches?remakes=include",
+    ];
+
+    // In one turn.
+    let one = env().await;
+    one.seed().await;
+    one.seed_builds().await;
+    seed(&one).await;
+    one.ctx_with(0)
+        .aggregate(&job("aggregate:analytics", ladder.clone()))
+        .await
+        .unwrap();
+    let mut want = vec![];
+    for uri in uris {
+        want.push(redact(one.get(uri).await.json()));
+    }
+
+    // A transaction a turn.
+    let e = env().await;
+    e.seed().await;
+    e.seed_builds().await;
+    seed(&e).await;
+    let ctx = e.ctx_with(0);
+    let mut payload = ladder.to_string();
+    let mut seen = vec![];
+    loop {
+        let mut j = job("aggregate:analytics", ladder.clone());
+        j.payload.clone_from(&payload);
+        match ctx.aggregate_turn(&j, std::time::Duration::ZERO).await {
+            Ok(()) => break,
+            Err(JobError::Yield { payload: Some(p), .. }) => {
+                let v: Value = serde_json::from_str(&p).unwrap();
+                assert_eq!(
+                    (&v["platform"], &v["queue"]),
+                    (&ladder["platform"], &ladder["queue"])
+                );
+                let r = &v["rebuild"];
+                seen.push((
+                    r["pruned"].as_bool().unwrap(),
+                    r["patch"].as_u64().unwrap(),
+                    r["step"].as_u64().unwrap(),
+                ));
+                assert!(
+                    runs(&e.state.db, &e.scope).await.unwrap().is_empty(),
+                    "no run recorded part-way: {p}"
+                );
+                payload = p;
+            }
+            Err(other) => panic!("{other:?}"),
+        }
+        assert!(seen.len() < 100, "never ends: {seen:?}");
+    }
+    // Each yield names the next transaction: after the prune, 16.19's first
+    // step; the last one, 16.18's set builds, ends the rebuild in its turn.
+    let expected: Vec<(bool, u64, u64)> = (0..2)
+        .flat_map(|patch| (0..6).map(move |step| (true, patch, step)))
+        .collect();
+    assert_eq!(seen, expected);
+    let recorded = runs(&e.state.db, &e.scope).await.unwrap();
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(
+        (recorded[0].1.kind.as_str(), recorded[0].1.status.as_str()),
+        ("rebuild", "completed")
+    );
+    assert_eq!(
+        recorded[0].1.steps.keys().collect::<Vec<_>>(),
+        ["builds", "champions", "matchups"]
+    );
+    let mut got = vec![];
+    for uri in uris {
+        got.push(redact(e.get(uri).await.json()));
+    }
+    assert_eq!(got, want);
+}
