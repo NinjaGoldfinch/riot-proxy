@@ -437,7 +437,7 @@ A production restart on 2026-11-08 logged `listening` and accepted nothing for m
 - [~] AVL-01 accept before catching up: `app::serve` starts right after bind; `recover`, the catch-ups and the workers follow in one boot task that honours SIGTERM (#265, ADR-209; the staging bench run, `listening` to the first `/healthz` 200 under 1 s, follows the merge under DEP-05's staging-first rule, owner decision 2026-11-09)
 - [ ] AVL-02 request-path writes are write-behind: the fetcher's archive writes and the profile routes' `players::upsert` no longer wait for the writer (ADR-210)
 - [ ] AVL-06 boot checks and the sampler cost nothing when there is nothing to do: a ranked match whose prefix is no platform stamped `UNKNOWN`, a bounded tier check and backfill query, `stale_matches` as `EXISTS`, no 60-second `SCAN matches` (ADR-213)
-- [ ] AVL-04 shutdown inside 90 s: after the job grace the writer's running statement is interrupted and its row re-queued (supersedes WR-03, ADR-211)
+- [~] AVL-04 shutdown inside 90 s: after the job grace the writer's running statement is interrupted and its row re-queued (supersedes WR-03) (#271, fix/AVL-04-shutdown-inside-90s, ADR-211)
 - [ ] AVL-03 stale beats none for `/v1/players/*`: an expired copy served `STALE` when the refresh fails; league entries in L2, the `refreshing` field and composite `X-Cache: STALE` (owner approved 2026-11-09) (ADR-212)
 - [ ] AVL-07 ticks remember their last run, so `maintenance`, `names:backfill` and `ddragon:sync` do not fire on every restart (ADR-214)
 - [ ] AVL-05 long writes in bounded, resumable transactions: `aggregate:analytics` per step and patch, `maintenance`'s trim in chunks (ADR-215)
