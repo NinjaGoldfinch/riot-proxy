@@ -120,6 +120,8 @@ pub const ENDPOINTS: &[Endpoint] = &[
         true,
         NegDefault,
     ),
+    // Persisted although its TTL is short: without it a player's ranks are
+    // gone after a restart until Riot answers again (AVL-03, owner 2026-11-09).
     ep(
         "league.entriesByPuuid",
         OnPlatform,
@@ -127,7 +129,7 @@ pub const ENDPOINTS: &[Endpoint] = &[
         &[],
         "league",
         secs(300),
-        false,
+        true,
         NegDefault,
     ),
     // Ladder reads share one override key and are persisted: a full page walk is
@@ -646,6 +648,7 @@ mod tests {
                 "account.byRiotId",
                 "account.regionByPuuid",
                 "league.challenger",
+                "league.entriesByPuuid",
                 "league.entriesByTier",
                 "league.grandmaster",
                 "league.master",

@@ -1248,7 +1248,8 @@ async fn debug_cache(State(state): State<AppState>, Extension(_c): Who, Query(qu
     let now = tokio::time::Instant::now();
     let (present, age, stale) = match state.fetcher.cache().l1.get(&key).await {
         Lookup::Fresh(e) => (true, Some(e.age(now)), Some(false)),
-        Lookup::Stale(e) => (true, Some(e.age(now)), Some(true)),
+        // Past hard TTL, kept for a failed refresh (AVL-03): stale too.
+        Lookup::Stale(e) | Lookup::Expired(e) => (true, Some(e.age(now)), Some(true)),
         Lookup::Miss => (false, None, None),
     };
     ok(&CacheProbe {

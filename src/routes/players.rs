@@ -6,9 +6,16 @@
 //! minute per player and part ([`RefreshWindows`]); unlike the passthrough
 //! routes' admin-only refresh, any consumer may ask, because it is metered.
 //!
-//! The composite `X-Cache` is `MISS` if any part went upstream and `HIT`
-//! otherwise; `X-Cache-Age` is the stalest part's age (v1 `summarise`), and
+//! The composite `X-Cache` is `STALE` if any part was served past its soft
+//! TTL (AVL-03, ADR-212; the body says `refreshing: true` and names the part in
+//! `warnings`), else `MISS` if any part went upstream and `HIT` otherwise;
+//! `X-Cache-Age` is the stalest part's age (v1 `summarise`), and
 //! `X-Cache-Fetched-Age` the oldest part's last read from Riot (SITE-01).
+//!
+//! Stale beats none (AVL-03): every part is read with
+//! [`crate::fetcher::Fetcher::fetch_or_stored`], so a part whose refresh fails
+//! is served from the stored copy, however old, rather than left out. Only a
+//! part with nothing stored fails.
 
 mod refresh;
 mod summary;
@@ -67,6 +74,8 @@ fn secs(d: Duration) -> u64 {
 #[derive(Debug, Default, Clone, Copy)]
 struct Tally {
     upstream: bool,
+    /// A part was served past its soft TTL (AVL-03).
+    stale: bool,
     age: u64,
     /// `None` while every part counted came from the archive.
     fetched_age: Option<u64>,
@@ -77,6 +86,7 @@ impl Tally {
         // v1 only knew HIT and MISS: a part that went upstream (a miss or a won
         // refresh) makes the document a MISS; everything else reads as a hit.
         self.upstream |= matches!(r.x_cache, XCache::Miss | XCache::Bypass);
+        self.stale |= r.x_cache == XCache::Stale;
         self.age = self.age.max(secs(r.cache_age));
         if let Some(f) = r.fetched_age {
             self.fetched_age = Some(self.fetched_age.unwrap_or(0).max(secs(f)));
@@ -84,7 +94,13 @@ impl Tally {
     }
 
     fn x_cache(self) -> &'static str {
-        if self.upstream { "MISS" } else { "HIT" }
+        if self.stale {
+            "STALE"
+        } else if self.upstream {
+            "MISS"
+        } else {
+            "HIT"
+        }
     }
 }
 
@@ -123,8 +139,16 @@ fn required_platform(query: &HashMap<String, String>) -> Result<Platform, ApiErr
     validate::required_query_platform(q(query, "platform"))
 }
 
+/// The warning naming a part served past its soft TTL (AVL-03).
+fn stale_warning(name: &str, r: &FetchResult) -> Option<String> {
+    (r.x_cache == XCache::Stale).then(|| match r.fetched_age {
+        Some(f) => format!("{name} served stale (last read from Riot {} s ago)", secs(f)),
+        None => format!("{name} served stale"),
+    })
+}
+
 /// One part of a fan-out: its Riot payload verbatim, or `None` with a warning
-/// naming why (v1 `collector`).
+/// naming why (v1 `collector`). A part served stale is kept and named too.
 fn part(
     name: &str,
     outcome: &Result<FetchResult, FetchError>,
@@ -132,7 +156,10 @@ fn part(
 ) -> Option<Box<RawValue>> {
     let err = match outcome {
         Ok(r) => match serde_json::from_slice::<Box<RawValue>>(&r.body) {
-            Ok(v) => return Some(v),
+            Ok(v) => {
+                warnings.extend(stale_warning(name, r));
+                return Some(v);
+            }
             Err(_) => ApiError::upstream(),
         },
         Err(e) => e.api.clone(),
@@ -152,9 +179,10 @@ async fn fetch(
     bypass: bool,
 ) -> Result<FetchResult, FetchError> {
     let req = req.map_err(FetchError::from)?;
+    // Stale beats none (AVL-03): a failed refresh serves the stored copy.
     state
         .fetcher
-        .fetch(
+        .fetch_or_stored(
             req,
             FetchOptions {
                 bypass,
@@ -213,7 +241,11 @@ pub struct ProfileBody {
     refreshed: bool,
     /// Seconds until another `?refresh=true` is allowed for this player; 0 when now.
     refresh_available_in: u64,
-    /// Names each part that could not be fetched.
+    /// A part was served past its soft TTL (`X-Cache: STALE`): a stored copy,
+    /// because its refresh is running in the background or failed. The part
+    /// is named in `warnings`; a later read gets the fresh one.
+    refreshing: bool,
+    /// Names each part that could not be fetched, and each part served stale.
     warnings: Vec<String>,
 }
 
@@ -352,6 +384,7 @@ async fn compose_profile(
         },
         refreshed: window.refreshed,
         refresh_available_in: window.available_in,
+        refreshing: tally.stale,
         warnings,
     };
     // Every part failing means the player does not resolve at all (v1).
@@ -522,6 +555,10 @@ pub struct MatchPage {
     backfill: Option<BackfillNotice>,
     refreshed: bool,
     refresh_available_in: u64,
+    /// The id list was served past its soft TTL (`X-Cache: STALE`): a stored
+    /// copy, because its refresh is running in the background or failed. It
+    /// is named in `warnings`; a later read gets the fresh one.
+    refreshing: bool,
     warnings: Vec<String>,
 }
 
@@ -690,7 +727,7 @@ async fn match_page(
     let backfill = maybe_backfill(&state, &puuid, platform, start).await;
     let mut tally = Tally::default();
     tally.add(&ids);
-    let mut warnings = Vec::new();
+    let mut warnings: Vec<String> = stale_warning("match ids", &ids).into_iter().collect();
 
     let (match_ids, has_more, archive) = match champion {
         None => {
@@ -798,6 +835,7 @@ async fn match_page(
         backfill,
         refreshed: window.refreshed,
         refresh_available_in: window.available_in,
+        refreshing: tally.stale,
         warnings,
     };
     document(&body, tally)
