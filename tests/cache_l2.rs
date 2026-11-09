@@ -138,7 +138,8 @@ async fn warm_keeps_expired_rows_for_a_day_and_sweep_deletes_the_rest() {
     match warmed.get("expired").await {
         Lookup::Expired(e) => {
             let at = tokio::time::Instant::now();
-            let near = |d: Duration, ms: u64| d.abs_diff(Duration::from_millis(ms)) < Duration::from_millis(500);
+            let near =
+                |d: Duration, ms: u64| d.abs_diff(Duration::from_millis(ms)) < Duration::from_millis(500);
             assert!(near(e.age(at), 10_000), "its real ages: {:?}", e.age(at));
             assert!(near(e.fetch_age(at), 5_000), "{:?}", e.fetch_age(at));
         }

@@ -543,3 +543,204 @@ async fn cache_reads_are_counted() {
         );
     }
 }
+
+// ── Stale beats none (AVL-03, ADR-212) ──────────────────────────────────────
+
+/// Soft and hard TTL both 1 s, so a copy is past hard TTL after 1.1 s.
+const EXPIRING: [(&str, &str); 2] = [
+    ("CACHE_TTL_OVERRIDES", "summoner=1"),
+    ("STALE_WHILE_REVALIDATE", "false"),
+];
+
+/// Store `{"v":1}` for the summoner, let it pass its hard TTL, and forget the
+/// upstream calls so far. Returns when it was stored.
+async fn store_then_expire(s: &Setup) -> Instant {
+    mount(&s.server, SUMMONER, ok(r#"{"v":1}"#)).await;
+    let stored = s
+        .fetcher
+        .fetch(summoner(Platform::Euw1), INTERACTIVE)
+        .await
+        .unwrap();
+    assert_eq!(stored.x_cache, XCache::Miss);
+    let at = Instant::now();
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    s.server.reset().await;
+    at
+}
+
+/// Served from storage with the ages it really has, not reset to now.
+fn assert_stored_copy(r: &riot_proxy::fetcher::FetchResult, stored_at: Instant) {
+    assert_eq!(
+        (r.x_cache, r.body.as_ref()),
+        (XCache::Stale, br#"{"v":1}"#.as_ref())
+    );
+    let real = stored_at.elapsed();
+    let near = |d: Duration| d >= Duration::from_millis(1100) && d <= real + Duration::from_millis(50);
+    assert!(
+        near(r.cache_age),
+        "content age {:?}, stored {real:?} ago",
+        r.cache_age
+    );
+    let fetched = r.fetched_age.expect("an L1 copy has a fetch time");
+    assert!(near(fetched), "fetch age {fetched:?}, stored {real:?} ago");
+}
+
+fn one_token_per_10s(s: &Setup) {
+    s.limiter.configure_app(
+        "euw1",
+        &[LimitWindow {
+            limit: 1,
+            seconds: 10,
+        }],
+    );
+}
+
+#[tokio::test]
+async fn expired_and_rate_limited_serves_the_stored_copy_stale() {
+    let s = setup(&EXPIRING).await;
+    one_token_per_10s(&s);
+    let stored_at = store_then_expire(&s).await;
+    mount(&s.server, SUMMONER, ok(r#"{"v":2}"#)).await;
+
+    // The passthrough rule is v1's: past hard TTL there is nothing to fall back on.
+    let e = s
+        .fetcher
+        .fetch(summoner(Platform::Euw1), INTERACTIVE)
+        .await
+        .unwrap_err();
+    assert_eq!(e.api.code, ErrorCode::RateLimited);
+
+    let r = s
+        .fetcher
+        .fetch_or_stored(summoner(Platform::Euw1), INTERACTIVE)
+        .await
+        .unwrap();
+    assert_stored_copy(&r, stored_at);
+    assert_eq!(upstream_calls(&s.server).await, 0, "no token: Riot never asked");
+}
+
+#[tokio::test]
+async fn expired_and_a_typed_429_serves_the_stored_copy_stale() {
+    let s = setup(&EXPIRING).await;
+    let stored_at = store_then_expire(&s).await;
+    // A freeze longer than CLIENT_WAIT_BUDGET_MS (2 s): the re-acquire gives up.
+    mount(
+        &s.server,
+        SUMMONER,
+        ResponseTemplate::new(429)
+            .insert_header("x-rate-limit-type", "method")
+            .insert_header("retry-after", "30"),
+    )
+    .await;
+    let started = Instant::now();
+    let r = s
+        .fetcher
+        .fetch_or_stored(summoner(Platform::Euw1), INTERACTIVE)
+        .await
+        .unwrap();
+    assert_stored_copy(&r, stored_at);
+    assert_eq!(upstream_calls(&s.server).await, 1);
+    assert!(
+        started.elapsed() < Duration::from_millis(2500),
+        "inside the interactive budget: {:?}",
+        started.elapsed()
+    );
+}
+
+#[tokio::test]
+async fn expired_and_an_upstream_failure_serves_the_stored_copy_stale() {
+    let s = setup(&EXPIRING).await;
+    let stored_at = store_then_expire(&s).await;
+    mount(&s.server, SUMMONER, ResponseTemplate::new(503)).await;
+
+    let r = s
+        .fetcher
+        .fetch_or_stored(summoner(Platform::Euw1), INTERACTIVE)
+        .await
+        .unwrap();
+    assert_stored_copy(&r, stored_at);
+    assert_eq!(
+        upstream_calls(&s.server).await,
+        3,
+        "it went upstream first, with v1's retries"
+    );
+
+    let e = s
+        .fetcher
+        .fetch(summoner(Platform::Euw1), INTERACTIVE)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        e.api.code,
+        ErrorCode::UpstreamError,
+        "the passthrough rule is unchanged"
+    );
+}
+
+#[tokio::test]
+async fn expired_and_riot_answering_is_a_miss_with_the_new_bytes() {
+    let s = setup(&EXPIRING).await;
+    store_then_expire(&s).await;
+    mount(&s.server, SUMMONER, ok(r#"{"v":2}"#)).await;
+    let r = s
+        .fetcher
+        .fetch_or_stored(summoner(Platform::Euw1), INTERACTIVE)
+        .await
+        .unwrap();
+    assert_eq!(
+        (r.x_cache, r.body.as_ref()),
+        (XCache::Miss, br#"{"v":2}"#.as_ref())
+    );
+    assert!(r.cache_age < Duration::from_millis(100), "{:?}", r.cache_age);
+}
+
+/// Riot's 404 is an answer, not a failure: the stored copy is not served.
+#[tokio::test]
+async fn expired_and_riots_404_is_not_found() {
+    let s = setup(&EXPIRING).await;
+    store_then_expire(&s).await;
+    mount(&s.server, SUMMONER, ResponseTemplate::new(404)).await;
+    let e = s
+        .fetcher
+        .fetch_or_stored(summoner(Platform::Euw1), INTERACTIVE)
+        .await
+        .unwrap_err();
+    assert_eq!(e.api.code, ErrorCode::NotFound);
+}
+
+#[tokio::test]
+async fn nothing_stored_and_rate_limited_is_rate_limited() {
+    let s = setup(&EXPIRING).await;
+    one_token_per_10s(&s);
+    s.limiter
+        .acquire("euw1", "x", Priority::Interactive, Duration::ZERO)
+        .await
+        .unwrap();
+    let e = s
+        .fetcher
+        .fetch_or_stored(summoner(Platform::Euw1), INTERACTIVE)
+        .await
+        .unwrap_err();
+    assert_eq!(e.api.code, ErrorCode::RateLimited);
+    assert!(
+        matches!(e.api.retry_after, Some(9 | 10)),
+        "{:?}",
+        e.api.retry_after
+    );
+    assert_eq!(upstream_calls(&s.server).await, 0);
+}
+
+#[tokio::test]
+async fn nothing_stored_and_an_upstream_failure_is_upstream_error() {
+    let s = setup(&EXPIRING).await;
+    mount(&s.server, SUMMONER, ResponseTemplate::new(500)).await;
+    let e = s
+        .fetcher
+        .fetch_or_stored(summoner(Platform::Euw1), INTERACTIVE)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (e.api.code, e.api.status.as_u16()),
+        (ErrorCode::UpstreamError, 502)
+    );
+}

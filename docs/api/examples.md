@@ -138,7 +138,7 @@ curl -s -H "Authorization: Bearer $KEY" "$BASE/v1/players/$PUUID/matches?platfor
 curl -s -H "Authorization: Bearer $KEY" "$BASE/v1/players/$PUUID/profile?platform=kr&refresh=true"
 ```
 
-The profile body has `puuid`, `platform`, `region`, `account`, `summoner`, `league[]`, `mastery[]`, `ageSeconds{…}`, `fetchedAgeSeconds{…}`, `refreshed`, `refreshAvailableIn`, `warnings[]`; the match page has `matchIds[]`, `matches[]`, `hasMore`, `backfill{…}` on the first page, and `archive{complete}` with `champion` (shapes in [endpoints-players-analytics.md](endpoints-players-analytics.md)). Captured without `platform`:
+The profile body has `puuid`, `platform`, `region`, `account`, `summoner`, `league[]`, `mastery[]`, `ageSeconds{…}`, `fetchedAgeSeconds{…}`, `refreshed`, `refreshAvailableIn`, `refreshing`, `warnings[]`; the match page has `matchIds[]`, `matches[]`, `hasMore`, `backfill{…}` on the first page, and `archive{complete}` with `champion` (shapes in [endpoints-players-analytics.md](endpoints-players-analytics.md)). Captured without `platform`:
 
 ```text
 400 {"error":{"code":"VALIDATION","message":"querystring must have required property 'platform'","requestId":"01M58N9D6PGC58Y7A9BZ3VXMY3"}}

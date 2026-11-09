@@ -112,6 +112,7 @@ expression: body
   "puuid": "NkQRxdiN3U3pEek5MWbWgaxzG_hpH5imJ9Ttch8ql5KM7D6p6Bh-Hbbvn6UoFVdGUBBIvcnEJv72qw",
   "refreshAvailableIn": 0,
   "refreshed": false,
+  "refreshing": false,
   "region": "asia",
   "summoner": {
     "profileIconId": 6,

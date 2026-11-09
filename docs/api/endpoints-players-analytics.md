@@ -7,8 +7,9 @@ The composite player routes (several Riot calls assembled into one document) and
 Shared behaviour (`src/routes/players.rs:L66-L105`, `L128-L147`):
 
 - `Content-Type: application/json; charset=utf-8`.
-- `X-Cache` is `MISS` if any part was a miss or bypass, else `HIT`; `X-Cache-Age` is the oldest part's content age; `X-Cache-Fetched-Age` is the oldest fetched age when any part has one. The body also reports ages per part (`ageSeconds`, `fetchedAgeSeconds`), which is what the site reads (site ADR-019).
+- `X-Cache` is `STALE` if any part was served past its soft TTL, else `MISS` if any part was a miss or bypass, else `HIT` (AVL-03, ADR-212); `X-Cache-Age` is the oldest part's content age; `X-Cache-Fetched-Age` is the oldest fetched age when any part has one. The body also reports ages per part (`ageSeconds`, `fetchedAgeSeconds`), which is what the site reads (site ADR-019).
 - A part that fails becomes `null` and adds a `warnings[]` entry `"<part> unavailable (<CODE>: <message>)"`; only the id-list failure on the match page fails the whole request.
+- **Stale beats none** (AVL-03, ADR-212). A part whose refresh fails for any reason but Riot's 404 (the limiter's budget, a 429, a 5xx, a timeout) is served from its stored copy, up to a day past its hard TTL, rather than left out; a part past its soft TTL is served at once and refreshed in the background. Either way the body says `"refreshing": true`, the part keeps its real `ageSeconds`/`fetchedAgeSeconds`, and `warnings[]` names it: `"<part> served stale (last read from Riot <n> s ago)"`. A part with nothing stored waits for the limiter at most `CLIENT_WAIT_BUDGET_MS` and fails as above.
 - `?refresh=true` is accepted from **any** consumer (unlike the passthrough routes) but metered: one claim per 60 s per `(part, puuid)` (`src/http/refresh.rs:L18`, `L43-L71`). Losing the race is not an error: the body says `"refreshed":false` and `"refreshAvailableIn":<seconds>`. `refresh` must be exactly `true` or `false` (`src/http/validate.rs:L185-L192`).
 - `?platform` is validated case-sensitively; an unknown value is `400 BAD_REGION` `querystring/platform must be equal to one of the allowed values` (`src/http/validate.rs:L194-L198`).
 
@@ -38,6 +39,7 @@ Response `ProfileBody` (`src/routes/players.rs:L190-L218`), shortened from `test
   "fetchedAgeSeconds": {"account": 0, "league": 0, "mastery": 0, "summoner": 0},
   "refreshed": false,
   "refreshAvailableIn": 0,
+  "refreshing": false,
   "warnings": []
 }
 ```
@@ -67,7 +69,7 @@ Response `MatchPage` (`src/routes/players.rs:L496-L526`, `MatchSummary` `src/rou
   ],
   "matchIdsAgeSeconds": 0, "matchIdsFetchedAgeSeconds": 0,
   "backfill": {"jobId": "01M58N9VRRQQGTJX5Y8NRJ9533", "status": "queued", "limit": 4294967295},
-  "refreshed": false, "refreshAvailableIn": 0, "warnings": []
+  "refreshed": false, "refreshAvailableIn": 0, "refreshing": false, "warnings": []
 }
 ```
 

@@ -392,7 +392,11 @@ impl Fetcher {
     /// `STALE` with its real ages. With nothing stored, the error stands. The
     /// fetch itself is unchanged: an expired copy still goes upstream first,
     /// inside the caller's budget (`CLIENT_WAIT_BUDGET_MS` for an interactive one).
-    pub async fn fetch_or_stored(&self, req: RiotRequest, opts: FetchOptions) -> Result<FetchResult, FetchError> {
+    pub async fn fetch_or_stored(
+        &self,
+        req: RiotRequest,
+        opts: FetchOptions,
+    ) -> Result<FetchResult, FetchError> {
         let key = cache_key(&self.inner.scope, &req);
         let endpoint = req.endpoint.id;
         let err = match self.fetch(req, opts).await {

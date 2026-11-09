@@ -43,6 +43,11 @@ struct Env {
 
 /// Which Riot calls fail, by path fragment.
 async fn env(failing: &[&str]) -> Env {
+    env_with(failing, &[]).await
+}
+
+/// [`env`] with config overrides.
+async fn env_with(failing: &[&str], config: &[(&str, &str)]) -> Env {
     let server = MockServer::start().await;
     for f in failing {
         Mock::given(path_regex(format!(".*{f}.*")))
@@ -93,7 +98,7 @@ async fn env(failing: &[&str]) -> Env {
             .mount(&server)
             .await;
     }
-    let (dir, state, router) = common::app_with(&[], &server.uri());
+    let (dir, state, router) = common::app_with(config, &server.uri());
     let key = consumers::create(
         &state.db,
         NewConsumer {
@@ -726,6 +731,130 @@ async fn a_match_page_refresh_rereads_only_the_id_list() {
     assert_eq!(
         e.get(&format!("{PROFILE}&refresh=true")).await.json()["refreshed"],
         true
+    );
+}
+
+// ── Stale beats none (AVL-03, ADR-212) ──────────────────────────────────────
+
+/// From now on, every Riot call whose path contains `fragment` answers `status`.
+async fn fail_from_now(e: &Env, fragment: &str, status: u16) {
+    Mock::given(path_regex(format!(".*{fragment}.*")))
+        .respond_with(ResponseTemplate::new(status))
+        .with_priority(1)
+        .mount(&e.server)
+        .await;
+}
+
+#[tokio::test]
+async fn a_fresh_profile_is_not_refreshing() {
+    let e = env(&[]).await;
+    for expected in ["MISS", "HIT"] {
+        let r = e.get(PROFILE).await;
+        assert_eq!(x_cache(&r).0, expected);
+        let b = r.json();
+        assert_eq!(b["refreshing"], json!(false));
+        assert_eq!(b["warnings"], json!([]));
+    }
+}
+
+/// The owner's rule: a refresh that fails never takes the stored part away.
+#[tokio::test]
+async fn a_part_past_its_hard_ttl_whose_refresh_fails_is_served_stale() {
+    // League entries live 1 s, soft and hard alike.
+    let e = env_with(
+        &[],
+        &[
+            ("CACHE_TTL_OVERRIDES", "league=1"),
+            ("STALE_WHILE_REVALIDATE", "false"),
+        ],
+    )
+    .await;
+    let first = e.get(PROFILE).await;
+    let stored = first.json()["league"].clone();
+    assert!(stored.is_array());
+    // 1.1 s, plus v1's two retries (0.8 to 1.2 s): 2 s old when served.
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    fail_from_now(&e, "/entries/by-puuid/", 503).await;
+
+    let r = e.get(PROFILE).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(x_cache(&r), ("STALE", "2"), "the stalest part's real age");
+    let b = r.json();
+    assert_eq!(b["league"], stored, "the stored ranks, not null");
+    assert_eq!(b["refreshing"], json!(true));
+    assert_eq!(
+        (
+            b["ageSeconds"]["league"].clone(),
+            b["fetchedAgeSeconds"]["league"].clone()
+        ),
+        (json!(2), json!(2))
+    );
+    assert_eq!(
+        b["warnings"],
+        json!(["league served stale (last read from Riot 2 s ago)"])
+    );
+    // It went upstream first: one call, then v1's two retries.
+    assert_eq!(e.calls_to("/entries/by-puuid/").await, 1 + 3);
+}
+
+#[tokio::test]
+async fn a_part_past_its_soft_ttl_is_served_stale_while_it_refreshes() {
+    // Soft 1 s, hard 4 s: served at once, refreshed in the background.
+    let e = env_with(&[], &[("CACHE_TTL_OVERRIDES", "league=1")]).await;
+    e.get(PROFILE).await;
+    tokio::time::sleep(Duration::from_millis(1600)).await;
+
+    let r = e.get(PROFILE).await;
+    assert_eq!(x_cache(&r).0, "STALE");
+    let b = r.json();
+    assert_eq!(b["refreshing"], json!(true));
+    assert!(b["league"].is_array());
+    assert_eq!(
+        b["warnings"],
+        json!(["league served stale (last read from Riot 2 s ago)"])
+    );
+}
+
+#[tokio::test]
+async fn a_part_with_nothing_stored_still_fails_as_before() {
+    let e = env(&[]).await;
+    fail_from_now(&e, "/entries/by-puuid/", 503).await;
+    let r = e.get(PROFILE).await;
+    assert_eq!(x_cache(&r).0, "MISS");
+    let b = r.json();
+    assert_eq!(b["league"], Value::Null);
+    assert_eq!(b["refreshing"], json!(false));
+    assert_eq!(
+        b["warnings"],
+        json!(["league unavailable (UPSTREAM_ERROR: Upstream request failed)"])
+    );
+}
+
+#[tokio::test]
+async fn a_match_page_whose_expired_id_list_cannot_be_refreshed_is_served_stale() {
+    let e = env_with(
+        &[],
+        &[
+            ("CACHE_TTL_OVERRIDES", "matchIds=1"),
+            ("STALE_WHILE_REVALIDATE", "false"),
+        ],
+    )
+    .await;
+    let first = e.get(&page("&count=5")).await;
+    assert_eq!(first.json()["refreshing"], json!(false));
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    fail_from_now(&e, "/ids", 503).await;
+
+    let r = e.get(&page("&count=5")).await;
+    assert_eq!(r.status, StatusCode::OK, "the stored id list, not a failed page");
+    assert_eq!(x_cache(&r).0, "STALE");
+    let b = r.json();
+    assert_eq!(b["refreshing"], json!(true));
+    assert_eq!(b["matchIds"].as_array().unwrap().len(), 5);
+    assert_eq!(b["matches"].as_array().unwrap().len(), 5, "from the archive");
+    assert_eq!(
+        b["warnings"],
+        json!(["match ids served stale (last read from Riot 2 s ago)"])
     );
 }
 

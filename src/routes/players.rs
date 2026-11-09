@@ -14,8 +14,8 @@
 //!
 //! Stale beats none (AVL-03): every part is read with
 //! [`crate::fetcher::Fetcher::fetch_or_stored`], so a part whose refresh fails
-//! is served from the stored copy, however old, rather than left out. Only a
-//! part with nothing stored fails.
+//! is served from the stored copy (kept a day past its hard TTL) rather than
+//! left out. Only a part with nothing stored fails.
 
 mod refresh;
 mod summary;
@@ -419,7 +419,9 @@ async fn compose_profile(
     summary = "A player's profile in one call",
     description = "Account, summoner, ranked entries and top mastery, fetched concurrently and each cached on \
                    its own. A part that fails is `null` and named in `warnings`; only every part failing is a \
-                   404. `refresh=true` re-reads every part upstream, at most once a minute per player. \
+                   404. A part whose refresh fails (rate limited, Riot down) is served from its stored \
+                   copy (kept a day past its TTL) rather than left out: the document then says `X-Cache: STALE` and \
+                   `refreshing: true`, and names the part in `warnings`. `refresh=true` re-reads every part upstream, at most once a minute per player. \
                    Without `platform`, the proxy reads the player's platform from account-v1's active region \
                    (cached like an account) and echoes it as `platform`, so the player's other routes can \
                    be routed from the profile alone.",
@@ -555,10 +557,12 @@ pub struct MatchPage {
     backfill: Option<BackfillNotice>,
     refreshed: bool,
     refresh_available_in: u64,
-    /// The id list was served past its soft TTL (`X-Cache: STALE`): a stored
-    /// copy, because its refresh is running in the background or failed. It
-    /// is named in `warnings`; a later read gets the fresh one.
+    /// The id list (or a match fetched for the page) was served past its soft
+    /// TTL (`X-Cache: STALE`): a stored copy, because its refresh is running in
+    /// the background or failed. It is named in `warnings`; a later read gets
+    /// the fresh one.
     refreshing: bool,
+    /// Names each match that could not be loaded, and each part served stale.
     warnings: Vec<String>,
 }
 
@@ -641,7 +645,9 @@ async fn maybe_backfill(
     description = "The id page, then every match on it, fanned out concurrently. Archived matches come from \
                    one archive read at no quota cost. Each entry is the player's own line in the game; the \
                    full match stays one call away at `/v1/lol/matches/{region}/{matchId}`. A match that \
-                   cannot be fetched is left out and named in `warnings`; a failed id lookup fails the page.\n\n\
+                   cannot be fetched is left out and named in `warnings`; a failed id lookup fails the page \
+                   unless an id list is stored (kept a day past its TTL): it is then served with `X-Cache: STALE` and \
+                   `refreshing: true`, and named in `warnings`.\n\n\
                    **`champion`** filters by champion. Riot's id list cannot, so the page comes from this \
                    deployment's archive: Riot's newest 20 ids are read and archived first, then the archive \
                    is paged for that champion's games, newest first. Older games appear as the player's \
@@ -792,6 +798,7 @@ async fn match_page(
             match fetched.remove(m) {
                 Some(Ok(r)) => {
                     tally.add(&r);
+                    warnings.extend(stale_warning(&format!("match {m}"), &r));
                     r.body
                 }
                 Some(Err(e)) => {
@@ -875,7 +882,10 @@ async fn champion_page(
     .await;
     for (m, r) in fetched {
         match r {
-            Ok(r) => tally.add(&r),
+            Ok(r) => {
+                tally.add(&r);
+                warnings.extend(stale_warning(&format!("recent match {m}"), &r));
+            }
             // It may not be this champion's game; say so rather than guess.
             Err(e) => warnings.push(format!(
                 "recent match {m} not archived ({}: {}); it may be missing from this page",

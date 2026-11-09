@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 const html = readFileSync(new URL('../src/ui/showcase.html', import.meta.url), 'utf8');
 const block = html.match(/\/\/ -{10} pure helpers[^\n]*\n([\s\S]*?)\/\/ -{10} end pure helpers/);
 assert.ok(block, 'the pure helpers block is marked in showcase.html');
-const h = new Function(`${block[1]}; return { APEX, QUEUES, LADDER_PAGE, APEX_LIST_CAP, apexCapNote, tierColour, winRate, pct, sortLadder, ladderPage, championIndex, imageUrl, statusNotices, topChampions, parseRiotId, parseRoute, champKey, findChampion, explorerLink, rankLabel, rankCards, queueNames, spellIndex, outcome, kda, durationSecs, clock, ago, masterySummary, liveGame, TIERS, SIDES, matchHref, matchTeams, goldDiff, goldScale, signedGold, tierRows, runeIndex, runePair, runeUrl, itemIndex, bootsIndex, itemSlots, roleList, thousands, patchChoices, pickPatch, patchLabel, BUILD_STARTER_MS, SHOP_VISIT_GAP_MS, itemCatalog, playerBuild, shopVisits, vsChoices, SMALL_SAMPLE };`)();
+const h = new Function(`${block[1]}; return { APEX, QUEUES, LADDER_PAGE, APEX_LIST_CAP, apexCapNote, tierColour, winRate, pct, sortLadder, ladderPage, championIndex, imageUrl, statusNotices, topChampions, parseRiotId, parseRoute, champKey, findChampion, explorerLink, rankLabel, rankCards, queueNames, spellIndex, outcome, kda, durationSecs, clock, ago, masterySummary, liveGame, TIERS, SIDES, matchHref, matchTeams, goldDiff, goldScale, signedGold, tierRows, runeIndex, runePair, runeUrl, itemIndex, bootsIndex, itemSlots, roleList, thousands, patchChoices, pickPatch, patchLabel, BUILD_STARTER_MS, SHOP_VISIT_GAP_MS, itemCatalog, playerBuild, shopVisits, vsChoices, SMALL_SAMPLE, splitWarnings, refreshingNote };`)();
 
 test('apex tiers and queues are the ones the apex route accepts', () => {
   assert.deepEqual(h.APEX, ['CHALLENGER', 'GRANDMASTER', 'MASTER']);
@@ -524,4 +524,29 @@ test('vs hashes and the vs picker choices (FLT-05)', () => {
   assert.deepEqual(h.vsChoices(list, 145, name).at(-1), [145, null], 'an unlisted pick last, without a count');
   assert.deepEqual(h.vsChoices(null, 145, name), [[145, null]], 'before the matchups arrive');
   assert.equal(h.SMALL_SAMPLE, 10);
+});
+
+test('a composite\'s warnings split into failed parts and stale ones (AVL-03)', () => {
+  const warnings = [
+    'league unavailable (UPSTREAM_ERROR: Upstream request failed)',
+    'summoner served stale (last read from Riot 1300 s ago)',
+    'match ids served stale',
+  ];
+  assert.deepEqual(h.splitWarnings(warnings), {
+    failed: ['league unavailable (UPSTREAM_ERROR: Upstream request failed)'],
+    stale: ['summoner served stale (last read from Riot 1300 s ago)', 'match ids served stale'],
+  });
+  assert.deepEqual(h.splitWarnings(undefined), { failed: [], stale: [] });
+  // A failure whose message happens to say "served stale" mid-sentence stays a failure.
+  assert.deepEqual(h.splitWarnings(['match X unavailable (served stale elsewhere)']).failed.length, 1);
+});
+
+test('the refreshing note names the stale parts, and is empty when nothing is refreshing', () => {
+  assert.equal(h.refreshingNote({ refreshing: false, warnings: ['summoner served stale'] }), '');
+  assert.equal(h.refreshingNote(undefined), '');
+  assert.equal(
+    h.refreshingNote({ refreshing: true, warnings: ['league unavailable (RATE_LIMITED: x)', 'summoner served stale (last read from Riot 90 s ago)'] }),
+    'Showing stored data while it refreshes: summoner served stale (last read from Riot 90 s ago).',
+  );
+  assert.equal(h.refreshingNote({ refreshing: true, warnings: [] }), 'Showing stored data while it refreshes.');
 });

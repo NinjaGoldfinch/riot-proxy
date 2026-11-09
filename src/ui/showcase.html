@@ -712,6 +712,23 @@ function shopVisits(purchases) {
   return out.map(({ t, items }) => ({ t, items }));
 }
 
+/**
+ * A composite's `warnings`, split (AVL-03): `failed` names parts that could not be loaded,
+ * `stale` parts served from a stored copy while they refresh ("… served stale (…)").
+ */
+function splitWarnings(warnings) {
+  const all = Array.isArray(warnings) ? warnings : [];
+  const isStale = (w) => / served stale(?: \(|$)/.test(w);
+  return { failed: all.filter((w) => !isStale(w)), stale: all.filter(isStale) };
+}
+
+/** The note under a composite with `refreshing: true`: what is shown from storage, and why. */
+function refreshingNote(doc) {
+  if (!doc?.refreshing) return '';
+  const { stale } = splitWarnings(doc.warnings);
+  return `Showing stored data while it refreshes${stale.length ? `: ${stale.join('; ')}` : ''}.`;
+}
+
 // ---------- end pure helpers
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -1026,6 +1043,8 @@ function renderProfile() {
   const icon = imageUrl(version, 'profileicon', p.summoner?.profileIconId != null ? `${p.summoner.profileIconId}.png` : null);
   const wait = p.refreshAvailableIn ?? 0;
   const top = Array.isArray(p.mastery) ? p.mastery : [];
+  // A stale part is still shown; only the parts that failed are "partly loaded" (AVL-03).
+  const { failed } = splitWarnings(p.warnings);
   $('#pHead').innerHTML = `<div class="who">
     ${icon ? `<img class="avatar" src="${esc(icon)}" alt="profile icon">` : '<span class="avatar"></span>'}
     <div>
@@ -1035,7 +1054,7 @@ function renderProfile() {
     </div>
     ${top.length ? `<div class="mains"><span class="muted">Top mastery</span>${top.map((m) => champLink(m.championId)).join('')}</div>` : ''}
     <div class="tools"><button data-refresh ${wait > 0 ? `disabled title="available again in ${esc(wait)} s"` : 'title="re-read every part upstream (metered: once a minute)"'}>${p.refreshed ? 'Refreshed' : 'Refresh'}</button></div>
-  </div>${p.warnings?.length ? `<p class="err">Partly loaded: ${esc(p.warnings.join('; '))}</p>` : ''}`;
+  </div>${failed.length ? `<p class="err">Partly loaded: ${esc(failed.join('; '))}</p>` : ''}${p.refreshing ? `<p class="muted note">${esc(refreshingNote(p))}</p>` : ''}`;
 }
 
 function renderRanks() {
@@ -1100,7 +1119,9 @@ async function loadMatches(seq, refresh = false, more = false) {
   const note = bf ? `<p class="muted">This lookup queued the player's history for archiving (${esc(bf.status)}); the champion pool fills in as it runs.</p>` : '';
   // A filtered page comes from the archive, which may not reach back to the player's first game yet.
   const partial = res.json.archive && !res.json.archive.complete ? `<p class="muted">Only games archived so far: older ones appear as the player's history is archived.</p>` : '';
-  const warn = res.json.warnings?.length ? `<p class="err">${esc(res.json.warnings.length)} match${res.json.warnings.length === 1 ? '' : 'es'} could not be loaded.</p>` : '';
+  const { failed } = splitWarnings(res.json.warnings);
+  const warn = (failed.length ? `<p class="err">${esc(failed.length)} match${failed.length === 1 ? '' : 'es'} could not be loaded.</p>` : '')
+    + (res.json.refreshing ? `<p class="muted note">${esc(refreshingNote(res.json))}</p>` : '');
   el.innerHTML = matchesHeader() + (pl.matches.length
     ? `<div class="matches">${pl.matches.map(matchCard).join('')}</div>`
     : `<p class="empty">No ${pl.queue ? `${esc(queueName(pl.queue))} ` : ''}games found.</p>`)

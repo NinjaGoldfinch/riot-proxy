@@ -200,7 +200,7 @@ pub async fn warm(db: &Db, l1: &L1) -> Result<usize, DbError> {
             // A row from before V0009 has no fetch time: its content's is the best there is.
             let mut stmt = c.prepare(
                 "SELECT key, body, status, content_at, COALESCE(fetched_at, content_at), soft_expires, hard_expires
-                 FROM cache WHERE hard_expires > ?1 OR (status = 200 AND hard_expires > ?2)",
+                 FROM cache WHERE hard_expires > ?2 AND (status = 200 OR hard_expires > ?1)",
             )?;
             let rows = stmt
                 .query_map([now_ms, kept_ms], |r| {
@@ -230,7 +230,7 @@ pub async fn sweep(db: &Db) -> Result<usize, DbError> {
     let kept_ms = now_ms.saturating_sub(keep_ms());
     db.write(move |c| {
         Ok(c.execute(
-            "DELETE FROM cache WHERE hard_expires <= ?2 OR (status <> 200 AND hard_expires <= ?1)",
+            "DELETE FROM cache WHERE hard_expires <= ?1 AND (status <> 200 OR hard_expires <= ?2)",
             [now_ms, kept_ms],
         )?)
     })

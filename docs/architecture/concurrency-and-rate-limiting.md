@@ -21,7 +21,7 @@ Per-consumer quotas are separate: a 60 s sliding window of `quota_per_min` admis
 
 | Caller | Priority | Budget | What happens when the budget is exceeded |
 |---|---|---|---|
-| HTTP route | Interactive | `CLIENT_WAIT_BUDGET_MS` (2000) | `503 RATE_LIMITED` with `Retry-After`, or a cached copy inside its hard TTL served as `STALE` |
+| HTTP route | Interactive | `CLIENT_WAIT_BUDGET_MS` (2000) | `503 RATE_LIMITED` with `Retry-After`, or a cached copy inside its hard TTL served as `STALE`; a `/v1/players/*` part also takes a copy up to a day past its hard TTL (AVL-03) |
 | Job | Bulk | `JOB_YIELD_BUDGET_MS` (1000) | The job yields: back to `pending` with `run_after = retry_at`, attempts not counted |
 | Background refresh | Bulk | 15 min | Logged at debug; the stale entry stays |
 

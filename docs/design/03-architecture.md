@@ -101,7 +101,7 @@ sequenceDiagram
     else stale (soft < now < hard)
         L1-->>C: 200 X-Cache: STALE
         F-)SF: spawn refresh @ Bulk
-    else miss
+    else miss, or expired (a 200 kept 24 h past hard, AVL-03)
         F->>SF: join_or_start(key)
         SF->>RL: acquire(scope, method, Interactive, budget 2 s)
         RL-->>SF: token | RATE_LIMITED
@@ -111,8 +111,16 @@ sequenceDiagram
         SF->>L1: put(key, body, soft, hard)
         SF->>AR: archive if immutable
         SF-->>C: 200 X-Cache: MISS
+        opt upstream failed (budget, 429, 5xx, timeout) and a copy inside hard TTL
+            SF-->>C: 200 X-Cache: STALE (v1 §8.5)
+        end
+        opt /v1/players/* only: it failed and an expired copy is stored
+            F-->>C: part served X-Cache: STALE with its real ages (AVL-03)
+        end
     end
 ```
+
+**Stale beats none** (AVL-03, ADR-212, owner 2026-11-08). The `/v1/players/*` composites read each part through `Fetcher::fetch_or_stored`: the fetch is the one above, and when its upstream leg fails for any reason but Riot's 404, the stored copy is served as `STALE` with its real ages even past hard TTL (L1 keeps a 200 `EXPIRED_KEEP`, 24 h, longer; design/04 §Cache tiers). The composite then sends `X-Cache: STALE` and `refreshing: true` and names the part in `warnings`. Only a part with nothing stored waits for the limiter (at most `CLIENT_WAIT_BUDGET_MS`) and fails with the usual envelope. The passthrough routes keep v1's rule.
 
 `X-Cache` values, headers (`X-Cache-Age`, `X-RateLimit-*`, `X-Request-Id`) and error codes (`QUOTA_EXCEEDED` vs `RATE_LIMITED`) are carried over verbatim from v1 so downstream projects need no changes.
 

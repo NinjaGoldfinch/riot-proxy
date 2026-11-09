@@ -12,7 +12,7 @@ The registry is `ENDPOINTS` in `src/riot/endpoints.rs:L91-L288`: v1's sixteen id
 | `account.byPuuid` | `/riot/account/v1/accounts/by-puuid/{puuid}` | account cluster | 86 400 / 345 600 | 300 | yes | `/v1/riot/accounts/by-puuid/*`, profile |
 | `account.regionByPuuid` (v2) | `/riot/account/v1/region/by-game/lol/by-puuid/{puuid}` | account cluster | 86 400 / 345 600 | 300 | yes | `/v1/riot/accounts/region/by-puuid`, profile without `platform` |
 | `summoner.byPuuid` | `/lol/summoner/v4/summoners/by-puuid/{puuid}` | platform | 3 600 / 14 400 | 30 | yes | `/v1/lol/summoners/*`, profile |
-| `league.entriesByPuuid` | `/lol/league/v4/entries/by-puuid/{puuid}` | platform | 300 / 1 200 | 30 | no | `/v1/lol/league/entries/by-puuid/*`, profile, `poll:rank`, `ranks:lookup` |
+| `league.entriesByPuuid` | `/lol/league/v4/entries/by-puuid/{puuid}` | platform | 300 / 1 200 | 30 | yes (AVL-03) | `/v1/lol/league/entries/by-puuid/*`, profile, `poll:rank`, `ranks:lookup` |
 | `league.challenger` | `/lol/league/v4/challengerleagues/by-queue/{queue}` | platform | 120 / 480 | none | yes | `/v1/lol/league/apex/*`, `ladder:apex`, ladder probe |
 | `league.grandmaster` | `/lol/league/v4/grandmasterleagues/by-queue/{queue}` | platform | 120 / 480 | none | yes | as above |
 | `league.master` | `/lol/league/v4/masterleagues/by-queue/{queue}` | platform | 120 / 480 | none | yes | as above |

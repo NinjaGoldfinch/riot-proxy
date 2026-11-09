@@ -35,12 +35,12 @@ flowchart TD
     store --> M["200 · X-Cache: MISS or BYPASS"]
 ```
 
-Only the L1 lookup decides freshness; L2 is never read on the request path, it is loaded into L1 once at boot (`src/cli/serve.rs:121-129`). A miss or bypass goes through the single-flight map so concurrent misses for one key share one upstream call (`src/fetcher.rs:348-364`, `src/singleflight.rs:1-12`). When the limiter refuses or Riot fails, a copy inside its hard TTL is served as `STALE` (`fetcher.rs:415-428,460-466`).
+Only the L1 lookup decides freshness; L2 is never read on the request path, it is loaded into L1 once at boot (`src/cli/serve.rs:121-129`). A miss or bypass goes through the single-flight map so concurrent misses for one key share one upstream call (`src/fetcher.rs:348-364`, `src/singleflight.rs:1-12`). When the limiter refuses or Riot fails, a copy inside its hard TTL is served as `STALE` (`fetcher.rs:415-428,460-466`). The `/v1/players/*` composites read through `Fetcher::fetch_or_stored`, which, when the fetch fails for any reason but a 404, also serves a copy past its hard TTL as `STALE` with its real ages (`fetcher.rs:388-421`; AVL-03, ADR-212); the composite then says `X-Cache: STALE` and `refreshing: true` and names the part in `warnings` (`src/routes/players.rs:75-105,142-148`).
 
 ## L1
 
 - A `moka::future::Cache<String, Arc<CacheEntry>>` with `max_capacity = CACHE_L1_MAX_MB × 1024 × 1024` bytes (default 128, range 1–1 048 576, `src/config.rs:809`) and a weigher of `key.len() + body.len() + 128` (`src/cache/l1.rs:18-19,102-119`). An entry heavier than the whole budget is not kept.
-- Freshness is the entry's own instants on tokio time: `Fresh` before `soft_expires`, `Stale` before `hard_expires`, else invalidated and `Miss` (`l1.rs:121-134`). moka's per-entry expiry is set to the hard TTL only to reclaim memory (`l1.rs:64-86`).
+- Freshness is the entry's own instants on tokio time: `Fresh` before `soft_expires`, `Stale` before `hard_expires`, then, for a positive entry, `Expired` for `EXPIRED_KEEP` (24 h) longer, else invalidated and `Miss` (`l1.rs:24-27,139-154`). An `Expired` entry is never served by itself: the fetcher goes upstream as on a miss, and only `fetch_or_stored` falls back on it (AVL-03, ADR-212). moka's per-entry expiry is the hard TTL, plus `EXPIRED_KEEP` for a positive entry, only to reclaim memory (`l1.rs:76-105`); `CACHE_L1_MAX_MB` still bounds the whole.
 - Soft and hard TTLs come from the endpoint registry; hard = soft × 4 while `STALE_WHILE_REVALIDATE=true` (default), else hard = soft (`src/riot/endpoints.rs:13-14,476-489`, `config.rs:775`). A `Stale` hit is served and a bulk-priority refresh runs in the background with a 15-minute budget (`fetcher.rs:332-338,376-390`).
 - A refresh that returns byte-identical bytes keeps `content_at` and restarts `fetched_at` and both expiries (`l1.rs:161-176`).
 - Negative entries are 404s stored with `soft = hard = negative TTL`, never `Stale`: `NEG_TTL_SECONDS` (30) for most endpoints, `NEG_TTL_ACCOUNT_SECONDS` (300) for account-v1, none for the ladder, rotations, status and league-exp endpoints (`l1.rs:143-146`, `config.rs:769-770`, `endpoints.rs:93-284`).
@@ -49,9 +49,9 @@ Only the L1 lookup decides freshness; L2 is never read on the request path, it i
 
 ## L2
 
-- The SQLite `cache` table holds only endpoints with `persist_l2`: `account.byRiotId`, `account.byPuuid`, `account.regionByPuuid`, `summoner.byPuuid`, the four ladder endpoints and both mastery endpoints (`src/cache/mod.rs:58-64`, `endpoints.rs:639-657`). Negative entries for those endpoints are persisted too (`cache/mod.rs:52-56`).
+- The SQLite `cache` table holds only endpoints with `persist_l2`: `account.byRiotId`, `account.byPuuid`, `account.regionByPuuid`, `summoner.byPuuid`, `league.entriesByPuuid` (its absence would leave a player page without ranks after a restart, AVL-03), the four ladder endpoints and both mastery endpoints (`src/cache/mod.rs:58-64`, `endpoints.rs:123-134`, `endpoints.rs:641-660`). Negative entries for those endpoints are persisted too (`cache/mod.rs:52-56`).
 - Write-behind: `put` enqueues a row on a bounded channel of 10 000; the writer flushes a batch of 500 rows or 2 s after a batch's first row, whichever comes first, as one `INSERT OR REPLACE` transaction; a full channel drops the row, logs a warning and bumps `cache_l2_dropped_total` (`src/cache/l2.rs:23-28,102-112,126-183`). The request path never waits.
-- Boot: `warm` loads every row with `hard_expires > now` into L1, then `sweep` deletes rows with `hard_expires <= now` (`l2.rs:186-223`, `serve.rs:121-129`). Shutdown drops the sender and awaits the writer, which flushes the rest (`l2.rs:115-123`, `serve.rs:464`).
+- Boot: `warm` loads every row L1 would still hold into L1 (a 200 with `hard_expires > now − 24 h`, a 404 with `hard_expires > now`), then `sweep` deletes the rest (`l2.rs:186-238`, `serve.rs:121-129`). Shutdown drops the sender and awaits the writer, which flushes the rest (`l2.rs:115-123`, `serve.rs:464`).
 - The daily `maintenance` job runs `sweep` again (`src/jobs/maintenance.rs:251`).
 
 ## TTLs per endpoint
@@ -62,7 +62,7 @@ From the registry (`src/riot/endpoints.rs:93-284`); hard TTLs assume stale-while
 |---|---|---|---|---|---|
 | `account.byRiotId`, `account.byPuuid`, `account.regionByPuuid` | 86 400 s | 345 600 s | 300 s | yes | `account` |
 | `summoner.byPuuid` | 3 600 s | 14 400 s | 30 s | yes | `summoner` |
-| `league.entriesByPuuid` | 300 s | 1 200 s | 30 s | no | `league` |
+| `league.entriesByPuuid` | 300 s | 1 200 s | 30 s | yes | `league` |
 | `league.challenger`, `league.grandmaster`, `league.master`, `league.entriesByTier` | 120 s | 480 s | none | yes | `ladder` |
 | `league.expEntries` | 120 s | 480 s | none | no | `ladder` |
 | `match.idsByPuuid` | 120 s | 480 s | 30 s | no | `matchIds` |
@@ -126,8 +126,8 @@ Consumer lookups are cached in a moka cache of 10 000 entries keyed by the key's
 
 | State | After restart |
 |---|---|
-| L1 | empty, then rewarmed from L2 before the listener opens (`serve.rs:121-129`); L1-only endpoints (league entries, spectator, match-id lists, rotations, status) start cold |
-| L2 | kept; expired rows swept |
+| L1 | empty, then rewarmed from L2 before the listener opens (`serve.rs:121-129`); L1-only endpoints (spectator, match-id lists, rotations, status) start cold |
+| L2 | kept; rows more than 24 h past hard TTL (a 404 at its TTL) swept |
 | Limiter buckets | restored from `limiter_state`; a checkpoint older than 120 s restores every window as full (`src/riot/limiter/persist.rs:23,92-94`) |
 | Analytics responses | cold until the next rebuild's or delta's warm; the first visitor computes |
 | Auth cache, refresh windows, single-flight map | empty |
@@ -135,5 +135,5 @@ Consumer lookups are cached in a moka cache of 10 000 entries keyed by the key's
 | Offload trigger counter | 0; boot queues an `archive:offload` run to compensate (`src/cli/serve.rs:553-558`) |
 
 ---
-**Sources:** `src/fetcher.rs:L306-L372`, `src/fetcher.rs:L381-L395`, `src/fetcher.rs:L420-L433`, `src/cache/l1.rs:L18-L19`, `src/cache/l1.rs:L64-L146`, `src/cache/l1.rs:L161-L204`, `src/cache/l2.rs:L23-L28`, `src/cache/l2.rs:L102-L223`, `src/cache/mod.rs:L39-L64`, `src/cache/keys.rs:L24-L123`, `src/riot/endpoints.rs:L13-L14`, `src/riot/endpoints.rs:L93-L284`, `src/riot/endpoints.rs:L424-L512`, `src/config.rs:L809-L816`, `src/config.rs:L853`, `src/cli/serve.rs:L121-L129`, `src/cli/serve.rs:L553-L558`, `src/cli/serve.rs:L464`, `src/routes/analytics.rs:L52`, `src/routes/analytics.rs:L577-L616`, `src/routes/analytics.rs:L749-L765`, `src/routes/analytics.rs:L947-L983`, `src/archive/analytics.rs:L1375-L1404`, `src/jobs/analytics.rs:L815-L818`, `src/routes/analytics/cache.rs:L1-L264`, `src/routes/players.rs:L883-L884`, `src/routes/players.rs:L1050-L1078`, `src/routes/players/refresh.rs:L5-L71`, `src/routes/passthrough.rs:L126-L167`, `src/routes/admin.rs:L816-L883`, `src/routes/statics.rs:L26`, `src/routes/statics.rs:L79`, `src/routes/ui.rs:L8-L9`, `src/routes/ui.rs:L108-L128`, `src/http/auth.rs:L29-L32`, `src/http/auth.rs:L209-L212`, `src/archive/matches.rs:L232-L328`, `src/archive/mod.rs:L128-L144`, `src/riot/limiter/persist.rs:L23`, `src/jobs/maintenance.rs:L251`, `src/jobs/ddragon.rs:L239-L285`, `docs/design/04-data-and-cache.md:L372-L436`, `docs/_meta/scratch/riot-and-cache.md`
+**Sources:** `src/fetcher.rs:L306-L372`, `src/fetcher.rs:L381-L395`, `src/fetcher.rs:L388-L421`, `src/fetcher.rs:L420-L433`, `src/cache/l1.rs:L18-L19`, `src/cache/l1.rs:L24-L27`, `src/cache/l1.rs:L76-L154`, `src/cache/l1.rs:L161-L204`, `src/cache/l2.rs:L23-L28`, `src/cache/l2.rs:L102-L238`, `src/cache/mod.rs:L39-L64`, `src/cache/keys.rs:L24-L123`, `src/riot/endpoints.rs:L13-L14`, `src/riot/endpoints.rs:L93-L284`, `src/riot/endpoints.rs:L123-L134`, `src/riot/endpoints.rs:L424-L512`, `src/config.rs:L809-L816`, `src/config.rs:L853`, `src/cli/serve.rs:L121-L129`, `src/cli/serve.rs:L553-L558`, `src/cli/serve.rs:L464`, `src/routes/analytics.rs:L52`, `src/routes/analytics.rs:L577-L616`, `src/routes/analytics.rs:L749-L765`, `src/routes/analytics.rs:L947-L983`, `src/archive/analytics.rs:L1375-L1404`, `src/jobs/analytics.rs:L815-L818`, `src/routes/analytics/cache.rs:L1-L264`, `src/routes/players.rs:L75-L148`, `src/routes/players.rs:L883-L884`, `src/routes/players.rs:L1050-L1078`, `src/routes/players/refresh.rs:L5-L71`, `src/routes/passthrough.rs:L126-L167`, `src/routes/admin.rs:L816-L883`, `src/routes/statics.rs:L26`, `src/routes/statics.rs:L79`, `src/routes/ui.rs:L8-L9`, `src/routes/ui.rs:L108-L128`, `src/http/auth.rs:L29-L32`, `src/http/auth.rs:L209-L212`, `src/archive/matches.rs:L232-L328`, `src/archive/mod.rs:L128-L144`, `src/riot/limiter/persist.rs:L23`, `src/jobs/maintenance.rs:L251`, `src/jobs/ddragon.rs:L239-L285`, `docs/design/04-data-and-cache.md:L372-L436`, `docs/_meta/scratch/riot-and-cache.md`
 **Last verified:** 2026-11-09 against commit `6eefe67`
