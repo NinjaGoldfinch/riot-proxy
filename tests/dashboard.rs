@@ -379,6 +379,7 @@ async fn history_points_are_sampled_capped_at_1440_and_served_oldest_first() {
 async fn the_snapshot_and_stats_read_the_samples_until_the_next_one() {
     let e = env().await;
     let stats = &e.state.stats;
+    let archive = stats.sample_archive().await.unwrap();
     let fast = stats.sample_fast().await.unwrap();
     let slow = stats.sample_slow().await.unwrap();
 
@@ -407,10 +408,11 @@ async fn the_snapshot_and_stats_read_the_samples_until_the_next_one() {
         (&json!(1), &json!(1))
     );
     assert!(st["sampledAt"]["fast"].as_i64().unwrap() >= before);
-    assert_eq!(st["sampledAt"]["slow"], json!(slow.at));
+    // The older of the archive sample and the slow one (AVL-06).
+    assert_eq!(st["sampledAt"]["slow"], json!(archive.at.min(slow.at)));
     assert_eq!(
         (&st["dbFileBytes"], &st["archiveStoredBytes"]),
-        (&json!(slow.disk.db_bytes), &json!(slow.archive.stored_bytes))
+        (&json!(slow.disk.db_bytes), &json!(archive.stats.stored_bytes))
     );
 
     // The next fast sample sees them; the slow set is unchanged.
@@ -566,4 +568,72 @@ async fn the_dashboard_follows_crawl_phases() {
     let page = riot_proxy::routes::ui::ADMIN_HTML;
     assert!(page.contains("frame.event === 'crawl.phase' || frame.event === 'ladder.crawl.completed'"));
     assert!(page.contains("/v1/admin/ladder/crawls/"));
+}
+
+/// AVL-06 (ADR-213): the archive's byte sums (a pass over every body) are
+/// sampled when the sampler starts and then every `ARCHIVE_STATS_INTERVAL_S`
+/// (an hour by default), not with each history point; in between,
+/// `GET /v1/admin/stats` serves the last sample and dates it.
+#[tokio::test(start_paused = true)]
+async fn the_archive_sums_are_sampled_hourly_and_reused_in_between() {
+    use std::sync::Arc;
+    use std::time::Duration;
+    let e = env().await;
+    assert_eq!(e.state.config.archive_stats_interval_s, 3600);
+    // The database answers on its own threads; a 1 ms timer keeps the paused
+    // clock from jumping to the sampler's next tick while it does.
+    let ticker = tokio::spawn(async {
+        loop {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    });
+    let started = tokio::time::Instant::now();
+    let sampler = riot_proxy::stats::spawn_sampler(
+        Arc::clone(&e.state.stats),
+        Duration::from_secs(15),
+        Duration::from_secs(60),
+    );
+    let stats = Arc::clone(&e.state.stats);
+    let sampled = move || stats.samples.archive();
+    while sampled().is_none() {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    let first = sampled().unwrap();
+    assert!(started.elapsed() < Duration::from_secs(60), "taken at the start");
+    assert_eq!(first.stats.stored_bytes, 0);
+
+    // A body archived after the sample: the history points go on, the sums
+    // don't move until the next hour.
+    e.sql(
+        "INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size, archived_at)
+           VALUES ('OC1_1', 'sea', '16.20', 420, 1, x'000000', 3, 1);"
+            .into(),
+    )
+    .await;
+    tokio::time::advance(Duration::from_secs(1800)).await;
+    while e.state.stats.history().await.unwrap().is_empty() {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    for _ in 0..50 {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    assert!(Arc::ptr_eq(&sampled().unwrap(), &first), "the same sample");
+    let st = e.get("/v1/admin/stats", &e.admin).await.json();
+    assert_eq!(st["archivedMatches"], 1, "the count is read with the request");
+    assert_eq!(st["archiveStoredBytes"], 0, "the bytes are the sample's");
+    assert_eq!(st["sampledAt"]["slow"], json!(first.at));
+
+    // Past the hour: sampled again, and served.
+    tokio::time::advance(Duration::from_secs(1800)).await;
+    while sampled().unwrap().stats.stored_bytes == 0 {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    assert!(started.elapsed() >= Duration::from_secs(3600));
+    let second = sampled().unwrap();
+    assert_eq!((second.stats.matches, second.stats.stored_bytes), (1, 3));
+    let st = e.get("/v1/admin/stats", &e.admin).await.json();
+    assert_eq!(st["archiveStoredBytes"], 3);
+    assert!(st["sampledAt"]["slow"].as_i64().unwrap() >= first.at);
+    sampler.abort();
+    ticker.abort();
 }

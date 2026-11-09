@@ -35,11 +35,15 @@ const RUNES = [
 const PUUID = 'PUUID-ME';
 const line = (i) => ({ puuid: PUUID, championId: 1 + (i % 2), championName: i % 2 ? 'Olaf' : 'Annie', kills: 5, deaths: 2, assists: 9, champLevel: 16, totalMinionsKilled: 180, neutralMinionsKilled: 6, goldEarned: 12000, totalDamageDealtToChampions: 21000, summoner1Id: 4, summoner2Id: 14, perks: { keystone: 8010, primaryStyle: 8000, subStyle: 8100 }, item0: 3078, item1: 0, item4: 3047, item6: 3340, roleBoundItem: 3006, teamId: 100, teamPosition: i ? 'TOP' : 'BOTTOM', win: i % 3 !== 1, gameEndedInEarlySurrender: i === 2 });
 const summary = (i) => ({ matchId: `OC1_${700000 + i}`, queueId: 420, gameMode: 'CLASSIC', gameCreation: Date.now() - 3600000, gameEndTimestamp: Date.now() - 1800000, gameDuration: 1865, gameVersion: '16.19.1', player: line(i) });
-function players(p, u, { live = false, refreshWait = 0 }) {
+// `stale` (AVL-03): the profile's league part and the match page's id list come from storage
+// while Riot is unavailable, and the profile's mastery part failed outright.
+function players(p, u, { live = false, refreshWait = 0, stale = false }) {
+  const profileWarnings = stale ? ['league served stale (last read from Riot 1500 s ago)', 'mastery unavailable (RATE_LIMITED: Rate limited by Riot API)'] : [];
+  const pageWarnings = stale ? ['match ids served stale (last read from Riot 600 s ago)'] : [];
   const by = p.match(/^\/v1\/players\/by-riot-id\/([^/]+)\/([^/]+)\/profile$/);
   if (by) {
     if (decodeURIComponent(by[1]) === 'Nobody') return [404, { error: { code: 'NOT_FOUND', message: 'no such Riot ID', requestId: 'r' } }];
-    return [200, { puuid: PUUID, platform: 'oc1', region: 'sea', refreshed: u.searchParams.get('refresh') === 'true', refreshAvailableIn: refreshWait, warnings: [], ageSeconds: { account: 0, summoner: 0, league: 0, mastery: 0 },
+    return [200, { puuid: PUUID, platform: 'oc1', region: 'sea', refreshed: u.searchParams.get('refresh') === 'true', refreshAvailableIn: refreshWait, refreshing: stale, warnings: profileWarnings, ageSeconds: { account: 0, summoner: 0, league: 0, mastery: 0 },
       account: { puuid: PUUID, gameName: decodeURIComponent(by[1]), tagLine: decodeURIComponent(by[2]) },
       summoner: { puuid: PUUID, profileIconId: 6, revisionDate: 1, summonerLevel: 939 },
       league: [{ queueType: 'RANKED_SOLO_5x5', tier: 'CHALLENGER', rank: 'I', puuid: PUUID, leaguePoints: 2178, wins: 410, losses: 335, veteran: false, inactive: false, freshBlood: false, hotStreak: true }],
@@ -49,10 +53,10 @@ function players(p, u, { live = false, refreshWait = 0 }) {
     const start = Number(u.searchParams.get('start'));
     const champion = Number(u.searchParams.get('champion'));
     // SITE-02: a champion's page comes from the archive, which has not reached their first game.
-    if (champion) return [200, { puuid: PUUID, platform: 'oc1', region: 'sea', start, count: 10, hasMore: false, matchIdsAgeSeconds: 0, matchIdsFetchedAgeSeconds: 0, refreshed: false, refreshAvailableIn: 0, warnings: [],
+    if (champion) return [200, { puuid: PUUID, platform: 'oc1', region: 'sea', start, count: 10, hasMore: false, matchIdsAgeSeconds: 0, matchIdsFetchedAgeSeconds: 0, refreshed: false, refreshAvailableIn: 0, refreshing: false, warnings: [],
       champion, archive: { complete: false }, matchIds: ['OC1_700000', 'OC1_700001'], matches: [summary(0), summary(1)] }];
     const n = start === 0 ? 10 : 3;
-    return [200, { puuid: PUUID, platform: 'oc1', region: 'sea', start, count: 10, hasMore: n === 10, matchIdsAgeSeconds: 0, refreshed: false, refreshAvailableIn: 0, warnings: [],
+    return [200, { puuid: PUUID, platform: 'oc1', region: 'sea', start, count: 10, hasMore: n === 10, matchIdsAgeSeconds: 0, refreshed: false, refreshAvailableIn: 0, refreshing: stale, warnings: pageWarnings,
       matchIds: Array.from({ length: n }, (_, i) => `OC1_${700000 + start + i}`), matches: Array.from({ length: n }, (_, i) => summary(start + i)),
       ...(start === 0 ? { backfill: { jobId: 'j1', status: 'queued', limit: 4294967295 } } : {}) }];
   }

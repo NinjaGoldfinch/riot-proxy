@@ -384,6 +384,24 @@ test('refresh re-reads the profile and the match page, and waits out its window'
   assert.match(waiting.$('#pHead [data-refresh]').title, /42 s/);
 });
 
+test('stored parts served while Riot is unavailable say so, apart from the parts that failed (AVL-03)', async () => {
+  const fresh = await playerPage();
+  assert.equal(fresh.$('#pHead .note'), null, 'nothing refreshing, no note');
+  assert.equal(fresh.$('#pMatches .note'), null);
+
+  const p = await playerPage({ stale: true });
+  const head = p.text('#pHead');
+  assert.ok(head.includes('Partly loaded: mastery unavailable (RATE_LIMITED: Rate limited by Riot API)'), head);
+  assert.ok(!head.includes('Partly loaded: league'), 'a stale part is loaded, not missing');
+  assert.equal(p.text('#pHead .note'), 'Showing stored data while it refreshes: league served stale (last read from Riot 1500 s ago).');
+  assert.equal(p.w.document.querySelectorAll('#pRanks .rank').length, 2, 'the stored ranks are drawn');
+  const matches = p.text('#pMatches');
+  assert.ok(!matches.includes('could not be loaded'), 'a stale id list is no failed match');
+  assert.equal(p.text('#pMatches .note'), 'Showing stored data while it refreshes: match ids served stale (last read from Riot 600 s ago).');
+  assert.equal(p.w.document.querySelectorAll('#pMatches .match').length, 10);
+  assert.deepEqual(p.errors, []);
+});
+
 test('an unknown Riot ID says so; the search box routes to the player view', async () => {
   const p = await page({ hash: '#/player/Nobody/0000' });
   assert.ok(p.text('#pHead').includes('No player Nobody #0000'));

@@ -101,7 +101,7 @@ sequenceDiagram
     else stale (soft < now < hard)
         L1-->>C: 200 X-Cache: STALE
         F-)SF: spawn refresh @ Bulk
-    else miss
+    else miss, or expired (a 200 kept 24 h past hard, AVL-03)
         F->>SF: join_or_start(key)
         SF->>RL: acquire(scope, method, Interactive, budget 2 s)
         RL-->>SF: token | RATE_LIMITED
@@ -109,12 +109,20 @@ sequenceDiagram
         R-->>SF: 200 + X-App-Rate-Limit* headers
         SF->>RL: observe(headers) → reconfigure + sync counts
         SF->>L1: put(key, body, soft, hard)
-        SF->>AR: archive if immutable
+        SF-)AR: archive if immutable, behind the response (AVL-02)
         SF-->>C: 200 X-Cache: MISS
+        opt upstream failed (budget, 429, 5xx, timeout) and a copy inside hard TTL
+            SF-->>C: 200 X-Cache: STALE (v1 §8.5)
+        end
+        opt /v1/players/* only: it failed and an expired copy is stored
+            F-->>C: part served X-Cache: STALE with its real ages (AVL-03)
+        end
     end
 ```
 
-`X-Cache` values, headers (`X-Cache-Age`, `X-RateLimit-*`, `X-Request-Id`) and error codes (`QUOTA_EXCEEDED` vs `RATE_LIMITED`) are carried over verbatim from v1 so downstream projects need no changes.
+**Stale beats none** (AVL-03, ADR-212, owner 2026-11-08). The `/v1/players/*` composites read each part through `Fetcher::fetch_or_stored`: the fetch is the one above, and when its upstream leg fails for any reason but Riot's 404, the stored copy is served as `STALE` with its real ages even past hard TTL (L1 keeps a 200 `EXPIRED_KEEP`, 24 h, longer; design/04 §Cache tiers). The composite then sends `X-Cache: STALE` and `refreshing: true` and names the part in `warnings`. Only a part with nothing stored waits for the limiter (at most `CLIENT_WAIT_BUDGET_MS`) and fails with the usual envelope. The passthrough routes keep v1's rule.
+
+`X-Cache` values, headers (`X-Cache-Age`, `X-RateLimit-*`, `X-Request-Id`) and error codes (`QUOTA_EXCEEDED` vs `RATE_LIMITED`) are carried over verbatim from v1 so downstream projects need no changes. The archive write on a miss (a match or timeline body, or a league lookup's ranks) and the `players` row a profile records run behind the response: the request returns when Riot answers, and a long job write on the SQLite writer delays only the write (AVL-02, ADR-210; design/04 §Cache tiers). A job's fetch still waits for its archive write.
 
 ## Process model
 
@@ -136,7 +144,7 @@ flowchart LR
 
 `--role all` is the design target and the only mode with SQLite. The split mode exists so the door to Postgres + separate worker stays open without a rewrite — but it is a **feature flag**, not the default, and v2.0 can ship without it.
 
-Inside the process (boot order amended for series AVL, ADR-208; the boot order is built (AVL-01, ADR-209), the writer interrupt at shutdown is AVL-04's):
+Inside the process (boot order amended for series AVL, ADR-208; the boot order is built (AVL-01, ADR-209), and so is the writer interrupt at shutdown (AVL-04, ADR-211)):
 
 ```mermaid
 flowchart TB
@@ -156,7 +164,7 @@ flowchart TB
     sig --> drain["graceful drain<br/>finish in-flight · job grace · interrupt the writer<br/>final checkpoint · close WS"]
 ```
 
-The order is **bind → serve → recover → catch-ups → workers**. What `/readyz` reports (the writer and the limiter) is ready before bind, so the first accept follows `listening` at once and a deploy's health wait measures the time to serve. `recover`, the boot catch-ups (the missing halves, stale facts, tier stamps, analytics splits and stamps, the offload sweep) and then the workers and ticks run in one task beside the server; each catch-up must be bounded (a boot check reads an index range, never a table; AVL-06). The shutdown signal is polled from `listening` on, so a SIGTERM during the catch-ups ends the boot task and drains like any other. At shutdown, after the job grace, a job write still running on the writer thread is interrupted so the final checkpoint and L2 flush are not queued behind it (06 §Shutdown; AVL-04, not built yet). As built (AVL-01, ADR-209): `serve_with` builds the state, binds, logs `listening` and spawns `app::serve` (`src/cli/serve.rs:385-390`), then runs `boot_catch_up` (`:475-566`) in a `select!` against the shared shutdown future; it logs `boot catch-up done ms=…` and the workers, ticks and metrics-history sampler start only after it returns (`:410-431`), so `recover` always precedes them. A signal during the catch-up drops it where it is, logs `boot catch-up stopped; job workers not started` with `reason=shutdown signal` (`reason=server ended`: the server task ended first, with no signal) and drains; blocking work it abandoned gets 10 s before the process exits (`cli::run`, `BLOCKING_GRACE`).
+The order is **bind → serve → recover → catch-ups → workers**. What `/readyz` reports (the writer and the limiter) is ready before bind, so the first accept follows `listening` at once and a deploy's health wait measures the time to serve. `recover`, the boot catch-ups (the missing halves, stale facts, tier stamps, analytics splits and stamps, the offload sweep) and then the workers and ticks run in one task beside the server; each catch-up must be bounded (a boot check reads an index range, never a table; AVL-06). The shutdown signal is polled from `listening` on, so a SIGTERM during the catch-ups ends the boot task and drains like any other. At shutdown, after the job grace, a job write still running on the writer thread is interrupted so the final checkpoint and L2 flush are not queued behind it (06 §Shutdown; AVL-04, ADR-211). As built (AVL-01, ADR-209): `serve_with` builds the state, binds, logs `listening` and spawns `app::serve` (`src/cli/serve.rs:409-414`), then runs `boot_catch_up` (`:501-592`) in a `select!` against the shared shutdown future; it logs `boot catch-up done ms=…` and the workers, ticks and metrics-history sampler start only after it returns (`:434-455`), so `recover` always precedes them. A signal during the catch-up drops it where it is, logs `boot catch-up stopped; job workers not started` with `reason=shutdown signal` (`reason=server ended`: the server task ended first, with no signal) and drains; blocking work it abandoned gets 10 s before the process exits (`cli::run`, `BLOCKING_GRACE`).
 
 ## Module layout
 

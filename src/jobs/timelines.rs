@@ -32,7 +32,7 @@ use crate::clock::Clock;
 use crate::db::{Db, DbError};
 use crate::fetcher::{FetchOptions, Fetcher};
 use crate::http::ErrorCode;
-use crate::jobs::scheduler::{Handler, Job, JobError, NewJob, Queue, enqueue_on};
+use crate::jobs::scheduler::{Handler, Job, JobError, NewJob, Queue};
 use crate::jobs::{activity, analytics, kinds, priority};
 use crate::metrics::{TIMELINE_BACKFILL_FETCHED_TOTAL, TIMELINE_BACKFILL_NOT_FOUND_TOTAL};
 use crate::riot::endpoints::Endpoint;
@@ -57,7 +57,9 @@ pub struct TimelinesContext {
     pub patches: u32,
 }
 
-/// One region's job, deduped per region.
+/// One region's job, deduped per region. The hourly tick queues one per
+/// region, each on its own clock (`jobs::ticks`, ADR-214), and a job finds
+/// nothing to do while the backfill is off.
 pub fn job(region: Region) -> NewJob {
     NewJob::new(
         kinds::TIMELINES_BACKFILL,
@@ -65,29 +67,6 @@ pub fn job(region: Region) -> NewJob {
         json!({"region": region.as_str()}),
     )
     .dedupe(region.as_str())
-}
-
-/// Queue a job for every region that has none pending or running. Returns
-/// how many were new. The hourly tick calls it only while the backfill is on,
-/// and a job finds nothing to do while it is off.
-pub async fn enqueue_all(queue: &Queue) -> Result<usize, DbError> {
-    let now = Clock::now().unix_ms;
-    let created = queue
-        .db()
-        .write(move |c| {
-            let tx = c.transaction()?;
-            let mut created = 0;
-            for region in Region::ALL {
-                created += usize::from(enqueue_on(&tx, &job(region), now)?.created);
-            }
-            tx.commit()?;
-            Ok::<_, DbError>(created)
-        })
-        .await?;
-    if created > 0 {
-        queue.wake_all();
-    }
-    Ok(created)
 }
 
 /// SQL: ranked queue ids, for an `IN (…)`.

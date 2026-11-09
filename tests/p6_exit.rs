@@ -165,6 +165,7 @@ async fn until<T>(what: &str, secs: u64, mut probe: impl AsyncFnMut() -> Option<
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "P6 exit check, ~10 s; run for the phase gate"]
 async fn p6_exit_check() {
+    let _signals = common::SIGNALS.lock().await;
     let dir = tempfile::tempdir().unwrap();
     let server = MockServer::start().await;
     let in_game = Arc::new(AtomicBool::new(false));

@@ -2707,3 +2707,96 @@ async fn a_rebuild_in_turns_yields_after_each_transaction_and_ends_as_one_turn_d
     }
     assert_eq!(got, want);
 }
+
+/// AVL-06 (ADR-213): `tiers:backfill` sweeps from each prefix's cursor and
+/// counts only the matches it stamped; once swept, the boot check has nothing
+/// to say, and `aggregate:delta`'s tail sweep keeps the cursors at the end.
+#[tokio::test]
+async fn the_tier_sweep_moves_its_cursors_and_counts_only_what_it_stamped() {
+    use riot_proxy::archive::tiers::{self, Due};
+    use riot_proxy::jobs::analytics::backfill_tiers_if_needed;
+    let e = env().await;
+    e.seed().await;
+    let due = |e: &Env| {
+        let db = e.state.db.clone();
+        async move {
+            db.read(|c| Ok::<_, DbError>(tiers::sweep_due(c, 500)?))
+                .await
+                .unwrap()
+        }
+    };
+    let cursor = |e: &Env| {
+        let db = e.state.db.clone();
+        async move {
+            db.read(|c| {
+                Ok::<_, DbError>(c.query_row(
+                    "SELECT swept_to FROM tiers_sweep WHERE prefix = 'KR'",
+                    [],
+                    |r| r.get::<_, String>(0),
+                )?)
+            })
+            .await
+            .unwrap()
+        }
+    };
+    // Archived matches are stamped already; KR has never been swept.
+    assert_eq!(due(&e).await, Some(Due::Unswept("KR".into())));
+    assert!(
+        backfill_tiers_if_needed(&Queue::new(e.state.db.clone()))
+            .await
+            .unwrap()
+    );
+    assert_eq!(e.ctx().backfill_tiers().await.unwrap(), 0, "nothing to stamp");
+    assert_eq!(cursor(&e).await, "KR_8393343196");
+    assert_eq!(due(&e).await, None);
+
+    // A match left with NULL tiers past the cursor: stamped by the tail sweep
+    // `aggregate:delta` runs, which moves the cursor.
+    e.archive_as("KR_9000000001", RANKED).await;
+    e.state
+        .db
+        .write(|c| {
+            c.execute(
+                "UPDATE match_facts SET tier = NULL WHERE match_id = 'KR_9000000001'",
+                [],
+            )?;
+            Ok::<_, DbError>(())
+        })
+        .await
+        .unwrap();
+    assert_eq!(due(&e).await, Some(Due::Unstamped("KR".into())));
+    assert_eq!(e.ctx().sweep_tier_tails().await.unwrap(), 1);
+    assert_eq!(cursor(&e).await, "KR_9000000001");
+    assert_eq!(due(&e).await, None);
+
+    // A re-extraction stamps a fact it adds (the cursor is past the match).
+    e.state
+        .db
+        .write(|c| {
+            c.execute_batch(
+                "DELETE FROM match_facts WHERE match_id = 'KR_9000000001';
+                 UPDATE matches SET facts_version = 1 WHERE match_id = 'KR_9000000001';",
+            )?;
+            Ok::<_, DbError>(())
+        })
+        .await
+        .unwrap();
+    e.ctx()
+        .reextract(&job("facts:reextract", json!({})))
+        .await
+        .unwrap();
+    let (facts, unstamped): (i64, i64) = e
+        .state
+        .db
+        .read(|c| {
+            Ok::<_, DbError>(c.query_row(
+                "SELECT count(*), count(*) - count(tier) FROM match_facts WHERE match_id = 'KR_9000000001'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?)
+        })
+        .await
+        .unwrap();
+    assert_eq!((facts, unstamped), (10, 0));
+    assert_eq!(due(&e).await, None);
+}

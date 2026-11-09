@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use riot_proxy::cache::ResponseCache;
-use riot_proxy::cache::l1::{L1, Lookup};
+use riot_proxy::cache::l1::{EXPIRED_KEEP, L1, Lookup};
 use riot_proxy::cache::l2::{self, L2Writer, Row};
 use riot_proxy::clock::Clock;
 use riot_proxy::db::Db;
@@ -100,34 +100,56 @@ async fn put_restart_warm_hit() {
     assert_eq!(warmed.get("s:spectator.activeGame:h:P").await, Lookup::Miss);
 }
 
+/// AVL-03 (ADR-212): a positive row is kept `EXPIRED_KEEP` past its hard TTL,
+/// as L1 keeps it, and warms as `Expired`; a negative one goes at its TTL.
 #[tokio::test]
-async fn warm_skips_and_sweep_deletes_expired_rows() {
+async fn warm_keeps_expired_rows_for_a_day_and_sweep_deletes_the_rest() {
     let dir = tempfile::tempdir().unwrap();
     let db = Db::open(&dir.path().join("riot-proxy.db"), 1).unwrap();
     let now = Clock::now().unix_ms;
-    let row = |key: &str, hard: i64| Row {
+    let keep = i64::try_from(EXPIRED_KEEP.as_millis()).unwrap();
+    let row = |key: &str, status: u16, hard: i64| Row {
         key: key.into(),
         body: Bytes::from_static(b"{}"),
-        status: 200,
+        status,
         content_at: now - 10_000,
         fetched_at: now - 5_000,
         soft_expires: now - 5_000,
         hard_expires: hard,
     };
-    l2::put_rows(&db, vec![row("live-stale", now + 60_000), row("dead", now - 1)])
-        .await
-        .unwrap();
+    l2::put_rows(
+        &db,
+        vec![
+            row("live-stale", 200, now + 60_000),
+            row("expired", 200, now - 1),
+            row("dead", 200, now - keep - 1),
+            row("neg-dead", 404, now - 1),
+        ],
+    )
+    .await
+    .unwrap();
 
     let warmed = l1();
-    assert_eq!(l2::warm(&db, &warmed).await.unwrap(), 1);
+    assert_eq!(l2::warm(&db, &warmed).await.unwrap(), 2);
     assert!(
         matches!(warmed.get("live-stale").await, Lookup::Stale(_)),
         "soft passed, hard not"
     );
+    match warmed.get("expired").await {
+        Lookup::Expired(e) => {
+            let at = tokio::time::Instant::now();
+            let near =
+                |d: Duration, ms: u64| d.abs_diff(Duration::from_millis(ms)) < Duration::from_millis(500);
+            assert!(near(e.age(at), 10_000), "its real ages: {:?}", e.age(at));
+            assert!(near(e.fetch_age(at), 5_000), "{:?}", e.fetch_age(at));
+        }
+        other => panic!("{other:?}"),
+    }
     assert_eq!(warmed.get("dead").await, Lookup::Miss);
+    assert_eq!(warmed.get("neg-dead").await, Lookup::Miss);
 
-    assert_eq!(l2::sweep(&db).await.unwrap(), 1);
-    assert_eq!(rows(&db).await, 1);
+    assert_eq!(l2::sweep(&db).await.unwrap(), 2, "dead and neg-dead");
+    assert_eq!(rows(&db).await, 2);
 }
 
 #[tokio::test]

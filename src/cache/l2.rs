@@ -6,7 +6,9 @@
 //! crash loses at most one batch window of L2 writes; L1 and Riot cover it. The
 //! request path never waits: with the queue full, an entry is dropped and logged.
 //!
-//! Boot: [`warm`] loads every unexpired row into L1, then [`sweep`] deletes the rest.
+//! Boot: [`warm`] loads every row L1 would still hold into L1, then [`sweep`]
+//! deletes the rest. A positive row is kept [`EXPIRED_KEEP`] past its hard TTL,
+//! as L1 keeps it, so a player's stored parts survive a restart (AVL-03, ADR-212).
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
@@ -16,7 +18,7 @@ use bytes::Bytes;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use crate::cache::l1::{CacheEntry, L1};
+use crate::cache::l1::{CacheEntry, EXPIRED_KEEP, L1};
 use crate::clock::Clock;
 use crate::db::{Db, DbError};
 
@@ -182,19 +184,26 @@ pub async fn put_rows(db: &Db, rows: Vec<Row>) -> Result<(), DbError> {
     .await
 }
 
-/// Load every unexpired row into `l1`. Returns how many.
+/// [`EXPIRED_KEEP`] in unix ms.
+fn keep_ms() -> i64 {
+    i64::try_from(EXPIRED_KEEP.as_millis()).unwrap_or(i64::MAX)
+}
+
+/// Load every row L1 would still hold into `l1`: a negative one inside its
+/// TTL, a positive one up to [`EXPIRED_KEEP`] past its hard TTL. Returns how many.
 pub async fn warm(db: &Db, l1: &L1) -> Result<usize, DbError> {
     let clock = Clock::now();
     let now_ms = clock.unix_ms;
+    let kept_ms = now_ms.saturating_sub(keep_ms());
     let rows: Vec<Row> = db
         .read(move |c| {
             // A row from before V0009 has no fetch time: its content's is the best there is.
             let mut stmt = c.prepare(
                 "SELECT key, body, status, content_at, COALESCE(fetched_at, content_at), soft_expires, hard_expires
-                 FROM cache WHERE hard_expires > ?1",
+                 FROM cache WHERE hard_expires > ?2 AND (status = 200 OR hard_expires > ?1)",
             )?;
             let rows = stmt
-                .query_map([now_ms], |r| {
+                .query_map([now_ms, kept_ms], |r| {
                     Ok(Row {
                         key: r.get(0)?,
                         body: Bytes::from(r.get::<_, Vec<u8>>(1)?),
@@ -215,11 +224,17 @@ pub async fn warm(db: &Db, l1: &L1) -> Result<usize, DbError> {
     Ok(rows.len())
 }
 
-/// Delete expired rows. Returns how many.
+/// Delete the rows [`warm`] would skip. Returns how many.
 pub async fn sweep(db: &Db) -> Result<usize, DbError> {
     let now_ms = Clock::now().unix_ms;
-    db.write(move |c| Ok(c.execute("DELETE FROM cache WHERE hard_expires <= ?1", [now_ms])?))
-        .await
+    let kept_ms = now_ms.saturating_sub(keep_ms());
+    db.write(move |c| {
+        Ok(c.execute(
+            "DELETE FROM cache WHERE hard_expires <= ?1 AND (status <> 200 OR hard_expires <= ?2)",
+            [now_ms, kept_ms],
+        )?)
+    })
+    .await
 }
 
 /// Keys matching `pred`, deleting nothing (a purge's dry run, ADM-10, and the

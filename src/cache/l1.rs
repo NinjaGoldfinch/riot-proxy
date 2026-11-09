@@ -2,8 +2,11 @@
 //! `moka` cache of every TTL'd endpoint, negative entries included.
 //!
 //! Freshness is decided here from each entry's own `soft_expires`/`hard_expires`
-//! (tokio time, so tests can pause it). moka's per-entry expiry is set to the hard
-//! TTL only to reclaim memory; it runs on real time and never decides freshness.
+//! (tokio time, so tests can pause it). moka's per-entry expiry only reclaims
+//! memory; it runs on real time and never decides freshness. A positive entry
+//! is kept [`EXPIRED_KEEP`] past its hard TTL and read as [`Lookup::Expired`],
+//! so a player's page can still be served when its refresh fails (AVL-03,
+//! ADR-212); a negative one goes at its TTL.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,6 +20,11 @@ use crate::riot::endpoints::Ttls;
 
 /// Per-entry bookkeeping counted against the weight budget, on top of key and body.
 const ENTRY_OVERHEAD: usize = 128;
+
+/// How long a positive entry outlives its hard TTL, read as [`Lookup::Expired`]
+/// (AVL-03, ADR-212). L2 keeps its rows as long ([`crate::cache::l2::warm`]).
+/// Memory stays bounded by `CACHE_L1_MAX_MB` whatever this is.
+pub const EXPIRED_KEEP: Duration = Duration::from_secs(24 * 3600);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CacheEntry {
@@ -32,7 +40,8 @@ pub struct CacheEntry {
     pub fetched_at: Instant,
     /// Fresh until.
     pub soft_expires: Instant,
-    /// Servable as `STALE` until; gone after.
+    /// Served as `STALE` without a refresh until; after it, only when the
+    /// refresh fails and the caller asks for it ([`Lookup::Expired`]).
     pub hard_expires: Instant,
 }
 
@@ -58,10 +67,14 @@ pub enum Lookup {
     Fresh(Arc<CacheEntry>),
     /// Between `soft_expires` and `hard_expires`: serve, and refresh in the background.
     Stale(Arc<CacheEntry>),
+    /// A positive entry past `hard_expires`, kept [`EXPIRED_KEEP`] longer: go
+    /// upstream, and serve it only if that fails (AVL-03, ADR-212).
+    Expired(Arc<CacheEntry>),
     Miss,
 }
 
-/// moka's memory-reclaim expiry: the entry's hard TTL at insert time.
+/// moka's memory-reclaim expiry: the entry's hard TTL at insert time, plus
+/// [`EXPIRED_KEEP`] for a positive entry.
 struct HardTtl;
 
 impl Expiry<String, Arc<CacheEntry>> for HardTtl {
@@ -71,7 +84,12 @@ impl Expiry<String, Arc<CacheEntry>> for HardTtl {
         value: &Arc<CacheEntry>,
         _created_at: std::time::Instant,
     ) -> Option<Duration> {
-        Some(value.hard_expires.saturating_duration_since(Instant::now()))
+        let hard = value.hard_expires.saturating_duration_since(Instant::now());
+        Some(if value.is_negative() {
+            hard
+        } else {
+            hard.saturating_add(EXPIRED_KEEP)
+        })
     }
 
     fn expire_after_update(
@@ -127,6 +145,8 @@ impl L1 {
             Lookup::Fresh(entry)
         } else if now < entry.hard_expires {
             Lookup::Stale(entry)
+        } else if !entry.is_negative() && now < entry.hard_expires + EXPIRED_KEEP {
+            Lookup::Expired(entry)
         } else {
             self.cache.invalidate(key).await;
             Lookup::Miss
@@ -261,8 +281,47 @@ mod tests {
         advance(Duration::from_secs(89)).await;
         assert!(stale(&l.get("k").await));
         advance(Duration::from_secs(1)).await;
-        assert_eq!(l.get("k").await, Lookup::Miss, "at exactly hard TTL");
+        assert!(
+            matches!(l.get("k").await, Lookup::Expired(_)),
+            "at exactly hard TTL: kept, but only for a failed refresh (AVL-03)"
+        );
         assert_eq!(l.get("never").await, Lookup::Miss);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_expired_entry_is_kept_for_a_day_with_its_real_times() {
+        let l = l1();
+        let put = l
+            .put("k", Bytes::from_static(b"{}"), &ttls(30, 120))
+            .await
+            .unwrap();
+        advance(Duration::from_secs(120) + EXPIRED_KEEP - Duration::from_secs(1)).await;
+        match l.get("k").await {
+            Lookup::Expired(e) => {
+                assert_eq!(e.content_at, put.content_at);
+                assert_eq!(e.fetched_at, put.fetched_at);
+                assert_eq!(e.age(Instant::now()), Duration::from_secs(119) + EXPIRED_KEEP);
+            }
+            other => panic!("{other:?}"),
+        }
+        advance(Duration::from_secs(1)).await;
+        assert_eq!(l.get("k").await, Lookup::Miss, "gone EXPIRED_KEEP past hard TTL");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_refresh_of_an_expired_entry_with_the_same_bytes_keeps_content_at() {
+        let l = l1();
+        let first = l
+            .put("k", Bytes::from_static(b"{}"), &ttls(30, 120))
+            .await
+            .unwrap();
+        advance(Duration::from_secs(600)).await;
+        let again = l
+            .put("k", Bytes::from_static(b"{}"), &ttls(30, 120))
+            .await
+            .unwrap();
+        assert_eq!(again.content_at, first.content_at);
+        assert!(fresh(&l.get("k").await));
     }
 
     #[tokio::test(start_paused = true)]

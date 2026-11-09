@@ -116,6 +116,7 @@ async fn boot(data_dir: &std::path::Path, riot_url: &str) -> Booted {
         ddragon_urls: Some(riot_proxy::jobs::ddragon::CdnUrls::mock(riot_url)),
         catch_up_hold: Some(hold.clone()),
         shutdown: Some(Arc::clone(&stop)),
+        ..ServeOptions::default()
     };
     let task = tokio::spawn(serve_with(config, options));
     let deadline = Instant::now() + Duration::from_secs(30);

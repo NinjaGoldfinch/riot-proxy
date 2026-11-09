@@ -424,3 +424,95 @@ async fn the_trim_seeks_its_index() {
         );
     }
 }
+
+/// Rows of `kind` the boot queued: every one but the seeded `seed` row.
+fn queued(db_path: &Path, kind: &str) -> usize {
+    ids(
+        db_path,
+        &format!("SELECT id FROM jobs WHERE kind = '{kind}' AND id <> 'seed'"),
+    )
+    .len()
+}
+
+/// Boot `serve` on `dir` until its ticks have run (the `aggregate:delta`
+/// tick fires at once on every boot), then return how many `maintenance`
+/// rows the boot queued.
+async fn maintenance_queued_by_a_boot(dir: &Path) -> usize {
+    // `serve_with` listens for this process's signals; another test's SIGTERM
+    // must not stop this server (AVL-04).
+    let _signals = crate::common::SIGNALS.lock().await;
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let config = crate::common::config(&[
+        ("DATA_DIR", dir.to_str().unwrap()),
+        ("PORT", &port.to_string()),
+        ("HOST", "127.0.0.1"),
+        ("LOG_LEVEL", "warn"),
+    ]);
+    let options = riot_proxy::cli::serve::ServeOptions {
+        // Nothing listens there: whatever a job asks for fails and retries.
+        riot_base_url: Some("http://127.0.0.1:9".into()),
+        skip_tracing_init: true,
+        ddragon_urls: Some(riot_proxy::jobs::ddragon::CdnUrls::mock("http://127.0.0.1:9")),
+        ..riot_proxy::cli::serve::ServeOptions::default()
+    };
+    let task = tokio::spawn(riot_proxy::cli::serve::serve_with(config, options));
+    let path = dir.join("riot-proxy.db");
+    let mut ticked = false;
+    for _ in 0..400 {
+        if queued(&path, "aggregate:delta") > 0 {
+            ticked = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    assert!(ticked, "the ticks never ran");
+    // Each loop reads its last run in a moment, so a maintenance tick due at
+    // boot has fired by now or does within this wait.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let n = queued(&path, "maintenance");
+    task.abort();
+    let _ = task.await;
+    n
+}
+
+/// AVL-07 (ADR-214): a first boot queues `maintenance` at once, as before;
+/// a restart a few hours after the last run queues none, so the backup, the
+/// trim and the checkpoint wait for their day.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_boot_queues_maintenance_only_when_it_is_due() {
+    let fresh = tempfile::tempdir().unwrap();
+    drop(open(fresh.path()));
+    assert_eq!(
+        maintenance_queued_by_a_boot(fresh.path()).await,
+        1,
+        "a fresh database: at once"
+    );
+
+    let restarted = tempfile::tempdir().unwrap();
+    let db = open(restarted.path());
+    let finished = riot_proxy::clock::Clock::now().unix_ms - 3 * 3_600_000;
+    db.write(move |c| {
+        c.execute(
+            "INSERT INTO jobs (id, kind, dedupe_key, priority, payload, state, run_after, finished_at)
+             VALUES ('seed', 'maintenance', 'maintenance', 30000, '{}', 'done', 0, ?1)",
+            [finished],
+        )?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    drop(db);
+    assert_eq!(
+        maintenance_queued_by_a_boot(restarted.path()).await,
+        0,
+        "ran 3 h ago: not before 21 h from now"
+    );
+    assert!(
+        !restarted.path().join("backups").exists(),
+        "and no backup was written"
+    );
+}

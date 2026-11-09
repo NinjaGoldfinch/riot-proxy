@@ -3221,6 +3221,10 @@ expression: doc
           "refreshed": {
             "type": "boolean"
           },
+          "refreshing": {
+            "description": "The id list (or a match fetched for the page) was served past its soft\nTTL (`X-Cache: STALE`): a stored copy, because its refresh is running in\nthe background or failed. It is named in `warnings`; a later read gets\nthe fresh one.",
+            "type": "boolean"
+          },
           "region": {
             "type": "string"
           },
@@ -3229,6 +3233,7 @@ expression: doc
             "type": "integer"
           },
           "warnings": {
+            "description": "Names each match that could not be loaded, and each part served stale.",
             "items": {
               "type": "string"
             },
@@ -3249,6 +3254,7 @@ expression: doc
           "backfill",
           "refreshed",
           "refreshAvailableIn",
+          "refreshing",
           "warnings"
         ],
         "type": "object"
@@ -4146,6 +4152,10 @@ expression: doc
             "description": "Whether this request won the refresh window and went upstream.",
             "type": "boolean"
           },
+          "refreshing": {
+            "description": "A part was served past its soft TTL (`X-Cache: STALE`): a stored copy,\nbecause its refresh is running in the background or failed. The part\nis named in `warnings`; a later read gets the fresh one.",
+            "type": "boolean"
+          },
           "region": {
             "type": "string"
           },
@@ -4161,7 +4171,7 @@ expression: doc
             ]
           },
           "warnings": {
-            "description": "Names each part that could not be fetched.",
+            "description": "Names each part that could not be fetched, and each part served stale.",
             "items": {
               "type": "string"
             },
@@ -4180,6 +4190,7 @@ expression: doc
           "fetchedAgeSeconds",
           "refreshed",
           "refreshAvailableIn",
+          "refreshing",
           "warnings"
         ],
         "type": "object"
@@ -4852,7 +4863,7 @@ expression: doc
             "type": "integer"
           },
           "slow": {
-            "description": "Archive bytes and disk, sampled with each history point.",
+            "description": "The disk, sampled with each history point; on `GET /v1/admin/stats`, the\nolder of that and the archive's byte sums (every `ARCHIVE_STATS_INTERVAL_S`).",
             "format": "int64",
             "type": "integer"
           }
@@ -11525,7 +11536,7 @@ expression: doc
     },
     "/v1/admin/stats": {
       "get": {
-        "description": "`archivedMatches` counts the whole archive, which is not key-scoped: match ids are not encrypted, so it survives a key rotation. `trackedPlayers` is scoped to the current key and reads zero right after one. The `db*`, `wal*` and `disk*` fields are the SQLite file, its write-ahead log and free list, and the data directory's file system (DSK-01). The match and player counts are read with the request; `archivedTimelines`, the archive's bytes and the disk readings are sampled in the background with each history point (`METRICS_HISTORY_INTERVAL_S`, a minute by default; `sampledAt.slow`). `archiveBodies` and `archivePack*` say how much of the archive is in object storage (design/12): `archiveStoredBytes` counts only bodies still in SQLite.",
+        "description": "`archivedMatches` counts the whole archive, which is not key-scoped: match ids are not encrypted, so it survives a key rotation. `trackedPlayers` is scoped to the current key and reads zero right after one. The `db*`, `wal*` and `disk*` fields are the SQLite file, its write-ahead log and free list, and the data directory's file system (DSK-01). The match and player counts are read with the request; the disk readings are sampled in the background with each history point (`METRICS_HISTORY_INTERVAL_S`, a minute by default), and `archivedTimelines`, the archive's bytes, `archiveBodies` and `archivePack*` every `ARCHIVE_STATS_INTERVAL_S` (an hour by default), a pass over every stored body; `sampledAt.slow` is the older of the two readings. `archiveBodies` and `archivePack*` say how much of the archive is in object storage (design/12): `archiveStoredBytes` counts only bodies still in SQLite.",
         "operationId": "stats",
         "responses": {
           "200": {
@@ -16593,7 +16604,7 @@ expression: doc
     },
     "/v1/players/{puuid}/matches": {
       "get": {
-        "description": "The id page, then every match on it, fanned out concurrently. Archived matches come from one archive read at no quota cost. Each entry is the player's own line in the game; the full match stays one call away at `/v1/lol/matches/{region}/{matchId}`. A match that cannot be fetched is left out and named in `warnings`; a failed id lookup fails the page.\n\n**`champion`** filters by champion. Riot's id list cannot, so the page comes from this deployment's archive: Riot's newest 20 ids are read and archived first, then the archive is paged for that champion's games, newest first. Older games appear as the player's backfill archives them; `archive.complete` says whether it has reached the start of their history. `type` cannot be combined with `champion`.",
+        "description": "The id page, then every match on it, fanned out concurrently. Archived matches come from one archive read at no quota cost. Each entry is the player's own line in the game; the full match stays one call away at `/v1/lol/matches/{region}/{matchId}`. A match that cannot be fetched is left out and named in `warnings`; a failed id lookup fails the page unless an id list is stored (kept a day past its TTL): it is then served with `X-Cache: STALE` and `refreshing: true`, and named in `warnings`.\n\n**`champion`** filters by champion. Riot's id list cannot, so the page comes from this deployment's archive: Riot's newest 20 ids are read and archived first, then the archive is paged for that champion's games, newest first. Older games appear as the player's backfill archives them; `archive.complete` says whether it has reached the start of their history. `type` cannot be combined with `champion`.",
         "operationId": "match_page",
         "parameters": [
           {
@@ -16872,7 +16883,7 @@ expression: doc
     },
     "/v1/players/{puuid}/profile": {
       "get": {
-        "description": "Account, summoner, ranked entries and top mastery, fetched concurrently and each cached on its own. A part that fails is `null` and named in `warnings`; only every part failing is a 404. `refresh=true` re-reads every part upstream, at most once a minute per player. Without `platform`, the proxy reads the player's platform from account-v1's active region (cached like an account) and echoes it as `platform`, so the player's other routes can be routed from the profile alone.",
+        "description": "Account, summoner, ranked entries and top mastery, fetched concurrently and each cached on its own. A part that fails is `null` and named in `warnings`; only every part failing is a 404. A part whose refresh fails (rate limited, Riot down) is served from its stored copy (kept a day past its TTL) rather than left out: the document then says `X-Cache: STALE` and `refreshing: true`, and names the part in `warnings`. `refresh=true` re-reads every part upstream, at most once a minute per player. Without `platform`, the proxy reads the player's platform from account-v1's active region (cached like an account) and echoes it as `platform`, so the player's other routes can be routed from the profile alone.",
         "operationId": "profile",
         "parameters": [
           {

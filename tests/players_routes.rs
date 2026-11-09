@@ -43,6 +43,11 @@ struct Env {
 
 /// Which Riot calls fail, by path fragment.
 async fn env(failing: &[&str]) -> Env {
+    env_with(failing, &[]).await
+}
+
+/// [`env`] with config overrides.
+async fn env_with(failing: &[&str], config: &[(&str, &str)]) -> Env {
     let server = MockServer::start().await;
     for f in failing {
         Mock::given(path_regex(format!(".*{f}.*")))
@@ -93,7 +98,7 @@ async fn env(failing: &[&str]) -> Env {
             .mount(&server)
             .await;
     }
-    let (dir, state, router) = common::app_with(&[], &server.uri());
+    let (dir, state, router) = common::app_with(config, &server.uri());
     let key = consumers::create(
         &state.db,
         NewConsumer {
@@ -171,7 +176,8 @@ async fn resolves_a_riot_id_and_reuses_that_account_as_the_composite_part() {
     );
     insta::assert_json_snapshot!("players_profile", body);
 
-    // The player is remembered, named.
+    // The player is remembered, named, once the write behind the profile lands (AVL-02).
+    e.state.db.flush_detached().await;
     let scope = e.state.fetcher.key_scope().as_str().to_string();
     let row = riot_proxy::players::get(&e.state.db, &scope, PUUID)
         .await
@@ -389,6 +395,8 @@ fn page(query: &str) -> String {
 async fn every_match_the_page_archives_queues_its_timeline() {
     let e = env(&[]).await;
     assert_eq!(e.get(&page("&count=5")).await.status, StatusCode::OK);
+    // The matches are stored, and their timelines queued, behind the page (AVL-02).
+    e.state.db.flush_detached().await;
     let queued: Vec<(String, i64, bool)> = e
         .state
         .db
@@ -729,6 +737,130 @@ async fn a_match_page_refresh_rereads_only_the_id_list() {
     );
 }
 
+// ── Stale beats none (AVL-03, ADR-212) ──────────────────────────────────────
+
+/// From now on, every Riot call whose path contains `fragment` answers `status`.
+async fn fail_from_now(e: &Env, fragment: &str, status: u16) {
+    Mock::given(path_regex(format!(".*{fragment}.*")))
+        .respond_with(ResponseTemplate::new(status))
+        .with_priority(1)
+        .mount(&e.server)
+        .await;
+}
+
+#[tokio::test]
+async fn a_fresh_profile_is_not_refreshing() {
+    let e = env(&[]).await;
+    for expected in ["MISS", "HIT"] {
+        let r = e.get(PROFILE).await;
+        assert_eq!(x_cache(&r).0, expected);
+        let b = r.json();
+        assert_eq!(b["refreshing"], json!(false));
+        assert_eq!(b["warnings"], json!([]));
+    }
+}
+
+/// The owner's rule: a refresh that fails never takes the stored part away.
+#[tokio::test]
+async fn a_part_past_its_hard_ttl_whose_refresh_fails_is_served_stale() {
+    // League entries live 1 s, soft and hard alike.
+    let e = env_with(
+        &[],
+        &[
+            ("CACHE_TTL_OVERRIDES", "league=1"),
+            ("STALE_WHILE_REVALIDATE", "false"),
+        ],
+    )
+    .await;
+    let first = e.get(PROFILE).await;
+    let stored = first.json()["league"].clone();
+    assert!(stored.is_array());
+    // 1.1 s, plus v1's two retries (0.8 to 1.2 s): 2 s old when served.
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    fail_from_now(&e, "/entries/by-puuid/", 503).await;
+
+    let r = e.get(PROFILE).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(x_cache(&r), ("STALE", "2"), "the stalest part's real age");
+    let b = r.json();
+    assert_eq!(b["league"], stored, "the stored ranks, not null");
+    assert_eq!(b["refreshing"], json!(true));
+    assert_eq!(
+        (
+            b["ageSeconds"]["league"].clone(),
+            b["fetchedAgeSeconds"]["league"].clone()
+        ),
+        (json!(2), json!(2))
+    );
+    assert_eq!(
+        b["warnings"],
+        json!(["league served stale (last read from Riot 2 s ago)"])
+    );
+    // It went upstream first: one call, then v1's two retries.
+    assert_eq!(e.calls_to("/entries/by-puuid/").await, 1 + 3);
+}
+
+#[tokio::test]
+async fn a_part_past_its_soft_ttl_is_served_stale_while_it_refreshes() {
+    // Soft 1 s, hard 4 s: served at once, refreshed in the background.
+    let e = env_with(&[], &[("CACHE_TTL_OVERRIDES", "league=1")]).await;
+    e.get(PROFILE).await;
+    tokio::time::sleep(Duration::from_millis(1600)).await;
+
+    let r = e.get(PROFILE).await;
+    assert_eq!(x_cache(&r).0, "STALE");
+    let b = r.json();
+    assert_eq!(b["refreshing"], json!(true));
+    assert!(b["league"].is_array());
+    assert_eq!(
+        b["warnings"],
+        json!(["league served stale (last read from Riot 2 s ago)"])
+    );
+}
+
+#[tokio::test]
+async fn a_part_with_nothing_stored_still_fails_as_before() {
+    let e = env(&[]).await;
+    fail_from_now(&e, "/entries/by-puuid/", 503).await;
+    let r = e.get(PROFILE).await;
+    assert_eq!(x_cache(&r).0, "MISS");
+    let b = r.json();
+    assert_eq!(b["league"], Value::Null);
+    assert_eq!(b["refreshing"], json!(false));
+    assert_eq!(
+        b["warnings"],
+        json!(["league unavailable (UPSTREAM_ERROR: Upstream request failed)"])
+    );
+}
+
+#[tokio::test]
+async fn a_match_page_whose_expired_id_list_cannot_be_refreshed_is_served_stale() {
+    let e = env_with(
+        &[],
+        &[
+            ("CACHE_TTL_OVERRIDES", "matchIds=1"),
+            ("STALE_WHILE_REVALIDATE", "false"),
+        ],
+    )
+    .await;
+    let first = e.get(&page("&count=5")).await;
+    assert_eq!(first.json()["refreshing"], json!(false));
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    fail_from_now(&e, "/ids", 503).await;
+
+    let r = e.get(&page("&count=5")).await;
+    assert_eq!(r.status, StatusCode::OK, "the stored id list, not a failed page");
+    assert_eq!(x_cache(&r).0, "STALE");
+    let b = r.json();
+    assert_eq!(b["refreshing"], json!(true));
+    assert_eq!(b["matchIds"].as_array().unwrap().len(), 5);
+    assert_eq!(b["matches"].as_array().unwrap().len(), 5, "from the archive");
+    assert_eq!(
+        b["warnings"],
+        json!(["match ids served stale (last read from Riot 2 s ago)"])
+    );
+}
+
 // ── Fetch age (SITE-01) ─────────────────────────────────────────────────────
 
 const PARTS: [&str; 4] = ["account", "summoner", "league", "mastery"];
@@ -855,6 +987,7 @@ async fn the_pool_is_grouped_from_the_archive_and_never_calls_riot() {
     );
 
     e.get(&page("&count=5")).await;
+    e.state.db.flush_detached().await;
     let before = e.calls().await.len();
     // A different filter set, so not the cached empty pool above.
     let r = e.get(&pool("?platform=kr")).await;
@@ -916,6 +1049,7 @@ async fn the_pool_names_the_champions_the_mirror_knows() {
     std::fs::write(dir.join("versions.json"), r#"["16.19.1"]"#).unwrap();
 
     e.get(&page("&count=5")).await;
+    e.state.db.flush_detached().await;
     let body = e.get(&pool("?platform=kr")).await.json();
     let names: Vec<(i64, Option<&str>)> = body["champions"]
         .as_array()
@@ -947,6 +1081,25 @@ async fn the_pool_rejects_what_is_not_a_patch_or_platform() {
     assert_eq!(bad.json()["error"]["message"], "querystring/limit must be <= 500");
 }
 
+/// ME-02 (ADR-216): `me1` is a platform. Its profile is europe's for
+/// match-v5, and the pool filters on the `ME1_` prefix.
+#[tokio::test]
+async fn me1_is_a_platform_on_the_players_routes() {
+    let e = env(&[]).await;
+    let r = e.get(&format!("/v1/players/{PUUID}/profile?platform=me1")).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(
+        (r.json()["platform"].clone(), r.json()["region"].clone()),
+        (json!("me1"), json!("europe"))
+    );
+    let r = e.get(&pool("?platform=me1")).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(
+        (r.json()["platform"].clone(), r.json()["archivedGames"].clone()),
+        (json!("me1"), json!(0))
+    );
+}
+
 #[tokio::test]
 async fn the_players_routes_need_a_read_key() {
     let e = env(&[]).await;
@@ -965,7 +1118,10 @@ async fn a_looked_up_players_games_count_in_analytics_at_their_rank() {
 
     let e = env(&[]).await;
     assert_eq!(e.get(PROFILE).await.status, StatusCode::OK);
+    // The rank is recorded behind the profile, the matches behind the page (AVL-02).
+    e.state.db.flush_detached().await;
     assert_eq!(e.get(&page("&count=5")).await.status, StatusCode::OK);
+    e.state.db.flush_detached().await;
     let scope = e.state.fetcher.key_scope().as_str().to_string();
     let tiers = e
         .state
