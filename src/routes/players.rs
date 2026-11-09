@@ -6,9 +6,16 @@
 //! minute per player and part ([`RefreshWindows`]); unlike the passthrough
 //! routes' admin-only refresh, any consumer may ask, because it is metered.
 //!
-//! The composite `X-Cache` is `MISS` if any part went upstream and `HIT`
-//! otherwise; `X-Cache-Age` is the stalest part's age (v1 `summarise`), and
+//! The composite `X-Cache` is `STALE` if any part was served past its soft
+//! TTL (AVL-03, ADR-212; the body says `refreshing: true` and names the part in
+//! `warnings`), else `MISS` if any part went upstream and `HIT` otherwise;
+//! `X-Cache-Age` is the stalest part's age (v1 `summarise`), and
 //! `X-Cache-Fetched-Age` the oldest part's last read from Riot (SITE-01).
+//!
+//! Stale beats none (AVL-03): every part is read with
+//! [`crate::fetcher::Fetcher::fetch_or_stored`], so a part whose refresh fails
+//! is served from the stored copy (kept a day past its hard TTL) rather than
+//! left out. Only a part with nothing stored fails.
 
 mod refresh;
 mod summary;
@@ -67,6 +74,8 @@ fn secs(d: Duration) -> u64 {
 #[derive(Debug, Default, Clone, Copy)]
 struct Tally {
     upstream: bool,
+    /// A part was served past its soft TTL (AVL-03).
+    stale: bool,
     age: u64,
     /// `None` while every part counted came from the archive.
     fetched_age: Option<u64>,
@@ -77,6 +86,7 @@ impl Tally {
         // v1 only knew HIT and MISS: a part that went upstream (a miss or a won
         // refresh) makes the document a MISS; everything else reads as a hit.
         self.upstream |= matches!(r.x_cache, XCache::Miss | XCache::Bypass);
+        self.stale |= r.x_cache == XCache::Stale;
         self.age = self.age.max(secs(r.cache_age));
         if let Some(f) = r.fetched_age {
             self.fetched_age = Some(self.fetched_age.unwrap_or(0).max(secs(f)));
@@ -84,7 +94,13 @@ impl Tally {
     }
 
     fn x_cache(self) -> &'static str {
-        if self.upstream { "MISS" } else { "HIT" }
+        if self.stale {
+            "STALE"
+        } else if self.upstream {
+            "MISS"
+        } else {
+            "HIT"
+        }
     }
 }
 
@@ -123,8 +139,16 @@ fn required_platform(query: &HashMap<String, String>) -> Result<Platform, ApiErr
     validate::required_query_platform(q(query, "platform"))
 }
 
+/// The warning naming a part served past its soft TTL (AVL-03).
+fn stale_warning(name: &str, r: &FetchResult) -> Option<String> {
+    (r.x_cache == XCache::Stale).then(|| match r.fetched_age {
+        Some(f) => format!("{name} served stale (last read from Riot {} s ago)", secs(f)),
+        None => format!("{name} served stale"),
+    })
+}
+
 /// One part of a fan-out: its Riot payload verbatim, or `None` with a warning
-/// naming why (v1 `collector`).
+/// naming why (v1 `collector`). A part served stale is kept and named too.
 fn part(
     name: &str,
     outcome: &Result<FetchResult, FetchError>,
@@ -132,7 +156,10 @@ fn part(
 ) -> Option<Box<RawValue>> {
     let err = match outcome {
         Ok(r) => match serde_json::from_slice::<Box<RawValue>>(&r.body) {
-            Ok(v) => return Some(v),
+            Ok(v) => {
+                warnings.extend(stale_warning(name, r));
+                return Some(v);
+            }
             Err(_) => ApiError::upstream(),
         },
         Err(e) => e.api.clone(),
@@ -151,17 +178,25 @@ async fn fetch(
     req: Result<RiotRequest, ApiError>,
     bypass: bool,
 ) -> Result<FetchResult, FetchError> {
+    fetch_with(
+        state,
+        req,
+        FetchOptions {
+            bypass,
+            ..FetchOptions::default()
+        },
+    )
+    .await
+}
+
+async fn fetch_with(
+    state: &AppState,
+    req: Result<RiotRequest, ApiError>,
+    opts: FetchOptions,
+) -> Result<FetchResult, FetchError> {
     let req = req.map_err(FetchError::from)?;
-    state
-        .fetcher
-        .fetch(
-            req,
-            FetchOptions {
-                bypass,
-                ..FetchOptions::default()
-            },
-        )
-        .await
+    // Stale beats none (AVL-03): a failed refresh serves the stored copy.
+    state.fetcher.fetch_or_stored(req, opts).await
 }
 
 fn now_ms() -> i64 {
@@ -213,7 +248,11 @@ pub struct ProfileBody {
     refreshed: bool,
     /// Seconds until another `?refresh=true` is allowed for this player; 0 when now.
     refresh_available_in: u64,
-    /// Names each part that could not be fetched.
+    /// A part was served past its soft TTL (`X-Cache: STALE`): a stored copy,
+    /// because its refresh is running in the background or failed. The part
+    /// is named in `warnings`; a later read gets the fresh one.
+    refreshing: bool,
+    /// Names each part that could not be fetched, and each part served stale.
     warnings: Vec<String>,
 }
 
@@ -352,6 +391,7 @@ async fn compose_profile(
         },
         refreshed: window.refreshed,
         refresh_available_in: window.available_in,
+        refreshing: tally.stale,
         warnings,
     };
     // Every part failing means the player does not resolve at all (v1).
@@ -371,12 +411,15 @@ async fn compose_profile(
         tag_line: who.as_ref().and_then(|w| w.tag_line.as_deref()),
         tracked: None,
     };
-    if let Err(e) =
-        crate::players::upsert(&state.db, state.fetcher.key_scope().as_str(), upsert, now_ms()).await
-    {
-        // Bookkeeping: a profile is still a profile without it.
-        tracing::warn!(error = %e, "could not record player identity");
-    }
+    // Bookkeeping: a profile is still a profile without it, so the profile
+    // does not wait for the write either (AVL-02).
+    crate::players::upsert_behind(
+        &state.db,
+        state.fetcher.key_scope().as_str(),
+        upsert,
+        now_ms(),
+        "could not record player identity",
+    );
 
     document(&body, tally)
 }
@@ -386,7 +429,9 @@ async fn compose_profile(
     summary = "A player's profile in one call",
     description = "Account, summoner, ranked entries and top mastery, fetched concurrently and each cached on \
                    its own. A part that fails is `null` and named in `warnings`; only every part failing is a \
-                   404. `refresh=true` re-reads every part upstream, at most once a minute per player. \
+                   404. A part whose refresh fails (rate limited, Riot down) is served from its stored \
+                   copy (kept a day past its TTL) rather than left out: the document then says `X-Cache: STALE` and \
+                   `refreshing: true`, and names the part in `warnings`. `refresh=true` re-reads every part upstream, at most once a minute per player. \
                    Without `platform`, the proxy reads the player's platform from account-v1's active region \
                    (cached like an account) and echoes it as `platform`, so the player's other routes can \
                    be routed from the profile alone.",
@@ -522,6 +567,12 @@ pub struct MatchPage {
     backfill: Option<BackfillNotice>,
     refreshed: bool,
     refresh_available_in: u64,
+    /// The id list (or a match fetched for the page) was served past its soft
+    /// TTL (`X-Cache: STALE`): a stored copy, because its refresh is running in
+    /// the background or failed. It is named in `warnings`; a later read gets
+    /// the fresh one.
+    refreshing: bool,
+    /// Names each match that could not be loaded, and each part served stale.
     warnings: Vec<String>,
 }
 
@@ -543,7 +594,10 @@ const RECENT_IDS: i64 = 20;
 /// v1 `maybeBackfill` (#44): the first page of a lookup records the player
 /// and, unless a completed walk already accounts for their history, queues one
 /// at bulk priority, so the next page view costs no quota. A walk in flight is
-/// deduped by the queue; a walk that died part-way is queued again.
+/// deduped by the queue; a walk that died part-way is queued again. The
+/// decision reads the player's row; recording the player is written behind
+/// the page (AVL-02), and a walk already queued is found by a read, so only a
+/// walk that has to be queued waits for the writer.
 async fn maybe_backfill(
     state: &AppState,
     puuid: &str,
@@ -554,20 +608,28 @@ async fn maybe_backfill(
     if limit == 0 || start != 0 {
         return None;
     }
+    let scope = state.fetcher.key_scope().as_str();
     let row = crate::players::Upsert {
         puuid,
         platform: platform.as_str(),
         ..crate::players::Upsert::default()
     };
-    let player =
-        match crate::players::upsert(&state.db, state.fetcher.key_scope().as_str(), row, now_ms()).await {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::warn!(error = %e, "could not record looked-up player");
-                return None;
-            }
-        };
-    let done = crate::jobs::archive::BackfillState::parse(player.backfill_state.as_deref())
+    crate::players::upsert_behind(
+        &state.db,
+        scope,
+        row,
+        now_ms(),
+        "could not record looked-up player",
+    );
+    let player = match crate::players::get(&state.db, scope, puuid).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(error = %e, "could not read looked-up player");
+            return None;
+        }
+    };
+    let done = player
+        .and_then(|p| crate::jobs::archive::BackfillState::parse(p.backfill_state.as_deref()))
         .is_some_and(|s| s.done_at.is_some());
     if done {
         return None;
@@ -580,7 +642,7 @@ async fn maybe_backfill(
         queue_id: None,
         reason: Some("lookup".into()),
     };
-    match crate::jobs::archive::enqueue_backfill(&state.jobs, &walk).await {
+    match crate::jobs::archive::enqueue_backfill_once(&state.jobs, &walk).await {
         Ok(q) => {
             tracing::info!(puuid, job = %q.id, status = q.status(), limit, "queued backfill on first lookup");
             Some(BackfillNotice {
@@ -604,7 +666,9 @@ async fn maybe_backfill(
     description = "The id page, then every match on it, fanned out concurrently. Archived matches come from \
                    one archive read at no quota cost. Each entry is the player's own line in the game; the \
                    full match stays one call away at `/v1/lol/matches/{region}/{matchId}`. A match that \
-                   cannot be fetched is left out and named in `warnings`; a failed id lookup fails the page.\n\n\
+                   cannot be fetched is left out and named in `warnings`; a failed id lookup fails the page \
+                   unless an id list is stored (kept a day past its TTL): it is then served with `X-Cache: STALE` and \
+                   `refreshing: true`, and named in `warnings`.\n\n\
                    **`champion`** filters by champion. Riot's id list cannot, so the page comes from this \
                    deployment's archive: Riot's newest 20 ids are read and archived first, then the archive \
                    is paged for that champion's games, newest first. Older games appear as the player's \
@@ -690,7 +754,7 @@ async fn match_page(
     let backfill = maybe_backfill(&state, &puuid, platform, start).await;
     let mut tally = Tally::default();
     tally.add(&ids);
-    let mut warnings = Vec::new();
+    let mut warnings: Vec<String> = stale_warning("match ids", &ids).into_iter().collect();
 
     let (match_ids, has_more, archive) = match champion {
         None => {
@@ -755,6 +819,7 @@ async fn match_page(
             match fetched.remove(m) {
                 Some(Ok(r)) => {
                     tally.add(&r);
+                    warnings.extend(stale_warning(&format!("match {m}"), &r));
                     r.body
                 }
                 Some(Err(e)) => {
@@ -798,6 +863,7 @@ async fn match_page(
         backfill,
         refreshed: window.refreshed,
         refresh_available_in: window.available_in,
+        refreshing: tally.stale,
         warnings,
     };
     document(&body, tally)
@@ -828,16 +894,27 @@ async fn champion_page(
             tracing::warn!(error = %e, "archive check failed; fetching every recent id");
             recent.to_vec()
         });
-    // The fetcher archives each match it reads (immutable endpoint).
+    // The fetcher archives each match it reads (immutable endpoint). The
+    // page is read from the archive next, so these wait for the write (AVL-02).
+    let stored_first = FetchOptions {
+        await_store: true,
+        ..FetchOptions::INTERACTIVE
+    };
     let fetched = join_all(missing.iter().map(|m| async move {
         let id = "match.byId";
         let target = Endpoint::by_id(id).and_then(|e| e.target_for_region(region));
-        (m, fetch(state, request(id, target, &[m], &[]), false).await)
+        (
+            m,
+            fetch_with(state, request(id, target, &[m], &[]), stored_first).await,
+        )
     }))
     .await;
     for (m, r) in fetched {
         match r {
-            Ok(r) => tally.add(&r),
+            Ok(r) => {
+                tally.add(&r);
+                warnings.extend(stale_warning(&format!("recent match {m}"), &r));
+            }
             // It may not be this champion's game; say so rather than guess.
             Err(e) => warnings.push(format!(
                 "recent match {m} not archived ({}: {}); it may be missing from this page",

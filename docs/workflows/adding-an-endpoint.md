@@ -29,7 +29,7 @@ Steps 1 to 5 are code; 6 and 7 are tests that fail until the route is documented
 
 ### 1. Registry entry (only when it fans out to Riot)
 
-If the route calls a Riot method the proxy does not yet know, add its `ep(` row to `ENDPOINTS` and its id to `V2_ADDED` in `src/riot/endpoints.rs` first; the unit tests there pin the table (`src/riot/endpoints.rs:92-288`, `539-578`). The whole procedure, the TTL sources and the replay fixture are in [adding-a-riot-call.md](./adding-a-riot-call.md). For the example the id is `clash.playerByPuuid` on `HostKind::Platform`. A route that only reads what is already archived skips this step.
+If the route calls a Riot method the proxy does not yet know, add its `ep(` row to `ENDPOINTS` and its id to `V2_ADDED` in `src/riot/endpoints.rs` first; the unit tests there pin the table (`src/riot/endpoints.rs:92-290`, `541-580`). The whole procedure, the TTL sources and the replay fixture are in [adding-a-riot-call.md](./adding-a-riot-call.md). For the example the id is `clash.playerByPuuid` on `HostKind::Platform`. A route that only reads what is already archived skips this step.
 
 ### 2. The handler
 
@@ -61,7 +61,7 @@ async fn clash_players_by_puuid(
 }
 ```
 
-The path template uses `{name}` segments; a wildcard is `{*name}` (`src/routes/statics.rs:71`). The `tag` decides the group in `/docs` and whether the showcase rule applies (step 7): `players`, `riot`, `lol`, `static` are read tags (`tests/ui.rs:427`).
+The path template uses `{name}` segments; a wildcard is `{*name}` (`src/routes/statics.rs:71`). The `tag` decides the group in `/docs` and whether the showcase rule applies (step 7): `players`, `riot`, `lol`, `static` are read tags (`tests/ui.rs:428`).
 
 ### 3. Register it
 
@@ -85,7 +85,7 @@ The same test also checks `/openapi.json` equals what `riot-proxy spec` prints (
 
 ### 7. The showcase coverage rule
 
-`/dev/showcase` must either use every `GET` operation tagged `players`, `riot`, `lol` or `static`, or list it under `notShowcased` with a reason; `tests/ui.rs::showcase_covers_every_read_route` reads the OpenAPI document and fails otherwise (`docs/design/11-showcase.md:117-131`; `tests/ui.rs:426-467`). The two maps sit in `<script type="application/json" id="coverage">` in `src/ui/showcase.html` (`src/ui/showcase.html:231-241` for `notShowcased`). For the example, either a card calls it (and the path up to its first parameter must appear in the page's script, `tests/ui.rs:469-470`) or:
+`/dev/showcase` must either use every `GET` operation tagged `players`, `riot`, `lol` or `static`, or list it under `notShowcased` with a reason; `tests/ui.rs::showcase_covers_every_read_route` reads the OpenAPI document and fails otherwise (`docs/design/11-showcase.md:117-131`; `tests/ui.rs:427-468`). The two maps sit in `<script type="application/json" id="coverage">` in `src/ui/showcase.html` (`src/ui/showcase.html:231-241` for `notShowcased`). For the example, either a card calls it (and the path up to its first parameter must appear in the page's script, `tests/ui.rs:470-471`) or:
 
 ```json
 "GET /v1/lol/clash/players/{platform}/{puuid}": "planned: a Clash card in a later task"
@@ -106,7 +106,7 @@ Record the decision as the next free `ADR-nnn` in `docs/DECISIONS.md` and tick t
 ### 10. This documentation set
 
 - `docs/api/endpoints.md` and its per-group file (`docs/api/endpoints-riot-lol.md` for a `/v1/lol` route): a row for the route (auth, parameters, Riot method, `X-Cache` states).
-- `docs/api/openapi.json`: regenerate with `riot-proxy spec > docs/api/openapi.json`; `spec` needs no configuration or key (`src/cli/mod.rs:72-81`).
+- `docs/api/openapi.json`: regenerate with `riot-proxy spec > docs/api/openapi.json`; `spec` needs no configuration or key (`src/cli/mod.rs:73-82`).
 - `docs/reference/riot-api-usage.md` if a Riot method was added.
 
 ## Checklist
@@ -122,5 +122,5 @@ Record the decision as the next free `ADR-nnn` in `docs/DECISIONS.md` and tick t
 9. `just lint`, `just test`; CI green ([ci.md](./ci.md)).
 
 ---
-**Sources:** `src/routes/docs.rs:L116-L153`, `L374-L377`, `src/routes/riot.rs:L21-L84`, `src/routes/lol.rs:L30-L104`, `L217-L229`, `src/routes/passthrough.rs:L17-L89`, `L94-L167`, `src/routes/mod.rs:L3-L15`, `src/routes/statics.rs:L71`, `src/http/validate.rs:L21-L31`, `L67-L253`, `src/app.rs:L71-L133`, `src/riot/endpoints.rs:L92-L288`, `L539-L578`, `src/cli/mod.rs:L72-L81`, `src/ui/showcase.html:L231-L241`, `tests/ui.rs:L426-L470`, `tests/openapi.rs:L9-L60`, `tests/lol_routes.rs:L22-L80`, `tests/riot_routes.rs:L16-L80`, `L243-L245`, `docs/design/11-showcase.md:L117-L131`, `docs/IMPLEMENTATION.md:L18`, `L22-L24`, `L94`, `PROGRESS.md:L388-L389`, `L391`, `.github/PULL_REQUEST_TEMPLATE.md:L21`
-**Last verified:** 2026-11-09 against commit `6c32ff4`
+**Sources:** `src/routes/docs.rs:L116-L153`, `L374-L377`, `src/routes/riot.rs:L21-L84`, `src/routes/lol.rs:L30-L104`, `L217-L229`, `src/routes/passthrough.rs:L17-L89`, `L94-L167`, `src/routes/mod.rs:L3-L15`, `src/routes/statics.rs:L71`, `src/http/validate.rs:L21-L31`, `L67-L253`, `src/app.rs:L71-L133`, `src/riot/endpoints.rs:L92-L290`, `L541-L580`, `src/cli/mod.rs:L73-L82`, `src/ui/showcase.html:L231-L241`, `tests/ui.rs:L427-L471`, `tests/openapi.rs:L9-L60`, `tests/lol_routes.rs:L22-L80`, `tests/riot_routes.rs:L16-L80`, `L243-L245`, `docs/design/11-showcase.md:L117-L131`, `docs/IMPLEMENTATION.md:L18`, `L22-L24`, `L94`, `PROGRESS.md:L388-L389`, `L391`, `.github/PULL_REQUEST_TEMPLATE.md:L21`
+**Last verified:** 2026-11-09 against commit `0113520`

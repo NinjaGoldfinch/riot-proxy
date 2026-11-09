@@ -298,6 +298,9 @@ fn queued(db_path: &Path, kind: &str) -> usize {
 /// tick fires at once on every boot), then return how many `maintenance`
 /// rows the boot queued.
 async fn maintenance_queued_by_a_boot(dir: &Path) -> usize {
+    // `serve_with` listens for this process's signals; another test's SIGTERM
+    // must not stop this server (AVL-04).
+    let _signals = crate::common::SIGNALS.lock().await;
     let port = std::net::TcpListener::bind("127.0.0.1:0")
         .unwrap()
         .local_addr()
@@ -314,6 +317,7 @@ async fn maintenance_queued_by_a_boot(dir: &Path) -> usize {
         riot_base_url: Some("http://127.0.0.1:9".into()),
         skip_tracing_init: true,
         ddragon_urls: Some(riot_proxy::jobs::ddragon::CdnUrls::mock("http://127.0.0.1:9")),
+        ..riot_proxy::cli::serve::ServeOptions::default()
     };
     let task = tokio::spawn(riot_proxy::cli::serve::serve_with(config, options));
     let path = dir.join("riot-proxy.db");

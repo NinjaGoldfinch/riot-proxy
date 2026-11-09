@@ -1,10 +1,18 @@
 //! `riot-proxy serve` (docs/design/03 §Process model, 07 §First run).
+//!
+//! The boot order (ADR-209): open the database, restore the limiter, warm L1,
+//! build the state, bind and **accept**, and only then the boot catch-up
+//! (`recover`, lanes, the checks that queue what an older process left
+//! undone) followed by the job workers and the ticks. A shutdown signal from
+//! "listening" on stops the catch-up where it is and drains.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Context;
+use futures_util::FutureExt;
+use tokio::sync::Notify;
 
 use crate::app::{self, AppState};
 use crate::archive::SqliteArchive;
@@ -34,6 +42,49 @@ pub struct ServeOptions {
     pub skip_tracing_init: bool,
     /// Where Data Dragon is fetched from. `None`: Riot's hosts.
     pub ddragon_urls: Option<crate::jobs::ddragon::CdnUrls>,
+    /// Test-only: hold the boot catch-up open (ADR-209).
+    #[doc(hidden)]
+    pub catch_up_hold: Option<CatchUpHold>,
+    /// Test-only: shut down when this is notified instead of on SIGTERM or
+    /// SIGINT, so an in-process test neither installs nor receives process
+    /// signals (another test in the binary sends itself SIGTERM).
+    #[doc(hidden)]
+    pub shutdown: Option<Arc<Notify>>,
+    /// Test-only: one more job kind and its handler, made from the database
+    /// (AVL-04's shutdown test runs a job that holds the writer).
+    #[doc(hidden)]
+    pub extra_handler: Option<ExtraHandler>,
+}
+
+/// Test-only (ADR-209): makes the boot catch-up observably slow, as a
+/// minutes-long check on a large archive is, without a large archive.
+#[doc(hidden)]
+#[derive(Debug, Clone, Default)]
+pub struct CatchUpHold {
+    /// Set when the catch-up reaches the hold: interrupted jobs are re-queued
+    /// and lanes assigned, the checks have not run.
+    pub reached: Arc<AtomicBool>,
+    /// The catch-up waits here until notified.
+    pub release: Arc<Notify>,
+    /// Set as the catch-up finishes, before the job workers start.
+    pub done: Arc<AtomicBool>,
+}
+
+/// Test-only: a job kind `serve` does not have, with a handler built from its
+/// [`Db`] (AVL-04, ADR-211).
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct ExtraHandler {
+    pub kind: &'static str,
+    pub make: Arc<dyn Fn(Db) -> Arc<dyn crate::jobs::scheduler::Handler> + Send + Sync>,
+}
+
+impl std::fmt::Debug for ExtraHandler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExtraHandler")
+            .field("kind", &self.kind)
+            .finish_non_exhaustive()
+    }
 }
 
 pub async fn serve(config: Config) -> anyhow::Result<()> {
@@ -148,16 +199,20 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
     });
 
     // Before "listening": a SIGTERM from then on must be a clean shutdown, not
-    // the default action.
-    let shutdown = app::shutdown_signal()?;
-    let listener = tokio::net::TcpListener::bind((config.host.as_str(), config.port))
-        .await
-        .with_context(|| format!("binding {}:{}", config.host, config.port))?;
-    let addr = listener.local_addr()?;
-    tracing::info!(%addr, "listening");
+    // the default action. Shared: the server's drain and the boot catch-up
+    // both stop on it (ADR-209).
+    let shutdown = match options.shutdown.clone() {
+        Some(stop) => async move {
+            stop.notified().await;
+            tracing::info!("shutdown requested");
+        }
+        .boxed(),
+        None => app::shutdown_signal()?.boxed(),
+    }
+    .shared();
 
-    // Jobs (design/06): handlers over one queue, interrupted work re-queued,
-    // then workers and the ticks.
+    // Jobs (design/06): handlers over one queue, built here; the workers and
+    // ticks start after the boot catch-up has re-queued interrupted work.
     let hub = crate::ws::Hub::new();
     let mirror = Arc::new(crate::r#static::Mirror::new(
         config.ddragon_dir.clone(),
@@ -294,9 +349,164 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
                 },
             );
     }
+    if let Some(extra) = &options.extra_handler {
+        handlers = handlers.with_shared(extra.kind, (extra.make)(db.clone()));
+    }
     let scheduler = crate::jobs::Scheduler::with_queue(queue.clone(), handlers)
         .with_limiter(Arc::clone(&limiter))
         .with_activity(activity.clone());
+    // The dashboard's documents: the `metrics` topic ticks only while someone
+    // holds it; the sampler (started with the workers, below) reads the
+    // table-scanning parts in the background and records the history
+    // regardless (v1, ADM-02). It reads the quotas and the cache too (ADM-04),
+    // so they are built first.
+    let config = Arc::new(config);
+    let quotas = Arc::new(Quotas::new());
+    let stats = Arc::new(crate::stats::Stats {
+        hub: hub.clone(),
+        db: db.clone(),
+        key_scope: scope.clone(),
+        limiter: Arc::clone(&limiter),
+        metrics: metrics.clone(),
+        mirror: Arc::clone(&mirror),
+        started,
+        samples: crate::stats::Samples::default(),
+        fetcher: fetcher.clone(),
+        quotas: Arc::clone(&quotas),
+        config: Arc::clone(&config),
+    });
+    let metrics_topic = crate::ws::metrics::spawn(
+        Arc::clone(&stats),
+        Duration::from_secs(u64::from(config.metrics_interval_s)),
+    );
+
+    let auth = Arc::new(Auth::new(&config, db.clone()));
+    let state = AppState {
+        config: Arc::clone(&config),
+        db: db.clone(),
+        limiter: Arc::clone(&limiter),
+        fetcher,
+        auth,
+        quotas,
+        limiter_restored: restored,
+        refresh: Arc::new(crate::routes::players::RefreshWindows::new()),
+        jobs: queue.clone(),
+        activity,
+        hub: hub.clone(),
+        ddragon: mirror,
+        stats: Arc::clone(&stats),
+        maintenance,
+        analytics: analytics_cache,
+        status: Arc::new(crate::status::Status::new(started)),
+    };
+    let checker = crate::status::checks::Checker::new(&state)?;
+    let router = app::router(state, metrics);
+
+    // Bind and accept at once (ADR-209): "listening" means accepting. The
+    // writer and the limiter are ready, so `/readyz` is too. The catch-up
+    // runs while requests are served, and stops where it is when the
+    // shutdown signal arrives or the server ends.
+    let listener = tokio::net::TcpListener::bind((config.host.as_str(), config.port))
+        .await
+        .with_context(|| format!("binding {}:{}", config.host, config.port))?;
+    let addr = listener.local_addr()?;
+    tracing::info!(%addr, "listening");
+    let mut server = tokio::spawn(app::serve(listener, router, shutdown.clone()));
+    // `/status`'s checks: a round now, then every STATUS_CHECK_INTERVAL_S (STS-02b).
+    let checks = checker.spawn();
+    let mut ended = None;
+    let caught_up = tokio::select! {
+        () = shutdown.clone() => false,
+        res = &mut server => {
+            ended = Some(res);
+            false
+        }
+        () = boot_catch_up(
+            &scheduler,
+            &queue,
+            &config,
+            &scope,
+            pending.is_some(),
+            options.catch_up_hold.as_ref(),
+        ) => true,
+    };
+    // Started only after a complete catch-up, so `recover` always comes first
+    // (design/06); after a shutdown during it, nothing is left to stop.
+    let jobs = if caught_up {
+        tracing::info!(
+            workers = config.job_concurrency,
+            kind_limits = ?config.job_kind_limits,
+            "starting job workers"
+        );
+        let workers = scheduler.start(usize::try_from(config.job_concurrency).unwrap_or(8));
+        let ticks = crate::jobs::ticks::Ticks::start_with(
+            &scheduler,
+            &scope,
+            crate::jobs::ticks::running_schedule(&config),
+            crate::jobs::ticks::ladders(&config),
+        );
+        let history = crate::stats::spawn_sampler(
+            Arc::clone(&stats),
+            crate::stats::FAST_SAMPLE,
+            Duration::from_secs(u64::from(config.metrics_history_interval_s)),
+        );
+        Some((workers, ticks, history))
+    } else {
+        log_catch_up_stopped(ended.is_some(), shutdown.clone());
+        None
+    };
+    let served = match ended {
+        Some(res) => res,
+        None => server.await,
+    };
+    let served: anyhow::Result<()> = match served {
+        Ok(res) => res.context("serving"),
+        Err(e) => Err(e).context("the server task"),
+    };
+
+    // After draining, whether or not serve failed: stop ticking, let running
+    // jobs finish (the rest resume on the next boot), close sockets, then the
+    // final limiter checkpoint (design/05), the writes still running behind
+    // their requests (AVL-02) and pending L2 writes (design/04).
+    let (workers, history) = match jobs {
+        Some((workers, ticks, history)) => {
+            ticks.shutdown().await;
+            (Some(workers), Some(history))
+        }
+        None => (None, None),
+    };
+    checks.abort();
+    metrics_topic.abort();
+    if let Some(history) = history {
+        history.abort();
+    }
+    if let Some(workers) = workers {
+        workers.shutdown(JOB_GRACE).await;
+    }
+    hub.shutdown();
+    checkpoints.abort();
+    persist::checkpoint_now(&limiter, &db).await;
+    db.flush_detached().await;
+    cache.shutdown().await;
+    tracing::info!("limiter checkpoint and L2 flushed; stopped");
+    served
+}
+
+/// The boot catch-up (design/06, ADR-209): rows a previous process left
+/// running re-queued, queued jobs given their lane, then the checks that
+/// queue what an older version or process left undone. It runs while the
+/// server accepts; the caller starts the workers once it returns, and drops it
+/// (at whichever query it is on) on shutdown. Each step logs its own failure
+/// and the next runs regardless, as before the reorder.
+async fn boot_catch_up(
+    scheduler: &crate::jobs::Scheduler,
+    queue: &crate::jobs::Queue,
+    config: &Config,
+    scope: &str,
+    offload: bool,
+    hold: Option<&CatchUpHold>,
+) {
+    let began = Instant::now();
     match scheduler.recover().await {
         Ok(r) => {
             if r.requeued > 0 {
@@ -319,27 +529,31 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         Ok(n) => tracing::info!(jobs = n, "gave queued jobs their rate-limit lane"),
         Err(e) => tracing::warn!(error = %e, "could not give queued jobs their rate-limit lane"),
     }
-    match crate::jobs::archive::queue_missing_halves(&queue, config.archive_timelines).await {
+    if let Some(hold) = hold {
+        hold.reached.store(true, Ordering::SeqCst);
+        hold.release.notified().await;
+    }
+    match crate::jobs::archive::queue_missing_halves(queue, config.archive_timelines).await {
         Ok(0) => {}
         Ok(n) => tracing::info!(matches = n, "queued the missing halves of archived matches"),
         Err(e) => tracing::warn!(error = %e, "could not queue the missing halves of archived matches"),
     }
     // Facts an older version derived are swept once, in the background.
-    match crate::jobs::analytics::reextract_if_stale(&queue).await {
+    match crate::jobs::analytics::reextract_if_stale(queue).await {
         Ok(true) => tracing::info!("queued facts:reextract for matches an older facts version derived"),
         Ok(false) => {}
         Err(e) => tracing::warn!(error = %e, "could not check for stale match facts"),
     }
     // Ranked matches archived before their tiers were stamped (V0016) are
     // stamped once, in the background (THR-02).
-    match crate::jobs::analytics::backfill_tiers_if_needed(&queue).await {
+    match crate::jobs::analytics::backfill_tiers_if_needed(queue).await {
         Ok(true) => tracing::info!("queued tiers:backfill for matches archived without tier stamps"),
         Ok(false) => {}
         Err(e) => tracing::warn!(error = %e, "could not check for matches without tier stamps"),
     }
     // Analytics rows from before their tables had a tier and side (V0017) are
     // replaced by one rebuild over every patch of their ladder (ADR-129).
-    match crate::jobs::analytics::split_if_needed(&queue, &scope).await {
+    match crate::jobs::analytics::split_if_needed(queue, scope).await {
         Ok(0) => {}
         Ok(n) => tracing::info!(
             ladders = n,
@@ -350,7 +564,7 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
     // A ladder no full rebuild has stamped since V0029 is rebuilt over every
     // patch once, one at a time, before its deltas start (THR-03, ADR-182).
     if config.aggregate_delta_s > 0 {
-        match crate::jobs::analytics::stamp_if_needed(&queue, &scope, &crate::jobs::ticks::ladders(&config))
+        match crate::jobs::analytics::stamp_if_needed(queue, scope, &crate::jobs::ticks::ladders(config))
             .await
         {
             Ok(0) => {}
@@ -362,95 +576,31 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         }
     }
     // A boot run catches a full pack the lost counter would have queued.
-    if pending.is_some() {
-        match crate::jobs::offload::enqueue(&queue).await {
+    if offload {
+        match crate::jobs::offload::enqueue(queue).await {
             Ok(_) => tracing::info!("queued archive:offload"),
             Err(e) => tracing::warn!(error = %e, "could not queue archive:offload"),
         }
     }
+    if let Some(hold) = hold {
+        hold.done.store(true, Ordering::SeqCst);
+    }
     tracing::info!(
-        workers = config.job_concurrency,
-        kind_limits = ?config.job_kind_limits,
-        "starting job workers"
+        ms = u64::try_from(began.elapsed().as_millis()).unwrap_or(u64::MAX),
+        "boot catch-up done"
     );
-    let workers = scheduler.start(usize::try_from(config.job_concurrency).unwrap_or(8));
-    let ticks = crate::jobs::ticks::Ticks::start_with(
-        &scheduler,
-        &scope,
-        crate::jobs::ticks::running_schedule(&config),
-        crate::jobs::ticks::ladders(&config),
-    );
-    // The dashboard's documents: the `metrics` topic ticks only while someone
-    // holds it; the sampler reads the table-scanning parts in the background
-    // and records the history regardless (v1, ADM-02). It reads the quotas
-    // and the cache too (ADM-04), so they are built first.
-    let config = Arc::new(config);
-    let quotas = Arc::new(Quotas::new());
-    let stats = Arc::new(crate::stats::Stats {
-        hub: hub.clone(),
-        db: db.clone(),
-        key_scope: scope.clone(),
-        limiter: Arc::clone(&limiter),
-        metrics: metrics.clone(),
-        mirror: Arc::clone(&mirror),
-        started,
-        samples: crate::stats::Samples::default(),
-        fetcher: fetcher.clone(),
-        quotas: Arc::clone(&quotas),
-        config: Arc::clone(&config),
-    });
-    let metrics_topic = crate::ws::metrics::spawn(
-        Arc::clone(&stats),
-        Duration::from_secs(u64::from(config.metrics_interval_s)),
-    );
-    let history = crate::stats::spawn_sampler(
-        Arc::clone(&stats),
-        crate::stats::FAST_SAMPLE,
-        Duration::from_secs(u64::from(config.metrics_history_interval_s)),
-    );
-
-    let auth = Arc::new(Auth::new(&config, db.clone()));
-    let state = AppState {
-        config,
-        db: db.clone(),
-        limiter: Arc::clone(&limiter),
-        fetcher,
-        auth,
-        quotas,
-        limiter_restored: restored,
-        refresh: Arc::new(crate::routes::players::RefreshWindows::new()),
-        jobs: queue,
-        activity,
-        hub: hub.clone(),
-        ddragon: mirror,
-        stats,
-        maintenance,
-        analytics: analytics_cache,
-        status: Arc::new(crate::status::Status::new(started)),
-    };
-    // `/status`'s checks: a round now, then every STATUS_CHECK_INTERVAL_S (STS-02b).
-    let checks = crate::status::checks::Checker::new(&state)?.spawn();
-    let served = app::serve(listener, app::router(state, metrics), shutdown).await;
-
-    // After draining, whether or not serve failed: stop ticking, let running
-    // jobs finish (the rest resume on the next boot), close sockets, then the
-    // final limiter checkpoint (design/05) and pending L2 writes (design/04).
-    ticks.shutdown().await;
-    checks.abort();
-    metrics_topic.abort();
-    history.abort();
-    workers.shutdown(JOB_GRACE).await;
-    hub.shutdown();
-    checkpoints.abort();
-    persist::checkpoint_now(&limiter, &db).await;
-    cache.shutdown().await;
-    tracing::info!("limiter checkpoint and L2 flushed; stopped");
-    served?;
-    Ok(())
 }
 
 /// How long running jobs get to finish at shutdown.
 const JOB_GRACE: Duration = Duration::from_secs(10);
+
+// The drain, the job grace and the writer interrupt stay under 60 s, so a
+// stop ends well inside systemd's 90 s `TimeoutStopSec` (AVL-04, ADR-211;
+// design/07 §Option C).
+const _: () = assert!(
+    app::SHUTDOWN_GRACE.as_secs() + JOB_GRACE.as_secs() + crate::jobs::scheduler::INTERRUPT_WAIT.as_secs()
+        < 60
+);
 
 fn print_bootstrap_key(key: &str) {
     eprintln!();
@@ -458,4 +608,20 @@ fn print_bootstrap_key(key: &str) {
     eprintln!("  Scopes read,admin. Store it now; it cannot be recovered.");
     eprintln!("  Mint more keys with: riot-proxy key create --name <name>");
     eprintln!();
+}
+
+/// The catch-up did not finish. `reason=shutdown signal` is the usual case,
+/// also when the server task drained on the signal before the `select!` saw
+/// it; `reason=server ended` means the server task ended with no signal
+/// fired, and the shutdown sequence that follows is the error path.
+fn log_catch_up_stopped<F>(server_ended: bool, shutdown: F)
+where
+    F: std::future::Future<Output = ()> + Unpin,
+{
+    let reason = if server_ended && shutdown.now_or_never().is_none() {
+        "server ended"
+    } else {
+        "shutdown signal"
+    };
+    tracing::info!(reason, "boot catch-up stopped; job workers not started");
 }

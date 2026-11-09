@@ -12,4 +12,4 @@
 
 ---
 **Sources:** `docs/DECISIONS.md:L349-L368,L1001-L1013,L1453-L1482`, `src/jobs/scheduler.rs:L40-L42,L225-L269,L963-L1025`, `src/db/store.rs:L98-L133`, `src/db/migrations/V0001__init.sql:L33-L45`
-**Last verified:** 2026-11-09 against commit `6eefe67`
+**Last verified:** 2026-11-09 against commit `199b559`

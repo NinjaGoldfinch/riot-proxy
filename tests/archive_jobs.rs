@@ -381,7 +381,9 @@ async fn a_rate_limited_timeline_yields_and_the_rerun_fetches_only_it() {
     assert_eq!(paths, [m.to_string(), format!("{m}/timeline")]);
 }
 
-/// ME-01: an `ME1_` match id names no platform, but europe serves it.
+/// ME-01: europe serves an `ME1_` match. ME-02: `me1` is a platform, so the
+/// ranked match's participants are stamped (`UNKNOWN`: no me1 ladder or rank
+/// lookup placed them), leaving nothing for the boot tier check to find.
 #[tokio::test]
 async fn a_middle_east_match_is_archived_from_europe() {
     let e = env().await;
@@ -403,6 +405,24 @@ async fn a_middle_east_match_is_archived_from_europe() {
         .await
         .unwrap();
     assert_eq!(region, "europe");
+    // `tier IS NULL` is what the boot tier check looks for (ADR-208 finding 2).
+    let (unknown, unstamped): (i64, i64) =
+        e.db.read(|c| {
+            let count = |sql: &str| c.query_row(sql, [], |r| r.get::<_, i64>(0));
+            Ok::<_, DbError>((
+                count(
+                    "SELECT count(*) FROM match_facts WHERE match_id = 'ME1_17228556' AND tier = 'UNKNOWN'",
+                )?,
+                count("SELECT count(*) FROM match_facts WHERE match_id = 'ME1_17228556' AND tier IS NULL")?,
+            ))
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        (unknown, unstamped),
+        (10, 0),
+        "a ranked solo game of ten, all stamped"
+    );
 }
 
 #[tokio::test]

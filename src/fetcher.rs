@@ -6,12 +6,21 @@
 //!   → limiter → client → observe → cache write → archive write (or rank record)
 //! ```
 //!
+//! The archive write is awaited only by a job's fetch; an interactive one
+//! hands it to the archive's write-behind and returns (AVL-02, ADR-210).
+//!
 //! The upstream leg owns v1's retry policy (ADR-017, ADR-021): 5xx and network
 //! failures retry twice after 250/750 ms; a typed 429 freezes the scope (via
 //! `observe`) and re-acquires; a service 429 backs off 500 ms × 2ⁿ, capped at 8 s,
 //! up to 3 tries. All waits are jittered ±20 %. When upstream fails or the rate-limit
 //! budget runs out and a cached copy is still inside its hard TTL, that copy is
 //! served as `STALE` (v1 §8.5).
+//!
+//! Stale beats none (AVL-03, ADR-212): [`Fetcher::fetch_or_stored`], which the
+//! `/v1/players/*` composites use, also serves a copy past its hard TTL
+//! (`Lookup::Expired`, kept `EXPIRED_KEEP`) as `STALE` with its real ages when
+//! the upstream leg fails for any reason but Riot's 404. The passthrough routes
+//! keep v1's rule.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -128,6 +137,11 @@ pub struct FetchOptions {
     /// A job's fetch: bulk, waiting at most `JOB_YIELD_BUDGET_MS` for the
     /// limiter before failing with `limited_until` set (SCH-01).
     pub job: bool,
+    /// Wait for the archive to store a fresh body before answering, for a
+    /// caller that reads the archive next: every job, and the champion page.
+    /// Otherwise the write runs behind the answer (AVL-02, ADR-210). A fetch
+    /// that joins another caller's call to Riot gets that caller's choice.
+    pub await_store: bool,
 }
 
 impl FetchOptions {
@@ -136,16 +150,21 @@ impl FetchOptions {
         priority: Priority::Bulk,
         bypass: false,
         job: true,
+        await_store: true,
+    };
+
+    /// An interactive fetch: the default.
+    pub const INTERACTIVE: Self = Self {
+        priority: Priority::Interactive,
+        bypass: false,
+        job: false,
+        await_store: false,
     };
 }
 
 impl Default for FetchOptions {
     fn default() -> Self {
-        Self {
-            priority: Priority::Interactive,
-            bypass: false,
-            job: false,
-        }
+        Self::INTERACTIVE
     }
 }
 
@@ -160,6 +179,32 @@ pub trait Archive: Send + Sync + 'static {
     /// players' ranks in league entries, ADR-105); most bodies it ignores.
     fn observe(&self, _req: &RiotRequest, _body: Bytes) -> futures_util::future::BoxFuture<'_, ()> {
         Box::pin(async {})
+    }
+    /// [`Archive::put`] for an immutable endpoint, [`Archive::observe`] for
+    /// the rest, without the caller waiting for the write (AVL-02, ADR-210):
+    /// what an interactive fetch does with a fresh body. An archive with a
+    /// write-behind queue starts the write and returns; one without (the
+    /// default) awaits it. Either way it is stored once this resolves or soon
+    /// after, and [`Archive::get`] should find a detached body at once.
+    fn store_behind<'a>(
+        &'a self,
+        req: &'a RiotRequest,
+        body: Bytes,
+    ) -> futures_util::future::BoxFuture<'a, ()> {
+        store(self, req, body)
+    }
+}
+
+/// What the fetcher does with a fresh body, awaited.
+fn store<'a, A: Archive + ?Sized>(
+    archive: &'a A,
+    req: &'a RiotRequest,
+    body: Bytes,
+) -> futures_util::future::BoxFuture<'a, ()> {
+    if req.endpoint.immutable {
+        archive.put(req, body)
+    } else {
+        archive.observe(req, body)
     }
 }
 
@@ -341,7 +386,9 @@ impl Fetcher {
                     }
                     return Ok(served(&e, XCache::Stale, now));
                 }
-                Lookup::Miss => {}
+                // Past hard TTL: go upstream as on a miss; only
+                // `fetch_or_stored` falls back to it (AVL-03).
+                Lookup::Expired(_) | Lookup::Miss => {}
             }
         }
 
@@ -354,12 +401,19 @@ impl Fetcher {
             (false, Priority::Bulk) => BULK_BUDGET,
         };
         let (work_key, priority) = (key.clone(), opts.priority);
+        // A job wants the archive row before it moves on; most callers do
+        // not wait for the write (AVL-02, ADR-210).
+        let store = if opts.await_store {
+            Store::Await
+        } else {
+            Store::Behind
+        };
         // The upstream leg runs on its own task; it logs to this job.
         let current = activity::current();
         let flight = self
             .flight
             .run(key, move || {
-                activity::within(current, upstream(inner, req, work_key, priority, budget))
+                activity::within(current, upstream(inner, req, work_key, priority, budget, store))
             })
             .await;
         let fetched = flight.value?;
@@ -377,6 +431,41 @@ impl Fetcher {
         })
     }
 
+    /// [`Fetcher::fetch`], but stale beats none (AVL-03, ADR-212): when the
+    /// fetch fails for any reason but a 404 (the limiter's budget, a 429, a
+    /// 5xx, a timeout, an auth failure) and a positive copy is stored, however
+    /// old (`Lookup::Fresh`, `Stale` or `Expired`), that copy is served as
+    /// `STALE` with its real ages. With nothing stored, the error stands. The
+    /// fetch itself is unchanged: an expired copy still goes upstream first,
+    /// inside the caller's budget (`CLIENT_WAIT_BUDGET_MS` for an interactive one).
+    pub async fn fetch_or_stored(
+        &self,
+        req: RiotRequest,
+        opts: FetchOptions,
+    ) -> Result<FetchResult, FetchError> {
+        let key = cache_key(&self.inner.scope, &req);
+        let endpoint = req.endpoint.id;
+        let err = match self.fetch(req, opts).await {
+            Ok(r) => return Ok(r),
+            Err(e) => e,
+        };
+        // A 404 is Riot's answer, not a failure; `HIT-NEG` is one remembered.
+        if err.x_cache.is_some() || err.api.code == ErrorCode::NotFound {
+            return Err(err);
+        }
+        match self.inner.cache.get(&key).await {
+            Lookup::Fresh(e) | Lookup::Stale(e) | Lookup::Expired(e) if !e.is_negative() => {
+                tracing::warn!(
+                    method = endpoint,
+                    code = err.api.code.as_str(),
+                    "serving the stored copy: the refresh failed"
+                );
+                Ok(served(&e, XCache::Stale, Instant::now()))
+            }
+            _ => Err(err),
+        }
+    }
+
     /// v1 §8.5: refresh past the soft TTL at bulk priority, without the caller waiting.
     fn refresh_in_background(&self, req: RiotRequest, key: String) {
         let (inner, flight) = (Arc::clone(&self.inner), Arc::clone(&self.flight));
@@ -384,7 +473,7 @@ impl Fetcher {
             let work_key = key.clone();
             let out = flight
                 .run(key, move || {
-                    upstream(inner, req, work_key, Priority::Bulk, BULK_BUDGET)
+                    upstream(inner, req, work_key, Priority::Bulk, BULK_BUDGET, Store::Behind)
                 })
                 .await;
             if let Err(e) = out.value {
@@ -429,15 +518,26 @@ async fn cached_copy(inner: &Inner, key: &str) -> Option<Fetched> {
     }
 }
 
+/// How the upstream leg hands a fresh body to the archive (AVL-02, ADR-210).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Store {
+    /// Wait for the write: [`FetchOptions::await_store`].
+    Await,
+    /// Return without waiting ([`Archive::store_behind`]): everything else.
+    Behind,
+}
+
 /// The upstream leg: limiter, HTTP, observe, retries, cache and archive writes,
 /// negatives. Runs once per key at a time (single-flight), on its own task.
-/// `budget` bounds each wait for the limiter.
+/// `budget` bounds each wait for the limiter; `store` says whether the leg
+/// waits for the archive's write.
 async fn upstream(
     inner: Arc<Inner>,
     mut req: RiotRequest,
     key: String,
     priority: Priority,
     budget: Duration,
+    store_as: Store,
 ) -> Result<Fetched, FetchError> {
     let endpoint: &'static Endpoint = req.endpoint;
     let targets = req.targets();
@@ -516,10 +616,9 @@ async fn upstream(
         let err = match outcome {
             Ok(res) => {
                 let ttls = inner.policy.ttls(endpoint);
-                if endpoint.immutable {
-                    inner.archive.put(&req, res.body.clone()).await;
-                } else {
-                    inner.archive.observe(&req, res.body.clone()).await;
+                match store_as {
+                    Store::Await => store(inner.archive.as_ref(), &req, res.body.clone()).await,
+                    Store::Behind => inner.archive.store_behind(&req, res.body.clone()).await,
                 }
                 let fetched_at = Instant::now();
                 let content_at = match inner.cache.put(&key, endpoint, res.body.clone(), &ttls).await {

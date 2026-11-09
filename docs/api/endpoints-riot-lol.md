@@ -12,12 +12,12 @@ Common parameter rules (`src/http/validate.rs`):
 | `gameName` | 1 to 16 code points (`L117-L119`) | `params/gameName must …` |
 | `tagLine` | 1 to 5 code points (`L125-L127`) | |
 | `region` | `americas`, `europe`, `asia`, `sea`, case-sensitive (`L67-L69`) | `400 BAD_REGION` `params/region must be equal to one of the allowed values` |
-| `platform` | one of the 16 platform values, case-sensitive (`L71-L78`) | `400 BAD_REGION` `params/platform must be equal to one of the allowed values` |
+| `platform` | one of the 17 platform values, case-sensitive (`L71-L78`) | `400 BAD_REGION` `params/platform must be equal to one of the allowed values` |
 | `matchId` | 6 to 40 chars, `^[A-Za-z0-9]+_[0-9]+$` (`L149-L166`) | `400 VALIDATION` |
 
 ## `/v1/riot/*`: account-v1
 
-Riot endpoint: `account.byRiotId` `/riot/account/v1/accounts/by-riot-id/{gameName}/{tagLine}`, `account.byPuuid` `/riot/account/v1/accounts/by-puuid/{puuid}`, `account.regionByPuuid` `/riot/account/v1/region/by-game/lol/by-puuid/{puuid}` (`src/riot/endpoints.rs:L93-L112`, `L271-L284`). Soft TTL 86 400 s, hard 345 600 s, negative TTL 300 s, persisted to L2.
+Riot endpoint: `account.byRiotId` `/riot/account/v1/accounts/by-riot-id/{gameName}/{tagLine}`, `account.byPuuid` `/riot/account/v1/accounts/by-puuid/{puuid}`, `account.regionByPuuid` `/riot/account/v1/region/by-game/lol/by-puuid/{puuid}` (`src/riot/endpoints.rs:L93-L112`, `L273-L286`). Soft TTL 86 400 s, hard 345 600 s, negative TTL 300 s, persisted to L2.
 
 | Method | Path | Params | Riot call | Handler |
 |---|---|---|---|---|
@@ -33,7 +33,7 @@ The pinned and picked variants share one cache entry (`src/routes/riot.rs:L155-L
 {"puuid":"AbCdEfGhIjKlMnOpQrStUvWxYz0123456789AbCdEfGhIjKlMnOpQrStUvWxYz0123456789AbCdEf","gameName":"Hide on bush","tagLine":"KR1"}
 ```
 
-A Riot ID that does not exist is `404 NOT_FOUND` `Resource not found upstream`, and the 404 is cached for 300 s, so the next call is `404` with `X-Cache: HIT-NEG` and message `Resource not found upstream (negative-cached)` (`src/fetcher.rs:L326-L332`).
+A Riot ID that does not exist is `404 NOT_FOUND` `Resource not found upstream`, and the 404 is cached for 300 s, so the next call is `404` with `X-Cache: HIT-NEG` and message `Resource not found upstream (negative-cached)` (`src/fetcher.rs:L371-L377`).
 
 > **TODO (unverified):** the 200 body of `/v1/riot/accounts/region/by-puuid/{puuid}` is not typed in the OpenAPI document (it is not in `RIOT_BODIES`, `src/routes/docs.rs:L300-L333`); the proxy forwards Riot's `AccountRegionDTO` bytes unchanged.
 
@@ -42,7 +42,7 @@ A Riot ID that does not exist is `404 NOT_FOUND` `Resource not found upstream`, 
 | Method | Path | Params | Riot call (host) | Cache | Handler |
 |---|---|---|---|---|---|
 | GET | `/v1/lol/summoners/by-puuid/{platform}/{puuid}` | platform, puuid | `summoner.byPuuid` `/lol/summoner/v4/summoners/by-puuid/{puuid}` (platform) | soft 3 600 s, L2, neg 30 s | `src/routes/lol.rs:L97` |
-| GET | `/v1/lol/league/entries/by-puuid/{platform}/{puuid}` | platform, puuid | `league.entriesByPuuid` `/lol/league/v4/entries/by-puuid/{puuid}` | soft 300 s, neg 30 s | `src/routes/lol.rs:L113` |
+| GET | `/v1/lol/league/entries/by-puuid/{platform}/{puuid}` | platform, puuid | `league.entriesByPuuid` `/lol/league/v4/entries/by-puuid/{puuid}` | soft 300 s, neg 30 s, L2 (AVL-03) | `src/routes/lol.rs:L113` |
 | GET | `/v1/lol/league/apex/{platform}/{tier}/{queue}` | `tier` in `MASTER`, `GRANDMASTER`, `CHALLENGER`; `queue` in `RANKED_SOLO_5x5`, `RANKED_FLEX_SR` | `league.master` / `grandmaster` / `challenger` `/lol/league/v4/<tier>leagues/by-queue/{queue}` | soft 120 s, L2, no neg | `src/routes/lol.rs:L131` |
 | GET | `/v1/lol/league/entries/{platform}/{queue}/{tier}/{division}` | `tier` in `IRON`…`DIAMOND`; `division` in `I`…`IV`; `?page` 1 to 100000, default 1, always sent | `league.entriesByTier` `/lol/league/v4/entries/{queue}/{tier}/{division}?page=` | soft 120 s, L2 | `src/routes/lol.rs:L163` |
 | GET | `/v1/lol/matches/ids/{region}/{puuid}` | `?start` 0 to 10000 (default 0); `?count` 1 to 100 (default 20); `?queue` 0 to 5000; `?type` in `ranked`, `normal`, `tourney`, `tutorial`; `?startTime`, `?endTime` ≥ 0 | `match.idsByPuuid` `/lol/match/v5/matches/by-puuid/{puuid}/ids` (region); `start` and `count` always sent, the others when given; unknown query keys are dropped | soft 120 s, neg 30 s | `src/routes/lol.rs:L206` |
@@ -55,7 +55,7 @@ A Riot ID that does not exist is `404 NOT_FOUND` `Resource not found upstream`, 
 
 Hard TTL is soft × 4 while `STALE_WHILE_REVALIDATE=true` (default); the full table with line references is in [../reference/riot-api-usage.md](../reference/riot-api-usage.md). Exact upstream URLs per route are asserted in `tests/snapshots/lol_routes__lol_routes_upstream_calls.snap`.
 
-Match routes derive the region from the id's prefix (`EUW1_` is `europe`; `ME1_` is served by `europe`, ADR-143). A declared region that disagrees is refused before any Riot call (`src/routes/lol.rs:L53-L64`):
+Match routes derive the region from the id's prefix (`EUW1_` is `europe`; `ME1_` is the `me1` platform's, also `europe`, ADR-143 and ADR-216). A declared region that disagrees is refused before any Riot call (`src/routes/lol.rs:L53-L64`):
 
 ```text
 GET /v1/lol/matches/americas/EUW1_7000000001
@@ -119,5 +119,5 @@ ninjagoldfinch.lol does not use these image routes; its browser loads icons stra
 > **TODO (unverified):** whether `ServeDir` sends `Last-Modified` and honours `If-Modified-Since` for images written by the fill route on a later request; the behaviour is tower-http's (`docs/_meta/scratch/routes.md` §7).
 
 ---
-**Sources:** `src/routes/riot.rs:L127-L300`, `src/routes/lol.rs:L30-L405`, `src/routes/statics.rs:L4-L292`, `src/routes/passthrough.rs:L325-L476`, `src/http/validate.rs:L53-L166,L232-L244`, `src/riot/endpoints.rs:L93-L284`, `src/riot/ladder.rs:L7-L26`, `src/riot/routing.rs:L132-L195`, `src/static/mod.rs:L28-L101`, `src/fetcher.rs:L311-L332`, `tests/snapshots/lol_routes__lol_routes_upstream_calls.snap`, `tests/snapshots/ddragon__ddragon_file_headers.snap`, `tests/snapshots/ddragon__ddragon_missing_headers.snap`, `docs/_meta/scratch/routes.md` §1.2-1.3,1.6-1.7, `docs/_meta/scratch/riot-and-cache.md` §2, live capture against `target/debug/riot-proxy` 2.7.0
-**Last verified:** 2026-11-09 against commit `6c32ff4`
+**Sources:** `src/routes/riot.rs:L127-L300`, `src/routes/lol.rs:L30-L405`, `src/routes/statics.rs:L4-L292`, `src/routes/passthrough.rs:L325-L476`, `src/http/validate.rs:L53-L166,L232-L244`, `src/riot/endpoints.rs:L93-L286`, `src/riot/ladder.rs:L7-L26`, `src/riot/routing.rs:L138-L205`, `src/static/mod.rs:L28-L101`, `src/fetcher.rs:L356-L377`, `tests/snapshots/lol_routes__lol_routes_upstream_calls.snap`, `tests/snapshots/ddragon__ddragon_file_headers.snap`, `tests/snapshots/ddragon__ddragon_missing_headers.snap`, `docs/_meta/scratch/routes.md` §1.2-1.3,1.6-1.7, `docs/_meta/scratch/riot-and-cache.md` §2, live capture against `target/debug/riot-proxy` 2.7.0
+**Last verified:** 2026-11-09 against commit `0113520`

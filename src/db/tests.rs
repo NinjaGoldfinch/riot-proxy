@@ -145,6 +145,7 @@ async fn migrations_create_exactly_the_design_04_tables() {
             "rank_lookup_queue",
             "rank_lookups",
             "refinery_schema_history",
+            "tiers_sweep",
             "timeline_gaps",
             "timelines",
         ]
@@ -227,7 +228,7 @@ async fn a_v1_database_upgrades_to_v2_and_keeps_its_data() {
         })
         .await
         .expect("read");
-    assert_eq!((name.as_str(), versions), ("old", 31));
+    assert_eq!((name.as_str(), versions), ("old", 32));
 }
 
 /// V0015 (SITE-08, ADR-123) backfills the slices aggregated before it, as the
@@ -895,11 +896,11 @@ async fn migrations_apply_once_across_reopens() {
         })
         .await
         .expect("insert");
-    assert_eq!(history(first.clone()).await.expect("history"), 31);
+    assert_eq!(history(first.clone()).await.expect("history"), 32);
     drop(first);
 
     let second = Db::open(&path, 1).expect("second open");
-    assert_eq!(history(second.clone()).await.expect("history"), 31, "no re-run");
+    assert_eq!(history(second.clone()).await.expect("history"), 32, "no re-run");
     let name: Option<String> = second
         .read(|c| {
             Ok::<_, DbError>(
@@ -1242,6 +1243,48 @@ async fn job_counts_read_only_the_state_kind_index() {
             "{sql}: {plan:?}"
         );
     }
+}
+
+/// AVL-06 (ADR-213): the boot's stale-facts check is two seeks on
+/// `matches_facts_version`, each stopping at its first entry, not a count
+/// over the index; and it answers both halves (NULL and older).
+#[tokio::test]
+async fn the_stale_facts_check_seeks_the_version_index() {
+    let (_dir, db) = open_temp(1);
+    let sql = crate::jobs::analytics::ANY_STALE;
+    let v = crate::archive::facts::FACTS_VERSION;
+    let (plan, answers) = db
+        .write(move |c| {
+            let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
+            let plan = stmt
+                .query_map([v], |r| r.get::<_, String>(3))?
+                .collect::<Result<Vec<_>, _>>()?;
+            let any = |c: &rusqlite::Connection| c.query_row(sql, [v], |r| r.get::<_, bool>(0));
+            let mut answers = vec![any(c)?];
+            c.execute(
+                "INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size,
+                   archived_at, facts_version) VALUES ('OC1_1', 'sea', '16.20', 420, 0, x'00', 1, 0, ?1)",
+                [v],
+            )?;
+            answers.push(any(c)?);
+            c.execute("UPDATE matches SET facts_version = NULL", [])?;
+            answers.push(any(c)?);
+            c.execute("UPDATE matches SET facts_version = ?1", [v - 1])?;
+            answers.push(any(c)?);
+            Ok::<_, DbError>((plan.join(" | "), answers))
+        })
+        .await
+        .expect("plan");
+    assert_eq!(answers, [false, false, true, true]);
+    assert!(
+        plan.contains("SEARCH matches USING COVERING INDEX matches_facts_version (facts_version=?)"),
+        "{plan}"
+    );
+    assert!(
+        plan.contains("SEARCH matches USING COVERING INDEX matches_facts_version (facts_version<?)"),
+        "{plan}"
+    );
+    assert!(!plan.contains("SCAN matches"), "{plan}");
 }
 
 /// WR-01 (ADR-179): every job statement of a crawl's activity view seeks an
@@ -2070,4 +2113,181 @@ async fn v0030_adds_the_collect_cursor() {
         .await
         .expect("read");
     assert_eq!(got, ((10, None, None), (7, 0)));
+}
+
+// ── AVL-04: the shutdown interrupt (ADR-211) ───────────────────────────────
+
+/// A recursive count that runs for hours unless something stops it.
+const ENDLESS: &str = "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 100000000000)
+                       SELECT count(*) FROM r";
+
+fn interrupted(e: &DbError) -> bool {
+    matches!(
+        e,
+        DbError::Sqlite(rusqlite::Error::SqliteFailure(f, _))
+            if f.code == rusqlite::ErrorCode::OperationInterrupted
+    )
+}
+
+/// Until SQLite is executing on the writer's behalf (a progress stamp).
+async fn executing(db: &Db) {
+    for _ in 0..500 {
+        let s = db.writer_status();
+        if s.busy() && s.progress_from_sqlite {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("the writer never started executing");
+}
+
+async fn marker_exists(db: &Db) -> bool {
+    db.read(|c| {
+        c.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE name = 'avl04_marker'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .map_err(DbError::from)
+    })
+    .await
+    .expect("read")
+        > 0
+}
+
+#[tokio::test]
+async fn interrupt_cancels_a_running_job_write_and_its_transaction_rolls_back() {
+    let (_dir, db) = open_temp(1);
+    let running = tokio::spawn(job_writes({
+        let db = db.clone();
+        async move {
+            db.write(|c| {
+                let tx = c.transaction()?;
+                tx.execute_batch("CREATE TABLE avl04_marker (x); INSERT INTO avl04_marker VALUES (1);")?;
+                tx.query_row(ENDLESS, [], |r| r.get::<_, i64>(0))?;
+                tx.commit()?;
+                Ok::<_, DbError>(())
+            })
+            .await
+        }
+    }));
+    executing(&db).await;
+    let stop = db.interrupt_job_writes(std::time::Duration::from_secs(5)).await;
+    assert_eq!(stop, JobWriteStop::Interrupted);
+    let err = running.await.expect("join").expect_err("interrupted");
+    assert!(interrupted(&err), "{err:?}");
+    assert!(!marker_exists(&db).await, "the job's transaction rolled back");
+    assert!(!db.writer_status().busy());
+    // The writer goes on: the next write is not interrupted.
+    let n: i64 = db
+        .write(|c| {
+            c.query_row("SELECT 41 + 1", [], |r| r.get(0))
+                .map_err(DbError::from)
+        })
+        .await
+        .expect("next write");
+    assert_eq!(n, 42);
+}
+
+#[tokio::test]
+async fn the_interrupt_repeats_while_the_job_write_starts_another_statement() {
+    let (_dir, db) = open_temp(1);
+    let running = tokio::spawn(job_writes({
+        let db = db.clone();
+        async move {
+            db.write(|c| {
+                // A closure that swallows the first interrupt and goes on.
+                let first = c.query_row(ENDLESS, [], |r| r.get::<_, i64>(0));
+                assert!(first.is_err());
+                c.query_row(ENDLESS, [], |r| r.get::<_, i64>(0))
+                    .map_err(DbError::from)
+            })
+            .await
+        }
+    }));
+    executing(&db).await;
+    let stop = db.interrupt_job_writes(std::time::Duration::from_secs(5)).await;
+    assert_eq!(stop, JobWriteStop::Interrupted);
+    let err = running.await.expect("join").expect_err("interrupted twice");
+    assert!(interrupted(&err), "{err:?}");
+}
+
+#[tokio::test]
+async fn interrupt_leaves_a_write_made_outside_a_job_alone() {
+    const N: i64 = 3_000_000;
+    let (_dir, db) = open_temp(1);
+    let running = tokio::spawn({
+        let db = db.clone();
+        async move {
+            db.write(|c| {
+                c.query_row(
+                    &format!(
+                        "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < {N})
+                         SELECT count(*) FROM r"
+                    ),
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )
+                .map_err(DbError::from)
+            })
+            .await
+        }
+    });
+    executing(&db).await;
+    assert!(!db.interrupt(), "no job write was running");
+    assert_eq!(
+        db.interrupt_job_writes(std::time::Duration::from_secs(1)).await,
+        JobWriteStop::Idle
+    );
+    assert_eq!(running.await.expect("join").expect("not interrupted"), N);
+}
+
+#[tokio::test]
+async fn job_writes_queued_before_the_interrupt_are_dropped_and_later_ones_run() {
+    let (_dir, db) = open_temp(1);
+    // Hold the writer with a write that is not a job's.
+    let (release, held) = std::sync::mpsc::channel::<()>();
+    let holder = tokio::spawn({
+        let db = db.clone();
+        async move {
+            db.write(move |_| {
+                let _ = held.recv();
+                Ok::<_, DbError>(())
+            })
+            .await
+        }
+    });
+    while !db.writer_status().busy() {
+        tokio::task::yield_now().await;
+    }
+    let queued = tokio::spawn(job_writes({
+        let db = db.clone();
+        async move {
+            db.write(|c| {
+                c.execute_batch("CREATE TABLE avl04_marker (x)")?;
+                Ok::<_, DbError>(())
+            })
+            .await
+        }
+    }));
+    while db.write_queued() == 0 {
+        tokio::task::yield_now().await;
+    }
+    assert!(!db.interrupt(), "the running write is not a job's");
+    release.send(()).expect("release");
+    holder
+        .await
+        .expect("join")
+        .expect("the holder is not interrupted");
+    let err = queued.await.expect("join").expect_err("dropped");
+    assert!(matches!(err, DbError::WriterGone), "{err:?}");
+    assert!(!marker_exists(&db).await, "the dropped job write never ran");
+    // A job write queued after the interrupt runs as usual.
+    job_writes(db.write(|c| {
+        c.execute_batch("CREATE TABLE avl04_marker (x)")?;
+        Ok::<_, DbError>(())
+    }))
+    .await
+    .expect("a later job write");
+    assert!(marker_exists(&db).await);
 }

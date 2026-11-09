@@ -27,14 +27,14 @@ The numbers are `MAX_ATTEMPTS = 5`, `BACKOFF_BASE = 30 s` and `backoff()` (`src/
 
 ### 1. The kind string
 
-Add a constant to `jobs::kinds` and append it to `kinds::ALL` (`src/jobs/mod.rs:19-71`). The name is `area:verb` in v1's style (`poll:live`, `archive:match`). `ALL` is what `JOB_KIND_LIMITS` validates against and what `GET /v1/admin/jobs?kind=` accepts (`src/config.rs:1261-1292`; ADR-137).
+Add a constant to `jobs::kinds` and append it to `kinds::ALL` (`src/jobs/mod.rs:19-71`). The name is `area:verb` in v1's style (`poll:live`, `archive:match`). `ALL` is what `JOB_KIND_LIMITS` validates against and what `GET /v1/admin/jobs?kind=` accepts (`src/config.rs:1267-1298`; ADR-137).
 
 ### 2. Lane, or cap
 
 Decide whether the job calls Riot:
 
 - **It calls Riot.** Give it a lane in `jobs::lanes::of` and add the kind to `LANED` (`src/jobs/lanes.rs:44-78`). The lane is the limiter scope its requests hit (the platform for league and spectator methods, the region for match-v5) and the method it mainly calls, derived from the kind and payload at enqueue so every producer agrees (`src/jobs/lanes.rs:1-6`); use `on(method, platform)` or `on_region(method, region)` (`src/jobs/lanes.rs:26-40`). The claim then skips the kind while the limiter has no bulk room for that lane and method, and spreads workers across lanes (`src/jobs/scheduler.rs:7-9`). A laned kind **cannot** be capped by `JOB_KIND_LIMITS`: the config refuses it with `'<kind>' calls Riot; the rate limiter paces it` (ADR-134, `docs/DECISIONS.md:1448`).
-- **It does not.** Leave it out of `of` and `LANED`. It is then always claimable and becomes cappable: operators may write `JOB_KIND_LIMITS=<kind>=1`, and the default already caps `aggregate:analytics` and `archive:offload` at one (`src/config.rs:125`). If the job is heavy on CPU or the write lock, say so in `.env.example`'s comment for `JOB_KIND_LIMITS` (`.env.example:35-38`) and consider adding it to the default.
+- **It does not.** Leave it out of `of` and `LANED`. It is then always claimable and becomes cappable: operators may write `JOB_KIND_LIMITS=<kind>=1`, and the default already caps `aggregate:analytics` and `archive:offload` at one (`src/config.rs:126`). If the job is heavy on CPU or the write lock, say so in `.env.example`'s comment for `JOB_KIND_LIMITS` (`.env.example:35-38`) and consider adding it to the default.
 
 ### 3. The handler
 
@@ -58,17 +58,17 @@ impl Handler for ClashSyncHandler {
 }
 ```
 
-Register it in `jobs::handlers`, which builds the `Registry` with `.with(kinds::X, handler)` and is called once by `serve` (`src/jobs/mod.rs:96-174`). A kind that exists only under some configuration is added afterwards in `serve`, as the two bucket kinds are (`src/cli/serve.rs:274-296`). A job whose kind has no handler fails with `no handler for job kind '…'` (`src/jobs/scheduler.rs:1126-1129`).
+Register it in `jobs::handlers`, which builds the `Registry` with `.with(kinds::X, handler)` and is called once by `serve` (`src/jobs/mod.rs:96-174`). A kind that exists only under some configuration is added afterwards in `serve`, as the two bucket kinds are (`src/cli/serve.rs:329-351`). A job whose kind has no handler fails with `no handler for job kind '…'` (`src/jobs/scheduler.rs:1132-1135`).
 
 ### 4. Priority, dedupe, payload
 
 - **Priority bands** are constants in `jobs::priority`: `INTERACTIVE` 0, `ARCHIVE_DEPTH` 100 (+ depth/10), `POLL` 10 000, `BACKFILL` 20 000, `MAINTENANCE` 30 000, `TIMELINE_BACKFILL` 40 000; lower runs first (`src/jobs/mod.rs:74-94`; `docs/design/06-jobs-and-realtime.md:84-97`). Pick the band by who waits for it; every enqueue sets one explicitly.
-- **Dedupe key.** `NewJob::new(kind, priority, payload).dedupe(key)`; a job without a key is never deduped (`src/jobs/scheduler.rs:51-78`). The key names the unit of work: a PUUID for polls, a match id for `archive:match`, `platform:queue` for a ladder, the kind itself for a singleton (`src/jobs/ticks.rs:79-84`, `97-101`). `Queue::enqueue` returns `Enqueued { id, created }`; `enqueue_or_promote` lifts a pending duplicate to the better priority instead (`src/jobs/scheduler.rs:80-92`, `418-450`).
+- **Dedupe key.** `NewJob::new(kind, priority, payload).dedupe(key)`; a job without a key is never deduped (`src/jobs/scheduler.rs:51-78`). The key names the unit of work: a PUUID for polls, a match id for `archive:match`, `platform:queue` for a ladder, the kind itself for a singleton (`src/jobs/ticks.rs:84-89`, `97-101`). `Queue::enqueue` returns `Enqueued { id, created }`; `enqueue_or_promote` lifts a pending duplicate to the better priority instead (`src/jobs/scheduler.rs:80-92`, `418-450`).
 - **Payload** is a `serde_json::Value`, stored as text; keep it small and camelCase as the existing ones are (`{"puuid", "platform"}`, `{"matchId", "puuid", "fetchTimeline"}`).
 
 ### 5. Calling Riot from a job
 
-Every job fetch uses `Fetcher::fetch(req, FetchOptions::JOB)`: bulk priority, no bypass, and a wait of at most `JOB_YIELD_BUDGET_MS` for the limiter before the fetch fails with `limited_until` set (`src/fetcher.rs:123-140`). Convert the error with `JobError::from_fetch`, which yields when the limiter had no room and retries otherwise (`src/jobs/scheduler.rs:131-142`); `archive:match` is the model, including treating an upstream 404 as `Fail` because retrying cannot help (`src/jobs/archive.rs:245-280`). A long job hands its worker back between batches with `JobError::take_turns()` (yield with `retry_at = now`), optionally carrying a new payload so it resumes where it stopped (`src/jobs/scheduler.rs:123-129`, `144-150`; `ladder:walk` every 10 pages, `timelines:backfill` every 25 timelines).
+Every job fetch uses `Fetcher::fetch(req, FetchOptions::JOB)`: bulk priority, no bypass, and a wait of at most `JOB_YIELD_BUDGET_MS` for the limiter before the fetch fails with `limited_until` set (`src/fetcher.rs:132-163`). Convert the error with `JobError::from_fetch`, which yields when the limiter had no room and retries otherwise (`src/jobs/scheduler.rs:131-142`); `archive:match` is the model, including treating an upstream 404 as `Fail` because retrying cannot help (`src/jobs/archive.rs:276-311`). A long job hands its worker back between batches with `JobError::take_turns()` (yield with `retry_at = now`), optionally carrying a new payload so it resumes where it stopped (`src/jobs/scheduler.rs:123-129`, `144-150`; `ladder:walk` every 10 pages, `timelines:backfill` every 25 timelines).
 
 ### 6. Activity tracing
 
@@ -78,7 +78,7 @@ Call `activity::step("GOLD II page 12 on na1")` at each unit of progress, `activ
 
 | Return | Effect | Lines |
 |---|---|---|
-| `Ok(())` | `done`, `proxy_jobs_total{job,status="completed"}` | `src/jobs/scheduler.rs:1078-1081` |
+| `Ok(())` | `done`, `proxy_jobs_total{job,status="completed"}` | `src/jobs/scheduler.rs:1084-1087` |
 | `Err(JobError::Retry(msg))`, `attempts < 5` | `pending`, `run_after = now + 2^attempts × 30 s × [0.8, 1.2]`, `error` kept; `proxy_jobs_total{status="failed"}` counted; warn `job failed … next=pending` | `:1070-1074`, `:1086-1092`, `:159-165` |
 | the 5th `Retry`, or any `Err(JobError::Fail(msg))` | `failed`, `finished_at`, `error`; shown in `GET /v1/admin/jobs?state=failed` | `:1075`, `:1112-1115` |
 | `Err(JobError::Yield { retry_at, payload })` | `pending` at `retry_at`, attempt not counted, payload replaced if given, not in `jobs_total` | `:1082-1084`, `:1102-1107` |
@@ -88,18 +88,18 @@ Call `activity::step("GOLD II page 12 on na1")` at each unit of progress, `activ
 
 ### 8. Enqueuing
 
-- **From a tick.** `jobs::ticks::schedule` lists every tick and its period from config (`src/jobs/ticks.rs:106-137`); a kind that is off by default is chained on only when its variable is set, as `ladder:crawl` and `aggregate:analytics` are (`:121-127`); `aggregate:delta` is chained on unless its variable is 0, so it runs by default (`:128-129`). `loops` gives each kind one loop, or one per ladder or region for the kinds queued per ladder or region (`:189-210`), and `fire` matches the kind: polls `fan_out` one job per tracked player, ladders and regions use their helpers, and the default arm queues a deduped singleton at `priority::MAINTENANCE` (`src/jobs/ticks.rs:291-320`; `singleton`, `:97-101`). A loop first fires at its kind's last run plus its period, at once when that is past or nothing is on record; a new kind that should fire on every boot instead goes in `remembers` (`src/jobs/ticks.rs:1-11`, `:212-289`; ADR-214). A new period needs a config variable in `src/config.rs` and a documented line in `.env.example`, which a config test checks against `VARS` (`src/config/tests.rs:434-453`).
-- **From a route or another job.** `state.jobs` is the `Queue` (`src/app.rs:53`); `POST /v1/admin/players/names/backfill` is the model: validate, `crate::jobs::names::enqueue(&state.jobs).await`, answer `202` with `{"ok": true, …}` (`src/routes/admin.rs:2292-2303`). Inside a handler, `enqueue_on(&tx, &job, now)` queues in the same transaction as the work (`src/jobs/ticks.rs:75-89`; `src/jobs/scheduler.rs:225-254`).
+- **From a tick.** `jobs::ticks::schedule` lists every tick and its period from config (`src/jobs/ticks.rs:111-142`); a kind that is off by default is chained on only when its variable is set, as `ladder:crawl` and `aggregate:analytics` are (`:126-132`); `aggregate:delta` is chained on unless its variable is 0, so it runs by default (`:133-134`). `loops` gives each kind one loop, or one per ladder or region for the kinds queued per ladder or region (`:194-215`), and `fire` matches the kind: polls `fan_out` one job per tracked player, ladders and regions use their helpers, and the default arm queues a deduped singleton at `priority::MAINTENANCE` (`src/jobs/ticks.rs:296-325`; `singleton`, `:102-106`). A loop first fires at its kind's last run plus its period, at once when that is past or nothing is on record; a new kind that should fire on every boot instead goes in `remembers` (`src/jobs/ticks.rs:1-11`, `:217-294`; ADR-214). A new period needs a config variable in `src/config.rs` and a documented line in `.env.example`, which a config test checks against `VARS` (`src/config/tests.rs:443-462`).
+- **From a route or another job.** `state.jobs` is the `Queue` (`src/app.rs:53`); `POST /v1/admin/players/names/backfill` is the model: validate, `crate::jobs::names::enqueue(&state.jobs).await`, answer `202` with `{"ok": true, …}` (`src/routes/admin.rs:2295-2306`). Inside a handler, `enqueue_on(&tx, &job, now)` queues in the same transaction as the work (`src/jobs/ticks.rs:80-94`; `src/jobs/scheduler.rs:225-254`).
 
 ### 9. Events and metrics
 
-- **Events.** The `Event` enum and its `NAMES` list are in `src/events.rs:113-124`; a job publishes through the hub (`Hub::publish`, `src/ws/hub.rs:100-103`) as `archive:match` does with `announce` (`src/jobs/archive.rs:282-288`, `423`). A new event is a new variant, a `NAMES` entry, the WebSocket protocol document ([../integration/contract.md](../integration/contract.md)) and the dashboard if it listens; events keep v1's names plus v2's additions (`PROGRESS.md:387`).
-- **Metrics.** `proxy_jobs_total{job,status}` and `jobs_pending{kind}` come for free (`src/jobs/scheduler.rs:36`, `48-49`). A job-specific metric is a constant in `src/metrics.rs`, a `def(...)` row in `CATALOGUE`, and a row in `docs/design/metrics.md`; a unit test fails when the document lacks the row (`src/metrics.rs:98-100`, `460-471`).
+- **Events.** The `Event` enum and its `NAMES` list are in `src/events.rs:113-124`; a job publishes through the hub (`Hub::publish`, `src/ws/hub.rs:100-103`) as `archive:match` does with `announce` (`src/jobs/archive.rs:313-319`, `454`). A new event is a new variant, a `NAMES` entry, the WebSocket protocol document ([../integration/contract.md](../integration/contract.md)) and the dashboard if it listens; events keep v1's names plus v2's additions (`PROGRESS.md:387`).
+- **Metrics.** `proxy_jobs_total{job,status}` and `jobs_pending{kind}` come for free (`src/jobs/scheduler.rs:36`, `48-49`). A job-specific metric is a constant in `src/metrics.rs`, a `def(...)` row in `CATALOGUE`, and a row in `docs/design/metrics.md`; a unit test fails when the document lacks the row (`src/metrics.rs:100-102`, `477-488`).
 
 ### 10. Tests
 
 - **Real workers, real SQLite:** `tests/jobs.rs` is the pattern. A test handler implements `Handler`, `Scheduler::new(db, Registry::new().with("kind", handler))`, `s.enqueue(NewJob::new(...))`, `s.start(n)`, a polling `until(...)`, then `workers.shutdown(Duration)` (`tests/jobs.rs:43-101`). With Riot in the loop use `common::app_with(env, wiremock_uri)` and assert the upstream calls, as `tests/archive_jobs.rs` and `tests/timelines.rs` do.
-- **Unit:** the handler's pure parts beside the code (`src/jobs/<kind>/tests.rs` or `#[cfg(test)]`, `src/jobs/names.rs:214-232`); the tick with paused time (`src/jobs/ticks/tests.rs:36-45`); the lane in `src/jobs/lanes.rs`'s tests; enqueue and dedupe in `src/jobs/scheduler/tests.rs:31-40`.
+- **Unit:** the handler's pure parts beside the code (`src/jobs/<kind>/tests.rs` or `#[cfg(test)]`, `src/jobs/names.rs:214-232`); the tick with paused time (`src/jobs/ticks/tests.rs:36-51`); the lane in `src/jobs/lanes.rs`'s tests; enqueue and dedupe in `src/jobs/scheduler/tests.rs:31-40`.
 - Run `cargo test --test it jobs:: lanes::` and the lot ([testing.md](./testing.md)).
 
 ### 11. Documents
@@ -166,5 +166,5 @@ Then: `jobs::handlers` gets `.with(kinds::CLASH_SYNC, clash::ClashSyncHandler(Ar
 9. design/06 catalogue row, concurrency and runbook docs, ADR, `PROGRESS.md`.
 
 ---
-**Sources:** `src/jobs/mod.rs:L19-L179`, `src/jobs/scheduler.rs:L1-L19`, `L36-L165`, `L225-L254`, `L418-L450`, `L1070-L1144`, `src/jobs/lanes.rs:L1-L78`, `src/jobs/ticks.rs:L1-L11`, `L65-L101`, `L106-L137`, `L189-L320`, `src/jobs/activity.rs:L363-L378`, `src/jobs/archive.rs:L245-L288`, `L423`, `src/jobs/names.rs:L193`, `L208-L232`, `src/fetcher.rs:L123-L140`, `src/cli/serve.rs:L274-L296`, `src/routes/admin.rs:L2292-L2303`, `src/app.rs:L53`, `src/events.rs:L113-L124`, `src/ws/hub.rs:L100-L103`, `src/metrics.rs:L98-L100`, `L460-L471`, `src/config.rs:L125`, `src/config/tests.rs:L434-L453`, `src/db/migrations/V0001__init.sql:L44`, `tests/jobs.rs:L43-L101`, `src/jobs/ticks/tests.rs:L36-L45`, `src/jobs/scheduler/tests.rs:L31-L40`, `docs/design/06-jobs-and-realtime.md:L84-L158`, `docs/DECISIONS.md:L1443-L1452` (ADR-134), `.env.example:L35-L38`, `PROGRESS.md:L387`
-**Last verified:** 2026-11-09 against commit `6eefe67`
+**Sources:** `src/jobs/mod.rs:L19-L179`, `src/jobs/scheduler.rs:L1-L19`, `L36-L165`, `L225-L254`, `L418-L450`, `L1076-L1150`, `src/jobs/lanes.rs:L1-L78`, `src/jobs/ticks.rs:L1-L11`, `L70-L106`, `L111-L142`, `L194-L325`, `src/jobs/activity.rs:L363-L378`, `src/jobs/archive.rs:L276-L319`, `L454`, `src/jobs/names.rs:L193`, `L208-L232`, `src/fetcher.rs:L132-L163`, `src/cli/serve.rs:L329-L351`, `src/routes/admin.rs:L2295-L2306`, `src/app.rs:L53`, `src/events.rs:L113-L124`, `src/ws/hub.rs:L100-L103`, `src/metrics.rs:L100-L102`, `L477-L488`, `src/config.rs:L126`, `src/config/tests.rs:L443-L462`, `src/db/migrations/V0001__init.sql:L44`, `tests/jobs.rs:L43-L101`, `src/jobs/ticks/tests.rs:L36-L51`, `src/jobs/scheduler/tests.rs:L31-L40`, `docs/design/06-jobs-and-realtime.md:L84-L158`, `docs/DECISIONS.md:L1443-L1452` (ADR-134), `.env.example:L35-L38`, `PROGRESS.md:L387`
+**Last verified:** 2026-11-09 against commit `199b559`

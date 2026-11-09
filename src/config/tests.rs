@@ -59,6 +59,7 @@ fn defaults_match_v1_and_design_07() {
     assert!(c.stale_while_revalidate);
     assert_eq!(c.metrics_interval_s, 5);
     assert_eq!(c.metrics_history_interval_s, 60);
+    assert_eq!(c.archive_stats_interval_s, 3600);
     assert_eq!(c.track_poll_live_s, 60);
     assert_eq!(c.track_poll_rank_s, 600);
     assert_eq!(c.track_poll_match_s, 300);
@@ -363,6 +364,14 @@ fn lists_are_split_and_trimmed() {
     assert_eq!(c.ladder_platforms, vec![Platform::Euw1, Platform::Na1]);
     assert_eq!(c.ladder_queues, vec!["RANKED_SOLO_5x5", "RANKED_FLEX_SR"]);
     assert_eq!(c.ladder_tier_floor, "DIAMOND");
+
+    // me1 is a platform (ME-02, ADR-216), for the crawl and the status probe.
+    let c = load(env(&[
+        ("LADDER_PLATFORMS", "me1"),
+        ("STATUS_CHECK_PLATFORMS", "ME1,euw1"),
+    ]));
+    assert_eq!(c.ladder_platforms, vec![Platform::Me1]);
+    assert_eq!(c.status_check_platforms, vec![Platform::Me1, Platform::Euw1]);
 
     // A v1 `.env` may still carry DEFAULT_PLATFORM: it is ignored, not a default.
     let c = load(env(&[("DEFAULT_PLATFORM", "kr")]));

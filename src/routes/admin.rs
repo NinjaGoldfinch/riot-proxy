@@ -964,9 +964,11 @@ pub struct ArchiveBodies {
                    encrypted, so it survives a key rotation. `trackedPlayers` is scoped to the current key and \
                    reads zero right after one. The `db*`, `wal*` and `disk*` fields are the SQLite file, its \
                    write-ahead log and free list, and the data directory's file system (DSK-01). The match and \
-                   player counts are read with the request; `archivedTimelines`, the archive's bytes and the disk \
-                   readings are sampled in the background with each history point (`METRICS_HISTORY_INTERVAL_S`, \
-                   a minute by default; `sampledAt.slow`). `archiveBodies` and `archivePack*` say how much of \
+                   player counts are read with the request; the disk readings are sampled in the background with \
+                   each history point (`METRICS_HISTORY_INTERVAL_S`, a minute by default), and `archivedTimelines`, \
+                   the archive's bytes, `archiveBodies` and `archivePack*` every `ARCHIVE_STATS_INTERVAL_S` (an \
+                   hour by default), a pass over every stored body; `sampledAt.slow` is the older of the two \
+                   readings. `archiveBodies` and `archivePack*` say how much of \
                    the archive is in object storage (design/12): `archiveStoredBytes` counts only bodies still \
                    in SQLite.",
     responses((status = 200, description = "The counts", body = AdminStats), LocalErrors),
@@ -1248,7 +1250,8 @@ async fn debug_cache(State(state): State<AppState>, Extension(_c): Who, Query(qu
     let now = tokio::time::Instant::now();
     let (present, age, stale) = match state.fetcher.cache().l1.get(&key).await {
         Lookup::Fresh(e) => (true, Some(e.age(now)), Some(false)),
-        Lookup::Stale(e) => (true, Some(e.age(now)), Some(true)),
+        // Past hard TTL, kept for a failed refresh (AVL-03): stale too.
+        Lookup::Stale(e) | Lookup::Expired(e) => (true, Some(e.age(now)), Some(true)),
         Lookup::Miss => (false, None, None),
     };
     ok(&CacheProbe {
