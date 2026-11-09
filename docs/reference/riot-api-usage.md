@@ -4,7 +4,7 @@ Which Riot endpoints riot-proxy calls, how it routes them, how it reads Riot's r
 
 ## Endpoints
 
-The registry is `ENDPOINTS` in `src/riot/endpoints.rs:L91-L290`: v1's sixteen ids (`docs/contract/v1-endpoints.txt`) plus two added in v2. Soft TTL is the registry default; hard TTL is soft × 4 while `STALE_WHILE_REVALIDATE=true` (`src/riot/endpoints.rs:L13-L14`, `L478-L499`); `CACHE_TTL_OVERRIDES` can replace a soft TTL by override key. Negative TTL is `NEG_TTL_SECONDS` (30) or `NEG_TTL_ACCOUNT_SECONDS` (300) (`src/config.rs:L815-L816`). L2 means the entry is also written to the SQLite `cache` table and survives restarts.
+The registry is `ENDPOINTS` in `src/riot/endpoints.rs:L110-L316`: v1's sixteen ids (`docs/contract/v1-endpoints.txt`) plus two added in v2. Soft TTL is the registry default; hard TTL is soft × 4 while `STALE_WHILE_REVALIDATE=true` (`src/riot/endpoints.rs:L13-L14`, `L478-L499`); `CACHE_TTL_OVERRIDES` can replace a soft TTL by override key. Negative TTL is `NEG_TTL_SECONDS` (30) or `NEG_TTL_ACCOUNT_SECONDS` (300) (`src/config.rs:L815-L816`). L2 means the entry is also written to the SQLite `cache` table and survives restarts.
 
 | id | Riot path | Routing | soft / hard TTL (s) | neg | L2 | Called by |
 |---|---|---|---|---|---|---|
@@ -27,7 +27,7 @@ The registry is `ENDPOINTS` in `src/riot/endpoints.rs:L91-L290`: v1's sixteen id
 | `platform.championRotations` | `/lol/platform/v3/champion-rotations` | platform | 21 600 / 86 400 | none | no | `/v1/lol/rotations/*` |
 | `status.platformData` | `/lol/status/v4/platform-data` | platform | 60 / 240 | none | no | `/v1/lol/status/*`, default bucket of the admin debug route |
 
-Sources per row: `src/riot/endpoints.rs:L93-L286`; the job column from `docs/_meta/scratch/jobs-and-observability.md` §3. Every call from a job goes through the same fetcher at bulk priority with a 1 s yield budget (`FetchOptions::JOB`).
+Sources per row: `src/riot/endpoints.rs:L112-L312`; the job column from `docs/_meta/scratch/jobs-and-observability.md` §3. Every call from a job goes through the same fetcher at bulk priority with a 1 s yield budget (`FetchOptions::JOB`).
 
 ### `startTime` on `match.idsByPuuid`
 
@@ -67,7 +67,7 @@ Hosts are `<platform>.api.riotgames.com` or `<region>.api.riotgames.com` (`src/r
 | `Accept` | `application/json` (`src/riot/client.rs:L383`) |
 | `User-Agent` | `RIOT_USER_AGENT`, default `riot-proxy/2.0 (+https://github.com/NinjaGoldfinch/riot-proxy)` (`src/config.rs:L111,L798`) |
 
-The key never goes in the URL (`src/riot/client.rs:L381`). Client settings: 10 s connect, 25 s total timeout, 32 idle connections per host, embedded Mozilla roots only (`src/riot/client.rs:L23-L27`, `L330-L338`; ADR-007). Path params are percent-encoded like `encodeURIComponent`; query strings like `URLSearchParams` (`src/riot/endpoints.rs:L364-L384`, `src/riot/client.rs:L90-L130`).
+The key never goes in the URL (`src/riot/client.rs:L381`). Client settings: 10 s connect, 25 s total timeout, 32 idle connections per host, embedded Mozilla roots only (`src/riot/client.rs:L23-L27`, `L330-L338`; ADR-007). Path params are percent-encoded like `encodeURIComponent`; query strings like `URLSearchParams` (`src/riot/endpoints.rs:L390-L410`, `src/riot/client.rs:L90-L130`).
 
 ## The rate-limit model
 
@@ -113,5 +113,5 @@ Through the running server, `GET /v1/admin/debug/riot?scope=<platform|region>&pa
 - Data Dragon version list: <https://ddragon.leagueoflegends.com/api/versions.json>
 
 ---
-**Sources:** `src/riot/endpoints.rs:L13-L14,L91-L290,L364-L384,L478-L499`, `src/riot/routing.rs:L114-L212`, `src/riot/client.rs:L23-L29,L90-L130,L146,L327-L389,L431`, `src/riot/limiter/headers.rs:L31-L42,L90-L196`, `src/riot/limiter/mod.rs:L370-L431`, `src/riot/ladder.rs:L14-L20`, `src/fetcher.rs:L43-L53,L648-L754`, `src/cache/keys.rs:L81-L88`, `src/jobs/ddragon.rs:L22-L25,L83-L97,L108-L152,L255-L285`, `src/static/mod.rs:L28-L35`, `src/static/images.rs:L32-L39`, `src/routes/admin.rs:L1077-L1206`, `src/cli/riot.rs`, `src/config.rs:L111,L798,L815-L816`, `docs/contract/v1-endpoints.txt`, `docs/design/03-architecture.md:L32-L36`, `docs/DECISIONS.md` ADR-001, ADR-007, ADR-023, ADR-024, ADR-059, ADR-066, ADR-143, ADR-216, `docs/_meta/scratch/riot-and-cache.md` §1-§4, `docs/_meta/scratch/jobs-and-observability.md` §3, `docs/_meta/scratch/WRITING-BRIEF.md`, `README.md`
-**Last verified:** 2026-11-09 against commit `0113520`
+**Sources:** `src/riot/endpoints.rs:L13-L14,L110-L316,L390-L410,L504-L525`, `src/riot/routing.rs:L114-L212`, `src/riot/client.rs:L23-L29,L90-L130,L146,L327-L389,L431`, `src/riot/limiter/headers.rs:L31-L42,L90-L196`, `src/riot/limiter/mod.rs:L370-L431`, `src/riot/ladder.rs:L14-L20`, `src/fetcher.rs:L43-L53,L648-L754`, `src/cache/keys.rs:L81-L88`, `src/jobs/ddragon.rs:L22-L25,L83-L97,L108-L152,L255-L285`, `src/static/mod.rs:L28-L35`, `src/static/images.rs:L32-L39`, `src/routes/admin.rs:L1077-L1206`, `src/cli/riot.rs`, `src/config.rs:L111,L798,L815-L816`, `docs/contract/v1-endpoints.txt`, `docs/design/03-architecture.md:L32-L36`, `docs/DECISIONS.md` ADR-001, ADR-007, ADR-023, ADR-024, ADR-059, ADR-066, ADR-143, ADR-216, `docs/_meta/scratch/riot-and-cache.md` §1-§4, `docs/_meta/scratch/jobs-and-observability.md` §3, `docs/_meta/scratch/WRITING-BRIEF.md`, `README.md`
+**Last verified:** 2026-11-09 against commit `7531561`

@@ -151,6 +151,9 @@ pub struct Maintenance {
     /// `BACKUP_KEEP`: backups kept, newest first; 0 takes none.
     pub keep: usize,
     pub disk_free: DiskFree,
+    /// The L2 rows the sweep leaves past their hard TTL (AVL-08); none
+    /// unless [`Maintenance::keeping_cache`] says, as `serve` does.
+    pub cache_kept: crate::cache::l2::Kept,
     /// The last run since the process started (ADM-06).
     last: RwLock<Option<LastRun>>,
     /// Where `archive:offload` and `archive:index-snapshot` are queued after
@@ -166,6 +169,7 @@ impl Maintenance {
             backup_dir,
             keep,
             disk_free: Arc::new(crate::db::disk::free_bytes),
+            cache_kept: crate::cache::l2::Kept::none(),
             last: RwLock::new(None),
             bucket_jobs: None,
         }
@@ -176,6 +180,13 @@ impl Maintenance {
     #[must_use]
     pub fn then_bucket_jobs(mut self, queue: crate::jobs::Queue) -> Self {
         self.bucket_jobs = Some(queue);
+        self
+    }
+
+    /// Sweep L2 as boot does: `kept`'s rows stay a day past their hard TTL.
+    #[must_use]
+    pub fn keeping_cache(mut self, kept: crate::cache::l2::Kept) -> Self {
+        self.cache_kept = kept;
         self
     }
 
@@ -248,7 +259,9 @@ impl Maintenance {
             .await
             .map_err(|e| fail(&e))?;
         report.history_deleted = history;
-        report.cache_swept = crate::cache::l2::sweep(&self.db).await.map_err(|e| fail(&e))?;
+        report.cache_swept = crate::cache::l2::sweep(&self.db, &self.cache_kept)
+            .await
+            .map_err(|e| fail(&e))?;
         self.db.optimize().await.map_err(|e| fail(&e))?;
 
         let (busy, log, moved): (i64, i64, i64) = self

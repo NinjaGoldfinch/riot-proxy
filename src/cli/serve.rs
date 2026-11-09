@@ -141,11 +141,17 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
 
     // Cache: L1 warmed from L2, expired L2 rows swept (design/04).
     let l1 = L1::from_config(&config);
-    match l2::warm(&db, &l1).await {
-        Ok(n) => tracing::info!(entries = n, "L1 warmed from L2"),
+    let kept = l2::Kept::for_scope(&KeyScope::for_config(&config));
+    match l2::warm(&db, &l1, &kept).await {
+        Ok(w) => tracing::info!(
+            entries = w.loaded,
+            bytes = w.bytes,
+            full = w.full,
+            "L1 warmed from L2"
+        ),
         Err(e) => tracing::warn!(error = %e, "L2 warm failed; starting with a cold cache"),
     }
-    if let Err(e) = l2::sweep(&db).await {
+    if let Err(e) = l2::sweep(&db, &kept).await {
         tracing::warn!(error = %e, "L2 sweep failed");
     }
     let cache = Arc::new(ResponseCache::new(l1, Some(L2Writer::spawn(db.clone()))));
@@ -283,7 +289,8 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         db.clone(),
         config.data_dir.join("backups"),
         config.backup_keep as usize,
-    );
+    )
+    .keeping_cache(kept);
     let maintenance = Arc::new(match &pending {
         Some(_) => maintenance.then_bucket_jobs(queue.clone()),
         None => maintenance,

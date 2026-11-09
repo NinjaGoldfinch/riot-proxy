@@ -516,3 +516,76 @@ async fn a_boot_queues_maintenance_only_when_it_is_due() {
         "and no backup was written"
     );
 }
+
+/// AVL-08: `serve` sweeps L2 at boot and in `maintenance` with the same rule.
+/// A player's row a few hours past its hard TTL outlives both sweeps; a
+/// ladder page as old is deleted, as before AVL-03.
+#[tokio::test]
+async fn a_boots_sweeps_keep_only_a_players_expired_cache_rows() {
+    use riot_proxy::cache::l2::{self, Row};
+
+    let dir = tempfile::tempdir().unwrap();
+    let _signals = crate::common::SIGNALS.lock().await;
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let config = crate::common::config(&[
+        ("DATA_DIR", dir.path().to_str().unwrap()),
+        ("PORT", &port.to_string()),
+        ("HOST", "127.0.0.1"),
+        ("LOG_LEVEL", "warn"),
+        ("BACKUP_KEEP", "0"),
+    ]);
+    let scope = riot_proxy::cache::keys::KeyScope::for_config(&config);
+    let now = riot_proxy::clock::Clock::now().unix_ms;
+    let row = |key: String| Row {
+        key,
+        body: bytes::Bytes::from_static(b"{}"),
+        status: 200,
+        content_at: now - 4 * 3_600_000,
+        fetched_at: now - 4 * 3_600_000,
+        soft_expires: now - 3 * 3_600_000 - 1_800_000,
+        hard_expires: now - 3 * 3_600_000,
+    };
+    let player = format!("{scope}:league.entriesByPuuid:kr.api.riotgames.com:P");
+    let ladder = format!("{scope}:league.entriesByTier:kr.api.riotgames.com:RANKED_SOLO_5x5:DIAMOND:I:abc");
+    {
+        let db = open(dir.path());
+        l2::put_rows(&db, vec![row(player.clone()), row(ladder)])
+            .await
+            .unwrap();
+    }
+
+    let options = riot_proxy::cli::serve::ServeOptions {
+        riot_base_url: Some("http://127.0.0.1:9".into()),
+        skip_tracing_init: true,
+        ddragon_urls: Some(riot_proxy::jobs::ddragon::CdnUrls::mock("http://127.0.0.1:9")),
+        ..riot_proxy::cli::serve::ServeOptions::default()
+    };
+    let task = tokio::spawn(riot_proxy::cli::serve::serve_with(config, options));
+    // A fresh database: the maintenance tick fires at boot and the job runs.
+    let path = dir.path().join("riot-proxy.db");
+    let mut ran = false;
+    for _ in 0..400 {
+        if !ids(
+            &path,
+            "SELECT id FROM jobs WHERE kind = 'maintenance' AND state = 'done'",
+        )
+        .is_empty()
+        {
+            ran = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    task.abort();
+    let _ = task.await;
+    assert!(ran, "maintenance never ran");
+    assert_eq!(
+        ids(&path, "SELECT key FROM cache"),
+        [player],
+        "the boot's sweep and maintenance's both left the player's row and no other"
+    );
+}

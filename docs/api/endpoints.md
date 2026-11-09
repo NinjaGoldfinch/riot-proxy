@@ -60,7 +60,7 @@ These routes return Riot's bytes verbatim with status 200 and `Content-Type: app
 | Header | Meaning |
 |---|---|
 | `X-Cache` | `HIT` (fresh L1), `MISS` (fetched from Riot), `STALE` (between soft and hard TTL, or served from a copy because Riot or the limiter failed), `HIT-NEG` (a cached 404, sent on the error response), `ARCHIVE` (immutable body from the match archive), `BYPASS` (`?refresh=true` by an admin-scoped consumer) (`src/fetcher.rs:L53-L72`, `L345-L418`) |
-| `X-Cache-Age` | Age of the **content** in whole seconds; a byte-identical refresh does not reset it (`src/routes/passthrough.rs:L441-L446`, `src/cache/l1.rs:L161-L176`) |
+| `X-Cache-Age` | Age of the **content** in whole seconds; a byte-identical refresh does not reset it (`src/routes/passthrough.rs:L441-L446`, `src/cache/l1.rs:L176-L192`) |
 | `X-Cache-Fetched-Age` | Seconds since the proxy last read it from Riot; absent for `ARCHIVE` (`src/routes/passthrough.rs:L447-L454`) |
 
 `?refresh=true` (or `=1`) skips cache reads but still writes, and only for consumers with the `admin` scope; for a read-only key it is ignored silently (`src/routes/passthrough.rs:L470-L476`). The `/v1/players/*` composites allow it for every consumer but meter it to one claim per 60 s per part and PUUID (see [endpoints-players-analytics.md](endpoints-players-analytics.md)).
@@ -242,4 +242,4 @@ The frame shape is `src/events.rs:L159-L172`; data fields per event are listed i
 
 ---
 **Sources:** `src/app.rs:L30-L35,L71-L121,L258-L264`, `src/routes/docs.rs:L86-L153,L386-L399`, `src/routes/health.rs:L21-L200`, `src/routes/ui.rs:L94-L233`, `src/routes/dev.rs:L33-L254`, `src/routes/ws.rs:L497-L572`, `src/ws/protocol.rs:L23-L147`, `src/ws/socket.rs:L38-L206`, `src/ws/hub.rs:L20-L205`, `src/http/auth.rs:L141-L423`, `src/status/mod.rs:L150-L246`, `src/status/ratelimits.rs:L103-L246`, `src/http/quota.rs:L320-L431`, `src/http/request_id.rs:L287-L339`, `src/http/validate.rs:L21-L88`, `src/routes/passthrough.rs:L401-L476`, `src/fetcher.rs:L53-L72,L345-L418,L673-L711`, `src/riot/routing.rs:L48-L196`, `docs/DECISIONS.md` ADR-216, `docs/_meta/scratch/routes.md`, `docs/design/12-object-storage-and-hosting.md:L904-L925`, `tests/snapshots/http__unknown_route_404.snap`, `tests/snapshots/ws_hub__ws_session.snap`, live capture against `target/debug/riot-proxy` 2.7.0
-**Last verified:** 2026-11-09 against commit `79d2bb8`
+**Last verified:** 2026-11-09 against commit `7531561`

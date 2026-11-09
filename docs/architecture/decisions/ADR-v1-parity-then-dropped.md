@@ -8,8 +8,8 @@
 
 **Status.** Parity dropped as a constraint on 2026-10-04 (ADR-065); still the default where nothing asks for a change.
 
-**Evidence.** `docs/DECISIONS.md` ADR-011, 014, 059, 065, 066, 123, 152; `acceptance/`; `scripts/compare-openapi.py`; `src/riot/endpoints.rs:544-554` (parity test).
+**Evidence.** `docs/DECISIONS.md` ADR-011, 014, 059, 065, 066, 123, 152; `acceptance/`; `scripts/compare-openapi.py`; `src/riot/endpoints.rs:570-580` (parity test).
 
 ---
-**Sources:** `docs/DECISIONS.md:L57-L67,L87-L93,L639-L668,L760-L791,L1324-L1334,L1609-L1617`, `src/app.rs:L243-L255`, `src/riot/endpoints.rs:L544-L554`
-**Last verified:** 2026-11-06 against commit `7cb71a2`
+**Sources:** `docs/DECISIONS.md:L57-L67,L87-L93,L639-L668,L760-L791,L1324-L1334,L1609-L1617`, `src/app.rs:L243-L255`, `src/riot/endpoints.rs:L570-L580`
+**Last verified:** 2026-11-09 against commit `7531561`
