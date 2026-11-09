@@ -10,11 +10,11 @@ Where riot-proxy spends time, the measurements that exist, the knobs that move t
 
 **Archive reads.** A match inside `ARCHIVE_BODY_LOCAL_DAYS` (14) is a local zstd blob; outside it the body comes from its pack by ranged GET, a few of them at 1 to 3 ms each in the same data centre (`docs/design/12-object-storage-and-hosting.md:261-267`), fetched one `get_ranges` call per pack with `ARCHIVE_OBJECT_CONCURRENCY` packs in flight (`src/archive/matches.rs:265-269`). The player page reads always fall inside the window (`:276`).
 
-**`aggregate:analytics`.** One rebuild of one ladder took about 30 s alone on the old 2-vCPU box; four started together beside archiving had not finished after 7 minutes (`docs/design/07-deployment.md:171`). It is CPU and writer bound: six write transactions in a row, one per step (`src/jobs/analytics.rs:354-520`), capped to one at a time by `JOB_KIND_LIMITS` (`src/config.rs:125`). On production in October 2026 a rebuild took 532–1,012 s a ladder (`docs/thr/THR-03-plan.md` §1.2).
+**`aggregate:analytics`.** One rebuild of one ladder took about 30 s alone on the old 2-vCPU box; four started together beside archiving had not finished after 7 minutes (`docs/design/07-deployment.md:175`). It is CPU and writer bound: six write transactions in a row, one per step (`src/jobs/analytics.rs:354-520`), capped to one at a time by `JOB_KIND_LIMITS` (`src/config.rs:125`). On production in October 2026 a rebuild took 532–1,012 s a ladder (`docs/thr/THR-03-plan.md` §1.2).
 
 **`aggregate:delta` (THR-03, ADR-182).** With `AGGREGATE_DELTA_S` > 0 (the default) new matches are counted in short write transactions instead of a rebuild: a ladder's first batch after a restart is 50 matches, each later one, the next run's first included, is resized from the one before (THR-07) so its statements take about `AGGREGATE_DELTA_TARGET_MS` (100 ms), between 5 and `AGGREGATE_DELTA_BATCH` (500) matches, with a 50 ms pause between batches (`src/jobs/analytics.rs:856-950`, `src/archive/analytics/delta.rs:31-52`). On a synthetic copy of oc1's size a 50-match batch took 138–154 ms at the median and a 100-match one 247–294 ms (`docs/thr/THR-03-plan.md`); production may be about 4× slower per match, which the sizing absorbs. With the release binary on a synthetic 100 000-match oc1 archive (2026-10-21): the boot full rebuild took 94 s, then deltas counted about 7 000 matches (3 000 new, about 3 900 with late-stamp retractions) in 43 s over 201 batches, every batch's statements at most 150 ms and its commit at most 100 ms except 8 commits of 0.25–1 s that ran a WAL checkpoint; a full recompute afterwards left all 16 analytics tables identical (THR-03). `aggregate_delta_batch_seconds{part}` and `aggregate_delta_batch_size` show what it settled on.
 
-**SQLite's single writer.** Every write goes through one thread and a 1024-deep queue (`src/db/mod.rs:41-42`, `:160-172`); a rebuild, `facts:reextract`, `builds:extract` and every archived match take turns on it (`docs/design/07-deployment.md:171`). `facts:reextract` decodes bodies on a blocking thread in batches of `FACTS_REEXTRACT_BATCH` with a 50 ms pause (`src/jobs/analytics.rs:539-620`); `builds:extract` does 25 timelines per batch (`:631-723`). While readers are always active the WAL does not checkpoint (`docs/design/07-deployment.md:171`), which is why `JOB_CONCURRENCY` matters more than core count on a small host.
+**SQLite's single writer.** Every write goes through one thread and a 1024-deep queue (`src/db/mod.rs:66-67`, `:191-204`); a rebuild, `facts:reextract`, `builds:extract` and every archived match take turns on it (`docs/design/07-deployment.md:175`). `facts:reextract` decodes bodies on a blocking thread in batches of `FACTS_REEXTRACT_BATCH` with a 50 ms pause (`src/jobs/analytics.rs:539-620`); `builds:extract` does 25 timelines per batch (`:631-723`). While readers are always active the WAL does not checkpoint (`docs/design/07-deployment.md:175`), which is why `JOB_CONCURRENCY` matters more than core count on a small host.
 
 ## Benchmarks that exist
 
@@ -29,7 +29,7 @@ Where riot-proxy spends time, the measurements that exist, the knobs that move t
 | the same call, debug build, cold | synthetic copy | 78 ms, 40,295 B | `docs/perf/PERF-03-design.md:100-108` |
 | 10 concurrent cold requests | same | 5 reads, not 50 (6 since THR-03 added the slice stamp to the champions `ETag`) | `docs/DECISIONS.md:1791` |
 | `fio` 4 KiB writes with fsync | `ngf-prod-syd1` (6 vCPU) | 3 ms median, 9 ms p99, 326 synced writes/s; cold random reads about 10 MB/s | `docs/design/12-object-storage-and-hosting.md:781-786` |
-| 8 workers on 2 vCPU | old OVH box | CPU about 1 % idle, PSI `some avg60` near 48 % | `docs/design/07-deployment.md:171` |
+| 8 workers on 2 vCPU | old OVH box | CPU about 1 % idle, PSI `some avg60` near 48 % | `docs/design/07-deployment.md:175` |
 
 The synthetic database and the before/after SQL are reproducible with `python3 scripts/perf-synthetic.py /tmp/perf/s.db` (seed 1; `PERF_SQLITE=pysqlite3` runs it on SQLite 3.51), not run by CI (`scripts/perf-synthetic.py:1-24`). Production latency per route is read from the dashboard's Traffic tab, built on the recent-requests ring; there is no latency metric per route on `/metrics` (`docs/DECISIONS.md:1749`; `src/http/recent.rs:38`).
 
@@ -39,7 +39,7 @@ The synthetic database and the before/after SQL are reproducible with `python3 s
 
 | Knob | Default (range) | Moves | Evidence |
 |---|---|---|---|
-| `JOB_CONCURRENCY` | 8 (≥ 1) | worker tasks; the lever on CPU and writer contention. 2 on a 2-vCPU host | `src/config.rs:808`; `docs/design/07-deployment.md:171` |
+| `JOB_CONCURRENCY` | 8 (≥ 1) | worker tasks; the lever on CPU and writer contention. 2 on a 2-vCPU host | `src/config.rs:808`; `docs/design/07-deployment.md:175` |
 | `JOB_KIND_LIMITS` | `aggregate:analytics=1,archive:offload=1` | running cap per lane-less kind; `none` lifts all | `src/config.rs:125`, `:796`, `:1220-1281` |
 | `JOB_YIELD_BUDGET_MS` | 1000 (0 to 900 000) | how long a job's fetch waits for the limiter before freeing its worker | `src/config.rs:810`; `src/fetcher.rs:124-140` |
 | `CLIENT_WAIT_BUDGET_MS` | 2000 (≥ 0) | how long an interactive request waits for a token before `RATE_LIMITED` or a `STALE` copy | `src/config.rs:815`; `src/fetcher.rs:142-150` |
@@ -56,8 +56,8 @@ The synthetic database and the before/after SQL are reproducible with `python3 s
 | `AGGREGATE_DELTA_TARGET_MS` | 100 (20 to 1000) | the statement time a delta batch is sized toward: lower holds the writer for less at a time, over more batches | `src/config.rs:859` |
 | `AGGREGATE_DELTA_BATCH` | 500 (5 to 5000) | the most matches in one delta batch | `src/config.rs:860` |
 | tokio worker threads | `min(cores, 4)`, not configurable | async executors; 4 on the 6-vCPU box | `src/cli/mod.rs:125` |
-| SQLite reader pool | `available_parallelism()`, fallback 4, not configurable | concurrent reads; 6 on `ngf-prod-syd1` | `src/db/mod.rs:206-207`; `PROGRESS.md:325` |
-| SQLite `cache_size` / `mmap_size` | 64 MiB / 256 MiB per connection, not configurable | page cache and memory-mapped I/O | `src/db/mod.rs:31-32` |
+| SQLite reader pool | `available_parallelism()`, fallback 4, not configurable | concurrent reads; 6 on `ngf-prod-syd1` | `src/db/mod.rs:239-240`; `PROGRESS.md:325` |
+| SQLite `cache_size` / `mmap_size` | 64 MiB / 256 MiB per connection, not configurable | page cache and memory-mapped I/O | `src/db/mod.rs:56-57` |
 
 Every env knob is read at boot; change the file, restart, and watch `/v1/admin/jobs/queue`, `sqlite_wal_bytes` and `limiter_*_waiters`.
 
@@ -69,12 +69,12 @@ The limiter starts every scope at the personal-key limits, 20 per second and 100
 
 Measured on `ngf-prod-syd1`: the storage numbers above, a 9 min 57 s seed `rsync` at about 37 MB/s, 10 GB of page cache an hour after the move, and `/readyz` with 6 of 6 readers free after cut-over (`docs/design/12-object-storage-and-hosting.md:781-799`; `PROGRESS.md:325`). ONI-4 was chosen for the 12 GB of RAM so the whole SQLite file sits in page cache, "which is what makes the analytics rebuilds and ladder queries fast" (`:480-482`).
 
-Extrapolated, not measured: design/07's sizing table and its 2-vCPU worker advice (`docs/design/07-deployment.md:165-171`) predate this host. With 6 cores the default 8 workers no longer leave the CPU 1 % idle by that arithmetic, and the reader pool is 6 rather than 2, but no run on this box with crawls, rebuilds and archiving together has been recorded. The single writer is still one thread, so rebuild time per ladder should be near the 30 s figure rather than six times better.
+Extrapolated, not measured: design/07's sizing table and its 2-vCPU worker advice (`docs/design/07-deployment.md:169-175`) predate this host. With 6 cores the default 8 workers no longer leave the CPU 1 % idle by that arithmetic, and the reader pool is 6 rather than 2, but no run on this box with crawls, rebuilds and archiving together has been recorded. The single writer is still one thread, so rebuild time per ladder should be near the 30 s figure rather than six times better.
 
-> **TODO (unverified):** a recommended `JOB_CONCURRENCY` for the 6-vCPU host; the repository records only the 2-vCPU recommendation (`docs/design/07-deployment.md:171`), and production's current value is in `/etc/riot-proxy/env`, which was not read.
+> **TODO (unverified):** a recommended `JOB_CONCURRENCY` for the 6-vCPU host; the repository records only the 2-vCPU recommendation (`docs/design/07-deployment.md:175`), and production's current value is in `/etc/riot-proxy/env`, which was not read.
 
 Disk and memory sizing for the archive and the bucket are in `../deployment/capacity.md`.
 
 ---
-**Sources:** `docs/DECISIONS.md:1732-1818`, `docs/perf/PERF-03-design.md:1-120`, `docs/design/07-deployment.md:165-173`, `docs/design/12-object-storage-and-hosting.md:261-267,480-486,781-799`, `PROGRESS.md:325,366`, `scripts/perf-synthetic.py:1-24`, `src/routes/analytics/cache.rs:1-19`, `src/routes/players.rs:285-324,725-746`, `src/archive/matches.rs:265-269`, `src/jobs/analytics.rs:354-520,539-620,631-723,856-950`, `src/archive/analytics/delta.rs:31-52`, `docs/thr/THR-03-plan.md`, `src/db/mod.rs:31-32,41-42,160-172,206-207`, `src/cli/mod.rs:125`, `src/config.rs:125,805-815,831-834,845,852-857,876-889,1261-1292`, `src/cache/l1.rs:106-119`, `src/fetcher.rs:124-150`, `src/riot/limiter/headers.rs:31-42`, `src/riot/limiter/mod.rs:177-184,329-344`, `src/http/recent.rs:38`
-**Last verified:** 2026-11-09 against commit `6c32ff4`
+**Sources:** `docs/DECISIONS.md:1732-1818`, `docs/perf/PERF-03-design.md:1-120`, `docs/design/07-deployment.md:169-177`, `docs/design/12-object-storage-and-hosting.md:261-267,480-486,781-799`, `PROGRESS.md:325,366`, `scripts/perf-synthetic.py:1-24`, `src/routes/analytics/cache.rs:1-19`, `src/routes/players.rs:285-324,725-746`, `src/archive/matches.rs:265-269`, `src/jobs/analytics.rs:354-520,539-620,631-723,856-950`, `src/archive/analytics/delta.rs:31-52`, `docs/thr/THR-03-plan.md`, `src/db/mod.rs:56-57,66-67,191-204,239-240`, `src/cli/mod.rs:125`, `src/config.rs:125,805-815,831-834,845,852-857,876-889,1261-1292`, `src/cache/l1.rs:106-119`, `src/fetcher.rs:124-150`, `src/riot/limiter/headers.rs:31-42`, `src/riot/limiter/mod.rs:177-184,329-344`, `src/http/recent.rs:38`
+**Last verified:** 2026-11-09 against commit `24ba99a`

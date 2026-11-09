@@ -2,7 +2,7 @@
 
 **Context.** With one process there is no coordination problem for a database to solve. The archive grows by tens of kilobytes per match; everything else is small.
 
-**Decision.** One SQLite file in WAL mode with `synchronous=NORMAL`, accessed through `rusqlite` (bundled engine) with a dedicated writer thread and a reader pool; migrations embedded with `refinery` and applied on boot (`src/db/mod.rs:26-42,148-155,343-345`). Postgres exists only as a compile-only `Store` seam behind the `postgres` feature so the door stays open without a rewrite; `postgres://` is refused at runtime in every build (`src/config.rs:714-719`, `src/db/store.rs:172-206`).
+**Decision.** One SQLite file in WAL mode with `synchronous=NORMAL`, accessed through `rusqlite` (bundled engine) with a dedicated writer thread and a reader pool; migrations embedded with `refinery` and applied on boot (`src/db/mod.rs:51-67,178-186,411-413`). Postgres exists only as a compile-only `Store` seam behind the `postgres` feature so the door stays open without a rewrite; `postgres://` is refused at runtime in every build (`src/config.rs:714-719`, `src/db/store.rs:172-206`).
 
 **Consequences.** All writes serialise on one lock, so CPU-heavy jobs that write (analytics rebuilds, re-extraction) are capped to one at a time by default (`JOB_KIND_LIMITS`). Backups are a `VACUUM INTO` copy, which needs free space of about the database's size (ADR-136). The file never shrinks on its own; reclaiming space is a copy-and-swap with strict rules about the WAL (`deploy/README.md` §Reclaiming). When raw bodies pushed the file past 50 GB, the answer was object storage (see [ADR-packs-in-object-storage.md](./ADR-packs-in-object-storage.md)), not Postgres. `rusqlite` is held at 0.39 because `refinery` 0.9 accepts no newer version (ADR-005).
 
@@ -12,4 +12,4 @@
 
 ---
 **Sources:** `docs/DECISIONS.md:L6-L18,L714-L730`, `src/db/mod.rs:L26-L42,L148-L155,L343-L345`, `src/db/store.rs:L172-L206`, `src/config.rs:L714-L719`, `Cargo.toml`
-**Last verified:** 2026-11-06 against commit `7cb71a2`
+**Last verified:** 2026-11-09 against commit `24ba99a`

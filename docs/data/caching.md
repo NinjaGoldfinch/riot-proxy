@@ -35,7 +35,7 @@ flowchart TD
     store --> M["200 · X-Cache: MISS or BYPASS"]
 ```
 
-Only the L1 lookup decides freshness; L2 is never read on the request path, it is loaded into L1 once at boot (`src/cli/serve.rs:121-129`). A miss or bypass goes through the single-flight map so concurrent misses for one key share one upstream call (`src/fetcher.rs:348-364`, `src/singleflight.rs:1-12`). When the limiter refuses or Riot fails, a copy inside its hard TTL is served as `STALE` (`fetcher.rs:415-428,460-466`).
+Only the L1 lookup decides freshness; L2 is never read on the request path, it is loaded into L1 once at boot (`src/cli/serve.rs:142-150`). A miss or bypass goes through the single-flight map so concurrent misses for one key share one upstream call (`src/fetcher.rs:348-364`, `src/singleflight.rs:1-12`). When the limiter refuses or Riot fails, a copy inside its hard TTL is served as `STALE` (`fetcher.rs:415-428,460-466`).
 
 ## L1
 
@@ -132,8 +132,8 @@ Consumer lookups are cached in a moka cache of 10 000 entries keyed by the key's
 | Analytics responses | cold until the next rebuild's or delta's warm; the first visitor computes |
 | Auth cache, refresh windows, single-flight map | empty |
 | Recent-request ring, live job activity | empty (in memory only) |
-| Offload trigger counter | 0; boot queues an `archive:offload` run to compensate (`src/cli/serve.rs:553-558`) |
+| Offload trigger counter | 0; boot queues an `archive:offload` run to compensate (`src/cli/serve.rs:577-582`) |
 
 ---
 **Sources:** `src/fetcher.rs:L306-L372`, `src/fetcher.rs:L381-L395`, `src/fetcher.rs:L420-L433`, `src/cache/l1.rs:L18-L19`, `src/cache/l1.rs:L64-L146`, `src/cache/l1.rs:L161-L204`, `src/cache/l2.rs:L23-L28`, `src/cache/l2.rs:L102-L223`, `src/cache/mod.rs:L39-L64`, `src/cache/keys.rs:L24-L123`, `src/riot/endpoints.rs:L13-L14`, `src/riot/endpoints.rs:L93-L284`, `src/riot/endpoints.rs:L424-L512`, `src/config.rs:L809-L816`, `src/config.rs:L853`, `src/cli/serve.rs:L121-L129`, `src/cli/serve.rs:L553-L558`, `src/cli/serve.rs:L464`, `src/routes/analytics.rs:L52`, `src/routes/analytics.rs:L577-L616`, `src/routes/analytics.rs:L749-L765`, `src/routes/analytics.rs:L947-L983`, `src/archive/analytics.rs:L1375-L1404`, `src/jobs/analytics.rs:L815-L818`, `src/routes/analytics/cache.rs:L1-L264`, `src/routes/players.rs:L883-L884`, `src/routes/players.rs:L1050-L1078`, `src/routes/players/refresh.rs:L5-L71`, `src/routes/passthrough.rs:L126-L167`, `src/routes/admin.rs:L816-L883`, `src/routes/statics.rs:L26`, `src/routes/statics.rs:L79`, `src/routes/ui.rs:L8-L9`, `src/routes/ui.rs:L108-L128`, `src/http/auth.rs:L29-L32`, `src/http/auth.rs:L209-L212`, `src/archive/matches.rs:L232-L328`, `src/archive/mod.rs:L128-L144`, `src/riot/limiter/persist.rs:L23`, `src/jobs/maintenance.rs:L251`, `src/jobs/ddragon.rs:L239-L285`, `docs/design/04-data-and-cache.md:L372-L436`, `docs/_meta/scratch/riot-and-cache.md`
-**Last verified:** 2026-11-09 against commit `6eefe67`
+**Last verified:** 2026-11-09 against commit `24ba99a`

@@ -10,7 +10,7 @@ A consumer key is `rpx_` followed by 24 random bytes in unpadded base64url: 36 c
 
 | Way | Command or call | Notes |
 |---|---|---|
-| First boot | `riot-proxy serve` prints `bootstrap admin key (shown once): rpx_…` on stderr when the `consumers` table is empty | scopes `read,admin`, quota 600; `BOOTSTRAP_ADMIN_KEY` imports a chosen key instead and prints nothing (`src/cli/serve.rs:64-75,443-449`, `src/consumers.rs:308-333`) |
+| First boot | `riot-proxy serve` prints `bootstrap admin key (shown once): rpx_…` on stderr when the `consumers` table is empty | scopes `read,admin`, quota 600; `BOOTSTRAP_ADMIN_KEY` imports a chosen key instead and prints nothing (`src/cli/serve.rs:68-96,467-473`, `src/consumers.rs:308-333`) |
 | CLI | `riot-proxy key create --name ninjagoldfinch-lol [--scopes read,admin] [--quota 600]` | prints id, name, scopes, quota and the key once (`src/cli/key.rs:46-57`) |
 | Admin API | `POST /v1/admin/consumers {"name":"…","scopes":["read"],"quotaPerMin":600}` | 200 with `{id,name,scopes,quotaPerMin,key,warning}` (`src/routes/admin.rs:180-219`) |
 
@@ -71,4 +71,4 @@ The CI `test` job greps `src/`, `tests/` and `docs/` for `RGAPI-` key shapes and
 
 ---
 **Sources:** `src/consumers.rs:L12,L95-L107,L154-L172,L256-L333`, `src/http/auth.rs:L29-L52,L116-L156,L204-L212,L292-L405`, `src/http/quota.rs:L320-L431`, `src/routes/admin.rs:L180-L219,L248-L326`, `src/routes/docs.rs:L86-L153`, `src/cli/key.rs:L46-L83`, `src/cli/serve.rs:L64-L75,L443-L449`, `src/config.rs:L744-L748`, `.github/workflows/ci.yml:L52-L53`, `docs/design/12-object-storage-and-hosting.md` §Admin hostname behind Access
-**Last verified:** 2026-11-09 against commit `6c32ff4`
+**Last verified:** 2026-11-09 against commit `24ba99a`
