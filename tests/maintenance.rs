@@ -438,6 +438,11 @@ fn queued(db_path: &Path, kind: &str) -> usize {
 /// tick fires at once on every boot), then return how many `maintenance`
 /// rows the boot queued.
 async fn maintenance_queued_by_a_boot(dir: &Path) -> usize {
+    maintenance_queued_by_a_boot_with(dir, &[]).await
+}
+
+/// [`maintenance_queued_by_a_boot`] with more of the environment set.
+async fn maintenance_queued_by_a_boot_with(dir: &Path, env: &[(&str, &str)]) -> usize {
     // `serve_with` listens for this process's signals; another test's SIGTERM
     // must not stop this server (AVL-04).
     let _signals = crate::common::SIGNALS.lock().await;
@@ -446,12 +451,15 @@ async fn maintenance_queued_by_a_boot(dir: &Path) -> usize {
         .local_addr()
         .unwrap()
         .port();
-    let config = crate::common::config(&[
+    let port = port.to_string();
+    let mut vars = vec![
         ("DATA_DIR", dir.to_str().unwrap()),
-        ("PORT", &port.to_string()),
+        ("PORT", port.as_str()),
         ("HOST", "127.0.0.1"),
         ("LOG_LEVEL", "warn"),
-    ]);
+    ];
+    vars.extend_from_slice(env);
+    let config = crate::common::config(&vars);
     let options = riot_proxy::cli::serve::ServeOptions {
         // Nothing listens there: whatever a job asks for fails and retries.
         riot_base_url: Some("http://127.0.0.1:9".into()),
@@ -493,8 +501,26 @@ async fn a_boot_queues_maintenance_only_when_it_is_due() {
     );
 
     let restarted = tempfile::tempdir().unwrap();
-    let db = open(restarted.path());
-    let finished = riot_proxy::clock::Clock::now().unix_ms - 3 * 3_600_000;
+    let finished = maintenance_ran(restarted.path(), 3 * 3_600_000).await;
+    // That run's backup, written a moment before the run ended.
+    let backup = backup_written(restarted.path(), finished - 2_000);
+    assert_eq!(
+        maintenance_queued_by_a_boot(restarted.path()).await,
+        0,
+        "ran 3 h ago and wrote its backup: not before 21 h from now"
+    );
+    assert_eq!(
+        backups(&restarted.path().join("backups")).await.unwrap(),
+        [backup],
+        "and no backup was written"
+    );
+}
+
+/// A database in `dir` whose last `maintenance` finished `ago_ms` ago.
+/// Returns when, unix ms.
+async fn maintenance_ran(dir: &Path, ago_ms: i64) -> i64 {
+    let db = open(dir);
+    let finished = riot_proxy::clock::Clock::now().unix_ms - ago_ms;
     db.write(move |c| {
         c.execute(
             "INSERT INTO jobs (id, kind, dedupe_key, priority, payload, state, run_after, finished_at)
@@ -505,14 +531,65 @@ async fn a_boot_queues_maintenance_only_when_it_is_due() {
     })
     .await
     .unwrap();
-    drop(db);
+    finished
+}
+
+/// A daily backup under `dir`, named for the UTC day of `at_ms` and last
+/// written then.
+fn backup_written(dir: &Path, at_ms: i64) -> std::path::PathBuf {
+    let backup_dir = dir.join("backups");
+    std::fs::create_dir_all(&backup_dir).unwrap();
+    let path = backup_dir.join(backup_name(at_ms));
+    std::fs::write(&path, b"backup").unwrap();
+    let written = std::time::UNIX_EPOCH + std::time::Duration::from_millis(u64::try_from(at_ms).unwrap());
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(written)
+        .unwrap();
+    path
+}
+
+/// AVL-13: with backups on, a `maintenance` run that wrote no backup is not
+/// the tick's last run, so the backup it did not write is not deferred a day.
+#[tokio::test]
+async fn a_boot_queues_maintenance_when_the_last_run_wrote_no_backup() {
+    // The disk guard skipped it, or the copy failed: nothing in `backups/`.
+    let skipped = tempfile::tempdir().unwrap();
+    maintenance_ran(skipped.path(), 3 * 3_600_000).await;
     assert_eq!(
-        maintenance_queued_by_a_boot(restarted.path()).await,
+        maintenance_queued_by_a_boot(skipped.path()).await,
+        1,
+        "ran 3 h ago, no backup on disk: due at boot"
+    );
+
+    // Today's existed already: the newest backup is over a day old by now.
+    let existed = tempfile::tempdir().unwrap();
+    let finished = maintenance_ran(existed.path(), 3 * 3_600_000).await;
+    backup_written(existed.path(), finished - 22 * 3_600_000);
+    assert_eq!(
+        maintenance_queued_by_a_boot(existed.path()).await,
+        1,
+        "ran 3 h ago, the newest backup 25 h old: due at boot"
+    );
+
+    // The newest backup is 23 h old: due in an hour, not 21 h from now.
+    let soon = tempfile::tempdir().unwrap();
+    let finished = maintenance_ran(soon.path(), 3 * 3_600_000).await;
+    backup_written(soon.path(), finished - 20 * 3_600_000);
+    assert_eq!(maintenance_queued_by_a_boot(soon.path()).await, 0, "not at boot");
+}
+
+/// `BACKUP_KEEP=0` takes no backups, so the last run alone counts, as before.
+#[tokio::test]
+async fn with_backups_off_a_boot_counts_from_the_last_run_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    maintenance_ran(dir.path(), 3 * 3_600_000).await;
+    assert_eq!(
+        maintenance_queued_by_a_boot_with(dir.path(), &[("BACKUP_KEEP", "0")]).await,
         0,
         "ran 3 h ago: not before 21 h from now"
     );
-    assert!(
-        !restarted.path().join("backups").exists(),
-        "and no backup was written"
-    );
+    assert!(!dir.path().join("backups").exists());
 }

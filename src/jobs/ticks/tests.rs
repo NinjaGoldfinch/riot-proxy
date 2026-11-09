@@ -667,3 +667,133 @@ async fn the_last_run_reads_seek_their_indexes() {
         assert!(plan.iter().any(|d| d.contains(index)), "{sql}: {plan:?}");
     }
 }
+
+// ── AVL-13: a maintenance run that wrote no backup is not the tick's last run ──
+
+const HOUR_MS: i64 = 3_600_000;
+
+/// A daily backup file in `dir`, named for the day of `ago_ms` before now and
+/// last written then.
+fn backup_written(dir: &std::path::Path, ago_ms: i64) -> std::path::PathBuf {
+    let at = Clock::now().unix_ms - ago_ms;
+    std::fs::create_dir_all(dir).unwrap();
+    let path = dir.join(crate::jobs::maintenance::backup_name(at));
+    std::fs::write(&path, b"backup").unwrap();
+    let written = std::time::UNIX_EPOCH + Duration::from_millis(u64::try_from(at).unwrap());
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(written)
+        .unwrap();
+    path
+}
+
+fn maintenance_tick() -> Tick {
+    Tick {
+        kind: kinds::MAINTENANCE,
+        period: Duration::from_secs(86_400),
+        target: Target::Kind,
+    }
+}
+
+/// How long until the maintenance tick first fires, in whole minutes.
+async fn maintenance_due_min(db: &Db, backups: Option<&std::path::Path>) -> u64 {
+    first_fire(db, "s1", &maintenance_tick(), Clock::now().unix_ms, backups)
+        .await
+        .as_secs()
+        .div_ceil(60)
+}
+
+#[test]
+fn the_backup_anchor_is_the_older_of_the_last_run_and_the_newest_backup() {
+    assert_eq!(
+        backup_anchor(Some(500), Some(100)),
+        Some(100),
+        "a later run wrote none"
+    );
+    assert_eq!(
+        backup_anchor(Some(100), Some(500)),
+        Some(100),
+        "a file touched later defers nothing"
+    );
+    assert_eq!(
+        backup_anchor(Some(100), None),
+        None,
+        "no backup on disk: due at once"
+    );
+    assert_eq!(backup_anchor(None, Some(100)), None, "never ran: due at once");
+    assert_eq!(backup_anchor(None, None), None);
+}
+
+#[tokio::test]
+async fn the_newest_backup_is_the_newest_name_and_its_time_is_the_files() {
+    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(newest_backup_ms(dir.path()).await, None, "no directory");
+    assert_eq!(newest_backup_ms(&dir.path().join("backups")).await, None);
+    let older = backup_written(dir.path(), 30 * HOUR_MS);
+    let newest = backup_written(dir.path(), 5 * HOUR_MS);
+    assert!(newest > older, "the date in the name orders them");
+    // Not a daily backup: never read.
+    std::fs::write(dir.path().join("riot-proxy-notes.db"), b"mine").unwrap();
+    let at = newest_backup_ms(dir.path()).await.unwrap();
+    let ago = Clock::now().unix_ms - at;
+    assert!((5 * HOUR_MS..5 * HOUR_MS + 60_000).contains(&ago), "{ago}");
+}
+
+/// The owner's scenario A: a backup at 00:05, a run by hand at 23:55 that
+/// wrote none because today's existed, a restart at 00:01. The tick is due
+/// at 00:05, a day after the backup, not at 23:55.
+#[tokio::test]
+async fn a_run_that_wrote_no_backup_does_not_defer_the_next_one() {
+    let (d, db) = db();
+    let backups = d.path().join("backups");
+    backup_written(&backups, 23 * HOUR_MS + 56 * 60_000);
+    done(&db, kinds::MAINTENANCE, kinds::MAINTENANCE, 6 * 60_000).await;
+    assert_eq!(maintenance_due_min(&db, Some(&backups)).await, 4);
+    // BACKUP_KEEP=0: the last run alone counts, as before.
+    assert_eq!(maintenance_due_min(&db, None).await, 23 * 60 + 54);
+}
+
+/// Scenario B: the disk guard skipped the backup, so the newest file is the
+/// day before's or there is none; the restart after freeing space runs it.
+#[tokio::test]
+async fn a_skipped_backup_is_taken_at_the_next_boot() {
+    let (d, db) = db();
+    let backups = d.path().join("backups");
+    done(&db, kinds::MAINTENANCE, kinds::MAINTENANCE, 3 * HOUR_MS).await;
+    assert_eq!(
+        maintenance_due_min(&db, Some(&backups)).await,
+        0,
+        "no backup at all"
+    );
+    backup_written(&backups, 27 * HOUR_MS);
+    assert_eq!(
+        maintenance_due_min(&db, Some(&backups)).await,
+        0,
+        "yesterday's only"
+    );
+    assert_eq!(maintenance_due_min(&db, None).await, 21 * 60);
+}
+
+#[tokio::test]
+async fn a_run_that_wrote_its_backup_is_the_last_run() {
+    let (d, db) = db();
+    let backups = d.path().join("backups");
+    // The copy ends a moment before the run does.
+    backup_written(&backups, 3 * HOUR_MS + 2_000);
+    done(&db, kinds::MAINTENANCE, kinds::MAINTENANCE, 3 * HOUR_MS).await;
+    assert_eq!(maintenance_due_min(&db, Some(&backups)).await, 21 * 60);
+    // A backup copied back later, with a new time, defers nothing further.
+    backup_written(&backups, 0);
+    assert_eq!(maintenance_due_min(&db, Some(&backups)).await, 21 * 60);
+    // Only maintenance reads the directory.
+    let other = Tick {
+        kind: kinds::NAMES_BACKFILL,
+        ..maintenance_tick()
+    };
+    done(&db, kinds::NAMES_BACKFILL, kinds::NAMES_BACKFILL, 3 * HOUR_MS).await;
+    let empty = d.path().join("none");
+    let due = first_fire(&db, "s1", &other, Clock::now().unix_ms, Some(&empty)).await;
+    assert_eq!(due.as_secs().div_ceil(60), 21 * 60);
+}

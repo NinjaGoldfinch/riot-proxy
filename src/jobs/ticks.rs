@@ -10,6 +10,11 @@
 //! straight away. A tick missed because the process stalled is skipped rather
 //! than burst.
 //!
+//! `maintenance` also counts from its backup (AVL-13, ADR-214 as amended):
+//! with `BACKUP_KEEP` above 0 a run that wrote no backup is not its last run,
+//! so its tick fires a period after the newest backup file was written, and
+//! at once when there is none ([`backup_anchor`]).
+//!
 //! The poll ticks fan out one job per tracked player (v1 `fanOut`), deduped by
 //! PUUID, so a slow poll is never queued twice. Adding or removing a tracked
 //! player needs no scheduler change (v1). The kinds queued once per ladder
@@ -18,7 +23,8 @@
 //! clock.
 
 use std::future::Future;
-use std::time::Duration;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, UNIX_EPOCH};
 
 use rusqlite::OptionalExtension;
 use serde_json::json;
@@ -265,6 +271,30 @@ pub async fn last_run(db: &Db, key_scope: &str, tick: &Tick) -> Result<Option<i6
     .await
 }
 
+/// When the newest daily backup in `dir` was written, unix ms: the file's
+/// modification time, which is the copy's last write (the rename into place
+/// keeps it). `None` when there is no backup or it cannot be read.
+pub async fn newest_backup_ms(dir: &Path) -> Option<i64> {
+    let newest = crate::jobs::maintenance::backups(dir)
+        .await
+        .ok()?
+        .into_iter()
+        .next()?;
+    let written = tokio::fs::metadata(&newest).await.ok()?.modified().ok()?;
+    i64::try_from(written.duration_since(UNIX_EPOCH).ok()?.as_millis()).ok()
+}
+
+/// What the `maintenance` tick counts from when backups are on (AVL-13): the
+/// older of its last `done` run and the newest backup. A run that wrote no
+/// backup (today's existed, the disk guard skipped it, the copy failed) is
+/// newer than the newest backup and so does not count, and with no backup on
+/// disk nothing does: the tick is due at once. A file whose time is later
+/// than the last run (copied back, or touched) never defers the tick past
+/// what the run alone would.
+pub fn backup_anchor(last_done: Option<i64>, newest_backup: Option<i64>) -> Option<i64> {
+    Some(last_done?.min(newest_backup?))
+}
+
 /// How long after `now_ms` a tick last run at `last` first fires: at
 /// `last + period`, at once when that is past or there is no last run, and
 /// never later than one period (a run stamped in the future, after the wall
@@ -280,17 +310,40 @@ pub fn first_delay(last: Option<i64>, period: Duration, now_ms: i64) -> Duration
 
 /// When `tick` first fires, read at boot. A read that fails fires at once,
 /// as every tick did before ADR-214, so a tick is never lost to it.
-pub async fn first_fire(db: &Db, key_scope: &str, tick: &Tick, now_ms: i64) -> Duration {
+/// `backups` is the backup directory when `BACKUP_KEEP` is above 0: the
+/// `maintenance` tick then counts from [`backup_anchor`].
+pub async fn first_fire(
+    db: &Db,
+    key_scope: &str,
+    tick: &Tick,
+    now_ms: i64,
+    backups: Option<&Path>,
+) -> Duration {
     if !remembers(tick.kind) {
         return Duration::ZERO;
     }
-    match last_run(db, key_scope, tick).await {
-        Ok(last) => first_delay(last, tick.period, now_ms),
+    let last = match last_run(db, key_scope, tick).await {
+        Ok(last) => last,
         Err(e) => {
             tracing::warn!(kind = tick.kind, key = %tick.key(), error = %e, "tick could not read its last run; firing now");
-            Duration::ZERO
+            return Duration::ZERO;
         }
+    };
+    let (kinds::MAINTENANCE, Some(dir)) = (tick.kind, backups) else {
+        return first_delay(last, tick.period, now_ms);
+    };
+    let newest_backup = newest_backup_ms(dir).await;
+    let due = first_delay(backup_anchor(last, newest_backup), tick.period, now_ms);
+    if due.is_zero() && !first_delay(last, tick.period, now_ms).is_zero() {
+        // Say why a restart runs maintenance inside a day of its last run.
+        tracing::info!(
+            kind = tick.kind,
+            last_run_ms = ?last,
+            newest_backup_ms = ?newest_backup,
+            "no backup written within the period; maintenance is due now"
+        );
     }
+    due
 }
 
 /// Queue what `tick` queues. Returns how many jobs were new.
@@ -344,13 +397,27 @@ impl Ticks {
         schedule: Vec<(&'static str, Duration)>,
         ladders: Vec<(String, String)>,
     ) -> Self {
+        Self::start_with_backups(scheduler, key_scope, schedule, ladders, None)
+    }
+
+    /// As [`Ticks::start_with`], with the directory `maintenance` writes its
+    /// backups to when `BACKUP_KEEP` is above 0 (`None` when it is 0), so its
+    /// tick counts from the newest backup ([`backup_anchor`]).
+    pub fn start_with_backups(
+        scheduler: &Scheduler,
+        key_scope: &str,
+        schedule: Vec<(&'static str, Duration)>,
+        ladders: Vec<(String, String)>,
+        backups: Option<PathBuf>,
+    ) -> Self {
         let (stop, stopped) = watch::channel(false);
         let mut set = JoinSet::new();
         let boot = Clock::now();
         for tick in loops(&schedule, &ladders) {
             let (scheduler, scope, stopped) = (scheduler.clone(), key_scope.to_string(), stopped.clone());
+            let backups = backups.clone();
             set.spawn(async move {
-                let due = first_fire(scheduler.db(), &scope, &tick, boot.unix_ms).await;
+                let due = first_fire(scheduler.db(), &scope, &tick, boot.unix_ms, backups.as_deref()).await;
                 if !due.is_zero() {
                     match tick.target {
                         Target::Kind => {
