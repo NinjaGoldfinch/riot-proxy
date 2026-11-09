@@ -134,7 +134,8 @@ flowchart LR
 | Set | What | When | Feeds |
 |---|---|---|---|
 | fast | totals (matches, players, consumers), queues by state and kind, ladder crawls, analytics runs and top champions | at boot, then every 15 s; again with each history point | snapshot `totals`, `queues`, `ladder`, `analytics`; the history point |
-| slow | timelines count and the archive's byte sums, disk usage and its gauges | at boot, then with each history point (`METRICS_HISTORY_INTERVAL_S`, 60 s) | `GET /v1/admin/stats` timelines count, bytes and disk; the snapshot's `disk` from ADM-04 |
+| slow | disk usage and its gauges, L2 rows | at boot, then with each history point (`METRICS_HISTORY_INTERVAL_S`, 60 s) | `GET /v1/admin/stats` disk; the snapshot's `disk` and `cacheStore.l2Rows` from ADM-04 |
+| archive | timelines count, the archive's byte sums, body states and pack totals (`matches::stats`, a pass over every stored body) | when the sampler starts (after the boot catch-up), then every `ARCHIVE_STATS_INTERVAL_S` (3600 s), beside the other two (AVL-06, ADR-213) | `GET /v1/admin/stats` timelines count, bytes, `archiveBodies`, `archivePack*`; its `sampledAt.slow` is the older of this and the slow sample |
 
 A snapshot reads both sets and computes live only the limiter, WebSocket counts, event counts, cache counters, flows and the process. `/v1/admin/stats` keeps its match and player counts live (index counts that callers poll for progress). `sampledAt {fast, slow}` (unix ms) on the snapshot and on `/v1/admin/stats` tells the page how old the sampled parts are; before the first sample the parts are read live and carry the request's time. The job counts read only the `jobs_state_kind` index (V0022): on 1.19 M rows, about 240 ms instead of 950 ms, once per 15 s in the background instead of once per request.
 
