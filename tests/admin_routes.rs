@@ -609,6 +609,8 @@ async fn stats_count_the_archive_and_the_players() {
     assert_eq!(empty["keyScope"], e.state.fetcher.key_scope().as_str());
 
     e.get(&format!("/v1/lol/matches/asia/{MATCH_ID}")).await;
+    // The match is stored behind the response (AVL-02).
+    e.state.db.flush_detached().await;
     e.post(
         "/v1/admin/tracked-players",
         json!({"platform": "kr", "gameName": "Hide on bush", "tagLine": "KR1"}),
@@ -655,6 +657,8 @@ async fn stats_count_the_archive_and_the_players() {
 async fn stats_report_what_the_database_takes_on_disk() {
     let e = env().await;
     e.get(&format!("/v1/lol/matches/asia/{MATCH_ID}")).await;
+    // The match is stored behind the response (AVL-02).
+    e.state.db.flush_detached().await;
     let s = e.get("/v1/admin/stats").await.json();
     let n = |k: &str| {
         s[k].as_u64()
@@ -692,6 +696,8 @@ async fn a_players_archive_counts_everything_stored_without_calling_riot() {
     assert_eq!(j["jobs"]["backfill:player"]["pending"], 0);
 
     e.get(&format!("/v1/lol/matches/asia/{MATCH_ID}")).await;
+    // The match is stored behind the response (AVL-02).
+    e.state.db.flush_detached().await;
     e.post(
         "/v1/admin/tracked-players",
         json!({"platform": "kr", "gameName": "Hide on bush", "tagLine": "KR1"}),

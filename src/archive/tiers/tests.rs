@@ -133,7 +133,12 @@ async fn a_match_outside_solo_and_flex_is_not_stamped() {
     let aram: &'static [u8] = Box::leak(aram.into_bytes().into_boxed_slice());
     archive(&db, aram, 100).await;
     assert!(stamps(&db).await.is_empty());
-    assert!(!db.read(|c| Ok::<_, DbError>(any_unstamped(c)?)).await.unwrap());
+    assert!(
+        db.read(|c| Ok::<_, DbError>(unstamped(c, "", 1)?))
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -284,7 +289,7 @@ async fn unstamped_matches_are_found_and_stamped() {
     let found = db
         .read(|c| {
             Ok::<_, DbError>((
-                any_unstamped(c)?,
+                !unstamped(c, "", 1)?.is_empty(),
                 unstamped(c, "", 10)?,
                 unstamped(c, MATCH_ID, 10)?,
             ))
@@ -298,7 +303,12 @@ async fn unstamped_matches_are_found_and_stamped() {
         .unwrap();
     assert_eq!(n, 10);
     assert_eq!(tier_of(&stamps(&db).await, &p[0]), "MASTER");
-    assert!(!db.read(|c| Ok::<_, DbError>(any_unstamped(c)?)).await.unwrap());
+    assert!(
+        db.read(|c| Ok::<_, DbError>(unstamped(c, "", 1)?))
+            .await
+            .unwrap()
+            .is_empty()
+    );
     // One fact left unstamped is enough to bring the match back.
     let p9 = p[9].clone();
     db.write(move |c| {
@@ -310,7 +320,12 @@ async fn unstamped_matches_are_found_and_stamped() {
     })
     .await
     .unwrap();
-    assert!(db.read(|c| Ok::<_, DbError>(any_unstamped(c)?)).await.unwrap());
+    assert!(
+        !db.read(|c| Ok::<_, DbError>(unstamped(c, "", 1)?))
+            .await
+            .unwrap()
+            .is_empty()
+    );
     let n = db
         .write(|c| Ok::<_, DbError>(stamp(c, MATCH_ID, 420)?))
         .await
@@ -382,4 +397,337 @@ async fn the_late_stamp_plan_reads_the_players_facts_by_index() {
         "{text}"
     );
     assert!(!text.contains("SCAN"), "{text}");
+}
+
+// ── AVL-06 (ADR-213): the fall-through and the sweep's cursors ──────────────
+
+/// A made-up prefix that names no platform. Not `ME1`: ME-02 makes that one a
+/// platform.
+const NOWHERE: &str = "ZZ9_8393343196";
+
+/// `puuid → tier` for one match's facts, NULL included.
+async fn tiers_of(db: &Db, id: &'static str) -> std::collections::BTreeMap<String, Option<String>> {
+    db.read(move |c| {
+        let mut stmt = c.prepare("SELECT puuid, tier FROM match_facts WHERE match_id = ?1")?;
+        let rows = stmt
+            .query_map([id], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        Ok::<_, DbError>(rows)
+    })
+    .await
+    .unwrap()
+}
+
+/// A ranked match whose id names no platform is stamped `UNKNOWN` for every
+/// participant, whatever the ladder holds, so it can't stay unstamped and be
+/// looked for on every boot; a participant already stamped keeps their tier.
+#[tokio::test]
+async fn a_ranked_match_whose_prefix_is_no_platform_is_stamped_unknown() {
+    let (_d, db) = db();
+    let p = puuids();
+    assert_eq!(Platform::from_match_id(NOWHERE), None);
+    // Ranked on kr: not the match's platform, so it places no one.
+    on_ladder(&db, "kr", SOLO, &p[0], "MASTER", 1).await;
+    matches::put(&db, NOWHERE, "asia", SCOPE, Bytes::from_static(MATCH), 100)
+        .await
+        .unwrap();
+    let t = tiers_of(&db, NOWHERE).await;
+    assert_eq!(t.len(), 10);
+    assert!(t.values().all(|v| v.as_deref() == Some(UNKNOWN_TIER)), "{t:?}");
+
+    // A participant with a tier keeps it; only the NULL ones are written.
+    let p0 = p[0].clone();
+    db.write(move |c| {
+        c.execute(
+            "UPDATE match_facts SET tier = CASE WHEN puuid = ?2 THEN 'GOLD' ELSE NULL END WHERE match_id = ?1",
+            rusqlite::params![NOWHERE, p0],
+        )?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    let n = db
+        .write(|c| Ok::<_, DbError>(stamp(c, NOWHERE, 440)?))
+        .await
+        .unwrap();
+    assert_eq!(n, 9);
+    let t = tiers_of(&db, NOWHERE).await;
+    assert_eq!(t[&p[0]].as_deref(), Some("GOLD"));
+    assert_eq!(
+        t.values().filter(|v| v.as_deref() == Some(UNKNOWN_TIER)).count(),
+        9
+    );
+    assert!(
+        db.read(|c| Ok::<_, DbError>(unstamped(c, "", 1)?))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// Outside solo and flex the fall-through writes nothing either (ADR-127).
+#[tokio::test]
+async fn a_non_ranked_match_whose_prefix_is_no_platform_is_not_stamped() {
+    let (_d, db) = db();
+    let aram = String::from_utf8(MATCH.to_vec())
+        .unwrap()
+        .replacen("\"queueId\":420", "\"queueId\":450", 1);
+    matches::put(&db, NOWHERE, "asia", SCOPE, Bytes::from(aram), 100)
+        .await
+        .unwrap();
+    let t = tiers_of(&db, NOWHERE).await;
+    assert_eq!(t.len(), 10);
+    assert!(t.values().all(Option::is_none), "{t:?}");
+    let n = db
+        .write(|c| Ok::<_, DbError>(stamp(c, NOWHERE, 450)?))
+        .await
+        .unwrap();
+    assert_eq!(n, 0);
+}
+
+/// `n` ranked solo matches `{prefix}_{first}…` with two facts each, unstamped
+/// (what `tiers:backfill` finds after V0016).
+fn seed(c: &rusqlite::Connection, prefix: &str, first: i64, n: i64) {
+    for i in first..first + n {
+        let id = format!("{prefix}_{i}");
+        c.execute(
+            "INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size, archived_at)
+             VALUES (?1, 'asia', '16.20', 420, 0, x'00', 1, 0)",
+            [&id],
+        )
+        .unwrap();
+        for puuid in ["a", "b"] {
+            c.execute(
+                "INSERT INTO match_facts (match_id, key_scope, puuid, team_id, champion_id, win, facts_version)
+                 VALUES (?1, 's', ?2, 100, 1, 1, 1)",
+                [id.as_str(), puuid],
+            )
+            .unwrap();
+        }
+    }
+}
+
+/// What `tiers:backfill` does (`jobs::analytics`), on one connection: a
+/// window of `size` ids past each prefix's cursor a pass, until no window is
+/// full. Returns the matches stamped.
+fn sweep_all(c: &mut rusqlite::Connection, size: i64, now: i64) -> usize {
+    let mut stamped = 0;
+    loop {
+        let mut more = false;
+        let tx = c.transaction().unwrap();
+        for s in sweeps(&tx).unwrap() {
+            let w = window(&tx, &s.after(), &s.before(), size).unwrap();
+            for (id, queue_id) in &w.todo {
+                if stamp(&tx, id, *queue_id).unwrap() > 0 {
+                    stamped += 1;
+                }
+            }
+            if let Some(last) = &w.last {
+                advance(&tx, &s.prefix, last, now).unwrap();
+            }
+            more |= w.full;
+        }
+        tx.commit().unwrap();
+        if !more {
+            return stamped;
+        }
+    }
+}
+
+fn cursors(c: &rusqlite::Connection) -> Vec<(String, String)> {
+    let mut stmt = c
+        .prepare("SELECT prefix, swept_to FROM tiers_sweep ORDER BY prefix")
+        .unwrap();
+    stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+}
+
+/// A raw connection to a migrated database, for the synchronous tests.
+fn raw() -> (tempfile::TempDir, Db, rusqlite::Connection) {
+    let (d, db) = db();
+    let c = rusqlite::Connection::open(d.path().join("t.db")).unwrap();
+    (d, db, c)
+}
+
+fn prefixes(c: &rusqlite::Connection) -> Vec<(String, Option<String>)> {
+    sweeps(c)
+        .unwrap()
+        .into_iter()
+        .map(|s| (s.prefix, s.swept_to))
+        .collect()
+}
+
+/// The prefixes come from seeks on the key, in id order, each with its
+/// cursor; an id with no `_` is stepped over, and a prefix that starts a
+/// longer one doesn't take its ids.
+#[test]
+fn the_prefixes_are_found_by_seeking_the_key() {
+    let (_d, _db, mut c) = raw();
+    seed(&c, "KR", 1, 2);
+    seed(&c, "KRX", 1, 1);
+    seed(&c, "EUW1", 5, 1);
+    c.execute(
+        "INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size, archived_at)
+         VALUES ('NOPREFIX', 'asia', '16.20', 420, 0, x'00', 1, 0)",
+        [],
+    )
+    .unwrap();
+    // "KRX_1" sorts before "KR_1": 'X' comes before '_'.
+    assert_eq!(
+        prefixes(&c),
+        [
+            ("EUW1".to_string(), None),
+            ("KRX".to_string(), None),
+            ("KR".to_string(), None)
+        ]
+    );
+    let kr = Sweep {
+        prefix: "KR".into(),
+        swept_to: None,
+    };
+    let w = window(&c, &kr.after(), &kr.before(), 10).unwrap();
+    assert_eq!(w.last.as_deref(), Some("KR_2"));
+    assert_eq!(w.todo.len(), 2, "KR's own matches, not KRX's");
+    // An empty cursor is a prefix never swept (a reset).
+    c.execute("INSERT INTO tiers_sweep VALUES ('KR', '', 1)", [])
+        .unwrap();
+    assert_eq!(prefixes(&c)[2], ("KR".to_string(), None));
+    assert_eq!(sweep_all(&mut c, 10, 2), 4);
+    assert_eq!(
+        prefixes(&c),
+        [
+            ("EUW1".to_string(), Some("EUW1_5".to_string())),
+            ("KRX".to_string(), Some("KRX_1".to_string())),
+            ("KR".to_string(), Some("KR_2".to_string()))
+        ]
+    );
+}
+
+/// A sweep stamps each prefix a window at a time and moves its cursor to the
+/// last id it passed; afterwards the boot check reads only past the cursors,
+/// so a NULL left below one is not looked for, while one past it is.
+#[test]
+fn a_sweep_stamps_and_advances_each_prefix_and_the_check_reads_past_the_cursors() {
+    let (_d, _db, mut c) = raw();
+    seed(&c, "KR", 100, 5);
+    seed(&c, "EUW1", 100, 3);
+    seed(&c, "ZZ9", 100, 2);
+    assert_eq!(sweep_due(&c, 2).unwrap(), Some(Due::Unswept("EUW1".into())));
+
+    // Windows of 2: KR takes three passes, and each match is stamped once.
+    assert_eq!(sweep_all(&mut c, 2, 7), 10);
+    assert_eq!(
+        cursors(&c),
+        [
+            ("EUW1".to_string(), "EUW1_102".to_string()),
+            ("KR".to_string(), "KR_104".to_string()),
+            ("ZZ9".to_string(), "ZZ9_101".to_string())
+        ]
+    );
+    let unknown: i64 = c
+        .query_row(
+            "SELECT count(*) FROM match_facts WHERE match_id LIKE 'ZZ9%' AND tier = 'UNKNOWN'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(unknown, 4, "the prefix that is no platform is stamped too");
+    assert!(unstamped(&c, "", 1).unwrap().is_empty());
+    assert_eq!(sweep_due(&c, 2).unwrap(), None);
+    assert_eq!(sweep_all(&mut c, 2, 8), 0, "a second sweep stamps nothing");
+
+    // Below a cursor nothing is read: a NULL put there isn't found.
+    c.execute("UPDATE match_facts SET tier = NULL WHERE match_id = 'KR_101'", [])
+        .unwrap();
+    assert_eq!(sweep_due(&c, 2).unwrap(), None);
+    // Past it, it is.
+    seed(&c, "KR", 200, 1);
+    assert_eq!(sweep_due(&c, 2).unwrap(), Some(Due::Unstamped("KR".into())));
+    assert_eq!(sweep_all(&mut c, 2, 9), 1);
+    assert_eq!(cursors(&c)[1], ("KR".to_string(), "KR_200".to_string()));
+
+    // More past a cursor than the check reads: due, to move the cursor up.
+    seed(&c, "EUW1", 200, 3);
+    c.execute(
+        "UPDATE match_facts SET tier = 'GOLD' WHERE match_id LIKE 'EUW1_2%'",
+        [],
+    )
+    .unwrap();
+    assert_eq!(sweep_due(&c, 2).unwrap(), Some(Due::Behind("EUW1".into())));
+    assert_eq!(sweep_due(&c, 4).unwrap(), None);
+    assert_eq!(sweep_all(&mut c, 2, 10), 0);
+    assert_eq!(sweep_due(&c, 2).unwrap(), None);
+
+    // A cursor reset makes the prefix due again, and the next sweep finds
+    // what was left below the old cursor.
+    c.execute("DELETE FROM tiers_sweep WHERE prefix = 'KR'", [])
+        .unwrap();
+    assert_eq!(sweep_due(&c, 2).unwrap(), Some(Due::Unswept("KR".into())));
+    assert_eq!(sweep_all(&mut c, 2, 11), 1, "KR_101");
+}
+
+/// A match archived after the sweep is stamped by its own archive, so the
+/// next check finds nothing, having read only that one id past the cursor.
+#[tokio::test]
+async fn a_match_archived_after_the_sweep_is_already_stamped() {
+    let (_d, db, mut c) = raw();
+    seed(&c, "KR", 1, 3);
+    assert_eq!(sweep_all(&mut c, 500, 1), 3);
+    archive(&db, MATCH, 100).await;
+    let (due, past) = db
+        .read(|c| {
+            let kr = sweeps(c)?.into_iter().find(|s| s.prefix == "KR").unwrap();
+            Ok::<_, DbError>((sweep_due(c, 500)?, window(c, &kr.after(), &kr.before(), 500)?))
+        })
+        .await
+        .unwrap();
+    assert_eq!(due, None);
+    assert_eq!(past.last.as_deref(), Some(MATCH_ID));
+    assert!(past.todo.is_empty() && !past.full);
+}
+
+/// The check's statements seek `matches`' key and read a range bounded on
+/// both sides, never a scan of the table (as WR-01 asserts its plans).
+#[tokio::test]
+async fn the_check_reads_a_bounded_range_of_the_key() {
+    let (_d, db) = db();
+    let [next, end, todo] = db
+        .read(|c| {
+            let plan = |sql: &str, args: &[&dyn rusqlite::ToSql]| -> Result<String, DbError> {
+                let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
+                let rows = stmt
+                    .query_map(args, |r| r.get::<_, String>(3))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(rows.join(" | "))
+            };
+            Ok::<_, DbError>([
+                plan(NEXT_ID, &[&"KR`"])?,
+                plan(WINDOW_END, &[&"KR_1", &"KR`", &500i64])?,
+                plan(WINDOW_TODO, &[&"KR_1", &"KR_9"])?,
+            ])
+        })
+        .await
+        .unwrap();
+    assert!(
+        next.contains("SEARCH matches USING COVERING INDEX") && next.contains("(match_id>?)"),
+        "{next}"
+    );
+    assert!(
+        end.contains("SEARCH matches USING COVERING INDEX") && end.contains("(match_id>? AND match_id<?)"),
+        "{end}"
+    );
+    assert!(
+        todo.contains("SEARCH m USING INDEX") && todo.contains("(match_id>? AND match_id<?)"),
+        "{todo}"
+    );
+    assert!(
+        todo.contains("SEARCH f EXISTS USING PRIMARY KEY (match_id=?)"),
+        "{todo}"
+    );
+    for p in [&next, &end, &todo] {
+        // A co-routine's or a constant row's SCAN reads no table.
+        assert!(!p.contains("SCAN m") && !p.contains("SCAN f"), "{p}");
+    }
 }

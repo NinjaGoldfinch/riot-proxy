@@ -41,9 +41,9 @@ sequenceDiagram
     end
 ```
 
-The order of checks is archive, then L1, then single-flight, then the limiter and the client (`src/fetcher.rs:286-372`). Numbers in the diagram: the interactive wait budget is `CLIENT_WAIT_BUDGET_MS`, default 2000 (`src/config.rs:812`); a background refresh runs at bulk priority with a 15 minute budget (`src/fetcher.rs:42-44`); the summoner endpoint's soft TTL is 3600 s and its hard TTL is four times that while `STALE_WHILE_REVALIDATE` is on (`src/riot/endpoints.rs:112-121,495-503`). A fresh negative entry answers `404 NOT_FOUND` with `X-Cache: HIT-NEG` (`src/fetcher.rs:305-312`). The single-flight leader's task is spawned, so a waiter that disconnects does not waste the limiter token (`src/singleflight.rs:1-12`).
+The order of checks is archive, then L1, then single-flight, then the limiter and the client (`src/fetcher.rs:325-418`). Numbers in the diagram: the interactive wait budget is `CLIENT_WAIT_BUDGET_MS`, default 2000 (`src/config.rs:817`); a background refresh runs at bulk priority with a 15 minute budget (`src/fetcher.rs:45-47`); the summoner endpoint's soft TTL is 3600 s and its hard TTL is four times that while `STALE_WHILE_REVALIDATE` is on (`src/riot/endpoints.rs:112-121,495-503`). A fresh negative entry answers `404 NOT_FOUND` with `X-Cache: HIT-NEG` (`src/fetcher.rs:344-351`). The single-flight leader's task is spawned, so a waiter that disconnects does not waste the limiter token (`src/singleflight.rs:1-12`).
 
-When Riot answers badly, the fetcher decides (`src/fetcher.rs:503-612`): a 404 is negative-cached for `NEG_TTL_SECONDS` (30 s; 300 s for account lookups); a 401 or 403 becomes `502 UPSTREAM_ERROR` at once and logs `RIOT KEY REJECTED`; a typed 429 with a numeric `Retry-After` freezes the scope and the loop re-acquires, up to 8 attempts; an untyped 429 tries the other account clusters, then backs off 500 ms, 1 s, 2 s with 20 % jitter for three tries; a 5xx or network failure retries after 250 ms and 750 ms, then serves a cached copy inside its hard TTL as `STALE` or fails `502`. The full table is in [../api/errors.md](../api/errors.md).
+When Riot answers badly, the fetcher decides (`src/fetcher.rs:560-668`): a 404 is negative-cached for `NEG_TTL_SECONDS` (30 s; 300 s for account lookups); a 401 or 403 becomes `502 UPSTREAM_ERROR` at once and logs `RIOT KEY REJECTED`; a typed 429 with a numeric `Retry-After` freezes the scope and the loop re-acquires, up to 8 attempts; an untyped 429 tries the other account clusters, then backs off 500 ms, 1 s, 2 s with 20 % jitter for three tries; a 5xx or network failure retries after 250 ms and 750 ms, then serves a cached copy inside its hard TTL as `STALE` or fails `502`. The full table is in [../api/errors.md](../api/errors.md).
 
 ## Archived match
 
@@ -71,12 +71,12 @@ sequenceDiagram
     else not archived, or a read failed (warning logged)
         F->>R: GET /lol/match/v5/matches/OC1_700000001
         R-->>F: 200
-        F->>AR: put zstd body, facts, bans, tier stamps, queue the timeline
+        F-)AR: put zstd body, facts, bans, tier stamps, queue the timeline (behind the response)
         F-->>C: 200 · X-Cache: MISS
     end
 ```
 
-The archive is consulted only for immutable endpoints (`src/fetcher.rs:291-302`). A local body is decoded from zstd and returned byte for byte; an empty `body_zstd` means the body was freed after packing, and `body_locations` gives the pack, offset and length for one ranged GET (`src/archive/matches.rs:191-328`). Any failure on that path logs one warning per pack and falls through to Riot, so an object-store outage degrades to a Riot fetch and nothing fails (`src/archive/mod.rs:128-144`). On a fresh fetch the archive stores the body, derives facts in the same transaction, and queues the match's timeline as an `archive:match` job at priority 0 when `ARCHIVE_TIMELINES` is on (`src/archive/mod.rs:88-110,146-178`). The match id's prefix must agree with the declared region, else `400 BAD_REGION` (`src/routes/lol.rs:53-64`).
+The archive is consulted only for immutable endpoints (`src/fetcher.rs:330-341`). A local body is decoded from zstd and returned byte for byte; an empty `body_zstd` means the body was freed after packing, and `body_locations` gives the pack, offset and length for one ranged GET (`src/archive/matches.rs:191-328`). Any failure on that path logs one warning per pack and falls through to Riot, so an object-store outage degrades to a Riot fetch and nothing fails (`src/archive/mod.rs:178-197`). On a fresh fetch the response does not wait for the archive's write: it runs on its own task through the SQLite writer's queue, and until it lands the archive serves the body from memory (AVL-02, ADR-210; `src/archive/mod.rs:183-185`, `:254-272`; a job's fetch still waits). The archive stores the body, derives facts in the same transaction, and queues the match's timeline as an `archive:match` job at priority 0 when `ARCHIVE_TIMELINES` is on (`src/archive/mod.rs:93-115,199-231`). The match id's prefix must agree with the declared region, else `400 BAD_REGION` (`src/routes/lol.rs:53-64`).
 
 ## Player profile composite
 
@@ -104,7 +104,7 @@ sequenceDiagram
     P-->>C: 200 · {account, summoner, league, mastery, ageSeconds, warnings[]} · X-Cache: HIT or MISS
 ```
 
-Without `?platform` the route resolves the platform from the account's active region first and answers `502 UPSTREAM_ERROR` if Riot's answer is not a known platform (`src/routes/players.rs:244-263`). The four parts run concurrently (`src/routes/players.rs:285-324`); a failed part becomes `null` with an entry in `warnings[]`, and only four failures make a `404` (`src/routes/players.rs:128-147,358-360`). The composite `X-Cache` is `MISS` if any part missed, else `HIT`, and `X-Cache-Age` is the oldest part (`src/routes/players.rs:66-105`). `?refresh=true` is allowed for any consumer here, but one refresh per part per puuid per 60 s wins; the others get `refreshed:false` and `refreshAvailableIn` (`src/routes/players/refresh.rs:18,43-71`). The first page of `/matches` also queues a `backfill:player` job (`src/routes/players.rs:547-599`).
+Without `?platform` the route resolves the platform from the account's active region first and answers `502 UPSTREAM_ERROR` if Riot's answer is not a known platform (`src/routes/players.rs:251-270`). The four parts run concurrently (`src/routes/players.rs:292-331`); a failed part becomes `null` with an entry in `warnings[]`, and only four failures make a `404` (`src/routes/players.rs:128-147,365-367`). The composite `X-Cache` is `MISS` if any part missed, else `HIT`, and `X-Cache-Age` is the oldest part (`src/routes/players.rs:66-105`). `?refresh=true` is allowed for any consumer here, but one refresh per part per puuid per 60 s wins; the others get `refreshed:false` and `refreshAvailableIn` (`src/routes/players/refresh.rs:18,43-71`). The first page of `/matches` also queues a `backfill:player` job (`src/routes/players.rs:560-620`).
 
 ## Admin request that queues a job
 
@@ -132,16 +132,16 @@ sequenceDiagram
     W-->>O: event crawl.phase on the ladder WebSocket topic
 ```
 
-The crawl is written in one transaction; a partial unique index refuses a second running crawl per ladder, so a duplicate request answers `already-running`, not `409` (`src/jobs/ladder.rs:247-328`, `src/routes/admin.rs:1700-1733`). The claim query takes the best ready row per rate-limit lane, skipping lanes the limiter reports blocked and kinds at their `JOB_KIND_LIMITS` cap (`src/db/store.rs:98-133`). A job whose fetch would wait longer than `JOB_YIELD_BUDGET_MS` (1000 ms) yields its worker and re-queues itself at `retry_at` (`src/jobs/scheduler.rs:124-141`). Phase transitions publish `crawl.phase` to the admin-only `ladder` topic (`src/jobs/ladder.rs:917-927`). The scheduler and its states are in [concurrency-and-rate-limiting.md](./concurrency-and-rate-limiting.md).
+The crawl is written in one transaction; a partial unique index refuses a second running crawl per ladder, so a duplicate request answers `already-running`, not `409` (`src/jobs/ladder.rs:247-328`, `src/routes/admin.rs:1702-1735`). The claim query takes the best ready row per rate-limit lane, skipping lanes the limiter reports blocked and kinds at their `JOB_KIND_LIMITS` cap (`src/db/store.rs:98-133`). A job whose fetch would wait longer than `JOB_YIELD_BUDGET_MS` (1000 ms) yields its worker and re-queues itself at `retry_at` (`src/jobs/scheduler.rs:124-141`). Phase transitions publish `crawl.phase` to the admin-only `ladder` topic (`src/jobs/ladder.rs:917-927`). The scheduler and its states are in [concurrency-and-rate-limiting.md](./concurrency-and-rate-limiting.md).
 
 ## Timeouts in one place
 
 | Where | Value | Source |
 |---|---|---|
 | Riot connect / total | 10 s / 25 s | `src/riot/client.rs:25-27` |
-| Interactive wait for a limiter token | `CLIENT_WAIT_BUDGET_MS` = 2000 | `src/config.rs:812` |
-| Job wait before yielding | `JOB_YIELD_BUDGET_MS` = 1000 | `src/config.rs:807` |
-| Background refresh budget | 15 min | `src/fetcher.rs:42-44` |
+| Interactive wait for a limiter token | `CLIENT_WAIT_BUDGET_MS` = 2000 | `src/config.rs:817` |
+| Job wait before yielding | `JOB_YIELD_BUDGET_MS` = 1000 | `src/config.rs:812` |
+| Background refresh budget | 15 min | `src/fetcher.rs:45-47` |
 | `/readyz` SQLite probe (idle writer) | 2 s, of which 1.5 s waiting for the write lock | `src/routes/health.rs:21-27` |
 | `/readyz` stall threshold (busy writer) | 5 s without progress stamps or CPU | `src/routes/health.rs:34-46` |
 | Graceful drain after SIGTERM | 10 s | `src/app.rs:35` |
@@ -149,5 +149,5 @@ The crawl is written in one transaction; a partial unique index refuses a second
 | Site's budget per proxy call | 5 s analytics and static, 30 s otherwise | ninjagoldfinch-lol `src/lib/server/proxy.ts:55-64` (origin/main) |
 
 ---
-**Sources:** `src/app.rs:L105-L120`, `src/http/request_id.rs:L287-L338`, `src/http/auth.rs:L353-L405`, `src/fetcher.rs:L36-L44,L286-L372,L407-L613`, `src/riot/endpoints.rs:L112-L121,L495-L503`, `src/singleflight.rs:L1-L12`, `src/archive/mod.rs:L88-L178`, `src/archive/matches.rs:L191-L328`, `src/routes/lol.rs:L53-L64`, `src/routes/players.rs:L66-L105,L128-L147,L244-L324,L547-L599`, `src/routes/players/refresh.rs:L18-L71`, `src/routes/admin.rs:L1700-L1733`, `src/jobs/ladder.rs:L247-L328,L917-L927`, `src/db/store.rs:L98-L133`, `src/jobs/scheduler.rs:L124-L141`, `docs/_meta/scratch/riot-and-cache.md` §1.5, `docs/_meta/scratch/siblings.md` §1.3
-**Last verified:** 2026-11-09 against commit `6c32ff4`
+**Sources:** `src/app.rs:L105-L120`, `src/http/request_id.rs:L287-L338`, `src/http/auth.rs:L353-L405`, `src/fetcher.rs:L39-L47,L325-L418,L453-L669`, `src/riot/endpoints.rs:L112-L121,L495-L503`, `src/singleflight.rs:L1-L12`, `src/archive/mod.rs:L93-L231`, `src/archive/matches.rs:L191-L328`, `src/routes/lol.rs:L53-L64`, `src/routes/players.rs:L66-L105,L128-L147,L251-L331,L560-L620`, `src/routes/players/refresh.rs:L18-L71`, `src/routes/admin.rs:L1702-L1735`, `src/jobs/ladder.rs:L247-L328,L917-L927`, `src/db/store.rs:L98-L133`, `src/jobs/scheduler.rs:L124-L141`, `docs/_meta/scratch/riot-and-cache.md` §1.5, `docs/_meta/scratch/siblings.md` §1.3
+**Last verified:** 2026-11-09 against commit `302025d`

@@ -10,8 +10,8 @@
 //!
 //! The parts that scan tables (totals, queues, ladder, analytics, archive
 //! bytes, disk) are sampled in the background (ADM-02, design/13): a fast set
-//! every [`FAST_SAMPLE`], the archive's byte sums and the disk with each
-//! history point. A snapshot reads
+//! every [`FAST_SAMPLE`], the disk with each history point, and the archive's
+//! byte sums every `ARCHIVE_STATS_INTERVAL_S` (AVL-06). A snapshot reads
 //! the samples and computes only what lives in memory, so a request or a
 //! `metrics` tick costs no table scan. Before the first sample (a test app, or
 //! the first instant after boot) the parts are read live.
@@ -43,7 +43,7 @@ use crate::ws::Hub;
 pub const HISTORY_MAX_POINTS: i64 = 1440;
 
 /// How often the fast set (totals, queues, ladder, analytics) is sampled. The
-/// slow set (archive bytes, disk) is sampled with each history point.
+/// slow set (disk, L2 rows) is sampled with each history point.
 pub const FAST_SAMPLE: Duration = Duration::from_secs(15);
 
 /// v1's six BullMQ queues, which the dashboard draws; every v2 job kind
@@ -94,15 +94,24 @@ pub struct Fast {
     pub analytics: AnalyticsSection,
 }
 
-/// The slow set: what costs a pass over the archive, or changes over minutes.
+/// The slow set: what changes over minutes, read with each history point.
 #[derive(Debug, Clone)]
 pub struct Slow {
     /// Unix ms the set was read.
     pub at: i64,
-    pub archive: matches::Stats,
     pub disk: Usage,
     /// Rows in the L2 `cache` table (ADM-04).
     pub l2_rows: i64,
+}
+
+/// The archive's counts and byte sums (`matches::stats`): a pass over every
+/// stored body, so sampled every `ARCHIVE_STATS_INTERVAL_S` (an hour by
+/// default) and reused in between (AVL-06, ADR-213).
+#[derive(Debug, Clone)]
+pub struct ArchiveSample {
+    /// Unix ms the sample was read.
+    pub at: i64,
+    pub stats: matches::Stats,
 }
 
 /// The newest of each set. The locks are never held across an await.
@@ -110,6 +119,7 @@ pub struct Slow {
 pub struct Samples {
     fast: RwLock<Option<Arc<Fast>>>,
     slow: RwLock<Option<Arc<Slow>>>,
+    archive: RwLock<Option<Arc<ArchiveSample>>>,
 }
 
 impl Samples {
@@ -128,6 +138,17 @@ impl Samples {
     fn set_slow(&self, s: Arc<Slow>) {
         *self.slow.write().unwrap_or_else(PoisonError::into_inner) = Some(s);
     }
+
+    pub fn archive(&self) -> Option<Arc<ArchiveSample>> {
+        self.archive
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn set_archive(&self, a: Arc<ArchiveSample>) {
+        *self.archive.write().unwrap_or_else(PoisonError::into_inner) = Some(a);
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -144,7 +165,8 @@ pub enum SampleError {
 pub struct SampledAt {
     /// Totals, queues, the ladder and analytics, sampled every 15 s.
     pub fast: i64,
-    /// Archive bytes and disk, sampled with each history point.
+    /// The disk, sampled with each history point; on `GET /v1/admin/stats`, the
+    /// older of that and the archive's byte sums (every `ARCHIVE_STATS_INTERVAL_S`).
     pub slow: i64,
 }
 
@@ -839,12 +861,17 @@ impl Stats {
         }
     }
 
-    async fn read_archive_and_disk(&self) -> Result<(matches::Stats, Usage), SampleError> {
-        let (archive, disk) = tokio::try_join!(
-            async { matches::stats(&self.db).await.map_err(SampleError::from) },
-            async { disk::usage(&self.db).await.map_err(SampleError::from) },
-        )?;
-        Ok((archive, disk))
+    /// Read the archive's counts and byte sums and keep them: a pass over
+    /// every stored body (`SCAN matches`), so the sampler does it every
+    /// `ARCHIVE_STATS_INTERVAL_S`, not with each history point.
+    pub async fn sample_archive(&self) -> Result<Arc<ArchiveSample>, ArchiveError> {
+        let at = Clock::now().unix_ms;
+        let archive = Arc::new(ArchiveSample {
+            at,
+            stats: matches::stats(&self.db).await?,
+        });
+        self.samples.set_archive(Arc::clone(&archive));
+        Ok(archive)
     }
 
     /// Read the fast set and keep it.
@@ -857,16 +884,12 @@ impl Stats {
     /// Read the slow set and keep it; the disk gauges (DSK-01) move with it.
     pub async fn sample_slow(&self) -> Result<Arc<Slow>, SampleError> {
         let at = Clock::now().unix_ms;
-        let ((archive, disk), l2_rows) = tokio::try_join!(self.read_archive_and_disk(), async {
-            self.l2_rows().await.map_err(SampleError::from)
-        })?;
+        let (disk, l2_rows) = tokio::try_join!(
+            async { disk::usage(&self.db).await.map_err(SampleError::from) },
+            async { self.l2_rows().await.map_err(SampleError::from) },
+        )?;
         disk::record(&disk);
-        let slow = Arc::new(Slow {
-            at,
-            archive,
-            disk,
-            l2_rows,
-        });
+        let slow = Arc::new(Slow { at, disk, l2_rows });
         self.samples.set_slow(Arc::clone(&slow));
         Ok(slow)
     }
@@ -885,15 +908,19 @@ impl Stats {
         }
     }
 
-    /// Archive bytes and disk usage for `GET /v1/admin/stats`: the slow sample,
-    /// or a live read before the first one. The third value is when they were read.
+    /// Archive bytes and disk usage for `GET /v1/admin/stats`: the archive
+    /// sample and the slow sample, each read live before its first one. The
+    /// third value is when the older of the two was read.
     pub async fn archive_and_disk(&self) -> Result<(matches::Stats, Usage, i64), SampleError> {
-        if let Some(s) = self.samples.slow() {
-            return Ok((s.archive, s.disk, s.at));
-        }
-        let at = Clock::now().unix_ms;
-        let (archive, disk) = self.read_archive_and_disk().await?;
-        Ok((archive, disk, at))
+        let (archive, archive_at) = match self.samples.archive() {
+            Some(a) => (a.stats, a.at),
+            None => (matches::stats(&self.db).await?, Clock::now().unix_ms),
+        };
+        let (disk, disk_at) = match self.samples.slow() {
+            Some(s) => (s.disk, s.at),
+            None => (disk::usage(&self.db).await?, Clock::now().unix_ms),
+        };
+        Ok((archive, disk, archive_at.min(disk_at)))
     }
 
     /// v1 `buildMetricsSnapshot`: the samples plus what lives in memory.
@@ -1038,36 +1065,56 @@ impl Stats {
 /// every `slow`, both sets and a history point, whether or not anyone
 /// watches (v1 `MetricsHistoryRecorder`). The first point comes after one
 /// `slow` interval.
+///
+/// The archive's byte sums ([`Stats::sample_archive`], a pass over every
+/// body) run beside them on their own cadence, `ARCHIVE_STATS_INTERVAL_S`
+/// from the stats' config: once at the start and then every interval
+/// (AVL-06, ADR-213), never holding up the fast set. The sampler starts after
+/// the boot catch-up, so that first pass doesn't compete with it.
 pub fn spawn_sampler(stats: Arc<Stats>, fast: Duration, slow: Duration) -> tokio::task::JoinHandle<()> {
+    let archive = Duration::from_secs(u64::from(stats.config.archive_stats_interval_s).max(1));
     tokio::spawn(async move {
-        if let Err(e) = stats.sample_fast().await {
-            tracing::warn!(error = %e, "stats sample failed");
-        }
-        if let Err(e) = stats.sample_slow().await {
-            tracing::warn!(error = %e, "stats sample failed");
-        }
-        let start = tokio::time::Instant::now();
-        let mut fast_every = tokio::time::interval_at(start + fast, fast);
-        fast_every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        let mut slow_every = tokio::time::interval_at(start + slow, slow);
-        slow_every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            tokio::select! {
-                biased;
-                _ = slow_every.tick() => {
-                    if let Err(e) = stats.record_point(Clock::now().unix_ms).await {
-                        tracing::warn!(error = %e, "metrics history point failed");
+        let sets = async {
+            if let Err(e) = stats.sample_fast().await {
+                tracing::warn!(error = %e, "stats sample failed");
+            }
+            if let Err(e) = stats.sample_slow().await {
+                tracing::warn!(error = %e, "stats sample failed");
+            }
+            let start = tokio::time::Instant::now();
+            let mut fast_every = tokio::time::interval_at(start + fast, fast);
+            fast_every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let mut slow_every = tokio::time::interval_at(start + slow, slow);
+            slow_every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = slow_every.tick() => {
+                        if let Err(e) = stats.record_point(Clock::now().unix_ms).await {
+                            tracing::warn!(error = %e, "metrics history point failed");
+                        }
+                        // The point sampled the fast set too.
+                        fast_every.reset();
                     }
-                    // The point sampled the fast set too.
-                    fast_every.reset();
-                }
-                _ = fast_every.tick() => {
-                    if let Err(e) = stats.sample_fast().await {
-                        tracing::warn!(error = %e, "stats sample failed");
+                    _ = fast_every.tick() => {
+                        if let Err(e) = stats.sample_fast().await {
+                            tracing::warn!(error = %e, "stats sample failed");
+                        }
                     }
                 }
             }
-        }
+        };
+        let archive_sums = async {
+            let mut every = tokio::time::interval(archive);
+            every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                every.tick().await;
+                if let Err(e) = stats.sample_archive().await {
+                    tracing::warn!(error = %e, "archive stats sample failed");
+                }
+            }
+        };
+        tokio::join!(sets, archive_sums);
     })
 }
 

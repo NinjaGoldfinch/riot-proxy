@@ -78,6 +78,28 @@ pub async fn upsert(db: &Db, key_scope: &str, p: Upsert<'_>, now_ms: i64) -> Res
     .await
 }
 
+/// [`upsert`] behind the response (AVL-02, ADR-210): the write runs through
+/// [`Db::write_behind`] and the caller goes on at once. A failure is logged as
+/// `what`; the row is bookkeeping a page does not wait for.
+pub fn upsert_behind(db: &Db, key_scope: &str, p: Upsert<'_>, now_ms: i64, what: &'static str) {
+    let (store, scope) = (db.clone(), key_scope.to_string());
+    let (puuid, platform) = (p.puuid.to_string(), p.platform.to_string());
+    let (name, tag) = (p.game_name.map(str::to_string), p.tag_line.map(str::to_string));
+    let tracked = p.tracked;
+    db.write_behind("player", 0, async move {
+        let row = Upsert {
+            puuid: &puuid,
+            platform: &platform,
+            game_name: name.as_deref(),
+            tag_line: tag.as_deref(),
+            tracked,
+        };
+        if let Err(e) = upsert(&store, &scope, row, now_ms).await {
+            tracing::warn!(error = %e, "{what}");
+        }
+    });
+}
+
 pub async fn get(db: &Db, key_scope: &str, puuid: &str) -> Result<Option<Player>, DbError> {
     let (scope, puuid) = (key_scope.to_string(), puuid.to_string());
     db.read(move |c| {

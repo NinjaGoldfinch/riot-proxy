@@ -145,6 +145,7 @@ async fn migrations_create_exactly_the_design_04_tables() {
             "rank_lookup_queue",
             "rank_lookups",
             "refinery_schema_history",
+            "tiers_sweep",
             "timeline_gaps",
             "timelines",
         ]
@@ -227,7 +228,7 @@ async fn a_v1_database_upgrades_to_v2_and_keeps_its_data() {
         })
         .await
         .expect("read");
-    assert_eq!((name.as_str(), versions), ("old", 31));
+    assert_eq!((name.as_str(), versions), ("old", 32));
 }
 
 /// V0015 (SITE-08, ADR-123) backfills the slices aggregated before it, as the
@@ -895,11 +896,11 @@ async fn migrations_apply_once_across_reopens() {
         })
         .await
         .expect("insert");
-    assert_eq!(history(first.clone()).await.expect("history"), 31);
+    assert_eq!(history(first.clone()).await.expect("history"), 32);
     drop(first);
 
     let second = Db::open(&path, 1).expect("second open");
-    assert_eq!(history(second.clone()).await.expect("history"), 31, "no re-run");
+    assert_eq!(history(second.clone()).await.expect("history"), 32, "no re-run");
     let name: Option<String> = second
         .read(|c| {
             Ok::<_, DbError>(
@@ -1242,6 +1243,48 @@ async fn job_counts_read_only_the_state_kind_index() {
             "{sql}: {plan:?}"
         );
     }
+}
+
+/// AVL-06 (ADR-213): the boot's stale-facts check is two seeks on
+/// `matches_facts_version`, each stopping at its first entry, not a count
+/// over the index; and it answers both halves (NULL and older).
+#[tokio::test]
+async fn the_stale_facts_check_seeks_the_version_index() {
+    let (_dir, db) = open_temp(1);
+    let sql = crate::jobs::analytics::ANY_STALE;
+    let v = crate::archive::facts::FACTS_VERSION;
+    let (plan, answers) = db
+        .write(move |c| {
+            let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
+            let plan = stmt
+                .query_map([v], |r| r.get::<_, String>(3))?
+                .collect::<Result<Vec<_>, _>>()?;
+            let any = |c: &rusqlite::Connection| c.query_row(sql, [v], |r| r.get::<_, bool>(0));
+            let mut answers = vec![any(c)?];
+            c.execute(
+                "INSERT INTO matches (match_id, region, patch, queue_id, game_end_ms, body_zstd, body_size,
+                   archived_at, facts_version) VALUES ('OC1_1', 'sea', '16.20', 420, 0, x'00', 1, 0, ?1)",
+                [v],
+            )?;
+            answers.push(any(c)?);
+            c.execute("UPDATE matches SET facts_version = NULL", [])?;
+            answers.push(any(c)?);
+            c.execute("UPDATE matches SET facts_version = ?1", [v - 1])?;
+            answers.push(any(c)?);
+            Ok::<_, DbError>((plan.join(" | "), answers))
+        })
+        .await
+        .expect("plan");
+    assert_eq!(answers, [false, false, true, true]);
+    assert!(
+        plan.contains("SEARCH matches USING COVERING INDEX matches_facts_version (facts_version=?)"),
+        "{plan}"
+    );
+    assert!(
+        plan.contains("SEARCH matches USING COVERING INDEX matches_facts_version (facts_version<?)"),
+        "{plan}"
+    );
+    assert!(!plan.contains("SCAN matches"), "{plan}");
 }
 
 /// WR-01 (ADR-179): every job statement of a crawl's activity view seeks an
