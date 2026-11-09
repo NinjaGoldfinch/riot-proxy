@@ -739,3 +739,144 @@ async fn nothing_stored_and_an_upstream_failure_is_upstream_error() {
         (ErrorCode::UpstreamError, 502)
     );
 }
+
+// ── AVL-09: the stored copy in time ─────────────────────────────────────────
+
+/// Riot accepts the connection and does not answer. A timeout is retried
+/// twice, so the whole fetch takes about 76 s; the caller has given up long
+/// before. With a copy stored, the wait is the interactive budget and a
+/// margin, and the copy is served while the call to Riot goes on.
+#[tokio::test]
+async fn expired_and_riot_hanging_serves_the_stored_copy_inside_the_wait() {
+    let s = setup(&EXPIRING).await;
+    let stored_at = store_then_expire(&s).await;
+    mount(
+        &s.server,
+        SUMMONER,
+        ok(r#"{"v":2}"#).set_delay(Duration::from_secs(60)),
+    )
+    .await;
+
+    let asked = Instant::now();
+    let r = tokio::time::timeout(
+        Duration::from_secs(5),
+        s.fetcher.fetch_or_stored(summoner(Platform::Euw1), INTERACTIVE),
+    )
+    .await
+    .expect("the stored copy within 5 s")
+    .unwrap();
+    assert_stored_copy(&r, stored_at);
+    assert!(
+        asked.elapsed() >= s.fetcher.interactive_budget(),
+        "Riot was given the interactive budget first: {:?}",
+        asked.elapsed()
+    );
+    assert_eq!(upstream_calls(&s.server).await, 1, "and it was asked");
+    // The call goes on behind the answer; the next read does not start another.
+    let again = tokio::time::timeout(
+        Duration::from_secs(5),
+        s.fetcher.fetch_or_stored(summoner(Platform::Euw1), INTERACTIVE),
+    )
+    .await
+    .expect("the stored copy again")
+    .unwrap();
+    assert_eq!(again.x_cache, XCache::Stale);
+    assert_eq!(upstream_calls(&s.server).await, 1);
+}
+
+/// The limiter is frozen for a minute. A read of a stale copy serves it and
+/// starts a bulk refresh, which sleeps through the freeze. Once the copy has
+/// passed its hard TTL, a read joins that sleeping refresh: it must not sleep
+/// with it.
+#[tokio::test]
+async fn expired_while_a_refresh_sleeps_through_a_freeze_serves_the_stored_copy() {
+    // Soft TTL 1 s, hard TTL 4 s (stale-while-revalidate on).
+    let s = setup(&[("CACHE_TTL_OVERRIDES", "summoner=1")]).await;
+    mount(&s.server, SUMMONER, ok(r#"{"v":1}"#)).await;
+    s.fetcher
+        .fetch(summoner(Platform::Euw1), INTERACTIVE)
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    s.limiter.freeze(
+        "euw1",
+        Duration::from_secs(60),
+        riot_proxy::riot::limiter::headers::RateLimitType::Application,
+    );
+    let stale = s
+        .fetcher
+        .fetch(summoner(Platform::Euw1), INTERACTIVE)
+        .await
+        .unwrap();
+    assert_eq!(
+        stale.x_cache,
+        XCache::Stale,
+        "inside hard TTL, and a refresh starts"
+    );
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    let r = tokio::time::timeout(
+        Duration::from_secs(3),
+        s.fetcher.fetch_or_stored(summoner(Platform::Euw1), INTERACTIVE),
+    )
+    .await
+    .expect("STALE inside 3 s, not after the freeze")
+    .unwrap();
+    assert_eq!(
+        (r.x_cache, r.body.as_ref()),
+        (XCache::Stale, br#"{"v":1}"#.as_ref())
+    );
+    assert!(
+        r.cache_age >= Duration::from_secs(4),
+        "past hard TTL: {:?}",
+        r.cache_age
+    );
+    assert_eq!(
+        upstream_calls(&s.server).await,
+        1,
+        "frozen: Riot was not asked again"
+    );
+}
+
+/// With nothing stored the wait is unchanged: the fetch's own outcome stands,
+/// however long it takes.
+#[tokio::test]
+async fn nothing_stored_and_riot_slow_still_waits_for_riot() {
+    let s = setup(&EXPIRING).await;
+    mount(
+        &s.server,
+        SUMMONER,
+        ok(r#"{"v":1}"#).set_delay(Duration::from_millis(3_000)),
+    )
+    .await;
+    let asked = Instant::now();
+    let r = s
+        .fetcher
+        .fetch_or_stored(summoner(Platform::Euw1), INTERACTIVE)
+        .await
+        .unwrap();
+    assert_eq!(r.x_cache, XCache::Miss);
+    assert!(asked.elapsed() >= Duration::from_millis(3_000));
+}
+
+/// Riot answering inside the wait is a MISS with the new bytes, as before.
+#[tokio::test]
+async fn expired_and_riot_answering_inside_the_wait_is_a_miss() {
+    let s = setup(&EXPIRING).await;
+    store_then_expire(&s).await;
+    mount(
+        &s.server,
+        SUMMONER,
+        ok(r#"{"v":2}"#).set_delay(Duration::from_millis(500)),
+    )
+    .await;
+    let r = s
+        .fetcher
+        .fetch_or_stored(summoner(Platform::Euw1), INTERACTIVE)
+        .await
+        .unwrap();
+    assert_eq!(
+        (r.x_cache, r.body.as_ref()),
+        (XCache::Miss, br#"{"v":2}"#.as_ref())
+    );
+}
