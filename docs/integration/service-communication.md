@@ -78,7 +78,7 @@ Two sequential round trips are the minimum because the match page needs the prof
 | Target | Protocol and auth | Frequency | Failure and retries |
 |---|---|---|---|
 | `https://<platform or region>.api.riotgames.com` | HTTPS, `X-Riot-Token`, `User-Agent: riot-proxy/2.0 (+…)`, connect 10 s, total 25 s | every cache miss, archive miss and job fetch, paced by the limiter | the fetcher retries 5xx twice, backs off untyped 429s three times, honours typed 429 freezes, never retries 401/403/404; see [../architecture/request-lifecycle.md](../architecture/request-lifecycle.md) |
-| `https://ddragon.leagueoflegends.com` (`/api/versions.json`, `/cdn/<v>/data/<locale>/*.json`, images) | HTTPS, no auth, connect 15 s, total 60 s | `ddragon:sync` every `DDRAGON_SYNC_S` (3600 s) and at boot; images on first request | a failed sync keeps what is on disk and retries as a job; a failed image is a 502 and nothing is kept |
+| `https://ddragon.leagueoflegends.com` (`/api/versions.json`, `/cdn/<v>/data/<locale>/*.json`, images) | HTTPS, no auth, connect 15 s, total 60 s | `ddragon:sync` every `DDRAGON_SYNC_S` (3600 s), at boot only when that long has passed since the last sync (ADR-214); images on first request | a failed sync keeps what is on disk and retries as a job; a failed image is a 502 and nothing is kept |
 | `https://static.developer.riotgames.com/docs/lol/queues.json` | HTTPS, no auth | every sync | keeps the previous file |
 
 Sources: `src/riot/client.rs:25-29,330-338`, `src/jobs/ddragon.rs:22-32,260-261`, `src/static/images.rs`.
@@ -105,4 +105,4 @@ The dashboard at `https://admin.ninjagoldfinch.lol/dashboard` (Cloudflare Access
 
 ---
 **Sources:** `docs/_meta/scratch/siblings.md` §1.3-§1.5, §2.2, §4, `ninjagoldfinch-lol/src/lib/server/proxy.ts:L28-L87`, `ninjagoldfinch-lol/src/lib/server/errors.ts:L16-L33`, `src/riot/client.rs:L25-L29,L330-L338`, `src/jobs/ddragon.rs:L22-L32,L260-L261`, `deploy/README.md`, `ninja-monitor/README.md:L50-L81`
-**Last verified:** 2026-11-09 against commit `6c32ff4`
+**Last verified:** 2026-11-09 against commit `199b559`

@@ -4,7 +4,7 @@
 
 BullMQ is replaced by three small pieces:
 
-1. **Ticks** — repeating timers that *enqueue* work (`poll:live` every 60 s, `ddragon:sync` hourly, …). Implemented as `tokio::time::interval` loops; nothing to persist because a missed tick just fires on next boot.
+1. **Ticks** — repeating timers that *enqueue* work (`poll:live` every 60 s, `ddragon:sync` hourly, …). Implemented as `tokio::time::interval` loops with no state of their own: at boot each loop reads when its kind last ran and fires first at that time plus its period, at once when that is past or nothing is on record, so a tick missed while the process was down fires on the next boot and a restart fires nothing that is not due (AVL-07, ADR-214). The last run is the newest `done` row's `finished_at` in `jobs` (`jobs_state_kind`; per region for `timelines:backfill`), a ladder's newest `ladder_crawls.started_at` for `ladder:crawl` and its last completed rebuild in `analytics_runs` for `aggregate:analytics`; those three kinds run one loop per ladder or region. The polls and `aggregate:delta` fire at once on every boot: they are cheap and deduped, and liveness resumes straight away.
 2. **A durable `jobs` table** — the queue. Every enqueued job is a row; the row is the truth.
 3. **A claim loop** — `N` worker tasks (default 8, `JOB_CONCURRENCY`) that claim the highest-priority ready row, run its handler, mark it done or reschedule with backoff.
 
