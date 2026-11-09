@@ -15,6 +15,12 @@
 //! up to 3 tries. All waits are jittered ±20 %. When upstream fails or the rate-limit
 //! budget runs out and a cached copy is still inside its hard TTL, that copy is
 //! served as `STALE` (v1 §8.5).
+//!
+//! Stale beats none (AVL-03, ADR-212): [`Fetcher::fetch_or_stored`], which the
+//! `/v1/players/*` composites use, also serves a copy past its hard TTL
+//! (`Lookup::Expired`, kept `EXPIRED_KEEP`) as `STALE` with its real ages when
+//! the upstream leg fails for any reason but Riot's 404. The passthrough routes
+//! keep v1's rule.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -380,7 +386,9 @@ impl Fetcher {
                     }
                     return Ok(served(&e, XCache::Stale, now));
                 }
-                Lookup::Miss => {}
+                // Past hard TTL: go upstream as on a miss; only
+                // `fetch_or_stored` falls back to it (AVL-03).
+                Lookup::Expired(_) | Lookup::Miss => {}
             }
         }
 
@@ -421,6 +429,41 @@ impl Fetcher {
             cache_age: now.saturating_duration_since(fetched.content_at),
             fetched_age: Some(now.saturating_duration_since(fetched.fetched_at)),
         })
+    }
+
+    /// [`Fetcher::fetch`], but stale beats none (AVL-03, ADR-212): when the
+    /// fetch fails for any reason but a 404 (the limiter's budget, a 429, a
+    /// 5xx, a timeout, an auth failure) and a positive copy is stored, however
+    /// old (`Lookup::Fresh`, `Stale` or `Expired`), that copy is served as
+    /// `STALE` with its real ages. With nothing stored, the error stands. The
+    /// fetch itself is unchanged: an expired copy still goes upstream first,
+    /// inside the caller's budget (`CLIENT_WAIT_BUDGET_MS` for an interactive one).
+    pub async fn fetch_or_stored(
+        &self,
+        req: RiotRequest,
+        opts: FetchOptions,
+    ) -> Result<FetchResult, FetchError> {
+        let key = cache_key(&self.inner.scope, &req);
+        let endpoint = req.endpoint.id;
+        let err = match self.fetch(req, opts).await {
+            Ok(r) => return Ok(r),
+            Err(e) => e,
+        };
+        // A 404 is Riot's answer, not a failure; `HIT-NEG` is one remembered.
+        if err.x_cache.is_some() || err.api.code == ErrorCode::NotFound {
+            return Err(err);
+        }
+        match self.inner.cache.get(&key).await {
+            Lookup::Fresh(e) | Lookup::Stale(e) | Lookup::Expired(e) if !e.is_negative() => {
+                tracing::warn!(
+                    method = endpoint,
+                    code = err.api.code.as_str(),
+                    "serving the stored copy: the refresh failed"
+                );
+                Ok(served(&e, XCache::Stale, Instant::now()))
+            }
+            _ => Err(err),
+        }
     }
 
     /// v1 §8.5: refresh past the soft TTL at bulk priority, without the caller waiting.

@@ -4,7 +4,7 @@ How riot-proxy stays inside Riot's limits with one key, how interactive requests
 
 ## The limiter model
 
-One `Limiter` holds a map of scopes. A scope is a routing value on a Riot host: a platform such as `euw1` or a region such as `europe` (`src/riot/limiter/mod.rs:97-110`, `src/riot/endpoints.rs:315-321`). Each scope has application windows and, per method id, method windows; each window is a sliding log of admission instants with a `limit` and a `seconds` length (ADR-023, `src/riot/limiter/bucket.rs:15-121`). A request is admitted only if every applicable window has room now.
+One `Limiter` holds a map of scopes. A scope is a routing value on a Riot host: a platform such as `euw1` or a region such as `europe` (`src/riot/limiter/mod.rs:97-110`, `src/riot/endpoints.rs:317-323`). Each scope has application windows and, per method id, method windows; each window is a sliding log of admission instants with a `limit` and a `seconds` length (ADR-023, `src/riot/limiter/bucket.rs:15-121`). A request is admitted only if every applicable window has room now.
 
 | Aspect | Behaviour | Source |
 |---|---|---|
@@ -21,11 +21,11 @@ Per-consumer quotas are separate: a 60 s sliding window of `quota_per_min` admis
 
 | Caller | Priority | Budget | What happens when the budget is exceeded |
 |---|---|---|---|
-| HTTP route | Interactive | `CLIENT_WAIT_BUDGET_MS` (2000) | `503 RATE_LIMITED` with `Retry-After`, or a cached copy inside its hard TTL served as `STALE` |
+| HTTP route | Interactive | `CLIENT_WAIT_BUDGET_MS` (2000) | `503 RATE_LIMITED` with `Retry-After`, or a cached copy inside its hard TTL served as `STALE`; a `/v1/players/*` part also takes a copy up to a day past its hard TTL (AVL-03) |
 | Job | Bulk | `JOB_YIELD_BUDGET_MS` (1000) | The job yields: back to `pending` with `run_after = retry_at`, attempts not counted |
 | Background refresh | Bulk | 15 min | Logged at debug; the stale entry stays |
 
-Sources: `src/fetcher.rs:43-48,141-164,407-412`, `src/jobs/scheduler.rs:124-141`.
+Sources: `src/fetcher.rs:49-54,147-170,415-420`, `src/jobs/scheduler.rs:124-141`.
 
 Bulk callers also respect a ceiling: while a scope has had an interactive request in the last `BULK_IDLE_AFTER_S` (30 s), bulk may use `BULK_USAGE_CEILING` (0.80) of every window; once idle, `BULK_IDLE_CEILING` (0.95). An interactive waiter on a scope makes bulk stand aside until it is served (`src/riot/limiter/mod.rs:117-125,229-235,329-344`; ADR-126).
 
@@ -82,11 +82,11 @@ flowchart TD
     F --> M["metric proxy_rl_429_total{type}; application/method logged as 'accountable 429'"]
 ```
 
-An accountable 429 means the limiter's accounting diverged from Riot's and is logged at error level (`src/riot/limiter/mod.rs:416-430`); the Prometheus rule `AccountableRateLimit429` alerts on it (`ops/prometheus-alerts.yml`). The fetcher's loop is bounded by 8 attempts (`src/fetcher.rs:44,570-608`).
+An accountable 429 means the limiter's accounting diverged from Riot's and is logged at error level (`src/riot/limiter/mod.rs:416-430`); the Prometheus rule `AccountableRateLimit429` alerts on it (`ops/prometheus-alerts.yml`). The fetcher's loop is bounded by 8 attempts (`src/fetcher.rs:50,613-651`).
 
 ## Account clusters
 
-Account-v1 is served by three clusters. A request without a region tries `asia`, `americas`, `europe` in that order, taking the first with a token available now and avoiding a cluster that just answered a service 429; all three share one cache entry keyed on the literal host `account` (`src/riot/routing.rs:148-153`, `src/fetcher.rs:671-709`, `src/cache/keys.rs:81-88`; ADR-066). `sea` platforms route account calls to `asia` (`src/riot/routing.rs:174-181`).
+Account-v1 is served by three clusters. A request without a region tries `asia`, `americas`, `europe` in that order, taking the first with a token available now and avoiding a cluster that just answered a service 429; all three share one cache entry keyed on the literal host `account` (`src/riot/routing.rs:163-168`, `src/fetcher.rs:714-752`, `src/cache/keys.rs:81-88`; ADR-066). `sea` platforms route account calls to `asia` (`src/riot/routing.rs:189-196`).
 
 ## The job queue
 
@@ -94,7 +94,7 @@ Jobs live in the SQLite `jobs` table; there is no in-memory queue (ADR-047, ADR-
 
 | Concept | Rule | Source |
 |---|---|---|
-| Lane | Riot-calling kinds get `(lane, method)` from their payload: a platform or the match-v5 region, and the endpoint id; other kinds have no lane and can be capped by `JOB_KIND_LIMITS` | `src/jobs/lanes.rs:425-468` |
+| Lane | Riot-calling kinds get `(lane, method)` from their payload: a platform or the match-v5 region, and the endpoint id; other kinds have no lane and can be capped by `JOB_KIND_LIMITS` | `src/jobs/lanes.rs:440-483` |
 | Priority bands | 0 interactive (a just-finished game, a missing timeline half), 100 + depth/10 archive by depth, 10 000 polls, 20 000–20 006 backfill and crawl stages, 30 000 maintenance, rebuilds and `aggregate:delta`, 40 000 timeline backfill | `src/jobs/mod.rs:74-94`, `src/jobs/ladder.rs:48-61` |
 | Dedupe | A unique partial index on `(kind, dedupe_key)` while pending or running; a duplicate enqueue returns the existing id (`already-queued`) or promotes a pending row's priority | `src/db/migrations/V0001__init.sql:44`, `src/jobs/scheduler.rs:225-269` |
 | Retry | Up to 5 attempts; backoff 30 s × 2^attempts ± 20 % where `attempts` includes the current run, so the first retry waits about 60 s | `src/jobs/scheduler.rs:40-42,160-171,1076-1081` |
@@ -114,12 +114,12 @@ Every job kind, its trigger, priority and tables is tabulated in `docs/_meta/scr
 | SQLite writer | one thread, queue of 1024 closures | `src/db/mod.rs:67-68,206-219` |
 | SQLite readers | `available_parallelism()` connections behind a semaphore | `src/db/mod.rs:111-118,244-247` |
 | Riot HTTP pool | 32 idle connections per host, 60 s idle | `src/riot/client.rs:23-24` |
-| L2 write-behind | 10 000 queued rows, flushed every 2 s or 500 rows | `src/cache/l2.rs:23-28` |
+| L2 write-behind | 10 000 queued rows, flushed every 2 s or 500 rows | `src/cache/l2.rs:25-30` |
 | Object-store reads | `ARCHIVE_OBJECT_CONCURRENCY` (16) ranged GETs in flight | `src/archive/matches.rs:265-269` |
 | WebSocket | 256 events buffered per topic; 200 topics per socket; ping every 30 s, dropped after 2 missed | `src/ws/hub.rs:20`, `src/ws/protocol.rs:23-29` |
 | Refresh windows | one `?refresh=true` per part per puuid per 60 s | `src/routes/players/refresh.rs:18` |
 | Request body | 1 MiB | `src/app.rs:30-31` |
 
 ---
-**Sources:** `src/riot/limiter/mod.rs:L50-L175,L229-L300,L307-L431,L532-L606`, `src/riot/limiter/bucket.rs:L15-L162`, `src/riot/limiter/headers.rs:L30-L41`, `src/riot/limiter/persist.rs:L21-L25,L141-L175`, `src/http/quota.rs:L320-L431`, `src/fetcher.rs:L43-L48,L141-L164,L407-L412,L570-L608,L671-L709`, `src/riot/routing.rs:L160-L196`, `src/cache/keys.rs:L81-L88`, `src/jobs/scheduler.rs:L40-L42,L124-L171,L225-L269,L963-L1025,L1070-L1084`, `src/jobs/lanes.rs:L440-L483`, `src/jobs/mod.rs:L74-L94`, `src/db/store.rs:L98-L133`, `src/db/mod.rs:L42-L43,L83-L90,L173-L213`, `src/cli/serve.rs:L82-L88`, `ops/prometheus-alerts.yml`, `docs/design/05-rate-limiter.md`, `docs/design/06-jobs-and-realtime.md`
-**Last verified:** 2026-11-09 against commit `d1aa2b5`
+**Sources:** `src/riot/limiter/mod.rs:L50-L175,L229-L300,L307-L431,L532-L606`, `src/riot/limiter/bucket.rs:L15-L162`, `src/riot/limiter/headers.rs:L30-L41`, `src/riot/limiter/persist.rs:L21-L25,L141-L175`, `src/http/quota.rs:L320-L431`, `src/fetcher.rs:L49-L54,L147-L170,L415-L420,L613-L651,L714-L752`, `src/riot/routing.rs:L160-L196`, `src/cache/keys.rs:L81-L88`, `src/jobs/scheduler.rs:L40-L42,L124-L171,L225-L269,L969-L1031,L1076-L1090`, `src/jobs/lanes.rs:L440-L483`, `src/jobs/mod.rs:L74-L94`, `src/db/store.rs:L98-L133`, `src/db/mod.rs:L42-L43,L83-L90,L173-L213`, `src/cli/serve.rs:L103-L109`, `ops/prometheus-alerts.yml`, `docs/design/05-rate-limiter.md`, `docs/design/06-jobs-and-realtime.md`
+**Last verified:** 2026-11-09 against commit `0113520`

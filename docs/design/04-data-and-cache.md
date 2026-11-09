@@ -414,14 +414,14 @@ Migrations are embedded in the binary (`sqlx::migrate!("./src/db/migrations")` o
 | Tier | Holds | TTL policy | Survives restart |
 |---|---|---|---|
 | **Archive** | match, timeline | forever | yes (SQLite) |
-| **L2** | account, summoner, ladder pages, mastery | soft/hard as v1 | yes (SQLite `cache`) |
-| **L1** | everything above plus league, spectator, rotations, status, match-id lists | soft/hard as v1 | no — rebuilt from L2 on boot or from Riot on first miss |
+| **L2** | account, summoner, league entries, ladder pages, mastery | soft/hard as v1; a 200 kept 24 h past hard TTL (AVL-03) | yes (SQLite `cache`) |
+| **L1** | everything above plus spectator, rotations, status, match-id lists | soft/hard as v1; a 200 kept 24 h past hard TTL (AVL-03) | no — rebuilt from L2 on boot or from Riot on first miss |
 | **Negative** | spectator 404 (30 s), account 404 (300 s) | fixed | no |
 | **Analytics responses** | the five `/v1/lol/analytics/*` routes' 200 bytes and `ETag` (PERF-03, ADR-169) | none: dropped when a rebuild commits, an `aggregate:delta` run ends (THR-03) or the Data Dragon version moves; LRU of `ANALYTICS_CACHE_ENTRIES` (512) | no — the next rebuild or delta warms the sites' slices |
 
 **A match and its timeline are archived together** (TL-01, ADR-118). Whatever stores one, a read or a job, queues an `archive:match` for the other in the next write: a stored match queues its timeline (unless `ARCHIVE_TIMELINES=false`), and a stored timeline queues its match. The job runs at priority 0, so it is next once the lane has bulk room, and it costs the caller nothing: the caller's request makes one Riot call, and the other half goes through the bulk ceiling (05). If a walk already queued that match, its job is moved up to 0 and asked to fetch the timeline, not queued twice. At boot, every archived match without a timeline and every timeline without its match is queued at `CATCH_UP` (20 004, TL-03, ADR-184): after a crawl's collect and before its downloads, so a restart doesn't hold the crawls while thousands of missing halves drain through each region's app limit, as it did at 100. The ids are found on a reader and queued 500 to a write. A match is skipped if its finished job already asked for the timeline, so one Riot won't serve is not requested again on every restart; it is retried once a `done` row is pruned after seven days (`failed` rows are kept).
 
-L2 membership is a per-endpoint flag in `riot/endpoints.rs` (`persist: true`). The rule: persist it if `TTL ≥ 1 h` **or** it costs more than one upstream call to rebuild. Anything with a TTL under a few minutes is cheaper to refetch than to write.
+L2 membership is a per-endpoint flag in `riot/endpoints.rs` (`persist: true`). The rule: persist it if `TTL ≥ 1 h` **or** it costs more than one upstream call to rebuild **or** its absence makes a player page unavailable. Anything else with a TTL under a few minutes is cheaper to refetch than to write. League entries (300 s) are persisted under the third clause (AVL-03, ADR-212, owner 2026-11-09): without them a player's ranks are gone after a restart until Riot answers again, at one L2 write per active player every 5 min.
 
 Write-behind: `l1.put()` also pushes `(key, entry)` onto an `mpsc`; a task batches inserts into the writer every 2 s or 500 entries. A crash loses at most 2 s of L2 writes, which is nothing.
 
@@ -429,7 +429,9 @@ Write-behind: `l1.put()` also pushes `(key, entry)` onto an `mpsc`; a task batch
 
 Two ages per entry (SITE-01, ADR-103). `content_at` is when these bytes were first seen: a refresh that returns the same bytes keeps it, so `X-Cache-Age` (and the composites' `ageSeconds`) is the age of the *content*. `fetched_at` is when Riot last answered, changed or not, so `X-Cache-Fetched-Age` (and `fetchedAgeSeconds` / `matchIdsFetchedAgeSeconds`) is the age of the *read*. A stale copy served because upstream failed keeps its own `fetched_at`. Archive reads have neither: immutable data is never read again, so they send `X-Cache-Age: 0` and no `X-Cache-Fetched-Age`.
 
-Boot warm: `SELECT * FROM cache WHERE hard_expires > now` into L1, then a sweep deletes expired rows. With a ~1 MB/entry upper bound and the L2 tiers listed, warm is sub-second even at tens of thousands of rows.
+**Stale beats none** (AVL-03, ADR-212). A positive entry is not dropped at its hard TTL: L1 keeps it `EXPIRED_KEEP` (24 h) longer and reads it as `Lookup::Expired`, and L2 keeps its row as long. An expired entry is never served on its own: a read goes upstream as on a miss, and the passthrough routes keep v1's rule (a copy inside hard TTL is served `STALE` when upstream fails, nothing older). The `/v1/players/*` composites read every part with `Fetcher::fetch_or_stored`: when the upstream leg fails for any reason but Riot's 404 (the limiter's budget, a 429, a 5xx, a timeout, an auth failure), the stored copy, up to `EXPIRED_KEEP` past its hard TTL, is served as `STALE` with its real `content_at` and `fetched_at`. Only a part with nothing stored fails, after waiting at most `CLIENT_WAIT_BUDGET_MS` for the limiter. A negative entry still goes at its TTL. Memory stays bounded by `CACHE_L1_MAX_MB`: moka evicts by weight whatever the expiry.
+
+Boot warm: every row L1 would still hold (`hard_expires > now - 24 h` for a 200, `hard_expires > now` for a 404, one range of the `cache_hard` index) into L1, then a sweep deletes the rest; the daily `maintenance` sweeps the same way. With a ~1 MB/entry upper bound and the L2 tiers listed, warm is sub-second even at tens of thousands of rows.
 
 ### TTLs (unchanged from v1)
 
@@ -439,7 +441,7 @@ Boot warm: `SELECT * FROM cache WHERE hard_expires > now` into L1, then a sweep 
 | match id list | 120 s | 480 s | no |
 | account (and its active region, SITE-09) | 24 h | 96 h | yes |
 | summoner | 1 h | 4 h | yes |
-| league entries | 300 s | 20 min | no |
+| league entries | 300 s | 20 min | yes (a player page without ranks, AVL-03) |
 | ladder (apex + paged) | 120 s | 8 min | yes (a full page walk is thousands of calls) |
 | spectator | 30 s (+30 s neg) | 2 min | no |
 | mastery | 1 h | 4 h | yes |

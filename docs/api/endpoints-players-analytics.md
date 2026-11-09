@@ -4,26 +4,27 @@ The composite player routes (several Riot calls assembled into one document) and
 
 ## `/v1/players/*`: composites
 
-Shared behaviour (`src/routes/players.rs:L66-L105`, `L128-L147`):
+Shared behaviour (`src/routes/players.rs:L73-L121`, `L152-L174`):
 
 - `Content-Type: application/json; charset=utf-8`.
-- `X-Cache` is `MISS` if any part was a miss or bypass, else `HIT`; `X-Cache-Age` is the oldest part's content age; `X-Cache-Fetched-Age` is the oldest fetched age when any part has one. The body also reports ages per part (`ageSeconds`, `fetchedAgeSeconds`), which is what the site reads (site ADR-019).
+- `X-Cache` is `STALE` if any part was served past its soft TTL, else `MISS` if any part was a miss or bypass, else `HIT` (AVL-03, ADR-212); `X-Cache-Age` is the oldest part's content age; `X-Cache-Fetched-Age` is the oldest fetched age when any part has one. The body also reports ages per part (`ageSeconds`, `fetchedAgeSeconds`), which is what the site reads (site ADR-019).
 - A part that fails becomes `null` and adds a `warnings[]` entry `"<part> unavailable (<CODE>: <message>)"`; only the id-list failure on the match page fails the whole request.
+- **Stale beats none** (AVL-03, ADR-212). A part whose refresh fails for any reason but Riot's 404 (the limiter's budget, a 429, a 5xx, a timeout) is served from its stored copy, up to a day past its hard TTL, rather than left out; a part past its soft TTL is served at once and refreshed in the background. Either way the body says `"refreshing": true`, the part keeps its real `ageSeconds`/`fetchedAgeSeconds`, and `warnings[]` names it: `"<part> served stale (last read from Riot <n> s ago)"`. A part with nothing stored waits for the limiter at most `CLIENT_WAIT_BUDGET_MS` and fails as above.
 - `?refresh=true` is accepted from **any** consumer (unlike the passthrough routes) but metered: one claim per 60 s per `(part, puuid)` (`src/http/refresh.rs:L18`, `L43-L71`). Losing the race is not an error: the body says `"refreshed":false` and `"refreshAvailableIn":<seconds>`. `refresh` must be exactly `true` or `false` (`src/http/validate.rs:L185-L192`).
 - `?platform` is validated case-sensitively; an unknown value is `400 BAD_REGION` `querystring/platform must be equal to one of the allowed values` (`src/http/validate.rs:L194-L198`).
 
 | Method | Path | Query | Riot calls | Handler |
 |---|---|---|---|---|
-| GET | `/v1/players/{puuid}/profile` | `platform` optional; `topMastery` 1 to 20 (default 5); `refresh` | without `platform`: `account.regionByPuuid` (cached, never bypassed) finds it; then in parallel `account.byPuuid` (cluster picked), `summoner.byPuuid`, `league.entriesByPuuid`, `mastery.topByPuuid?count=<topMastery>` | `src/routes/players.rs:L410` |
-| GET | `/v1/players/by-riot-id/{gameName}/{tagLine}/profile` | same | `account.byRiotId` (cached read path) resolves the PUUID, then as above; Riot's spelling of the name wins | `src/routes/players.rs:L445` |
-| GET | `/v1/players/{puuid}/matches` | `platform` **required**; `start` 0 to 10000 (default 0); `count` 1 to 20 (default 10); `queue` 0 to 5000; `type` in `ranked`, `normal`, `tourney`, `tutorial`; `champion` 1 to 10000; `refresh` | `match.idsByPuuid` on the platform's region, then `match.byId` for every id not already archived | `src/routes/players.rs:L644` |
-| GET | `/v1/players/{puuid}/champions` | `platform` optional filter; `queue` 0 to 5000; `patch` `major.minor`; `limit` 1 to 500 (default 200); `remakes` `exclude` (default) or `include` | none: reads the archive | `src/routes/players.rs:L1034` |
+| GET | `/v1/players/{puuid}/profile` | `platform` optional; `topMastery` 1 to 20 (default 5); `refresh` | without `platform`: `account.regionByPuuid` (cached, never bypassed) finds it; then in parallel `account.byPuuid` (cluster picked), `summoner.byPuuid`, `league.entriesByPuuid`, `mastery.topByPuuid?count=<topMastery>` | `src/routes/players.rs:L445` |
+| GET | `/v1/players/by-riot-id/{gameName}/{tagLine}/profile` | same | `account.byRiotId` (cached read path) resolves the PUUID, then as above; Riot's spelling of the name wins | `src/routes/players.rs:L480` |
+| GET | `/v1/players/{puuid}/matches` | `platform` **required**; `start` 0 to 10000 (default 0); `count` 1 to 20 (default 10); `queue` 0 to 5000; `type` in `ranked`, `normal`, `tourney`, `tutorial`; `champion` 1 to 10000; `refresh` | `match.idsByPuuid` on the platform's region, then `match.byId` for every id not already archived | `src/routes/players.rs:L687` |
+| GET | `/v1/players/{puuid}/champions` | `platform` optional filter; `queue` 0 to 5000; `patch` `major.minor`; `limit` 1 to 500 (default 200); `remakes` `exclude` (default) or `include` | none: reads the archive | `src/routes/players.rs:L1082` |
 
 ### Profile
 
-Errors specific to this route: all four parts failing is `404 NOT_FOUND` `No profile data available for this PUUID` (`src/routes/players.rs:L365-L367`); a Riot ID whose account has no `puuid` is `404` `Riot ID '{gameName}#{tagLine}' did not resolve to a PUUID` (`L470-L478`); an unparsable `region` from `account.regionByPuuid` is `502 UPSTREAM_ERROR` (`L251-L270`). A successful profile upserts the `players` row (`L370-L381`).
+Errors specific to this route: all four parts failing is `404 NOT_FOUND` `No profile data available for this PUUID` (`src/routes/players.rs:L398-L400`); a Riot ID whose account has no `puuid` is `404` `Riot ID '{gameName}#{tagLine}' did not resolve to a PUUID` (`L505-L513`); an unparsable `region` from `account.regionByPuuid` is `502 UPSTREAM_ERROR` (`L283-L302`). A successful profile upserts the `players` row (`L403-L414`).
 
-Response `ProfileBody` (`src/routes/players.rs:L197-L225`), shortened from `tests/snapshots/players_routes__players_profile.snap`:
+Response `ProfileBody` (`src/routes/players.rs:L225-L257`), shortened from `tests/snapshots/players_routes__players_profile.snap`:
 
 ```json
 {
@@ -38,6 +39,7 @@ Response `ProfileBody` (`src/routes/players.rs:L197-L225`), shortened from `test
   "fetchedAgeSeconds": {"account": 0, "league": 0, "mastery": 0, "summoner": 0},
   "refreshed": false,
   "refreshAvailableIn": 0,
+  "refreshing": false,
   "warnings": []
 }
 ```
@@ -46,11 +48,11 @@ Response `ProfileBody` (`src/routes/players.rs:L197-L225`), shortened from `test
 
 ### Match page
 
-`platform` missing is `400 VALIDATION` `querystring must have required property 'platform'` (ADR-065). `type` and `champion` together is `400 VALIDATION` `querystring/type must not be set with champion` (`src/routes/players.rs:L670-L674`). With `champion`, the page is built from the archive: the proxy asks Riot only for its newest 20 ids to keep the archive current, then filters archived matches by champion (`L551`, `L688-L692`, `L846-L866`); see [pagination-filtering-and-versioning.md](pagination-filtering-and-versioning.md#match-history).
+`platform` missing is `400 VALIDATION` `querystring must have required property 'platform'` (ADR-065). `type` and `champion` together is `400 VALIDATION` `querystring/type must not be set with champion` (`src/routes/players.rs:L713-L717`). With `champion`, the page is built from the archive: the proxy asks Riot only for its newest 20 ids to keep the archive current, then filters archived matches by champion (`L592`, `L731-L735`, `L891-L911`); see [pagination-filtering-and-versioning.md](pagination-filtering-and-versioning.md#match-history).
 
 The first page (`start=0`) of a player not yet walked queues a `backfill:player` job and reports it as `backfill{jobId,status,limit}` (`L547-L599`, `L484-L492`); `limit` is `LOOKUP_BACKFILL_LIMIT`, by default the whole history (`4294967295`).
 
-Response `MatchPage` (`src/routes/players.rs:L506-L536`, `MatchSummary` `src/routes/summary.rs:L14-L43`), shortened from `tests/snapshots/players_routes__players_match_page.snap`:
+Response `MatchPage` (`src/routes/players.rs:L541-L577`, `MatchSummary` `src/routes/summary.rs:L14-L43`), shortened from `tests/snapshots/players_routes__players_match_page.snap`:
 
 ```json
 {
@@ -67,7 +69,7 @@ Response `MatchPage` (`src/routes/players.rs:L506-L536`, `MatchSummary` `src/rou
   ],
   "matchIdsAgeSeconds": 0, "matchIdsFetchedAgeSeconds": 0,
   "backfill": {"jobId": "01M58N9VRRQQGTJX5Y8NRJ9533", "status": "queued", "limit": 4294967295},
-  "refreshed": false, "refreshAvailableIn": 0, "warnings": []
+  "refreshed": false, "refreshAvailableIn": 0, "refreshing": false, "warnings": []
 }
 ```
 
@@ -75,7 +77,7 @@ With `champion`, the body also carries `champion` and `archive: {"complete": boo
 
 ### Champion pool
 
-Reads the archive only. Served from a derived L1 entry with a 300 s TTL keyed on the full query (`POOL_TTL`, `src/routes/players.rs:L913`, `L1065-L1108`): a hit is `X-Cache: HIT` with the age; a computed answer is `X-Cache: MISS`, `X-Cache-Age: 0`. Captured against an empty archive:
+Reads the archive only. Served from a derived L1 entry with a 300 s TTL keyed on the full query (`POOL_TTL`, `src/routes/players.rs:L961`, `L1113-L1156`): a hit is `X-Cache: HIT` with the age; a computed answer is `X-Cache: MISS`, `X-Cache-Age: 0`. Captured against an empty archive:
 
 ```text
 GET /v1/players/AbC…/champions
@@ -158,5 +160,5 @@ A read failure is `500 INTERNAL` (`L627`).
 What ninjagoldfinch.lol sends: `queue=RANKED_SOLO_5x5`, optional `patch` and `role`, `minGames=0`, `limit=500` on the list, `limit=10` on the detail, `limit=200` on matchups; never `tier`, `side` or `minTier` (`docs/_meta/scratch/siblings.md` §1.5).
 
 ---
-**Sources:** `src/routes/players.rs:L5-L7,L66-L147,L197-L240,L251-L270,L365-L381,L410-L502,L551-L620,L644-L692,L846-L866,L913,L941-L955,L1034-L1114`, `src/routes/summary.rs:L14-L43`, `src/http/refresh.rs:L18-L71`, `src/http/validate.rs:L185-L250`, `src/routes/analytics.rs:L1-L3,L52-L56,L111-L134,L153-L178,L230-L267,L326-L421,L486-L629,L649-L658,L749-L765,L767-L772,L903-L983,L1031,L1131,L1237,L1509,L1648`, `src/routes/analytics/cache.rs:L1-L19,L89-L137,L181-L264`, `tests/snapshots/players_routes__*.snap`, `tests/snapshots/analytics__*.snap`, `docs/DECISIONS.md` ADR-065, ADR-123, `docs/_meta/scratch/routes.md` §1.4-1.5, `docs/_meta/scratch/siblings.md` §1.5, live capture against `target/debug/riot-proxy` 2.7.0
-**Last verified:** 2026-11-09 against commit `24ba99a`
+**Sources:** `src/routes/players.rs:L5-L7,L73-L174,L225-L272,L283-L302,L398-L414,L445-L537,L592-L661,L687-L735,L891-L911,L961,L989-L1003,L1082-L1162`, `src/routes/summary.rs:L14-L43`, `src/http/refresh.rs:L18-L71`, `src/http/validate.rs:L185-L250`, `src/routes/analytics.rs:L1-L3,L52-L56,L111-L134,L153-L178,L230-L267,L326-L421,L486-L629,L649-L658,L749-L765,L767-L772,L903-L983,L1031,L1131,L1237,L1509,L1648`, `src/routes/analytics/cache.rs:L1-L19,L89-L137,L181-L264`, `tests/snapshots/players_routes__*.snap`, `tests/snapshots/analytics__*.snap`, `docs/DECISIONS.md` ADR-065, ADR-123, `docs/_meta/scratch/routes.md` §1.4-1.5, `docs/_meta/scratch/siblings.md` §1.5, live capture against `target/debug/riot-proxy` 2.7.0
+**Last verified:** 2026-11-09 against commit `0113520`

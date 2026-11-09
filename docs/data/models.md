@@ -8,29 +8,29 @@ The in-code types riot-proxy moves data through: the Riot request model, cache e
 
 | Field | Type | Source | Notes |
 |---|---|---|---|
-| `endpoint` | `&'static Endpoint` | registry `src/riot/endpoints.rs:92-288` | one of 18 ids, e.g. `match.byId` |
-| `target` | `Target` | caller's routing value | `Platform(oc1)` or `Region(sea)` (`endpoints.rs:302-322`); `host()` gives `oc1.api.riotgames.com`, `scope()` the limiter's app scope |
+| `endpoint` | `&'static Endpoint` | registry `src/riot/endpoints.rs:92-290` | one of 18 ids, e.g. `match.byId` |
+| `target` | `Target` | caller's routing value | `Platform(oc1)` or `Region(sea)` (`endpoints.rs:304-324`); `host()` gives `oc1.api.riotgames.com`, `scope()` the limiter's app scope |
 | `path` | `String` | `Endpoint::path_template` filled in order | percent-encoded |
 | `params` | `Vec<String>` | path values as they appear in `path` | joined into the cache key |
 | `query` | `Vec<(&str, String)>` | only names in `Endpoint::query` | sorted and hashed into the cache key |
 | `pick_cluster` | `bool` | account-v1 only | the fetcher picks the first free cluster (ADR-066) |
 
-`Endpoint` (`endpoints.rs:40-57`): `id`, `host: HostKind` (`Platform`, `Regional`, `Account`; `endpoints.rs:18-26`), `path_template`, `query`, `method_scope_key` (always the id), `override_key` (`CACHE_TTL_OVERRIDES` group), `soft_ttl: Option<Duration>` (`None` = immutable, archived forever), `persist_l2`, `immutable`, `negative: NegTtl` (`None`, `Default`, `Account`). `Ttls` (`endpoints.rs:448-455`) is the registry resolved under the running config: `soft`, `hard` (soft × 4 with stale-while-revalidate, `endpoints.rs:482-489`), `negative`.
+`Endpoint` (`endpoints.rs:40-57`): `id`, `host: HostKind` (`Platform`, `Regional`, `Account`; `endpoints.rs:18-26`), `path_template`, `query`, `method_scope_key` (always the id), `override_key` (`CACHE_TTL_OVERRIDES` group), `soft_ttl: Option<Duration>` (`None` = immutable, archived forever), `persist_l2`, `immutable`, `negative: NegTtl` (`None`, `Default`, `Account`). `Ttls` (`endpoints.rs:450-457`) is the registry resolved under the running config: `soft`, `hard` (soft × 4 with stale-while-revalidate, `endpoints.rs:484-491`), `negative`.
 
 ## Cache entry
 
-`CacheEntry` (`src/cache/l1.rs:22-37`) is what L1 holds and what L2 persists.
+`CacheEntry` (`src/cache/l1.rs:30-46`) is what L1 holds and what L2 persists.
 
 | Field | Type | Source | Notes |
 |---|---|---|---|
-| `status` | `u16` | upstream | 200, or 404 for a negative entry (`is_negative`, `l1.rs:40-42`) |
+| `status` | `u16` | upstream | 200, or 404 for a negative entry (`is_negative`, `l1.rs:49-51`) |
 | `body` | `Bytes` | Riot's bytes untouched | empty for a negative entry |
-| `content_at` | `Instant` | first time these bytes were seen | kept when a refresh returns identical bytes (`l1.rs:162-166`), so `X-Cache-Age` is content age |
+| `content_at` | `Instant` | first time these bytes were seen | kept when a refresh returns identical bytes (`l1.rs:182-186`), so `X-Cache-Age` is content age |
 | `fetched_at` | `Instant` | last time Riot answered | `X-Cache-Fetched-Age` |
 | `soft_expires` | `Instant` | `now + soft` | fresh until |
 | `hard_expires` | `Instant` | `now + max(hard, soft)` | servable as `STALE` until |
 
-L2 stores the same six values as unix ms in `Row` (`src/cache/l2.rs:31-63`), converted through the process `Clock`. A lookup is `Fresh` before `soft_expires`, `Stale` before `hard_expires`, else `Miss` (`l1.rs:121-134`).
+L2 stores the same six values as unix ms in `Row` (`src/cache/l2.rs:33-65`), converted through the process `Clock`. A lookup is `Fresh` before `soft_expires`, `Stale` before `hard_expires`, then `Expired` for a positive entry until `EXPIRED_KEEP` (24 h) past it, else `Miss` (`l1.rs:24-27,139-154`; AVL-03, ADR-212).
 
 ## Consumer
 
@@ -48,9 +48,9 @@ L2 stores the same six values as unix ms in `Row` (`src/cache/l2.rs:31-63`), con
 
 ## Composite response bodies
 
-`ProfileBody` (`src/routes/players.rs:195-225`): `puuid`, `platform`, `region`, then `account`, `summoner`, `league`, `mastery` as Riot's payloads verbatim or `null`, `ageSeconds` and `fetchedAgeSeconds` per part, `refreshed`, `refreshAvailableIn`, `warnings[]`. Without `?platform`, `platform` comes from `account.regionByPuuid`'s `region` parsed as a platform (`players.rs:244-263`).
+`ProfileBody` (`src/routes/players.rs:223-257`): `puuid`, `platform`, `region`, then `account`, `summoner`, `league`, `mastery` as Riot's payloads verbatim or `null`, `ageSeconds` and `fetchedAgeSeconds` per part, `refreshed`, `refreshAvailableIn`, `refreshing` (a part was served past its soft TTL, AVL-03), `warnings[]`. Without `?platform`, `platform` comes from `account.regionByPuuid`'s `region` parsed as a platform (`players.rs:298-317`).
 
-`MatchPage` (`players.rs:494-526`): `puuid`, `platform`, `region`, `start`, `count`, `matchIds[]` as Riot returned them, `matches[]` of `MatchSummary`, `hasMore`, optional `champion` and `archive.complete`, `matchIdsAgeSeconds`, `matchIdsFetchedAgeSeconds`, `backfill`, `refreshed`, `refreshAvailableIn`, `warnings[]`.
+`MatchPage` (`players.rs:551-589`): `puuid`, `platform`, `region`, `start`, `count`, `matchIds[]` as Riot returned them, `matches[]` of `MatchSummary`, `hasMore`, optional `champion` and `archive.complete`, `matchIdsAgeSeconds`, `matchIdsFetchedAgeSeconds`, `backfill`, `refreshed`, `refreshAvailableIn`, `refreshing`, `warnings[]`.
 
 `MatchSummary` (`src/routes/players/summary.rs:14-122`) is the requesting player's line in one match, Riot's names and values verbatim, absent means absent:
 
@@ -62,7 +62,7 @@ L2 stores the same six values as unix ms in `Row` (`src/cache/l2.rs:31-63`), con
 | `player.*` | the participant whose `puuid` matches | `win`, `gameEndedInEarlySurrender`, `championId`, `championName`, `champLevel`, `teamId`, `teamPosition`, `kills`, `deaths`, `assists`, `totalMinionsKilled`, `neutralMinionsKilled`, `goldEarned`, `visionScore`, `totalDamageDealtToChampions`, `item0`–`item6`, `roleBoundItem`, `summoner1Id`, `summoner2Id`, `placement`, `playerSubteamId` |
 | `player.perks` | `perks.styles[]` | reduced to `keystone`, `primaryStyle`, `subStyle` (`summary.rs:201-215`) |
 
-`PlayerChampions` (`players.rs:912-926`) is the champion pool grouped from `match_facts` at read time (`src/archive/pool.rs:39-84`). Per `PlayerChampionEntry` (`players.rs:889-906`): `games`, `wins`, `winRate` = wins/games, `avgKda` = (kills + assists) / max(deaths, 1) over the games that carry a K/D/A, `csPerMin` = summed `cs` over the minutes of the games that carry both CS and a `game_duration` (`players.rs:971-984`, `pool.rs:49-53`), `lastPlayedAt` ISO 8601 of `max(game_end_ms)`.
+`PlayerChampions` (`players.rs:982-996`) is the champion pool grouped from `match_facts` at read time (`src/archive/pool.rs:39-84`). Per `PlayerChampionEntry` (`players.rs:959-976`): `games`, `wins`, `winRate` = wins/games, `avgKda` = (kills + assists) / max(deaths, 1) over the games that carry a K/D/A, `csPerMin` = summed `cs` over the minutes of the games that carry both CS and a `game_duration` (`players.rs:1041-1054`, `pool.rs:49-53`), `lastPlayedAt` ISO 8601 of `max(game_end_ms)`.
 
 ## Match row and facts
 
@@ -156,5 +156,5 @@ The pack binary layout is in [../integration/object-storage.md](../integration/o
 Events are serialised once into v1's frame `{"op":"event","event":"<name>","topic":"<topic>","at":<unix ms>,"data":{…}}` (`src/events.rs:158-172`). The `Event` enum (`events.rs:30-111`) carries, per name: `game.started` `{puuid, platform, gameId, queueId?, championId?}`; `game.ended` the same with `platform` optional; `rank.changed` `{puuid, queue, before, after}` where each side is `{tier?, rank?, lp?}` or `null`; `match.archived` `{puuid?, matchId, patch?, participants[]}`; `patch.new` `{version}`; `crawl.phase` `{crawlId, platform, queue, phase, stats}`; `ladder.crawl.completed` `{crawlId, platform, queue, entries, players, durationS}`; `analytics.updated` `{platform, queue, durationS, tables}`; `metrics.snapshot` the dashboard snapshot. `HistoryPoint` (`src/stats.rs:379-394`), the `metrics_history` row, is `{t, totals, queues, analytics, cache, disk?, requests?, upstream?}`.
 
 ---
-**Sources:** `src/riot/client.rs:L34-L45`, `src/riot/endpoints.rs:L18-L57`, `src/riot/endpoints.rs:L302-L322`, `src/riot/endpoints.rs:L448-L496`, `src/cache/l1.rs:L22-L62`, `src/cache/l1.rs:L121-L177`, `src/cache/l2.rs:L31-L63`, `src/consumers.rs:L18-L23`, `src/consumers.rs:L70-L107`, `src/players.rs:L22-L36`, `src/jobs/archive.rs:L49-L100`, `src/routes/players.rs:L195-L225`, `src/routes/players.rs:L251-L270`, `src/routes/players.rs:L504-L536`, `src/routes/players.rs:L918-L955`, `src/routes/players.rs:L982-L1018`, `src/routes/players/summary.rs:L14-L215`, `src/archive/pool.rs:L39-L84`, `src/archive/matches.rs:L53-L103`, `src/archive/mod.rs:L199-L247`, `src/archive/facts.rs:L14-L80`, `src/archive/facts.rs:L173-L289`, `src/archive/tiers.rs:L43-L68`, `src/archive/builds.rs:L23-L65`, `src/archive/builds.rs:L263-L290`, `src/routes/analytics.rs:L72-L134`, `src/routes/analytics.rs:L153-L421`, `src/routes/analytics.rs:L645-L658`, `src/routes/analytics.rs:L690-L720`, `src/archive/pack.rs:L79-L122`, `src/archive/recovery.rs:L63-L88`, `src/riot/limiter/persist.rs:L37-L70`, `src/jobs/mod.rs:L20-L71`, `src/jobs/poll.rs:L55-L56`, `src/jobs/analytics.rs:L54-L55`, `src/jobs/analytics.rs:L93-L96`, `src/jobs/timelines.rs:L195`, `src/jobs/ddragon.rs:L287-L292`, `src/jobs/ladder.rs:L109-L157`, `src/jobs/ladder/ranks.rs:L33-L43`, `src/jobs/offload.rs:L42-L49`, `src/events.rs:L30-L172`, `src/stats.rs:L357-L372`, `docs/DECISIONS.md` (ADR-131, ADR-132), `docs/_meta/scratch/routes.md`
-**Last verified:** 2026-11-09 against commit `79d2bb8`
+**Sources:** `src/riot/client.rs:L34-L45`, `src/riot/endpoints.rs:L18-L57`, `src/riot/endpoints.rs:L304-L324`, `src/riot/endpoints.rs:L450-L498`, `src/cache/l1.rs:L30-L74`, `src/cache/l1.rs:L139-L197`, `src/cache/l2.rs:L33-L65`, `src/consumers.rs:L18-L23`, `src/consumers.rs:L70-L107`, `src/players.rs:L22-L36`, `src/jobs/archive.rs:L49-L100`, `src/routes/players.rs:L223-L257`, `src/routes/players.rs:L283-L302`, `src/routes/players.rs:L539-L577`, `src/routes/players.rs:L966-L1003`, `src/routes/players.rs:L1030-L1066`, `src/routes/players/summary.rs:L14-L215`, `src/archive/pool.rs:L39-L84`, `src/archive/matches.rs:L53-L103`, `src/archive/mod.rs:L199-L247`, `src/archive/facts.rs:L14-L80`, `src/archive/facts.rs:L173-L289`, `src/archive/tiers.rs:L43-L68`, `src/archive/builds.rs:L23-L65`, `src/archive/builds.rs:L263-L290`, `src/routes/analytics.rs:L72-L134`, `src/routes/analytics.rs:L153-L421`, `src/routes/analytics.rs:L645-L658`, `src/routes/analytics.rs:L690-L720`, `src/archive/pack.rs:L79-L122`, `src/archive/recovery.rs:L63-L88`, `src/riot/limiter/persist.rs:L37-L70`, `src/jobs/mod.rs:L20-L71`, `src/jobs/poll.rs:L55-L56`, `src/jobs/analytics.rs:L54-L55`, `src/jobs/analytics.rs:L93-L96`, `src/jobs/timelines.rs:L195`, `src/jobs/ddragon.rs:L287-L292`, `src/jobs/ladder.rs:L109-L157`, `src/jobs/ladder/ranks.rs:L33-L43`, `src/jobs/offload.rs:L42-L49`, `src/events.rs:L30-L172`, `src/stats.rs:L379-L394`, `docs/DECISIONS.md` (ADR-131, ADR-132), `docs/_meta/scratch/routes.md`
+**Last verified:** 2026-11-09 against commit `0113520`

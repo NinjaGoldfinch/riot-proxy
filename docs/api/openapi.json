@@ -10904,7 +10904,7 @@
           "players"
         ],
         "summary": "A page of match history, summarised",
-        "description": "The id page, then every match on it, fanned out concurrently. Archived matches come from one archive read at no quota cost. Each entry is the player's own line in the game; the full match stays one call away at `/v1/lol/matches/{region}/{matchId}`. A match that cannot be fetched is left out and named in `warnings`; a failed id lookup fails the page.\n\n**`champion`** filters by champion. Riot's id list cannot, so the page comes from this deployment's archive: Riot's newest 20 ids are read and archived first, then the archive is paged for that champion's games, newest first. Older games appear as the player's backfill archives them; `archive.complete` says whether it has reached the start of their history. `type` cannot be combined with `champion`.",
+        "description": "The id page, then every match on it, fanned out concurrently. Archived matches come from one archive read at no quota cost. Each entry is the player's own line in the game; the full match stays one call away at `/v1/lol/matches/{region}/{matchId}`. A match that cannot be fetched is left out and named in `warnings`; a failed id lookup fails the page unless an id list is stored (kept a day past its TTL): it is then served with `X-Cache: STALE` and `refreshing: true`, and named in `warnings`.\n\n**`champion`** filters by champion. Riot's id list cannot, so the page comes from this deployment's archive: Riot's newest 20 ids are read and archived first, then the archive is paged for that champion's games, newest first. Older games appear as the player's backfill archives them; `archive.complete` says whether it has reached the start of their history. `type` cannot be combined with `champion`.",
         "operationId": "match_page",
         "parameters": [
           {
@@ -11183,7 +11183,7 @@
           "players"
         ],
         "summary": "A player's profile in one call",
-        "description": "Account, summoner, ranked entries and top mastery, fetched concurrently and each cached on its own. A part that fails is `null` and named in `warnings`; only every part failing is a 404. `refresh=true` re-reads every part upstream, at most once a minute per player. Without `platform`, the proxy reads the player's platform from account-v1's active region (cached like an account) and echoes it as `platform`, so the player's other routes can be routed from the profile alone.",
+        "description": "Account, summoner, ranked entries and top mastery, fetched concurrently and each cached on its own. A part that fails is `null` and named in `warnings`; only every part failing is a 404. A part whose refresh fails (rate limited, Riot down) is served from its stored copy (kept a day past its TTL) rather than left out: the document then says `X-Cache: STALE` and `refreshing: true`, and names the part in `warnings`. `refresh=true` re-reads every part upstream, at most once a minute per player. Without `platform`, the proxy reads the player's platform from account-v1's active region (cached like an account) and echoes it as `platform`, so the player's other routes can be routed from the profile alone.",
         "operationId": "profile",
         "parameters": [
           {
@@ -16148,6 +16148,7 @@
           "backfill",
           "refreshed",
           "refreshAvailableIn",
+          "refreshing",
           "warnings"
         ],
         "properties": {
@@ -16235,11 +16236,16 @@
             "format": "int64",
             "minimum": 0
           },
+          "refreshing": {
+            "type": "boolean",
+            "description": "The id list (or a match fetched for the page) was served past its soft\nTTL (`X-Cache: STALE`): a stored copy, because its refresh is running in\nthe background or failed. It is named in `warnings`; a later read gets\nthe fresh one."
+          },
           "warnings": {
             "type": "array",
             "items": {
               "type": "string"
-            }
+            },
+            "description": "Names each match that could not be loaded, and each part served stale."
           }
         }
       },
@@ -17093,6 +17099,7 @@
           "fetchedAgeSeconds",
           "refreshed",
           "refreshAvailableIn",
+          "refreshing",
           "warnings"
         ],
         "properties": {
@@ -17165,12 +17172,16 @@
             "description": "Seconds until another `?refresh=true` is allowed for this player; 0 when now.",
             "minimum": 0
           },
+          "refreshing": {
+            "type": "boolean",
+            "description": "A part was served past its soft TTL (`X-Cache: STALE`): a stored copy,\nbecause its refresh is running in the background or failed. The part\nis named in `warnings`; a later read gets the fresh one."
+          },
           "warnings": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "Names each part that could not be fetched."
+            "description": "Names each part that could not be fetched, and each part served stale."
           }
         }
       },

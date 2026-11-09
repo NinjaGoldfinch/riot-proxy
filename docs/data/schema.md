@@ -74,14 +74,14 @@ Indexes: the automatic ones for the primary key and the two `UNIQUE` columns. Wr
 | Column | Type | Constraints | Notes |
 |---|---|---|---|
 | `key` | TEXT | PRIMARY KEY | the canonical cache key, key scope included (see [caching.md](caching.md)) |
-| `body` | BLOB | NOT NULL | Riot's response bytes as received, not zstd (`src/cache/l2.rs:164-170`) |
+| `body` | BLOB | NOT NULL | Riot's response bytes as received, not zstd (`src/cache/l2.rs:166-172`) |
 | `status` | INTEGER | NOT NULL | 200, or 404 for a negative entry |
 | `content_at` | INTEGER | NOT NULL | unix ms the content was first seen (`X-Cache-Age`) |
-| `fetched_at` | INTEGER | nullable | unix ms Riot last answered; pre-V0009 rows read `COALESCE(fetched_at, content_at)` (`src/cache/l2.rs:191-194`) |
+| `fetched_at` | INTEGER | nullable | unix ms Riot last answered; pre-V0009 rows read `COALESCE(fetched_at, content_at)` (`src/cache/l2.rs:200-203`) |
 | `soft_expires` | INTEGER | NOT NULL | unix ms |
 | `hard_expires` | INTEGER | NOT NULL | unix ms |
 
-Index: `cache_hard ON cache(hard_expires)` (`V0001:24`). Written by the write-behind `L2Writer` in batches of `INSERT OR REPLACE` (`src/cache/l2.rs:159-183`). Read by `warm` at boot (`l2.rs:186-216`) and the admin purge, which selects keys on a reader (`l2::keys_where`) and deletes them by key on the writer (`l2::delete_keys`). Retention: `sweep` deletes `hard_expires <= now` at boot and in the daily `maintenance` job (`l2.rs:219-223`, `src/jobs/maintenance.rs:251`).
+Index: `cache_hard ON cache(hard_expires)` (`V0001:24`). Written by the write-behind `L2Writer` in batches of `INSERT OR REPLACE` (`src/cache/l2.rs:161-185`). Read by `warm` at boot (`l2.rs:194-225`) and the admin purge, which selects keys on a reader (`l2::keys_where`) and deletes them by key on the writer (`l2::delete_keys`). Retention: `sweep` deletes a 404 at `hard_expires <= now` and a 200 at `hard_expires <= now − 24 h` (`EXPIRED_KEEP`, AVL-03), at boot and in the daily `maintenance` job (`l2.rs:228-238`, `src/jobs/maintenance.rs:251`).
 
 ### limiter_state
 
@@ -94,7 +94,7 @@ Index: `cache_hard ON cache(hard_expires)` (`V0001:24`). Written by the write-be
 | `frozen_until` | INTEGER | nullable | unix ms |
 | `updated_at` | INTEGER | NOT NULL | unix ms |
 
-No secondary index. Written by `persist::save`, which deletes every row and re-inserts the current set in one transaction (`src/riot/limiter/persist.rs:178-194`) every 10 s and at shutdown (`persist.rs:25`, `src/cli/serve.rs:110,454`). Read once at boot (`persist.rs:196-213`, `serve.rs:83`); a checkpoint older than 120 s restores every window as full (`persist.rs:23,92-94`). Retention: replaced whole on every checkpoint; not wiped by `/dev/reset`.
+No secondary index. Written by `persist::save`, which deletes every row and re-inserts the current set in one transaction (`src/riot/limiter/persist.rs:178-194`) every 10 s and at shutdown (`persist.rs:25`, `src/cli/serve.rs:110,454`). Read once at boot (`persist.rs:196-213`, `serve.rs:104`); a checkpoint older than 120 s restores every window as full (`persist.rs:23,92-94`). Retention: replaced whole on every checkpoint; not wiped by `/dev/reset`.
 
 ### jobs
 
@@ -329,5 +329,5 @@ Written by `pack::record_on` after a verified upload (`src/archive/pack.rs:287-3
 Index `body_locations_pack (pack_id)` (`V0023:30`). Written by `locate_on` (upsert, `pack.rs:331-350`) and `restore-index`. Read by the archive read path's `LEFT JOIN` (`matches.rs:201-204`), the free step's guard (`offload.rs:157-158`) and the snapshot. Retention: never deleted by a job; about 60 bytes per row (`docs/design/12-object-storage-and-hosting.md:209-210`).
 
 ---
-**Sources:** `src/db/migrations/V0001__init.sql`, `V0002__archive.sql`, `V0003__cs_and_duration.sql`, `V0005__analytics.sql`, `V0007__job_lane.sql`, `V0009__cache_fetched_at.sql`, `V0012__match_builds.sql`, `V0013__timelines_standalone.sql`, `V0018__timeline_gaps.sql`, `V0019__tier_on_facts.sql`, `V0020__without_rowid_derived.sql`, `V0021__facts_without_rowid.sql`, `V0022__jobs_state_kind.sql`, `V0023__body_packs.sql`, `V0024__matches_archived.sql`, `V0028__jobs_crawl_matches.sql`, `V0029__analytics_counted.sql`, `src/db/mod.rs:L27-L43`, `src/db/mod.rs:L443-L445`, `src/archive/matches.rs:L33-L103`, `src/archive/matches.rs:L193-L230`, `src/archive/matches.rs:L390-L446`, `src/archive/analytics/delta.rs:L98-L145`, `src/archive/facts.rs:L19`, `src/archive/facts.rs:L292-L379`, `src/archive/builds.rs:L24`, `src/archive/pack.rs:L287-L354`, `src/archive/offload.rs:L147-L170`, `src/archive/tiers.rs:L43-L68`, `src/cache/l2.rs:L159-L223`, `src/riot/limiter/persist.rs:L23-L25`, `src/riot/limiter/persist.rs:L178-L213`, `src/consumers.rs:L105-L107`, `src/consumers.rs:L141-L155`, `src/consumers.rs:L213-L283`, `src/jobs/maintenance.rs:L36-L38`, `src/jobs/maintenance.rs:L237-L251`, `src/stats.rs:L43`, `src/stats.rs:L357-L372`, `src/stats.rs:L1001-L1017`, `src/routes/dev.rs:L41-L84`, `docs/_meta/scratch/persistence.md`, `docs/design/04-data-and-cache.md`, `docs/design/12-object-storage-and-hosting.md:L159-L221`
-**Last verified:** 2026-11-09 against commit `d1aa2b5`
+**Sources:** `src/db/migrations/V0001__init.sql`, `V0002__archive.sql`, `V0003__cs_and_duration.sql`, `V0005__analytics.sql`, `V0007__job_lane.sql`, `V0009__cache_fetched_at.sql`, `V0012__match_builds.sql`, `V0013__timelines_standalone.sql`, `V0018__timeline_gaps.sql`, `V0019__tier_on_facts.sql`, `V0020__without_rowid_derived.sql`, `V0021__facts_without_rowid.sql`, `V0022__jobs_state_kind.sql`, `V0023__body_packs.sql`, `V0024__matches_archived.sql`, `V0028__jobs_crawl_matches.sql`, `V0029__analytics_counted.sql`, `src/db/mod.rs:L27-L43`, `src/db/mod.rs:L443-L445`, `src/archive/matches.rs:L33-L103`, `src/archive/matches.rs:L193-L230`, `src/archive/matches.rs:L390-L446`, `src/archive/analytics/delta.rs:L98-L145`, `src/archive/facts.rs:L19`, `src/archive/facts.rs:L292-L379`, `src/archive/builds.rs:L24`, `src/archive/pack.rs:L287-L354`, `src/archive/offload.rs:L147-L170`, `src/archive/tiers.rs:L43-L68`, `src/cache/l2.rs:L161-L238`, `src/riot/limiter/persist.rs:L23-L25`, `src/riot/limiter/persist.rs:L178-L213`, `src/consumers.rs:L105-L107`, `src/consumers.rs:L141-L155`, `src/consumers.rs:L213-L283`, `src/jobs/maintenance.rs:L36-L38`, `src/jobs/maintenance.rs:L237-L251`, `src/stats.rs:L43`, `src/stats.rs:L379-L394`, `src/stats.rs:L1028-L1044`, `src/routes/dev.rs:L41-L85`, `docs/_meta/scratch/persistence.md`, `docs/design/04-data-and-cache.md`, `docs/design/12-object-storage-and-hosting.md:L159-L221`
+**Last verified:** 2026-11-09 against commit `0113520`
