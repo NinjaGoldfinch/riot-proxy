@@ -333,6 +333,10 @@ mod tests {
             )
         );
         assert_eq!(platform("euw1").unwrap(), Platform::Euw1);
+        assert_eq!(platform("me1").unwrap(), Platform::Me1);
+        assert_eq!(query_platform(Some("me1")).unwrap(), Some(Platform::Me1));
+        assert_eq!(limiter_scope("me1").unwrap(), "me1");
+        assert_eq!(msg(platform("ME1")).0, ErrorCode::BadRegion);
         assert_eq!(msg(platform("euw")).0, ErrorCode::BadRegion);
     }
 

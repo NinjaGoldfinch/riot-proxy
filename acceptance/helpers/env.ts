@@ -46,7 +46,7 @@ export interface AcceptanceConfig {
 /** routing.rs `Platform::region` (v1 `platformToRegion`). */
 const REGION: Record<string, string> = {
   br1: 'americas', la1: 'americas', la2: 'americas', na1: 'americas',
-  eun1: 'europe', euw1: 'europe', ru: 'europe', tr1: 'europe',
+  eun1: 'europe', euw1: 'europe', me1: 'europe', ru: 'europe', tr1: 'europe',
   jp1: 'asia', kr: 'asia',
   oc1: 'sea', ph2: 'sea', sg2: 'sea', th2: 'sea', tw2: 'sea', vn2: 'sea',
 };

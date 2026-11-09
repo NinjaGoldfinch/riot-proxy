@@ -178,18 +178,25 @@ async fn fetch(
     req: Result<RiotRequest, ApiError>,
     bypass: bool,
 ) -> Result<FetchResult, FetchError> {
+    fetch_with(
+        state,
+        req,
+        FetchOptions {
+            bypass,
+            ..FetchOptions::default()
+        },
+    )
+    .await
+}
+
+async fn fetch_with(
+    state: &AppState,
+    req: Result<RiotRequest, ApiError>,
+    opts: FetchOptions,
+) -> Result<FetchResult, FetchError> {
     let req = req.map_err(FetchError::from)?;
     // Stale beats none (AVL-03): a failed refresh serves the stored copy.
-    state
-        .fetcher
-        .fetch_or_stored(
-            req,
-            FetchOptions {
-                bypass,
-                ..FetchOptions::default()
-            },
-        )
-        .await
+    state.fetcher.fetch_or_stored(req, opts).await
 }
 
 fn now_ms() -> i64 {
@@ -404,12 +411,15 @@ async fn compose_profile(
         tag_line: who.as_ref().and_then(|w| w.tag_line.as_deref()),
         tracked: None,
     };
-    if let Err(e) =
-        crate::players::upsert(&state.db, state.fetcher.key_scope().as_str(), upsert, now_ms()).await
-    {
-        // Bookkeeping: a profile is still a profile without it.
-        tracing::warn!(error = %e, "could not record player identity");
-    }
+    // Bookkeeping: a profile is still a profile without it, so the profile
+    // does not wait for the write either (AVL-02).
+    crate::players::upsert_behind(
+        &state.db,
+        state.fetcher.key_scope().as_str(),
+        upsert,
+        now_ms(),
+        "could not record player identity",
+    );
 
     document(&body, tally)
 }
@@ -584,7 +594,10 @@ const RECENT_IDS: i64 = 20;
 /// v1 `maybeBackfill` (#44): the first page of a lookup records the player
 /// and, unless a completed walk already accounts for their history, queues one
 /// at bulk priority, so the next page view costs no quota. A walk in flight is
-/// deduped by the queue; a walk that died part-way is queued again.
+/// deduped by the queue; a walk that died part-way is queued again. The
+/// decision reads the player's row; recording the player is written behind
+/// the page (AVL-02), and a walk already queued is found by a read, so only a
+/// walk that has to be queued waits for the writer.
 async fn maybe_backfill(
     state: &AppState,
     puuid: &str,
@@ -595,20 +608,28 @@ async fn maybe_backfill(
     if limit == 0 || start != 0 {
         return None;
     }
+    let scope = state.fetcher.key_scope().as_str();
     let row = crate::players::Upsert {
         puuid,
         platform: platform.as_str(),
         ..crate::players::Upsert::default()
     };
-    let player =
-        match crate::players::upsert(&state.db, state.fetcher.key_scope().as_str(), row, now_ms()).await {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::warn!(error = %e, "could not record looked-up player");
-                return None;
-            }
-        };
-    let done = crate::jobs::archive::BackfillState::parse(player.backfill_state.as_deref())
+    crate::players::upsert_behind(
+        &state.db,
+        scope,
+        row,
+        now_ms(),
+        "could not record looked-up player",
+    );
+    let player = match crate::players::get(&state.db, scope, puuid).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(error = %e, "could not read looked-up player");
+            return None;
+        }
+    };
+    let done = player
+        .and_then(|p| crate::jobs::archive::BackfillState::parse(p.backfill_state.as_deref()))
         .is_some_and(|s| s.done_at.is_some());
     if done {
         return None;
@@ -621,7 +642,7 @@ async fn maybe_backfill(
         queue_id: None,
         reason: Some("lookup".into()),
     };
-    match crate::jobs::archive::enqueue_backfill(&state.jobs, &walk).await {
+    match crate::jobs::archive::enqueue_backfill_once(&state.jobs, &walk).await {
         Ok(q) => {
             tracing::info!(puuid, job = %q.id, status = q.status(), limit, "queued backfill on first lookup");
             Some(BackfillNotice {
@@ -873,11 +894,19 @@ async fn champion_page(
             tracing::warn!(error = %e, "archive check failed; fetching every recent id");
             recent.to_vec()
         });
-    // The fetcher archives each match it reads (immutable endpoint).
+    // The fetcher archives each match it reads (immutable endpoint). The
+    // page is read from the archive next, so these wait for the write (AVL-02).
+    let stored_first = FetchOptions {
+        await_store: true,
+        ..FetchOptions::INTERACTIVE
+    };
     let fetched = join_all(missing.iter().map(|m| async move {
         let id = "match.byId";
         let target = Endpoint::by_id(id).and_then(|e| e.target_for_region(region));
-        (m, fetch(state, request(id, target, &[m], &[]), false).await)
+        (
+            m,
+            fetch_with(state, request(id, target, &[m], &[]), stored_first).await,
+        )
     }))
     .await;
     for (m, r) in fetched {

@@ -242,6 +242,37 @@ pub async fn enqueue_backfill(queue: &Queue, walk: &BackfillPlayer) -> Result<En
     Ok(out)
 }
 
+/// [`enqueue_backfill`], except that a walk already pending or running for
+/// the player is found with a read, so it answers `already-queued` without
+/// waiting for the writer (AVL-02). Only a walk that is not queued yet is
+/// written. The answer is the one the queue's dedupe would give.
+pub async fn enqueue_backfill_once(
+    queue: &Queue,
+    walk: &BackfillPlayer,
+) -> Result<Enqueued, crate::db::DbError> {
+    let puuid = walk.puuid.clone();
+    let queued: Option<String> = queue
+        .db()
+        .read(move |c| {
+            use rusqlite::OptionalExtension;
+            c.query_row(
+                "SELECT id FROM jobs WHERE kind = ?1 AND dedupe_key = ?2 AND state IN ('pending', 'running')",
+                rusqlite::params![kinds::BACKFILL_PLAYER, puuid],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(crate::db::DbError::from)
+        })
+        .await?;
+    let Some(id) = queued else {
+        return enqueue_backfill(queue, walk).await;
+    };
+    let out = Enqueued { id, created: false };
+    let reason = walk.reason.clone().unwrap_or_else(|| "admin".into());
+    metrics::counter!(BACKFILLS_QUEUED_TOTAL, "reason" => reason, "status" => out.status()).increment(1);
+    Ok(out)
+}
+
 /// A fetch failure: retried with backoff, or a yield when the limiter has no room.
 fn retry(e: &FetchError) -> JobError {
     JobError::from_fetch(e)

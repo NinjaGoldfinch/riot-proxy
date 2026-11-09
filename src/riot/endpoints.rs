@@ -846,6 +846,7 @@ mod tests {
         let cases = [
             (Platform::Na1, "na1", "americas", "americas"),
             (Platform::Euw1, "euw1", "europe", "europe"),
+            (Platform::Me1, "me1", "europe", "europe"),
             (Platform::Kr, "kr", "asia", "asia"),
             (Platform::Oc1, "oc1", "sea", "asia"),
             (Platform::Vn2, "vn2", "sea", "asia"),

@@ -7,10 +7,10 @@
 //! writer thread's CPU clock tells that apart from waiting on a lock or sleeping.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use rusqlite::Connection;
+use rusqlite::{Connection, InterruptHandle};
 use tokio::sync::mpsc;
 
 /// VM instructions between progress stamps. On a 1 M-row insert, row by row or as
@@ -235,6 +235,88 @@ pub(super) type WriteFn = Box<dyn FnOnce(&mut Connection) + Send>;
 pub(super) struct WriteJob {
     pub(super) queued_at: Instant,
     pub(super) run: WriteFn,
+    /// A job's write (queued inside [`super::job_writes`]): the job-write epoch
+    /// when it was queued. `None` for every other write.
+    pub(super) job_epoch: Option<u64>,
+}
+
+/// Job writes and the shutdown interrupt (AVL-04, ADR-211). A job write runs
+/// only if no [`JobWrites::stop`] came after it was queued, and while it runs
+/// [`JobWrites::cancel`] interrupts the writer connection. The check and the
+/// interrupt are made under one lock that the writer thread also takes to
+/// start and to end a job write, so an interrupt never lands on any other
+/// write: one issued after the job write's last statement is cleared by
+/// SQLite when the next statement starts with none active.
+pub(super) struct JobWrites {
+    handle: InterruptHandle,
+    state: Mutex<JobWriteState>,
+}
+
+#[derive(Debug, Default)]
+struct JobWriteState {
+    /// Bumped by every stop; job writes queued before it are dropped.
+    epoch: u64,
+    /// A job write is running on the writer thread.
+    running: bool,
+    /// The running job write was interrupted.
+    interrupted: bool,
+}
+
+impl JobWrites {
+    pub(super) fn new(handle: InterruptHandle) -> Self {
+        Self {
+            handle,
+            state: Mutex::new(JobWriteState::default()),
+        }
+    }
+
+    fn state(&self) -> std::sync::MutexGuard<'_, JobWriteState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub(super) fn epoch(&self) -> u64 {
+        self.state().epoch
+    }
+
+    /// Drop the job writes queued so far and interrupt the running one.
+    /// Returns whether one was running.
+    pub(super) fn stop(&self) -> bool {
+        let mut state = self.state();
+        state.epoch += 1;
+        Self::interrupt(&self.handle, &mut state)
+    }
+
+    /// Interrupt the running job write, if one is. Returns whether one was.
+    pub(super) fn cancel(&self) -> bool {
+        Self::interrupt(&self.handle, &mut self.state())
+    }
+
+    fn interrupt(handle: &InterruptHandle, state: &mut JobWriteState) -> bool {
+        if state.running {
+            handle.interrupt();
+            state.interrupted = true;
+        }
+        state.running
+    }
+
+    /// The writer thread starts a job write queued at `epoch`: false when a
+    /// stop came since, and the write is dropped instead.
+    fn begin(&self, epoch: u64) -> bool {
+        let mut state = self.state();
+        if epoch < state.epoch {
+            return false;
+        }
+        state.running = true;
+        state.interrupted = false;
+        true
+    }
+
+    /// The job write has returned. Returns whether it was interrupted.
+    fn end(&self) -> bool {
+        let mut state = self.state();
+        state.running = false;
+        std::mem::take(&mut state.interrupted)
+    }
 }
 
 pub(super) fn set_queue_gauge(queued: usize) {
@@ -248,9 +330,21 @@ pub(super) fn run_job(
     conn: &mut Connection,
     job: WriteJob,
     stamps: &Stamps,
+    jobs: &JobWrites,
     rx: &mpsc::Receiver<WriteJob>,
     after_idle: bool,
 ) -> bool {
+    if let Some(epoch) = job.job_epoch
+        && !jobs.begin(epoch)
+    {
+        // Queued by a job before the shutdown interrupt: its task is gone and
+        // its row stays `running` for `recover` (AVL-04). Dropping the closure
+        // drops its sender, so a caller still waiting sees WriterGone.
+        tracing::debug!("dropped a job write queued before the shutdown interrupt");
+        let queued = rx.len();
+        set_queue_gauge(queued);
+        return queued == 0;
+    }
     let started = Instant::now();
     metrics::histogram!(crate::metrics::SQLITE_WRITE_WAIT_SECONDS)
         .record(started.duration_since(job.queued_at).as_secs_f64());
@@ -259,6 +353,17 @@ pub(super) fn run_job(
     // WriterGone; the connection stays usable for the next job.
     let run = job.run;
     let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(conn))).is_err();
+    if job.job_epoch.is_some() && jobs.end() {
+        tracing::info!("job write interrupted at shutdown; its transaction rolled back");
+        // A write interrupted inside its own transaction rolls back as its
+        // `Transaction` drops; had that rollback itself been interrupted, the
+        // transaction would still be open for the next write.
+        if !conn.is_autocommit()
+            && let Err(e) = conn.execute_batch("ROLLBACK")
+        {
+            tracing::warn!(error = %e, "could not roll back an interrupted job write");
+        }
+    }
     stamps.finish();
     let took = started.elapsed();
     metrics::histogram!(crate::metrics::SQLITE_WRITE_SECONDS).record(took.as_secs_f64());

@@ -1,6 +1,9 @@
 //! Host routing (v1 spec §5.1, v1 `src/riot/routing.ts`). Platform and regional host
 //! values are confirmed against developer.riotgames.com/docs/lol#routing-values
 //! (2026-09-24). The platform→region grouping and the account-v1 rule are v1's.
+//! `me1` is not in v1 nor in that table: the owner confirmed its host answers
+//! league-v4 and quoted Riot's match-v5 routing list (EUROPE serves EUNE, EUW,
+//! ME1, TR and RU) on 2026-11-09 (ME-02, ADR-216).
 
 use std::fmt;
 use std::str::FromStr;
@@ -21,6 +24,7 @@ pub enum Platform {
     Eun1,
     Tr1,
     Ru,
+    Me1,
     Kr,
     Jp1,
     Oc1,
@@ -42,8 +46,8 @@ pub enum Region {
 }
 
 impl Platform {
-    /// In v1's order.
-    pub const ALL: [Platform; 16] = [
+    /// In v1's order, with `me1` (ME-02) after the other europe platforms.
+    pub const ALL: [Platform; 17] = [
         Self::Na1,
         Self::Br1,
         Self::La1,
@@ -52,6 +56,7 @@ impl Platform {
         Self::Eun1,
         Self::Tr1,
         Self::Ru,
+        Self::Me1,
         Self::Kr,
         Self::Jp1,
         Self::Oc1,
@@ -72,6 +77,7 @@ impl Platform {
             Self::Eun1 => "eun1",
             Self::Tr1 => "tr1",
             Self::Ru => "ru",
+            Self::Me1 => "me1",
             Self::Kr => "kr",
             Self::Jp1 => "jp1",
             Self::Oc1 => "oc1",
@@ -83,7 +89,7 @@ impl Platform {
         }
     }
 
-    /// v1 `PLATFORM_LABELS`.
+    /// v1 `PLATFORM_LABELS`; `me1`'s is the owner's name for the shard (ME-01, ME-02).
     pub fn label(self) -> &'static str {
         match self {
             Self::Na1 => "North America",
@@ -94,6 +100,7 @@ impl Platform {
             Self::Eun1 => "EU Nordic & East",
             Self::Tr1 => "Türkiye",
             Self::Ru => "Russia",
+            Self::Me1 => "Middle East",
             Self::Kr => "Korea",
             Self::Jp1 => "Japan",
             Self::Oc1 => "Oceania",
@@ -109,7 +116,7 @@ impl Platform {
     pub fn region(self) -> Region {
         match self {
             Self::Na1 | Self::Br1 | Self::La1 | Self::La2 => Region::Americas,
-            Self::Euw1 | Self::Eun1 | Self::Tr1 | Self::Ru => Region::Europe,
+            Self::Euw1 | Self::Eun1 | Self::Tr1 | Self::Ru | Self::Me1 => Region::Europe,
             Self::Kr | Self::Jp1 => Region::Asia,
             Self::Oc1 | Self::Ph2 | Self::Sg2 | Self::Th2 | Self::Tw2 | Self::Vn2 => Region::Sea,
         }
@@ -137,10 +144,18 @@ impl Platform {
 }
 
 /// Match id prefixes that are not a platform this proxy serves, and the
-/// match-v5 host that answers for them (ME-01, ADR-143). Riot's routing table
-/// lists no ME1; `europe` serving `ME1_` matches (and `americas`, `asia` and
-/// `sea` 404ing) was checked against the live API on 2026-10-13.
-pub const MATCH_ONLY_PREFIXES: [(&str, Region); 1] = [("ME1", Region::Europe)];
+/// match-v5 host that answers for them (ME-01, ADR-143). Empty since `ME1`
+/// became a platform (ME-02, ADR-216); kept so a future prefix Riot serves
+/// before its platform is known needs one line, with a live check as its source.
+pub const MATCH_ONLY_PREFIXES: [(&str, Region); 0] = [];
+
+/// The region `list` gives a match id's prefix, any case.
+fn match_only_region(match_id: &str, list: &[(&str, Region)]) -> Option<Region> {
+    let (prefix, _) = match_id.split_once('_')?;
+    list.iter()
+        .find(|(p, _)| p.eq_ignore_ascii_case(prefix))
+        .map(|&(_, region)| region)
+}
 
 impl Region {
     pub const ALL: [Region; 4] = [Self::Americas, Self::Europe, Self::Asia, Self::Sea];
@@ -185,13 +200,7 @@ impl Region {
     pub fn from_match_id(match_id: &str) -> Option<Region> {
         Platform::from_match_id(match_id)
             .map(Platform::region)
-            .or_else(|| {
-                let (prefix, _) = match_id.split_once('_')?;
-                MATCH_ONLY_PREFIXES
-                    .iter()
-                    .find(|(p, _)| p.eq_ignore_ascii_case(prefix))
-                    .map(|&(_, region)| region)
-            })
+            .or_else(|| match_only_region(match_id, &MATCH_ONLY_PREFIXES))
     }
 
     pub fn platforms(self) -> impl Iterator<Item = Platform> {
@@ -271,6 +280,7 @@ mod tests {
         ("eun1", Region::Europe, Region::Europe),
         ("tr1", Region::Europe, Region::Europe),
         ("ru", Region::Europe, Region::Europe),
+        ("me1", Region::Europe, Region::Europe),
         ("kr", Region::Asia, Region::Asia),
         ("jp1", Region::Asia, Region::Asia),
         ("oc1", Region::Sea, Region::Asia),
@@ -303,7 +313,7 @@ mod tests {
             v
         };
         assert_eq!(names(Region::Americas), ["br1", "la1", "la2", "na1"]);
-        assert_eq!(names(Region::Europe), ["eun1", "euw1", "ru", "tr1"]);
+        assert_eq!(names(Region::Europe), ["eun1", "euw1", "me1", "ru", "tr1"]);
         assert_eq!(names(Region::Asia), ["jp1", "kr"]);
         assert_eq!(names(Region::Sea), ["oc1", "ph2", "sg2", "th2", "tw2", "vn2"]);
         let total: usize = Region::ALL.iter().map(|r| r.platforms().count()).sum();
@@ -365,15 +375,44 @@ mod tests {
     }
 
     #[test]
-    fn a_match_id_routes_to_its_region_including_match_only_prefixes() {
+    fn a_match_id_routes_to_its_region() {
         assert_eq!(Region::from_match_id("EUW1_7381937461"), Some(Region::Europe));
         assert_eq!(Region::from_match_id("OC1_1"), Some(Region::Sea));
-        // ME1 is no platform here, but its matches are served by europe.
-        assert_eq!(Platform::from_match_id("ME1_17228556"), None);
+        // ME1 is a platform (ME-02), still served by europe as ME-01 checked.
+        assert_eq!(Platform::from_match_id("ME1_17228556"), Some(Platform::Me1));
+        assert_eq!(Platform::from_match_id("me1_17228556"), Some(Platform::Me1));
         assert_eq!(Region::from_match_id("ME1_17228556"), Some(Region::Europe));
         assert_eq!(Region::from_match_id("me1_17228556"), Some(Region::Europe));
         assert_eq!(Region::from_match_id("NOPE_1"), None);
         assert_eq!(Region::from_match_id("ME117228556"), None);
+    }
+
+    /// `me1` (ME-02, ADR-216): its own platform host, europe for match-v5
+    /// (Riot's routing list) and so for account-v1, as the europe platforms.
+    #[test]
+    fn me1_is_a_europe_platform() {
+        let p = Platform::parse("me1").unwrap();
+        assert_eq!(p, Platform::Me1);
+        assert_eq!(Platform::parse("ME1").unwrap(), Platform::Me1);
+        assert_eq!(p.host(), "me1.api.riotgames.com");
+        assert_eq!(p.region(), Region::Europe);
+        assert_eq!(p.account_region(), Region::Europe);
+        assert_eq!(p.account_region(), Platform::Euw1.account_region());
+        assert_eq!(p.label(), "Middle East");
+        assert_eq!(serde_json::to_string(&p).unwrap(), "\"me1\"");
+        assert!(Region::Europe.platforms().any(|q| q == Platform::Me1));
+    }
+
+    /// No prefix is match-only today; the fallback still works for one listed.
+    #[test]
+    fn a_match_only_prefix_falls_back_to_its_listed_region() {
+        assert!(MATCH_ONLY_PREFIXES.is_empty(), "ME1 is a platform since ME-02");
+        let list = [("XX9", Region::Asia)];
+        assert_eq!(match_only_region("XX9_1", &list), Some(Region::Asia));
+        assert_eq!(match_only_region("xx9_1", &list), Some(Region::Asia));
+        assert_eq!(match_only_region("XX8_1", &list), None);
+        assert_eq!(match_only_region("XX91", &list), None);
+        assert_eq!(match_only_region("XX9_1", &MATCH_ONLY_PREFIXES), None);
     }
 
     #[test]

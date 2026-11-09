@@ -335,7 +335,7 @@ Before (OVH VPS, 2026-10-13 01:00 UTC): 38 GB disk at 77 %, `riot-proxy.db` 20 G
 ## ME — Middle East match ids (owner report 2026-10-13)
 
 - [x] ME-01 `ME1_` match ids archive from `europe` (#175, ADR-143)
-- [ ] ME-02 me1 as a platform (owner confirmed the host 2026-11-09; ADR-216); see IMPLEMENTATION.md §Post-release — AVL, finding 2
+- [~] ME-02 me1 as a platform (owner confirmed the host 2026-11-09) (feat/ME-02-me1-platform, #267, ADR-216); see IMPLEMENTATION.md §Post-release — AVL, finding 2
 - [x] OBJ-00 design/12 revised with the owner's answers: Onidel 250 GB primary, R2 replica, 14-day window, `object_store`, bodies packed with a `body_locations` index (ADR-146)
 - [x] OBJ-01 object store client and config: `archive::objects` over `object_store`, `ARCHIVE_OBJECT_*` with redaction and production checks (#196, ADR-162)
 - [x] OBJ-02 pack format, `body_locations` and reads: `archive::pack`, V0023, reads by byte range, `archive::offload` write and free steps, stats and dashboard counts (#197, ADR-163)
@@ -435,9 +435,9 @@ Staging is seeded from production's daily backup and reads production's packs fr
 A production restart on 2026-11-08 logged `listening` and accepted nothing for minutes while the boot tier check walked the archive for `ME1_` matches it cannot stamp (ME-02); profiles then waited behind a 243 s job write, and a SIGTERM in the gap ended in SIGKILL at 90 s (IMPLEMENTATION.md §Post-release — AVL, ADR-208). Order: 00, 01, 02, 06, 04, 03, 07, 05.
 - [x] AVL-00 series spec: the plan section, ADR-208, design/03 boot order and design/06 shutdown; `scripts/restart-bench.sh` for staging (#264, ADR-208)
 - [~] AVL-01 accept before catching up: `app::serve` starts right after bind; `recover`, the catch-ups and the workers follow in one boot task that honours SIGTERM (#265, ADR-209; the staging bench run, `listening` to the first `/healthz` 200 under 1 s, follows the merge under DEP-05's staging-first rule, owner decision 2026-11-09)
-- [ ] AVL-02 request-path writes are write-behind: the fetcher's archive writes and the profile routes' `players::upsert` no longer wait for the writer (ADR-210)
-- [ ] AVL-06 boot checks and the sampler cost nothing when there is nothing to do: a ranked match whose prefix is no platform stamped `UNKNOWN`, a bounded tier check and backfill query, `stale_matches` as `EXISTS`, no 60-second `SCAN matches` (ADR-213)
-- [ ] AVL-04 shutdown inside 90 s: after the job grace the writer's running statement is interrupted and its row re-queued (supersedes WR-03, ADR-211)
+- [~] AVL-02 request-path writes are write-behind: the fetcher's archive writes and the profile routes' `players::upsert` no longer wait for the writer (#266, `feat/AVL-02-write-behind-request-writes`, ADR-210)
+- [~] AVL-06 boot checks and the sampler cost nothing when there is nothing to do: a ranked match whose prefix is no platform stamped `UNKNOWN`, a bounded tier check and backfill query, `stale_matches` as `EXISTS`, no 60-second `SCAN matches` (#268, feat/AVL-06-bounded-boot-checks, ADR-213). Per-prefix sweep cursor `tiers_sweep` (V0033; next free V0034), `ARCHIVE_STATS_INTERVAL_S` (3600). Any change that leaves ranked facts with `tier` NULL resets the cursors (ADR-213 §The reset rule)
+- [~] AVL-04 shutdown inside 90 s: after the job grace the writer's running statement is interrupted and its row re-queued (supersedes WR-03) (#271, fix/AVL-04-shutdown-inside-90s, ADR-211)
 - [~] AVL-03 stale beats none for `/v1/players/*`: an expired copy served `STALE` when the refresh fails; league entries in L2, the `refreshing` field and composite `X-Cache: STALE` (owner approved 2026-11-09) (#270, feat/AVL-03-stale-beats-none, ADR-212)
 - [ ] AVL-07 ticks remember their last run, so `maintenance`, `names:backfill` and `ddragon:sync` do not fire on every restart (ADR-214)
 - [ ] AVL-05 long writes in bounded, resumable transactions: `aggregate:analytics` per step and patch, `maintenance`'s trim in chunks (ADR-215)

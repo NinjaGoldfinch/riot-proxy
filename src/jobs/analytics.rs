@@ -146,16 +146,21 @@ pub fn tiers_job() -> NewJob {
     NewJob::new(kinds::TIERS_BACKFILL, priority::MAINTENANCE, json!({})).dedupe(kinds::TIERS_BACKFILL)
 }
 
-/// Queue `tiers:backfill` when a ranked match has a fact with no tier (at
-/// boot, after V0016). Returns whether one was queued.
+/// Queue `tiers:backfill` when it has work (at boot): a match-id prefix no
+/// sweep has passed, or an unstamped ranked match past a prefix's cursor, or
+/// a cursor further behind than one window ([`tiers::sweep_due`], ADR-213).
+/// Bounded: it reads at most a window of `matches` a prefix, never the ids
+/// below a cursor. Returns whether one was queued.
 pub async fn backfill_tiers_if_needed(queue: &Queue) -> Result<bool, DbError> {
-    if !queue
+    let Some(due) = queue
         .db()
-        .read(|c| Ok::<_, DbError>(tiers::any_unstamped(c)?))
+        .read(|c| Ok::<_, DbError>(tiers::sweep_due(c, TIERS_BATCH)?))
         .await?
-    {
+    else {
         return Ok(false);
-    }
+    };
+    let (prefix, why) = due.parts();
+    tracing::info!(prefix, why, "tier sweep due");
     Ok(queue.enqueue(tiers_job()).await?.created)
 }
 
@@ -177,7 +182,9 @@ pub async fn split_if_needed(queue: &Queue, key_scope: &str) -> Result<usize, Db
     Ok(queued)
 }
 
-/// Matches whose facts an older `FACTS_VERSION` derived.
+/// Matches whose facts an older `FACTS_VERSION` derived: the whole range of
+/// `matches_facts_version` below the version, counted. For the sweep's
+/// progress and the dashboard; the boot check asks [`ANY_STALE`] instead.
 pub async fn stale_matches(db: &Db) -> Result<i64, DbError> {
     db.read(|c| {
         Ok(c.query_row(
@@ -189,10 +196,20 @@ pub async fn stale_matches(db: &Db) -> Result<i64, DbError> {
     .await
 }
 
+/// Whether any match's facts are stale: the first entry of
+/// `matches_facts_version` below the version, whatever the archive's size
+/// (AVL-06, ADR-213). NULLs sort first in an index, so each half is one seek.
+pub(crate) const ANY_STALE: &str = "SELECT EXISTS (SELECT 1 FROM matches WHERE facts_version IS NULL)
+         OR EXISTS (SELECT 1 FROM matches WHERE facts_version < ?1)";
+
 /// Queue a sweep when the archive holds stale facts (at boot, after a
 /// version bump). Returns whether one was queued.
 pub async fn reextract_if_stale(queue: &Queue) -> Result<bool, DbError> {
-    if stale_matches(queue.db()).await? == 0 {
+    let any: bool = queue
+        .db()
+        .read(|c| Ok::<_, DbError>(c.query_row(ANY_STALE, [FACTS_VERSION], |r| r.get(0))?))
+        .await?;
+    if !any {
         return Ok(false);
     }
     Ok(queue.enqueue(reextract_job()).await?.created)
@@ -585,6 +602,10 @@ impl AnalyticsContext {
                                         |r| r.get(0),
                                     ))?;
                                 matches::write_derived(&tx, id, owner.as_deref().unwrap_or(&scope), d)?;
+                                // A fact the old version didn't write is stamped
+                                // as archiving would; stamped ones are kept. The
+                                // tier sweep's cursors rely on it (ADR-213).
+                                tiers::stamp(&tx, id, d.0.queue_id)?;
                             }
                             // A body that no longer derives: stamp it so the sweep moves on.
                             None => {
@@ -724,48 +745,137 @@ impl AnalyticsContext {
 }
 
 impl AnalyticsContext {
-    /// `tiers:backfill` (THR-02, ADR-127): stamp every ranked match that has
-    /// facts and no tier stamps, a batch at a time, from the ladder and league
-    /// lookups as they are now. That is the tier every rebuild before V0016
-    /// used, so the next rebuild's output is unchanged. Walks in id order, so
-    /// a match that stamps nothing isn't read twice in one sweep. Returns the
-    /// matches it stamped.
+    /// `tiers:backfill` (THR-02, ADR-127, ADR-213): stamp every ranked match
+    /// that has a fact with no tier, from the ladder and league lookups as
+    /// they are now. That is the tier every rebuild before V0016 used, so the
+    /// next rebuild's output is unchanged. Each match-id prefix is swept in id
+    /// order from its cursor (`tiers_sweep`), a window of [`TIERS_BATCH`] ids
+    /// a pass, and the cursor moves in the transaction that stamps the
+    /// window, so a prefix is walked once and a stopped sweep resumes where it
+    /// was. Returns the matches it stamped.
     pub async fn backfill_tiers(&self) -> Result<i64, JobError> {
-        let mut after = String::new();
-        let mut done = 0i64;
+        let mut pick = Prefixes::All;
+        let mut total = TierPass::default();
         loop {
-            let from = after.clone();
-            // Found on a reader, so the writer isn't held while a mostly
-            // stamped archive is walked; a match archived meanwhile was
-            // stamped by its archive and is skipped by `INSERT OR IGNORE`.
-            let todo = self
-                .db()
-                .read(move |c| Ok::<_, DbError>(tiers::unstamped(c, &from, TIERS_BATCH)?))
-                .await
-                .map_err(|e| store(&e))?;
-            let n = todo.last().map(|(id, _)| (id.clone(), todo.len()));
-            self.db()
-                .write(move |c| {
-                    let tx = c.transaction()?;
-                    for (id, queue_id) in &todo {
-                        tiers::stamp(&tx, id, *queue_id)?;
-                    }
-                    tx.commit()?;
-                    Ok::<_, DbError>(())
-                })
-                .await
-                .map_err(|e| store(&e))?;
-            let Some((last, n)) = n else {
+            let pass = self.tier_pass(pick).await.map_err(|e| store(&e))?;
+            total.add(&pass);
+            if pass.behind.is_empty() {
                 break;
-            };
-            after = last;
-            done += i64::try_from(n).unwrap_or(0);
+            }
+            pick = Prefixes::Listed(pass.behind);
             tokio::time::sleep(REEXTRACT_PACE).await;
         }
-        if done > 0 {
-            tracing::info!(matches = done, "match tiers stamped");
+        total.log();
+        Ok(total.matches)
+    }
+
+    /// `aggregate:delta`'s share of the sweep: the next window of every prefix
+    /// already swept, once, so the cursors keep up with the archive and the
+    /// boot check finds nothing past them. A prefix never swept is left to
+    /// `tiers:backfill`. Returns the matches it stamped.
+    pub async fn sweep_tier_tails(&self) -> Result<i64, DbError> {
+        let pass = self.tier_pass(Prefixes::Swept).await?;
+        pass.log();
+        Ok(pass.matches)
+    }
+
+    /// One pass of the tier sweep: on a reader, the next window of each
+    /// picked prefix, then one write that stamps their unstamped matches and
+    /// moves their cursors.
+    async fn tier_pass(&self, pick: Prefixes) -> Result<TierPass, DbError> {
+        let now = Clock::now().unix_ms;
+        let windows = self
+            .db()
+            .read(move |c| {
+                let mut out = Vec::new();
+                for s in tiers::sweeps(c)? {
+                    let picked = match &pick {
+                        Prefixes::All => true,
+                        Prefixes::Swept => s.swept_to.is_some(),
+                        Prefixes::Listed(list) => list.contains(&s.prefix),
+                    };
+                    if !picked {
+                        continue;
+                    }
+                    let w = tiers::window(c, &s.after(), &s.before(), TIERS_BATCH)?;
+                    if w.last.is_some() {
+                        out.push((s.prefix, w));
+                    }
+                }
+                Ok::<_, DbError>(out)
+            })
+            .await?;
+        if windows.is_empty() {
+            return Ok(TierPass::default());
         }
-        Ok(done)
+        let behind = windows
+            .iter()
+            .filter(|(_, w)| w.full)
+            .map(|(p, _)| p.clone())
+            .collect();
+        // A match archived since the read was stamped by its own archive.
+        let (matches, rows) = self
+            .db()
+            .write(move |c| {
+                let tx = c.transaction()?;
+                let (mut matches, mut rows) = (0i64, 0usize);
+                for (prefix, w) in &windows {
+                    for (id, queue_id) in &w.todo {
+                        let n = tiers::stamp(&tx, id, *queue_id)?;
+                        if n > 0 {
+                            matches += 1;
+                            rows += n;
+                        }
+                    }
+                    if let Some(last) = &w.last {
+                        tiers::advance(&tx, prefix, last, now)?;
+                    }
+                }
+                tx.commit()?;
+                Ok::<_, DbError>((matches, rows))
+            })
+            .await?;
+        Ok(TierPass {
+            matches,
+            rows,
+            behind,
+        })
+    }
+}
+
+/// Which match-id prefixes a pass of the tier sweep reads.
+#[derive(Debug)]
+enum Prefixes {
+    /// Every prefix: a sweep's first pass.
+    All,
+    /// Those a sweep has passed before: `aggregate:delta`'s tail.
+    Swept,
+    /// Those whose last window was full.
+    Listed(Vec<String>),
+}
+
+/// What a pass of the tier sweep did.
+#[derive(Debug, Default)]
+struct TierPass {
+    /// Matches with a fact stamped, and the facts.
+    matches: i64,
+    rows: usize,
+    /// Prefixes whose window was full: more may follow.
+    behind: Vec<String>,
+}
+
+impl TierPass {
+    fn add(&mut self, other: &Self) {
+        self.matches += other.matches;
+        self.rows += other.rows;
+    }
+
+    /// Logged only when something was stamped, with what was (a sweep that
+    /// only moved its cursors says nothing).
+    fn log(&self) {
+        if self.matches > 0 {
+            tracing::info!(matches = self.matches, facts = self.rows, "match tiers stamped");
+        }
     }
 }
 
@@ -781,6 +891,12 @@ impl AnalyticsContext {
         activity::step("extracting builds".to_string());
         if let Err(e) = self.extract_builds().await {
             tracing::warn!(error = ?e, "could not extract builds");
+        }
+        // Keep the tier sweep's cursors at the archive's end, so a boot's
+        // check reads next to nothing (ADR-213).
+        activity::step("sweeping tiers".to_string());
+        if let Err(e) = self.sweep_tier_tails().await {
+            tracing::warn!(error = %e, "could not sweep match tiers");
         }
         let scope = self.key_scope.clone();
         let (ready, pending) = self

@@ -31,8 +31,13 @@ where
     let mut interval = tokio::time::interval(period.max(Duration::from_millis(1)));
     interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
     loop {
+        // A tick's enqueue can wait behind a long job write; a stop drops it
+        // there rather than hold shutdown until that write ends (AVL-04).
         tokio::select! {
-            _ = interval.tick() => action().await,
+            _ = interval.tick() => tokio::select! {
+                () = action() => {}
+                _ = stop.changed() => return,
+            },
             _ = stop.changed() => return,
         }
         if *stop.borrow() {

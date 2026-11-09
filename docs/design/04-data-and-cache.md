@@ -50,7 +50,7 @@ PRAGMA wal_autocheckpoint = 1000;
 
 Connection policy:
 
-- **One writer connection** on a dedicated thread. All `INSERT/UPDATE/DELETE` go through an `mpsc` channel of closures — serialised by construction, so there is never a `SQLITE_BUSY` on write. The thread stamps when each job starts and ends, and a progress handler (every 1000 VM instructions) and commit hook stamp while SQLite executes; `Db::writer_status` reads the stamps without queueing, for `/readyz`, and every job is timed into `sqlite_write_seconds` (WR-02, ADR-180).
+- **One writer connection** on a dedicated thread. All `INSERT/UPDATE/DELETE` go through an `mpsc` channel of closures — serialised by construction, so there is never a `SQLITE_BUSY` on write. The thread stamps when each job starts and ends, and a progress handler (every 1000 VM instructions) and commit hook stamp while SQLite executes; `Db::writer_status` reads the stamps without queueing, for `/readyz`, and every job is timed into `sqlite_write_seconds` (WR-02, ADR-180). A write that stores what a request fetched is handed to `Db::write_behind` and runs on its own task through this same queue, so the request never waits for the writer (AVL-02, ADR-210, §Cache tiers).
 - **Reader pool** of `n_cores` connections for the HTTP path. WAL means they see a consistent snapshot without blocking. A read borrows a connection with its semaphore permit and hands both back from inside the blocking closure, connection first, so a caller that stops waiting (`try_join!`, a client gone) can't leave a permit without a connection. `/readyz` and `sqlite_readers_free` show the idle count (ADR-113).
 - `spawn_blocking` at the boundary; no SQLite call inside an async fn.
 
@@ -164,9 +164,11 @@ CREATE TABLE match_facts (                        -- one row per participant; de
   gold INTEGER, damage INTEGER, vision INTEGER,   -- V0005 (ADR-056)
   tier         TEXT,                              -- V0019 (DSK-04, ADR-138): the player's tier when their solo/flex
                                                   -- match was archived (ADR-127): newer of ladder_entries and
-                                                  -- player_ranks then, else 'UNKNOWN'; NULL until stamped (tiers:backfill).
+                                                  -- player_ranks then, else 'UNKNOWN' (also for an id whose prefix is
+                                                  -- no platform, ADR-213); NULL until stamped (tiers:backfill).
                                                   -- Never restamped; a later rank places an UNKNOWN one on a match that
-                                                  -- ended within TIER_LATE_STAMP_DAYS. facts:reextract never writes it.
+                                                  -- ended within TIER_LATE_STAMP_DAYS. facts:reextract stamps only a
+                                                  -- fact it adds (ADR-213), never rewrites one.
   PRIMARY KEY (match_id, puuid)
 ) WITHOUT ROWID;                                  -- V0021 (DSK-07, ADR-141): the key is stored once
 -- V0005 (ADR-056): matches.remake (Riot's gameEndedInEarlySurrender) and
@@ -190,6 +192,14 @@ CREATE TABLE match_builds (                       -- V0012 (ADR-117): from the t
 ) WITHOUT ROWID;                                  -- V0020 (DSK-06, ADR-140)
 CREATE INDEX facts_player ON match_facts(key_scope, puuid, match_id);  -- holds the key's columns: no growth WITHOUT ROWID
 -- facts_champ (champion_id alone) was dropped by V0021: no reader, and it would carry the key per entry (ADR-141)
+CREATE TABLE tiers_sweep (                        -- V0033 (AVL-06, ADR-213): tiers:backfill's cursor per id prefix
+  prefix   TEXT PRIMARY KEY,                      -- a match id's part before '_', as spelled ('EUW1')
+  swept_to TEXT NOT NULL,                         -- highest id of the prefix a sweep has passed; '' = never
+  swept_at INTEGER NOT NULL                       -- unix ms
+) WITHOUT ROWID;                                  -- every id up to swept_to was stamped when the sweep passed and
+                                                  -- every later write of facts stamps them, so the boot check and
+                                                  -- the sweep read only past the cursors. A change that leaves
+                                                  -- ranked facts NULL again resets them (rows deleted or '').
 
 -- Analytics (recomputed; safe to TRUNCATE) ── v1's shape, ADR-056 ───────────
 -- Every table here is WITHOUT ROWID since V0020 (DSK-06, ADR-140): the key is
@@ -414,6 +424,8 @@ Migrations are embedded in the binary (`sqlx::migrate!("./src/db/migrations")` o
 L2 membership is a per-endpoint flag in `riot/endpoints.rs` (`persist: true`). The rule: persist it if `TTL ≥ 1 h` **or** it costs more than one upstream call to rebuild **or** its absence makes a player page unavailable. Anything else with a TTL under a few minutes is cheaper to refetch than to write. League entries (300 s) are persisted under the third clause (AVL-03, ADR-212, owner 2026-11-09): without them a player's ranks are gone after a restart until Riot answers again, at one L2 write per active player every 5 min.
 
 Write-behind: `l1.put()` also pushes `(key, entry)` onto an `mpsc`; a task batches inserts into the writer every 2 s or 500 entries. A crash loses at most 2 s of L2 writes, which is nothing.
+
+**Request-path writes are write-behind too** (AVL-02, ADR-210). A write that stores what a request fetched never holds up the response that returns it: a match or timeline body (`Archive::store_behind`), a player's ranks from a league lookup, and the `players` row a profile or a match page records. Each runs on its own task through `Db::write_behind`, which still goes through `Db::write`, so it joins the one writer's FIFO queue and waits there behind a long job write instead of the caller. Until a body is stored, the archive serves it from memory, so a repeat read is `ARCHIVE` as before and costs no Riot call. Detached writes are bounded at 4,096 in flight or 256 MiB of bodies; past that a new one is dropped and counted (`sqlite_detached_writes_dropped_total`), and a dropped body is fetched again by the next request for it. Jobs (`FetchOptions::JOB`) and the champion page, which read the archive next, still wait for their writes (`await_store`). Shutdown waits for every detached write after the limiter checkpoint and before the L2 flush.
 
 Two ages per entry (SITE-01, ADR-103). `content_at` is when these bytes were first seen: a refresh that returns the same bytes keeps it, so `X-Cache-Age` (and the composites' `ageSeconds`) is the age of the *content*. `fetched_at` is when Riot last answered, changed or not, so `X-Cache-Fetched-Age` (and `fetchedAgeSeconds` / `matchIdsFetchedAgeSeconds`) is the age of the *read*. A stale copy served because upstream failed keeps its own `fetched_at`. Archive reads have neither: immutable data is never read again, so they send `X-Cache-Age: 0` and no `X-Cache-Fetched-Age`.
 

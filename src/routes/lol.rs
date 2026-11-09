@@ -421,7 +421,7 @@ mod tests {
             e.message,
             "Match EUW1_123456 belongs to region 'europe', not 'americas'"
         );
-        // ME1 is no platform, but its matches live on europe (ME-01).
+        // ME1's matches live on europe (ME-01); ME1 is a europe platform (ME-02).
         assert_eq!(match_region("europe", "ME1_17228556").unwrap(), Region::Europe);
         assert_eq!(
             match_region("sea", "ME1_17228556").unwrap_err().message,

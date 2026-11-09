@@ -176,7 +176,8 @@ async fn resolves_a_riot_id_and_reuses_that_account_as_the_composite_part() {
     );
     insta::assert_json_snapshot!("players_profile", body);
 
-    // The player is remembered, named.
+    // The player is remembered, named, once the write behind the profile lands (AVL-02).
+    e.state.db.flush_detached().await;
     let scope = e.state.fetcher.key_scope().as_str().to_string();
     let row = riot_proxy::players::get(&e.state.db, &scope, PUUID)
         .await
@@ -394,6 +395,8 @@ fn page(query: &str) -> String {
 async fn every_match_the_page_archives_queues_its_timeline() {
     let e = env(&[]).await;
     assert_eq!(e.get(&page("&count=5")).await.status, StatusCode::OK);
+    // The matches are stored, and their timelines queued, behind the page (AVL-02).
+    e.state.db.flush_detached().await;
     let queued: Vec<(String, i64, bool)> = e
         .state
         .db
@@ -984,6 +987,7 @@ async fn the_pool_is_grouped_from_the_archive_and_never_calls_riot() {
     );
 
     e.get(&page("&count=5")).await;
+    e.state.db.flush_detached().await;
     let before = e.calls().await.len();
     // A different filter set, so not the cached empty pool above.
     let r = e.get(&pool("?platform=kr")).await;
@@ -1045,6 +1049,7 @@ async fn the_pool_names_the_champions_the_mirror_knows() {
     std::fs::write(dir.join("versions.json"), r#"["16.19.1"]"#).unwrap();
 
     e.get(&page("&count=5")).await;
+    e.state.db.flush_detached().await;
     let body = e.get(&pool("?platform=kr")).await.json();
     let names: Vec<(i64, Option<&str>)> = body["champions"]
         .as_array()
@@ -1076,6 +1081,25 @@ async fn the_pool_rejects_what_is_not_a_patch_or_platform() {
     assert_eq!(bad.json()["error"]["message"], "querystring/limit must be <= 500");
 }
 
+/// ME-02 (ADR-216): `me1` is a platform. Its profile is europe's for
+/// match-v5, and the pool filters on the `ME1_` prefix.
+#[tokio::test]
+async fn me1_is_a_platform_on_the_players_routes() {
+    let e = env(&[]).await;
+    let r = e.get(&format!("/v1/players/{PUUID}/profile?platform=me1")).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(
+        (r.json()["platform"].clone(), r.json()["region"].clone()),
+        (json!("me1"), json!("europe"))
+    );
+    let r = e.get(&pool("?platform=me1")).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(
+        (r.json()["platform"].clone(), r.json()["archivedGames"].clone()),
+        (json!("me1"), json!(0))
+    );
+}
+
 #[tokio::test]
 async fn the_players_routes_need_a_read_key() {
     let e = env(&[]).await;
@@ -1094,7 +1118,10 @@ async fn a_looked_up_players_games_count_in_analytics_at_their_rank() {
 
     let e = env(&[]).await;
     assert_eq!(e.get(PROFILE).await.status, StatusCode::OK);
+    // The rank is recorded behind the profile, the matches behind the page (AVL-02).
+    e.state.db.flush_detached().await;
     assert_eq!(e.get(&page("&count=5")).await.status, StatusCode::OK);
+    e.state.db.flush_detached().await;
     let scope = e.state.fetcher.key_scope().as_str().to_string();
     let tiers = e
         .state
