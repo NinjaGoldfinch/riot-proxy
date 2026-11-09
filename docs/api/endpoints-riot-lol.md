@@ -12,7 +12,7 @@ Common parameter rules (`src/http/validate.rs`):
 | `gameName` | 1 to 16 code points (`L117-L119`) | `params/gameName must …` |
 | `tagLine` | 1 to 5 code points (`L125-L127`) | |
 | `region` | `americas`, `europe`, `asia`, `sea`, case-sensitive (`L67-L69`) | `400 BAD_REGION` `params/region must be equal to one of the allowed values` |
-| `platform` | one of the 16 platform values, case-sensitive (`L71-L78`) | `400 BAD_REGION` `params/platform must be equal to one of the allowed values` |
+| `platform` | one of the 17 platform values, case-sensitive (`L71-L78`) | `400 BAD_REGION` `params/platform must be equal to one of the allowed values` |
 | `matchId` | 6 to 40 chars, `^[A-Za-z0-9]+_[0-9]+$` (`L149-L166`) | `400 VALIDATION` |
 
 ## `/v1/riot/*`: account-v1
@@ -55,7 +55,7 @@ A Riot ID that does not exist is `404 NOT_FOUND` `Resource not found upstream`, 
 
 Hard TTL is soft × 4 while `STALE_WHILE_REVALIDATE=true` (default); the full table with line references is in [../reference/riot-api-usage.md](../reference/riot-api-usage.md). Exact upstream URLs per route are asserted in `tests/snapshots/lol_routes__lol_routes_upstream_calls.snap`.
 
-Match routes derive the region from the id's prefix (`EUW1_` is `europe`; `ME1_` is served by `europe`, ADR-143). A declared region that disagrees is refused before any Riot call (`src/routes/lol.rs:L53-L64`):
+Match routes derive the region from the id's prefix (`EUW1_` is `europe`; `ME1_` is the `me1` platform's, also `europe`, ADR-143 and ADR-216). A declared region that disagrees is refused before any Riot call (`src/routes/lol.rs:L53-L64`):
 
 ```text
 GET /v1/lol/matches/americas/EUW1_7000000001
@@ -119,5 +119,5 @@ ninjagoldfinch.lol does not use these image routes; its browser loads icons stra
 > **TODO (unverified):** whether `ServeDir` sends `Last-Modified` and honours `If-Modified-Since` for images written by the fill route on a later request; the behaviour is tower-http's (`docs/_meta/scratch/routes.md` §7).
 
 ---
-**Sources:** `src/routes/riot.rs:L127-L300`, `src/routes/lol.rs:L30-L405`, `src/routes/statics.rs:L4-L292`, `src/routes/passthrough.rs:L325-L476`, `src/http/validate.rs:L53-L166,L232-L244`, `src/riot/endpoints.rs:L93-L284`, `src/riot/ladder.rs:L7-L26`, `src/riot/routing.rs:L132-L195`, `src/static/mod.rs:L28-L101`, `src/fetcher.rs:L350-L371`, `tests/snapshots/lol_routes__lol_routes_upstream_calls.snap`, `tests/snapshots/ddragon__ddragon_file_headers.snap`, `tests/snapshots/ddragon__ddragon_missing_headers.snap`, `docs/_meta/scratch/routes.md` §1.2-1.3,1.6-1.7, `docs/_meta/scratch/riot-and-cache.md` §2, live capture against `target/debug/riot-proxy` 2.7.0
-**Last verified:** 2026-11-09 against commit `24ba99a`
+**Sources:** `src/routes/riot.rs:L127-L300`, `src/routes/lol.rs:L30-L405`, `src/routes/statics.rs:L4-L292`, `src/routes/passthrough.rs:L325-L476`, `src/http/validate.rs:L53-L166,L232-L244`, `src/riot/endpoints.rs:L93-L284`, `src/riot/ladder.rs:L7-L26`, `src/riot/routing.rs:L138-L205`, `src/static/mod.rs:L28-L101`, `src/fetcher.rs:L350-L371`, `tests/snapshots/lol_routes__lol_routes_upstream_calls.snap`, `tests/snapshots/ddragon__ddragon_file_headers.snap`, `tests/snapshots/ddragon__ddragon_missing_headers.snap`, `docs/_meta/scratch/routes.md` §1.2-1.3,1.6-1.7, `docs/_meta/scratch/riot-and-cache.md` §2, live capture against `target/debug/riot-proxy` 2.7.0
+**Last verified:** 2026-11-09 against commit `79d2bb8`

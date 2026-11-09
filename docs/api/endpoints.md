@@ -71,7 +71,7 @@ A malformed path segment (for example a bad percent-encoding) is `400 VALIDATION
 
 ### Regions and platforms
 
-Path values are **case-sensitive** ajv enums: `EUW1` is refused with `400 BAD_REGION` `params/platform must be equal to one of the allowed values` (`src/http/validate.rs:L53-L78`). `region` is one of `americas`, `europe`, `asia`, `sea` (`src/riot/routing.rs:L146`); `platform` is one of the 16 below (`src/riot/routing.rs:L46-L63`).
+Path values are **case-sensitive** ajv enums: `EUW1` is refused with `400 BAD_REGION` `params/platform must be equal to one of the allowed values` (`src/http/validate.rs:L53-L78`). `region` is one of `americas`, `europe`, `asia`, `sea` (`src/riot/routing.rs:L161`); `platform` is one of the 17 below (`src/riot/routing.rs:L48-L68`).
 
 | platform | label | match-v5 region | account-v1 cluster |
 |---|---|---|---|
@@ -83,6 +83,7 @@ Path values are **case-sensitive** ajv enums: `EUW1` is refused with `400 BAD_RE
 | `eun1` | EU Nordic & East | `europe` | `europe` |
 | `tr1` | Türkiye | `europe` | `europe` |
 | `ru` | Russia | `europe` | `europe` |
+| `me1` | Middle East | `europe` | `europe` |
 | `kr` | Korea | `asia` | `asia` |
 | `jp1` | Japan | `asia` | `asia` |
 | `oc1` | Oceania | `sea` | `asia` |
@@ -92,7 +93,7 @@ Path values are **case-sensitive** ajv enums: `EUW1` is refused with `400 BAD_RE
 | `tw2` | Taiwan | `sea` | `asia` |
 | `vn2` | Vietnam | `sea` | `asia` |
 
-Source: `src/riot/routing.rs:L86-L121`. `sea` has no account-v1 cluster, so account routes pinned to `sea` go to `asia` (`src/riot/routing.rs:L174-L181`).
+Source: `src/riot/routing.rs:L92-L128`. `me1` is not in v1 nor in Riot's routing-values table; the owner confirmed its host and its `europe` grouping on 2026-11-09 (ADR-216). `sea` has no account-v1 cluster, so account routes pinned to `sea` go to `asia` (`src/riot/routing.rs:L188-L196`).
 
 **Account-cluster picking (ADR-066).** Riot serves every account from each of `americas`, `asia` and `europe`. The region-less `/v1/riot/accounts/*` routes, and the internal account lookups of the player profile and admin tracking, take a token from the first cluster with room now in the order `asia`, `americas`, `europe`; if none has room they wait for the soonest, inside the usual budget; a cluster that answered a 429 goes last for the rest of the request (`src/riot/routing.rs:L151-L153`, `src/fetcher.rs:L673-L711`). All clusters share one cache entry keyed on the literal host `account` (`src/cache/keys.rs:L81-L88`). The `/{region}/` variants pin a cluster and never move.
 
@@ -240,5 +241,5 @@ The frame shape is `src/events.rs:L159-L172`; data fields per event are listed i
 - Gauge `proxy_ws_connections`; counter `events_published_total{name}`.
 
 ---
-**Sources:** `src/app.rs:L30-L35,L71-L121,L258-L264`, `src/routes/docs.rs:L86-L153,L386-L399`, `src/routes/health.rs:L21-L200`, `src/routes/ui.rs:L94-L233`, `src/routes/dev.rs:L33-L254`, `src/routes/ws.rs:L497-L572`, `src/ws/protocol.rs:L23-L147`, `src/ws/socket.rs:L38-L206`, `src/ws/hub.rs:L20-L205`, `src/http/auth.rs:L141-L423`, `src/status/mod.rs:L150-L246`, `src/status/ratelimits.rs:L103-L246`, `src/http/quota.rs:L320-L431`, `src/http/request_id.rs:L287-L339`, `src/http/validate.rs:L21-L88`, `src/routes/passthrough.rs:L401-L476`, `src/fetcher.rs:L53-L72,L345-L418,L673-L711`, `src/riot/routing.rs:L46-L181`, `docs/_meta/scratch/routes.md`, `docs/design/12-object-storage-and-hosting.md:L904-L925`, `tests/snapshots/http__unknown_route_404.snap`, `tests/snapshots/ws_hub__ws_session.snap`, live capture against `target/debug/riot-proxy` 2.7.0
-**Last verified:** 2026-11-09 against commit `302025d`
+**Sources:** `src/app.rs:L30-L35,L71-L121,L258-L264`, `src/routes/docs.rs:L86-L153,L386-L399`, `src/routes/health.rs:L21-L200`, `src/routes/ui.rs:L94-L233`, `src/routes/dev.rs:L33-L254`, `src/routes/ws.rs:L497-L572`, `src/ws/protocol.rs:L23-L147`, `src/ws/socket.rs:L38-L206`, `src/ws/hub.rs:L20-L205`, `src/http/auth.rs:L141-L423`, `src/status/mod.rs:L150-L246`, `src/status/ratelimits.rs:L103-L246`, `src/http/quota.rs:L320-L431`, `src/http/request_id.rs:L287-L339`, `src/http/validate.rs:L21-L88`, `src/routes/passthrough.rs:L401-L476`, `src/fetcher.rs:L53-L72,L345-L418,L673-L711`, `src/riot/routing.rs:L48-L196`, `docs/DECISIONS.md` ADR-216, `docs/_meta/scratch/routes.md`, `docs/design/12-object-storage-and-hosting.md:L904-L925`, `tests/snapshots/http__unknown_route_404.snap`, `tests/snapshots/ws_hub__ws_session.snap`, live capture against `target/debug/riot-proxy` 2.7.0
+**Last verified:** 2026-11-09 against commit `79d2bb8`

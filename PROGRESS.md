@@ -335,7 +335,7 @@ Before (OVH VPS, 2026-10-13 01:00 UTC): 38 GB disk at 77 %, `riot-proxy.db` 20 G
 ## ME — Middle East match ids (owner report 2026-10-13)
 
 - [x] ME-01 `ME1_` match ids archive from `europe` (#175, ADR-143)
-- [ ] ME-02 me1 as a platform (owner confirmed the host 2026-11-09; ADR-216); see IMPLEMENTATION.md §Post-release — AVL, finding 2
+- [~] ME-02 me1 as a platform (owner confirmed the host 2026-11-09) (feat/ME-02-me1-platform, #267, ADR-216); see IMPLEMENTATION.md §Post-release — AVL, finding 2
 - [x] OBJ-00 design/12 revised with the owner's answers: Onidel 250 GB primary, R2 replica, 14-day window, `object_store`, bodies packed with a `body_locations` index (ADR-146)
 - [x] OBJ-01 object store client and config: `archive::objects` over `object_store`, `ARCHIVE_OBJECT_*` with redaction and production checks (#196, ADR-162)
 - [x] OBJ-02 pack format, `body_locations` and reads: `archive::pack`, V0023, reads by byte range, `archive::offload` write and free steps, stats and dashboard counts (#197, ADR-163)
