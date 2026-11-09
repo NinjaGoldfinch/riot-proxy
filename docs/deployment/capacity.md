@@ -12,14 +12,14 @@ ONI-4: 6 vCPU, 12 GB RAM, 120 GB NVMe (115 GB usable), 6 TB/month transfer, A$42
 
 | Component | Size | Evidence |
 |---|---|---|
-| SQLite page cache | `cache_size = -65536`, 64 MiB **per connection**. `serve` opens one writer plus `available_parallelism()` readers (6 on this box), and the daily backup opens one more; worst case about 7 × 64 MiB = 448 MiB if every connection fills its cache (*estimate*) | `src/db/mod.rs:28-34,195-198`; `src/jobs/maintenance.rs:57-76`; `PROGRESS.md:325` ("6 of 6 SQLite readers") |
+| SQLite page cache | `cache_size = -65536`, 64 MiB **per connection**. `serve` opens one writer plus `available_parallelism()` readers (6 on this box), and the daily backup opens one more; worst case about 7 × 64 MiB = 448 MiB if every connection fills its cache (*estimate*) | `src/db/mod.rs:28-34,195-198`; `src/jobs/maintenance.rs:59-78`; `PROGRESS.md:325` ("6 of 6 SQLite readers") |
 | SQLite `mmap_size` | 256 MiB per connection, file-backed and shared with the kernel page cache; shows in RSS as file pages, not anonymous memory | `src/db/mod.rs:32` |
 | L1 response cache | `CACHE_L1_MAX_MB`, default 128 MiB, weight-bounded | `src/config.rs:809`; `src/cache/l1.rs:117-118` |
 | Analytics response cache | `ANALYTICS_CACHE_ENTRIES` 512 × about 40 kB per champions list ≈ 20 MB (*estimate*) | `src/config.rs:853`; `.env.example:159-161` |
 | L2 write-behind queue | up to 10 000 entries, flushed every 2 s or 500 rows | `src/cache/l2.rs:24-28` |
 | Auth cache | up to 10 000 entries | `src/http/auth.rs:209-212` |
 | Live activity traces | 200 events per job, 200 finished traces | `src/jobs/activity.rs:40-42` |
-| Job handlers | `JOB_CONCURRENCY` tasks; an analytics rebuild and `facts:reextract` work in batches (500 matches) on blocking threads | `src/jobs/analytics.rs:539-620`; `src/config.rs:851` |
+| Job handlers | `JOB_CONCURRENCY` tasks; an analytics rebuild and `facts:reextract` work in batches (500 matches) on blocking threads | `src/jobs/analytics.rs:780-861`; `src/config.rs:851` |
 
 The design puts the binary's RSS at "the SQLite page cache plus L1", tunable down to about 50 MB on a Pi, and sizes an Emerald-floor crawl with timelines at 1–2 GB (`docs/design/07-deployment.md:165-173`).
 
@@ -69,7 +69,7 @@ From 21.6 GB on 2026-10-13 to 53.8 GB on 2026-10-18 is about 6.4 GB/day with the
 
 - The key allows at most 72,000 requests a day (below). With `ARCHIVE_TIMELINES=true` a match costs two requests, so at most about 36,000 matches a day can be archived even if every request went to match bodies; at 10.7 + 62.3 KB that is about 2.6 GB/day of bodies, plus about 10 KB of facts per match (*estimate*). The measured 6.4 GB/day is higher; the difference (indexes, derived tables, the L2 `cache` table, WAL) is not accounted for in any source, so plan with the measured figure.
 - The 14-day window keeps every body local for 14 days after its match was archived (`src/config.rs:832`; `docs/_meta/scratch/persistence.md:353-355`). At 6.4 GB/day that is about 90 GB of local bodies, which does not fit beside the rest on 115 GB; at the 2.6 GB/day body rate it is about 36 GB (*estimate*). The session note of 2026-10-18 advised `ARCHIVE_BODY_LOCAL_DAYS=3` plus a reclaim rather than a larger disk.
-- The daily backup needs 1.2 × (file + WAL) free: 65 GB at 53.8 GB, more than the 27 GB free on 2026-10-18, so it skips, and the offsite copy has nothing new to upload (`src/jobs/maintenance.rs:34,294-306`). A manual `rp backup` needs the same room (`docs/design/07-deployment.md:189`).
+- The daily backup needs 1.2 × (file + WAL) free: 65 GB at 53.8 GB, more than the 27 GB free on 2026-10-18, so it skips, and the offsite copy has nothing new to upload (`src/jobs/maintenance.rs:36,294-306`). A manual `rp backup` needs the same room (`docs/design/07-deployment.md:189`).
 - Freed bodies leave their pages on the free list (`sqlite_freelist_bytes`); later writes reuse them, so the file stops growing but does not shrink until a `VACUUM INTO` copy is swapped in, which needs free space of about the live data's size (`docs/design/07-deployment.md:185-206`). After the reclaim, expect `sqlite_db_bytes` under 8 GB (`deploy/README.md:267-268`).
 - The bucket: 250 GB allocated, upgradable, not downgradable; 3 M objects (`docs/design/12-object-storage-and-hosting.md:475`). From 20 GB at 2.6 GB/day the allocation lasts about 90 days (*estimate*); the design's own table puts a 1.1 M-match backlog at about 100 GB with timelines (`docs/design/12-object-storage-and-hosting.md:464-470`). Packs are never expired (`deploy/README.md:36`).
 
@@ -106,7 +106,7 @@ All are on `/metrics` and in `GET /v1/admin/stats` (`docs/design/07-deployment.m
 
 | Signal | Means | Act when | Evidence |
 |---|---|---|---|
-| `data_dir_free_bytes` | free space beside the database | below 1.2 × (`sqlite_db_bytes` + `sqlite_wal_bytes`): backups stop; `ninja-monitor` alerts at 70 % and 85 % disk | `src/db/disk.rs:73`; `src/jobs/maintenance.rs:34`; `docs/design/12-object-storage-and-hosting.md:836` |
+| `data_dir_free_bytes` | free space beside the database | below 1.2 × (`sqlite_db_bytes` + `sqlite_wal_bytes`): backups stop; `ninja-monitor` alerts at 70 % and 85 % disk | `src/db/disk.rs:73`; `src/jobs/maintenance.rs:36`; `docs/design/12-object-storage-and-hosting.md:836` |
 | `sqlite_db_bytes` | file size | growing after the offload has caught up: shorten `ARCHIVE_BODY_LOCAL_DAYS`; above 8 GB with a large free list: reclaim | `src/db/disk.rs:70`; `deploy/README.md:267` |
 | `sqlite_freelist_bytes` | pages freed but not returned | large and stable: the file can be made smaller by a reclaim | `src/db/disk.rs:72`; `docs/design/07-deployment.md:187` |
 | `sqlite_wal_bytes` | WAL not checkpointing | keeps growing: readers always busy, too many workers | `src/db/disk.rs:71`; `docs/design/07-deployment.md:171` |
@@ -119,5 +119,5 @@ All are on `/metrics` and in `GET /v1/admin/stats` (`docs/design/07-deployment.m
 | `ninja-monitor` memory alerts | per-service anonymous memory | proxy above 2 GiB: look at L1, `cache_size` × connections and the job mix | `docs/design/12-object-storage-and-hosting.md:832-835` |
 
 ---
-**Sources:** `docs/design/07-deployment.md:L165-L173,L185-L206,L216`, `docs/design/12-object-storage-and-hosting.md:L13-L18,L366-L369,L459-L487,L780-L786,L827-L836,L957-L959`, `deploy/README.md:L36,L222-L270`, `PROGRESS.md:L325`, `docs/DECISIONS.md:L1513`, `reports/OBJ implementation handoff.md:L20,L24`, `src/db/mod.rs:L28-L42,L160-L172,L195-L198,L285-L316`, `src/db/disk.rs:L70-L73`, `src/cli/mod.rs:L123-L126`, `src/config.rs:L125,L805,L809,L813,L823-L825,L832,L838,L845,L851,L853`, `src/cache/l1.rs:L117-L118`, `src/cache/l2.rs:L24-L28`, `src/http/auth.rs:L209-L212`, `src/jobs/activity.rs:L40-L42`, `src/jobs/maintenance.rs:L34,L57-L76,L294-L306`, `src/jobs/offload.rs:L204-L215`, `src/jobs/scheduler.rs:L49,L1226-L1245`, `src/jobs/analytics.rs:L539-L620`, `src/riot/limiter/mod.rs:L240-L242`, `src/routes/health.rs:L21-L46,L148-L200`, `.env.example:L159-L161`, `docs/_meta/scratch/persistence.md:L350-L358`, `docs/_meta/scratch/riot-and-cache.md:L188`, `docs/_meta/scratch/siblings.md:L186,L191`
-**Last verified:** 2026-11-09 against commit `6c32ff4`
+**Sources:** `docs/design/07-deployment.md:L165-L173,L185-L206,L216`, `docs/design/12-object-storage-and-hosting.md:L13-L18,L366-L369,L459-L487,L780-L786,L827-L836,L957-L959`, `deploy/README.md:L36,L222-L270`, `PROGRESS.md:L325`, `docs/DECISIONS.md:L1513`, `reports/OBJ implementation handoff.md:L20,L24`, `src/db/mod.rs:L28-L42,L160-L172,L195-L198,L285-L316`, `src/db/disk.rs:L70-L73`, `src/cli/mod.rs:L123-L126`, `src/config.rs:L125,L805,L809,L813,L823-L825,L832,L838,L845,L851,L853`, `src/cache/l1.rs:L117-L118`, `src/cache/l2.rs:L24-L28`, `src/http/auth.rs:L209-L212`, `src/jobs/activity.rs:L40-L42`, `src/jobs/maintenance.rs:L36,L59-L78,L294-L306`, `src/jobs/offload.rs:L204-L215`, `src/jobs/scheduler.rs:L49,L1226-L1245`, `src/jobs/analytics.rs:L780-L861`, `src/riot/limiter/mod.rs:L240-L242`, `src/routes/health.rs:L21-L46,L148-L200`, `.env.example:L159-L161`, `docs/_meta/scratch/persistence.md:L350-L358`, `docs/_meta/scratch/riot-and-cache.md:L188`, `docs/_meta/scratch/siblings.md:L186,L191`
+**Last verified:** 2026-11-09 against commit `24ba99a`
