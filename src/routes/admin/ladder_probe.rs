@@ -33,7 +33,6 @@ use crate::http::body::Body;
 use crate::http::{ApiError, validate};
 use crate::riot::endpoints::Endpoint;
 use crate::riot::ladder::{APEX_TIERS, RANKED_QUEUES, RIOT_APEX_LIST_CAP, apex_endpoint};
-use crate::riot::limiter::Priority;
 use crate::riot::routing::Platform;
 use crate::routes::passthrough::{LocalErrors, request};
 
@@ -349,9 +348,8 @@ pub fn analyse(a: &Answers, cap: usize, tolerance: usize) -> Report {
 }
 
 const FRESH: FetchOptions = FetchOptions {
-    priority: Priority::Interactive,
     bypass: true,
-    job: false,
+    ..FetchOptions::INTERACTIVE
 };
 
 async fn get(

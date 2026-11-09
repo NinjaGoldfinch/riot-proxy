@@ -12,4 +12,4 @@
 
 ---
 **Sources:** `docs/DECISIONS.md:L792-L799,L1516-L1523,L1534-L1543`, `docs/design/07-deployment.md`, `docs/design/12-object-storage-and-hosting.md`, `src/config.rs:L759-L764`
-**Last verified:** 2026-11-09 against commit `6eefe67`
+**Last verified:** 2026-11-09 against commit `302025d`

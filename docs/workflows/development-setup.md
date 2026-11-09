@@ -37,13 +37,13 @@ just dev            # = cargo run -- serve  (justfile:11-13)
 
 The first `serve` on an empty `DATA_DIR` prints, on stdout as JSON (pretty when stdout is a terminal, `src/config.rs:740-747`):
 
-1. refinery's lines: `schema history table is empty, going to apply all migrations`, then `going to batch apply 27 migrations in single transaction.` naming `V1__init` to `V27__matchup_builds` (`src/db/mod.rs:22-24`, `294-296`).
-2. `database ready` with `path=<DATA_DIR>/riot-proxy.db` (`src/cli/serve.rs:59-62`).
-3. `bootstrap admin consumer created` with its ULID id (`src/cli/serve.rs:64-75`).
-4. `limiter checkpoint restored rows=0`, `L1 warmed from L2 entries=0`, `listening addr=<HOST>:<PORT>`, `starting job workers workers=<JOB_CONCURRENCY> kind_limits=…` (`src/cli/serve.rs:83-100`, `143-148`, `341-346`).
+1. refinery's lines: `schema history table is empty, going to apply all migrations`, then `going to batch apply 27 migrations in single transaction.` naming `V1__init` to `V27__matchup_builds` (`src/db/mod.rs:23-25`, `374-376`).
+2. `database ready` with `path=<DATA_DIR>/riot-proxy.db` (`src/cli/serve.rs:89-92`).
+3. `bootstrap admin consumer created` with its ULID id (`src/cli/serve.rs:94-105`).
+4. `limiter checkpoint restored rows=0`, `L1 warmed from L2 entries=0`, `listening addr=<HOST>:<PORT>` (the server answers from here on), `boot catch-up done ms=…`, `starting job workers workers=<JOB_CONCURRENCY> kind_limits=…` (`src/cli/serve.rs:113-130`, `385-389`, `564-567`, `412-416`; ADR-209).
 5. The ticks that fire immediately at boot (`src/jobs/ticks.rs:1-4`): `ddragon:sync` (downloads the current patch from `ddragon.leagueoflegends.com` into `DATA_DIR/ddragon`), `maintenance` (writes `DATA_DIR/backups/riot-proxy-<date>.db` and logs `backup written`, `maintenance done`) and `names:backfill` (`player names backfilled from archive`).
 
-On **stderr**, and only when `BOOTSTRAP_ADMIN_KEY` was not set, the one-time banner (`src/cli/serve.rs:443-449`):
+On **stderr**, and only when `BOOTSTRAP_ADMIN_KEY` was not set, the one-time banner (`src/cli/serve.rs:573-579`):
 
 ```text
 
@@ -68,7 +68,7 @@ With the defaults every page is on (`src/config.rs:755-757`, `784-787`):
 
 ### Mint a key and make the first request
 
-Every CLI subcommand except `spec` loads the config first, so run them from the directory holding `.env` (or export `RIOT_API_KEY`) and with the same `DATA_DIR` as the server (`src/cli/mod.rs:82-88`).
+Every CLI subcommand except `spec` loads the config first, so run them from the directory holding `.env` (or export `RIOT_API_KEY`) and with the same `DATA_DIR` as the server (`src/cli/mod.rs:83-89`).
 
 ```bash
 riot-proxy key create --name local-site                 # scopes default to read (src/cli/key.rs:13-20)
@@ -145,7 +145,7 @@ Setting `DDRAGON_BASE_URL=http://127.0.0.1:9` keeps it fully offline: the sync t
 
 ## The `data/` directory
 
-`DATA_DIR` (default `./data`, created at config load, `src/config.rs:672`, `815-820`) holds everything (`src/cli/serve.rs:229`; `src/config.rs:804-806`):
+`DATA_DIR` (default `./data`, created at config load, `src/config.rs:672`, `815-820`) holds everything (`src/cli/serve.rs:263`; `src/config.rs:804-806`):
 
 ```text
 data/
@@ -175,17 +175,17 @@ data/
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `error: binding 127.0.0.1:8080: Address already in use (os error 98)` | another `serve` (or anything) on the port (`src/cli/serve.rs:152-157`) | stop it, or `PORT=8081` / `--port 8081` |
+| `error: binding 127.0.0.1:8080: Address already in use (os error 98)` | another `serve` (or anything) on the port (`src/cli/serve.rs:385-387`) | stop it, or `PORT=8081` / `--port 8081` |
 | `error: Invalid environment configuration:` then `  RIOT_API_KEY: must be at least 8 characters` | a placeholder or truncated key (`src/config.rs:693-697`) | set a real development key |
 | `  RIOT_API_KEY: is required` although `.env` has one | the command ran from another directory: `.env` is read relative to the process cwd (`src/config.rs:651-665`) | `cd` to the directory with `.env`, or export the variable |
 | `key list` shows no keys although `serve` printed a banner | a different `DATA_DIR` | pass the same `DATA_DIR` (or `--data-dir`) to every command |
 | `TLS: built-in TLS was removed; terminate HTTPS in a reverse proxy` | a v1 `.env` with `TLS=true` (`src/config.rs:759-764`) | remove it; terminate HTTPS in front (`README.md:118`) |
 | `DATABASE_URL: postgres:// needs a build with the postgres feature` | a v1 `DATABASE_URL` (`src/config.rs:719-724`) | remove it; SQLite only |
 | `AUTH_DISABLED cannot be enabled when ENV=production` | `ENV=production` (or a v1 `NODE_ENV=production` fallback, `src/config.rs:707-711`) | use `ENV=development` locally |
-| `DEV_UI=true ignored: /dev is never served when ENV=production` | by design (`src/cli/serve.rs:102-104`) | run with `ENV=development` to see `/dev` |
+| `DEV_UI=true ignored: /dev is never served when ENV=production` | by design (`src/cli/serve.rs:132-134`) | run with `ENV=development` to see `/dev` |
 | `invalid LOG_LEVEL filter: …` at `serve` | `LOG_LEVEL` is a tracing filter, validated only by `serve` (`src/telemetry.rs:31`, `41-42`) | e.g. `info` or `riot_proxy=debug` |
 | `skipping: node not runnable` during `cargo test` | no `node` on `PATH`; the helper suites skip locally and fail in CI (`tests/ui.rs:52-56`) | install Node 22 |
-| `CACHE_TTL_OVERRIDES key matches no cacheable endpoint; ignored` | a key that is not an `override_key`, or names only immutable endpoints (`src/cli/serve.rs:113-115`) | use `account, summoner, league, ladder, matchIds, spectator, mastery, rotations, status` |
+| `CACHE_TTL_OVERRIDES key matches no cacheable endpoint; ignored` | a key that is not an `override_key`, or names only immutable endpoints (`src/cli/serve.rs:143-145`) | use `account, summoner, league, ladder, matchIds, spectator, mastery, rotations, status` |
 
 ## What was verified on this machine
 
@@ -203,5 +203,5 @@ Not re-executed here: `cargo build`, `cargo test` and `just nextest` (a full run
 > **TODO (unverified):** the exact first-run output of a **release** binary built without `dev-cli` (`Cargo.toml:52-54`); only the local `--all-features` debug build was run, and its `--help` lists `riot`.
 
 ---
-**Sources:** `rust-toolchain.toml:L1-L5`, `justfile:L1-L52`, `.env.example:L1-L213`, `README.md:L60-L113`, `src/config.rs:L3`, `L612-L626`, `L654-L664`, `L702-L728`, `L937-L963`, `L1040-L1052`, `src/cli/mod.rs:L82-L88`, `src/cli/serve.rs:L59-L75`, `L76-L108`, `L143-L148`, `L341-L346`, `L421-L427`, `src/cli/key.rs:L13-L57`, `src/consumers.rs:L12-L14`, `L95-L96`, `src/http/auth.rs:L207-L210`, `src/jobs/ticks.rs:L1-L4`, `L44-L80`, `L108-L139`, `src/cli/riot.rs:L1-L32`, `L63-L81`, `src/archive/objects.rs:L109-L121`, `acceptance/helpers/env.ts:L19-L25`, `L244-L275`, `acceptance/helpers/setup.ts:L23-L54`, `acceptance/helpers/mock-riot.ts:L7`, `tests/ui.rs:L42-L64`, `tests/dom/package.json`, `acceptance/package.json`, `.github/workflows/ci.yml:L52-L53`, `PROGRESS.md:L390`, `L400`, `L420-L422`, `docs/IMPLEMENTATION.md:L434`, `docs/design/11-showcase.md:L15`, `docs/DECISIONS.md:L1457`, `docs/_meta/scratch/config.md`, `docs/_meta/scratch/persistence.md` §5, `docs/_meta/scratch/siblings.md` §1.2, §1.8
-**Last verified:** 2026-11-09 against commit `6eefe67`
+**Sources:** `rust-toolchain.toml:L1-L5`, `justfile:L1-L52`, `.env.example:L1-L213`, `README.md:L60-L113`, `src/config.rs:L3`, `L612-L626`, `L654-L664`, `L702-L728`, `L937-L963`, `L1040-L1052`, `src/cli/mod.rs:L83-L89`, `src/cli/serve.rs:L89-L92`, `L94-L105`, `L113-L130`, `L132-L134`, `L143-L145`, `L263`, `L385-L389`, `L412-L416`, `L564-L567`, `L573-L579`, `src/cli/key.rs:L13-L57`, `src/consumers.rs:L12-L14`, `L95-L96`, `src/http/auth.rs:L207-L210`, `src/jobs/ticks.rs:L1-L4`, `L44-L80`, `L108-L139`, `src/cli/riot.rs:L1-L32`, `L63-L81`, `src/archive/objects.rs:L109-L121`, `acceptance/helpers/env.ts:L19-L25`, `L244-L275`, `acceptance/helpers/setup.ts:L23-L54`, `acceptance/helpers/mock-riot.ts:L7`, `tests/ui.rs:L42-L64`, `tests/dom/package.json`, `acceptance/package.json`, `.github/workflows/ci.yml:L52-L53`, `PROGRESS.md:L390`, `L400`, `L420-L422`, `docs/IMPLEMENTATION.md:L434`, `docs/design/11-showcase.md:L15`, `docs/DECISIONS.md:L1457`, `docs/_meta/scratch/config.md`, `docs/_meta/scratch/persistence.md` §5, `docs/_meta/scratch/siblings.md` §1.2, §1.8
+**Last verified:** 2026-11-09 against commit `302025d`

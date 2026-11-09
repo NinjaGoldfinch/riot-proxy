@@ -12,6 +12,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 
 use crate::archive::objects::Objects;
 
+pub mod behind;
 pub mod disk;
 pub mod store;
 mod writer;
@@ -89,6 +90,8 @@ struct Inner {
     reads: AtomicU64,
     /// What the writer thread is doing (WR-02).
     stamps: Arc<Stamps>,
+    /// Writes run behind the request that fetched their data (AVL-02).
+    detached: behind::Detached,
 }
 
 impl Inner {
@@ -116,6 +119,18 @@ impl Drop for ReaderLoan {
             set_readers_free(idle.len());
         }
         // `_permit` is released after this, once the connection is back.
+    }
+}
+
+/// One admitted detached write; dropping it gives its room back.
+struct Admitted {
+    inner: Arc<Inner>,
+    bytes: usize,
+}
+
+impl Drop for Admitted {
+    fn drop(&mut self) {
+        self.inner.detached.release(self.bytes);
     }
 }
 
@@ -182,6 +197,7 @@ impl Db {
                 objects: OnceLock::new(),
                 reads: AtomicU64::new(0),
                 stamps,
+                detached: behind::Detached::new(),
             }),
         })
     }
@@ -279,6 +295,70 @@ impl Db {
             .map_err(|_| DbError::WriterGone)?;
         writer::set_queue_gauge(self.write_queued());
         rx.await.map_err(|_| DbError::WriterGone)?
+    }
+
+    /// Run `work`, a write that stores what a request fetched, on its own task,
+    /// so the caller does not wait for the writer (AVL-02, ADR-210). `work`
+    /// writes through [`Db::write`] as usual, so it keeps its place in the
+    /// writer's queue; it is the task that waits behind a busy writer. `bytes`
+    /// is what it holds in memory (a body), counted against
+    /// [`behind::MAX_BYTES`]. Returns `false`, with the write dropped, logged
+    /// and counted, when the bound is full. `what` names it in the logs.
+    pub fn write_behind<Fut>(&self, what: &'static str, bytes: usize, work: Fut) -> bool
+    where
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        if !self.inner.detached.admit(bytes) {
+            tracing::warn!(
+                what,
+                bytes,
+                in_flight = self.detached_writes(),
+                "detached SQLite writes at their bound; write dropped"
+            );
+            return false;
+        }
+        let admitted = Admitted {
+            inner: Arc::clone(&self.inner),
+            bytes,
+        };
+        tokio::spawn(async move {
+            let started = std::time::Instant::now();
+            work.await;
+            let took = started.elapsed();
+            if took >= behind::SLOW {
+                tracing::warn!(
+                    what,
+                    waited_ms = u64::try_from(took.as_millis()).unwrap_or(u64::MAX),
+                    "detached SQLite write waited for the writer"
+                );
+            }
+            // Released here, or when the task is dropped part-way.
+            drop(admitted);
+        });
+        true
+    }
+
+    /// Detached writes ([`Db::write_behind`]) not yet finished.
+    pub fn detached_writes(&self) -> usize {
+        self.inner.detached.in_flight()
+    }
+
+    /// Detached writes dropped at the bound since open.
+    pub fn detached_dropped(&self) -> u64 {
+        self.inner.detached.dropped()
+    }
+
+    /// Wait for every detached write to finish, those started meanwhile
+    /// included: at shutdown, and in tests before reading what a request stored.
+    pub async fn flush_detached(&self) {
+        self.inner.detached.settle().await;
+    }
+
+    /// Test hook: the detached writes' bound ([`behind::MAX_WRITES`],
+    /// [`behind::MAX_BYTES`]).
+    #[doc(hidden)]
+    pub fn set_detached_limits(&self, writes: usize, bytes: usize) {
+        self.inner.detached.set_limits(writes, bytes);
     }
 
     /// Run `f` on a read-only pooled connection via `spawn_blocking`. Writes

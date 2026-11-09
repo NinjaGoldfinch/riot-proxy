@@ -109,12 +109,12 @@ sequenceDiagram
         R-->>SF: 200 + X-App-Rate-Limit* headers
         SF->>RL: observe(headers) → reconfigure + sync counts
         SF->>L1: put(key, body, soft, hard)
-        SF->>AR: archive if immutable
+        SF-)AR: archive if immutable, behind the response (AVL-02)
         SF-->>C: 200 X-Cache: MISS
     end
 ```
 
-`X-Cache` values, headers (`X-Cache-Age`, `X-RateLimit-*`, `X-Request-Id`) and error codes (`QUOTA_EXCEEDED` vs `RATE_LIMITED`) are carried over verbatim from v1 so downstream projects need no changes.
+`X-Cache` values, headers (`X-Cache-Age`, `X-RateLimit-*`, `X-Request-Id`) and error codes (`QUOTA_EXCEEDED` vs `RATE_LIMITED`) are carried over verbatim from v1 so downstream projects need no changes. The archive write on a miss (a match or timeline body, or a league lookup's ranks) and the `players` row a profile records run behind the response: the request returns when Riot answers, and a long job write on the SQLite writer delays only the write (AVL-02, ADR-210; design/04 §Cache tiers). A job's fetch still waits for its archive write.
 
 ## Process model
 
@@ -136,7 +136,7 @@ flowchart LR
 
 `--role all` is the design target and the only mode with SQLite. The split mode exists so the door to Postgres + separate worker stays open without a rewrite — but it is a **feature flag**, not the default, and v2.0 can ship without it.
 
-Inside the process (boot order amended for series AVL, ADR-208, as built by AVL-01 / AVL-04; until then see the last paragraph):
+Inside the process (boot order amended for series AVL, ADR-208; the boot order is built (AVL-01, ADR-209), the writer interrupt at shutdown is AVL-04's):
 
 ```mermaid
 flowchart TB
@@ -148,16 +148,15 @@ flowchart TB
     subgraph spawn["tokio::spawn"]
         srv[axum server<br/>accepting at once]
         subgraph boot["boot task, gives way to SIGTERM"]
-            rec[recover] --> cu[catch-ups] --> sch[workers + ticks]
+            rec[recover] --> cu[catch-ups] --> sch[workers + ticks<br/>metrics history every 60 s]
         end
         ck[checkpoint loop<br/>limiter + L2 flush every 10 s]
-        hb[metrics history<br/>every 60 s]
     end
     spawn --> sig[SIGTERM / SIGINT]
     sig --> drain["graceful drain<br/>finish in-flight · job grace · interrupt the writer<br/>final checkpoint · close WS"]
 ```
 
-The order is **bind → serve → recover → catch-ups → workers**. What `/readyz` reports (the writer and the limiter) is ready before bind, so the first accept follows `listening` at once and a deploy's health wait measures the time to serve. `recover`, the boot catch-ups (the missing halves, stale facts, tier stamps, analytics splits and stamps, the offload sweep) and then the workers and ticks run in one task beside the server; each catch-up must be bounded (a boot check reads an index range, never a table; AVL-06). The shutdown signal is polled from `listening` on, so a SIGTERM during the catch-ups ends the boot task and drains like any other. At shutdown, after the job grace, a job write still running on the writer thread is interrupted so the final checkpoint and L2 flush are not queued behind it (06 §Shutdown). Until AVL-01 merges, `serve_with` still awaits every catch-up between `listening` and `app::serve` (`src/cli/serve.rs:157-433` at `324c493`), the gap of the 2026-11-08 restart (IMPLEMENTATION.md §Post-release — AVL).
+The order is **bind → serve → recover → catch-ups → workers**. What `/readyz` reports (the writer and the limiter) is ready before bind, so the first accept follows `listening` at once and a deploy's health wait measures the time to serve. `recover`, the boot catch-ups (the missing halves, stale facts, tier stamps, analytics splits and stamps, the offload sweep) and then the workers and ticks run in one task beside the server; each catch-up must be bounded (a boot check reads an index range, never a table; AVL-06). The shutdown signal is polled from `listening` on, so a SIGTERM during the catch-ups ends the boot task and drains like any other. At shutdown, after the job grace, a job write still running on the writer thread is interrupted so the final checkpoint and L2 flush are not queued behind it (06 §Shutdown; AVL-04, not built yet). As built (AVL-01, ADR-209): `serve_with` builds the state, binds, logs `listening` and spawns `app::serve` (`src/cli/serve.rs:385-390`), then runs `boot_catch_up` (`:477-568`) in a `select!` against the shared shutdown future; it logs `boot catch-up done ms=…` and the workers, ticks and metrics-history sampler start only after it returns (`:410-431`), so `recover` always precedes them. A signal during the catch-up drops it where it is, logs `boot catch-up stopped; job workers not started` with `reason=shutdown signal` (`reason=server ended`: the server task ended first, with no signal) and drains; blocking work it abandoned gets 10 s before the process exits (`cli::run`, `BLOCKING_GRACE`).
 
 ## Module layout
 
