@@ -11,5 +11,5 @@
 **Evidence.** `src/jobs/scheduler.rs`, `src/jobs/lanes.rs`, `src/jobs/ticks.rs`, `src/db/store.rs:98-133`, `src/db/migrations/V0001__init.sql:33-45`, `V0007__job_lane.sql`, `V0022__jobs_state_kind.sql`, `tests/jobs.rs`, `tests/lanes.rs`.
 
 ---
-**Sources:** `docs/DECISIONS.md:L349-L368,L1001-L1013,L1453-L1482`, `src/jobs/scheduler.rs:L40-L42,L225-L269,L963-L1025`, `src/db/store.rs:L98-L133`, `src/db/migrations/V0001__init.sql:L33-L45`
-**Last verified:** 2026-11-09 against commit `199b559`
+**Sources:** `docs/DECISIONS.md:L349-L368,L1001-L1013,L1453-L1482`, `src/jobs/scheduler.rs:L40-L42,L225-L269,L968-L1030`, `src/db/store.rs:L98-L133`, `src/db/migrations/V0001__init.sql:L33-L45`
+**Last verified:** 2026-11-09 against commit `7531561`
