@@ -13,8 +13,10 @@
 //! `champion_stats_totals` holds the stats already summed over tier, for the
 //! reads that name none (PERF-02, ADR-168). Every table is
 //! rebuilt wholesale for the newest `AGGREGATE_PATCH_LIMIT` patches (0: all)
-//! and keeps older patches' rows. Every row carries `remake`, so a read can
-//! leave remakes out (the default) or add them back.
+//! and keeps older patches' rows; the job does it a patch and a step at a
+//! time, each its own transaction ([`rebuild_patch_step`], AVL-05,
+//! ADR-215). Every row carries `remake`, so a read can leave remakes out
+//! (the default) or add them back.
 
 use std::collections::BTreeSet;
 
@@ -49,6 +51,14 @@ pub fn recent_patches(c: &Connection, queue_id: i64, limit: u32) -> Result<Optio
     if limit == 0 {
         return Ok(None);
     }
+    patch_list(c, queue_id, limit).map(Some)
+}
+
+/// The newest `limit` patches archived for a queue, any platform, newest
+/// first; every one when `limit` is 0. What a rebuild walks a patch at a
+/// time (AVL-05).
+pub fn patch_list(c: &Connection, queue_id: i64, limit: u32) -> Result<Vec<String>, DbError> {
+    let limit = if limit == 0 { -1 } else { i64::from(limit) };
     let mut stmt = c.prepare(&format!(
         "SELECT patch FROM (SELECT DISTINCT patch FROM matches WHERE queue_id = ?1 AND patch IS NOT NULL)
           ORDER BY {PATCH_DESC} LIMIT ?2"
@@ -56,7 +66,7 @@ pub fn recent_patches(c: &Connection, queue_id: i64, limit: u32) -> Result<Optio
     let rows = stmt
         .query_map(params![queue_id, limit], |r| r.get(0))?
         .collect::<Result<Vec<String>, _>>()?;
-    Ok(Some(rows))
+    Ok(rows)
 }
 
 impl Scope {
@@ -305,6 +315,79 @@ pub(crate) fn rebuild_step(c: &Connection, s: &Scope, step: &Step) -> Result<Wri
         }
     }
     delta::stamp_step(c, s, step.bit)?;
+    Ok(out)
+}
+
+/// The name each of [`STEPS`] reports its time under: v1's three steps,
+/// the last four being its builds step (the dashboard's `steps`,
+/// `aggregate_duration_seconds{step}`).
+pub const STEP_NAMES: [&str; 6] = ["champions", "matchups", "builds", "builds", "builds", "builds"];
+
+/// One step of the rebuild for one patch, in the caller's transaction
+/// (AVL-05, ADR-215): [`rebuild_step`] over `s` narrowed to `patch`. Every
+/// table's rows are keyed by their patch and every statement filters on it,
+/// so a rebuild of patches one at a time writes, deletes and stamps exactly
+/// what one over all of them at once did.
+pub(crate) fn rebuild_patch_step(
+    c: &Connection,
+    s: &Scope,
+    patch: &str,
+    step: &Step,
+) -> Result<Written, DbError> {
+    let one = Scope {
+        patches: Some(vec![patch.to_string()]),
+        ..s.clone()
+    };
+    rebuild_step(c, &one, step)
+}
+
+/// Before a rebuild of every patch a patch at a time, in a transaction of
+/// its own: delete the ladder's rows of every step's tables whose patch is
+/// not in `keep` (every patch archived), which a rebuild over all patches at
+/// once deleted with the rest and a per-patch delete never reaches (AVL-05).
+pub fn prune_patches(c: &Connection, s: &Scope, keep: &[String]) -> Result<(), DbError> {
+    let keep = serde_json::to_string(keep).unwrap_or_else(|_| "[]".into());
+    for t in STEPS.iter().flat_map(|step| step.tables.iter()) {
+        c.execute(
+            &format!(
+                "DELETE FROM {t} WHERE key_scope = ?1 AND platform = ?2 AND queue = ?3
+                   AND patch NOT IN (SELECT value FROM json_each(?4))"
+            ),
+            params![s.key_scope, s.platform, s.queue, keep],
+        )?;
+    }
+    Ok(())
+}
+
+/// The whole rebuild of `s` as `aggregate:analytics` runs it, without its
+/// turns and pauses: for every patch (`s.patches`, or every patch archived
+/// after a prune), newest first, each step in its own transaction. For the
+/// fixtures, which hold it to the same rows as [`rebuild_champions`],
+/// [`rebuild_matchups`] and [`rebuild_builds`] over the whole scope.
+pub fn rebuild_by_patch(c: &mut Connection, s: &Scope) -> Result<Written, DbError> {
+    let patches = match &s.patches {
+        Some(p) => p.clone(),
+        None => {
+            let all = patch_list(c, s.queue_id, 0)?;
+            let tx = c.transaction()?;
+            prune_patches(&tx, s, &all)?;
+            tx.commit()?;
+            all
+        }
+    };
+    let mut out: Written = vec![];
+    for patch in &patches {
+        for step in &STEPS {
+            let tx = c.transaction()?;
+            for (table, n) in rebuild_patch_step(&tx, s, patch, step)? {
+                match out.iter_mut().find(|(t, _)| *t == table) {
+                    Some((_, sum)) => *sum += n,
+                    None => out.push((table, n)),
+                }
+            }
+            tx.commit()?;
+        }
+    }
     Ok(out)
 }
 

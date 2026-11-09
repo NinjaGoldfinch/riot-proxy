@@ -101,8 +101,8 @@ Jobs live in the SQLite `jobs` table; there is no in-memory queue (ADR-047, ADR-
 | Yield | A limiter wait beyond `JOB_YIELD_BUDGET_MS` re-queues the job at `retry_at` without counting an attempt; long jobs call `take_turns()` to let others in | `src/jobs/scheduler.rs:145-150,1088-1090` |
 | Recovery | Rows left `running` by a crash go back to `pending` on boot | `src/jobs/scheduler.rs:969-979` |
 | Idle | A worker with nothing claimable sleeps until the next `run_after` or blocked lane frees, at most 1 s, and is woken by any enqueue | `src/jobs/scheduler.rs:1002-1031` |
-| Analytics on the writer | `aggregate:analytics` holds the writer for a step at a time and runs one at a time (`JOB_KIND_LIMITS`); `aggregate:delta` (THR-03) is one job for every ladder, deduped to one, whose batches are separate write transactions sized toward `AGGREGATE_DELTA_TARGET_MS` with a 50 ms pause between them, so other writes interleave | `src/jobs/analytics.rs:93-96,972-1066` |
-| Retention | `done` rows are deleted after 7 days by `maintenance`; `failed` rows stay until purged | `src/jobs/maintenance.rs:36,237-240` |
+| Analytics on the writer | `aggregate:analytics` holds the writer for one patch's step at a time, 50 ms apart, gives its worker back after each 5 s turn and resumes from its job payload (AVL-05, ADR-215), and runs one at a time (`JOB_KIND_LIMITS`); `aggregate:delta` (THR-03) is one job for every ladder, deduped to one, whose batches are separate write transactions sized toward `AGGREGATE_DELTA_TARGET_MS` with a 50 ms pause between them, so other writes interleave | `src/jobs/analytics.rs:99-102,1213-1307` |
+| Retention | `done` rows are deleted after 7 days by `maintenance`, a kind at a time and 5 000 a write (AVL-05); `failed` rows stay until purged | `src/jobs/maintenance.rs:38,337-380` |
 
 Every job kind, its trigger, priority and tables is tabulated in `docs/_meta/scratch/jobs-and-observability.md` §3 and summarised for operators in [../operations/runbook.md](../operations/runbook.md).
 
@@ -122,4 +122,4 @@ Every job kind, its trigger, priority and tables is tabulated in `docs/_meta/scr
 
 ---
 **Sources:** `src/riot/limiter/mod.rs:L50-L175,L229-L300,L307-L431,L532-L606`, `src/riot/limiter/bucket.rs:L15-L162`, `src/riot/limiter/headers.rs:L30-L41`, `src/riot/limiter/persist.rs:L21-L25,L141-L175`, `src/http/quota.rs:L320-L431`, `src/fetcher.rs:L49-L54,L147-L170,L415-L420,L613-L651,L714-L752`, `src/riot/routing.rs:L160-L196`, `src/cache/keys.rs:L81-L88`, `src/jobs/scheduler.rs:L40-L42,L124-L171,L225-L269,L969-L1031,L1076-L1090`, `src/jobs/lanes.rs:L440-L483`, `src/jobs/mod.rs:L74-L94`, `src/db/store.rs:L98-L133`, `src/db/mod.rs:L42-L43,L83-L90,L173-L213`, `src/cli/serve.rs:L103-L109`, `ops/prometheus-alerts.yml`, `docs/design/05-rate-limiter.md`, `docs/design/06-jobs-and-realtime.md`
-**Last verified:** 2026-11-09 against commit `0113520`
+**Last verified:** 2026-11-09 against commit `10f9512`

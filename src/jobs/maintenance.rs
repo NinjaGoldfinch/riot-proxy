@@ -9,8 +9,10 @@
 //!    has less than [`BACKUP_FREE_FACTOR`] times the database's size free,
 //!    and a copy that fails is logged and cleaned up: neither stops the
 //!    steps below (DSK-02, ADR-136).
-//! 2. **Trim** `done` jobs older than 7 days (design/06) and `metrics_history`
-//!    older than 24 hours (1440 points at 60 s, design/04).
+//! 2. **Trim** `done` jobs older than 7 days (design/06), a kind and
+//!    [`PURGE_CHUNK`] rows a write as `DELETE /v1/admin/jobs` deletes
+//!    (AVL-05, ADR-215), and `metrics_history` older than 24 hours (1440
+//!    points at 60 s, design/04).
 //! 3. **Sweep** expired L2 cache rows.
 //! 4. **Optimize:** `PRAGMA optimize` refreshes the planner's statistics
 //!    where they are missing or stale (ADR-102).
@@ -24,7 +26,7 @@ use serde::Serialize;
 
 use crate::clock::Clock;
 use crate::db::{Db, DbError};
-use crate::jobs::scheduler::{Handler, Job, JobError};
+use crate::jobs::scheduler::{Handler, Job, JobError, PURGE_CHUNK, PURGE_PACE};
 
 /// Backups kept by default (`BACKUP_KEEP`, design/07).
 pub const KEEP_BACKUPS: usize = 14;
@@ -231,22 +233,20 @@ impl Maintenance {
             }
         }
 
-        let (jobs, history) = self
+        report.jobs_deleted = trim_done_jobs(&self.db, now_ms - JOB_RETENTION_MS)
+            .await
+            .map_err(|e| fail(&e))?
+            .deleted;
+        let history = self
             .db
             .write(move |c| {
-                let jobs = c.execute(
-                    "DELETE FROM jobs WHERE state = 'done' AND finished_at < ?1",
-                    [now_ms - JOB_RETENTION_MS],
-                )?;
-                let history = c.execute(
+                Ok::<_, DbError>(c.execute(
                     "DELETE FROM metrics_history WHERE at < ?1",
                     [now_ms - HISTORY_RETENTION_MS],
-                )?;
-                Ok::<_, DbError>((jobs, history))
+                )?)
             })
             .await
             .map_err(|e| fail(&e))?;
-        report.jobs_deleted = jobs;
         report.history_deleted = history;
         report.cache_swept = crate::cache::l2::sweep(&self.db).await.map_err(|e| fail(&e))?;
         self.db.optimize().await.map_err(|e| fail(&e))?;
@@ -321,6 +321,62 @@ impl Maintenance {
             }
         }
     }
+}
+
+/// What [`trim_done_jobs`] did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Trimmed {
+    pub deleted: usize,
+    /// Write transactions, each of at most [`PURGE_CHUNK`] rows.
+    pub writes: usize,
+}
+
+/// One kind's trimmable rows, at most [`PURGE_CHUNK`]: a seek into
+/// `jobs_state_kind`'s `('done', kind)` range, whose old rows come first
+/// (`run_after` is never later than `finished_at`).
+pub const TRIM_CHUNK_SQL: &str = "DELETE FROM jobs WHERE rowid IN (
+       SELECT rowid FROM jobs WHERE state = 'done' AND kind = ?1 AND finished_at < ?2 LIMIT ?3)";
+
+/// The next kind with `done` rows after `?1`: one seek into
+/// `jobs_state_kind`, so the trim visits each kind without a scan.
+pub const NEXT_DONE_KIND_SQL: &str = "SELECT min(kind) FROM jobs WHERE state = 'done' AND kind > ?1";
+
+/// Delete the `done` jobs that finished before `before_ms`, a kind at a time
+/// and at most [`PURGE_CHUNK`] rows a write, [`PURGE_PACE`] apart, as
+/// `DELETE /v1/admin/jobs` does (DSK-03): a week of a crawl's `archive:match`
+/// rows no longer holds the writer in one statement (AVL-05, ADR-215). A row
+/// that finishes meanwhile is newer than `before_ms` and stays.
+pub async fn trim_done_jobs(db: &Db, before_ms: i64) -> Result<Trimmed, DbError> {
+    let mut out = Trimmed::default();
+    let mut after = String::new();
+    loop {
+        let from = after.clone();
+        let next: Option<String> = db
+            .read(move |c| Ok::<_, DbError>(c.query_row(NEXT_DONE_KIND_SQL, [from], |r| r.get(0))?))
+            .await?;
+        let Some(kind) = next else {
+            break;
+        };
+        loop {
+            let k = kind.clone();
+            let n = db
+                .write(move |c| {
+                    Ok::<_, DbError>(c.execute(
+                        TRIM_CHUNK_SQL,
+                        rusqlite::params![k, before_ms, PURGE_CHUNK as i64],
+                    )?)
+                })
+                .await?;
+            out.deleted += n;
+            out.writes += 1;
+            if n < PURGE_CHUNK {
+                break;
+            }
+            tokio::time::sleep(PURGE_PACE).await;
+        }
+        after = kind;
+    }
+    Ok(out)
 }
 
 pub struct MaintenanceHandler(pub Arc<Maintenance>);
