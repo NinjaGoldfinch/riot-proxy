@@ -262,8 +262,21 @@ fn scope(c: &Connection, patch_limit: u32) -> Scope {
 }
 
 /// Stamps the fixture's tiers as `tiers:backfill` would (THR-02), then
-/// rebuilds.
+/// rebuilds as the job does, a patch and a step a transaction (AVL-05), so
+/// every fixture below holds that form to its hand-computed rows.
 async fn rebuild(db: &Db, patch_limit: u32) -> Written {
+    db.write(move |c| {
+        stamp_all(c);
+        let s = scope(c, patch_limit);
+        rebuild_by_patch(c, &s)
+    })
+    .await
+    .unwrap()
+}
+
+/// The same over the whole scope at once, a transaction a step, as before
+/// AVL-05: the reference the per-patch form is compared with.
+async fn rebuild_whole(db: &Db, patch_limit: u32) -> Written {
     db.write(move |c| {
         stamp_all(c);
         let s = scope(c, patch_limit);
@@ -274,6 +287,130 @@ async fn rebuild(db: &Db, patch_limit: u32) -> Written {
     })
     .await
     .unwrap()
+}
+
+/// Every analytics table's rows and every stamp, `computed_at` left out.
+async fn every_row(db: &Db) -> Vec<String> {
+    db.read(|c| {
+        let mut out = vec![];
+        let tables = STEPS
+            .iter()
+            .flat_map(|s| s.tables.iter().copied())
+            .chain(["analytics_counted", "analytics_retract"]);
+        for t in tables {
+            let cols: Vec<String> = c
+                .prepare(&format!(
+                    "SELECT name FROM pragma_table_info('{t}') WHERE name <> 'computed_at' ORDER BY cid"
+                ))?
+                .query_map([], |r| r.get(0))?
+                .collect::<Result<_, _>>()?;
+            let row = cols
+                .iter()
+                .map(|c| format!("quote({c})"))
+                .collect::<Vec<_>>()
+                .join(" || '|' || ");
+            let rows: Vec<String> = c
+                .prepare(&format!("SELECT '{t}|' || {row} FROM {t} ORDER BY 1"))?
+                .query_map([], |r| r.get(0))?
+                .collect::<Result<_, _>>()?;
+            out.extend(rows);
+        }
+        Ok::<_, DbError>(out)
+    })
+    .await
+    .unwrap()
+}
+
+/// A third patch for the fixture: M2 moved to 14.19, and a row of a patch no
+/// match has any more, which only a rebuild of every patch deletes.
+async fn three_patches(db: &Db) {
+    db.write(|c| {
+        c.execute_batch(
+            "UPDATE matches SET patch = '14.19' WHERE match_id = 'KR_2';
+             INSERT INTO champion_stats (key_scope, platform, queue, tier, patch, champion_id, role, remake, side,
+               games, wins, matches_picked, stated_games, kills, deaths, assists, cs, gold, damage, vision,
+               duration_s, computed_at)
+             VALUES ('s', 'kr', 'RANKED_SOLO_5x5', 'MASTER', '13.1', 1, 'MIDDLE', 0, 'blue',
+               1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1);",
+        )?;
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+}
+
+/// Rows written per table, summed.
+fn by_table(w: Written) -> BTreeMap<&'static str, i64> {
+    w.into_iter().fold(BTreeMap::new(), |mut m, (t, n)| {
+        *m.entry(t).or_default() += n;
+        m
+    })
+}
+
+/// AVL-05: a patch at a time writes, deletes and stamps exactly what the
+/// whole scope at once did, over every patch and over the newest ones.
+#[tokio::test]
+async fn a_rebuild_a_patch_at_a_time_equals_one_over_the_whole_scope() {
+    for limit in [0, 1, 2] {
+        let mut out = vec![];
+        for whole in [true, false] {
+            let (_d, db) = db();
+            db.write(|c| {
+                seed(c);
+                Ok::<_, DbError>(())
+            })
+            .await
+            .unwrap();
+            three_patches(&db).await;
+            let written = if whole {
+                rebuild_whole(&db, limit).await
+            } else {
+                rebuild(&db, limit).await
+            };
+            out.push((by_table(written), every_row(&db).await));
+        }
+        assert!(!out[0].1.is_empty());
+        assert_eq!(out[0], out[1], "patch limit {limit}");
+        let orphan = out[1].1.iter().any(|r| r.contains("'13.1'"));
+        assert_eq!(orphan, limit != 0, "patch limit {limit}");
+    }
+}
+
+/// AVL-05: the writer is given back between patches: a rebuild of three
+/// patches over every patch is a prune and six steps each, every one its
+/// own commit.
+#[tokio::test]
+async fn a_rebuild_over_three_patches_commits_once_per_patch_and_step() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (_d, db) = db();
+    db.write(|c| {
+        seed(c);
+        stamp_all(c);
+        Ok::<_, DbError>(())
+    })
+    .await
+    .unwrap();
+    three_patches(&db).await;
+    let commits = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&commits);
+    let patches = db
+        .write(move |c| {
+            let s = scope(c, 0);
+            let patches = patch_list(c, 420, 0)?;
+            c.commit_hook(Some(move || {
+                seen.fetch_add(1, Ordering::SeqCst);
+                false
+            }))?;
+            let out = rebuild_by_patch(c, &s);
+            c.commit_hook(None::<fn() -> bool>)?;
+            out?;
+            Ok::<_, DbError>(patches)
+        })
+        .await
+        .unwrap();
+    assert_eq!(patches, ["14.19", "14.18", "14.17"]);
+    assert_eq!(commits.load(Ordering::SeqCst), 1 + 3 * STEPS.len());
 }
 
 /// Stamp every unstamped match from the ladder and lookups as they are now.

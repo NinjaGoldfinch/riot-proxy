@@ -289,6 +289,47 @@ proptest! {
     }
 }
 
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(24))]
+
+    /// AVL-05: random matches rebuilt a patch and a step a transaction give
+    /// the rows and stamps of a rebuild over every patch at once, after a
+    /// delta has counted some of them and late stamps have moved tiers.
+    #[test]
+    fn a_rebuild_a_patch_at_a_time_equals_one_over_every_patch(
+        seed in 1u64..u64::MAX,
+        n in 1usize..30,
+        late in 0usize..4,
+    ) {
+        let build = |by_patch: bool| {
+            let mut c = fresh(seed, n);
+            delta(&mut c, &[3]);
+            add_matches(&c, seed ^ 1, n, n / 2 + 1);
+            for (id, puuid) in unknowns(&c).into_iter().take(late) {
+                c.execute(
+                    "UPDATE match_facts SET tier = 'MASTER' WHERE match_id = ?1 AND puuid = ?2",
+                    params![id, puuid],
+                )
+                .unwrap();
+            }
+            if by_patch {
+                crate::archive::analytics::rebuild_by_patch(&mut c, &kr()).unwrap();
+            } else {
+                rebuild_steps(&mut c, 0..STEPS.len());
+            }
+            let retract: Vec<(String, i64)> = c
+                .prepare("SELECT match_id, step FROM analytics_retract ORDER BY 1, 2")
+                .unwrap()
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            (snapshot(&c), bits_of(&c), retract)
+        };
+        prop_assert_eq!(build(true), build(false));
+    }
+}
+
 #[test]
 fn every_counted_match_of_the_ladder_has_all_six_bits_and_no_other_does() {
     let mut c = fresh(3, 20);

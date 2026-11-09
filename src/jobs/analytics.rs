@@ -2,8 +2,12 @@
 //! `jobs/analytics.ts`).
 //!
 //! `aggregate:analytics` rebuilds one ladder's analytics tables from the
-//! facts: champions (slices, stats, bans), then matchups, then builds, each
-//! step its own transaction (v1), and announces `analytics.updated`.
+//! facts: champions (slices, stats, bans), then matchups, then builds (v1),
+//! one transaction per patch and step, newest patch first, 50 ms apart; each
+//! transaction saves the rebuild's [`Progress`] in its job's payload, and a
+//! turn gives the worker back after [`REBUILD_TURN`], so a restart resumes
+//! after the last commit (AVL-05, ADR-215). The last turn announces
+//! `analytics.updated`.
 //! `aggregate:delta` counts the matches no rebuild has counted, a short
 //! transaction a batch, for every ladder a full rebuild has stamped (THR-03,
 //! ADR-182); the rebuild stays as the repair.
@@ -79,9 +83,31 @@ pub async fn enqueue_aggregate(queue: &Queue, platform: &str, ladder: &str) -> R
 /// rebuilds from the matches archived so far instead of after a crawl's
 /// downloads. No running job is interrupted. A rebuild already queued for
 /// the ladder is moved up rather than queued twice. It makes no Riot call.
+///
+/// A rebuild part-way through (between turns, or in one) starts over
+/// (AVL-05, ADR-215): its payload loses its progress and its priority is
+/// lifted, and a running turn sees the new payload at its next commit and
+/// gives its worker back.
 pub async fn enqueue_aggregate_now(queue: &Queue, platform: &str, ladder: &str) -> Result<Enqueued, DbError> {
     let mut job = aggregate_job(platform, ladder);
     job.priority = priority::INTERACTIVE;
+    let (kind, key, fresh, prio) = (
+        job.kind,
+        job.dedupe_key.clone(),
+        job.payload.to_string(),
+        job.priority,
+    );
+    queue
+        .db()
+        .write(move |c| {
+            c.execute(
+                "UPDATE jobs SET payload = ?3, priority = MIN(priority, ?4)
+                  WHERE kind = ?1 AND dedupe_key = ?2 AND state IN ('pending', 'running') AND payload <> ?3",
+                params![kind, key, fresh, prio],
+            )?;
+            Ok::<_, DbError>(())
+        })
+        .await?;
     queue.enqueue_or_promote(job).await
 }
 
@@ -340,23 +366,297 @@ impl DeltaSettings {
     };
 }
 
+/// The pause between two of a rebuild's transactions, so other writes get
+/// the writer between them, as between the delta's batches (AVL-05).
+const REBUILD_PACE: Duration = REEXTRACT_PACE;
+
+/// How long a rebuild's turn runs before it gives its worker back, after
+/// the transaction it is in (AVL-05, ADR-215): a few seconds, so
+/// higher-priority work queued behind it gets a worker.
+pub const REBUILD_TURN: Duration = Duration::from_secs(5);
+
+/// `aggregate:analytics`'s payload: the ladder, and once its first
+/// transaction has committed, where the rebuild is (AVL-05).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AggregatePayload {
+    #[serde(flatten)]
+    pub ladder: Ladder,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rebuild: Option<Progress>,
+}
+
+impl AggregatePayload {
+    fn to_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
+}
+
+/// Where a rebuild is, saved in its job's payload by each of its
+/// transactions, in that transaction (AVL-05, ADR-215). A restart resumes at
+/// the transaction after the last one committed. The decisions taken when it
+/// began stay with it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Progress {
+    /// When the rebuild began: a ladder marked dirty since is not stamped
+    /// (`mark_stamped`).
+    pub started_ms: i64,
+    /// The ladder held rows V0017 couldn't split: taken off the list at the end.
+    pub unsplit: bool,
+    /// Every patch: the rows of patches no match has are deleted first, and
+    /// the ladder is stamped at the end (THR-03).
+    pub every_patch: bool,
+    /// The patches rebuilt, newest first, as they were when it began.
+    pub patches: Vec<String>,
+    /// The prune is done (or not needed).
+    pub pruned: bool,
+    /// The next transaction: this patch's (an index into `patches`) …
+    pub patch: usize,
+    /// … step (an index into the archive's six steps).
+    pub step: usize,
+    /// Seconds each step's transactions took so far, by step name.
+    pub secs: BTreeMap<String, f64>,
+    /// Rows written so far, by reported table.
+    pub rows: BTreeMap<String, i64>,
+    /// The time its turns took so far.
+    pub ms: i64,
+}
+
+/// What a [`Progress`] runs next.
+enum At<'a> {
+    Prune,
+    Step(&'a str, &'a analytics::Step),
+    Done,
+}
+
+impl Progress {
+    fn new(started_ms: i64, unsplit: bool, every_patch: bool, patches: Vec<String>) -> Self {
+        Self {
+            started_ms,
+            unsplit,
+            every_patch,
+            patches,
+            pruned: !every_patch,
+            patch: 0,
+            step: 0,
+            secs: analytics::STEP_NAMES
+                .iter()
+                .map(|n| ((*n).to_string(), 0.0))
+                .collect(),
+            // Every table reports, as each step's statement did over every patch.
+            rows: analytics::REPORTED
+                .iter()
+                .map(|t| ((*t).to_string(), 0))
+                .collect(),
+            ms: 0,
+        }
+    }
+
+    /// Every transaction has committed.
+    pub fn done(&self) -> bool {
+        matches!(self.at(), At::Done)
+    }
+
+    fn at(&self) -> At<'_> {
+        if !self.pruned {
+            return At::Prune;
+        }
+        match (self.patches.get(self.patch), analytics::STEPS.get(self.step)) {
+            (Some(patch), Some(step)) => At::Step(patch, step),
+            _ => At::Done,
+        }
+    }
+
+    /// Past the transaction it was at, which wrote `written` in `secs`.
+    fn advance(&mut self, written: &analytics::Written, secs: f64) {
+        if !self.pruned {
+            self.pruned = true;
+            return;
+        }
+        if let Some(name) = analytics::STEP_NAMES.get(self.step) {
+            *self.secs.entry((*name).to_string()).or_default() += secs;
+        }
+        for (table, n) in written {
+            *self.rows.entry((*table).to_string()).or_default() += n;
+        }
+        self.step += 1;
+        if self.step >= analytics::STEPS.len() {
+            self.step = 0;
+            self.patch += 1;
+        }
+    }
+
+    /// The job's activity line.
+    fn describe(&self, ladder: &Ladder) -> String {
+        match self.at() {
+            At::Prune => format!(
+                "rebuilding: dropping rows of patches no match has for {} {}",
+                ladder.platform, ladder.queue
+            ),
+            At::Step(patch, _) => format!(
+                "rebuilding {} {patch} ({}/{}) for {} {}",
+                analytics::STEP_NAMES.get(self.step).copied().unwrap_or("step"),
+                self.patch + 1,
+                self.patches.len(),
+                ladder.platform,
+                ladder.queue
+            ),
+            At::Done => format!("rebuilt {} {}", ladder.platform, ladder.queue),
+        }
+    }
+}
+
+/// How a rebuild's turn ended.
+enum Turn {
+    Done,
+    /// Give the worker back; the payload replaces the row's when set.
+    Yield(Option<String>),
+}
+
+/// What [`save_progress`] found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Saved {
+    Written,
+    /// The row's payload is no longer the one this run last wrote: a
+    /// recompute replaced it ([`enqueue_aggregate_now`]).
+    Superseded,
+    /// No such row: a handler run outside the queue (tests).
+    NoRow,
+}
+
+/// Write a rebuild's progress into its job's row, in the transaction that
+/// made it, if the row still holds what this run last wrote (AVL-05).
+fn save_progress(c: &rusqlite::Connection, id: &str, expected: &str, body: &str) -> Result<Saved, DbError> {
+    if c.execute(
+        "UPDATE jobs SET payload = ?3 WHERE id = ?1 AND payload = ?2",
+        params![id, expected, body],
+    )? == 1
+    {
+        return Ok(Saved::Written);
+    }
+    let exists =
+        rusqlite::OptionalExtension::optional(
+            c.query_row("SELECT 1 FROM jobs WHERE id = ?1", [id], |_| Ok(())),
+        )?
+        .is_some();
+    Ok(if exists { Saved::Superseded } else { Saved::NoRow })
+}
+
 fn store(e: &dyn std::fmt::Display) -> JobError {
     JobError::Retry(format!("store: {e}"))
 }
-
-type Step = fn(&mut rusqlite::Connection, &Scope) -> Result<analytics::Written, DbError>;
 
 impl AnalyticsContext {
     fn db(&self) -> &Db {
         self.queue.db()
     }
 
+    /// One turn of a rebuild, [`REBUILD_TURN`] long (AVL-05, ADR-215).
     pub async fn aggregate(&self, job: &Job) -> Result<(), JobError> {
-        let ladder: Ladder = job.payload()?;
+        self.aggregate_turn(job, REBUILD_TURN).await
+    }
+
+    /// Rebuild one ladder a transaction at a time, each one patch's step,
+    /// from where the payload's [`Progress`] says it stopped; once `turn`
+    /// has passed, give the worker back after the transaction it is in
+    /// (`JobError::Yield`, design/06 §Take turns). Zero is one transaction a
+    /// turn. The last turn records the run, clears the response cache and
+    /// announces it, as one transaction a step did.
+    pub async fn aggregate_turn(&self, job: &Job, turn: Duration) -> Result<(), JobError> {
+        let payload: AggregatePayload = job.payload()?;
+        let ladder = payload.ladder;
         crate::riot::routing::Platform::parse(&ladder.platform).map_err(|e| JobError::Fail(e.message))?;
-        let queue_id = crate::riot::ladder::queue_id(&ladder.queue)
-            .ok_or_else(|| JobError::Fail(format!("'{}' is not a ranked queue", ladder.queue)))?;
+        let queue_id = i64::from(
+            crate::riot::ladder::queue_id(&ladder.queue)
+                .ok_or_else(|| JobError::Fail(format!("'{}' is not a ranked queue", ladder.queue)))?,
+        );
         let started = Instant::now();
+        let earlier_ms = payload.rebuild.as_ref().map_or(0, |p| p.ms);
+        let mut progress = match payload.rebuild {
+            Some(p) => p,
+            None => {
+                self.before_rebuild().await;
+                self.start_rebuild(&ladder, queue_id).await?
+            }
+        };
+        let result = self
+            .rebuild(job, &ladder, queue_id, &mut progress, started, turn)
+            .await;
+        if let Ok(Turn::Yield(payload)) = result {
+            return Err(JobError::Yield {
+                retry_at: Clock::now().unix_ms,
+                payload,
+            });
+        }
+        let status = if result.is_ok() { "completed" } else { "failed" };
+        metrics::counter!(crate::metrics::AGGREGATE_RUNS_TOTAL,
+            "platform" => ladder.platform.clone(), "queue" => ladder.queue.clone(), "status" => status,
+            "kind" => "rebuild")
+        .increment(1);
+        // The time its turns took, each from its start.
+        let ms = earlier_ms.saturating_add(i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX));
+        let games: i64 = match &result {
+            Ok(_) => self.games(&ladder).await.unwrap_or(0),
+            Err(_) => 0,
+        };
+        if result.is_ok() {
+            // A step's seconds are its transactions', every patch and turn.
+            for (name, secs) in &progress.secs {
+                metrics::histogram!(crate::metrics::AGGREGATE_DURATION_SECONDS,
+                    "platform" => ladder.platform.clone(), "queue" => ladder.queue.clone(), "step" => name.clone())
+                .record(*secs);
+            }
+            for (table, n) in &progress.rows {
+                #[allow(clippy::cast_precision_loss)]
+                metrics::gauge!(crate::metrics::AGGREGATE_ROWS,
+                    "platform" => ladder.platform.clone(), "queue" => ladder.queue.clone(), "table" => table.clone())
+                .set(*n as f64);
+            }
+        }
+        // The dashboard's record of the run, failed ones with the time the
+        // steps took so far (v1 `recordAnalyticsRun`).
+        let run = Run {
+            kind: "rebuild".into(),
+            at: Clock::now().unix_ms,
+            status: status.into(),
+            ms,
+            steps: progress.secs.clone(),
+            rows: if result.is_ok() {
+                progress.rows.clone()
+            } else {
+                BTreeMap::new()
+            },
+            games,
+        };
+        if let Err(e) = record_run(self.db(), &self.key_scope, &ladder, &run).await {
+            tracing::warn!(error = %e, "could not record the analytics run");
+        }
+        // After the last commit and before the announcement, so nobody acting
+        // on `analytics.updated` is served the old numbers. A failed rebuild
+        // may have committed a step, so it clears too (ADR-169). Once a
+        // rebuild, not a transaction: in between, readers may see one patch
+        // rebuilt and the next not yet (ADR-215).
+        self.cache.clear();
+        result?;
+        let tables = progress.rows;
+        tracing::info!(platform = %ladder.platform, queue = %ladder.queue, ?tables, games, ms, "analytics recomputed");
+        events::publish(
+            &self.hub,
+            &Event::AnalyticsUpdated {
+                platform: ladder.platform.clone(),
+                queue: ladder.queue,
+                duration_s: (ms + 500) / 1000,
+                tables,
+            },
+        );
+        // The slices sites open first, so their next call is a hit.
+        let warmed = self.cache.warm(&ladder.platform).await;
+        tracing::debug!(warmed, "analytics responses warmed");
+        Ok(())
+    }
+
+    /// What a rebuild's first turn does before its transactions.
+    async fn before_rebuild(&self) {
         // A crawl can grow the archive tenfold between rebuilds; fresh
         // statistics keep the rebuild's joins on their keys (ADR-102).
         if let Err(e) = self.db().optimize().await {
@@ -376,127 +676,125 @@ impl AnalyticsContext {
         if let Err(e) = self.backfill_tiers().await {
             tracing::warn!(error = ?e, "could not stamp match tiers");
         }
-        let mut steps = BTreeMap::new();
-        let result = self.rebuild(&ladder, i64::from(queue_id), &mut steps).await;
-        let status = if result.is_ok() { "completed" } else { "failed" };
-        metrics::counter!(crate::metrics::AGGREGATE_RUNS_TOTAL,
-            "platform" => ladder.platform.clone(), "queue" => ladder.queue.clone(), "status" => status,
-            "kind" => "rebuild")
-        .increment(1);
-        let ms = started.elapsed().as_millis();
-        let games: i64 = match &result {
-            Ok(_) => self.games(&ladder).await.unwrap_or(0),
-            Err(_) => 0,
-        };
-        // The dashboard's record of the run, failed ones with the steps that
-        // finished (v1 `recordAnalyticsRun`).
-        let run = Run {
-            kind: "rebuild".into(),
-            at: Clock::now().unix_ms,
-            status: status.into(),
-            ms: i64::try_from(ms).unwrap_or(i64::MAX),
-            steps,
-            rows: result.as_ref().cloned().unwrap_or_default(),
-            games,
-        };
-        if let Err(e) = record_run(self.db(), &self.key_scope, &ladder, &run).await {
-            tracing::warn!(error = %e, "could not record the analytics run");
-        }
-        // After the last commit and before the announcement, so nobody acting
-        // on `analytics.updated` is served the old numbers. A failed rebuild
-        // may have committed a step, so it clears too (ADR-169).
-        self.cache.clear();
-        let tables = result?;
-        tracing::info!(platform = %ladder.platform, queue = %ladder.queue, ?tables, games, ms, "analytics recomputed");
-        events::publish(
-            &self.hub,
-            &Event::AnalyticsUpdated {
-                platform: ladder.platform.clone(),
-                queue: ladder.queue,
-                duration_s: i64::try_from((ms + 500) / 1000).unwrap_or(i64::MAX),
-                tables,
-            },
-        );
-        // The slices sites open first, so their next call is a hit.
-        let warmed = self.cache.warm(&ladder.platform).await;
-        tracing::debug!(warmed, "analytics responses warmed");
-        Ok(())
     }
 
-    /// The three steps, in v1's order, each timed; rows written by table.
-    async fn rebuild(
-        &self,
-        ladder: &Ladder,
-        queue_id: i64,
-        steps_done: &mut BTreeMap<String, f64>,
-    ) -> Result<BTreeMap<String, i64>, JobError> {
-        let steps: [(&str, Step); 3] = [
-            ("champions", analytics::rebuild_champions),
-            ("matchups", analytics::rebuild_matchups),
-            ("builds", analytics::rebuild_builds),
-        ];
-        // A ladder with rows V0017 couldn't split by tier and side is rebuilt
-        // over every patch once, which replaces them all (ADR-129). So is one
-        // no full rebuild has stamped since V0029 or since a counted match
-        // was rewritten (THR-03): only then do its stamps cover every match.
+    /// A rebuild's decisions, taken once when it begins and kept in its
+    /// payload: which patches, and whether it stamps the ladder.
+    async fn start_rebuild(&self, ladder: &Ladder, queue_id: i64) -> Result<Progress, JobError> {
         let started_ms = Clock::now().unix_ms;
-        let (key_scope, l) = (self.key_scope.clone(), ladder.clone());
-        let (unsplit, stamped) = self
-            .db()
+        let (key_scope, l, limit, delta_on) = (
+            self.key_scope.clone(),
+            ladder.clone(),
+            self.patch_limit,
+            self.delta.on,
+        );
+        self.db()
             .read(move |c| {
-                Ok::<_, DbError>((
-                    analytics::unsplit(c, &key_scope, &l.platform, &l.queue)?,
-                    analytics::delta::ready(c, &key_scope, &l.platform, &l.queue)?,
-                ))
+                // A ladder with rows V0017 couldn't split by tier and side is
+                // rebuilt over every patch once, which replaces them all
+                // (ADR-129). So is one no full rebuild has stamped since V0029
+                // or since a counted match was rewritten (THR-03): only then
+                // do its stamps cover every match.
+                let unsplit = analytics::unsplit(c, &key_scope, &l.platform, &l.queue)?;
+                let stamped = analytics::delta::ready(c, &key_scope, &l.platform, &l.queue)?;
+                // Without the delta the stamps change nothing, so the patch
+                // limit holds; a rebuild of every patch stamps the ladder
+                // either way.
+                let full = unsplit || (delta_on && !stamped);
+                let every_patch = full || limit == 0;
+                let patches = analytics::patch_list(c, queue_id, if every_patch { 0 } else { limit })?;
+                Ok::<_, DbError>(Progress::new(started_ms, unsplit, every_patch, patches))
             })
             .await
-            .map_err(|e| store(&e))?;
-        // Without the delta the stamps change nothing, so the patch limit
-        // holds; a rebuild of every patch stamps the ladder either way.
-        let full = unsplit || (self.delta.on && !stamped);
-        let every_patch = full || self.patch_limit == 0;
-        let mut tables = BTreeMap::new();
-        for (name, step) in steps {
-            activity::step(format!(
-                "rebuilding {name} for {} {}",
-                ladder.platform, ladder.queue
-            ));
-            let started = Instant::now();
-            let (key_scope, l, limit) = (self.key_scope.clone(), ladder.clone(), self.patch_limit);
-            let written = self
+            .map_err(|e| store(&e))
+    }
+
+    /// The rebuild's transactions from `p` on, each saving the progress it
+    /// leaves into the job's payload before its commit, [`REBUILD_PACE`]
+    /// apart, until they are done or the turn is up; then the ladder's
+    /// stamps. In v1's step order within a patch, the newest patch first.
+    async fn rebuild(
+        &self,
+        job: &Job,
+        ladder: &Ladder,
+        queue_id: i64,
+        p: &mut Progress,
+        started: Instant,
+        turn: Duration,
+    ) -> Result<Turn, JobError> {
+        // What the row holds, for the compare-and-set in each commit.
+        let mut held = job.payload.clone();
+        let mut no_row = false;
+        let base_ms = p.ms;
+        while !p.done() {
+            activity::step(p.describe(ladder));
+            let (id, expected, from, l, key_scope) = (
+                job.id.clone(),
+                held.clone(),
+                p.clone(),
+                ladder.clone(),
+                self.key_scope.clone(),
+            );
+            let (next, body, saved) = self
                 .db()
                 .write(move |c| {
+                    let sql = Instant::now();
                     let scope = Scope {
                         key_scope,
-                        platform: l.platform,
-                        queue: l.queue,
+                        platform: l.platform.clone(),
+                        queue: l.queue.clone(),
                         queue_id,
-                        patches: if full {
-                            None
-                        } else {
-                            analytics::recent_patches(c, queue_id, limit)?
-                        },
+                        patches: None,
                         now: Clock::now().unix_ms,
                     };
-                    step(c, &scope)
+                    let tx = c.transaction()?;
+                    let written = match from.at() {
+                        At::Prune => {
+                            analytics::prune_patches(&tx, &scope, &from.patches)?;
+                            vec![]
+                        }
+                        At::Step(patch, step) => analytics::rebuild_patch_step(&tx, &scope, patch, step)?,
+                        At::Done => vec![],
+                    };
+                    let mut next = from.clone();
+                    next.advance(&written, sql.elapsed().as_secs_f64());
+                    next.ms =
+                        base_ms.saturating_add(i64::try_from(started.elapsed().as_millis()).unwrap_or(0));
+                    let body = AggregatePayload {
+                        ladder: l,
+                        rebuild: Some(next.clone()),
+                    }
+                    .to_json();
+                    let saved = save_progress(&tx, &id, &expected, &body)?;
+                    tx.commit()?;
+                    Ok::<_, DbError>((next, body, saved))
                 })
                 .await
                 .map_err(|e| store(&e))?;
-            let secs = started.elapsed().as_secs_f64();
-            metrics::histogram!(crate::metrics::AGGREGATE_DURATION_SECONDS,
-                "platform" => ladder.platform.clone(), "queue" => ladder.queue.clone(), "step" => name)
-            .record(secs);
-            steps_done.insert(name.to_string(), secs);
-            for (table, n) in written {
-                #[allow(clippy::cast_precision_loss)]
-                metrics::gauge!(crate::metrics::AGGREGATE_ROWS,
-                    "platform" => ladder.platform.clone(), "queue" => ladder.queue.clone(), "table" => table)
-                .set(n as f64);
-                tables.insert(table.to_string(), n);
+            *p = next;
+            match saved {
+                Saved::Written => held = body,
+                Saved::NoRow => {
+                    no_row = true;
+                    held = body;
+                }
+                // A recompute asked for since the turn began: the row holds a
+                // fresh payload, and the next turn starts over from it.
+                Saved::Superseded => return Ok(Turn::Yield(None)),
             }
+            if p.done() {
+                break;
+            }
+            if started.elapsed() >= turn {
+                // The row has the progress already; outside the queue, the
+                // yield carries it.
+                return Ok(Turn::Yield(no_row.then_some(held)));
+            }
+            tokio::time::sleep(REBUILD_PACE).await;
         }
-        if every_patch {
-            let (key_scope, l) = (self.key_scope.clone(), ladder.clone());
+        if p.every_patch {
+            let (key_scope, l, unsplit, started_ms) =
+                (self.key_scope.clone(), ladder.clone(), p.unsplit, p.started_ms);
             self.db()
                 .write(move |c| {
                     if unsplit {
@@ -516,7 +814,7 @@ impl AnalyticsContext {
                 .await
                 .map_err(|e| store(&e))?;
         }
-        Ok(tables)
+        Ok(Turn::Done)
     }
 
     /// Games in the ladder's stats, for the log line (v1 `games`).
