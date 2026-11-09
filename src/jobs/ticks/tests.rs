@@ -72,9 +72,14 @@ async fn a_tick_fires_now_then_every_period_until_stopped() {
 #[tokio::test(start_paused = true)]
 async fn a_stop_ends_a_tick_still_running() {
     let (stop, stopped) = watch::channel(false);
-    let task = tokio::spawn(every(Duration::from_secs(60), Duration::ZERO, stopped, || async {
-        tokio::time::sleep(Duration::from_secs(3600)).await;
-    }));
+    let task = tokio::spawn(every(
+        Duration::from_secs(60),
+        Duration::ZERO,
+        stopped,
+        || async {
+            tokio::time::sleep(Duration::from_secs(3600)).await;
+        },
+    ));
     tokio::task::yield_now().await;
     stop.send(true).unwrap();
     tokio::time::timeout(Duration::from_secs(1), task)
