@@ -380,6 +380,7 @@ ninjagoldfinch.lol's `/champions` data took 3.9 s, all of it the proxy's analyti
 - [x] CI-03 the DOM and browser suites in their own `ui` job (#223, ADR-175)
 - [x] CI-04 one integration-test binary (#224, ADR-176)
 - [x] CI-05 less debug info in dev and test builds (#225, ADR-177)
+- [~] CI-06 `sqlite_writes_are_timed_and_the_queue_is_a_gauge` waits for the writer's own bookkeeping before it asserts: it failed in CI run 42563140692 (2026-11-09) and in 170 of 508 runs under load, none of 496 after (branch `test/CI-06-write-metrics-scrape-race`, no PR yet)
 
 ## DOC — the documentation set (owner request 2026-10-19)
 
