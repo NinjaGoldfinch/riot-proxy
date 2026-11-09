@@ -59,7 +59,9 @@ impl Detached {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Count a write in if the bound has room; `false` drops it.
+    /// Count a write in if the bound has room; `false` when it has none, and
+    /// the caller then drops the write ([`Detached::count_dropped`]) or makes
+    /// it some other way.
     pub(super) fn admit(&self, bytes: usize) -> bool {
         let mut s = self.state();
         let fits = s.writes == 0 || (s.writes < s.max_writes && s.bytes.saturating_add(bytes) <= s.max_bytes);
@@ -67,11 +69,14 @@ impl Detached {
             s.writes += 1;
             s.bytes = s.bytes.saturating_add(bytes);
             set_gauge(s.writes);
-        } else {
-            self.dropped.fetch_add(1, Ordering::Relaxed);
-            metrics::counter!(SQLITE_DETACHED_WRITES_DROPPED_TOTAL).increment(1);
         }
         fits
+    }
+
+    /// A write the bound had no room for was dropped.
+    pub(super) fn count_dropped(&self) {
+        self.dropped.fetch_add(1, Ordering::Relaxed);
+        metrics::counter!(SQLITE_DETACHED_WRITES_DROPPED_TOTAL).increment(1);
     }
 
     /// A write admitted with `bytes` has finished (or its task was dropped).

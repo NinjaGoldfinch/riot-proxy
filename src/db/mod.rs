@@ -152,15 +152,46 @@ impl Drop for ReaderLoan {
     }
 }
 
-/// One admitted detached write; dropping it gives its room back.
-struct Admitted {
+/// Room for one detached write, taken from the bound ([`Db::reserve_behind`]);
+/// dropping it gives the room back.
+pub struct Reserved {
     inner: Arc<Inner>,
     bytes: usize,
 }
 
-impl Drop for Admitted {
+impl Drop for Reserved {
     fn drop(&mut self) {
         self.inner.detached.release(self.bytes);
+    }
+}
+
+impl std::fmt::Debug for Reserved {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Reserved").field("bytes", &self.bytes).finish()
+    }
+}
+
+impl Reserved {
+    /// Run `work` on its own task in this room; the room is given back when
+    /// the task ends or is dropped. `what` names it in the logs.
+    pub fn spawn<Fut>(self, what: &'static str, work: Fut)
+    where
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        tokio::spawn(async move {
+            let started = std::time::Instant::now();
+            work.await;
+            let took = started.elapsed();
+            if took >= behind::SLOW {
+                tracing::warn!(
+                    what,
+                    waited_ms = u64::try_from(took.as_millis()).unwrap_or(u64::MAX),
+                    "detached SQLite write waited for the writer"
+                );
+            }
+            // Released here, or when the task is dropped part-way.
+            drop(self);
+        });
     }
 }
 
@@ -346,34 +377,38 @@ impl Db {
     where
         Fut: std::future::Future<Output = ()> + Send + 'static,
     {
-        if !self.inner.detached.admit(bytes) {
-            tracing::warn!(
-                what,
-                bytes,
-                in_flight = self.detached_writes(),
-                "detached SQLite writes at their bound; write dropped"
-            );
-            return false;
+        match self.reserve_behind(bytes) {
+            Some(room) => {
+                room.spawn(what, work);
+                true
+            }
+            None => {
+                self.behind_dropped(what, bytes);
+                false
+            }
         }
-        let admitted = Admitted {
+    }
+
+    /// Room for one detached write holding `bytes`, or `None` when the bound
+    /// is full. Nothing is logged or counted for a `None`: the caller drops
+    /// the write and says so with [`Db::behind_dropped`], or makes it without
+    /// detaching (the archive, for a write a job waits for: AVL-11).
+    pub fn reserve_behind(&self, bytes: usize) -> Option<Reserved> {
+        self.inner.detached.admit(bytes).then(|| Reserved {
             inner: Arc::clone(&self.inner),
             bytes,
-        };
-        tokio::spawn(async move {
-            let started = std::time::Instant::now();
-            work.await;
-            let took = started.elapsed();
-            if took >= behind::SLOW {
-                tracing::warn!(
-                    what,
-                    waited_ms = u64::try_from(took.as_millis()).unwrap_or(u64::MAX),
-                    "detached SQLite write waited for the writer"
-                );
-            }
-            // Released here, or when the task is dropped part-way.
-            drop(admitted);
-        });
-        true
+        })
+    }
+
+    /// Log and count a detached write dropped because the bound was full.
+    pub fn behind_dropped(&self, what: &'static str, bytes: usize) {
+        self.inner.detached.count_dropped();
+        tracing::warn!(
+            what,
+            bytes,
+            in_flight = self.detached_writes(),
+            "detached SQLite writes at their bound; write dropped"
+        );
     }
 
     /// Detached writes ([`Db::write_behind`]) not yet finished.

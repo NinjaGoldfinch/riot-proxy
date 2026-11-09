@@ -23,7 +23,7 @@ use futures_util::future::BoxFuture;
 use crate::cache::keys::KeyScope;
 use crate::clock::Clock;
 use crate::db::{Db, DbError};
-use crate::fetcher::Archive;
+use crate::fetcher::{Archive, Stored};
 use crate::jobs::archive::queue_missing_half_on;
 use crate::jobs::offload::Pending;
 use crate::jobs::{Queue, priority};
@@ -45,9 +45,12 @@ pub struct SqliteArchive {
     /// one is full (OBJ-03); `None` without a bucket.
     pending: Option<Arc<Pending>>,
     /// Bodies handed to the write-behind and not yet stored, by archive key,
-    /// so [`Archive::get`] serves them meanwhile (AVL-02).
-    unstored: Arc<Mutex<HashMap<String, Bytes>>>,
+    /// so [`Archive::get`] serves them meanwhile (AVL-02), each with the
+    /// handle that says when its write has landed (AVL-11).
+    unstored: Arc<Mutex<Bodies>>,
 }
+
+type Bodies = HashMap<String, (Bytes, Stored)>;
 
 #[derive(Debug, Clone)]
 struct Halves {
@@ -115,6 +118,17 @@ impl SqliteArchive {
     }
 }
 
+impl SqliteArchive {
+    /// [`Archive::put`] for a match or timeline, [`Archive::observe`] for the rest.
+    async fn write(&self, req: &RiotRequest, body: Bytes) {
+        if req.endpoint.immutable {
+            self.put(req, body).await;
+        } else {
+            self.observe(req, body).await;
+        }
+    }
+}
+
 enum Kind {
     Match,
     Timeline,
@@ -133,14 +147,14 @@ impl Kind {
 /// A body among the unstored ones until its detached write finishes or is
 /// dropped. A later body under the same key is left alone.
 struct Unstored {
-    map: Arc<Mutex<HashMap<String, Bytes>>>,
+    map: Arc<Mutex<Bodies>>,
     key: String,
     body: Bytes,
 }
 
 impl Unstored {
-    fn hold(map: &Arc<Mutex<HashMap<String, Bytes>>>, key: String, body: Bytes) -> Self {
-        lock(map).insert(key.clone(), body.clone());
+    fn hold(map: &Arc<Mutex<Bodies>>, key: String, body: Bytes, stored: Stored) -> Self {
+        lock(map).insert(key.clone(), (body.clone(), stored));
         Self {
             map: Arc::clone(map),
             key,
@@ -154,15 +168,39 @@ impl Drop for Unstored {
         let mut map = lock(&self.map);
         if map
             .get(&self.key)
-            .is_some_and(|b| b.as_ptr() == self.body.as_ptr())
+            .is_some_and(|(b, _)| b.as_ptr() == self.body.as_ptr())
         {
             map.remove(&self.key);
         }
     }
 }
 
-fn lock(map: &Mutex<HashMap<String, Bytes>>) -> std::sync::MutexGuard<'_, HashMap<String, Bytes>> {
+fn lock(map: &Mutex<Bodies>) -> std::sync::MutexGuard<'_, Bodies> {
     map.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// A write the write-behind had no room for, until someone makes it: dropped
+/// unmade, it is logged and counted as the write-behind drops any other.
+struct Unmade {
+    db: Db,
+    what: &'static str,
+    bytes: usize,
+    made: bool,
+}
+
+impl Unmade {
+    /// The write was made after all.
+    fn made(mut self) {
+        self.made = true;
+    }
+}
+
+impl Drop for Unmade {
+    fn drop(&mut self) {
+        if !self.made {
+            self.db.behind_dropped(self.what, self.bytes);
+        }
+    }
 }
 
 /// Which archive table a request belongs to, and its match id.
@@ -180,7 +218,7 @@ impl Archive for SqliteArchive {
         let Some((kind, id)) = target(req) else {
             return Box::pin(async { None });
         };
-        if let Some(body) = lock(&self.unstored).get(&kind.key(id)).cloned() {
+        if let Some((body, _)) = lock(&self.unstored).get(&kind.key(id)).cloned() {
             return Box::pin(async move { Some(body) });
         }
         let id = id.to_string();
@@ -248,25 +286,58 @@ impl Archive for SqliteArchive {
     }
 
     /// A match or timeline body, or a player's ranks, written behind the
-    /// response (AVL-02, ADR-210): through [`Db::write_behind`], with the body
-    /// served by [`Archive::get`] until it is stored. Everything else is
+    /// response (AVL-02, ADR-210): on a detached task within the
+    /// write-behind's bound, with the body served by [`Archive::get`] until
+    /// it is stored. The handle resolves when the write has landed, for a
+    /// caller that reads the archive next (AVL-11). Everything else is
     /// nothing to write.
-    fn store_behind<'a>(&'a self, req: &'a RiotRequest, body: Bytes) -> BoxFuture<'a, ()> {
+    ///
+    /// At the bound the write is not started and the body is not held: the
+    /// handle is then the write itself. A job's fetch waits on it and so
+    /// makes the write, which is how a job's write is never dropped; when
+    /// only requests were waiting nobody does, and it is dropped and counted
+    /// as before.
+    fn store_behind<'a>(&'a self, req: &'a RiotRequest, body: Bytes) -> BoxFuture<'a, Stored> {
         let bytes = body.len();
-        if let Some((kind, id)) = target(req) {
-            let unstored = Unstored::hold(&self.unstored, kind.key(id), body.clone());
-            let (this, req) = (self.clone(), req.clone());
-            self.db.write_behind("archive", bytes, async move {
-                this.put(&req, body).await;
-                drop(unstored);
-            });
-        } else if observed(req).is_some() {
-            let (this, req) = (self.clone(), req.clone());
-            self.db.write_behind("ranks", bytes, async move {
-                this.observe(&req, body).await;
-            });
-        }
-        Box::pin(async {})
+        let (what, held) = match target(req) {
+            Some((kind, id)) => ("archive", Some(kind.key(id))),
+            None if observed(req).is_some() => ("ranks", None),
+            None => return Box::pin(async { Stored::done() }),
+        };
+        let (this, owned) = (self.clone(), req.clone());
+        let stored = match self.db.reserve_behind(bytes) {
+            Some(room) => {
+                let (landed, stored) = Stored::pending();
+                let unstored =
+                    held.map(|key| Unstored::hold(&self.unstored, key, body.clone(), stored.clone()));
+                room.spawn(what, async move {
+                    this.write(&owned, body).await;
+                    // The row is there: readers go to it, then waiters go on.
+                    drop(unstored);
+                    drop(landed);
+                });
+                stored
+            }
+            None => {
+                let unmade = Unmade {
+                    db: self.db.clone(),
+                    what,
+                    bytes,
+                    made: false,
+                };
+                Stored::when(async move {
+                    this.write(&owned, body).await;
+                    unmade.made();
+                })
+            }
+        };
+        Box::pin(async move { stored })
+    }
+
+    fn storing(&self, req: &RiotRequest) -> Stored {
+        target(req)
+            .and_then(|(kind, id)| lock(&self.unstored).get(&kind.key(id)).map(|(_, s)| s.clone()))
+            .unwrap_or_default()
     }
 }
 

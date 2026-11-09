@@ -8,8 +8,8 @@ How schema changes ship: one forward-only refinery SQL file under `src/db/migrat
 |---|---|
 | Engine | refinery, embedded at compile time by `refinery::embed_migrations!("src/db/migrations")` (`src/db/mod.rs:48-50`) |
 | Naming | `V<nnnn>__<name>.sql`; refinery only recognises `^[UV]\d+__\w+\.sql$`, and the four-digit padding is this repository's convention (ADR-010, `docs/DECISIONS.md:51`). refinery logs them without the padding (`V27__matchup_builds`) |
-| When | `Db::open` applies pending migrations on the writer connection, after the pragmas and before the readers open (`src/db/mod.rs:180-196`). `serve` opens that way, and so does every CLI command that touches the database (`src/cli/mod.rs:153-158`). `riot-proxy migrate` applies them on a raw connection and prints `<path>: up to date` or `<path>: applied V…` (`src/cli/mod.rs:161-182`) |
-| Transaction | all pending files in **one** transaction (`set_grouped(true)`, `src/db/mod.rs:491-493`); applied versions are skipped, so running on every boot is safe |
+| When | `Db::open` applies pending migrations on the writer connection, after the pragmas and before the readers open (`src/db/mod.rs:211-227`). `serve` opens that way, and so does every CLI command that touches the database (`src/cli/mod.rs:153-158`). `riot-proxy migrate` applies them on a raw connection and prints `<path>: up to date` or `<path>: applied V…` (`src/cli/mod.rs:161-182`) |
+| Transaction | all pending files in **one** transaction (`set_grouped(true)`, `src/db/mod.rs:526-528`); applied versions are skipped, so running on every boot is safe |
 | History | `refinery_schema_history(version, name, applied_on, checksum)`; a fresh database has 32 rows after V0033, V0031 being unassigned on `main` (`src/db/tests.rs:899`) |
 | Direction | forward only. There are no down migrations: every file is `V…`, and a change that must be undone is undone by restoring the previous backup (`README.md:194`; [../deployment/upgrade-and-rollback.md](../deployment/upgrade-and-rollback.md)) |
 
@@ -120,4 +120,4 @@ Then: add `"clash_teams"` to the sorted list in `migrations_create_exactly_the_d
 
 ---
 **Sources:** `src/db/mod.rs:L23-L32`, `L131-L147`, `L294-L296`, `src/cli/mod.rs:L153-L182`, `src/db/migrations/V0001__init.sql:L1-L2`, `V0003__cs_and_duration.sql`, `V0021__facts_without_rowid.sql:L1-L33`, `V0023__body_packs.sql:L1-L48`, `V0027__matchup_builds.sql:L1-L19`, `src/db/tests.rs:L92-L153`, `L170`, `L401-L453`, `L542-L565`, `L734`, `L876-L918`, `L1221`, `src/archive/offload/tests.rs:L519-L532`, `src/jobs/offload/tests.rs:L497-L512`, `src/routes/dev.rs:L38-L87`, `tests/common/mod.rs:L32-L33`, `docs/design/04-data-and-cache.md:L61-L63`, `L417-L425`, `docs/design/12-object-storage-and-hosting.md:L196-L221`, `docs/DECISIONS.md:L49-L51` (ADR-010), `L1455` (ADR-135), `L1460-L1462` (ADR-136), `L1490-L1505` (ADR-140, ADR-141), `L1510` (ADR-142), `README.md:L194`, `docs/_meta/scratch/persistence.md` §1
-**Last verified:** 2026-11-09 against commit `d1aa2b5`
+**Last verified:** 2026-11-09 against commit `7531561`
