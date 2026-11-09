@@ -87,6 +87,7 @@ impl Env {
                               ('j2', 'backfill:player', 20000, '{}', 'pending', 1),
                               ('j3', 'maintenance', 30000, '{}', 'done', 1);
                      INSERT INTO metrics_history (at, point) VALUES (1, '{}');
+                     INSERT INTO tiers_sweep (prefix, swept_to, swept_at) VALUES ('OC1', 'OC1_1', 1);
                      INSERT INTO limiter_state (scope, windows, updated_at) VALUES ('app:oc1', '[]', 1);",
                 )?;
                 Ok::<_, riot_proxy::db::DbError>(())
@@ -150,6 +151,8 @@ async fn preview_counts_what_would_go() {
     let body = r.json();
     assert_eq!(rows_of(&body, "players"), 2);
     assert_eq!(rows_of(&body, "matches"), 1);
+    // The tier sweep's cursors go with the matches they describe (AVL-06).
+    assert_eq!(rows_of(&body, "tiers_sweep"), 1);
     assert_eq!(rows_of(&body, "jobs"), 3);
     assert_eq!(body["runningJobs"], 1);
     assert_eq!(body["l1Entries"], 1);
@@ -186,6 +189,7 @@ async fn reset_wipes_fetched_data_and_keeps_keys_and_limits() {
     assert_eq!(rows_of(&body, "players"), 2);
     assert_eq!(rows_of(&body, "timelines"), 1);
     assert_eq!(rows_of(&body, "jobs"), 3);
+    assert_eq!(rows_of(&body, "tiers_sweep"), 1, "the tier cursors are cleared");
     // The seeded running row has no worker behind it: nothing to stop.
     assert_eq!(
         (&body["runningJobs"], &body["stoppedJobs"]),

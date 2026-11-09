@@ -59,13 +59,13 @@ These routes return Riot's bytes verbatim with status 200 and `Content-Type: app
 
 | Header | Meaning |
 |---|---|
-| `X-Cache` | `HIT` (fresh L1), `MISS` (fetched from Riot), `STALE` (between soft and hard TTL, or served from a copy because Riot or the limiter failed), `HIT-NEG` (a cached 404, sent on the error response), `ARCHIVE` (immutable body from the match archive), `BYPASS` (`?refresh=true` by an admin-scoped consumer) (`src/fetcher.rs:L50-L69`, `L306-L372`) |
+| `X-Cache` | `HIT` (fresh L1), `MISS` (fetched from Riot), `STALE` (between soft and hard TTL, or served from a copy because Riot or the limiter failed), `HIT-NEG` (a cached 404, sent on the error response), `ARCHIVE` (immutable body from the match archive), `BYPASS` (`?refresh=true` by an admin-scoped consumer) (`src/fetcher.rs:L53-L72`, `L345-L418`) |
 | `X-Cache-Age` | Age of the **content** in whole seconds; a byte-identical refresh does not reset it (`src/routes/passthrough.rs:L441-L446`, `src/cache/l1.rs:L161-L176`) |
 | `X-Cache-Fetched-Age` | Seconds since the proxy last read it from Riot; absent for `ARCHIVE` (`src/routes/passthrough.rs:L447-L454`) |
 
 `?refresh=true` (or `=1`) skips cache reads but still writes, and only for consumers with the `admin` scope; for a read-only key it is ignored silently (`src/routes/passthrough.rs:L470-L476`). The `/v1/players/*` composites allow it for every consumer but meter it to one claim per 60 s per part and PUUID (see [endpoints-players-analytics.md](endpoints-players-analytics.md)).
 
-TTLs per Riot endpoint are in [../reference/riot-api-usage.md](../reference/riot-api-usage.md). Matches and timelines are immutable: after the first fetch they are served from the archive forever with `X-Cache: ARCHIVE`, `X-Cache-Age: 0` (`src/fetcher.rs:L311-L322`).
+TTLs per Riot endpoint are in [../reference/riot-api-usage.md](../reference/riot-api-usage.md). Matches and timelines are immutable: after the first fetch they are served from the archive forever with `X-Cache: ARCHIVE`, `X-Cache-Age: 0` (`src/fetcher.rs:L350-L361`).
 
 A malformed path segment (for example a bad percent-encoding) is `400 VALIDATION` with the message `params <axum text>` (`src/routes/riot.rs:L137-L139`).
 
@@ -95,7 +95,7 @@ Path values are **case-sensitive** ajv enums: `EUW1` is refused with `400 BAD_RE
 
 Source: `src/riot/routing.rs:L92-L128`. `me1` is not in v1 nor in Riot's routing-values table; the owner confirmed its host and its `europe` grouping on 2026-11-09 (ADR-216). `sea` has no account-v1 cluster, so account routes pinned to `sea` go to `asia` (`src/riot/routing.rs:L188-L196`).
 
-**Account-cluster picking (ADR-066).** Riot serves every account from each of `americas`, `asia` and `europe`. The region-less `/v1/riot/accounts/*` routes, and the internal account lookups of the player profile and admin tracking, take a token from the first cluster with room now in the order `asia`, `americas`, `europe`; if none has room they wait for the soonest, inside the usual budget; a cluster that answered a 429 goes last for the rest of the request (`src/riot/routing.rs:L151-L153`, `src/fetcher.rs:L617-L655`). All clusters share one cache entry keyed on the literal host `account` (`src/cache/keys.rs:L81-L88`). The `/{region}/` variants pin a cluster and never move.
+**Account-cluster picking (ADR-066).** Riot serves every account from each of `americas`, `asia` and `europe`. The region-less `/v1/riot/accounts/*` routes, and the internal account lookups of the player profile and admin tracking, take a token from the first cluster with room now in the order `asia`, `americas`, `europe`; if none has room they wait for the soonest, inside the usual budget; a cluster that answered a 429 goes last for the rest of the request (`src/riot/routing.rs:L151-L153`, `src/fetcher.rs:L673-L711`). All clusters share one cache entry keyed on the literal host `account` (`src/cache/keys.rs:L81-L88`). The `/{region}/` variants pin a cluster and never move.
 
 ### Other headers
 
@@ -145,7 +145,7 @@ No key. Not listed in the document itself. `riot-proxy spec` prints the same JSO
 
 ## Dev and dashboard pages (toggles)
 
-`DEV_UI` defaults on but is forced off when `ENV=production`; `DASHBOARD_UI` defaults on (`src/config.rs:L750-L752`, `L812-L815`). None of these are in the OpenAPI document.
+`DEV_UI` defaults on but is forced off when `ENV=production`; `DASHBOARD_UI` defaults on (`src/config.rs:L755-L757`, `L812-L815`). None of these are in the OpenAPI document.
 
 | Method | Path | Toggle | Auth | Response | Handler |
 |---|---|---|---|---|---|
@@ -154,8 +154,8 @@ No key. Not listed in the document itself. `riot-proxy spec` prints the same JSO
 | GET | `/dev/config.json` | `DEV_UI` | none | `{authDisabled,version,env,docsUi,dashboardUi,regions[],platforms[{value,label,region}]}`, `no-store` | `src/routes/ui.rs:L199-L202` |
 | GET | `/dev/openapi.json` | `DEV_UI` | none | the OpenAPI JSON even when `DOCS_UI` is off, `no-store` | `src/routes/ui.rs:L203-L215` |
 | GET | `/dev/jobs` | `DEV_UI` and `DASHBOARD_UI` | none | `302 Location: /dashboard#jobs` | `src/routes/ui.rs:L223-L230` |
-| GET | `/dev/reset` | `DEV_UI` | admin | preview `{tables[{name,rows}],l1Entries,runningJobs,kept[]}` | `src/routes/dev.rs:L155` |
-| POST | `/dev/reset` | `DEV_UI` | admin | body must be `{"confirm":"reset"}` else `400 VALIDATION` `body/confirm must be equal to 'reset'`; wipes data tables, keeps `consumers`, `limiter_state`, `refinery_schema_history` | `src/routes/dev.rs:L188` (`L36`, `L86`, `L189-L201`) |
+| GET | `/dev/reset` | `DEV_UI` | admin | preview `{tables[{name,rows}],l1Entries,runningJobs,kept[]}` | `src/routes/dev.rs:L156` |
+| POST | `/dev/reset` | `DEV_UI` | admin | body must be `{"confirm":"reset"}` else `400 VALIDATION` `body/confirm must be equal to 'reset'`; wipes data tables, keeps `consumers`, `limiter_state`, `refinery_schema_history` | `src/routes/dev.rs:L189` (`L36`, `L86`, `L189-L201`) |
 | GET | `/dashboard` | `DASHBOARD_UI` | none for the page; every call it makes needs an admin key | HTML with a strong `ETag`, `Cache-Control: no-cache`; `If-None-Match` hit is 304 | `src/routes/ui.rs:L218-L221` (`L113-L131`) |
 
 ## The 404 fallback
@@ -241,5 +241,5 @@ The frame shape is `src/events.rs:L159-L172`; data fields per event are listed i
 - Gauge `proxy_ws_connections`; counter `events_published_total{name}`.
 
 ---
-**Sources:** `src/app.rs:L30-L35,L71-L121,L258-L264`, `src/routes/docs.rs:L86-L153,L386-L399`, `src/routes/health.rs:L21-L200`, `src/routes/ui.rs:L94-L233`, `src/routes/dev.rs:L33-L253`, `src/routes/ws.rs:L497-L572`, `src/ws/protocol.rs:L23-L147`, `src/ws/socket.rs:L38-L206`, `src/ws/hub.rs:L20-L205`, `src/http/auth.rs:L141-L423`, `src/status/mod.rs:L150-L246`, `src/status/ratelimits.rs:L103-L246`, `src/http/quota.rs:L320-L431`, `src/http/request_id.rs:L287-L339`, `src/http/validate.rs:L21-L88`, `src/routes/passthrough.rs:L401-L476`, `src/fetcher.rs:L50-L69,L306-L372,L617-L655`, `src/riot/routing.rs:L48-L196`, `docs/DECISIONS.md` ADR-216, `docs/_meta/scratch/routes.md`, `docs/design/12-object-storage-and-hosting.md:L904-L925`, `tests/snapshots/http__unknown_route_404.snap`, `tests/snapshots/ws_hub__ws_session.snap`, live capture against `target/debug/riot-proxy` 2.7.0
-**Last verified:** 2026-11-09 against commit `6eefe67`
+**Sources:** `src/app.rs:L30-L35,L71-L121,L258-L264`, `src/routes/docs.rs:L86-L153,L386-L399`, `src/routes/health.rs:L21-L200`, `src/routes/ui.rs:L94-L233`, `src/routes/dev.rs:L33-L254`, `src/routes/ws.rs:L497-L572`, `src/ws/protocol.rs:L23-L147`, `src/ws/socket.rs:L38-L206`, `src/ws/hub.rs:L20-L205`, `src/http/auth.rs:L141-L423`, `src/status/mod.rs:L150-L246`, `src/status/ratelimits.rs:L103-L246`, `src/http/quota.rs:L320-L431`, `src/http/request_id.rs:L287-L339`, `src/http/validate.rs:L21-L88`, `src/routes/passthrough.rs:L401-L476`, `src/fetcher.rs:L53-L72,L345-L418,L673-L711`, `src/riot/routing.rs:L48-L196`, `docs/DECISIONS.md` ADR-216, `docs/_meta/scratch/routes.md`, `docs/design/12-object-storage-and-hosting.md:L904-L925`, `tests/snapshots/http__unknown_route_404.snap`, `tests/snapshots/ws_hub__ws_session.snap`, live capture against `target/debug/riot-proxy` 2.7.0
+**Last verified:** 2026-11-09 against commit `79d2bb8`

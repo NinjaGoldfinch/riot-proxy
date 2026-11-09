@@ -106,7 +106,7 @@ Record the decision as the next free `ADR-nnn` in `docs/DECISIONS.md` and tick t
 ### 10. This documentation set
 
 - `docs/api/endpoints.md` and its per-group file (`docs/api/endpoints-riot-lol.md` for a `/v1/lol` route): a row for the route (auth, parameters, Riot method, `X-Cache` states).
-- `docs/api/openapi.json`: regenerate with `riot-proxy spec > docs/api/openapi.json`; `spec` needs no configuration or key (`src/cli/mod.rs:72-81`).
+- `docs/api/openapi.json`: regenerate with `riot-proxy spec > docs/api/openapi.json`; `spec` needs no configuration or key (`src/cli/mod.rs:73-82`).
 - `docs/reference/riot-api-usage.md` if a Riot method was added.
 
 ## Checklist
@@ -122,5 +122,5 @@ Record the decision as the next free `ADR-nnn` in `docs/DECISIONS.md` and tick t
 9. `just lint`, `just test`; CI green ([ci.md](./ci.md)).
 
 ---
-**Sources:** `src/routes/docs.rs:L116-L153`, `L374-L377`, `src/routes/riot.rs:L21-L84`, `src/routes/lol.rs:L30-L104`, `L217-L229`, `src/routes/passthrough.rs:L17-L89`, `L94-L167`, `src/routes/mod.rs:L3-L15`, `src/routes/statics.rs:L71`, `src/http/validate.rs:L21-L31`, `L67-L253`, `src/app.rs:L71-L133`, `src/riot/endpoints.rs:L92-L288`, `L539-L578`, `src/cli/mod.rs:L72-L81`, `src/ui/showcase.html:L231-L241`, `tests/ui.rs:L427-L471`, `tests/openapi.rs:L9-L60`, `tests/lol_routes.rs:L22-L80`, `tests/riot_routes.rs:L16-L80`, `L243-L245`, `docs/design/11-showcase.md:L117-L131`, `docs/IMPLEMENTATION.md:L18`, `L22-L24`, `L94`, `PROGRESS.md:L388-L389`, `L391`, `.github/PULL_REQUEST_TEMPLATE.md:L21`
-**Last verified:** 2026-11-09 against commit `6eefe67`
+**Sources:** `src/routes/docs.rs:L116-L153`, `L374-L377`, `src/routes/riot.rs:L21-L84`, `src/routes/lol.rs:L30-L104`, `L217-L229`, `src/routes/passthrough.rs:L17-L89`, `L94-L167`, `src/routes/mod.rs:L3-L15`, `src/routes/statics.rs:L71`, `src/http/validate.rs:L21-L31`, `L67-L253`, `src/app.rs:L71-L133`, `src/riot/endpoints.rs:L92-L288`, `L539-L578`, `src/cli/mod.rs:L73-L82`, `src/ui/showcase.html:L231-L241`, `tests/ui.rs:L427-L471`, `tests/openapi.rs:L9-L60`, `tests/lol_routes.rs:L22-L80`, `tests/riot_routes.rs:L16-L80`, `L243-L245`, `docs/design/11-showcase.md:L117-L131`, `docs/IMPLEMENTATION.md:L18`, `L22-L24`, `L94`, `PROGRESS.md:L388-L389`, `L391`, `.github/PULL_REQUEST_TEMPLATE.md:L21`
+**Last verified:** 2026-11-09 against commit `79d2bb8`

@@ -76,7 +76,10 @@ impl Env {
         self.server.received_requests().await.unwrap().len()
     }
 
+    /// Rows in `table` once the writes running behind the requests so far
+    /// have landed (AVL-02).
     async fn archived(&self, table: &'static str) -> i64 {
+        self.state.db.flush_detached().await;
         self.state
             .db
             .read(move |c| {
@@ -89,8 +92,10 @@ impl Env {
 }
 
 impl Env {
-    /// Pending `archive:match` jobs: (match id, priority, payload).
+    /// Pending `archive:match` jobs: (match id, priority, payload), once the
+    /// writes behind the requests so far have queued theirs (AVL-02).
     async fn queued(&self) -> Vec<(String, i64, Value)> {
+        self.state.db.flush_detached().await;
         self.state
             .db
             .read(|c| {
@@ -314,6 +319,7 @@ async fn offload(
     kind: riot_proxy::archive::pack::Kind,
 ) {
     use riot_proxy::archive::offload;
+    e.state.db.flush_detached().await;
     let ids = vec![MATCH_ID.to_string()];
     offload::write_pack(&e.state.db, objects, kind, &ids, 1_000)
         .await

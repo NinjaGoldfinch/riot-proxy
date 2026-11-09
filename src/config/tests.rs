@@ -59,6 +59,7 @@ fn defaults_match_v1_and_design_07() {
     assert!(c.stale_while_revalidate);
     assert_eq!(c.metrics_interval_s, 5);
     assert_eq!(c.metrics_history_interval_s, 60);
+    assert_eq!(c.archive_stats_interval_s, 3600);
     assert_eq!(c.track_poll_live_s, 60);
     assert_eq!(c.track_poll_rank_s, 600);
     assert_eq!(c.track_poll_match_s, 300);
