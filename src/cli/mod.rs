@@ -12,6 +12,7 @@ pub mod riot;
 pub mod serve;
 
 use std::process::ExitCode;
+use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 
@@ -111,6 +112,7 @@ pub fn run() -> ExitCode {
             Command::Riot(cmd) => riot::run(&config, cmd).await,
         }
     });
+    shut_down(runtime, BLOCKING_GRACE);
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -118,6 +120,21 @@ pub fn run() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// How long blocking work a returned command abandoned may still run before
+/// the process exits (ADR-209): a boot catch-up query a shutdown cut short
+/// goes on in its `spawn_blocking` thread, which dropping the runtime would
+/// otherwise wait for, for minutes on a large archive. Everything that must
+/// finish (the drain, the job grace, the final checkpoint and L2 flush) was
+/// awaited before the command returned.
+const BLOCKING_GRACE: Duration = Duration::from_secs(10);
+// With the 10 s drain and the 10 s job grace, well inside systemd's 90 s.
+const _: () = assert!(BLOCKING_GRACE.as_secs() <= 15);
+
+/// Drop the runtime, giving blocking tasks still running at most `grace`.
+fn shut_down(runtime: tokio::runtime::Runtime, grace: Duration) {
+    runtime.shutdown_timeout(grace);
 }
 
 /// design/03: the workload is I/O; four workers are plenty.
@@ -165,4 +182,32 @@ async fn migrate(config: &Config) -> anyhow::Result<()> {
         println!("{}: applied {}", path.display(), applied.join(", "));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    /// ADR-209: a blocking task the command abandoned (a boot check a
+    /// shutdown cut short) does not hold the process open past the grace.
+    #[test]
+    fn shutting_down_does_not_wait_for_abandoned_blocking_work() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .build()
+            .unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        runtime.block_on(async {
+            // Abandoned, as `select!` abandons a catch-up query.
+            drop(tokio::task::spawn_blocking(move || {
+                let _ = started_tx.send(());
+                std::thread::sleep(Duration::from_secs(30));
+            }));
+        });
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let at = std::time::Instant::now();
+        shut_down(runtime, Duration::from_millis(100));
+        assert!(at.elapsed() < Duration::from_secs(5), "{:?}", at.elapsed());
+    }
 }
