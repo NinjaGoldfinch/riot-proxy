@@ -1,7 +1,8 @@
 //! A real SIGTERM lets an in-flight request finish before the server exits,
 //! and `serve` stops inside its budget while a job holds the writer (AVL-04).
-//! The tests that send this process SIGTERM take [`SIGNALS`] first: each
-//! one's server would otherwise also stop on the other's signal.
+//! The tests that send this process SIGTERM take [`common::SIGNALS`] first,
+//! as does every test that runs `serve_with`: each one's server would
+//! otherwise also stop on the other's signal under `cargo test`.
 #![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -23,9 +24,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use wiremock::MockServer;
 
-/// Held by every test here that sends this process SIGTERM.
-static SIGNALS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
 fn sigterm_self() {
     let status = std::process::Command::new("kill")
         .args(["-TERM", &std::process::id().to_string()])
@@ -45,7 +43,7 @@ async fn raw_get(addr: std::net::SocketAddr, path: &str) -> String {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sigterm_drains_in_flight_requests() {
-    let _signals = SIGNALS.lock().await;
+    let _signals = common::SIGNALS.lock().await;
     let router = Router::new().route(
         "/slow",
         get(|| async {
@@ -173,7 +171,7 @@ async fn hold_state(db: &Db) -> String {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sigterm_while_a_job_holds_the_writer_exits_inside_the_budget() {
-    let _signals = SIGNALS.lock().await;
+    let _signals = common::SIGNALS.lock().await;
     let riot = MockServer::start().await;
     let data = tempfile::tempdir().unwrap();
     let path = data.path().join("riot-proxy.db");
@@ -224,7 +222,6 @@ async fn sigterm_while_a_job_holds_the_writer_exits_inside_the_budget() {
             kind: HOLD,
             make: Arc::new(make),
         }),
-        ..ServeOptions::default()
     };
     let serve = tokio::spawn(serve_with(config, options));
     let waiting = Instant::now();
@@ -273,11 +270,21 @@ async fn sigterm_while_a_job_holds_the_writer_exits_inside_the_budget() {
         "the final limiter checkpoint ran after the signal (ADR-026): {checkpointed} < {signalled}"
     );
 
-    // The next boot re-queues it.
+    // The next boot re-queues it, with the boot's other jobs still running
+    // when the workers were aborted.
+    let running: i64 = db
+        .read(|c| {
+            c.query_row("SELECT count(*) FROM jobs WHERE state = 'running'", [], |r| {
+                r.get(0)
+            })
+            .map_err(DbError::from)
+        })
+        .await
+        .unwrap();
     let recovered = Scheduler::new(db.clone(), Registry::new())
         .recover()
         .await
         .unwrap();
-    assert_eq!(recovered.requeued, 1);
+    assert_eq!(recovered.requeued, usize::try_from(running).unwrap());
     assert_eq!(hold_state(&db).await, "pending");
 }

@@ -109,6 +109,7 @@ fn free_port() -> u16 {
 #[tokio::test]
 #[ignore = "end to end through serve; run at the phase gate"]
 async fn a_master_crawl_of_thirty_players_runs_every_stage_and_fetches_each_match_once() {
+    let _signals = common::SIGNALS.lock().await;
     let server = MockServer::start().await;
     mock_riot(&server).await;
     let data = tempfile::tempdir().unwrap();
