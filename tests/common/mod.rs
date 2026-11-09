@@ -12,10 +12,11 @@ use tower::ServiceExt;
 
 pub const TEST_KEY: &str = "RGAPI-test-key-not-real";
 
-/// Held by a test that sends this process SIGTERM or runs `serve_with` (whose
-/// server stops on any SIGTERM the process gets): under `cargo test` the tests
-/// share one process, so one test's signal would stop another's server.
-/// nextest runs each test in its own process, where the lock is uncontended.
+/// Held by a test that sends this process SIGTERM or runs `serve_with` on the
+/// process's signals (no `ServeOptions::shutdown`, so its server stops on any
+/// SIGTERM the process gets): under `cargo test` the tests share one process,
+/// so one test's signal would stop another's server. nextest runs each test in
+/// its own process, where the lock is uncontended.
 pub static SIGNALS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 pub fn config(extra: &[(&str, &str)]) -> Config {

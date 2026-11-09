@@ -222,6 +222,7 @@ async fn sigterm_while_a_job_holds_the_writer_exits_inside_the_budget() {
             kind: HOLD,
             make: Arc::new(make),
         }),
+        ..ServeOptions::default()
     };
     let serve = tokio::spawn(serve_with(config, options));
     let waiting = Instant::now();
