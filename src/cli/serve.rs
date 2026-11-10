@@ -439,11 +439,14 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
             "starting job workers"
         );
         let workers = scheduler.start(usize::try_from(config.job_concurrency).unwrap_or(8));
-        let ticks = crate::jobs::ticks::Ticks::start_with(
+        let ticks = crate::jobs::ticks::Ticks::start_with_backups(
             &scheduler,
             &scope,
             crate::jobs::ticks::running_schedule(&config),
             crate::jobs::ticks::ladders(&config),
+            // With backups on, a maintenance run that wrote none is not the
+            // tick's last run (AVL-13).
+            (config.backup_keep > 0).then(|| config.data_dir.join("backups")),
         );
         let history = crate::stats::spawn_sampler(
             Arc::clone(&stats),

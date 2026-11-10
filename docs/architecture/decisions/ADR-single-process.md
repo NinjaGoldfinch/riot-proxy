@@ -8,8 +8,8 @@
 
 **Status.** Accepted, in force (ADR-001, ADR-003, 2026-09-16).
 
-**Evidence.** `docs/DECISIONS.md` ADR-001 and ADR-003; `src/main.rs`; `src/cli/serve.rs:94-493` (everything spawned from one `serve`); `Cargo.toml` (`[profile.release]` static, stripped); CI `build-musl` job.
+**Evidence.** `docs/DECISIONS.md` ADR-001 and ADR-003; `src/main.rs`; `src/cli/serve.rs:94-496` (everything spawned from one `serve`); `Cargo.toml` (`[profile.release]` static, stripped); CI `build-musl` job.
 
 ---
-**Sources:** `docs/DECISIONS.md:L3-L14`, `docs/design/03-architecture.md`, `src/cli/serve.rs:L73-L467`, `src/db/mod.rs:L173-L213`, `src/jobs/scheduler.rs:L963-L973`
-**Last verified:** 2026-11-09 against commit `d1aa2b5`
+**Sources:** `docs/DECISIONS.md:L3-L14`, `docs/design/03-architecture.md`, `src/cli/serve.rs:L73-L470`, `src/db/mod.rs:L173-L213`, `src/jobs/scheduler.rs:L963-L973`
+**Last verified:** 2026-11-09 against commit `7531561`
