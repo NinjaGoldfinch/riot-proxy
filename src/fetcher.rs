@@ -20,8 +20,9 @@
 //! `/v1/players/*` composites use, also serves a copy past its hard TTL
 //! (`Lookup::Expired`, kept `EXPIRED_KEEP`) as `STALE` with its real ages when
 //! the upstream leg fails for any reason but Riot's 404, or has not answered
-//! within the interactive budget and [`STORED_MARGIN`] (AVL-09): the leg goes
-//! on behind the answer. The passthrough routes keep v1's rule.
+//! within the caller's budget and [`STORED_MARGIN`] (AVL-09; a forced refresh
+//! waits for its answer): the leg goes on behind the answer. The passthrough
+//! routes keep v1's rule.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -54,7 +55,7 @@ const MAX_ATTEMPTS: u32 = 8;
 pub const BULK_BUDGET: Duration = Duration::from_secs(15 * 60);
 /// A job's trace notes a rate-limit wait from this long on (DEV-19).
 const TRACE_WAIT_FROM: Duration = Duration::from_millis(20);
-/// How long past the interactive budget [`Fetcher::fetch_or_stored`] waits
+/// How long past the caller's budget [`Fetcher::fetch_or_stored`] waits
 /// for a fetch before it serves the stored copy (AVL-09). The budget is what
 /// the limiter may take; this is for Riot's answer on top, so a fetch that got
 /// its token at the last moment and an ordinary answer still wins.
@@ -401,11 +402,7 @@ impl Fetcher {
         // 3. Miss (or bypass): coalesce, then go upstream.
         record("miss");
         let inner = Arc::clone(&self.inner);
-        let budget = match (opts.job, opts.priority) {
-            (true, _) => inner.job_budget,
-            (false, Priority::Interactive) => inner.interactive_budget,
-            (false, Priority::Bulk) => BULK_BUDGET,
-        };
+        let budget = self.budget_for(opts);
         let (work_key, priority) = (key.clone(), opts.priority);
         // A job wants the archive row before it moves on; most callers do
         // not wait for the write (AVL-02, ADR-210).
@@ -453,7 +450,9 @@ impl Fetcher {
     /// refresh sleeping through it. The upstream leg is the single-flight
     /// call's own task, so it goes on and fills the cache for the next read.
     /// With nothing stored the fetch is waited for as before, and so is a
-    /// caller that asked to wait for the archive write (`await_store`).
+    /// caller that asked to wait for the archive write (`await_store`) or
+    /// forced a refresh (`bypass`, `?refresh=true`): a forced refresh that
+    /// fails still falls back to the copy, below.
     pub async fn fetch_or_stored(
         &self,
         req: RiotRequest,
@@ -461,14 +460,14 @@ impl Fetcher {
     ) -> Result<FetchResult, FetchError> {
         let key = cache_key(&self.inner.scope, &req);
         let endpoint = req.endpoint.id;
-        let stored = if opts.await_store {
+        let stored = if opts.await_store || opts.bypass {
             None
         } else {
             self.stored_copy(&key).await
         };
         let fetched = match stored {
             Some(copy) => {
-                let wait = self.stored_wait();
+                let wait = self.stored_wait(opts);
                 match tokio::time::timeout(wait, self.fetch(req, opts)).await {
                     Ok(fetched) => fetched,
                     Err(_) => {
@@ -504,11 +503,22 @@ impl Fetcher {
         }
     }
 
-    /// How long [`Fetcher::fetch_or_stored`] waits for a fetch when a copy is
-    /// stored: the interactive budget (`CLIENT_WAIT_BUDGET_MS`) and
-    /// [`STORED_MARGIN`].
-    pub fn stored_wait(&self) -> Duration {
-        self.inner.interactive_budget + STORED_MARGIN
+    /// How long [`Fetcher::fetch_or_stored`] waits for a fetch with `opts`
+    /// when a copy is stored: the budget the fetch itself gets
+    /// (`budget_for`) and [`STORED_MARGIN`].
+    pub fn stored_wait(&self, opts: FetchOptions) -> Duration {
+        self.budget_for(opts) + STORED_MARGIN
+    }
+
+    /// What a fetch with `opts` may wait for the limiter: `JOB_YIELD_BUDGET_MS`
+    /// for a job, `CLIENT_WAIT_BUDGET_MS` for an interactive caller, and
+    /// [`BULK_BUDGET`] for a bulk one.
+    fn budget_for(&self, opts: FetchOptions) -> Duration {
+        match (opts.job, opts.priority) {
+            (true, _) => self.inner.job_budget,
+            (false, Priority::Interactive) => self.inner.interactive_budget,
+            (false, Priority::Bulk) => BULK_BUDGET,
+        }
     }
 
     /// The positive copy stored for `key`, however old.

@@ -880,3 +880,33 @@ async fn expired_and_riot_answering_inside_the_wait_is_a_miss() {
         (XCache::Miss, br#"{"v":2}"#.as_ref())
     );
 }
+
+/// A forced refresh (`?refresh=true`, review of #274) is not bounded by the
+/// wait: the consumer spent its refresh window on Riot's answer, so serving
+/// the old copy as `STALE` at the wait would answer `refreshed: true` with
+/// the bytes it asked to replace. It waits for Riot, as before AVL-09.
+#[tokio::test]
+async fn a_forced_refresh_waits_for_riot_past_the_stored_copy_wait() {
+    let s = setup(&EXPIRING).await;
+    store_then_expire(&s).await;
+    let slow = Duration::from_secs(4);
+    assert!(
+        slow > s.fetcher.stored_wait(BYPASS),
+        "Riot answers after the wait"
+    );
+    mount(&s.server, SUMMONER, ok(r#"{"v":2}"#).set_delay(slow)).await;
+
+    let asked = Instant::now();
+    let r = s
+        .fetcher
+        .fetch_or_stored(summoner(Platform::Euw1), BYPASS)
+        .await
+        .unwrap();
+    assert_eq!(
+        (r.x_cache, r.body.as_ref()),
+        (XCache::Bypass, br#"{"v":2}"#.as_ref()),
+        "Riot's answer, not the stored copy"
+    );
+    assert!(asked.elapsed() >= slow, "waited for Riot: {:?}", asked.elapsed());
+    assert_eq!(upstream_calls(&s.server).await, 1);
+}
