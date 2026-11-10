@@ -74,4 +74,4 @@ Riot and League of Legends terms as this service uses them, then the project's o
 
 ---
 **Sources:** `src/http/validate.rs:L117-L250`, `src/riot/routing.rs:L48-L210`, `src/riot/ladder.rs:L7-L56`, `src/riot/endpoints.rs:L112-L230,L504-L525`, `src/riot/client.rs:L431`, `src/riot/limiter/mod.rs:L306-L431`, `src/riot/limiter/bucket.rs:L165-L181`, `src/routes/analytics.rs:L53-L56,L153-L178,L326-L390,L493-L496,L649-L658`, `src/routes/admin.rs:L99-L101,L454-L571`, `src/consumers.rs:L12-L45,L95-L162`, `src/http/auth.rs:L301-L313`, `src/http/quota.rs:L320-L431`, `src/cache/keys.rs:L31-L37`, `src/cache/l1.rs:L107-L144`, `src/cache/l2.rs:L251-L396`, `src/fetcher.rs:L45-L72,L365-L441`, `src/config.rs:L815-L840`, `src/jobs/mod.rs:L20-L71`, `src/jobs/ladder.rs:L228-L328`, `src/jobs/archive.rs:L358-L468`, `src/jobs/analytics.rs:L531-L778`, `docs/design/12-object-storage-and-hosting.md:L83-L156`, `docs/design/07-deployment.md:L187`, `docs/_meta/scratch/{jobs-and-observability,persistence,siblings,WRITING-BRIEF}.md`, `README.md`
-**Last verified:** 2026-11-09 against commit `7531561`
+**Last verified:** 2026-11-10 against commit `4ff4579`

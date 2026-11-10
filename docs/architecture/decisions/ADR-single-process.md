@@ -12,4 +12,4 @@
 
 ---
 **Sources:** `docs/DECISIONS.md:L3-L14`, `docs/design/03-architecture.md`, `src/cli/serve.rs:L73-L474`, `src/db/mod.rs:L173-L213`, `src/jobs/scheduler.rs:L963-L973`
-**Last verified:** 2026-11-09 against commit `7531561`
+**Last verified:** 2026-11-10 against commit `4ff4579`

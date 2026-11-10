@@ -114,4 +114,4 @@ Through the running server, `GET /v1/admin/debug/riot?scope=<platform|region>&pa
 
 ---
 **Sources:** `src/riot/endpoints.rs:L13-L14,L110-L316,L390-L410,L504-L525`, `src/riot/routing.rs:L114-L212`, `src/riot/client.rs:L23-L29,L90-L130,L146,L327-L389,L431`, `src/riot/limiter/headers.rs:L31-L42,L90-L196`, `src/riot/limiter/mod.rs:L370-L431`, `src/riot/ladder.rs:L14-L20`, `src/fetcher.rs:L43-L53,L648-L754`, `src/cache/keys.rs:L81-L88`, `src/jobs/ddragon.rs:L22-L25,L83-L97,L108-L152,L255-L285`, `src/static/mod.rs:L28-L35`, `src/static/images.rs:L32-L39`, `src/routes/admin.rs:L1077-L1206`, `src/cli/riot.rs`, `src/config.rs:L111,L798,L815-L816`, `docs/contract/v1-endpoints.txt`, `docs/design/03-architecture.md:L32-L36`, `docs/DECISIONS.md` ADR-001, ADR-007, ADR-023, ADR-024, ADR-059, ADR-066, ADR-143, ADR-216, `docs/_meta/scratch/riot-and-cache.md` §1-§4, `docs/_meta/scratch/jobs-and-observability.md` §3, `docs/_meta/scratch/WRITING-BRIEF.md`, `README.md`
-**Last verified:** 2026-11-09 against commit `7531561`
+**Last verified:** 2026-11-10 against commit `4ff4579`

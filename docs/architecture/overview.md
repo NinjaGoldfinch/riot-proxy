@@ -68,4 +68,4 @@ Details in [../integration/environments.md](../integration/environments.md).
 
 ---
 **Sources:** `docs/design/03-architecture.md`, `docs/design/12-object-storage-and-hosting.md` (§Topology after the move, §As executed), `deploy/README.md`, `src/riot/client.rs:L29,L327-L329`, `src/riot/limiter/headers.rs:L30-L41`, `src/cli/mod.rs:L123-L126`, `src/db/mod.rs:L210-L213`, `src/cli/serve.rs:L43-L163`, `docs/_meta/scratch/siblings.md`
-**Last verified:** 2026-11-09 against commit `7531561`
+**Last verified:** 2026-11-10 against commit `4ff4579`

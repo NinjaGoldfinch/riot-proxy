@@ -84,4 +84,4 @@ The table in [../data/schema.md](../data/schema.md) gives every column; [../data
 
 ---
 **Sources:** `src/fetcher.rs:L592-L611`, `src/cache/keys.rs:L81-L99`, `src/cache/l2.rs:L30-L35`, `src/riot/endpoints.rs:L107-L313`, `src/archive/matches.rs:L33,L137-L169,L366-L411`, `src/archive/mod.rs:L93-L115,L233-L279`, `src/archive/facts.rs:L19,L329-L379`, `src/archive/builds.rs:L24,L382-L419`, `src/archive/tiers.rs:L39-L110`, `src/archive/ranks.rs:L53-L66`, `src/jobs/analytics.rs:L360-L761,L780-L964,L1013-L1202`, `src/archive/analytics.rs:L72-L107,L214-L785`, `src/archive/analytics/delta.rs`, `src/routes/analytics.rs:L577-L629`, `src/archive/offload.rs:L72-L170`, `src/jobs/offload.rs:L146-L195`, `docs/_meta/scratch/persistence.md`, `docs/_meta/scratch/siblings.md` §1.5
-**Last verified:** 2026-11-09 against commit `7531561`
+**Last verified:** 2026-11-10 against commit `4ff4579`

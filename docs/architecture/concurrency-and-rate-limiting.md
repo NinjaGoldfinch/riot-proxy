@@ -122,4 +122,4 @@ Every job kind, its trigger, priority and tables is tabulated in `docs/_meta/scr
 
 ---
 **Sources:** `src/riot/limiter/mod.rs:L50-L175,L229-L300,L307-L431,L532-L606`, `src/riot/limiter/bucket.rs:L15-L162`, `src/riot/limiter/headers.rs:L30-L41`, `src/riot/limiter/persist.rs:L21-L25,L141-L175`, `src/http/quota.rs:L320-L431`, `src/fetcher.rs:L49-L54,L147-L170,L415-L420,L613-L651,L714-L752`, `src/riot/routing.rs:L160-L196`, `src/cache/keys.rs:L81-L88`, `src/jobs/scheduler.rs:L40-L42,L124-L171,L225-L269,L969-L1031,L1076-L1090`, `src/jobs/lanes.rs:L440-L483`, `src/jobs/mod.rs:L74-L94`, `src/db/store.rs:L98-L133`, `src/db/mod.rs:L42-L43,L83-L90,L173-L213`, `src/cli/serve.rs:L103-L109`, `ops/prometheus-alerts.yml`, `docs/design/05-rate-limiter.md`, `docs/design/06-jobs-and-realtime.md`
-**Last verified:** 2026-11-09 against commit `7531561`
+**Last verified:** 2026-11-10 against commit `4ff4579`

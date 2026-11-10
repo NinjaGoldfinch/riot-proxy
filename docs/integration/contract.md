@@ -101,4 +101,4 @@ The server reports its version in the OpenAPI document's `info.version` (`/opena
 
 ---
 **Sources:** `src/http/error.rs:L15-L67,L158-L193`, `src/http/request_id.rs:L287-L338`, `src/http/quota.rs:L332-L336`, `src/routes/passthrough.rs:L127-L166,L470-L476`, `src/routes/analytics.rs:L577-L614`, `src/routes/players.rs:L66-L147`, `src/routes/players/refresh.rs:L18-L71`, `src/riot/endpoints.rs:L107-L310`, `docs/api/openapi.json`, `docs/_meta/scratch/siblings.md` §1.5, `docs/_meta/scratch/routes.md` §1-§4
-**Last verified:** 2026-11-09 against commit `7531561`
+**Last verified:** 2026-11-10 against commit `4ff4579`
