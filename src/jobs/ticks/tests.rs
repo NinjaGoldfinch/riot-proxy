@@ -364,19 +364,27 @@ async fn pending(db: &Db) -> Vec<String> {
 }
 
 /// Let the tick loops run what the clock has reached, and return what is
-/// pending then. Time stays paused: a read goes through `spawn_blocking`,
-/// which holds the clock still, and nothing here sleeps, so nothing moves the
-/// clock behind the test's back.
-async fn settle(db: &Db) -> Vec<String> {
-    let mut last = pending(db).await;
-    let mut same = 0;
-    while same < 20 {
-        tokio::task::yield_now().await;
-        let now = pending(db).await;
-        same = if now == last { same + 1 } else { 0 };
-        last = now;
+/// pending then. A loop's read of its last run and a fire's enqueue run on
+/// the readers and the writer thread, outside the paused clock and as slow as
+/// the box is: wait until no loop is busy ([`Ticks::busy`]), not for the
+/// rows to look settled, which under load returned before a write had landed
+/// (CI-07). Time stays paused: the waits go through `spawn_blocking`, which
+/// holds the clock still, and nothing here sleeps on it.
+async fn settle(db: &Db, ticks: &Ticks) -> Vec<String> {
+    loop {
+        // A loop the clock has reached wakes and starts its fire, counted
+        // busy from its first poll, within a few turns of this runtime.
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        if ticks.busy() == 0 {
+            break;
+        }
+        tokio::task::spawn_blocking(|| std::thread::sleep(Duration::from_millis(1)))
+            .await
+            .unwrap();
     }
-    last
+    pending(db).await
 }
 
 /// What a worker does with every pending row: finish it now. Through a
@@ -498,17 +506,17 @@ async fn a_kind_that_ran_half_a_period_ago_first_fires_half_a_period_later() {
     done(&db, kinds::MAINTENANCE, kinds::MAINTENANCE, 50_000).await;
     let s = Scheduler::new(db.clone(), Registry::new());
     let ticks = Ticks::start(&s, "s1", vec![(kinds::MAINTENANCE, Duration::from_secs(100))]);
-    assert!(settle(&db).await.is_empty(), "not at boot");
+    assert!(settle(&db, &ticks).await.is_empty(), "not at boot");
     advance(49).await;
-    assert!(settle(&db).await.is_empty(), "49 s in");
+    assert!(settle(&db, &ticks).await.is_empty(), "49 s in");
     advance(1).await;
-    assert_eq!(settle(&db).await, ["maintenance:maintenance"], "50 s in");
+    assert_eq!(settle(&db, &ticks).await, ["maintenance:maintenance"], "50 s in");
     finish_all(&d).await;
     advance(98).await;
-    assert!(settle(&db).await.is_empty(), "148 s in");
+    assert!(settle(&db, &ticks).await.is_empty(), "148 s in");
     advance(2).await;
     assert_eq!(
-        settle(&db).await,
+        settle(&db, &ticks).await,
         ["maintenance:maintenance"],
         "then every period"
     );
@@ -544,7 +552,7 @@ async fn none_or_an_old_run_fires_at_once_and_the_polls_and_delta_always_do() {
     .to_vec();
     let ticks = Ticks::start(&s, "s1", schedule);
     assert_eq!(
-        settle(&db).await,
+        settle(&db, &ticks).await,
         [
             "aggregate:delta:aggregate:delta",
             "maintenance:maintenance",
@@ -557,10 +565,10 @@ async fn none_or_an_old_run_fires_at_once_and_the_polls_and_delta_always_do() {
     );
     finish_all(&d).await;
     advance(85).await;
-    assert!(settle(&db).await.is_empty(), "85 s in");
+    assert!(settle(&db, &ticks).await.is_empty(), "85 s in");
     advance(5).await;
     assert_eq!(
-        settle(&db).await,
+        settle(&db, &ticks).await,
         ["ddragon:sync:ddragon:sync"],
         "ddragon:sync at its own time"
     );
@@ -604,7 +612,7 @@ async fn each_ladder_and_region_remembers_its_own_last_run() {
         ladders,
     );
     assert_eq!(
-        settle(&db).await,
+        settle(&db, &ticks).await,
         [
             // Only a completed rebuild counts, not a failed one or a delta.
             "aggregate:analytics:euw1:RANKED_SOLO_5x5",
@@ -618,10 +626,10 @@ async fn each_ladder_and_region_remembers_its_own_last_run() {
     );
     finish_all(&d).await;
     advance(65).await;
-    assert!(settle(&db).await.is_empty(), "65 s in");
+    assert!(settle(&db, &ticks).await.is_empty(), "65 s in");
     advance(5).await;
     assert_eq!(
-        settle(&db).await,
+        settle(&db, &ticks).await,
         [
             "aggregate:analytics:kr:RANKED_SOLO_5x5",
             "ladder:crawl:kr:RANKED_SOLO_5x5",

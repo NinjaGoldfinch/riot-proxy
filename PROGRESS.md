@@ -380,6 +380,7 @@ ninjagoldfinch.lol's `/champions` data took 3.9 s, all of it the proxy's analyti
 - [x] CI-03 the DOM and browser suites in their own `ui` job (#223, ADR-175)
 - [x] CI-04 one integration-test binary (#224, ADR-176)
 - [x] CI-05 less debug info in dev and test builds (#225, ADR-177)
+- [~] CI-07 the `ticks` tests wait for the tick loops, not for the rows to look settled: three tests failed in 29 of 300 runs under load, the 17 tick tests none in 100 iterations after (ADR-214 amended, `test/CI-07-ticks-test-flakes`)
 
 ## DOC — the documentation set (owner request 2026-10-19)
 

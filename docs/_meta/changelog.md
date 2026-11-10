@@ -2,6 +2,10 @@
 
 Dated log of changes to this documentation set. One line per change; the newest first.
 
+## 2026-11-10
+
+- CI-07 (ADR-214 amended): the tick tests wait for the tick loops (`Ticks::busy`) instead of for twenty quiet reads, which under load returned before a write had landed. Line citations of `src/jobs/ticks.rs` moved with the new lines.
+
 ## 2026-11-09
 
 - AVL-05 (ADR-215): `aggregate:analytics` commits one patch's step at a time, newest patch first, with its progress in the job's payload in the same transaction; it yields its worker after each 5 s turn and a restart resumes at the recorded patch and step; only the last turn records the run, clears the cache and announces. `maintenance` trims `done` jobs a kind at a time, 5 000 a write. `architecture/concurrency-and-rate-limiting.md`, `architecture/data-flow.md`, `data/schema-analytics.md`, `deployment/upgrade-and-rollback.md`, `operations/performance.md`, `operations/runbook.md` (§ maintenance, Recompute now), `reference/glossary.md`, design/04 §Analytics and design/06 §Job catalogue and §Backoff; line citations of `src/jobs/analytics.rs`, `src/archive/analytics.rs` and `src/jobs/maintenance.rs` moved in every page that cites them (`data/caching.md`, `data/models.md`, `data/schema.md`, `deployment/{backup-and-restore,capacity,overview}.md`, `integration/{monitoring-hooks,object-storage}.md`, `operations/{observability,troubleshooting}.md`, `workflows/development-setup.md`), each page's `Last verified` refreshed.
@@ -71,4 +75,4 @@ Dated log of changes to this documentation set. One line per change; the newest 
 
 ---
 **Sources:** this documentation set
-**Last verified:** 2026-11-09 against commit `10f9512`
+**Last verified:** 2026-11-10 against commit `7531561`
