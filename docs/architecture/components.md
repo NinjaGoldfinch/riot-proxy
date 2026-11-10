@@ -59,7 +59,7 @@ Reads from a route or a job all pass through the fetcher; the archive is the onl
 | `config.rs` | Flags, environment and `.env` merged by figment, validated as a whole; production refusals; `Secret` wrapper | `Config::load`, `VARS` (`src/config.rs:23-102,651-685`) |
 | `http/` | Request ids, auth guards (`require_read`, `require_admin`), per-consumer quota, CORS for the admin API, the error envelope, validators, recent-request rings | `src/http/auth.rs`, `quota.rs`, `cors.rs`, `error.rs`, `validate.rs`, `recent.rs` |
 | `routes/` | One file per prefix; handlers carry `#[utoipa::path]` so the OpenAPI document is generated from the same registration (`routes::docs::api_router`) | `src/routes/docs.rs:116-153` |
-| `fetcher.rs` | The single read funnel: archive, L1, single-flight, limiter, client, store; stale-while-revalidate; retries; `X-Cache` values | `Fetcher::fetch`, `FetchOptions` (`src/fetcher.rs:325-418,453-669`) |
+| `fetcher.rs` | The single read funnel: archive, L1, single-flight, limiter, client, store; stale-while-revalidate; retries; `X-Cache` values | `Fetcher::fetch`, `FetchOptions` (`src/fetcher.rs:332-421,490-732`) |
 | `cache/` | L1 in moka with soft and hard TTLs and negative entries; L2 write-behind to the SQLite `cache` table; cache keys scoped by the Riot key hash | `src/cache/l1.rs`, `l2.rs`, `keys.rs` |
 | `singleflight.rs` | One upstream task per key for concurrent misses; the leader's task survives waiter cancellation | `SingleFlight::run` (`src/singleflight.rs:73-105`) |
 | `riot/` | Endpoint registry with TTLs and routing kind; platform and region mapping; the reqwest client; the header-driven sliding-log limiter and its checkpoint | `src/riot/endpoints.rs`, `routing.rs`, `client.rs`, `limiter/` |
@@ -77,11 +77,11 @@ Reads from a route or a job all pass through the fetcher; the archive is the onl
 - **Auth is a route layer, not a handler concern.** The read routers are wrapped in `require_read` and the admin router in `require_admin` at registration (`src/routes/docs.rs:118-153`); `/healthz`, `/readyz`, `/metrics`, `/ddragon/*`, `/docs` and the pages are outside both.
 - **The fetcher owns upstream policy.** The client classifies and never retries (`src/riot/client.rs:1-7`); negative caching, stale fallbacks, the service-429 backoff and the 5xx retries live in the fetcher (`src/fetcher.rs:12-17`).
 - **The archive never fails a request.** A read failure in SQLite or the bucket logs a warning and returns nothing, so the fetcher goes to Riot (`src/archive/mod.rs:178-197`, `src/archive/matches.rs:232-319`).
-- **Jobs and routes share the fetcher but not the budget.** Routes fetch at interactive priority with a 2 s wait budget; jobs at bulk priority with a 1 s yield budget, after which the job gives its worker back (`src/fetcher.rs:141-164`, `src/jobs/scheduler.rs:124-141`).
+- **Jobs and routes share the fetcher but not the budget.** Routes fetch at interactive priority with a 2 s wait budget; jobs at bulk priority with a 1 s yield budget, after which the job gives its worker back (`src/fetcher.rs:148-171`, `src/jobs/scheduler.rs:124-141`).
 - **The object store is attached once.** `Db::attach_objects` stores the bucket handle so every archive read can resolve an offloaded body without the callers changing (`src/db/mod.rs:237-245`).
 
 The design these modules implement is `docs/design/03-architecture.md`; where the code has moved on from the design, the inventories under `docs/_meta/scratch/` record the differences and [../_meta/gaps.md](../_meta/gaps.md) lists them.
 
 ---
-**Sources:** `src/lib.rs`, `src/app.rs:L40-L121`, `src/cli/mod.rs:L71-L123`, `src/routes/docs.rs:L116-L153`, `src/fetcher.rs:L12-L17,L141-L164`, `src/riot/client.rs:L1-L7`, `src/archive/mod.rs:L178-L197`, `src/db/mod.rs:L203-L211,L275-L332`, `src/jobs/scheduler.rs:L124-L141`, `docs/design/03-architecture.md#component-diagram`
-**Last verified:** 2026-11-09 against commit `d1aa2b5`
+**Sources:** `src/lib.rs`, `src/app.rs:L40-L121`, `src/cli/mod.rs:L71-L123`, `src/routes/docs.rs:L116-L153`, `src/fetcher.rs:L12-L17,L148-L171`, `src/riot/client.rs:L1-L7`, `src/archive/mod.rs:L178-L197`, `src/db/mod.rs:L203-L211,L275-L332`, `src/jobs/scheduler.rs:L124-L141`, `docs/design/03-architecture.md#component-diagram`
+**Last verified:** 2026-11-09 against commit `7531561`

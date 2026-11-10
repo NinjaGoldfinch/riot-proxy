@@ -39,7 +39,7 @@ Notation: `int(min..=max)` means a whole number in that range, `bool` accepts `t
 | `CACHE_L1_MAX_MB` | int(1..=1048576) MiB | `128` | no | in-memory response cache budget | `128` | `src/config.rs:814` |
 | `NEG_TTL_SECONDS` | int(1..=u32::MAX) | `30` | no | negative-cache TTL for 404s | `30` | `src/config.rs:815` |
 | `NEG_TTL_ACCOUNT_SECONDS` | int(1..=u32::MAX) | `300` | no | negative-cache TTL for account lookups | `300` | `src/config.rs:816` |
-| `CLIENT_WAIT_BUDGET_MS` | int(0..=u64::MAX) | `2000` | no | how long an interactive request waits for a limiter token | `2000` | `src/config.rs:817` |
+| `CLIENT_WAIT_BUDGET_MS` | int(0..=u64::MAX) | `2000` | no | how long an interactive request waits for a limiter token; plus 250 ms, how long a `/v1/players/*` part with a stored copy waits for its refresh before that copy is served (AVL-09) | `2000` | `src/config.rs:817` |
 | `BULK_USAGE_CEILING` | float(0..=1) | `0.8` | no | share of a rate bucket bulk work may use while someone is active | `0.80` | `src/config.rs:818` |
 | `BULK_IDLE_CEILING` | float(0..=1), `< 1`, ≥ `BULK_USAGE_CEILING` | `0.95`, raised to `BULK_USAGE_CEILING` if that is higher and this is unset | no | bulk share once a scope has been idle `BULK_IDLE_AFTER_S` | `0.95` | `src/config.rs:116,819,882-895` |
 | `BULK_IDLE_AFTER_S` | int(0..=86400) | `30` | no | idle threshold for the idle ceiling | `30` | `src/config.rs:820` |
@@ -212,4 +212,4 @@ From session notes, not from the live file. The box's env file was last describe
 
 ---
 **Sources:** `src/config.rs:L3,L23-L170,L189-L254,L436-L573,L576-L636,L651-L665,L687-L912,L938-L992,L996-L1143,L1190-L1335`, `src/config/tests.rs:L44-L50,L192-L203,L269-L279,L367-L382,L443-L462,L598-L604,L883-L889`, `src/cli/mod.rs:L29-L88`, `src/cli/serve.rs:L64-L75,L102-L104,L443-L449`, `src/consumers.rs:L95-L107,L154-L157,L308-L333`, `src/http/auth.rs:L66-L77,L128-L139,L196-L202`, `src/riot/client.rs:L327-L329`, `src/riot/endpoints.rs:L424-L444`, `src/routes/admin.rs:L2501-L2528`, `src/archive/objects.rs:L142,L201-L204`, `.env.example`, `README.md:L97,L102`, `.github/workflows/ci.yml:L52-L53`, `deploy/README.md:L24-L28,L51-L72,L151`, `docs/design/07-deployment.md:L125`, `docs/design/12-object-storage-and-hosting.md:L437-L446,L484,L806-L807,L828-L830,L868-L873`, `docs/DECISIONS.md:L1862`, `reports/OBJ implementation handoff.md:L20`, `docs/_meta/scratch/config.md`
-**Last verified:** 2026-11-09 against commit `d1aa2b5`
+**Last verified:** 2026-11-09 against commit `7531561`
