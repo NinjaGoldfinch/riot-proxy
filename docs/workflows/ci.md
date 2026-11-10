@@ -257,4 +257,4 @@ Deploys a release to staging or production (DEP-03, ADR-196; DEP-05, ADR-198). `
 What happens on the host is in [release-process.md](./release-process.md), "Staging" and "Deploying to production"; `scripts/deploy-workflow.test.sh` and `scripts/smoke.test.sh` (the `ops` job, through `deploy/test.sh`) check the wiring and the smoke test, since the workflow cannot run in CI.
 
 **Sources:** `.github/workflows/ci.yml`, `.github/workflows/deploy.yml`, `scripts/deploy-workflow.test.sh`, `scripts/release-workflow.test.sh`, `scripts/smoke.sh`, `scripts/smoke.test.sh`, `scripts/restart-bench.sh`, `scripts/restart-bench.test.sh`, `deploy/test.sh`, `docs/_meta/tools/docs-guard.py`, `docs/_meta/tools/openapi-check.py`, `.github/workflows/edge.yml`, `.github/workflows/release.yml`, `.config/nextest.toml`, `scripts/docker-paths.sh`, `scripts/edge-tags.sh`, `scripts/image-description.sh`, `scripts/check-image-description.sh`, `justfile`, `Dockerfile.release`
-**Last verified:** 2026-11-09 against commit `324c493`
+**Last verified:** 2026-11-10 against commit `8bcfd77`

@@ -1,6 +1,6 @@
 # Migrations
 
-How schema migrations are written, applied and recorded, the complete list V0001 to V0033 (V0031 is reserved for LAD-02), and what to expect from the expensive ones in production. The resulting tables are in [schema.md](schema.md) and [schema-analytics.md](schema-analytics.md); the procedure for adding one is in [../workflows/adding-a-migration.md](../workflows/adding-a-migration.md).
+How schema migrations are written, applied and recorded, the complete list V0001 to V0034 (V0031 is reserved for LAD-02), and what to expect from the expensive ones in production. The resulting tables are in [schema.md](schema.md) and [schema-analytics.md](schema-analytics.md); the procedure for adding one is in [../workflows/adding-a-migration.md](../workflows/adding-a-migration.md).
 
 ## How they run
 
@@ -53,6 +53,7 @@ PR numbers from `PROGRESS.md`; dates are the accepting ADR's in `docs/DECISIONS.
 | [`V0030__collect_cursor.sql`](../../src/db/migrations/V0030__collect_cursor.sql) | 2026-10-26, THR-04 | `ladder_entries.collected_games`, `ladder_entries.collected_at` (the collect cursor) and `ladder_crawls.players_skipped`; added columns only | THR-04, ADR-185 |
 | [`V0032__crawl_match_limit.sql`](../../src/db/migrations/V0032__crawl_match_limit.sql) | 2026-11-05, STG-03 | `ladder_crawls.matches_skipped` and `ladder_crawls.match_limit`; added columns only. V0031 is LAD-02's, not yet on `main`: refinery refuses a lower unapplied version, so whichever lands second renumbers past the other | STG-03, ADR-202 |
 | [`V0033__tiers_sweep.sql`](../../src/db/migrations/V0033__tiers_sweep.sql) | 2026-11-09, AVL-06 | `tiers_sweep`, `tiers:backfill`'s cursor per match-id prefix, so the boot tier check reads only past the cursors; created empty | AVL-06, ADR-213 |
+| [`V0034__platform_status.sql`](../../src/db/migrations/V0034__platform_status.sql) | 2026-11-10, SITE-13 | `platform_status`, the status poller's last answer per platform (the last 200's body and `fetched_at`, the last failure's `failed_at` and `error`); created empty | SITE-13, ADR-219 |
 
 ## Expensive migrations
 
@@ -71,6 +72,7 @@ Every migration runs in the boot transaction before the listener opens, so a slo
 | V0030 | three `ADD COLUMN`s, nullable or with a constant default: no row is rewritten | ADR-185 |
 | V0032 | two `ADD COLUMN`s, nullable or with a constant default: no row is rewritten, so it is instant on production's database and staging's copy of it | ADR-202 |
 | V0033 | one empty table: instant. The cost comes after it: with no cursor, the first boot queues `tiers:backfill`, whose first sweep reads every match row once, a window of 500 ids at a time on a reader, and stamps production's 46 ranked `ME1_` matches `UNKNOWN` (unless ME-02 has made `ME1` a platform). After that a boot reads only past the cursors | ADR-213 |
+| V0034 | one empty table: instant. The poller fills it with one row per platform on the first round after boot | ADR-219 |
 
 > **TODO (unverified):** the actual V0026 and V0027 timings on production were not found in `docs/DECISIONS.md`, `PROGRESS.md` or `docs/flt/`; the v2.7.0 release line in `PROGRESS.md` was ticked by #226 (`52fa67d`) without recording them.
 
@@ -92,4 +94,4 @@ The full procedure, with the test and ADR steps, is in [../workflows/adding-a-mi
 
 ---
 **Sources:** `src/db/mod.rs:L23-L25`, `src/db/mod.rs:L154-L221`, `src/db/mod.rs:L521-L525`, `src/db/store.rs:L213-L247`, `src/cli/mod.rs:L153-L185`, `src/cli/serve.rs:L88-L91`, `src/db/migrations/V0001__init.sql` to `V0029__analytics_counted.sql`, `docs/thr/THR-03-plan.md`, `docs/DECISIONS.md:L15-L17`, `docs/DECISIONS.md:L51`, `docs/DECISIONS.md:L1388`, `docs/DECISIONS.md:L1700`, `docs/DECISIONS.md:L1714`, `docs/DECISIONS.md:L1776`, `docs/DECISIONS.md:L1841`, `docs/flt/FLT-03-plan.md:L573`, `PROGRESS.md:L10-L365`, `docs/design/12-object-storage-and-hosting.md:L159-L162`, `deploy/README.md:L222-L270`, `docs/_meta/scratch/persistence.md`
-**Last verified:** 2026-11-10 against commit `97a926a`
+**Last verified:** 2026-11-10 against commit `8bcfd77`

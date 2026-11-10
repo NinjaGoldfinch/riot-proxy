@@ -59,13 +59,13 @@ These routes return Riot's bytes verbatim with status 200 and `Content-Type: app
 
 | Header | Meaning |
 |---|---|
-| `X-Cache` | `HIT` (fresh L1), `MISS` (fetched from Riot), `STALE` (between soft and hard TTL, or served from a copy because Riot or the limiter failed), `HIT-NEG` (a cached 404, sent on the error response), `ARCHIVE` (immutable body from the match archive), `BYPASS` (`?refresh=true` by an admin-scoped consumer) (`src/fetcher.rs:L59-L78`, `L345-L418`) |
+| `X-Cache` | `HIT` (fresh L1), `MISS` (fetched from Riot), `STALE` (between soft and hard TTL, or served from a copy because Riot or the limiter failed), `HIT-NEG` (a cached 404, sent on the error response), `ARCHIVE` (immutable body from the match archive), `BYPASS` (`?refresh=true` by an admin-scoped consumer) (`src/fetcher.rs:L64-L83`, `L362-L435`) |
 | `X-Cache-Age` | Age of the **content** in whole seconds; a byte-identical refresh does not reset it (`src/routes/passthrough.rs:L441-L446`, `src/cache/l1.rs:L176-L192`) |
 | `X-Cache-Fetched-Age` | Seconds since the proxy last read it from Riot; absent for `ARCHIVE` (`src/routes/passthrough.rs:L447-L454`) |
 
 `?refresh=true` (or `=1`) skips cache reads but still writes, and only for consumers with the `admin` scope; for a read-only key it is ignored silently (`src/routes/passthrough.rs:L470-L476`). The `/v1/players/*` composites allow it for every consumer but meter it to one claim per 60 s per part and PUUID (see [endpoints-players-analytics.md](endpoints-players-analytics.md)).
 
-TTLs per Riot endpoint are in [../reference/riot-api-usage.md](../reference/riot-api-usage.md). Matches and timelines are immutable: after the first fetch they are served from the archive forever with `X-Cache: ARCHIVE`, `X-Cache-Age: 0` (`src/fetcher.rs:L423-L439`).
+TTLs per Riot endpoint are in [../reference/riot-api-usage.md](../reference/riot-api-usage.md). Matches and timelines are immutable: after the first fetch they are served from the archive forever with `X-Cache: ARCHIVE`, `X-Cache-Age: 0` (`src/fetcher.rs:L440-L456`).
 
 A malformed path segment (for example a bad percent-encoding) is `400 VALIDATION` with the message `params <axum text>` (`src/routes/riot.rs:L137-L139`).
 
@@ -95,7 +95,7 @@ Path values are **case-sensitive** ajv enums: `EUW1` is refused with `400 BAD_RE
 
 Source: `src/riot/routing.rs:L92-L128`. `me1` is not in v1 nor in Riot's routing-values table; the owner confirmed its host and its `europe` grouping on 2026-11-09 (ADR-216). `sea` has no account-v1 cluster, so account routes pinned to `sea` go to `asia` (`src/riot/routing.rs:L188-L196`).
 
-**Account-cluster picking (ADR-066).** Riot serves every account from each of `americas`, `asia` and `europe`. The region-less `/v1/riot/accounts/*` routes, and the internal account lookups of the player profile and admin tracking, take a token from the first cluster with room now in the order `asia`, `americas`, `europe`; if none has room they wait for the soonest, inside the usual budget; a cluster that answered a 429 goes last for the rest of the request (`src/riot/routing.rs:L151-L153`, `src/fetcher.rs:L740-L778`). All clusters share one cache entry keyed on the literal host `account` (`src/cache/keys.rs:L81-L88`). The `/{region}/` variants pin a cluster and never move.
+**Account-cluster picking (ADR-066).** Riot serves every account from each of `americas`, `asia` and `europe`. The region-less `/v1/riot/accounts/*` routes, and the internal account lookups of the player profile and admin tracking, take a token from the first cluster with room now in the order `asia`, `americas`, `europe`; if none has room they wait for the soonest, inside the usual budget; a cluster that answered a 429 goes last for the rest of the request (`src/riot/routing.rs:L151-L153`, `src/fetcher.rs:L784-L822`). All clusters share one cache entry keyed on the literal host `account` (`src/cache/keys.rs:L81-L88`). The `/{region}/` variants pin a cluster and never move.
 
 ### Other headers
 
@@ -116,8 +116,8 @@ Request bodies are capped at 1 MiB (`src/app.rs:L30-L31`, `L107`).
 |---|---|---|---|---|
 | GET | `/healthz` | none | `200 {"ok":true}`; touches nothing | `src/routes/health.rs:L70` |
 | GET | `/readyz` | none | `{"ok","sqlite","limiter","keyScope","sqliteReaders","sqliteReadersFree","writerBusy","writerBusyMs","writerQueued"}`; 200 when `sqlite && limiter`, else **503 with the same body**. With the writer idle, `sqlite` is a `BEGIN IMMEDIATE; ROLLBACK;` on it within 2 s; with the writer busy, nothing is queued behind it and `sqlite` says whether the running write made progress (SQLite stamps or CPU) in the last 5 s (ADR-180). `limiter` is the restored-checkpoint flag; the `writer*` fields are informational | `src/routes/health.rs:L119` (`L21-L46`, `L148-L200`) |
-| GET | `/status` | the admin key, or none from a `STATUS_ALLOW_CIDR` peer on a request no reverse proxy forwarded (no `Cf-Connecting-IP`, `X-Forwarded-For`, `Forwarded` or `X-Real-IP`) | the shared ninjagoldfinch status contract (design/14): `{"schema","service","host","version","commit","built_at","started_at","uptime_s","status","checks","metrics","metrics_meta"}`, `checks` are `riot_api` (when `STATUS_CHECK_PLATFORMS` names a platform), `riot_key`, `cache` and `storage` (with a bucket), from the last background round (`src/status/checks.rs:L75-L101`); **200 even when `status` is `down`**; 401 keyless from elsewhere or through a reverse proxy, 403 for a key without admin scope; no consumer quota | `src/status/mod.rs:L211` (`src/http/auth.rs:L381-L405`) |
-| GET | `/status/ratelimits` | the admin key only; never keyless, not even from loopback | `{"schema":1,"at","retry_after_s","scopes":{<scope>:{"observed_at","app":[{"window_s","limit","count","remaining_pct"}],"remaining_pct","retry_after":{"s","at"},"methods":{<method id>:{"observed_at","windows":[…]}}}}}`: what Riot's rate-limit headers last said (design/14 §Rate-limit table, ADR-207). `remaining_pct` is `(limit − count) / limit × 100` rounded down, a scope's the least of its app windows'; `retry_after_s` the longest freeze left after a 429, as `/status`'s `riot_retry_after_s`; a scope's `retry_after` the last `Retry-After` Riot sent on it. Memory only, empty after a restart; never calls Riot; 401 keyless or with an unknown key, 403 for a key without admin scope or from outside `ADMIN_IP_ALLOWLIST`; no consumer quota | `src/status/mod.rs:L243` (`src/http/auth.rs:L391-L405,L417-L423`; `src/status/ratelimits.rs:L103-L246`) |
+| GET | `/status` | the admin key, or none from a `STATUS_ALLOW_CIDR` peer on a request no reverse proxy forwarded (no `Cf-Connecting-IP`, `X-Forwarded-For`, `Forwarded` or `X-Real-IP`) | the shared ninjagoldfinch status contract (design/14): `{"schema","service","host","version","commit","built_at","started_at","uptime_s","status","checks","metrics","metrics_meta"}`, `checks` are `riot_api` (when `STATUS_CHECK_PLATFORMS` names a platform), `riot_key`, `cache` and `storage` (with a bucket), from the last background round (`src/status/checks.rs:L75-L101`); **200 even when `status` is `down`**; 401 keyless from elsewhere or through a reverse proxy, 403 for a key without admin scope; no consumer quota | `src/status/mod.rs:L212` (`src/http/auth.rs:L381-L405`) |
+| GET | `/status/ratelimits` | the admin key only; never keyless, not even from loopback | `{"schema":1,"at","retry_after_s","scopes":{<scope>:{"observed_at","app":[{"window_s","limit","count","remaining_pct"}],"remaining_pct","retry_after":{"s","at"},"methods":{<method id>:{"observed_at","windows":[…]}}}}}`: what Riot's rate-limit headers last said (design/14 §Rate-limit table, ADR-207). `remaining_pct` is `(limit − count) / limit × 100` rounded down, a scope's the least of its app windows'; `retry_after_s` the longest freeze left after a 429, as `/status`'s `riot_retry_after_s`; a scope's `retry_after` the last `Retry-After` Riot sent on it. Memory only, empty after a restart; never calls Riot; 401 keyless or with an unknown key, 403 for a key without admin scope or from outside `ADMIN_IP_ALLOWLIST`; no consumer quota | `src/status/mod.rs:L244` (`src/http/auth.rs:L391-L405,L417-L423`; `src/status/ratelimits.rs:L103-L246`) |
 | GET | `/metrics` | none | Prometheus text, `Content-Type: text/plain; version=0.0.4; charset=utf-8` | `src/telemetry.rs:L119` |
 
 Captured:
@@ -145,7 +145,7 @@ No key. Not listed in the document itself. `riot-proxy spec` prints the same JSO
 
 ## Dev and dashboard pages (toggles)
 
-`DEV_UI` defaults on but is forced off when `ENV=production`; `DASHBOARD_UI` defaults on (`src/config.rs:L755-L757`, `L812-L815`). None of these are in the OpenAPI document.
+`DEV_UI` defaults on but is forced off when `ENV=production`; `DASHBOARD_UI` defaults on (`src/config.rs:L781-L783`, `L839-L842`). None of these are in the OpenAPI document.
 
 | Method | Path | Toggle | Auth | Response | Handler |
 |---|---|---|---|---|---|
@@ -154,8 +154,8 @@ No key. Not listed in the document itself. `riot-proxy spec` prints the same JSO
 | GET | `/dev/config.json` | `DEV_UI` | none | `{authDisabled,version,env,docsUi,dashboardUi,regions[],platforms[{value,label,region}]}`, `no-store` | `src/routes/ui.rs:L199-L202` |
 | GET | `/dev/openapi.json` | `DEV_UI` | none | the OpenAPI JSON even when `DOCS_UI` is off, `no-store` | `src/routes/ui.rs:L203-L215` |
 | GET | `/dev/jobs` | `DEV_UI` and `DASHBOARD_UI` | none | `302 Location: /dashboard#jobs` | `src/routes/ui.rs:L223-L230` |
-| GET | `/dev/reset` | `DEV_UI` | admin | preview `{tables[{name,rows}],l1Entries,runningJobs,kept[]}` | `src/routes/dev.rs:L156` |
-| POST | `/dev/reset` | `DEV_UI` | admin | body must be `{"confirm":"reset"}` else `400 VALIDATION` `body/confirm must be equal to 'reset'`; wipes data tables, keeps `consumers`, `limiter_state`, `refinery_schema_history` | `src/routes/dev.rs:L189` (`L36`, `L86`, `L189-L201`) |
+| GET | `/dev/reset` | `DEV_UI` | admin | preview `{tables[{name,rows}],l1Entries,runningJobs,kept[]}` | `src/routes/dev.rs:L157` |
+| POST | `/dev/reset` | `DEV_UI` | admin | body must be `{"confirm":"reset"}` else `400 VALIDATION` `body/confirm must be equal to 'reset'`; wipes data tables, keeps `consumers`, `limiter_state`, `refinery_schema_history` | `src/routes/dev.rs:L190` (`L36`, `L87`, `L190-L202`) |
 | GET | `/dashboard` | `DASHBOARD_UI` | none for the page; every call it makes needs an admin key | HTML with a strong `ETag`, `Cache-Control: no-cache`; `If-None-Match` hit is 304 | `src/routes/ui.rs:L218-L221` (`L113-L131`) |
 
 ## The 404 fallback
@@ -241,5 +241,5 @@ The frame shape is `src/events.rs:L159-L172`; data fields per event are listed i
 - Gauge `proxy_ws_connections`; counter `events_published_total{name}`.
 
 ---
-**Sources:** `src/app.rs:L30-L35,L71-L121,L258-L264`, `src/routes/docs.rs:L86-L153,L386-L399`, `src/routes/health.rs:L21-L200`, `src/routes/ui.rs:L94-L233`, `src/routes/dev.rs:L33-L254`, `src/routes/ws.rs:L497-L572`, `src/ws/protocol.rs:L23-L147`, `src/ws/socket.rs:L38-L206`, `src/ws/hub.rs:L20-L205`, `src/http/auth.rs:L141-L423`, `src/status/mod.rs:L150-L246`, `src/status/ratelimits.rs:L103-L246`, `src/http/quota.rs:L320-L431`, `src/http/request_id.rs:L287-L339`, `src/http/validate.rs:L21-L88`, `src/routes/passthrough.rs:L401-L476`, `src/fetcher.rs:L59-L78,L418-L489,L740-L778`, `src/riot/routing.rs:L48-L196`, `docs/DECISIONS.md` ADR-216, `docs/_meta/scratch/routes.md`, `docs/design/12-object-storage-and-hosting.md:L904-L925`, `tests/snapshots/http__unknown_route_404.snap`, `tests/snapshots/ws_hub__ws_session.snap`, live capture against `target/debug/riot-proxy` 2.7.0
-**Last verified:** 2026-11-10 against commit `97a926a`
+**Sources:** `src/app.rs:L30-L35,L71-L121,L258-L264`, `src/routes/docs.rs:L86-L153,L386-L399`, `src/routes/health.rs:L21-L200`, `src/routes/ui.rs:L94-L233`, `src/routes/dev.rs:L33-L255`, `src/routes/ws.rs:L497-L572`, `src/ws/protocol.rs:L23-L147`, `src/ws/socket.rs:L38-L206`, `src/ws/hub.rs:L20-L205`, `src/http/auth.rs:L141-L423`, `src/status/mod.rs:L151-L247`, `src/status/ratelimits.rs:L103-L246`, `src/http/quota.rs:L320-L431`, `src/http/request_id.rs:L287-L339`, `src/http/validate.rs:L21-L88`, `src/routes/passthrough.rs:L401-L476`, `src/fetcher.rs:L64-L83,L435-L511,L784-L822`, `src/riot/routing.rs:L48-L196`, `docs/DECISIONS.md` ADR-216, `docs/_meta/scratch/routes.md`, `docs/design/12-object-storage-and-hosting.md:L904-L925`, `tests/snapshots/http__unknown_route_404.snap`, `tests/snapshots/ws_hub__ws_session.snap`, live capture against `target/debug/riot-proxy` 2.7.0
+**Last verified:** 2026-11-10 against commit `8bcfd77`

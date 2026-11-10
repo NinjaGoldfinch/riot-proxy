@@ -10,8 +10,8 @@ How schema changes ship: one forward-only refinery SQL file under `src/db/migrat
 | Naming | `V<nnnn>__<name>.sql`; refinery only recognises `^[UV]\d+__\w+\.sql$`, and the four-digit padding is this repository's convention (ADR-010, `docs/DECISIONS.md:51`). refinery logs them without the padding (`V27__matchup_builds`) |
 | When | `Db::open` applies pending migrations on the writer connection, after the pragmas and before the readers open (`src/db/mod.rs:215-231`). `serve` opens that way, and so does every CLI command that touches the database (`src/cli/mod.rs:153-158`). `riot-proxy migrate` applies them on a raw connection and prints `<path>: up to date` or `<path>: applied V…` (`src/cli/mod.rs:161-182`) |
 | Transaction | all pending files in **one** transaction (`set_grouped(true)`, `src/db/mod.rs:571-573`); applied versions are skipped, so running on every boot is safe |
-| History | `refinery_schema_history(version, name, applied_on, checksum)`; a fresh database has 32 rows after V0033, V0031 being unassigned on `main` (`src/db/tests.rs:899`) |
-| Direction | forward only. There are no down migrations: every file is `V…`, and a change that must be undone is undone by restoring the previous backup (`README.md:194`; [../deployment/upgrade-and-rollback.md](../deployment/upgrade-and-rollback.md)) |
+| History | `refinery_schema_history(version, name, applied_on, checksum)`; a fresh database has 33 rows after V0034, V0031 being unassigned on `main` (`src/db/tests.rs:901`) |
+| Direction | forward only. There are no down migrations: every file is `V…`, and a change that must be undone is undone by restoring the previous backup (`README.md:195`; [../deployment/upgrade-and-rollback.md](../deployment/upgrade-and-rollback.md)) |
 
 Observed on 2026-10-19: a first `serve` logged `going to batch apply 27 migrations in single transaction.` naming `V1__init` to `V27__matchup_builds`; a second one `going to batch apply 0 migrations`; `riot-proxy migrate` printed `…/riot-proxy.db: up to date`.
 
@@ -19,7 +19,7 @@ Observed on 2026-10-19: a first `serve` logged `going to batch apply 27 migratio
 
 ## Numbering
 
-The files are `V0001__init.sql` to `V0033__tiers_sweep.sql` (`src/db/migrations/`), with V0031 held by LAD-02's branch; the next free number is **V0034**. Because several sessions work on this clone and branches are always based on `origin/main`, check there before picking a number:
+The files are `V0001__init.sql` to `V0034__platform_status.sql` (`src/db/migrations/`), with V0031 held by LAD-02's branch; the next free number is **V0035**. Because several sessions work on this clone and branches are always based on `origin/main`, check there before picking a number:
 
 ```bash
 git fetch origin && git ls-tree --name-only origin/main src/db/migrations/ | tail -1
@@ -62,15 +62,15 @@ Every integration test opens a fresh tempfile database through `Db::open` (`test
 
 | Test | What to change | Lines |
 |---|---|---|
-| `migrations_create_exactly_the_design_04_tables` | add the new table to the sorted list | `src/db/tests.rs:92-153` |
+| `migrations_create_exactly_the_design_04_tables` | add the new table to the sorted list | `src/db/tests.rs:92-154` |
 | `migrations_apply_once_across_reopens` | the history count, 29 → 30 | `:898`, `:902` |
 | a seeded upgrade test, for anything beyond `CREATE TABLE` | run the runner with `.set_target(refinery::Target::Version(27))`, seed rows, open with `Db::open`, assert rows survive with their values and the DDL says what it should: `v0020_rebuilds_…` and `v0021_rebuilds_…` are the models | `:401-453`, `:542-565` |
 | `archive_indexes_exist` / `archive_foreign_keys_behave_as_designed` | if the migration adds an index or an FK | `:170`, `:734` |
 
 Outside `src/db/`:
 
-- **The dev reset lists.** `routes::dev::WIPED` and `KEPT` must together name every table; a test fails otherwise, "so a new migration has to choose" (`src/routes/dev.rs:38-87`; `tests/dev_reset.rs`). Derived and fetched data go in `WIPED`, children before parents; only consumers, the limiter checkpoint and refinery's history are `KEPT`.
-- **A `/v1/admin/stats` or dashboard count** over the new table needs its own `EXPLAIN QUERY PLAN` test, as the pack counts (`src/archive/offload/tests.rs:519-532`) and the job counts (`src/db/tests.rs:1222`) have.
+- **The dev reset lists.** `routes::dev::WIPED` and `KEPT` must together name every table; a test fails otherwise, "so a new migration has to choose" (`src/routes/dev.rs:38-88`; `tests/dev_reset.rs`). Derived and fetched data go in `WIPED`, children before parents; only consumers, the limiter checkpoint and refinery's history are `KEPT`.
+- **A `/v1/admin/stats` or dashboard count** over the new table needs its own `EXPLAIN QUERY PLAN` test, as the pack counts (`src/archive/offload/tests.rs:519-532`) and the job counts (`src/db/tests.rs:1223`) have.
 - Run `cargo test --lib db::` then `cargo test --test it dev_reset::` and the lot ([testing.md](./testing.md)).
 
 ## Documents to update
@@ -119,5 +119,5 @@ Then: add `"clash_teams"` to the sorted list in `migrations_create_exactly_the_d
 7. `just lint`, `just test`; a backup before the first production boot ([../deployment/backup-and-restore.md](../deployment/backup-and-restore.md)).
 
 ---
-**Sources:** `src/db/mod.rs:L23-L36`, `L131-L147`, `L294-L296`, `src/cli/mod.rs:L153-L182`, `src/db/migrations/V0001__init.sql:L1-L2`, `V0003__cs_and_duration.sql`, `V0021__facts_without_rowid.sql:L1-L33`, `V0023__body_packs.sql:L1-L48`, `V0027__matchup_builds.sql:L1-L19`, `src/db/tests.rs:L92-L153`, `L170`, `L401-L453`, `L542-L565`, `L734`, `L876-L918`, `L1221`, `src/archive/offload/tests.rs:L519-L532`, `src/jobs/offload/tests.rs:L507-L522`, `src/routes/dev.rs:L38-L87`, `tests/common/mod.rs:L32-L33`, `docs/design/04-data-and-cache.md:L61-L63`, `L417-L425`, `docs/design/12-object-storage-and-hosting.md:L196-L221`, `docs/DECISIONS.md:L49-L51` (ADR-010), `L1455` (ADR-135), `L1460-L1462` (ADR-136), `L1490-L1505` (ADR-140, ADR-141), `L1510` (ADR-142), `README.md:L194`, `docs/_meta/scratch/persistence.md` §1
-**Last verified:** 2026-11-10 against commit `97a926a`
+**Sources:** `src/db/mod.rs:L23-L36`, `L131-L147`, `L294-L296`, `src/cli/mod.rs:L153-L182`, `src/db/migrations/V0001__init.sql:L1-L2`, `V0003__cs_and_duration.sql`, `V0021__facts_without_rowid.sql:L1-L33`, `V0023__body_packs.sql:L1-L48`, `V0027__matchup_builds.sql:L1-L19`, `src/db/tests.rs:L92-L154`, `L171`, `L402-L454`, `L543-L566`, `L735`, `L877-L919`, `L1222`, `src/archive/offload/tests.rs:L519-L532`, `src/jobs/offload/tests.rs:L507-L522`, `src/routes/dev.rs:L38-L88`, `tests/common/mod.rs:L32-L33`, `docs/design/04-data-and-cache.md:L61-L63`, `L417-L425`, `docs/design/12-object-storage-and-hosting.md:L196-L221`, `docs/DECISIONS.md:L49-L51` (ADR-010), `L1455` (ADR-135), `L1460-L1462` (ADR-136), `L1490-L1505` (ADR-140, ADR-141), `L1510` (ADR-142), `README.md:L195`, `docs/_meta/scratch/persistence.md` §1
+**Last verified:** 2026-11-10 against commit `8bcfd77`

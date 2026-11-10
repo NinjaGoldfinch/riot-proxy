@@ -2,6 +2,10 @@
 
 Dated log of changes to this documentation set. One line per change; the newest first.
 
+## 2026-11-10
+
+- SITE-13 (ADR-219): the status poller reads every platform's `lol-status-v4` every `STATUS_POLL_INTERVAL_S` (300 s) through the fetcher into L1 and `platform_status` (V0034); `status`'s TTL is 300 s / 600 s; recordings of bodies with an incident go to `STATUS_RECORDINGS_DIR`; `status_polls_total`; `FetchOptions::budget` and `fresh_only`. design/04 (§TTLs, the DDL), design/07 and design/14 (§Status poller, §Configuration), design/metrics; `data/caching.md`, `data/schema.md`, `data/migrations.md`, `workflows/adding-a-migration.md` (next free V0035), `deployment/configuration.md` (three variables), `operations/observability.md` (the metric, the log lines), `integration/monitoring-hooks.md`, `architecture/request-lifecycle.md`, `reference/riot-api-usage.md`, `api/endpoints-riot-lol.md`, the README's configuration table. Line citations of `src/fetcher.rs`, `src/config.rs`, `src/config/tests.rs`, `src/cli/serve.rs`, `src/riot/endpoints.rs`, `src/metrics.rs`, `src/status/mod.rs`, `src/routes/dev.rs`, `.env.example` and `README.md` moved with the code in every page that cites them; each such page's `Last verified` is refreshed.
+
 ## 2026-11-09
 
 - CI-06: `workflows/testing.md` §Known flakes records the telemetry test that scraped `/metrics` before the writer thread had recorded `sqlite_write_seconds`, how it reproduces under load and what the test waits for now. No code under `src/` changed.
@@ -75,4 +79,4 @@ Dated log of changes to this documentation set. One line per change; the newest 
 
 ---
 **Sources:** this documentation set
-**Last verified:** 2026-11-10 against commit `97a926a`
+**Last verified:** 2026-11-10 against commit `8bcfd77`

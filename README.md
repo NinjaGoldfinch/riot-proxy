@@ -109,6 +109,7 @@ Values come from CLI flags, then the environment, then `.env`, then the built-in
 | `ADMIN_IP_ALLOWLIST` | — | IPs and CIDRs allowed to reach `/v1/admin/*` |
 | `TRUST_PROXY` | `false` | Take the client address from `X-Forwarded-For`. Turn on only behind a reverse proxy that sets it |
 | `STATUS_ALLOW_CIDR` | `127.0.0.1/32,::1/128` | TCP peers that may read `/status` without a key (never `X-Forwarded-For`); `none` for none |
+| `STATUS_POLL_PLATFORMS` / `STATUS_POLL_INTERVAL_S` | every platform / `300` | Platforms whose `lol-status-v4` is read on a timer, at bulk priority, so `/v1/lol/status/{platform}` answers from cache; `none` turns it off. `STATUS_RECORDINGS_DIR` keeps a redacted copy of a body with an incident |
 | `BOOTSTRAP_ADMIN_KEY` | — | Use this admin key on first run instead of generating one |
 | `DEV_UI` / `DOCS_UI` / `DASHBOARD_UI` | on (`/dev` always off in production) | The three pages |
 

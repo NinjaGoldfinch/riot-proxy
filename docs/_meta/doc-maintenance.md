@@ -120,4 +120,4 @@ The files under [scratch/](./scratch/) are the Phase 0 inventories the set was w
 
 ---
 **Sources:** `docs/_meta/scratch/WRITING-BRIEF.md`, `src/routes/analytics.rs:L1031`, `src/routes/players.rs:L1082`, `tests/openapi.rs`, `scripts/compare-openapi.py`, `src/config/tests.rs:L443-L462`
-**Last verified:** 2026-11-09 against commit `0113520`
+**Last verified:** 2026-11-10 against commit `8bcfd77`

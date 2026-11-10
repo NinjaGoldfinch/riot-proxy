@@ -56,10 +56,10 @@ Reads from a route or a job all pass through the fetcher; the archive is the onl
 |---|---|---|
 | `app.rs` | Builds the axum router and the middleware stack, runs the server with a 10 s graceful drain | `router()`, `serve()`, `AppState` (`src/app.rs:40-69,71-121,268-302`) |
 | `cli/` | Subcommands: `serve`, `migrate`, `key`, `healthcheck`, `spec`, `backup`, `migrate-v1`, `packs`, and `riot` behind the `dev-cli` feature | `cli::run` (`src/cli/mod.rs:71-123`); the boot sequence in `cli/serve.rs` |
-| `config.rs` | Flags, environment and `.env` merged by figment, validated as a whole; production refusals; `Secret` wrapper | `Config::load`, `VARS` (`src/config.rs:23-102,651-685`) |
+| `config.rs` | Flags, environment and `.env` merged by figment, validated as a whole; production refusals; `Secret` wrapper | `Config::load`, `VARS` (`src/config.rs:23-105,677-711`) |
 | `http/` | Request ids, auth guards (`require_read`, `require_admin`), per-consumer quota, CORS for the admin API, the error envelope, validators, recent-request rings | `src/http/auth.rs`, `quota.rs`, `cors.rs`, `error.rs`, `validate.rs`, `recent.rs` |
 | `routes/` | One file per prefix; handlers carry `#[utoipa::path]` so the OpenAPI document is generated from the same registration (`routes::docs::api_router`) | `src/routes/docs.rs:116-153` |
-| `fetcher.rs` | The single read funnel: archive, L1, single-flight, limiter, client, store; stale-while-revalidate; retries; `X-Cache` values | `Fetcher::fetch`, `FetchOptions` (`src/fetcher.rs:398-489,530-736`) |
+| `fetcher.rs` | The single read funnel: archive, L1, single-flight, limiter, client, store; stale-while-revalidate; retries; `X-Cache` values | `Fetcher::fetch`, `FetchOptions` (`src/fetcher.rs:415-511,552-780`) |
 | `cache/` | L1 in moka with soft and hard TTLs and negative entries; L2 write-behind to the SQLite `cache` table; cache keys scoped by the Riot key hash | `src/cache/l1.rs`, `l2.rs`, `keys.rs` |
 | `singleflight.rs` | One upstream task per key for concurrent misses; the leader's task survives waiter cancellation | `SingleFlight::run` (`src/singleflight.rs:73-105`) |
 | `riot/` | Endpoint registry with TTLs and routing kind; platform and region mapping; the reqwest client; the header-driven sliding-log limiter and its checkpoint | `src/riot/endpoints.rs`, `routing.rs`, `client.rs`, `limiter/` |
@@ -67,7 +67,7 @@ Reads from a route or a job all pass through the fetcher; the archive is the onl
 | `jobs/` | Durable SQLite-backed queue, rate-limit-aware claims, workers, ticks, every job handler | `src/jobs/scheduler.rs`, `ticks.rs`, `mod.rs` (kinds and handlers) |
 | `events/`, `ws/` | Typed events published to per-topic broadcast channels and fanned out to sockets | `src/events/mod.rs`, `src/ws/hub.rs`, `socket.rs`, `protocol.rs` |
 | `db/` | One writer thread, a reader pool, pragmas, embedded refinery migrations, disk gauges | `Db::write`, `Db::read` (`src/db/mod.rs:343-514`) |
-| `metrics.rs`, `telemetry.rs` | The metric catalogue (v1 names) and the Prometheus exporter; tracing setup | `src/metrics.rs:102-434`, `src/telemetry.rs` |
+| `metrics.rs`, `telemetry.rs` | The metric catalogue (v1 names) and the Prometheus exporter; tracing setup | `src/metrics.rs:103-443`, `src/telemetry.rs` |
 | `stats.rs` | The dashboard's sampled snapshot and the metrics history in SQLite | `src/stats.rs` |
 | `static/` | The Data Dragon mirror on disk and image fill-on-request | `src/static/mod.rs`, `images.rs` |
 | `ui/` | The three embedded pages: `dev-ui.html`, `showcase.html`, `admin.html` | `src/routes/ui.rs` |
@@ -77,11 +77,11 @@ Reads from a route or a job all pass through the fetcher; the archive is the onl
 - **Auth is a route layer, not a handler concern.** The read routers are wrapped in `require_read` and the admin router in `require_admin` at registration (`src/routes/docs.rs:118-153`); `/healthz`, `/readyz`, `/metrics`, `/ddragon/*`, `/docs` and the pages are outside both.
 - **The fetcher owns upstream policy.** The client classifies and never retries (`src/riot/client.rs:1-7`); negative caching, stale fallbacks, the service-429 backoff and the 5xx retries live in the fetcher (`src/fetcher.rs:16-21`).
 - **The archive never fails a request.** A read failure in SQLite or the bucket logs a warning and returns nothing, so the fetcher goes to Riot (`src/archive/mod.rs:216-235`, `src/archive/matches.rs:232-319`).
-- **Jobs and routes share the fetcher but not the budget.** Routes fetch at interactive priority with a 2 s wait budget; jobs at bulk priority with a 1 s yield budget, after which the job gives its worker back (`src/fetcher.rs:146-172`, `src/jobs/scheduler.rs:124-141`).
+- **Jobs and routes share the fetcher but not the budget.** Routes fetch at interactive priority with a 2 s wait budget; jobs at bulk priority with a 1 s yield budget, after which the job gives its worker back (`src/fetcher.rs:151-189`, `src/jobs/scheduler.rs:124-141`).
 - **The object store is attached once.** `Db::attach_objects` stores the bucket handle so every archive read can resolve an offloaded body without the callers changing (`src/db/mod.rs:272-280`).
 
 The design these modules implement is `docs/design/03-architecture.md`; where the code has moved on from the design, the inventories under `docs/_meta/scratch/` record the differences and [../_meta/gaps.md](../_meta/gaps.md) lists them.
 
 ---
-**Sources:** `src/lib.rs`, `src/app.rs:L40-L121`, `src/cli/mod.rs:L71-L123`, `src/routes/docs.rs:L116-L153`, `src/fetcher.rs:L16-L21,L146-L172`, `src/riot/client.rs:L1-L7`, `src/archive/mod.rs:L216-L235`, `src/db/mod.rs:L238-L246,L310-L408`, `src/jobs/scheduler.rs:L124-L141`, `docs/design/03-architecture.md#component-diagram`
-**Last verified:** 2026-11-10 against commit `97a926a`
+**Sources:** `src/lib.rs`, `src/app.rs:L40-L121`, `src/cli/mod.rs:L71-L123`, `src/routes/docs.rs:L116-L153`, `src/fetcher.rs:L16-L21,L151-L189`, `src/riot/client.rs:L1-L7`, `src/archive/mod.rs:L216-L235`, `src/db/mod.rs:L238-L246,L310-L408`, `src/jobs/scheduler.rs:L124-L141`, `docs/design/03-architecture.md#component-diagram`
+**Last verified:** 2026-11-10 against commit `8bcfd77`
