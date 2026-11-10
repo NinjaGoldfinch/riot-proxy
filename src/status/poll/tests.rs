@@ -269,7 +269,7 @@ async fn a_recording_is_written_only_with_an_incident_once_per_id_and_has_no_key
                 Read::Body(body("oc1", &[], "quiet")),
                 Read::Body(body("oc1", &[7, 7], &leaked)),
                 Read::Body(body("oc1", &[7, 9], "later")),
-                Read::Body(body("oc1", &[11], "RGAPI-00000000-0000-0000-0000-000000000000")),
+                Read::Body(body("oc1", &[11], "RGAPI-another-key-not-ours")),
             ],
         ),
         (
