@@ -28,7 +28,11 @@ tokio::task_local! {
 /// Run `fut` as a job (the scheduler wraps each handler in this): every
 /// [`Db::write`] it makes on its own task is a *job write*, which
 /// [`Db::interrupt`] cancels at shutdown (AVL-04, ADR-211). Writes from a
-/// task it spawns are not, nor are the request path's.
+/// task it spawns are not, nor are the request path's. The exception is an
+/// archive write at the write-behind's bound (AVL-11): the job polls it on
+/// its own task, so it is a job write, dropped at shutdown like the rest and
+/// outside [`Db::flush_detached`]; the job runs again after `recover`
+/// (ADR-210).
 pub async fn job_writes<F: std::future::Future>(fut: F) -> F::Output {
     JOB_WRITES.scope((), fut).await
 }

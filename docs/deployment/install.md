@@ -134,7 +134,7 @@ sudo systemd-run --quiet --wait --pipe --uid=riot-proxy -p EnvironmentFile=/etc/
   /usr/local/bin/riot-proxy --data-dir /var/lib/riot-proxy/data migrate     # <path>: applied V0001, … or up to date
 ```
 
-`migrate` creates the database and applies every migration (`src/cli/mod.rs:144-168`); `serve` would do the same on its first boot (`src/db/mod.rs:224-232`).
+`migrate` creates the database and applies every migration (`src/cli/mod.rs:144-168`); `serve` would do the same on its first boot (`src/db/mod.rs:228-236`).
 
 ## 6. Enable, start, verify
 
