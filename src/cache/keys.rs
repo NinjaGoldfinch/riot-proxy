@@ -98,12 +98,6 @@ pub fn cache_key(scope: &KeyScope, req: &RiotRequest) -> String {
     key
 }
 
-/// The endpoint a key was made for by [`cache_key`]: its second segment.
-/// `None` for a derived key or anything else.
-pub fn endpoint_of(key: &str) -> Option<&'static crate::riot::endpoints::Endpoint> {
-    crate::riot::endpoints::Endpoint::by_id(key.split(':').nth(1)?)
-}
-
 /// What every key of `endpoint_id` under `scope` starts with: the keys form
 /// one range of a table keyed by them.
 pub fn endpoint_prefix(scope: &KeyScope, endpoint_id: &str) -> String {

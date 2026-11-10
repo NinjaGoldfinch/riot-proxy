@@ -289,8 +289,8 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         db.clone(),
         config.data_dir.join("backups"),
         config.backup_keep as usize,
-    )
-    .keeping_cache(kept);
+        kept,
+    );
     let maintenance = Arc::new(match &pending {
         Some(_) => maintenance.then_bucket_jobs(queue.clone()),
         None => maintenance,

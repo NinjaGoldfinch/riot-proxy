@@ -102,7 +102,7 @@ Jobs live in the SQLite `jobs` table; there is no in-memory queue (ADR-047, ADR-
 | Recovery | Rows left `running` by a crash go back to `pending` on boot | `src/jobs/scheduler.rs:969-979` |
 | Idle | A worker with nothing claimable sleeps until the next `run_after` or blocked lane frees, at most 1 s, and is woken by any enqueue | `src/jobs/scheduler.rs:1002-1031` |
 | Analytics on the writer | `aggregate:analytics` holds the writer for one patch's step at a time, 50 ms apart, gives its worker back after each 5 s turn and resumes from its job payload (AVL-05, ADR-215), and runs one at a time (`JOB_KIND_LIMITS`); `aggregate:delta` (THR-03) is one job for every ladder, deduped to one, whose batches are separate write transactions sized toward `AGGREGATE_DELTA_TARGET_MS` with a 50 ms pause between them, so other writes interleave | `src/jobs/analytics.rs:99-102,1213-1307` |
-| Retention | `done` rows are deleted after 7 days by `maintenance`, a kind at a time and 5 000 a write (AVL-05); `failed` rows stay until purged | `src/jobs/maintenance.rs:38,350-393` |
+| Retention | `done` rows are deleted after 7 days by `maintenance`, a kind at a time and 5 000 a write (AVL-05); `failed` rows stay until purged | `src/jobs/maintenance.rs:38,346-389` |
 
 Every job kind, its trigger, priority and tables is tabulated in `docs/_meta/scratch/jobs-and-observability.md` §3 and summarised for operators in [../operations/runbook.md](../operations/runbook.md).
 

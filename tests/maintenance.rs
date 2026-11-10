@@ -10,6 +10,7 @@ use std::path::Path;
 use riot_proxy::db::{Db, DbError};
 use std::sync::Arc;
 
+use riot_proxy::cache::l2::Kept;
 use riot_proxy::jobs::maintenance::{KEEP_BACKUPS, Maintenance, backup_name, backups, vacuum_into};
 
 const DAY_MS: i64 = 86_400_000;
@@ -63,7 +64,7 @@ async fn the_daily_run_backs_up_first_then_trims_sweeps_and_checkpoints() {
         std::fs::write(backup_dir.join(backup_name(NOW - d * DAY_MS)), b"old").unwrap();
     }
     std::fs::write(backup_dir.join("riot-proxy-notes.db"), b"mine").unwrap();
-    let m = Maintenance::new(db.clone(), backup_dir.clone(), KEEP_BACKUPS);
+    let m = Maintenance::new(db.clone(), backup_dir.clone(), KEEP_BACKUPS, Kept::none());
 
     let report = m.run_once(NOW).await.unwrap();
     let today = backup_dir.join("riot-proxy-2026-10-03.db");
@@ -117,7 +118,7 @@ async fn a_backup_cut_short_is_not_taken_for_todays() {
     std::fs::create_dir_all(&backup_dir).unwrap();
     // A crash mid-copy leaves the partial file only.
     std::fs::write(backup_dir.join(".riot-proxy-2026-10-03.db.partial"), b"half").unwrap();
-    let m = Maintenance::new(db, backup_dir.clone(), KEEP_BACKUPS);
+    let m = Maintenance::new(db, backup_dir.clone(), KEEP_BACKUPS, Kept::none());
     let report = m.run_once(NOW).await.unwrap();
     let today = report.backup.unwrap();
     assert_eq!(ids(&today, "SELECT name FROM consumers"), ["keep me"]);
@@ -149,7 +150,7 @@ async fn keep_zero_takes_no_backup_prunes_none_and_still_trims() {
     for d in 1..=16 {
         std::fs::write(backup_dir.join(backup_name(NOW - d * DAY_MS)), b"old").unwrap();
     }
-    let m = Maintenance::new(db, backup_dir.clone(), 0);
+    let m = Maintenance::new(db, backup_dir.clone(), 0, Kept::none());
     assert_eq!(m.last(), None, "no run yet");
     let report = m.run_once(NOW).await.unwrap();
     assert_eq!(report.backup, None);
@@ -180,7 +181,7 @@ async fn no_room_on_the_disk_skips_the_backup_and_the_rest_runs() {
     let size = std::fs::metadata(dir.path().join("riot-proxy.db")).unwrap().len()
         + std::fs::metadata(dir.path().join("riot-proxy.db-wal")).map_or(0, |m| m.len());
     let short = (size as f64 * 1.2) as u64 - 1;
-    let m = Maintenance::new(db.clone(), backup_dir.clone(), KEEP_BACKUPS)
+    let m = Maintenance::new(db.clone(), backup_dir.clone(), KEEP_BACKUPS, Kept::none())
         .with_disk_free(Arc::new(move |_| Ok(short)));
     let report = m.run_once(NOW).await.unwrap();
     assert_eq!(report.backup, None);
@@ -202,7 +203,8 @@ async fn no_room_on_the_disk_skips_the_backup_and_the_rest_runs() {
     trimmed(dir.path(), &report).await;
 
     // With room, the same run writes it.
-    let m = Maintenance::new(db, backup_dir.clone(), KEEP_BACKUPS).with_disk_free(Arc::new(|_| Ok(u64::MAX)));
+    let m = Maintenance::new(db, backup_dir.clone(), KEEP_BACKUPS, Kept::none())
+        .with_disk_free(Arc::new(|_| Ok(u64::MAX)));
     let report = m.run_once(NOW).await.unwrap();
     assert!(report.backup.is_some(), "{report:?}");
 }
@@ -218,7 +220,8 @@ async fn a_copy_that_fails_leaves_no_partial_and_the_rest_runs() {
     std::fs::create_dir_all(&backup_dir).unwrap();
     // VACUUM INTO cannot create its file in a directory it may not write to.
     std::fs::set_permissions(&backup_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
-    let m = Maintenance::new(db, backup_dir.clone(), KEEP_BACKUPS).with_disk_free(Arc::new(|_| Ok(u64::MAX)));
+    let m = Maintenance::new(db, backup_dir.clone(), KEEP_BACKUPS, Kept::none())
+        .with_disk_free(Arc::new(|_| Ok(u64::MAX)));
     let report = m.run_once(NOW).await.unwrap();
     std::fs::set_permissions(&backup_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
     assert_eq!(report.backup, None);
@@ -258,7 +261,7 @@ async fn the_daily_run_refreshes_planner_statistics() {
     let dir = tempfile::tempdir().unwrap();
     let db = open(dir.path());
     seed(&db).await;
-    let m = Maintenance::new(db.clone(), dir.path().join("backups"), KEEP_BACKUPS);
+    let m = Maintenance::new(db.clone(), dir.path().join("backups"), KEEP_BACKUPS, Kept::none());
     m.run_once(NOW).await.unwrap();
     // ADR-102: `jobs` gained rows since the open, so it has statistics now.
     let analysed = ids(
@@ -277,7 +280,8 @@ async fn a_failed_run_is_remembered_with_its_error() {
     // the backups to prune fails the run.
     let backup_dir = dir.path().join("backups");
     std::fs::write(&backup_dir, b"not a directory").unwrap();
-    let m = Maintenance::new(db, backup_dir, KEEP_BACKUPS).with_disk_free(Arc::new(|_| Ok(u64::MAX)));
+    let m = Maintenance::new(db, backup_dir, KEEP_BACKUPS, Kept::none())
+        .with_disk_free(Arc::new(|_| Ok(u64::MAX)));
     let err = m.run_once(NOW).await.unwrap_err();
     let last = m.last().unwrap();
     assert_eq!(last.at, NOW);
@@ -389,7 +393,7 @@ async fn the_trim_deletes_old_done_jobs_in_chunks_of_five_thousand() {
     })
     .await
     .unwrap();
-    let m = Maintenance::new(db.clone(), dir.path().join("backups"), 0);
+    let m = Maintenance::new(db.clone(), dir.path().join("backups"), 0, Kept::none());
     assert_eq!(m.run_once(NOW).await.unwrap().jobs_deleted, 1);
     assert_eq!(trim_done_jobs(&db, cutoff).await.unwrap().deleted, 0);
 }
