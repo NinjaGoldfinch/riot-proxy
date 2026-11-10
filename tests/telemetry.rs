@@ -146,8 +146,20 @@ async fn sqlite_writes_are_timed_and_the_queue_is_a_gauge() {
     })
     .await
     .unwrap();
-    handle.run_upkeep();
-    let (_, _, body) = get_body(app(), Request::get("/metrics").body(Body::empty()).unwrap()).await;
+    // The writer thread answers the caller from inside the write's closure and
+    // only then records `sqlite_write_seconds` and sets the gauge
+    // (`db::writer::run_job`), so a scrape made as soon as the write returns
+    // can come before both. Wait for the writer's own bookkeeping, then assert.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let body = loop {
+        handle.run_upkeep();
+        let (_, _, body) = get_body(app(), Request::get("/metrics").body(Body::empty()).unwrap()).await;
+        let recorded = body.contains("sqlite_write_seconds_count ") && body.contains("sqlite_write_queue 0");
+        if recorded || std::time::Instant::now() >= deadline {
+            break body;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    };
     for name in ["sqlite_write_seconds", "sqlite_write_wait_seconds"] {
         assert!(body.contains(&format!("# TYPE {name} histogram")), "{body}");
         let les: Vec<&str> = body

@@ -151,6 +151,10 @@ pub struct Maintenance {
     /// `BACKUP_KEEP`: backups kept, newest first; 0 takes none.
     pub keep: usize,
     pub disk_free: DiskFree,
+    /// The L2 rows the sweep leaves past their hard TTL (AVL-08): `serve`
+    /// passes [`Kept::for_scope`](crate::cache::l2::Kept::for_scope), so a
+    /// player's expired copy outlives the daily sweep as it does boot's.
+    pub cache_kept: crate::cache::l2::Kept,
     /// The last run since the process started (ADM-06).
     last: RwLock<Option<LastRun>>,
     /// Where `archive:offload` and `archive:index-snapshot` are queued after
@@ -160,12 +164,15 @@ pub struct Maintenance {
 }
 
 impl Maintenance {
-    pub fn new(db: Db, backup_dir: PathBuf, keep: usize) -> Self {
+    /// `cache_kept` is required, not defaulted: a default of none would
+    /// sweep the expired player rows AVL-03 keeps for a Riot outage.
+    pub fn new(db: Db, backup_dir: PathBuf, keep: usize, cache_kept: crate::cache::l2::Kept) -> Self {
         Self {
             db,
             backup_dir,
             keep,
             disk_free: Arc::new(crate::db::disk::free_bytes),
+            cache_kept,
             last: RwLock::new(None),
             bucket_jobs: None,
         }
@@ -248,7 +255,9 @@ impl Maintenance {
             .await
             .map_err(|e| fail(&e))?;
         report.history_deleted = history;
-        report.cache_swept = crate::cache::l2::sweep(&self.db).await.map_err(|e| fail(&e))?;
+        report.cache_swept = crate::cache::l2::sweep(&self.db, &self.cache_kept)
+            .await
+            .map_err(|e| fail(&e))?;
         self.db.optimize().await.map_err(|e| fail(&e))?;
 
         let (busy, log, moved): (i64, i64, i64) = self

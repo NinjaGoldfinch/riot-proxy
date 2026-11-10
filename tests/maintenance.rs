@@ -10,6 +10,7 @@ use std::path::Path;
 use riot_proxy::db::{Db, DbError};
 use std::sync::Arc;
 
+use riot_proxy::cache::l2::Kept;
 use riot_proxy::jobs::maintenance::{KEEP_BACKUPS, Maintenance, backup_name, backups, vacuum_into};
 
 const DAY_MS: i64 = 86_400_000;
@@ -63,7 +64,7 @@ async fn the_daily_run_backs_up_first_then_trims_sweeps_and_checkpoints() {
         std::fs::write(backup_dir.join(backup_name(NOW - d * DAY_MS)), b"old").unwrap();
     }
     std::fs::write(backup_dir.join("riot-proxy-notes.db"), b"mine").unwrap();
-    let m = Maintenance::new(db.clone(), backup_dir.clone(), KEEP_BACKUPS);
+    let m = Maintenance::new(db.clone(), backup_dir.clone(), KEEP_BACKUPS, Kept::none());
 
     let report = m.run_once(NOW).await.unwrap();
     let today = backup_dir.join("riot-proxy-2026-10-03.db");
@@ -117,7 +118,7 @@ async fn a_backup_cut_short_is_not_taken_for_todays() {
     std::fs::create_dir_all(&backup_dir).unwrap();
     // A crash mid-copy leaves the partial file only.
     std::fs::write(backup_dir.join(".riot-proxy-2026-10-03.db.partial"), b"half").unwrap();
-    let m = Maintenance::new(db, backup_dir.clone(), KEEP_BACKUPS);
+    let m = Maintenance::new(db, backup_dir.clone(), KEEP_BACKUPS, Kept::none());
     let report = m.run_once(NOW).await.unwrap();
     let today = report.backup.unwrap();
     assert_eq!(ids(&today, "SELECT name FROM consumers"), ["keep me"]);
@@ -149,7 +150,7 @@ async fn keep_zero_takes_no_backup_prunes_none_and_still_trims() {
     for d in 1..=16 {
         std::fs::write(backup_dir.join(backup_name(NOW - d * DAY_MS)), b"old").unwrap();
     }
-    let m = Maintenance::new(db, backup_dir.clone(), 0);
+    let m = Maintenance::new(db, backup_dir.clone(), 0, Kept::none());
     assert_eq!(m.last(), None, "no run yet");
     let report = m.run_once(NOW).await.unwrap();
     assert_eq!(report.backup, None);
@@ -180,7 +181,7 @@ async fn no_room_on_the_disk_skips_the_backup_and_the_rest_runs() {
     let size = std::fs::metadata(dir.path().join("riot-proxy.db")).unwrap().len()
         + std::fs::metadata(dir.path().join("riot-proxy.db-wal")).map_or(0, |m| m.len());
     let short = (size as f64 * 1.2) as u64 - 1;
-    let m = Maintenance::new(db.clone(), backup_dir.clone(), KEEP_BACKUPS)
+    let m = Maintenance::new(db.clone(), backup_dir.clone(), KEEP_BACKUPS, Kept::none())
         .with_disk_free(Arc::new(move |_| Ok(short)));
     let report = m.run_once(NOW).await.unwrap();
     assert_eq!(report.backup, None);
@@ -202,7 +203,8 @@ async fn no_room_on_the_disk_skips_the_backup_and_the_rest_runs() {
     trimmed(dir.path(), &report).await;
 
     // With room, the same run writes it.
-    let m = Maintenance::new(db, backup_dir.clone(), KEEP_BACKUPS).with_disk_free(Arc::new(|_| Ok(u64::MAX)));
+    let m = Maintenance::new(db, backup_dir.clone(), KEEP_BACKUPS, Kept::none())
+        .with_disk_free(Arc::new(|_| Ok(u64::MAX)));
     let report = m.run_once(NOW).await.unwrap();
     assert!(report.backup.is_some(), "{report:?}");
 }
@@ -218,7 +220,8 @@ async fn a_copy_that_fails_leaves_no_partial_and_the_rest_runs() {
     std::fs::create_dir_all(&backup_dir).unwrap();
     // VACUUM INTO cannot create its file in a directory it may not write to.
     std::fs::set_permissions(&backup_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
-    let m = Maintenance::new(db, backup_dir.clone(), KEEP_BACKUPS).with_disk_free(Arc::new(|_| Ok(u64::MAX)));
+    let m = Maintenance::new(db, backup_dir.clone(), KEEP_BACKUPS, Kept::none())
+        .with_disk_free(Arc::new(|_| Ok(u64::MAX)));
     let report = m.run_once(NOW).await.unwrap();
     std::fs::set_permissions(&backup_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
     assert_eq!(report.backup, None);
@@ -258,7 +261,7 @@ async fn the_daily_run_refreshes_planner_statistics() {
     let dir = tempfile::tempdir().unwrap();
     let db = open(dir.path());
     seed(&db).await;
-    let m = Maintenance::new(db.clone(), dir.path().join("backups"), KEEP_BACKUPS);
+    let m = Maintenance::new(db.clone(), dir.path().join("backups"), KEEP_BACKUPS, Kept::none());
     m.run_once(NOW).await.unwrap();
     // ADR-102: `jobs` gained rows since the open, so it has statistics now.
     let analysed = ids(
@@ -277,7 +280,8 @@ async fn a_failed_run_is_remembered_with_its_error() {
     // the backups to prune fails the run.
     let backup_dir = dir.path().join("backups");
     std::fs::write(&backup_dir, b"not a directory").unwrap();
-    let m = Maintenance::new(db, backup_dir, KEEP_BACKUPS).with_disk_free(Arc::new(|_| Ok(u64::MAX)));
+    let m = Maintenance::new(db, backup_dir, KEEP_BACKUPS, Kept::none())
+        .with_disk_free(Arc::new(|_| Ok(u64::MAX)));
     let err = m.run_once(NOW).await.unwrap_err();
     let last = m.last().unwrap();
     assert_eq!(last.at, NOW);
@@ -389,7 +393,7 @@ async fn the_trim_deletes_old_done_jobs_in_chunks_of_five_thousand() {
     })
     .await
     .unwrap();
-    let m = Maintenance::new(db.clone(), dir.path().join("backups"), 0);
+    let m = Maintenance::new(db.clone(), dir.path().join("backups"), 0, Kept::none());
     assert_eq!(m.run_once(NOW).await.unwrap().jobs_deleted, 1);
     assert_eq!(trim_done_jobs(&db, cutoff).await.unwrap().deleted, 0);
 }
@@ -514,5 +518,78 @@ async fn a_boot_queues_maintenance_only_when_it_is_due() {
     assert!(
         !restarted.path().join("backups").exists(),
         "and no backup was written"
+    );
+}
+
+/// AVL-08: `serve` sweeps L2 at boot and in `maintenance` with the same rule.
+/// A player's row a few hours past its hard TTL outlives both sweeps; a
+/// ladder page as old is deleted, as before AVL-03.
+#[tokio::test]
+async fn a_boots_sweeps_keep_only_a_players_expired_cache_rows() {
+    use riot_proxy::cache::l2::{self, Row};
+
+    let dir = tempfile::tempdir().unwrap();
+    let _signals = crate::common::SIGNALS.lock().await;
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let config = crate::common::config(&[
+        ("DATA_DIR", dir.path().to_str().unwrap()),
+        ("PORT", &port.to_string()),
+        ("HOST", "127.0.0.1"),
+        ("LOG_LEVEL", "warn"),
+        ("BACKUP_KEEP", "0"),
+    ]);
+    let scope = riot_proxy::cache::keys::KeyScope::for_config(&config);
+    let now = riot_proxy::clock::Clock::now().unix_ms;
+    let row = |key: String| Row {
+        key,
+        body: bytes::Bytes::from_static(b"{}"),
+        status: 200,
+        content_at: now - 4 * 3_600_000,
+        fetched_at: now - 4 * 3_600_000,
+        soft_expires: now - 3 * 3_600_000 - 1_800_000,
+        hard_expires: now - 3 * 3_600_000,
+    };
+    let player = format!("{scope}:league.entriesByPuuid:kr.api.riotgames.com:P");
+    let ladder = format!("{scope}:league.entriesByTier:kr.api.riotgames.com:RANKED_SOLO_5x5:DIAMOND:I:abc");
+    {
+        let db = open(dir.path());
+        l2::put_rows(&db, vec![row(player.clone()), row(ladder)])
+            .await
+            .unwrap();
+    }
+
+    let options = riot_proxy::cli::serve::ServeOptions {
+        riot_base_url: Some("http://127.0.0.1:9".into()),
+        skip_tracing_init: true,
+        ddragon_urls: Some(riot_proxy::jobs::ddragon::CdnUrls::mock("http://127.0.0.1:9")),
+        ..riot_proxy::cli::serve::ServeOptions::default()
+    };
+    let task = tokio::spawn(riot_proxy::cli::serve::serve_with(config, options));
+    // A fresh database: the maintenance tick fires at boot and the job runs.
+    let path = dir.path().join("riot-proxy.db");
+    let mut ran = false;
+    for _ in 0..400 {
+        if !ids(
+            &path,
+            "SELECT id FROM jobs WHERE kind = 'maintenance' AND state = 'done'",
+        )
+        .is_empty()
+        {
+            ran = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    task.abort();
+    let _ = task.await;
+    assert!(ran, "maintenance never ran");
+    assert_eq!(
+        ids(&path, "SELECT key FROM cache"),
+        [player],
+        "the boot's sweep and maintenance's both left the player's row and no other"
     );
 }
