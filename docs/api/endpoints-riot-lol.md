@@ -17,7 +17,7 @@ Common parameter rules (`src/http/validate.rs`):
 
 ## `/v1/riot/*`: account-v1
 
-Riot endpoint: `account.byRiotId` `/riot/account/v1/accounts/by-riot-id/{gameName}/{tagLine}`, `account.byPuuid` `/riot/account/v1/accounts/by-puuid/{puuid}`, `account.regionByPuuid` `/riot/account/v1/region/by-game/lol/by-puuid/{puuid}` (`src/riot/endpoints.rs:L112-L133`, `L273-L286`). Soft TTL 86 400 s, hard 345 600 s, negative TTL 300 s, persisted to L2.
+Riot endpoint: `account.byRiotId` `/riot/account/v1/accounts/by-riot-id/{gameName}/{tagLine}`, `account.byPuuid` `/riot/account/v1/accounts/by-puuid/{puuid}`, `account.regionByPuuid` `/riot/account/v1/region/by-game/lol/by-puuid/{puuid}` (`src/riot/endpoints.rs:L126-L147`, `L287-L304`). Soft TTL 86 400 s, hard 345 600 s, negative TTL 300 s, persisted to L2.
 
 | Method | Path | Params | Riot call | Handler |
 |---|---|---|---|---|
@@ -33,7 +33,7 @@ The pinned and picked variants share one cache entry (`src/routes/riot.rs:L155-L
 {"puuid":"AbCdEfGhIjKlMnOpQrStUvWxYz0123456789AbCdEfGhIjKlMnOpQrStUvWxYz0123456789AbCdEf","gameName":"Hide on bush","tagLine":"KR1"}
 ```
 
-A Riot ID that does not exist is `404 NOT_FOUND` `Resource not found upstream`, and the 404 is cached for 300 s, so the next call is `404` with `X-Cache: HIT-NEG` and message `Resource not found upstream (negative-cached)` (`src/fetcher.rs:L449-L455`).
+A Riot ID that does not exist is `404 NOT_FOUND` `Resource not found upstream`, and the 404 is cached for 300 s, so the next call is `404` with `X-Cache: HIT-NEG` and message `Resource not found upstream (negative-cached)` (`src/fetcher.rs:L466-L472`).
 
 > **TODO (unverified):** the 200 body of `/v1/riot/accounts/region/by-puuid/{puuid}` is not typed in the OpenAPI document (it is not in `RIOT_BODIES`, `src/routes/docs.rs:L300-L333`); the proxy forwards Riot's `AccountRegionDTO` bytes unchanged.
 
@@ -51,7 +51,7 @@ A Riot ID that does not exist is `404 NOT_FOUND` `Resource not found upstream`, 
 | GET | `/v1/lol/spectator/active/{platform}/{puuid}` | platform, puuid | `spectator.activeGame` `/lol/spectator/v5/active-games/by-summoner/{puuid}` | soft 30 s; a 404 (not in game) is cached 30 s as `HIT-NEG` | `src/routes/lol.rs:L309` |
 | GET | `/v1/lol/mastery/by-puuid/{platform}/{puuid}` | `?top` 1 to 200 | with `top`: `mastery.topByPuuid` `…/champion-masteries/by-puuid/{puuid}/top?count=N`; else `mastery.byPuuid` | soft 3 600 s, L2 | `src/routes/lol.rs:L326` |
 | GET | `/v1/lol/rotations/{platform}` | platform | `platform.championRotations` `/lol/platform/v3/champion-rotations` | soft 21 600 s | `src/routes/lol.rs:L385` |
-| GET | `/v1/lol/status/{platform}` | platform | `status.platformData` `/lol/status/v4/platform-data` | soft 60 s | `src/routes/lol.rs:L400` |
+| GET | `/v1/lol/status/{platform}` | platform | `status.platformData` `/lol/status/v4/platform-data` | soft 300 s; kept warm by the status poller, so usually `HIT` (SITE-13) | `src/routes/lol.rs:L400` |
 
 Hard TTL is soft × 4 while `STALE_WHILE_REVALIDATE=true` (default); the full table with line references is in [../reference/riot-api-usage.md](../reference/riot-api-usage.md). Exact upstream URLs per route are asserted in `tests/snapshots/lol_routes__lol_routes_upstream_calls.snap`.
 
@@ -119,5 +119,5 @@ ninjagoldfinch.lol does not use these image routes; its browser loads icons stra
 > **TODO (unverified):** whether `ServeDir` sends `Last-Modified` and honours `If-Modified-Since` for images written by the fill route on a later request; the behaviour is tower-http's (`docs/_meta/scratch/routes.md` §7).
 
 ---
-**Sources:** `src/routes/riot.rs:L127-L300`, `src/routes/lol.rs:L30-L405`, `src/routes/statics.rs:L4-L292`, `src/routes/passthrough.rs:L325-L476`, `src/http/validate.rs:L53-L166,L232-L244`, `src/riot/endpoints.rs:L112-L312`, `src/riot/ladder.rs:L7-L26`, `src/riot/routing.rs:L138-L205`, `src/static/mod.rs:L28-L101`, `src/fetcher.rs:L429-L455`, `tests/snapshots/lol_routes__lol_routes_upstream_calls.snap`, `tests/snapshots/ddragon__ddragon_file_headers.snap`, `tests/snapshots/ddragon__ddragon_missing_headers.snap`, `docs/_meta/scratch/routes.md` §1.2-1.3,1.6-1.7, `docs/_meta/scratch/riot-and-cache.md` §2, live capture against `target/debug/riot-proxy` 2.7.0
-**Last verified:** 2026-11-10 against commit `97a926a`
+**Sources:** `src/routes/riot.rs:L127-L300`, `src/routes/lol.rs:L30-L405`, `src/routes/statics.rs:L4-L292`, `src/routes/passthrough.rs:L325-L476`, `src/http/validate.rs:L53-L166,L232-L244`, `src/riot/endpoints.rs:L126-L330`, `src/riot/ladder.rs:L7-L26`, `src/riot/routing.rs:L138-L205`, `src/static/mod.rs:L28-L101`, `src/fetcher.rs:L446-L472`, `tests/snapshots/lol_routes__lol_routes_upstream_calls.snap`, `tests/snapshots/ddragon__ddragon_file_headers.snap`, `tests/snapshots/ddragon__ddragon_missing_headers.snap`, `docs/_meta/scratch/routes.md` §1.2-1.3,1.6-1.7, `docs/_meta/scratch/riot-and-cache.md` §2, live capture against `target/debug/riot-proxy` 2.7.0
+**Last verified:** 2026-11-10 against commit `8bcfd77`

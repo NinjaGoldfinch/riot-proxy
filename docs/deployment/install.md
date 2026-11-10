@@ -78,7 +78,7 @@ WantedBy=multi-user.target
 
 `TimeoutStopSec=90` is systemd's default, written down so a later edit does not lower it below what a stop takes: about 25 s during a long job write, 35 s at worst (`docs/design/07-deployment.md:100`, ADR-211). A unit that does not set it already has it.
 
-`ExecStart` has no `--data-dir`, so `DATA_DIR=/var/lib/riot-proxy/data` must be in the env file (the default is `./data`, relative to the working directory, `src/config.rs:718`). The `rp` helper in `deploy/README.md:121-122` passes `--data-dir /var/lib/riot-proxy/data` explicitly for one-off commands.
+`ExecStart` has no `--data-dir`, so `DATA_DIR=/var/lib/riot-proxy/data` must be in the env file (the default is `./data`, relative to the working directory, `src/config.rs:744`). The `rp` helper in `deploy/README.md:121-122` passes `--data-dir /var/lib/riot-proxy/data` explicitly for one-off commands.
 
 ```bash
 sudo install -m 0644 riot-proxy.service /etc/systemd/system/
@@ -95,7 +95,7 @@ Create `/etc/riot-proxy/env` root-only and fill it in an editor (`docs/design/12
 sudo install -m 0600 /dev/null /etc/riot-proxy/env && sudo editor /etc/riot-proxy/env
 ```
 
-The production-relevant variables, with placeholders. The file is parsed with node-dotenv rules; an empty value means "use the default" (`src/config.rs:938-981,983-989`).
+The production-relevant variables, with placeholders. The file is parsed with node-dotenv rules; an empty value means "use the default" (`src/config.rs:968-1011,1013-1019`).
 
 ```ini
 RIOT_API_KEY=<the Riot key, never anywhere else>
@@ -125,9 +125,9 @@ BOOTSTRAP_ADMIN_KEY=
 
 `ADMIN_IP_ALLOWLIST` stays empty on purpose: Cloudflare Access is the gate on `admin.`, and behind the tunnel an allowlist of `127.0.0.1` refuses every admin call (`docs/design/12-object-storage-and-hosting.md:871-876`). `BOOTSTRAP_ADMIN_KEY` may be left empty: `serve` then mints the first admin key and prints it once (`src/cli/serve.rs:68-96`).
 
-What `ENV=production` enforces: `AUTH_DISABLED` refused, `/dev` never served, `RIOT_BASE_URL` and `DDRAGON_BASE_URL` refused, `file://` object URLs refused, `http://` endpoints refused, both object-storage keys required with an `s3://` URL (`src/config.rs:749-775,1099-1111`). `HOST=127.0.0.1` keeps port 8080 off the public interface; the default is `0.0.0.0` (`docs/design/12-object-storage-and-hosting.md:554-559`; `src/config.rs:805`). The full reference, defaults and last-known production values are in [configuration.md](./configuration.md).
+What `ENV=production` enforces: `AUTH_DISABLED` refused, `/dev` never served, `RIOT_BASE_URL` and `DDRAGON_BASE_URL` refused, `file://` object URLs refused, `http://` endpoints refused, both object-storage keys required with an `s3://` URL (`src/config.rs:775-801,1129-1141`). `HOST=127.0.0.1` keeps port 8080 off the public interface; the default is `0.0.0.0` (`docs/design/12-object-storage-and-hosting.md:554-559`; `src/config.rs:832`). The full reference, defaults and last-known production values are in [configuration.md](./configuration.md).
 
-Check the file loads without starting the service. Every subcommand validates the configuration first and prints `error: Invalid environment configuration:` with one line per problem, exit 1 (`src/cli/mod.rs:82-88`; `src/config.rs:130-131,897-901`):
+Check the file loads without starting the service. Every subcommand validates the configuration first and prints `error: Invalid environment configuration:` with one line per problem, exit 1 (`src/cli/mod.rs:82-88`; `src/config.rs:133-134,927-931`):
 
 ```bash
 sudo systemd-run --quiet --wait --pipe --uid=riot-proxy -p EnvironmentFile=/etc/riot-proxy/env \
@@ -145,7 +145,7 @@ curl -s localhost:8080/healthz      # {"ok":true}
 curl -s localhost:8080/readyz       # {"ok":true,"sqlite":true,"limiter":true,…}
 ```
 
-In the journal, in order: `database ready`, `bootstrap admin consumer created`, then on stderr a block `bootstrap admin key (shown once): rpx_…` with `Scopes read,admin. Store it now; it cannot be recovered.` (only when `BOOTSTRAP_ADMIN_KEY` was not set), `limiter checkpoint restored` or `limiter checkpoint could not be read; starting fresh`, `L1 warmed from L2`, `object store configured store=s3://riot-proxy-archive at https://…`, `listening addr=127.0.0.1:8080`, `starting job workers` (`src/cli/serve.rs:63-184,390-395,474-481`; `docs/_meta/scratch/jobs-and-observability.md:11-31`). Store the admin key now; only its sha256 is kept (`src/consumers.rs:105-107,154-157`).
+In the journal, in order: `database ready`, `bootstrap admin consumer created`, then on stderr a block `bootstrap admin key (shown once): rpx_…` with `Scopes read,admin. Store it now; it cannot be recovered.` (only when `BOOTSTRAP_ADMIN_KEY` was not set), `limiter checkpoint restored` or `limiter checkpoint could not be read; starting fresh`, `L1 warmed from L2`, `object store configured store=s3://riot-proxy-archive at https://…`, `listening addr=127.0.0.1:8080`, `starting job workers` (`src/cli/serve.rs:63-184,390-395,478-485`; `docs/_meta/scratch/jobs-and-observability.md:11-31`). Store the admin key now; only its sha256 is kept (`src/consumers.rs:105-107,154-157`).
 
 `/readyz` answers 503 with the same body while the limiter is not yet restored, while another process holds the database's write lock, or while a running write has stalled; a long write that makes progress keeps it 200 (`src/routes/health.rs:122-204`).
 
@@ -241,5 +241,5 @@ docker compose logs | grep -i "admin key"                     # the bootstrap ad
 The image is `FROM scratch` with the static binary, `DATA_DIR=/data`, port 8080 and a `HEALTHCHECK` that runs `riot-proxy healthcheck` (`Dockerfile:19-26`). `healthcheck` loads the configuration first, so `RIOT_API_KEY` must be in the container environment (`src/cli/healthcheck.rs`; `docs/_meta/scratch/config.md:215`). The Proxmox dev VM in `deploy/proxmox/` follows the `:edge` image; it is optional and currently dormant (`README.md:27-58`).
 
 ---
-**Sources:** `docs/design/07-deployment.md:L15,L74-L95`, `docs/design/12-object-storage-and-hosting.md:L547-L561,L588-L644,L797-L810,L818-L821,L896-L906`, `deploy/README.md:L20-L100,L121-L122,L151-L152`, `deploy/riot-proxy-replica.service:L12-L33`, `deploy/riot-proxy-replica.timer:L6-L8`, `.github/workflows/release.yml:L262-L279`, `README.md:L11-L24,L27-L58`, `Dockerfile:L19-L26`, `docker-compose.yml:L1-L11`, `src/config.rs:L131-L132,L718,L754-L780,L805,L944-L995,L1105-L1117`, `src/cli/mod.rs:L82-L88,L144-L168`, `src/cli/serve.rs:L59-L163,L366-L371,L450-L456`, `src/cli/key.rs:L46-L57`, `src/consumers.rs:L95-L107,L154-L157`, `src/http/auth.rs:L30,L288-L290`, `src/routes/health.rs:L122-L204`, `docs/_meta/scratch/siblings.md`, `docs/_meta/scratch/routes.md:L137-L140`
-**Last verified:** 2026-11-10 against commit `97a926a`
+**Sources:** `docs/design/07-deployment.md:L15,L74-L95`, `docs/design/12-object-storage-and-hosting.md:L547-L561,L588-L644,L797-L810,L818-L821,L896-L906`, `deploy/README.md:L20-L100,L121-L122,L151-L152`, `deploy/riot-proxy-replica.service:L12-L33`, `deploy/riot-proxy-replica.timer:L6-L8`, `.github/workflows/release.yml:L262-L279`, `README.md:L11-L24,L27-L58`, `Dockerfile:L19-L26`, `docker-compose.yml:L1-L11`, `src/config.rs:L134-L135,L744,L780-L806,L832,L974-L1025,L1135-L1147`, `src/cli/mod.rs:L82-L88,L144-L168`, `src/cli/serve.rs:L59-L163,L366-L371,L454-L460`, `src/cli/key.rs:L46-L57`, `src/consumers.rs:L95-L107,L154-L157`, `src/http/auth.rs:L30,L288-L290`, `src/routes/health.rs:L122-L204`, `docs/_meta/scratch/siblings.md`, `docs/_meta/scratch/routes.md:L137-L140`
+**Last verified:** 2026-11-10 against commit `8bcfd77`

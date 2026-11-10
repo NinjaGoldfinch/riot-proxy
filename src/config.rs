@@ -90,6 +90,9 @@ pub const VARS: &[&str] = &[
     "STATUS_ALLOW_CIDR",
     "STATUS_CHECK_INTERVAL_S",
     "STATUS_CHECK_PLATFORMS",
+    "STATUS_POLL_INTERVAL_S",
+    "STATUS_POLL_PLATFORMS",
+    "STATUS_RECORDINGS_DIR",
     "RIOT_API_KEY_EXPIRES_AT",
     "ADMIN_CORS_ORIGINS",
     "BOOTSTRAP_ADMIN_KEY",
@@ -407,6 +410,15 @@ pub struct Config {
     /// `down` (ADR-206). Defaults to `LADDER_PLATFORMS`; `none` is empty,
     /// which leaves `riot_api` out of the checks.
     pub status_check_platforms: Vec<Platform>,
+    /// How often the status poller reads every platform's `lol-status-v4`
+    /// (SITE-13, design/14 §Status poller).
+    pub status_poll_interval_s: u32,
+    /// The platforms the status poller reads, in order without repeats.
+    /// Defaults to every platform; `none` is empty and turns it off.
+    pub status_poll_platforms: Vec<Platform>,
+    /// Where the status poller writes a redacted body with an incident, one
+    /// file per platform and incident id. Unset: none is written.
+    pub status_recordings_dir: Option<PathBuf>,
     /// `RIOT_API_KEY_EXPIRES_AT` in unix ms: `riot_key` is `degraded` from
     /// 48 h before it.
     pub riot_api_key_expires_at_ms: Option<i64>,
@@ -553,6 +565,20 @@ impl Config {
                     let names: Vec<&str> = self.status_check_platforms.iter().map(|p| p.as_str()).collect();
                     names.join(",")
                 }),
+            ),
+            ("STATUS_POLL_INTERVAL_S", s(self.status_poll_interval_s)),
+            (
+                "STATUS_POLL_PLATFORMS",
+                s(if self.status_poll_platforms.is_empty() {
+                    "none".to_string()
+                } else {
+                    let names: Vec<&str> = self.status_poll_platforms.iter().map(|p| p.as_str()).collect();
+                    names.join(",")
+                }),
+            ),
+            (
+                "STATUS_RECORDINGS_DIR",
+                self.status_recordings_dir.as_deref().and_then(path),
             ),
             (
                 "RIOT_API_KEY_EXPIRES_AT",
@@ -781,7 +807,8 @@ impl Config {
             .iter()
             .map(|p| v.platform("LADDER_PLATFORMS", p))
             .collect();
-        let status_check_platforms = v.status_platforms(&ladder_platforms);
+        let status_check_platforms = v.platform_list("STATUS_CHECK_PLATFORMS", &ladder_platforms);
+        let status_poll_platforms = v.platform_list("STATUS_POLL_PLATFORMS", &Platform::ALL);
         let riot_api_key_expires_at_ms = v.timestamp_ms("RIOT_API_KEY_EXPIRES_AT");
 
         let objects = v.object_store(env);
@@ -870,6 +897,9 @@ impl Config {
             status_allow_cidr: v.cidrs("STATUS_ALLOW_CIDR", DEFAULT_STATUS_ALLOW_CIDR),
             status_check_interval_s: v.int("STATUS_CHECK_INTERVAL_S", 30, 1, 3_600),
             status_check_platforms,
+            status_poll_interval_s: v.int("STATUS_POLL_INTERVAL_S", 300, 60, 3_600),
+            status_poll_platforms,
+            status_recordings_dir: v.opt_string("STATUS_RECORDINGS_DIR").map(PathBuf::from),
             riot_api_key_expires_at_ms,
             admin_cors_origins: v.origins("ADMIN_CORS_ORIGINS"),
             bootstrap_admin_key: v.opt_string("BOOTSTRAP_ADMIN_KEY").map(Secret::new),
@@ -1226,14 +1256,15 @@ impl Vars {
         default
     }
 
-    /// `STATUS_CHECK_PLATFORMS`: platforms in order without repeats, `none`
-    /// for none, `LADDER_PLATFORMS` when unset (design/14 §Configuration).
-    fn status_platforms(&mut self, ladder: &[Platform]) -> Vec<Platform> {
-        const NAME: &str = "STATUS_CHECK_PLATFORMS";
-        let listed: Vec<Platform> = match self.opt_string(NAME) {
-            None => ladder.to_vec(),
+    /// `STATUS_CHECK_PLATFORMS` and `STATUS_POLL_PLATFORMS`: platforms in
+    /// order without repeats, `none` for none, `default` when unset
+    /// (`LADDER_PLATFORMS` for the first, every platform for the second;
+    /// design/14 §Configuration).
+    fn platform_list(&mut self, name: &str, default: &[Platform]) -> Vec<Platform> {
+        let listed: Vec<Platform> = match self.opt_string(name) {
+            None => default.to_vec(),
             Some(raw) if raw.trim().eq_ignore_ascii_case("none") => Vec::new(),
-            Some(raw) => csv(&raw).iter().map(|p| self.platform(NAME, p)).collect(),
+            Some(raw) => csv(&raw).iter().map(|p| self.platform(name, p)).collect(),
         };
         let mut out = Vec::with_capacity(listed.len());
         for p in listed {

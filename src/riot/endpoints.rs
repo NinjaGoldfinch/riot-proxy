@@ -10,7 +10,8 @@ use std::time::Duration;
 
 use crate::riot::routing::{Platform, Region};
 
-/// v1 `STALE_MULTIPLIER`: with stale-while-revalidate on, hard TTL = soft × 4.
+/// v1 `STALE_MULTIPLIER`: with stale-while-revalidate on, hard TTL = soft × 4,
+/// unless an endpoint sets its own ([`Endpoint::stale_multiplier`]).
 pub const STALE_MULTIPLIER: u32 = 4;
 
 /// Which host family serves a method (v1 spec §5.1).
@@ -59,6 +60,10 @@ pub struct Endpoint {
     /// the one reader of such a copy; every other endpoint's entry goes at
     /// its hard TTL (AVL-08).
     pub keep_expired: bool,
+    /// Hard TTL = soft × this with stale-while-revalidate on:
+    /// [`STALE_MULTIPLIER`] (v1's 4) but for `status`, whose 300 s / 600 s
+    /// the status poller keeps warm (owner, SITE-13, ADR-219).
+    pub stale_multiplier: u32,
     pub immutable: bool,
     pub negative: NegTtl,
 }
@@ -88,6 +93,7 @@ const fn ep(
         soft_ttl,
         persist_l2,
         keep_expired: false,
+        stale_multiplier: STALE_MULTIPLIER,
         immutable: soft_ttl.is_none(),
         negative,
     }
@@ -99,6 +105,14 @@ impl Endpoint {
     const fn kept(self) -> Self {
         Self {
             keep_expired: true,
+            ..self
+        }
+    }
+
+    /// This endpoint with hard TTL = soft × `n` under stale-while-revalidate.
+    const fn stale_x(self, n: u32) -> Self {
+        Self {
+            stale_multiplier: n,
             ..self
         }
     }
@@ -271,16 +285,20 @@ pub const ENDPOINTS: &[Endpoint] = &[
         false,
         NoNeg,
     ),
+    // v1 cached it 60 s (hard 240 s). The status poller reads every platform
+    // every `STATUS_POLL_INTERVAL_S` (300) and writes through, so the route
+    // is answered from cache (owner, SITE-13, ADR-219).
     ep(
         "status.platformData",
         OnPlatform,
         "/lol/status/v4/platform-data",
         &[],
         "status",
-        secs(60),
+        secs(300),
         false,
         NoNeg,
-    ),
+    )
+    .stale_x(2),
     // v2 (LAD-03). league-exp-v4 pages a tier like `entriesByTier` but also
     // takes the apex tiers; the route and its paging are as the owner checked
     // it (IMPLEMENTATION.md §Post-release — LAD). Only the apex probe calls it,
@@ -508,7 +526,7 @@ impl TtlPolicy {
                 .map_or(ttl, |s| Duration::from_secs(*s))
         });
         let multiplier = if self.stale_while_revalidate {
-            STALE_MULTIPLIER
+            endpoint.stale_multiplier
         } else {
             1
         };
@@ -575,7 +593,8 @@ mod tests {
         assert_eq!(ours, want);
     }
 
-    /// v1 "uses the documented TTL table", plus design/04 hard TTLs (×4).
+    /// v1 "uses the documented TTL table", plus design/04 hard TTLs (×4), but
+    /// `status`'s 300 s / 600 s (owner, SITE-13, ADR-219).
     #[test]
     fn documented_ttl_table() {
         let p = policy(&[]);
@@ -595,7 +614,7 @@ mod tests {
             ("mastery.byPuuid", 3600, 14_400),
             ("mastery.topByPuuid", 3600, 14_400),
             ("platform.championRotations", 21_600, 86_400),
-            ("status.platformData", 60, 240),
+            ("status.platformData", 300, 600),
         ];
         for &(id, s, h) in table {
             let t = p.ttls(ep(id));
@@ -766,6 +785,30 @@ mod tests {
             p.ttls(ep("summoner.byPuuid")).hard,
             Some(Duration::from_secs(3600))
         );
+        assert_eq!(
+            p.ttls(ep("status.platformData")).hard,
+            Some(Duration::from_secs(300))
+        );
+    }
+
+    /// `status` keeps its ×2 under an override (SITE-13, ADR-219); every
+    /// other endpoint keeps v1's ×4.
+    #[test]
+    fn only_status_has_its_own_stale_multiplier() {
+        let p = policy(&[("CACHE_TTL_OVERRIDES", "status=120")]);
+        let t = p.ttls(ep("status.platformData"));
+        assert_eq!(
+            (t.soft, t.hard),
+            (Some(Duration::from_secs(120)), Some(Duration::from_secs(240)))
+        );
+        for e in ENDPOINTS {
+            let want = if e.id == "status.platformData" {
+                2
+            } else {
+                STALE_MULTIPLIER
+            };
+            assert_eq!(e.stale_multiplier, want, "{}", e.id);
+        }
     }
 
     #[test]

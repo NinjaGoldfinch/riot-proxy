@@ -46,6 +46,7 @@ mod riot_client;
 mod riot_routes;
 mod shutdown;
 mod status;
+mod status_poll;
 mod timelines;
 mod ui;
 mod write_behind;
