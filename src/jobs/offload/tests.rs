@@ -468,8 +468,13 @@ async fn maintenance_queues_the_offload_and_the_index_snapshot_after_each_run() 
     }
     let (dir, db) = db();
     let queue = Queue::new(db.clone());
-    let m = crate::jobs::maintenance::Maintenance::new(db.clone(), dir.path().join("backups"), 0)
-        .then_bucket_jobs(queue.clone());
+    let m = crate::jobs::maintenance::Maintenance::new(
+        db.clone(),
+        dir.path().join("backups"),
+        0,
+        crate::cache::l2::Kept::none(),
+    )
+    .then_bucket_jobs(queue.clone());
     m.run_once(NOW).await.unwrap();
     assert_eq!(offload_jobs(&db).await, 1);
     assert_eq!(snapshot_jobs(&db).await, 1);
@@ -479,7 +484,12 @@ async fn maintenance_queues_the_offload_and_the_index_snapshot_after_each_run() 
 
     // Without a bucket, maintenance queues nothing.
     let (dir2, db2) = self::db();
-    let plain = crate::jobs::maintenance::Maintenance::new(db2.clone(), dir2.path().join("backups"), 0);
+    let plain = crate::jobs::maintenance::Maintenance::new(
+        db2.clone(),
+        dir2.path().join("backups"),
+        0,
+        crate::cache::l2::Kept::none(),
+    );
     plain.run_once(NOW).await.unwrap();
     assert_eq!(offload_jobs(&db2).await, 0);
     assert_eq!(snapshot_jobs(&db2).await, 0);

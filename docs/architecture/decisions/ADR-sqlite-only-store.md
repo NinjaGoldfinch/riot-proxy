@@ -12,4 +12,4 @@
 
 ---
 **Sources:** `docs/DECISIONS.md:L6-L18,L714-L730`, `src/db/mod.rs:L27-L44,L152-L171,L465-L467`, `src/db/store.rs:L213-L247`, `src/config.rs:L719-L724`, `Cargo.toml`
-**Last verified:** 2026-11-09 against commit `7531561`
+**Last verified:** 2026-11-10 against commit `64ea2a8`

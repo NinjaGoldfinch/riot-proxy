@@ -52,6 +52,13 @@ pub struct Endpoint {
     pub soft_ttl: Option<Duration>,
     /// Written through to the SQLite `cache` table (design/04 §TTLs).
     pub persist_l2: bool,
+    /// A 200 is kept `EXPIRED_KEEP` (a day) past its hard TTL, in L1 and in
+    /// L2, so it can still be served as `STALE` when its refresh fails
+    /// (stale beats none: AVL-03, ADR-212). Set only for what the
+    /// `/v1/players/*` composites read through `Fetcher::fetch_or_stored`,
+    /// the one reader of such a copy; every other endpoint's entry goes at
+    /// its hard TTL (AVL-08).
+    pub keep_expired: bool,
     pub immutable: bool,
     pub negative: NegTtl,
 }
@@ -80,8 +87,20 @@ const fn ep(
         override_key,
         soft_ttl,
         persist_l2,
+        keep_expired: false,
         immutable: soft_ttl.is_none(),
         negative,
+    }
+}
+
+impl Endpoint {
+    /// This endpoint with [`Endpoint::keep_expired`] set: a part of a
+    /// `/v1/players/*` document.
+    const fn kept(self) -> Self {
+        Self {
+            keep_expired: true,
+            ..self
+        }
     }
 }
 
@@ -99,7 +118,8 @@ pub const ENDPOINTS: &[Endpoint] = &[
         secs(86_400),
         true,
         NegAccount,
-    ),
+    )
+    .kept(),
     ep(
         "account.byPuuid",
         Account,
@@ -109,7 +129,8 @@ pub const ENDPOINTS: &[Endpoint] = &[
         secs(86_400),
         true,
         NegAccount,
-    ),
+    )
+    .kept(),
     ep(
         "summoner.byPuuid",
         OnPlatform,
@@ -119,7 +140,8 @@ pub const ENDPOINTS: &[Endpoint] = &[
         secs(3600),
         true,
         NegDefault,
-    ),
+    )
+    .kept(),
     // Persisted although its TTL is short: without it a player's ranks are
     // gone after a restart until Riot answers again (AVL-03, owner 2026-11-09).
     ep(
@@ -131,7 +153,8 @@ pub const ENDPOINTS: &[Endpoint] = &[
         secs(300),
         true,
         NegDefault,
-    ),
+    )
+    .kept(),
     // Ladder reads share one override key and are persisted: a full page walk is
     // thousands of calls to rebuild (design/04).
     ep(
@@ -183,7 +206,8 @@ pub const ENDPOINTS: &[Endpoint] = &[
         secs(120),
         false,
         NegDefault,
-    ),
+    )
+    .kept(),
     ep(
         "match.byId",
         Regional,
@@ -233,7 +257,8 @@ pub const ENDPOINTS: &[Endpoint] = &[
         secs(3600),
         true,
         NegDefault,
-    ),
+    )
+    .kept(),
     // design/04's table says rotations are not persisted, although its ≥ 1 h rule
     // would include them. The explicit table wins (ADR-016).
     ep(
@@ -283,7 +308,8 @@ pub const ENDPOINTS: &[Endpoint] = &[
         secs(86_400),
         true,
         NegAccount,
-    ),
+    )
+    .kept(),
 ];
 
 /// Method ids v2 added after v1's list, in registry order.

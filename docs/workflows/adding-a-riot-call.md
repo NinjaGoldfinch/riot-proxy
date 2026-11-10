@@ -4,30 +4,30 @@ How to teach the proxy a new Riot API method: the registry row in `src/riot/endp
 
 ## What the registry is
 
-`ENDPOINTS` is the single table of every Riot method the proxy calls: its host family, path, query parameters, TTLs and cache tier (`src/riot/endpoints.rs:1-3`, `91-287`). A method id is Riot's rate-limit granularity: the limiter buckets on it and the cache key embeds it, so ids must stay stable even if a URL changes (`src/riot/endpoints.rs:5-6`). Routes, jobs, the dev CLI and the lane table all look methods up by id (`Endpoint::by_id`, `src/riot/endpoints.rs:327`).
+`ENDPOINTS` is the single table of every Riot method the proxy calls: its host family, path, query parameters, TTLs and cache tier (`src/riot/endpoints.rs:1-3`, `91-287`). A method id is Riot's rate-limit granularity: the limiter buckets on it and the cache key embeds it, so ids must stay stable even if a URL changes (`src/riot/endpoints.rs:5-6`). Routes, jobs, the dev CLI and the lane table all look methods up by id (`Endpoint::by_id`, `src/riot/endpoints.rs:353`).
 
 ## The `ep(` row
 
-`ep(id, host, path_template, query, override_key, soft_ttl, persist_l2, negative)` builds one `Endpoint` (`src/riot/endpoints.rs:64-86`):
+`ep(id, host, path_template, query, override_key, soft_ttl, persist_l2, negative)` builds one `Endpoint` (`src/riot/endpoints.rs:71-94`):
 
 | Field | Type | Meaning | Source of the value |
 |---|---|---|---|
 | `id` | `&str` | `family.method` in v1's naming (`account.byPuuid`); doubles as the limiter's method bucket, `method_scope_key = id` (`src/riot/endpoints.rs:47-48`, `79`) | v1 `src/riot/endpoints.ts` for carried-over methods; the same style for new ones |
 | `host` | `HostKind::{Platform, Regional, Account}` | `{platform}.api.riotgames.com`, `{region}.api.riotgames.com` (match-v5), or the three account-v1 clusters with `sea` sent to `asia` (`src/riot/endpoints.rs:16-26`) | the developer portal's routing for the method |
-| `path_template` | `&str` | Riot's path with `{name}` segments filled in order by `Endpoint::path` (`src/riot/endpoints.rs:43-44`, `364-386`); values are `encodeURIComponent`-encoded (`src/riot/endpoints.rs:409-422`) | the developer portal, verbatim |
+| `path_template` | `&str` | Riot's path with `{name}` segments filled in order by `Endpoint::path` (`src/riot/endpoints.rs:43-44`, `364-386`); values are `encodeURIComponent`-encoded (`src/riot/endpoints.rs:435-448`) | the developer portal, verbatim |
 | `query` | `&[&str]` | the query parameters the method accepts; `RiotRequest::query` refuses others (`src/riot/endpoints.rs:45-46`) | the developer portal |
-| `override_key` | `&str` | the key under which `CACHE_TTL_OVERRIDES=key=seconds` replaces the soft TTL of every method sharing it (`src/riot/endpoints.rs:49-50`, `426-446`, `478-499`); existing keys: `account, summoner, league, ladder, matchIds, match, timeline, spectator, mastery, rotations, status` | reuse a group's key when the method belongs to it (ladder reads share `ladder`, `src/riot/endpoints.rs:135-136`) |
+| `override_key` | `&str` | the key under which `CACHE_TTL_OVERRIDES=key=seconds` replaces the soft TTL of every method sharing it (`src/riot/endpoints.rs:49-50`, `426-446`, `478-499`); existing keys: `account, summoner, league, ladder, matchIds, match, timeline, spectator, mastery, rotations, status` | reuse a group's key when the method belongs to it (ladder reads share `ladder`, `src/riot/endpoints.rs:158-159`) |
 | `soft_ttl` | `Option<Duration>` via `secs(n)` | how long a copy is fresh; `None` means **immutable** (`src/riot/endpoints.rs:51-52`, `59-61`, `83`). Hard TTL is soft × `STALE_MULTIPLIER` (4) with stale-while-revalidate on, else equal (`src/riot/endpoints.rs:13-14`, `478-499`) | see [Where TTLs come from](#where-ttls-come-from) |
 | `persist_l2` | `bool` | written through to the SQLite `cache` table so it survives a restart (`src/riot/endpoints.rs:53-54`) | design/04's rule: persist if the TTL is at least an hour **or** it costs more than one upstream call to rebuild (`docs/design/04-data-and-cache.md:394`); its table wins over the rule (rotations, ADR-016) |
 | `negative` | `NegTtl::{None, Default, Account}` | whether an upstream 404 is cached and for how long: `NEG_TTL_SECONDS` (30) or `NEG_TTL_ACCOUNT_SECONDS` (300) (`src/riot/endpoints.rs:28-37`; `src/config.rs:815-816`) | v1 §8.3: account lookups get the long one; list-shaped methods that cannot 404 get `None` |
 
-The row goes at the **end** of `ENDPOINTS` and its id at the end of `V2_ADDED` (`src/riot/endpoints.rs:289-290`): the registry is v1's `METHOD_IDS` order followed by v2's additions, and the `parity` test asserts exactly that against `docs/contract/v1-endpoints.txt` (`src/riot/endpoints.rs:540-550`; the contract file lists the 16 v1 ids). Comment the row the way the two v2 rows are: which task, why that host and tier (`src/riot/endpoints.rs:259-286`).
+The row goes at the **end** of `ENDPOINTS` and its id at the end of `V2_ADDED` (`src/riot/endpoints.rs:315-316`): the registry is v1's `METHOD_IDS` order followed by v2's additions, and the `parity` test asserts exactly that against `docs/contract/v1-endpoints.txt` (`src/riot/endpoints.rs:566-576`; the contract file lists the 16 v1 ids). Comment the row the way the two v2 rows are: which task, why that host and tier (`src/riot/endpoints.rs:284-312`).
 
 ## Where TTLs come from
 
 Never from memory (`docs/IMPLEMENTATION.md:18`; CLAUDE.md "Never invent Riot semantics"). In order:
 
-1. `docs/design/04-data-and-cache.md` §TTLs (`:392-407`): the table the registry's `documented_ttl_table` test pins (`src/riot/endpoints.rs:552-580`). If the method is there, use its row.
+1. `docs/design/04-data-and-cache.md` §TTLs (`:392-407`): the table the registry's `documented_ttl_table` test pins (`src/riot/endpoints.rs:578-606`). If the method is there, use its row.
 2. v1's `src/riot/endpoints.ts` at `c86e631` (cloned as `../riot-proxy-v1`): ids, paths, host families, TTLs and override keys were ported from it (`src/riot/endpoints.rs:1-3`).
 3. The Riot developer portal: the method's documented behaviour, routing and how often its data changes.
 
@@ -35,11 +35,11 @@ A method none of the three covers is a question for the owner, not a guess: add 
 
 ### Immutable means archive, not cache
 
-`soft_ttl: None` sets `immutable: true` (`src/riot/endpoints.rs:83`). Only `match.byId` and `match.timeline` are immutable, and they are not cached at all: the fetcher serves them from the archive (`X-Cache: ARCHIVE`) and the archive stores them forever (`src/riot/endpoints.rs:187-206`; `docs/design/04-data-and-cache.md:406`). An override on an immutable method is ineffective and `serve` warns about it (`src/riot/endpoints.rs:502-514`). A new immutable method therefore needs archive work (`src/archive/`), not just a row; that is a task of its own.
+`soft_ttl: None` sets `immutable: true` (`src/riot/endpoints.rs:91`). Only `match.byId` and `match.timeline` are immutable, and they are not cached at all: the fetcher serves them from the archive (`X-Cache: ARCHIVE`) and the archive stores them forever (`src/riot/endpoints.rs:211-230`; `docs/design/04-data-and-cache.md:406`). An override on an immutable method is ineffective and `serve` warns about it (`src/riot/endpoints.rs:528-540`). A new immutable method therefore needs archive work (`src/archive/`), not just a row; that is a task of its own.
 
 ## Routing and the limiter: nothing to configure
 
-- **Targets.** `Endpoint::target_for_platform` maps a platform to itself, its match-v5 region or its account cluster; `target_for_region` returns `None` for platform-hosted methods (`src/riot/endpoints.rs:388-406`). `Target::scope()` is the limiter's app scope, the platform or region string (`src/riot/endpoints.rs:318-323`). The platform-to-region table is `src/riot/routing.rs:115-128`.
+- **Targets.** `Endpoint::target_for_platform` maps a platform to itself, its match-v5 region or its account cluster; `target_for_region` returns `None` for platform-hosted methods (`src/riot/endpoints.rs:414-432`). `Target::scope()` is the limiter's app scope, the platform or region string (`src/riot/endpoints.rs:344-349`). The platform-to-region table is `src/riot/routing.rs:115-128`.
 - **Requests.** `RiotRequest::new(ep, target, &params)?.query(k, Some(v))?`; `RiotRequest::account(ep, &params)` for an `Account` method that may pick a cluster (`PROGRESS.md:403`; `src/routes/riot.rs:43-47`).
 - **Limits.** The limiter learns every window from Riot's own headers: `X-App-Rate-Limit` and `X-Method-Rate-Limit` with their `-Count` pairs, `X-Rate-Limit-Type` and `Retry-After` (`src/riot/limiter/headers.rs:1-15`). Until the first answer it assumes the development-key app limits, 20 per 1 s and 100 per 120 s (`src/riot/limiter/headers.rs:31-40`). The method bucket is keyed by `method_scope_key`, which is the id; a new row gets its own bucket on first use. There is no per-method configuration.
 - **Jobs.** If a background job will call the method, `jobs::lanes::of` must map that kind to the method so the claim respects the limiter (`src/jobs/lanes.rs:44-64`); see [adding-a-job.md](./adding-a-job.md).
@@ -117,4 +117,4 @@ Then the tests above (`documented_ttl_table` gains `("clash.playerByPuuid", 300,
 
 ---
 **Sources:** `src/riot/endpoints.rs:L1-L6`, `L13-L86`, `L91-L137`, `L187-L206`, `L259-L290`, `L318-L327`, `L364-L422`, `L426-L446`, `L478-L514`, `L540-L580`, `L599-L699`, `L745-L826`, `src/riot/routing.rs:L115-L128`, `src/riot/limiter/headers.rs:L1-L40`, `src/jobs/lanes.rs:L44-L64`, `src/cli/riot.rs:L63-L81`, `src/cli/record.rs:L1-L29`, `L106-L158`, `src/routes/riot.rs:L43-L47`, `src/config.rs:L815-L816`, `docs/contract/v1-endpoints.txt`, `docs/design/04-data-and-cache.md:L394`, `L402-L418`, `docs/IMPLEMENTATION.md:L18`, `tests/fixtures/replay/README.md:L1-L26`, `tests/replay.rs:L1-L60`, `.github/workflows/ci.yml:L52-L53`, `justfile:L45-L47`, `PROGRESS.md:L403`
-**Last verified:** 2026-11-09 against commit `0113520`
+**Last verified:** 2026-11-10 against commit `4ff4579`

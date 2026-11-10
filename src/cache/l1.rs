@@ -4,9 +4,10 @@
 //! Freshness is decided here from each entry's own `soft_expires`/`hard_expires`
 //! (tokio time, so tests can pause it). moka's per-entry expiry only reclaims
 //! memory; it runs on real time and never decides freshness. A positive entry
-//! is kept [`EXPIRED_KEEP`] past its hard TTL and read as [`Lookup::Expired`],
-//! so a player's page can still be served when its refresh fails (AVL-03,
-//! ADR-212); a negative one goes at its TTL.
+//! of an endpoint a player's page reads ([`L1::put_kept`]) is kept
+//! [`EXPIRED_KEEP`] past its hard TTL and read as [`Lookup::Expired`], so the
+//! page can still be served when its refresh fails (AVL-03, ADR-212). Every
+//! other entry, and every negative one, goes at its hard TTL (AVL-08).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,9 +22,10 @@ use crate::riot::endpoints::Ttls;
 /// Per-entry bookkeeping counted against the weight budget, on top of key and body.
 const ENTRY_OVERHEAD: usize = 128;
 
-/// How long a positive entry outlives its hard TTL, read as [`Lookup::Expired`]
-/// (AVL-03, ADR-212). L2 keeps its rows as long ([`crate::cache::l2::warm`]).
-/// Memory stays bounded by `CACHE_L1_MAX_MB` whatever this is.
+/// How long a kept positive entry ([`L1::put_kept`]) outlives its hard TTL,
+/// read as [`Lookup::Expired`] (AVL-03, ADR-212). L2 keeps the same
+/// endpoints' rows as long ([`crate::cache::l2::Kept`]). Memory stays bounded
+/// by `CACHE_L1_MAX_MB` whatever this is.
 pub const EXPIRED_KEEP: Duration = Duration::from_secs(24 * 3600);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,6 +45,10 @@ pub struct CacheEntry {
     /// Served as `STALE` without a refresh until; after it, only when the
     /// refresh fails and the caller asks for it ([`Lookup::Expired`]).
     pub hard_expires: Instant,
+    /// Read as [`Lookup::Expired`] until: [`EXPIRED_KEEP`] past
+    /// `hard_expires` for a kept entry, `hard_expires` itself for every
+    /// other, which is gone at its hard TTL.
+    pub kept_until: Instant,
 }
 
 impl CacheEntry {
@@ -67,14 +73,14 @@ pub enum Lookup {
     Fresh(Arc<CacheEntry>),
     /// Between `soft_expires` and `hard_expires`: serve, and refresh in the background.
     Stale(Arc<CacheEntry>),
-    /// A positive entry past `hard_expires`, kept [`EXPIRED_KEEP`] longer: go
+    /// A kept positive entry past `hard_expires` and before `kept_until`: go
     /// upstream, and serve it only if that fails (AVL-03, ADR-212).
     Expired(Arc<CacheEntry>),
     Miss,
 }
 
-/// moka's memory-reclaim expiry: the entry's hard TTL at insert time, plus
-/// [`EXPIRED_KEEP`] for a positive entry.
+/// moka's memory-reclaim expiry: until the entry's `kept_until`, which is its
+/// hard TTL unless it is kept past it.
 struct HardTtl;
 
 impl Expiry<String, Arc<CacheEntry>> for HardTtl {
@@ -84,12 +90,7 @@ impl Expiry<String, Arc<CacheEntry>> for HardTtl {
         value: &Arc<CacheEntry>,
         _created_at: std::time::Instant,
     ) -> Option<Duration> {
-        let hard = value.hard_expires.saturating_duration_since(Instant::now());
-        Some(if value.is_negative() {
-            hard
-        } else {
-            hard.saturating_add(EXPIRED_KEEP)
-        })
+        Some(value.kept_until.saturating_duration_since(Instant::now()))
     }
 
     fn expire_after_update(
@@ -118,7 +119,13 @@ impl std::fmt::Debug for L1 {
 }
 
 fn weight(key: &str, entry: &CacheEntry) -> u32 {
-    u32::try_from(key.len() + entry.body.len() + ENTRY_OVERHEAD).unwrap_or(u32::MAX)
+    u32::try_from(entry_weight(key, entry.body.len())).unwrap_or(u32::MAX)
+}
+
+/// What an entry counts against the weight budget: its key, body and
+/// bookkeeping. The L2 warm adds these up to stop at the budget.
+pub fn entry_weight(key: &str, body_len: usize) -> u64 {
+    (key.len() + body_len + ENTRY_OVERHEAD) as u64
 }
 
 impl L1 {
@@ -145,7 +152,7 @@ impl L1 {
             Lookup::Fresh(entry)
         } else if now < entry.hard_expires {
             Lookup::Stale(entry)
-        } else if !entry.is_negative() && now < entry.hard_expires + EXPIRED_KEEP {
+        } else if now < entry.kept_until {
             Lookup::Expired(entry)
         } else {
             self.cache.invalidate(key).await;
@@ -153,16 +160,25 @@ impl L1 {
         }
     }
 
-    /// Store a positive response. `ttls.soft`/`hard` must be set (immutable endpoints
-    /// go to the archive, not here); if not, nothing is cached.
+    /// Store a positive response, gone at its hard TTL. `ttls.soft`/`hard`
+    /// must be set (immutable endpoints go to the archive, not here); if not,
+    /// nothing is cached.
     pub async fn put(&self, key: &str, body: Bytes, ttls: &Ttls) -> Option<Arc<CacheEntry>> {
         let (soft, hard) = (ttls.soft?, ttls.hard?);
-        Some(self.insert(key, 200, body, soft, hard).await)
+        Some(self.insert(key, 200, body, soft, hard, Duration::ZERO).await)
+    }
+
+    /// [`L1::put`] for an endpoint with `keep_expired`: the entry is kept
+    /// [`EXPIRED_KEEP`] past its hard TTL and read as [`Lookup::Expired`].
+    pub async fn put_kept(&self, key: &str, body: Bytes, ttls: &Ttls) -> Option<Arc<CacheEntry>> {
+        let (soft, hard) = (ttls.soft?, ttls.hard?);
+        Some(self.insert(key, 200, body, soft, hard, EXPIRED_KEEP).await)
     }
 
     /// Store a negative (404) entry for `ttl`. Negatives are never served stale.
     pub async fn put_negative(&self, key: &str, ttl: Duration) -> Arc<CacheEntry> {
-        self.insert(key, 404, Bytes::new(), ttl, ttl).await
+        self.insert(key, 404, Bytes::new(), ttl, ttl, Duration::ZERO)
+            .await
     }
 
     /// Insert an entry that already carries its times (L2 warm, P3-03).
@@ -177,6 +193,7 @@ impl L1 {
         body: Bytes,
         soft: Duration,
         hard: Duration,
+        keep: Duration,
     ) -> Arc<CacheEntry> {
         let now = Instant::now();
         // Keep content_at when the new bytes are the old bytes (design 04).
@@ -191,6 +208,7 @@ impl L1 {
             fetched_at: now,
             soft_expires: now + soft,
             hard_expires: now + hard.max(soft),
+            kept_until: now + hard.max(soft) + keep,
         });
         self.cache.insert(key.to_string(), Arc::clone(&entry)).await;
         entry
@@ -281,18 +299,52 @@ mod tests {
         advance(Duration::from_secs(89)).await;
         assert!(stale(&l.get("k").await));
         advance(Duration::from_secs(1)).await;
-        assert!(
-            matches!(l.get("k").await, Lookup::Expired(_)),
-            "at exactly hard TTL: kept, but only for a failed refresh (AVL-03)"
+        assert_eq!(
+            l.get("k").await,
+            Lookup::Miss,
+            "at exactly hard TTL: gone, as before AVL-03 (AVL-08)"
         );
         assert_eq!(l.get("never").await, Lookup::Miss);
+    }
+
+    /// Only an entry put as kept (an endpoint a player's page reads) outlives
+    /// its hard TTL; the same bytes under the plain `put` are gone at it.
+    #[tokio::test(start_paused = true)]
+    async fn only_a_kept_entry_is_expired_past_its_hard_ttl() {
+        let l = l1();
+        l.put("ladder", Bytes::from_static(b"{}"), &ttls(30, 120))
+            .await
+            .unwrap();
+        let kept = l
+            .put_kept("player", Bytes::from_static(b"{}"), &ttls(30, 120))
+            .await
+            .unwrap();
+        assert_eq!(kept.kept_until, kept.hard_expires + EXPIRED_KEEP);
+        advance(Duration::from_secs(119)).await;
+        assert!(stale(&l.get("ladder").await) && stale(&l.get("player").await));
+        advance(Duration::from_secs(1)).await;
+        assert_eq!(l.get("ladder").await, Lookup::Miss, "gone at its hard TTL");
+        assert!(
+            matches!(l.get("player").await, Lookup::Expired(_)),
+            "at exactly hard TTL: kept, but only for a failed refresh (AVL-03)"
+        );
+        // A plain put over a kept entry is not kept, and the other way round.
+        l.put("player", Bytes::from_static(b"{}"), &ttls(30, 120))
+            .await
+            .unwrap();
+        l.put_kept("ladder", Bytes::from_static(b"{}"), &ttls(30, 120))
+            .await
+            .unwrap();
+        advance(Duration::from_secs(120)).await;
+        assert_eq!(l.get("player").await, Lookup::Miss);
+        assert!(matches!(l.get("ladder").await, Lookup::Expired(_)));
     }
 
     #[tokio::test(start_paused = true)]
     async fn an_expired_entry_is_kept_for_a_day_with_its_real_times() {
         let l = l1();
         let put = l
-            .put("k", Bytes::from_static(b"{}"), &ttls(30, 120))
+            .put_kept("k", Bytes::from_static(b"{}"), &ttls(30, 120))
             .await
             .unwrap();
         advance(Duration::from_secs(120) + EXPIRED_KEEP - Duration::from_secs(1)).await;
@@ -312,12 +364,12 @@ mod tests {
     async fn a_refresh_of_an_expired_entry_with_the_same_bytes_keeps_content_at() {
         let l = l1();
         let first = l
-            .put("k", Bytes::from_static(b"{}"), &ttls(30, 120))
+            .put_kept("k", Bytes::from_static(b"{}"), &ttls(30, 120))
             .await
             .unwrap();
         advance(Duration::from_secs(600)).await;
         let again = l
-            .put("k", Bytes::from_static(b"{}"), &ttls(30, 120))
+            .put_kept("k", Bytes::from_static(b"{}"), &ttls(30, 120))
             .await
             .unwrap();
         assert_eq!(again.content_at, first.content_at);

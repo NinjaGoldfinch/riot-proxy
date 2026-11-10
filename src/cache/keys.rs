@@ -98,6 +98,12 @@ pub fn cache_key(scope: &KeyScope, req: &RiotRequest) -> String {
     key
 }
 
+/// What every key of `endpoint_id` under `scope` starts with: the keys form
+/// one range of a table keyed by them.
+pub fn endpoint_prefix(scope: &KeyScope, endpoint_id: &str) -> String {
+    format!("{scope}:{endpoint_id}:")
+}
+
 /// A key for one of the proxy's own derived reads, computed from the archive rather
 /// than fetched (v1 `derivedKey`, #113). Scoped for the same reason: derived
 /// documents are reached through PUUIDs. `part` names the read so two reads can

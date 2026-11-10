@@ -380,6 +380,7 @@ ninjagoldfinch.lol's `/champions` data took 3.9 s, all of it the proxy's analyti
 - [x] CI-03 the DOM and browser suites in their own `ui` job (#223, ADR-175)
 - [x] CI-04 one integration-test binary (#224, ADR-176)
 - [x] CI-05 less debug info in dev and test builds (#225, ADR-177)
+- [~] CI-06 `sqlite_writes_are_timed_and_the_queue_is_a_gauge` waits for the writer's own bookkeeping before it asserts: it failed in CI run 42563140692 (2026-11-09) and in 170 of 508 runs under load, none of 496 after (#279, `test/CI-06-write-metrics-scrape-race`)
 
 ## DOC — the documentation set (owner request 2026-10-19)
 
@@ -440,6 +441,7 @@ A production restart on 2026-11-08 logged `listening` and accepted nothing for m
 - [~] AVL-04 shutdown inside 90 s: after the job grace the writer's running statement is interrupted and its row re-queued (supersedes WR-03) (#271, fix/AVL-04-shutdown-inside-90s, ADR-211)
 - [~] AVL-10 a claim queued behind the job write a stop interrupts is dropped, and a claim that runs for a worker that is gone is not made or is put back, so up to 7 ready jobs are no longer left `running` with an attempt counted (review of #271; #275, `fix/AVL-10-queued-claims-at-shutdown`; ADR-211 amended). The worker's claim is a job write; `Db::write_for_caller` is the write with an undo
 - [~] AVL-03 stale beats none for `/v1/players/*`: an expired copy served `STALE` when the refresh fails; league entries in L2, the `refreshing` field and composite `X-Cache: STALE` (owner approved 2026-11-09) (#270, feat/AVL-03-stale-beats-none, ADR-212)
+- [~] AVL-08 only what a player page reads is kept past its hard TTL: `Endpoint::keep_expired` (seven endpoints) decides it in L1 (`L1::put_kept`, `CacheEntry::kept_until`) and in L2 (`l2::Kept`, the endpoints' key ranges; no migration); `warm` streams newest first and stops at `CACHE_L1_MAX_MB`; every other endpoint is as before AVL-03 (review of #270; #273, `fix/AVL-08-stale-keep-per-endpoint`; ADR-212 amended). `warm` and `sweep` take the `Kept`; `Maintenance::keeping_cache` must be given it, as `serve` does
 - [~] AVL-07 ticks remember their last run, so `maintenance`, `names:backfill` and `ddragon:sync` do not fire on every restart; per-ladder crawl and rebuild ticks read the crawl log and `analytics_runs`, timelines one loop per region (#269, feat/AVL-07-ticks-remember-last-run, ADR-214)
 - [~] AVL-05 long writes in bounded, resumable transactions: `aggregate:analytics` per step and patch, `maintenance`'s trim in chunks (#272, feat/AVL-05-bounded-rebuild, ADR-215)
 
