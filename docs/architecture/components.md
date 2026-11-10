@@ -48,7 +48,7 @@ flowchart TB
     jobs --> db
 ```
 
-Reads from a route or a job all pass through the fetcher; the archive is the only module that touches object storage; the scheduler is the only module that claims jobs.
+Reads from a route or a job all pass through the fetcher (`GET /v1/lol/status` reads the `platform_status` rows the status poller wrote through it, SITE-14); the archive is the only module that touches object storage; the scheduler is the only module that claims jobs.
 
 ## Responsibilities
 

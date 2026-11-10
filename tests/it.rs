@@ -33,6 +33,7 @@ mod lanes;
 mod limiter_restart;
 mod limiter_soak;
 mod lol_routes;
+mod lol_status;
 mod maintenance;
 mod migrate_v1;
 mod offload;

@@ -423,5 +423,7 @@ fn parse(body: &Bytes) -> Result<(String, serde_json::Value), String> {
     Ok((text.to_string(), value))
 }
 
+pub mod summary;
+
 #[cfg(test)]
 mod tests;

@@ -189,7 +189,9 @@ fn responses_declare_the_headers_they_send() {
                 for (h, r) in res["headers"].as_object().unwrap() {
                     assert_eq!(r["$ref"], format!("#/components/headers/{h}"), "{at}");
                 }
-                if matches!(status.as_str(), "429" | "503") {
+                // SITE-14: the status summary's 503 is the poller turned off, not a wait.
+                let summary = path == "/v1/lol/status";
+                if status == "429" || (status == "503" && !summary) {
                     assert!(has("Retry-After"), "{at}");
                 }
                 if read && status.as_str() != "401" && status.as_str() != "403" {
@@ -201,7 +203,17 @@ fn responses_declare_the_headers_they_send() {
                         assert!(has("Cache-Control") && has("Last-Modified"), "{at}");
                     }
                 }
-                if read && status.starts_with('2') && !path.starts_with("/v1/lol/analytics") {
+                // SITE-14: read from the poller's table, dated by its fetch age only.
+                if summary && status == "200" {
+                    assert!(
+                        has("X-Cache") && has("X-Cache-Fetched-Age") && !has("X-Cache-Age"),
+                        "{at}"
+                    );
+                }
+                if summary && status == "503" {
+                    assert!(!has("Retry-After"), "{at}");
+                }
+                if read && status.starts_with('2') && !path.starts_with("/v1/lol/analytics") && !summary {
                     assert!(has("X-Cache") && has("X-Cache-Age"), "{at}");
                     checked += 1;
                 }

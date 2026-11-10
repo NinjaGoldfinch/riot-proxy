@@ -10009,6 +10009,129 @@
         }
       }
     },
+    "/v1/lol/status": {
+      "get": {
+        "tags": [
+          "lol"
+        ],
+        "summary": "Every platform's status",
+        "description": "Every platform's status in one call, summarised from Riot's lol-status-v4 `platform-data`. **Never calls Riot**: the status poller reads each platform in `STATUS_POLL_PLATFORMS` (every platform by default) every `STATUS_POLL_INTERVAL_S` (300 s by default) and this route reads what it stored, so an available entry is at most one poll interval old (`fetchedAgeSeconds`).\n\n`platforms` lists each polled platform once, in the proxy's platform order (`na1` … `vn2`). An entry is `available: false`, with `error` saying why and its counts `null`, until the poller has read a 200 for it, and again whenever its latest read failed (a platform Riot does not serve, such as `tw2`, which the portal's lol-status-v4 region list omits, is just such an entry); the call is still a 200. `X-Cache` is `HIT`, and `X-Cache-Fetched-Age` is the stalest available entry's `fetchedAgeSeconds` (not sent when none is available). For a platform's whole body, titles and updates included, use `/v1/lol/status/{platform}`, which the poller keeps cached.\n\n503 with `NOT_FOUND` when this deployment does not poll (`STATUS_POLL_PLATFORMS=none`).",
+        "operationId": "status_summary",
+        "responses": {
+          "200": {
+            "description": "Every polled platform, in platform order",
+            "headers": {
+              "X-Cache": {
+                "$ref": "#/components/headers/X-Cache"
+              },
+              "X-Cache-Fetched-Age": {
+                "$ref": "#/components/headers/X-Cache-Fetched-Age"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusSummary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid key.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key lacks a scope.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`).",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/Retry-After"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The status poller is off on this deployment (`STATUS_POLL_PLATFORMS=none`): `NOT_FOUND`, without `Retry-After`, since waiting does not change it.",
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/lol/status/{platform}": {
       "get": {
         "tags": [
@@ -16584,6 +16707,83 @@
           }
         }
       },
+      "PlatformSummary": {
+        "type": "object",
+        "description": "One platform in `GET /v1/lol/status`.",
+        "required": [
+          "platform",
+          "available",
+          "error",
+          "incidents",
+          "maintenances",
+          "worstSeverity",
+          "maintenanceInProgress",
+          "fetchedAgeSeconds"
+        ],
+        "properties": {
+          "platform": {
+            "type": "string",
+            "description": "The platform routing value, e.g. `euw1`.",
+            "example": "euw1"
+          },
+          "available": {
+            "type": "boolean",
+            "description": "Whether the counts below describe the platform's current status: the\npoller has stored a 200 from Riot for it and its last read since has\nnot failed. `false` with `error` saying why; the counts are then `null`."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the entry is unavailable: the last read's error (the proxy's\nerror code and message, e.g. `NOT_FOUND: Resource not found upstream`),\nor `not read yet`. `null` when available."
+          },
+          "incidents": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How many incidents Riot lists (`incidents[]`). `null` when unavailable.",
+            "minimum": 0
+          },
+          "maintenances": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How many maintenances Riot lists that are not `complete`\n(`maintenances[]` without `maintenance_status: \"complete\"`). `null`\nwhen unavailable.",
+            "minimum": 0
+          },
+          "worstSeverity": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Severity",
+                "description": "The worst `incident_severity` among the incidents: `critical` over\n`warning` over `info`. `null` with no incident that has one of those\nthree, or when unavailable. A value outside the three is not counted."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "maintenanceInProgress": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether a maintenance is `in_progress`. `null` when unavailable."
+          },
+          "fetchedAgeSeconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Seconds since the poller last read a 200 for this platform, whether or\nnot a read has failed since; `null` before any.",
+            "minimum": 0
+          }
+        }
+      },
       "PlayerArchive": {
         "type": "object",
         "description": "`GET /v1/admin/players/{puuid}/archive`.",
@@ -17955,6 +18155,15 @@
           }
         }
       },
+      "Severity": {
+        "type": "string",
+        "description": "An incident's `incident_severity`, in the site's order: `critical` over\n`warning` over `info`.",
+        "enum": [
+          "info",
+          "warning",
+          "critical"
+        ]
+      },
       "Snapshot": {
         "type": "object",
         "description": "v1 `MetricsSnapshot`, field for field and in v1's order.",
@@ -18323,6 +18532,22 @@
             "propertyNames": {
               "type": "string"
             }
+          }
+        }
+      },
+      "StatusSummary": {
+        "type": "object",
+        "description": "`GET /v1/lol/status`: every platform the status poller reads.",
+        "required": [
+          "platforms"
+        ],
+        "properties": {
+          "platforms": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlatformSummary"
+            },
+            "description": "One entry per platform in `STATUS_POLL_PLATFORMS` (every platform by\ndefault), in the proxy's platform order, each at most one poll\ninterval old when available."
           }
         }
       },
@@ -18736,7 +18961,7 @@
         "schema": {
           "type": "integer"
         },
-        "description": "Seconds since the proxy last read it from Riot, changed or not. Not sent for `ARCHIVE`."
+        "description": "Seconds since the proxy last read it from Riot, changed or not. Not sent for `ARCHIVE`. On `/v1/lol/status`, the stalest available platform's, not sent when none is available."
       },
       "X-RateLimit-Limit": {
         "schema": {

@@ -61,7 +61,7 @@ With the defaults every page is on (`src/config.rs:781-783`, `784-787`):
 
 | Page | What | Key needed |
 |---|---|---|
-| `http://127.0.0.1:8080/docs` | the OpenAPI reference (Scalar) and `/openapi.json`, `/openapi.yaml` (`src/routes/docs.rs:385-399`) | no |
+| `http://127.0.0.1:8080/docs` | the OpenAPI reference (Scalar) and `/openapi.json`, `/openapi.yaml` (`src/routes/docs.rs:397-411`) | no |
 | `/dev` and `/dev/showcase` | the dev explorer and the example frontend; never served when `ENV=production` (`README.md:88`; `src/config.rs:781-783`) | the page loads without one; its API calls need a read key unless `AUTH_DISABLED` (`docs/design/11-showcase.md:15`) |
 | `/dashboard` | the operational dashboard; inert without an admin key (`.env.example:221-222`) | admin key in the page |
 | `/healthz`, `/readyz`, `/metrics` | ops routes | no |

@@ -54,7 +54,7 @@ What is in the riot-proxy repository at commit `7491ff6` (version 2.7.0), gather
 |---|---|
 | Binary `riot-proxy` with subcommands `serve`, `migrate`, `key {create,list,revoke}`, `healthcheck`, `spec`, `migrate-v1`, `backup`, `packs {reindex,restore-index,snapshot}`, and `riot {get,record}` (dev-cli) | `src/cli/mod.rs:35-67` |
 | Server bootstrap (23 ordered steps) | `src/cli/serve.rs:94-507`, summarised in [scratch/jobs-and-observability.md](./scratch/jobs-and-observability.md) §1 |
-| HTTP routes (76 documented operations on 72 paths plus docs, pages, dev reset, `/ddragon` files, fallback) | registered in `src/routes/docs.rs:116-153`; table in [scratch/routes.md](./scratch/routes.md) §1 and [../api/endpoints.md](../api/endpoints.md) |
+| HTTP routes (77 documented operations on 73 paths plus docs, pages, dev reset, `/ddragon` files, fallback) | registered in `src/routes/docs.rs:116-153`; table in [scratch/routes.md](./scratch/routes.md) §1 and [../api/endpoints.md](../api/endpoints.md) |
 | WebSocket `/v1/ws` | `src/routes/ws.rs:497-499`, protocol in `src/ws/protocol.rs` |
 | Ticks (periodic enqueues): `poll:live` 60 s, `poll:rank` 600 s, `poll:matches` 300 s, `ddragon:sync` 3600 s, `maintenance` and `names:backfill` daily, `ladder:crawl` on `LADDER_CRAWL_S`, `aggregate:analytics` on `AGGREGATE_INTERVAL_S`, `aggregate:delta` on `AGGREGATE_DELTA_S` (60 s), `timelines:backfill` hourly when enabled | `src/jobs/ticks.rs:111-142` |
 | 22 job kinds with handlers | `src/jobs/mod.rs:20-71,97-174`; table in [scratch/jobs-and-observability.md](./scratch/jobs-and-observability.md) §3 |

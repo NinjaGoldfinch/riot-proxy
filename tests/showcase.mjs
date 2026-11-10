@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 const html = readFileSync(new URL('../src/ui/showcase.html', import.meta.url), 'utf8');
 const block = html.match(/\/\/ -{10} pure helpers[^\n]*\n([\s\S]*?)\/\/ -{10} end pure helpers/);
 assert.ok(block, 'the pure helpers block is marked in showcase.html');
-const h = new Function(`${block[1]}; return { APEX, QUEUES, LADDER_PAGE, APEX_LIST_CAP, apexCapNote, tierColour, winRate, pct, sortLadder, ladderPage, championIndex, imageUrl, statusNotices, topChampions, parseRiotId, parseRoute, champKey, findChampion, explorerLink, rankLabel, rankCards, queueNames, spellIndex, outcome, kda, durationSecs, clock, ago, masterySummary, liveGame, TIERS, SIDES, matchHref, matchTeams, goldDiff, goldScale, signedGold, tierRows, runeIndex, runePair, runeUrl, itemIndex, bootsIndex, itemSlots, roleList, thousands, patchChoices, pickPatch, patchLabel, BUILD_STARTER_MS, SHOP_VISIT_GAP_MS, itemCatalog, playerBuild, shopVisits, vsChoices, SMALL_SAMPLE, splitWarnings, refreshingNote };`)();
+const h = new Function(`${block[1]}; return { APEX, QUEUES, LADDER_PAGE, APEX_LIST_CAP, apexCapNote, tierColour, winRate, pct, sortLadder, ladderPage, championIndex, imageUrl, statusNotices, secsAgo, platformChip, topChampions, parseRiotId, parseRoute, champKey, findChampion, explorerLink, rankLabel, rankCards, queueNames, spellIndex, outcome, kda, durationSecs, clock, ago, masterySummary, liveGame, TIERS, SIDES, matchHref, matchTeams, goldDiff, goldScale, signedGold, tierRows, runeIndex, runePair, runeUrl, itemIndex, bootsIndex, itemSlots, roleList, thousands, patchChoices, pickPatch, patchLabel, BUILD_STARTER_MS, SHOP_VISIT_GAP_MS, itemCatalog, playerBuild, shopVisits, vsChoices, SMALL_SAMPLE, splitWarnings, refreshingNote };`)();
 
 test('apex tiers and queues are the ones the apex route accepts', () => {
   assert.deepEqual(h.APEX, ['CHALLENGER', 'GRANDMASTER', 'MASTER']);
@@ -84,6 +84,23 @@ test('status notices list maintenances and incidents in the wanted locale', () =
   ]);
   assert.equal(h.statusNotices(doc, 'fr_FR')[0].title, 'Maintenance', 'falls back to en_US');
   assert.deepEqual(h.statusNotices({ maintenances: [], incidents: [] }), []);
+});
+
+test('every platform as a chip: its tone, a short note and the rest in the title (SITE-14)', () => {
+  const ok = { platform: 'oc1', available: true, error: null, incidents: 0, maintenances: 0, worstSeverity: null, maintenanceInProgress: false, fetchedAgeSeconds: 42 };
+  assert.deepEqual(h.platformChip(ok), { code: 'OC1', tone: 'ok', note: 'ok', title: 'OC1: ok · last read 42 s ago' });
+  assert.deepEqual(h.platformChip({ ...ok, incidents: 2, worstSeverity: 'critical', fetchedAgeSeconds: 180 }),
+    { code: 'OC1', tone: 'critical', note: '2 incidents', title: 'OC1: 2 incidents · worst critical · last read 3 min ago' });
+  assert.equal(h.platformChip({ ...ok, incidents: 1, worstSeverity: 'info' }).tone, 'warn');
+  assert.equal(h.platformChip({ ...ok, maintenances: 1 }).tone, 'info', 'a scheduled maintenance only');
+  const busy = h.platformChip({ ...ok, maintenances: 1, maintenanceInProgress: true });
+  assert.deepEqual([busy.tone, busy.note], ['warn', '1 maintenance']);
+  assert.ok(busy.title.includes('maintenance in progress'));
+  const down = { platform: 'tw2', available: false, error: 'NOT_FOUND: Resource not found upstream', incidents: null, maintenances: null, worstSeverity: null, maintenanceInProgress: null, fetchedAgeSeconds: null };
+  assert.deepEqual(h.platformChip(down), { code: 'TW2', tone: 'down', note: 'unavailable', title: 'TW2: NOT_FOUND: Resource not found upstream · never read' });
+  assert.equal(h.secsAgo(null), '');
+  assert.equal(h.secsAgo(59), '59 s ago');
+  assert.equal(h.secsAgo(7200, 10 * 86400000), '2 h ago');
 });
 
 test('top champions rank the summed rows by win rate and by games', () => {

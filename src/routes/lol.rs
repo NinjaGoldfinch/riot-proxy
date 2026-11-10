@@ -4,6 +4,10 @@
 //!
 //! v1's three `/v1/lol/analytics/*` routes read the analytics tables and arrive
 //! with them in P7-04 (owner decision, ADR-037).
+//!
+//! `GET /v1/lol/status` (SITE-14, ADR-220) is the exception: a typed summary
+//! of every polled platform's status, read from what the status poller stored
+//! (`status::poll::summary`), never from Riot.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -11,18 +15,21 @@ use std::sync::Arc;
 use axum::Extension;
 use axum::extract::rejection::PathRejection;
 use axum::extract::{Path, Query, State};
+use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
 use crate::app::AppState;
 use crate::http::auth::Consumer;
-use crate::http::{ApiError, validate};
+use crate::http::error::ErrorResponse;
+use crate::http::{ApiError, ErrorCode, validate};
 use crate::riot::endpoints::{Endpoint, Target};
 use crate::riot::ladder::{APEX_TIERS, DIVISIONS, PAGED_TIERS, RANKED_QUEUES, apex_endpoint};
 use crate::riot::routing::{Platform, Region};
 use crate::routes::passthrough::{PassthroughResponses, fetch, request};
 use crate::routes::riot::bad_path;
+use crate::status::poll::{self, summary};
 
 type Q = Query<HashMap<String, String>>;
 type Who = Extension<Arc<Consumer>>;
@@ -40,6 +47,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(mastery_by_puuid))
         .routes(routes!(rotations))
         .routes(routes!(platform_status))
+        .routes(routes!(status_summary))
 }
 
 fn on_platform(id: &str, platform: Platform) -> Option<Target> {
@@ -406,10 +414,69 @@ async fn platform_status(
     platform_only(s, c, q, path, "status.platformData").await
 }
 
+/// What `GET /v1/lol/status` says about where its data comes from.
+const STATUS_SUMMARY_NOTES: &str = "Every platform's status in one call, summarised from Riot's lol-status-v4 \
+    `platform-data`. **Never calls Riot**: the status poller reads each platform in `STATUS_POLL_PLATFORMS` \
+    (every platform by default) every `STATUS_POLL_INTERVAL_S` (300 s by default) and this route reads what it \
+    stored, so an available entry is at most one poll interval old (`fetchedAgeSeconds`).\n\n\
+    `platforms` lists each polled platform once, in the proxy's platform order (`na1` … `vn2`). An entry is \
+    `available: false`, with `error` saying why and its counts `null`, until the poller has read a 200 for it, \
+    and again whenever its latest read failed (a platform Riot does not serve, such as `tw2`, which the portal's \
+    lol-status-v4 region list omits, is just such an entry); the call is still a 200. `X-Cache` is `HIT`, and `X-Cache-Fetched-Age` is the stalest \
+    available entry's `fetchedAgeSeconds` (not sent when none is available). For a platform's whole body, \
+    titles and updates included, use `/v1/lol/status/{platform}`, which the poller keeps cached.\n\n\
+    503 with `NOT_FOUND` when this deployment does not poll (`STATUS_POLL_PLATFORMS=none`).";
+
+#[utoipa::path(
+    get, path = "/v1/lol/status", tag = "lol",
+    summary = "Every platform's status",
+    description = STATUS_SUMMARY_NOTES,
+    responses(
+        (status = 200, description = "Every polled platform, in platform order", body = summary::StatusSummary),
+        (status = 401, description = "Missing or invalid key.", body = ErrorResponse),
+        (status = 403, description = "The key lacks a scope.", body = ErrorResponse),
+        (status = 429, description = "Your consumer quota is spent (`QUOTA_EXCEEDED`).", body = ErrorResponse),
+        (status = 503, description = "The status poller is off on this deployment (`STATUS_POLL_PLATFORMS=none`): \
+            `NOT_FOUND`, without `Retry-After`, since waiting does not change it.", body = ErrorResponse),
+    ),
+)]
+async fn status_summary(State(s): State<AppState>) -> Response {
+    let listed = &s.config.status_poll_platforms;
+    if listed.is_empty() {
+        return poller_off().into_response();
+    }
+    let rows = match poll::stored(&s.db).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!(error = %e, "platform_status not read");
+            return ApiError::internal().into_response();
+        }
+    };
+    let body = summary::summarize(listed, &rows, crate::clock::Clock::now().unix_ms);
+    let fetched_age = body.stalest_available_age();
+    let mut res = axum::Json(body).into_response();
+    let h = res.headers_mut();
+    h.insert("x-cache", HeaderValue::from_static("HIT"));
+    if let Some(age) = fetched_age {
+        h.insert("x-cache-fetched-age", HeaderValue::from(age));
+    }
+    res
+}
+
+/// `STATUS_POLL_PLATFORMS=none`: nothing is polled, so there is nothing to
+/// summarise. v1's closed code set has no "turned off"; `NOT_FOUND` is its
+/// "we do not serve it", at 503 as the series spec asks (ADR-220).
+fn poller_off() -> ApiError {
+    ApiError::new(
+        ErrorCode::NotFound,
+        "The status poller is off on this deployment (STATUS_POLL_PLATFORMS=none)",
+    )
+    .with_status(StatusCode::SERVICE_UNAVAILABLE)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http::ErrorCode;
 
     #[test]
     fn match_region_must_agree_with_the_match_id() {

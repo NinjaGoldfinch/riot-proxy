@@ -196,6 +196,13 @@ function detail(p, u, { noTimeline = false, noAnalytics = false, noBuilds = fals
   return null;
 }
 
+/** `GET /v1/lol/status` (SITE-14): two platforms read, one not. */
+const PLATFORMS = [
+  { platform: 'na1', available: true, error: null, incidents: 1, maintenances: 0, worstSeverity: 'critical', maintenanceInProgress: false, fetchedAgeSeconds: 120 },
+  { platform: 'kr', available: true, error: null, incidents: 0, maintenances: 0, worstSeverity: null, maintenanceInProgress: false, fetchedAgeSeconds: 30 },
+  { platform: 'tw2', available: false, error: 'NOT_FOUND: Resource not found upstream', incidents: null, maintenances: null, worstSeverity: null, maintenanceInProgress: null, fetchedAgeSeconds: null },
+];
+
 function api(calls, url, { status = {}, unauthorized = false, ...opts } = {}) {
   const u = new URL(url, 'http://localhost');
   calls.push(`${u.pathname}${u.search}`);
@@ -210,6 +217,8 @@ function api(calls, url, { status = {}, unauthorized = false, ...opts } = {}) {
   if (unauthorized) return [401, { error: { code: 'UNAUTHORIZED', message: 'missing key', requestId: 'r' } }];
   const pl = players(p, u, opts) ?? detail(p, u, opts);
   if (pl) return pl;
+  // `opts.statusAll`: the summary's [status, body] instead, e.g. the poller turned off.
+  if (p === '/v1/lol/status') return opts.statusAll ?? [200, { platforms: PLATFORMS }];
   if (p.startsWith('/v1/lol/status/')) return [200, { id: 'OC1', name: 'Oceania', locales: ['en_US'], maintenances: [], incidents: [], ...status }];
   // `opts.apexSizes` sets a tier's list length, e.g. `{ MASTER: 10000 }` for a league at Riot's cap.
   if (p.startsWith('/v1/lol/league/apex/')) return [200, { tier: p.split('/')[6], queue: p.split('/')[7], name: 'L', leagueId: 'x', entries: Array.from({ length: opts.apexSizes?.[p.split('/')[6]] ?? LADDER }, (_, i) => entry(i)) }];
@@ -223,4 +232,4 @@ function api(calls, url, { status = {}, unauthorized = false, ...opts } = {}) {
   return [404, { error: { code: 'NOT_FOUND', message: p } }];
 }
 
-export { root, html, LADDER, CHAMPS, RUNES, PUUID, BOOTS, MATCH, TIMELINE, DETAIL, MATCHUPS, BUILDS, api };
+export { root, html, LADDER, PLATFORMS, CHAMPS, RUNES, PUUID, BOOTS, MATCH, TIMELINE, DETAIL, MATCHUPS, BUILDS, api };

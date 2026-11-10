@@ -5,11 +5,11 @@ The human-readable reference for every route riot-proxy 2.7.0 serves. This page 
 | Page | Routes |
 |---|---|
 | this page | `/healthz`, `/readyz`, `/status`, `/status/ratelimits`, `/metrics`, `/docs`, `/openapi.json`, `/openapi.yaml`, `/dev*`, `/dashboard`, `/v1/ws`, the 404 fallback |
-| [endpoints-riot-lol.md](endpoints-riot-lol.md) | `/v1/riot/*`, `/v1/lol/*` (passthrough), `/v1/static/*`, `/ddragon/*` |
+| [endpoints-riot-lol.md](endpoints-riot-lol.md) | `/v1/riot/*`, `/v1/lol/*` (passthrough, and the `/v1/lol/status` summary), `/v1/static/*`, `/ddragon/*` |
 | [endpoints-players-analytics.md](endpoints-players-analytics.md) | `/v1/players/*`, `/v1/lol/analytics/*` |
 | [endpoints-admin.md](endpoints-admin.md) | all 40 `/v1/admin/*` operations |
 
-The machine-readable contract is [openapi.json](openapi.json) (OpenAPI 3.1.0, `info.version` `2.10.0`, 72 paths, 76 operations). The server builds that document from the same router it serves, so the two cannot drift (`src/routes/docs.rs:L116-L153`). Errors are in [errors.md](errors.md); paging, filters, ETags and versioning in [pagination-filtering-and-versioning.md](pagination-filtering-and-versioning.md); copy-pasteable walkthroughs in [examples.md](examples.md).
+The machine-readable contract is [openapi.json](openapi.json) (OpenAPI 3.1.0, `info.version` `2.10.0`, 73 paths, 77 operations). The server builds that document from the same router it serves, so the two cannot drift (`src/routes/docs.rs:L116-L153`). Errors are in [errors.md](errors.md); paging, filters, ETags and versioning in [pagination-filtering-and-versioning.md](pagination-filtering-and-versioning.md); copy-pasteable walkthroughs in [examples.md](examples.md).
 
 ## Conventions
 
@@ -61,7 +61,7 @@ These routes return Riot's bytes verbatim with status 200 and `Content-Type: app
 |---|---|
 | `X-Cache` | `HIT` (fresh L1), `MISS` (fetched from Riot), `STALE` (between soft and hard TTL, or served from a copy because Riot or the limiter failed), `HIT-NEG` (a cached 404, sent on the error response), `ARCHIVE` (immutable body from the match archive), `BYPASS` (`?refresh=true` by an admin-scoped consumer) (`src/fetcher.rs:L64-L83`, `L362-L435`) |
 | `X-Cache-Age` | Age of the **content** in whole seconds; a byte-identical refresh does not reset it (`src/routes/passthrough.rs:L441-L446`, `src/cache/l1.rs:L176-L192`) |
-| `X-Cache-Fetched-Age` | Seconds since the proxy last read it from Riot; absent for `ARCHIVE` (`src/routes/passthrough.rs:L447-L454`) |
+| `X-Cache-Fetched-Age` | Seconds since the proxy last read it from Riot; absent for `ARCHIVE` (`src/routes/passthrough.rs:L447-L454`). On the `/v1/lol/status` summary, which is not a passthrough, the stalest available platform's (SITE-14) |
 
 `?refresh=true` (or `=1`) skips cache reads but still writes, and only for consumers with the `admin` scope; for a read-only key it is ignored silently (`src/routes/passthrough.rs:L470-L476`). The `/v1/players/*` composites allow it for every consumer but meter it to one claim per 60 s per part and PUUID (see [endpoints-players-analytics.md](endpoints-players-analytics.md)).
 
@@ -137,9 +137,9 @@ x-request-id: 01M5B6GNQ9SCSC5X3GTAV136MG
 
 | Method | Path | Response | Handler |
 |---|---|---|---|
-| GET | `/docs` | Scalar HTML reference | `src/routes/docs.rs:L398` |
-| GET | `/openapi.json` | the document, pretty JSON | `src/routes/docs.rs:L390-L393` |
-| GET | `/openapi.yaml` | `Content-Type: application/yaml` | `src/routes/docs.rs:L394-L397` |
+| GET | `/docs` | Scalar HTML reference | `src/routes/docs.rs:L410` |
+| GET | `/openapi.json` | the document, pretty JSON | `src/routes/docs.rs:L402-L405` |
+| GET | `/openapi.yaml` | `Content-Type: application/yaml` | `src/routes/docs.rs:L406-L409` |
 
 No key. Not listed in the document itself. `riot-proxy spec` prints the same JSON from the CLI.
 
