@@ -33,7 +33,8 @@ It is in the page bar (design/10 §Page bar) as **Showcase**, right after Dev ex
 
 | View (`#hash`) | Task | Calls | Renders |
 |---|---|---|---|
-| `#/` home | DEV-06, SITE-10 | (`/dev/config.json`) | the home view's own platform picker at the top (SITE-10); with none picked, an empty state pointing at it and no platform call |
+| `#/` home | DEV-06, SITE-10 | (`/dev/config.json`) | the home view's own platform picker at the top (SITE-10); with none picked, an empty state pointing at it and no platform call (the **Every platform** card below is not per platform, so it shows either way) |
+| | SITE-14 | `/v1/lol/status` | **Every platform**: one chip per platform the proxy polls, in the route's order, each `CODE note` with a tone: `ok`, `N incidents` and/or `N maintenances` (not `complete`), `unavailable` (dashed, with the route's `error` in its title). Red for a `critical` incident, amber for any other incident or a maintenance in progress, blue for a scheduled maintenance only. The title adds the worst severity, "maintenance in progress" and how long ago the poller last read it. A failed call (the poller off is a 503) shows the error in the card. At the top of the right column with a platform picked, under the empty state without |
 | | DEV-06 | `/v1/lol/league/apex/{platform}/{tier}/{queue}`, `/v1/riot/accounts/by-puuid/{puuid}` | ladder: Challenger, Grandmaster or Master × Solo/Duo or Flex, highest LP first, 25 a page, names for the visible page only (five calls at a time, cached for the session). A league of 10,000 players or more (`RIOT_APEX_LIST_CAP`, LAD-01) gets the note `Master: top 10,000 only (Riot API limit)` under the list: Riot left out the rest of the tier |
 | | | `/v1/lol/status/{platform}` | a banner per maintenance or incident; nothing when there are none |
 | | | `/v1/lol/rotations/{platform}`, `/v1/static/champion` | free rotation as champion icons |
@@ -60,7 +61,7 @@ An image the mirror cannot serve (an item retired since that game, say) becomes 
 flowchart LR
   subgraph Page["/dev/showcase — showcase.html (no deps, no build)"]
     S[Search: Riot ID or champion · key]
-    H[Home: status · ladder · rotation · top champions]
+    H[Home: status · every platform · ladder · rotation · top champions]
     P[Player: profile · ranks · live · matches · pool · mastery]
     C[Champion: tiers · builds · matchups]
     M[Match: scoreboard · gold graph · build]

@@ -407,6 +407,7 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         status: Arc::new(crate::status::Status::new(started)),
     };
     let checker = crate::status::checks::Checker::new(&state)?;
+    let poller = crate::status::poll::Poller::new(&state)?;
     let router = app::router(state, metrics);
 
     // Bind and accept at once (ADR-209): "listening" means accepting. The
@@ -421,6 +422,9 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
     let mut server = tokio::spawn(app::serve(listener, router, shutdown.clone()));
     // `/status`'s checks: a round now, then every STATUS_CHECK_INTERVAL_S (STS-02b).
     let checks = checker.spawn();
+    // Every platform's status: a round now, then every STATUS_POLL_INTERVAL_S
+    // (SITE-13), unless STATUS_POLL_PLATFORMS is none.
+    let polls = poller.map(crate::status::poll::Poller::spawn);
     let mut ended = None;
     let caught_up = tokio::select! {
         () = shutdown.clone() => false,
@@ -483,6 +487,9 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         None => (None, None),
     };
     checks.abort();
+    if let Some(polls) = polls {
+        polls.abort();
+    }
     metrics_topic.abort();
     if let Some(history) = history {
         history.abort();

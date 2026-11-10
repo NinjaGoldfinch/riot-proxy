@@ -51,7 +51,7 @@ json.dump(d,open(p,'w'),indent=2,ensure_ascii=False); open(p,'a').write('\n')
 EOF2
 ```
 
-Then cross-check the route table against the document (the repo's own `tests/openapi.rs` asserts `/openapi.json` equals `spec()`; `scripts/compare-openapi.py OLD NEW --prefix /v1/` lists operations missing from NEW).
+Then cross-check the route table against the document (the repo's own `tests/openapi.rs` asserts `/openapi.json` equals `spec()`; `scripts/compare-openapi.py OLD NEW --prefix /v1/` lists operations missing from NEW). The same test file checks that every response declares the headers it sends (SITE-04): a route whose headers differ from its tag's (the analytics routes, the image mirror, `GET /v1/lol/status`) has its own rule in `headers_for` (`src/routes/docs.rs`) and its own assertion there.
 
 ## Checking links
 
@@ -120,4 +120,4 @@ The files under [scratch/](./scratch/) are the Phase 0 inventories the set was w
 
 ---
 **Sources:** `docs/_meta/scratch/WRITING-BRIEF.md`, `src/routes/analytics.rs:L1031`, `src/routes/players.rs:L1082`, `tests/openapi.rs`, `scripts/compare-openapi.py`, `src/config/tests.rs:L443-L462`
-**Last verified:** 2026-11-09 against commit `0113520`
+**Last verified:** 2026-11-10 against commit `8bcfd77`

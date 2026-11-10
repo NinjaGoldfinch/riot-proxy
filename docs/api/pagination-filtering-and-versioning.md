@@ -8,7 +8,7 @@ Two routes page a player's match history. Both forward `start` and `count` to Ri
 
 | Route | `start` | `count` | Other filters | Returns |
 |---|---|---|---|---|
-| `GET /v1/lol/matches/ids/{region}/{puuid}` (`src/routes/lol.rs:L217-L243`) | 0 to 10000, default 0 | 1 to 100, default 20 | `queue` 0 to 5000; `type` in `ranked`, `normal`, `tourney`, `tutorial`; `startTime`, `endTime` ≥ 0 (epoch seconds, passed through) | Riot's `string[]` of match ids |
+| `GET /v1/lol/matches/ids/{region}/{puuid}` (`src/routes/lol.rs:L225-L251`) | 0 to 10000, default 0 | 1 to 100, default 20 | `queue` 0 to 5000; `type` in `ranked`, `normal`, `tourney`, `tutorial`; `startTime`, `endTime` ≥ 0 (epoch seconds, passed through) | Riot's `string[]` of match ids |
 | `GET /v1/players/{puuid}/matches` (`src/routes/players.rs:L654-L677`) | 0 to 10000, default 0 | 1 to 20, default 10 | `platform` **required**; `queue`; `type`; `champion` 1 to 10000; `refresh` | `MatchPage` with `matchIds[]`, `matches[]`, `hasMore` |
 
 Out-of-range values are `400 VALIDATION`, for example `querystring/count must be <= 100` (captured). Unknown query keys are dropped, not refused (`tests/snapshots/lol_routes__lol_routes_upstream_calls.snap`, the `junk=x` row).
@@ -21,7 +21,7 @@ Queue ids are match-v5's: `420` ranked solo/duo and `440` ranked flex (`src/riot
 
 ## Ladder paging
 
-`GET /v1/lol/league/entries/{platform}/{queue}/{tier}/{division}?page=N` forwards `page` (1 to 100000, default 1, always sent) to `league.entriesByTier` (`src/routes/lol.rs:L180-L187`). Riot returns 205 entries per page (`ENTRIES_PER_PAGE`, `src/riot/ladder.rs:L26`) and an **empty array** past the end, which the route passes through unchanged (`src/routes/lol.rs:L154-L155`); there is no `hasMore`, so stop when a page is empty.
+`GET /v1/lol/league/entries/{platform}/{queue}/{tier}/{division}?page=N` forwards `page` (1 to 100000, default 1, always sent) to `league.entriesByTier` (`src/routes/lol.rs:L188-L195`). Riot returns 205 entries per page (`ENTRIES_PER_PAGE`, `src/riot/ladder.rs:L26`) and an **empty array** past the end, which the route passes through unchanged (`src/routes/lol.rs:L162-L163`); there is no `hasMore`, so stop when a page is empty.
 
 Apex tiers (`MASTER`, `GRANDMASTER`, `CHALLENGER`) are not paged: `GET /v1/lol/league/apex/{platform}/{tier}/{queue}` returns the whole league in one document, and Riot caps it at 10 000 entries (`RIOT_APEX_LIST_CAP`, `src/riot/ladder.rs:L14-L20`, observed on kr, euw1 and na1 on 2026-10-09). The paged route refuses an apex tier and the apex route refuses a paged tier (`params/tier must be equal to one of the allowed values`, captured).
 
@@ -93,5 +93,5 @@ The validator changes when the `aggregate:analytics` job rewrites the slice (its
 `/healthz` and `/readyz` carry no version. There is no `Server` header.
 
 ---
-**Sources:** `src/routes/lol.rs:L154-L155,L180-L187,L217-L243`, `src/routes/players.rs:L551,L654-L692,L846-L866`, `src/routes/admin.rs:L775-L780,L1337-L1356,L1848-L1857,L1953-L1995,L2038-L2041,L2323-L2327,L2564-L2574`, `src/routes/analytics.rs:L52-L56,L486-L561,L577-L607,L903-L945`, `src/routes/ui.rs:L113-L131`, `src/http/validate.rs:L211-L250`, `src/http/recent.rs:L111-L113`, `src/riot/ladder.rs:L14-L26`, `tests/snapshots/lol_routes__lol_routes_upstream_calls.snap`, `docs/DECISIONS.md` ADR-065, ADR-066, ADR-123, ADR-143, ADR-166, `docs/api/openapi.json`, `README.md`, `docs/_meta/scratch/siblings.md` §1.3-1.5, §5-6, live capture against `target/debug/riot-proxy` 2.7.0
-**Last verified:** 2026-11-09 against commit `302025d`
+**Sources:** `src/routes/lol.rs:L162-L163,L180-L187,L217-L243`, `src/routes/players.rs:L551,L654-L692,L846-L866`, `src/routes/admin.rs:L775-L780,L1337-L1356,L1848-L1857,L1953-L1995,L2038-L2041,L2323-L2327,L2564-L2574`, `src/routes/analytics.rs:L52-L56,L486-L561,L577-L607,L903-L945`, `src/routes/ui.rs:L113-L131`, `src/http/validate.rs:L211-L250`, `src/http/recent.rs:L111-L113`, `src/riot/ladder.rs:L14-L26`, `tests/snapshots/lol_routes__lol_routes_upstream_calls.snap`, `docs/DECISIONS.md` ADR-065, ADR-066, ADR-123, ADR-143, ADR-166, `docs/api/openapi.json`, `README.md`, `docs/_meta/scratch/siblings.md` §1.3-1.5, §5-6, live capture against `target/debug/riot-proxy` 2.7.0
+**Last verified:** 2026-11-10 against commit `8bcfd77`

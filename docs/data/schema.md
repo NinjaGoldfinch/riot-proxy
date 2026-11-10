@@ -1,6 +1,6 @@
 # SQLite schema: core and archive tables
 
-Every table and index in `riot-proxy.db` after migration V0033, with what writes it, what reads it and how long rows live. This file covers the core (operational) and archive groups; the ladder, rank and analytics groups are in [schema-analytics.md](schema-analytics.md), including V0029's incremental-analytics bookkeeping: `analytics_counted`, `analytics_retract` and `analytics_stamped`, the `match_facts_tier_moved` trigger, and the `kind` column of `analytics_runs` (THR-03, ADR-182).
+Every table and index in `riot-proxy.db` after migration V0034, with what writes it, what reads it and how long rows live. This file covers the core (operational) and archive groups; the ladder, rank and analytics groups are in [schema-analytics.md](schema-analytics.md), including V0029's incremental-analytics bookkeeping: `analytics_counted`, `analytics_retract` and `analytics_stamped`, the `match_facts_tier_moved` trigger, and the `kind` column of `analytics_runs` (THR-03, ADR-182).
 
 ## Conventions
 
@@ -8,7 +8,7 @@ Every table and index in `riot-proxy.db` after migration V0033, with what writes
 - Timestamps are unix milliseconds in `INTEGER` columns; JSON lives in `TEXT`; match and timeline bodies are zstd level 3 `BLOB`s (`src/db/migrations/V0001__init.sql:2`, `V0002__archive.sql:3`, `src/archive/matches.rs:33`).
 - `key_scope` is the first 8 hex characters of `sha256(RIOT_API_KEY)` (`src/cache/keys.rs:34-46`). Rows that hold encrypted Riot ids (PUUIDs) carry it; the archive does not, because match ids are not encrypted (`V0002:21`).
 - Declared foreign keys are few: `match_facts`, `match_bans`, `match_builds`, `analytics_counted` and `analytics_retract` cascade from `matches`; `crawl_legs` and `crawl_match_ids` cascade from `ladder_crawls`; `body_locations.pack_id` references `body_packs`. `PRAGMA foreign_keys = ON` on every connection (`src/db/mod.rs:58-64`). Every other join in the diagrams is logical, not declared.
-- 44 tables in total: the 41 that `/dev/reset` wipes plus `consumers`, `limiter_state` and `refinery_schema_history` (`src/routes/dev.rs:41-87`). V0033 added `tiers_sweep` (AVL-06, ADR-213).
+- 45 tables in total: the 42 that `/dev/reset` wipes plus `consumers`, `limiter_state` and `refinery_schema_history` (`src/routes/dev.rs:41-88`). V0033 added `tiers_sweep` (AVL-06, ADR-213), V0034 `platform_status` (SITE-13, ADR-219).
 
 ## Core tables
 
@@ -43,13 +43,17 @@ erDiagram
         INTEGER at PK
         TEXT point
     }
+    platform_status {
+        TEXT platform PK
+        TEXT body
+    }
     refinery_schema_history {
         INTEGER version PK
     }
     players ||--o{ jobs : "payload.puuid (poll, backfill)"
 ```
 
-The job rows carry a player's PUUID in their JSON payload rather than a column, so the only edge is logical. `consumers`, `cache`, `limiter_state` and the two history tables stand alone.
+The job rows carry a player's PUUID in their JSON payload rather than a column, so the only edge is logical. `consumers`, `cache`, `limiter_state`, `platform_status` and the two history tables stand alone.
 
 ### consumers
 
@@ -94,7 +98,7 @@ Index: `cache_hard ON cache(hard_expires)` (`V0001:24`). Written by the write-be
 | `frozen_until` | INTEGER | nullable | unix ms |
 | `updated_at` | INTEGER | NOT NULL | unix ms |
 
-No secondary index. Written by `persist::save`, which deletes every row and re-inserts the current set in one transaction (`src/riot/limiter/persist.rs:178-194`) every 10 s and at shutdown (`persist.rs:25`, `src/cli/serve.rs:110,461`). Read once at boot (`persist.rs:196-213`, `serve.rs:104`); a checkpoint older than 120 s restores every window as full (`persist.rs:23,92-94`). Retention: replaced whole on every checkpoint; not wiped by `/dev/reset`.
+No secondary index. Written by `persist::save`, which deletes every row and re-inserts the current set in one transaction (`src/riot/limiter/persist.rs:178-194`) every 10 s and at shutdown (`persist.rs:25`, `src/cli/serve.rs:110,465`). Read once at boot (`persist.rs:196-213`, `serve.rs:104`); a checkpoint older than 120 s restores every window as full (`persist.rs:23,92-94`). Retention: replaced whole on every checkpoint; not wiped by `/dev/reset`.
 
 ### jobs
 
@@ -127,6 +131,20 @@ Indexes: `jobs_dedupe UNIQUE (kind, dedupe_key) WHERE state IN ('pending','runni
 | `point` | TEXT | NOT NULL | JSON `HistoryPoint` (`src/stats.rs:379-394`) |
 
 Written every `METRICS_HISTORY_INTERVAL_S` (default 60 s) by `INSERT OR REPLACE` (`src/stats.rs:1023-1046`). Read by `GET /v1/admin/metrics/history`. Retention: each write keeps only the newest 1 440 rows (`src/stats.rs:43,1037-1040`) and `maintenance` deletes rows older than 24 h (`maintenance.rs:40,250-253`).
+
+### platform_status
+
+[`V0034__platform_status.sql`](../../src/db/migrations/V0034__platform_status.sql) (SITE-13, ADR-219). One row per platform the status poller has stored an answer for; a rowid table (a body is not a small row).
+
+| Column | Type | Constraints | Notes |
+|---|---|---|---|
+| `platform` | TEXT | PRIMARY KEY | `Platform::as_str`, e.g. `oc1` |
+| `body` | TEXT | nullable | the last 200's `lol-status-v4` `platform-data` body, JSON as Riot sent it; NULL until one |
+| `fetched_at` | INTEGER | nullable | unix ms of the last 200 |
+| `failed_at` | INTEGER | nullable | unix ms of the last failure (any other answer, no answer, or a 200 that is not JSON) |
+| `error` | TEXT | nullable | the last failure's reason: the fetcher's error code and message, e.g. `NOT_FOUND: Resource not found upstream` |
+
+Written once a round by the status poller in one transaction (`src/status/poll.rs:247-270`): a 200 upserts `body` and `fetched_at`, a failure `failed_at` and `error`, each leaving the other pair as it was, so a failure keeps the last body and a reader compares the two stamps. A platform the limiter had no room for writes nothing that round. Not keyed by `key_scope`: the feed is Riot's whatever key read it. Read by `status::poll::stored` (every row, in `Platform::ALL` order; SITE-14's summary route). Retention: one row per platform, overwritten each round; a platform dropped from `STATUS_POLL_PLATFORMS` keeps its last row. `/dev/reset` empties it.
 
 ### players
 
@@ -329,5 +347,5 @@ Written by `pack::record_on` after a verified upload (`src/archive/pack.rs:287-3
 Index `body_locations_pack (pack_id)` (`V0023:30`). Written by `locate_on` (upsert, `pack.rs:331-350`) and `restore-index`. Read by the archive read path's `LEFT JOIN` (`matches.rs:201-204`), the free step's guard (`offload.rs:157-158`) and the snapshot. Retention: never deleted by a job; about 60 bytes per row (`docs/design/12-object-storage-and-hosting.md:209-210`).
 
 ---
-**Sources:** `src/db/migrations/V0001__init.sql`, `V0002__archive.sql`, `V0003__cs_and_duration.sql`, `V0005__analytics.sql`, `V0007__job_lane.sql`, `V0009__cache_fetched_at.sql`, `V0012__match_builds.sql`, `V0013__timelines_standalone.sql`, `V0018__timeline_gaps.sql`, `V0019__tier_on_facts.sql`, `V0020__without_rowid_derived.sql`, `V0021__facts_without_rowid.sql`, `V0022__jobs_state_kind.sql`, `V0023__body_packs.sql`, `V0024__matches_archived.sql`, `V0028__jobs_crawl_matches.sql`, `V0029__analytics_counted.sql`, `src/db/mod.rs:L27-L47`, `src/db/mod.rs:L523-L525`, `src/archive/matches.rs:L33-L103`, `src/archive/matches.rs:L193-L230`, `src/archive/matches.rs:L390-L446`, `src/archive/analytics/delta.rs:L98-L145`, `src/archive/facts.rs:L19`, `src/archive/facts.rs:L292-L379`, `src/archive/builds.rs:L24`, `src/archive/pack.rs:L287-L354`, `src/archive/offload.rs:L147-L170`, `src/archive/tiers.rs:L43-L68`, `src/cache/l2.rs:L220-L416`, `src/riot/limiter/persist.rs:L23-L25`, `src/riot/limiter/persist.rs:L178-L213`, `src/consumers.rs:L105-L107`, `src/consumers.rs:L141-L155`, `src/consumers.rs:L213-L283`, `src/jobs/maintenance.rs:L38-L40`, `src/jobs/maintenance.rs:L243-L260,L346-L389`, `src/stats.rs:L43`, `src/stats.rs:L379-L394`, `src/stats.rs:L1028-L1044`, `src/routes/dev.rs:L41-L85`, `docs/_meta/scratch/persistence.md`, `docs/design/04-data-and-cache.md`, `docs/design/12-object-storage-and-hosting.md:L159-L221`
-**Last verified:** 2026-11-10 against commit `97a926a`
+**Sources:** `src/db/migrations/V0001__init.sql`, `V0002__archive.sql`, `V0003__cs_and_duration.sql`, `V0005__analytics.sql`, `V0007__job_lane.sql`, `V0009__cache_fetched_at.sql`, `V0012__match_builds.sql`, `V0013__timelines_standalone.sql`, `V0018__timeline_gaps.sql`, `V0019__tier_on_facts.sql`, `V0020__without_rowid_derived.sql`, `V0021__facts_without_rowid.sql`, `V0022__jobs_state_kind.sql`, `V0023__body_packs.sql`, `V0024__matches_archived.sql`, `V0028__jobs_crawl_matches.sql`, `V0029__analytics_counted.sql`, `src/db/mod.rs:L27-L47`, `src/db/mod.rs:L523-L525`, `src/archive/matches.rs:L33-L103`, `src/archive/matches.rs:L193-L230`, `src/archive/matches.rs:L390-L446`, `src/archive/analytics/delta.rs:L98-L145`, `src/archive/facts.rs:L19`, `src/archive/facts.rs:L292-L379`, `src/archive/builds.rs:L24`, `src/archive/pack.rs:L287-L354`, `src/archive/offload.rs:L147-L170`, `src/archive/tiers.rs:L43-L68`, `src/cache/l2.rs:L220-L416`, `src/riot/limiter/persist.rs:L23-L25`, `src/riot/limiter/persist.rs:L178-L213`, `src/consumers.rs:L105-L107`, `src/consumers.rs:L141-L155`, `src/consumers.rs:L213-L283`, `src/jobs/maintenance.rs:L38-L40`, `src/jobs/maintenance.rs:L243-L260,L346-L389`, `src/stats.rs:L43`, `src/stats.rs:L379-L394`, `src/stats.rs:L1028-L1044`, `src/routes/dev.rs:L41-L86`, `docs/_meta/scratch/persistence.md`, `docs/design/04-data-and-cache.md`, `docs/design/12-object-storage-and-hosting.md:L159-L221`
+**Last verified:** 2026-11-10 against commit `8bcfd77`

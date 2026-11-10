@@ -78,6 +78,7 @@ pub const WIPED: &[&str] = &[
     "analytics_stamped",
     "tiers_sweep",
     "cache",
+    "platform_status",
     "jobs",
     "metrics_history",
 ];

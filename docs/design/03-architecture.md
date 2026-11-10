@@ -182,7 +182,7 @@ src/
 │   └── headers.rs       X-Cache, X-Cache-Age, X-RateLimit-*, X-Request-Id
 ├── routes/
 │   ├── riot.rs          /v1/riot/* passthrough
-│   ├── lol.rs           /v1/lol/*
+│   ├── lol.rs           /v1/lol/* (GET /v1/lol/status summarises the status poller's table, SITE-14)
 │   ├── players.rs       /v1/players/* composites (fan-out with join_all)
 │   ├── admin.rs         /v1/admin/*
 │   ├── health.rs        /healthz /readyz /metrics
