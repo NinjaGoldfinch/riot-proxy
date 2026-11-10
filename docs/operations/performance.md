@@ -44,7 +44,7 @@ The synthetic database and the before/after SQL are reproducible with `python3 s
 | `JOB_YIELD_BUDGET_MS` | 1000 (0 to 900 000) | how long a job's fetch waits for the limiter before freeing its worker | `src/config.rs:815`; `src/fetcher.rs:127-157` |
 | `CLIENT_WAIT_BUDGET_MS` | 2000 (≥ 0) | how long an interactive request waits for a token before `RATE_LIMITED` or a `STALE` copy | `src/config.rs:820`; `src/fetcher.rs:159-163` |
 | `BULK_USAGE_CEILING` / `BULK_IDLE_CEILING` / `BULK_IDLE_AFTER_S` | 0.8 / 0.95 / 30 | bulk's share of each window while a scope is busy / after it idles / the idle threshold | `src/config.rs:821-823`, `:867-884` |
-| `CACHE_L1_MAX_MB` | 128 (1 to 1 048 576) | L1 weight budget; an entry larger than the budget is not kept | `src/config.rs:817`; `src/cache/l1.rs:124-137` |
+| `CACHE_L1_MAX_MB` | 128 (1 to 1 048 576) | L1 weight budget; an entry larger than the budget is not kept | `src/config.rs:817`; `src/cache/l1.rs:131-144` |
 | `ANALYTICS_CACHE_ENTRIES` | 512 (0 to 4096) | analytics responses kept; about 41 kB each at most, so about 21 MB at 512 and 170 MB at 4096; 0 disables | `src/config.rs:862`; `docs/DECISIONS.md:1800` |
 | `ARCHIVE_OBJECT_CONCURRENCY` | 16 (1 to 256) | ranged GETs in flight when reading offloaded bodies | `src/config.rs:840` |
 | `ARCHIVE_BODY_LOCAL_DAYS` | 14 (0 to 365) | how long a packed body stays local, so which reads touch the bucket | `src/config.rs:842` |
@@ -76,5 +76,5 @@ Extrapolated, not measured: design/07's sizing table and its 2-vCPU worker advic
 Disk and memory sizing for the archive and the bucket are in `../deployment/capacity.md`.
 
 ---
-**Sources:** `docs/DECISIONS.md:1732-1818`, `docs/perf/PERF-03-design.md:1-120`, `docs/design/07-deployment.md:169-177`, `docs/design/12-object-storage-and-hosting.md:261-267,480-486,781-799`, `PROGRESS.md:325,366`, `scripts/perf-synthetic.py:1-24`, `src/routes/analytics/cache.rs:1-19`, `src/routes/players.rs:292-331,746-767`, `src/archive/matches.rs:265-269`, `src/jobs/analytics.rs:531-778,797-882,893-985,1213-1307`, `src/archive/analytics/delta.rs:31-52`, `docs/thr/THR-03-plan.md`, `src/db/mod.rs:57-58,67-68,206-219,255-256`, `src/cli/mod.rs:125`, `src/config.rs:126,810-820,837-840,851,858-863,882-895,1267-1298`, `src/cache/l1.rs:124-137`, `src/fetcher.rs:127-163`, `src/riot/limiter/headers.rs:31-42`, `src/riot/limiter/mod.rs:177-184,329-344`, `src/http/recent.rs:38`
-**Last verified:** 2026-11-09 against commit `10f9512`
+**Sources:** `docs/DECISIONS.md:1732-1818`, `docs/perf/PERF-03-design.md:1-120`, `docs/design/07-deployment.md:169-177`, `docs/design/12-object-storage-and-hosting.md:261-267,480-486,781-799`, `PROGRESS.md:325,366`, `scripts/perf-synthetic.py:1-24`, `src/routes/analytics/cache.rs:1-19`, `src/routes/players.rs:292-331,746-767`, `src/archive/matches.rs:265-269`, `src/jobs/analytics.rs:531-778,797-882,893-985,1213-1307`, `src/archive/analytics/delta.rs:31-52`, `docs/thr/THR-03-plan.md`, `src/db/mod.rs:57-58,67-68,206-219,255-256`, `src/cli/mod.rs:125`, `src/config.rs:126,810-820,837-840,851,858-863,882-895,1267-1298`, `src/cache/l1.rs:131-144`, `src/fetcher.rs:127-163`, `src/riot/limiter/headers.rs:31-42`, `src/riot/limiter/mod.rs:177-184,329-344`, `src/http/recent.rs:38`
+**Last verified:** 2026-11-10 against commit `4ff4579`

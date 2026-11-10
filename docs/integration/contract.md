@@ -100,5 +100,5 @@ The server reports its version in the OpenAPI document's `info.version` (`/opena
 `GET /v1/ws` with `?token=` or the bearer header. First frame `{"op":"ready","consumer":"…"}`; `{"op":"subscribe","topics":["player:<puuid>","patch"]}` answers `{"op":"subscribed","topics":[…]}`; events arrive as `{"op":"event","event":"game.started","topic":"player:…","at":1760000000000,"data":{…}}`. The site does not use it. Protocol details in [../api/endpoints.md](../api/endpoints.md#v1ws-the-realtime-socket).
 
 ---
-**Sources:** `src/http/error.rs:L15-L67,L158-L193`, `src/http/request_id.rs:L287-L338`, `src/http/quota.rs:L332-L336`, `src/routes/passthrough.rs:L127-L166,L470-L476`, `src/routes/analytics.rs:L577-L614`, `src/routes/players.rs:L66-L147`, `src/routes/players/refresh.rs:L18-L71`, `src/riot/endpoints.rs:L88-L285`, `docs/api/openapi.json`, `docs/_meta/scratch/siblings.md` §1.5, `docs/_meta/scratch/routes.md` §1-§4
-**Last verified:** 2026-10-19 against commit `52fa67d`
+**Sources:** `src/http/error.rs:L15-L67,L158-L193`, `src/http/request_id.rs:L287-L338`, `src/http/quota.rs:L332-L336`, `src/routes/passthrough.rs:L127-L166,L470-L476`, `src/routes/analytics.rs:L577-L614`, `src/routes/players.rs:L66-L147`, `src/routes/players/refresh.rs:L18-L71`, `src/riot/endpoints.rs:L107-L310`, `docs/api/openapi.json`, `docs/_meta/scratch/siblings.md` §1.5, `docs/_meta/scratch/routes.md` §1-§4
+**Last verified:** 2026-11-10 against commit `4ff4579`

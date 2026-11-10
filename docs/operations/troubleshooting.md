@@ -14,7 +14,7 @@ Failures an operator or integrator meets with riot-proxy, each as symptom, likel
 
 - **Cause:** `limiter_restored` is set after `restore_from` returns, success or failure (`src/cli/serve.rs:133-139`; `src/riot/limiter/persist.rs:224-229`), so `false` means boot has not reached step 5 yet (migrations or the L2 warm still running).
 - **Diagnose:** `sudo journalctl -u riot-proxy -n 50 -o cat` for `limiter checkpoint restored rows=` or `limiter checkpoint could not be read; starting fresh` (`src/cli/serve.rs:135-137`).
-- **Fix:** wait for `listening` (`src/cli/serve.rs:413`). A persistent `false` after `listening` is a bug.
+- **Fix:** wait for `listening` (`src/cli/serve.rs:420`). A persistent `false` after `listening` is a bug.
 
 ## Authentication and authorisation
 
@@ -76,7 +76,7 @@ Failures an operator or integrator meets with riot-proxy, each as symptom, likel
 
 ### 12. `X-Cache: MISS` on every request, or hit ratio under 70 %
 
-- **Cause:** one of: the endpoint is immutable and served `ARCHIVE` not `HIT` (`match.byId`, `match.timeline`; `src/riot/endpoints.rs:187-206`); an admin key sends `?refresh=true` and gets `BYPASS` (`src/routes/passthrough.rs:159-167`); `CACHE_TTL_OVERRIDES` set a tiny soft TTL (`src/riot/endpoints.rs:426-446`); L1 is too small so entries evict at once, and an entry larger than the whole budget is never kept (`CACHE_L1_MAX_MB`, `src/cache/l1.rs:124-137`); the L2 write-behind queue is full so nothing survives a restart (`cache_l2_dropped_total`, `warn` `L2 write queue full; entry not persisted`, `src/cache/l2.rs:104-114`).
+- **Cause:** one of: the endpoint is immutable and served `ARCHIVE` not `HIT` (`match.byId`, `match.timeline`; `src/riot/endpoints.rs:211-230`); an admin key sends `?refresh=true` and gets `BYPASS` (`src/routes/passthrough.rs:159-167`); `CACHE_TTL_OVERRIDES` set a tiny soft TTL (`src/riot/endpoints.rs:452-472`); L1 is too small so entries evict at once, and an entry larger than the whole budget is never kept (`CACHE_L1_MAX_MB`, `src/cache/l1.rs:131-144`); the L2 write-behind queue is full so nothing survives a restart (`cache_l2_dropped_total`, `warn` `L2 write queue full; entry not persisted`, `src/cache/l2.rs:163-173`).
 - **Diagnose:** `GET /v1/admin/debug/cache?scope=oc1&method=summoner.byPuuid&path=/lol/summoner/v4/summoners/by-puuid/<puuid>` → `{key,present,ageSeconds,stale}` (`src/routes/admin.rs:1234-1250`); `GET /v1/admin/metrics | jq '{cache,cacheStore}'`; `/metrics` `proxy_cache_reads_total{state}` and `cache_l2_dropped_total`.
 - **Fix:** remove the override, raise `CACHE_L1_MAX_MB`, or lower `JOB_CONCURRENCY` if the SQLite writer is behind (a rising `cache_l2_dropped_total` means exactly that, `docs/design/metrics.md:56`).
 
@@ -84,13 +84,13 @@ Failures an operator or integrator meets with riot-proxy, each as symptom, likel
 
 ### 13. `warn` `backup skipped: not enough disk`
 
-- **Cause:** free space on the backup directory is under 1.2 × (db + wal) (`BACKUP_FREE_FACTOR`, `src/jobs/maintenance.rs:36`, `:293-305`). The run goes on without the backup.
+- **Cause:** free space on the backup directory is under 1.2 × (db + wal) (`BACKUP_FREE_FACTOR`, `src/jobs/maintenance.rs:36`, `:306-318`). The run goes on without the backup.
 - **Diagnose:** `GET /v1/admin/backups` → `lastRun.report.backupSkipped`, `diskFreeBytes` (`src/routes/admin.rs:2599-2622`); `df -h /var/lib/riot-proxy`.
 - **Fix:** `runbook.md` §11.
 
 ### 14. The WAL keeps growing (`sqlite_wal_bytes` in the hundreds of MB)
 
-- **Cause:** `wal_autocheckpoint=1000` (`src/db/mod.rs:64`) cannot complete while readers hold old snapshots; with readers always active the WAL never checkpointed on the 2-vCPU host (`docs/design/07-deployment.md:175`). The daily `maintenance` runs `PRAGMA wal_checkpoint(TRUNCATE)` and logs `checkpoint_busy`, `wal_frames`, `checkpointed` (`src/jobs/maintenance.rs:253-267`).
+- **Cause:** `wal_autocheckpoint=1000` (`src/db/mod.rs:64`) cannot complete while readers hold old snapshots; with readers always active the WAL never checkpointed on the 2-vCPU host (`docs/design/07-deployment.md:175`). The daily `maintenance` runs `PRAGMA wal_checkpoint(TRUNCATE)` and logs `checkpoint_busy`, `wal_frames`, `checkpointed` (`src/jobs/maintenance.rs:262-276`).
 - **Diagnose:** `/metrics` `sqlite_wal_bytes`; `ls -la /var/lib/riot-proxy/data/riot-proxy.db-wal`; the last `maintenance done` line.
 - **Fix:** `POST /v1/admin/maintenance/run` in a quiet moment; lower `JOB_CONCURRENCY` so fewer readers overlap. Never delete the `-wal` file (`deploy/README.md:258-265`).
 
@@ -118,7 +118,7 @@ Failures an operator or integrator meets with riot-proxy, each as symptom, likel
 
 ### 18. `archive:offload` keeps failing
 
-- **Cause:** credentials or endpoint. Boot refuses `http://` in production (`ARCHIVE_OBJECT_ENDPOINT: must be https:// when ENV=production`, `src/config.rs:1029-1041`), an `s3://` URL without an endpoint (`is required with an s3:// ARCHIVE_OBJECT_URL`, `:1069`), one key without the other (`set both or neither`, `:1062-1065`), or a production URL without keys (`:1071-1076`). A boot that passes logs `object store configured store=s3://riot-proxy-archive at <endpoint>` (`src/cli/serve.rs:161`; `src/archive/objects.rs:142`); a store that then rejects requests makes every run `Retry` (`src/jobs/offload.rs:147`).
+- **Cause:** credentials or endpoint. Boot refuses `http://` in production (`ARCHIVE_OBJECT_ENDPOINT: must be https:// when ENV=production`, `src/config.rs:1029-1041`), an `s3://` URL without an endpoint (`is required with an s3:// ARCHIVE_OBJECT_URL`, `:1069`), one key without the other (`set both or neither`, `:1062-1065`), or a production URL without keys (`:1071-1076`). A boot that passes logs `object store configured store=s3://riot-proxy-archive at <endpoint>` (`src/cli/serve.rs:167`; `src/archive/objects.rs:142`); a store that then rejects requests makes every run `Retry` (`src/jobs/offload.rs:147`).
 - **Diagnose:** `GET /v1/admin/jobs?kind=archive:offload` → `error`; `rp packs snapshot` exercises a PUT with the service's credentials (`src/cli/packs.rs:55-65`); `sudo rclone --config /etc/riot-proxy/rclone.conf lsf onidel:riot-proxy-archive --max-depth 1`.
 - **Fix:** correct the env file and restart (`runbook.md` §6); `archive_offload_pending` falls on the next run.
 
@@ -142,18 +142,18 @@ Failures an operator or integrator meets with riot-proxy, each as symptom, likel
 
 ### 22. `warn` `DEV_UI=true ignored: /dev is never served when ENV=production`
 
-- **Cause:** `DEV_UI` is forced off in production (`src/config.rs:758-760`, `:867-868`; `src/cli/serve.rs:153-155`). Not an error; `/dev` and `/dev/reset` are simply absent.
+- **Cause:** `DEV_UI` is forced off in production (`src/config.rs:758-760`, `:867-868`; `src/cli/serve.rs:159-161`). Not an error; `/dev` and `/dev/reset` are simply absent.
 - **Fix:** remove the variable to silence the warning. The dashboard (`/dashboard`, `DASHBOARD_UI`) is unaffected.
 
 ### 23. Boot fails with `binding 127.0.0.1:8080: Address already in use`
 
-- **Cause:** another process holds the port; the bind error carries that context (`src/cli/serve.rs:409-411`) and exits 1.
+- **Cause:** another process holds the port; the bind error carries that context (`src/cli/serve.rs:416-418`) and exits 1.
 - **Diagnose:** `sudo ss -ltnp 'sport = :8080'`; often a previous instance still draining (10 s grace, `src/app.rs:35`) or a stray `rp … serve`.
 - **Fix:** wait or stop the other process, then `sudo systemctl restart riot-proxy`.
 
 ### 24. `warn` `CACHE_TTL_OVERRIDES key matches no cacheable endpoint; ignored key=match`
 
-- **Cause:** the key is unknown or names only immutable endpoints (`match`, `timeline`), whose bodies are archived, not cached (`src/cli/serve.rs:164-166`; `src/riot/endpoints.rs:502-514`). Valid keys: `account, summoner, league, ladder, match, timeline, spectator, mastery, rotations, status` (`docs/_meta/scratch/config.md` §1.2). Malformed items are skipped silently (`src/riot/endpoints.rs:426-446`).
+- **Cause:** the key is unknown or names only immutable endpoints (`match`, `timeline`), whose bodies are archived, not cached (`src/cli/serve.rs:170-172`; `src/riot/endpoints.rs:528-540`). Valid keys: `account, summoner, league, ladder, match, timeline, spectator, mastery, rotations, status` (`docs/_meta/scratch/config.md` §1.2). Malformed items are skipped silently (`src/riot/endpoints.rs:452-472`).
 - **Fix:** correct the key; the rest of the list still applies.
 
 ## Other environments
@@ -178,7 +178,7 @@ Failures an operator or integrator meets with riot-proxy, each as symptom, likel
 
 ### 28. The bootstrap admin key was never shown
 
-- **Cause:** it is printed only when the `consumers` table is empty at `serve` and `BOOTSTRAP_ADMIN_KEY` is unset (`src/consumers.rs:308-333`; `src/cli/serve.rs:115-126`, `:605-611`). With `BOOTSTRAP_ADMIN_KEY` set, that key is imported silently; with any consumer already present, nothing is created. It goes to stderr, not the log (`src/cli/serve.rs:607`).
+- **Cause:** it is printed only when the `consumers` table is empty at `serve` and `BOOTSTRAP_ADMIN_KEY` is unset (`src/consumers.rs:308-333`; `src/cli/serve.rs:115-126`, `:612-618`). With `BOOTSTRAP_ADMIN_KEY` set, that key is imported silently; with any consumer already present, nothing is created. It goes to stderr, not the log (`src/cli/serve.rs:614`).
 - **Diagnose:** `rp key list` shows whether `bootstrap-admin` exists (`src/consumers.rs:16`).
 - **Fix:** mint a new admin key with `rp key create --name admin-2026-10 --scopes read,admin`; a lost key cannot be recovered (only its hash is stored, `src/consumers.rs:105-107`).
 
@@ -187,7 +187,7 @@ Failures an operator or integrator meets with riot-proxy, each as symptom, likel
 ### 29. A ladder's analytics stop moving after crawls, or `lastRuns` has no `delta` for it
 
 - **Cause:** since THR-03 (ADR-182) a completed crawl of a stamped ladder queues `aggregate:delta`, not a rebuild, and the delta counts only ladders stamped by a full rebuild with nothing marked dirty since, of any platform (`src/jobs/analytics.rs:1130-1168`; `src/archive/analytics/delta.rs:199-222`). A ladder is unstamped after the upgrade to V0029 until its first full rebuild finishes, and dirty after a `facts:reextract` or a `BUILDS_VERSION` bump rewrote matches already counted; either way a full rebuild is queued for it and the delta skips it until then. A crawl of an unstamped ladder (a platform outside `LADDER_PLATFORMS`, started from the admin route, or one before its first full rebuild) queues that rebuild at its end, which stamps it; deltas count it from then on. Boot and each delta queue the rebuild only for configured ladders.
-- **Diagnose:** `GET /v1/admin/metrics | jq '.analytics.lastRuns[] | {platform,queue,kind,at,status}'`; `GET /v1/admin/jobs/queue` for a pending or running `aggregate:analytics`; the journal's `full rebuilds queued for ladders not stamped yet queued=n` (`src/jobs/analytics.rs:1162`) or, at boot, `queued full analytics rebuilds to stamp counted matches ladders=n` (`src/cli/serve.rs:571-574`). `GET /v1/admin/info` shows `AGGREGATE_DELTA_S`; at `0` crawls queue rebuilds as before.
+- **Diagnose:** `GET /v1/admin/metrics | jq '.analytics.lastRuns[] | {platform,queue,kind,at,status}'`; `GET /v1/admin/jobs/queue` for a pending or running `aggregate:analytics`; the journal's `full rebuilds queued for ladders not stamped yet queued=n` (`src/jobs/analytics.rs:1162`) or, at boot, `queued full analytics rebuilds to stamp counted matches ladders=n` (`src/cli/serve.rs:578-581`). `GET /v1/admin/info` shows `AGGREGATE_DELTA_S`; at `0` crawls queue rebuilds as before.
 - **Fix:** let the queued rebuild finish (minutes per ladder on production; `runbook.md` §19 step 1). For an unconfigured platform, run a crawl of it or press Recompute now for it (`POST /v1/admin/analytics/recompute {"platform":"…"}`): its rebuild stamps it.
 
 ### 30. `aggregate_delta_pending` keeps rising
@@ -212,10 +212,10 @@ Failures an operator or integrator meets with riot-proxy, each as symptom, likel
 
 ### 33. The journal says `listening` but nothing answers, and `ss` shows the listen backlog full
 
-- **Cause:** on a release before AVL-01, the boot catch-ups ran between `listening` and the first accept, so the kernel completed connections into the listen backlog and nothing accepted them. On production from at least 2026-10-26, before AVL-06, the tier check among them found the ranked `ME1_` matches it could not stamp only after reading most of the archive in id order, which took 1.3 to 5 minutes on every boot; AVL-06 (ADR-213) stamps them `UNKNOWN` (`src/archive/tiers.rs:60-68`) and reads only past each prefix's cursor (`:279-293`). A SIGTERM in that window was not acted on until the server ran (`src/app.rs:329`), so a restart then ended in systemd's SIGKILL at 90 s. AVL-01 (ADR-209) binds and serves first (`src/cli/serve.rs:409-414`) and runs the catch-up behind the server (`:501-592`), honouring a SIGTERM during it (`:418-456`); with it, this symptom means something else holds the accept loop.
+- **Cause:** on a release before AVL-01, the boot catch-ups ran between `listening` and the first accept, so the kernel completed connections into the listen backlog and nothing accepted them. On production from at least 2026-10-26, before AVL-06, the tier check among them found the ranked `ME1_` matches it could not stamp only after reading most of the archive in id order, which took 1.3 to 5 minutes on every boot; AVL-06 (ADR-213) stamps them `UNKNOWN` (`src/archive/tiers.rs:60-68`) and reads only past each prefix's cursor (`:279-293`). A SIGTERM in that window was not acted on until the server ran (`src/app.rs:329`), so a restart then ended in systemd's SIGKILL at 90 s. AVL-01 (ADR-209) binds and serves first (`src/cli/serve.rs:416-421`) and runs the catch-up behind the server (`:508-599`), honouring a SIGTERM during it (`:425-463`); with it, this symptom means something else holds the accept loop.
 - **Diagnose:** `sudo ss -ltn 'sport = :8080'` shows `Recv-Q` at or over `Send-Q` (129 over 128 on 2026-11-08); `curl -s -m 5 localhost:8080/healthz` times out; the journal has `listening` and no `starting job workers` yet (`runbook.md` §20 step 3); `sudo cat /proc/$(pidof riot-proxy)/io` shows `read_bytes` climbing. With AVL-01, `boot catch-up done ms=…` says how long the catch-up took, and `/healthz` answers throughout it.
 - **Fix:** on a release before AVL-01, wait for `starting job workers`, after which it serves; do not restart again meanwhile (`runbook.md` §20). Upgrade to a release with AVL-01, which serves before the catch-ups and removes the gap; AVL-06 bounds the tier check and ME-02 makes `me1` a platform, which remove its cost (IMPLEMENTATION.md §Post-release — AVL, ADR-208).
 
 ---
-**Sources:** `src/routes/health.rs:21-46,148-200`, `src/db/writer.rs:22,158-206,214-230,326-380`, `src/db/mod.rs:55,64,67-68,206-219,278-306,515-521`, `src/jobs/analytics.rs:531-778,622,1130-1168`, `src/archive/analytics/delta.rs:199-270`, `src/cli/serve.rs:551-564,115-126,133-139,153-155,159-166,201-212,510-580,592,596-610`, `src/archive/tiers.rs:60-68,129-294`, `src/riot/limiter/persist.rs:224-229`, `src/http/auth.rs:32,43-52,118-139,196-202,292-313`, `src/http/error.rs:107`, `src/http/quota.rs:131,320,339-399`, `src/http/validate.rs:53-78,194-208`, `src/riot/routing.rs:49-68,139-158`, `src/riot/client.rs:179-186,424-444`, `src/riot/limiter/mod.rs:58-80`, `src/fetcher.rs:522-528`, `src/riot/endpoints.rs:187-206,426-446,502-514`, `src/routes/passthrough.rs:159-167`, `src/routes/players.rs:656`, `src/routes/statics.rs:213,289-292`, `src/cache/l1.rs:124-137`, `src/cache/l2.rs:104-114`, `src/jobs/maintenance.rs:36,254-268,294-306`, `src/jobs/scheduler.rs:40-42,160-171,969-979,1076-1098`, `src/jobs/archive.rs:294-338`, `src/jobs/ladder.rs:861-909`, `src/jobs/ladder/store.rs:363-418`, `src/jobs/ddragon.rs:111-112,241-304`, `src/jobs/offload.rs:147`, `src/jobs/ticks.rs:102-106,217-325`, `src/archive/matches.rs:250-317,399`, `src/archive/mod.rs:178-197`, `src/archive/objects.rs:142`, `src/config.rs:693-697,749-764,817,874-875,985-992,1026-1038,1093-1107`, `src/consumers.rs:16,105-107,308-333`, `src/cli/mod.rs:83-89`, `src/cli/key.rs:59-79`, `src/cli/packs.rs:32-35,55-83`, `src/routes/admin.rs:44-82,181-200,1012-1029,1234-1250,1702-1735,1924-1941,2108-2126,2454-2493,2599-2622`, `src/db/migrations/V0004__ladder.sql:7,33-34`, `src/app.rs:35,329`, `Dockerfile:24`, `deploy/README.md:12-18,258-265`, `deploy/proxmox/README.md:72-85`, `deploy/proxmox/files/riot-proxy-update:69-96`, `docs/design/07-deployment.md:59-61,175,225`, `docs/design/12-object-storage-and-hosting.md:943`, `docs/design/metrics.md:56`, `PROGRESS.md:342`, `docs/thr/THR-03-plan.md`
-**Last verified:** 2026-11-09 against commit `10f9512`
+**Sources:** `src/routes/health.rs:21-46,148-200`, `src/db/writer.rs:22,158-206,214-230,326-380`, `src/db/mod.rs:55,64,67-68,206-219,278-306,515-521`, `src/jobs/analytics.rs:531-778,622,1130-1168`, `src/archive/analytics/delta.rs:199-270`, `src/cli/serve.rs:558-571,115-126,133-139,159-161,165-172,207-218,517-587,599,603-617`, `src/archive/tiers.rs:60-68,129-294`, `src/riot/limiter/persist.rs:224-229`, `src/http/auth.rs:32,43-52,118-139,196-202,292-313`, `src/http/error.rs:107`, `src/http/quota.rs:131,320,339-399`, `src/http/validate.rs:53-78,194-208`, `src/riot/routing.rs:49-68,139-158`, `src/riot/client.rs:179-186,424-444`, `src/riot/limiter/mod.rs:58-80`, `src/fetcher.rs:522-528`, `src/riot/endpoints.rs:211-230,452-472,528-540`, `src/routes/passthrough.rs:159-167`, `src/routes/players.rs:656`, `src/routes/statics.rs:213,289-292`, `src/cache/l1.rs:131-144`, `src/cache/l2.rs:163-173`, `src/jobs/maintenance.rs:36,263-277,303-315`, `src/jobs/scheduler.rs:40-42,160-171,969-979,1076-1098`, `src/jobs/archive.rs:294-338`, `src/jobs/ladder.rs:861-909`, `src/jobs/ladder/store.rs:363-418`, `src/jobs/ddragon.rs:111-112,241-304`, `src/jobs/offload.rs:147`, `src/jobs/ticks.rs:102-106,217-325`, `src/archive/matches.rs:250-317,399`, `src/archive/mod.rs:178-197`, `src/archive/objects.rs:142`, `src/config.rs:693-697,749-764,817,874-875,985-992,1026-1038,1093-1107`, `src/consumers.rs:16,105-107,308-333`, `src/cli/mod.rs:83-89`, `src/cli/key.rs:59-79`, `src/cli/packs.rs:32-35,55-83`, `src/routes/admin.rs:44-82,181-200,1012-1029,1234-1250,1702-1735,1924-1941,2108-2126,2454-2493,2599-2622`, `src/db/migrations/V0004__ladder.sql:7,33-34`, `src/app.rs:35,329`, `Dockerfile:24`, `deploy/README.md:12-18,258-265`, `deploy/proxmox/README.md:72-85`, `deploy/proxmox/files/riot-proxy-update:69-96`, `docs/design/07-deployment.md:59-61,175,225`, `docs/design/12-object-storage-and-hosting.md:943`, `docs/design/metrics.md:56`, `PROGRESS.md:342`, `docs/thr/THR-03-plan.md`
+**Last verified:** 2026-11-10 against commit `4ff4579`
