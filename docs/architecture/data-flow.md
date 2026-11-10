@@ -60,7 +60,7 @@ Between rebuilds `aggregate:delta` (THR-03, ADR-182) keeps the same tables curre
 
 ### 6. Analytics to the consumer
 
-`/v1/lol/analytics/*` reads the aggregate tables, caches each response in memory per rebuild generation (`ANALYTICS_CACHE_ENTRIES`, default 512), and answers with a weak `ETag`, `Cache-Control: private, max-age=300` and `X-Cache: HIT` or `MISS` (`src/routes/analytics.rs:577-629`, `src/routes/analytics/cache.rs`). The site calls `/v1/lol/analytics/champions` with `queue=RANKED_SOLO_5x5&minGames=0&limit=500` and caches the rendered page at the edge for 10 minutes (ninjagoldfinch-lol `src/lib/domain/champion-stats.ts:93-107`, `src/lib/server/cache.ts:5-16`).
+`/v1/lol/analytics/*` reads the aggregate tables, caches each response in memory per rebuild generation (`ANALYTICS_CACHE_ENTRIES`, default 512), and answers with a weak `ETag`, `Cache-Control: private, max-age=300` and `X-Cache: HIT` or `MISS` (`src/routes/analytics.rs:588-640`, `src/routes/analytics/cache.rs`). The site calls `/v1/lol/analytics/champions` with `queue=RANKED_SOLO_5x5&minGames=0&limit=500` and caches the rendered page at the edge for 10 minutes (ninjagoldfinch-lol `src/lib/domain/champion-stats.ts:93-107`, `src/lib/server/cache.ts:5-16`).
 
 ### 7. Bodies to object storage
 
@@ -83,5 +83,5 @@ Within hours of being archived a body is packed: `archive:offload` builds a 64 M
 The table in [../data/schema.md](../data/schema.md) gives every column; [../data/caching.md](../data/caching.md) gives every TTL.
 
 ---
-**Sources:** `src/fetcher.rs:L661-L680`, `src/cache/keys.rs:L81-L99`, `src/cache/l2.rs:L30-L35`, `src/riot/endpoints.rs:L107-L313`, `src/archive/matches.rs:L33,L137-L169,L366-L411`, `src/archive/mod.rs:L96-L118,L271-L350`, `src/archive/facts.rs:L19,L329-L379`, `src/archive/builds.rs:L24,L382-L419`, `src/archive/tiers.rs:L39-L110`, `src/archive/ranks.rs:L53-L66`, `src/jobs/analytics.rs:L360-L761,L780-L964,L1013-L1202`, `src/archive/analytics.rs:L72-L107,L214-L785`, `src/archive/analytics/delta.rs`, `src/routes/analytics.rs:L577-L629`, `src/archive/offload.rs:L72-L170`, `src/jobs/offload.rs:L146-L195`, `docs/_meta/scratch/persistence.md`, `docs/_meta/scratch/siblings.md` §1.5
-**Last verified:** 2026-11-10 against commit `97a926a`
+**Sources:** `src/fetcher.rs:L661-L680`, `src/cache/keys.rs:L81-L99`, `src/cache/l2.rs:L30-L35`, `src/riot/endpoints.rs:L107-L313`, `src/archive/matches.rs:L33,L137-L169,L366-L411`, `src/archive/mod.rs:L96-L118,L271-L350`, `src/archive/facts.rs:L19,L329-L379`, `src/archive/builds.rs:L24,L382-L419`, `src/archive/tiers.rs:L39-L110`, `src/archive/ranks.rs:L53-L66`, `src/jobs/analytics.rs:L360-L761,L780-L964,L1013-L1202`, `src/archive/analytics.rs:L72-L107,L214-L785`, `src/archive/analytics/delta.rs`, `src/routes/analytics.rs:L588-L640`, `src/archive/offload.rs:L72-L170`, `src/jobs/offload.rs:L146-L195`, `docs/_meta/scratch/persistence.md`, `docs/_meta/scratch/siblings.md` §1.5
+**Last verified:** 2026-11-10 against commit `8bcfd77`

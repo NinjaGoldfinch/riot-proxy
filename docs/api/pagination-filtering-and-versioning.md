@@ -40,7 +40,7 @@ Apex tiers (`MASTER`, `GRANDMASTER`, `CHALLENGER`) are not paged: `GET /v1/lol/l
 
 ## Analytics filters
 
-All five `/v1/lol/analytics/*` routes parse the same query (`src/routes/analytics.rs:L486-L561`, `L903-L945`); each route then accepts a subset.
+All five `/v1/lol/analytics/*` routes parse the same query (`src/routes/analytics.rs:L497-L572`, `L903-L945`); each route then accepts a subset.
 
 | Filter | Values | Default | Notes |
 |---|---|---|---|
@@ -70,7 +70,7 @@ etag: W/"pG-2XjBV9zuyNBcF5V3Tf_TERlw-OdnaWXVDeIr2mTM"
 x-cache: HIT
 ```
 
-The validator changes when the `aggregate:analytics` job rewrites the slice (its `computedAt`); on every analytics route but `/patches`, when a rebuild or an `aggregate:delta` run adds a match anywhere in the slice, because one part is the newest `computed_at` of the slice's `analytics_match_totals` rows (THR-03, ADR-182; `src/routes/analytics.rs:L749-L765`), so every tag changed once at that deploy; and when the document's shape changes (ADR-123 added the marker so a per-tier document could not revalidate as a summed one). `private` because the body is per-consumer scoped by key; `max-age=300` matches the in-memory response cache's intent. ninjagoldfinch.lol sends no conditional headers at all (`docs/_meta/scratch/siblings.md` §1.3), so in production the 304 path is unused; ADR-166 records that the ETag saved nothing.
+The validator changes when the `aggregate:analytics` job rewrites the slice (its `computedAt`); on every analytics route but `/patches`, when a rebuild or an `aggregate:delta` run adds a match anywhere in the slice, because one part is the newest `computed_at` of the slice's `analytics_match_totals` rows (THR-03, ADR-182; `src/routes/analytics.rs:L766-L782`), so every tag changed once at that deploy; and when the document's shape changes (ADR-123 added the marker so a per-tier document could not revalidate as a summed one). `private` because the body is per-consumer scoped by key; `max-age=300` matches the in-memory response cache's intent. ninjagoldfinch.lol sends no conditional headers at all (`docs/_meta/scratch/siblings.md` §1.3), so in production the 304 path is unused; ADR-166 records that the ETag saved nothing.
 
 `/dashboard` uses a strong `ETag` and `Cache-Control: no-cache` the same way (`src/routes/ui.rs:L113-L131`). No other route emits a validator; passthrough bodies are described by `X-Cache*` instead (see [endpoints.md](endpoints.md#shared-passthrough-behaviour-v1riot-v1lol)).
 
@@ -93,5 +93,5 @@ The validator changes when the `aggregate:analytics` job rewrites the slice (its
 `/healthz` and `/readyz` carry no version. There is no `Server` header.
 
 ---
-**Sources:** `src/routes/lol.rs:L154-L155,L180-L187,L217-L243`, `src/routes/players.rs:L551,L654-L692,L846-L866`, `src/routes/admin.rs:L775-L780,L1337-L1356,L1848-L1857,L1953-L1995,L2038-L2041,L2323-L2327,L2564-L2574`, `src/routes/analytics.rs:L52-L56,L486-L561,L577-L607,L903-L945`, `src/routes/ui.rs:L113-L131`, `src/http/validate.rs:L211-L250`, `src/http/recent.rs:L111-L113`, `src/riot/ladder.rs:L14-L26`, `tests/snapshots/lol_routes__lol_routes_upstream_calls.snap`, `docs/DECISIONS.md` ADR-065, ADR-066, ADR-123, ADR-143, ADR-166, `docs/api/openapi.json`, `README.md`, `docs/_meta/scratch/siblings.md` §1.3-1.5, §5-6, live capture against `target/debug/riot-proxy` 2.7.0
-**Last verified:** 2026-11-09 against commit `302025d`
+**Sources:** `src/routes/lol.rs:L154-L155,L180-L187,L217-L243`, `src/routes/players.rs:L551,L654-L692,L846-L866`, `src/routes/admin.rs:L775-L780,L1337-L1356,L1848-L1857,L1953-L1995,L2038-L2041,L2323-L2327,L2564-L2574`, `src/routes/analytics.rs:L52-L56,L497-L572,L588-L618,L920-L962`, `src/routes/ui.rs:L113-L131`, `src/http/validate.rs:L211-L250`, `src/http/recent.rs:L111-L113`, `src/riot/ladder.rs:L14-L26`, `tests/snapshots/lol_routes__lol_routes_upstream_calls.snap`, `docs/DECISIONS.md` ADR-065, ADR-066, ADR-123, ADR-143, ADR-166, `docs/api/openapi.json`, `README.md`, `docs/_meta/scratch/siblings.md` §1.3-1.5, §5-6, live capture against `target/debug/riot-proxy` 2.7.0
+**Last verified:** 2026-11-10 against commit `8bcfd77`
