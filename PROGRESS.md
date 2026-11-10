@@ -450,7 +450,7 @@ A production restart on 2026-11-08 logged `listening` and accepted nothing for m
 The site asked for RP-1 to RP-5 (`docs/notes/status-card.md` there); the owner added a status poller every 5 min (IMPLEMENTATION.md §Post-release — SITE (2), ADR-217). RP-4 (`me1`) is ME-02 (#267) and needs only a release.
 - [ ] SITE-12 `totalMatches` on `ChampionStatsResponse`: the slice's matches, each once (RP-5; ADR-218)
 - [~] SITE-13 every platform's status read on a timer (`STATUS_POLL_INTERVAL_S` 300) into the cache and `platform_status`; `status` TTL 300 s / 600 s; recordings to `STATUS_RECORDINGS_DIR` (owner, 2026-11-10) (#282, feat/SITE-13-status-poller, ADR-219; stacked on #280)
-- [ ] SITE-14 `GET /v1/lol/status`: every polled platform's counts, worst severity, maintenance in progress and fetch age from `platform_status` (RP-1; after SITE-13; ADR-220)
+- [~] SITE-14 `GET /v1/lol/status`: every polled platform's counts, worst severity, maintenance in progress and fetch age from `platform_status` (RP-1; after SITE-13; ADR-220) (#283, feat/SITE-14-status-summary; stacked on #282)
 - [ ] SITE-15 closed incidents and maintenances kept 7 days as `recentlyClosed` (RP-3; after SITE-14; ADR-221)
 - [ ] SITE-16 schemas for the status and rotations bodies from the portal and SITE-13's recordings (RP-2; after SITE-13 has recorded; ADR-222)
 
