@@ -2,6 +2,10 @@
 
 Dated log of changes to this documentation set. One line per change; the newest first.
 
+## 2026-11-10
+
+- SITE-12 (ADR-218): `totalMatches` on `GET /v1/lol/analytics/champions`, the slice's matches each once (the rows' pick-rate denominator), and `totalGames` described as the returned rows' games. `api/endpoints-players-analytics.md` (the bodies, a paragraph on the two totals), `api/examples.md` (the empty document), `api/openapi.json`, `data/models.md`, `integration/contract.md`, design/11 (the Top champions header). Line citations of `src/routes/analytics.rs` moved with the code in every page that cites them (`architecture/data-flow.md`, `api/pagination-filtering-and-versioning.md`, `_meta/doc-maintenance.md`, `data/caching.md`, `reference/glossary.md`); `workflows/adding-an-endpoint.md` re-verified (it cites `src/ui/showcase.html`); each page's `Last verified` is refreshed.
+
 ## 2026-11-09
 
 - CI-06: `workflows/testing.md` §Known flakes records the telemetry test that scraped `/metrics` before the writer thread had recorded `sqlite_write_seconds`, how it reproduces under load and what the test waits for now. No code under `src/` changed.
@@ -75,4 +79,4 @@ Dated log of changes to this documentation set. One line per change; the newest 
 
 ---
 **Sources:** this documentation set
-**Last verified:** 2026-11-10 against commit `97a926a`
+**Last verified:** 2026-11-10 against commit `8bcfd77`

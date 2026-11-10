@@ -1759,6 +1759,12 @@ expression: doc
             ]
           },
           "totalGames": {
+            "description": "Participant games over the rows returned, after `limit` and\n`minGames`: a match counts once for each of its players in them, so\na full slice counts a match ten times. The sum of `champions[].games`.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "totalMatches": {
+            "description": "Matches in the slice, each counted once (SITE-12): the denominator of\nevery row's `pickRate` and `banRate`. Without `tier`, every match in\nthe slice (platform, queue, patch); with `minTier`, those with a player\nat or above it; with `tier`, those with a player at that tier. Every\nrole and side; `limit` and `minGames` don't change it. 0 when there is\nno patch.",
             "format": "int64",
             "type": "integer"
           }
@@ -1773,6 +1779,7 @@ expression: doc
           "role",
           "computedAt",
           "totalGames",
+          "totalMatches",
           "champions"
         ],
         "type": "object"
@@ -12333,7 +12340,7 @@ expression: doc
     },
     "/v1/lol/analytics/champions": {
       "get": {
-        "description": "Aggregated from every archived match on the platform. Each participant is placed at the tier the ladder crawl or the latest league lookup of that player found them at, whichever is newer, and under `UNKNOWN` when neither has. Without `tier`, one row per champion summed over every tier (`tier: null`): pick and ban rates over every match in the slice (platform, queue, patch), each match counted once however many tiers its players were in, and averages over all the champion's games. With `tier`, a row per champion at that tier, its rates over the matches that had a player at the tier. `minGames` and `limit` apply to the rows returned. Recomputed per (platform, queue) when a crawl completes. Sends an `ETag`; a matching `If-None-Match` gets 304. Kept in memory until the next recompute: `X-Cache: HIT` from memory, `MISS` read from the tables. Games Riot flagged as remakes are left out unless `remakes=include`.",
+        "description": "Aggregated from every archived match on the platform. Each participant is placed at the tier the ladder crawl or the latest league lookup of that player found them at, whichever is newer, and under `UNKNOWN` when neither has. Without `tier`, one row per champion summed over every tier (`tier: null`): pick and ban rates over every match in the slice (platform, queue, patch), each match counted once however many tiers its players were in, and averages over all the champion's games. With `tier`, a row per champion at that tier, its rates over the matches that had a player at the tier. `minGames` and `limit` apply to the rows returned: `totalGames` sums their games, while `totalMatches` is the rates' denominator, each match once, whatever `limit` and `minGames`. Recomputed per (platform, queue) when a crawl completes. Sends an `ETag`; a matching `If-None-Match` gets 304. Kept in memory until the next recompute: `X-Cache: HIT` from memory, `MISS` read from the tables. Games Riot flagged as remakes are left out unless `remakes=include`.",
         "operationId": "champions",
         "parameters": [
           {

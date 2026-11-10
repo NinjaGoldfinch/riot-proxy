@@ -222,7 +222,7 @@ async fn before_any_recompute_the_routes_answer_empty_documents() {
     assert_eq!(
         r.json(),
         json!({"platform": null, "queue": "RANKED_SOLO_5x5", "tier": null, "minTier": null, "side": null, "patch": null,
-               "role": null, "computedAt": null, "totalGames": 0, "champions": []})
+               "role": null, "computedAt": null, "totalGames": 0, "totalMatches": 0, "champions": []})
     );
     let d = e.get("/v1/lol/analytics/champions/134").await.json();
     assert_eq!(
@@ -994,6 +994,101 @@ async fn without_a_tier_each_champion_is_one_row_over_every_match() {
     assert_eq!(
         (&d["stats"][0]["tier"], &d["stats"][0]["banRate"]),
         (&json!("MASTER"), &json!(0.5))
+    );
+}
+
+/// `totalMatches` (SITE-12, ADR-218) counts the slice's matches once each:
+/// the denominator the rows' `pickRate` divides by, which `limit`,
+/// `minGames`, `role` and `side` leave alone. The ranked game has its blue
+/// team in GRANDMASTER and its red in MASTER; the remake is all MASTER.
+#[tokio::test]
+async fn total_matches_counts_each_match_once() {
+    let e = env().await;
+    let blue: Vec<String> = serde_json::from_slice::<Value>(RANKED).unwrap()["info"]["participants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|p| p["teamId"] == 100)
+        .map(|p| p["puuid"].as_str().unwrap().to_string())
+        .collect();
+    e.seed_with(move |p| {
+        if blue.iter().any(|b| b == p) {
+            "GRANDMASTER"
+        } else {
+            "MASTER"
+        }
+    })
+    .await;
+    e.aggregate().await;
+    let list = |q: &'static str| {
+        let e = &e;
+        async move {
+            e.get(&format!("/v1/lol/analytics/champions?patch=all{q}"))
+                .await
+                .json()
+        }
+    };
+    let totals = |v: &Value| (v["totalGames"].as_i64(), v["totalMatches"].as_i64());
+    let pick = |v: &Value, id: i64| {
+        v["champions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["championId"] == id)
+            .map(|c| c["pickRate"].clone())
+    };
+
+    // A match with ten players is one match.
+    let ranked = list("").await;
+    assert_eq!(totals(&ranked), (Some(10), Some(1)), "{ranked}");
+    assert_eq!(pick(&ranked, 157), Some(json!(1)));
+
+    // The summed row's denominator: 157 was picked in one of the two
+    // matches, 134 in both.
+    let all = list("&remakes=include").await;
+    assert_eq!(totals(&all), (Some(20), Some(2)));
+    assert_eq!(
+        (pick(&all, 157), pick(&all, 134)),
+        (Some(json!(0.5)), Some(json!(1)))
+    );
+
+    // limit and minGames change the rows, so totalGames, not totalMatches.
+    let one = list("&remakes=include&limit=1").await;
+    assert_eq!(one["champions"].as_array().unwrap().len(), 1);
+    assert_eq!(totals(&one), (Some(2), Some(2)));
+    let min2 = list("&remakes=include&minGames=2").await;
+    assert_eq!(totals(&min2), (Some(4), Some(2)));
+    // Rates have no role or side: neither does their denominator.
+    for q in ["&remakes=include&role=MIDDLE", "&remakes=include&side=blue"] {
+        assert_eq!(list(q).await["totalMatches"], 2, "{q}");
+    }
+
+    // A named tier: the matches with a player at it.
+    let gm = list("&remakes=include&tier=GRANDMASTER").await;
+    assert_eq!(totals(&gm), (Some(5), Some(1)));
+    assert_eq!(pick(&gm, 157), Some(json!(1)));
+    let master = list("&remakes=include&tier=MASTER").await;
+    assert_eq!(totals(&master), (Some(15), Some(2)));
+    assert_eq!(pick(&master, 64), Some(json!(0.5)));
+    // A tier nobody played at: no matches, no rates.
+    assert_eq!(
+        totals(&list("&remakes=include&tier=GOLD").await),
+        (Some(0), Some(0))
+    );
+
+    // A range: the matches with a player at or above its floor, each once,
+    // though the ranked game is in both tiers' slices.
+    let range = list("&remakes=include&minTier=MASTER").await;
+    assert_eq!(totals(&range), (Some(20), Some(2)));
+    let top = list("&remakes=include&minTier=GRANDMASTER").await;
+    assert_eq!(totals(&top), (Some(5), Some(1)));
+    assert_eq!(pick(&top, 157), Some(json!(1)));
+
+    // No patch aggregated for the ladder asked for: 0.
+    let none = e.get("/v1/lol/analytics/champions?platform=euw1").await.json();
+    assert_eq!(
+        (&none["patch"], totals(&none)),
+        (&Value::Null, (Some(0), Some(0)))
     );
 }
 
