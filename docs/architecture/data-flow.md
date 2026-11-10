@@ -33,12 +33,12 @@ The archive is the only source for facts; the ladder and rank lookups add the ti
 
 ### 1. Riot payload to cache or archive
 
-The fetcher stores a 2xx body in one of two ways (`src/fetcher.rs:592-611`):
+The fetcher stores a 2xx body in one of two ways (`src/fetcher.rs:661-680`):
 
 - **Mutable endpoints** (summoner, league, mastery, spectator, match ids, rotations, status, account) go to L1 under `{keyScope}:{endpoint}:{host}:{params}[:{queryHash}]` with the endpoint's soft and hard TTL (`src/cache/keys.rs:81-99`). Endpoints flagged `persist_l2` (account, summoner, league entries by PUUID, mastery, the ladder reads) are also queued for the SQLite `cache` table so they survive a restart (`src/riot/endpoints.rs:107-313`, `src/cache/l2.rs:30-35`). Bodies are stored as the bytes Riot sent; passthrough routes forward them untouched.
-- **Immutable endpoints** (`match.byId`, `match.timeline`) go to the archive: zstd level 3 into `matches.body_zstd` or `timelines.body_zstd`, with `region`, `patch` (`major.minor` from `gameVersion`), `queue_id`, `game_end_ms`, `game_duration`, `body_size` and `archived_at` (`src/archive/matches.rs:33,366-411`). The two halves are archived together: storing one queues the other as an `archive:match` job at priority 0 (`src/archive/mod.rs:93-115`, ADR-118).
+- **Immutable endpoints** (`match.byId`, `match.timeline`) go to the archive: zstd level 3 into `matches.body_zstd` or `timelines.body_zstd`, with `region`, `patch` (`major.minor` from `gameVersion`), `queue_id`, `game_end_ms`, `game_duration`, `body_size` and `archived_at` (`src/archive/matches.rs:33,366-411`). The two halves are archived together: storing one queues the other as an `archive:match` job at priority 0 (`src/archive/mod.rs:96-118`, ADR-118).
 
-A league-entries body is also "observed": the player's ranks are recorded in `player_ranks` and late tier stamps are applied (`src/archive/mod.rs:233-279`).
+A league-entries body is also "observed": the player's ranks are recorded in `player_ranks` and late tier stamps are applied (`src/archive/mod.rs:271-350`).
 
 ### 2. Body to facts
 
@@ -83,5 +83,5 @@ Within hours of being archived a body is packed: `archive:offload` builds a 64 M
 The table in [../data/schema.md](../data/schema.md) gives every column; [../data/caching.md](../data/caching.md) gives every TTL.
 
 ---
-**Sources:** `src/fetcher.rs:L592-L611`, `src/cache/keys.rs:L81-L99`, `src/cache/l2.rs:L30-L35`, `src/riot/endpoints.rs:L107-L313`, `src/archive/matches.rs:L33,L137-L169,L366-L411`, `src/archive/mod.rs:L93-L115,L233-L279`, `src/archive/facts.rs:L19,L329-L379`, `src/archive/builds.rs:L24,L382-L419`, `src/archive/tiers.rs:L39-L110`, `src/archive/ranks.rs:L53-L66`, `src/jobs/analytics.rs:L360-L761,L780-L964,L1013-L1202`, `src/archive/analytics.rs:L72-L107,L214-L785`, `src/archive/analytics/delta.rs`, `src/routes/analytics.rs:L577-L629`, `src/archive/offload.rs:L72-L170`, `src/jobs/offload.rs:L146-L195`, `docs/_meta/scratch/persistence.md`, `docs/_meta/scratch/siblings.md` §1.5
-**Last verified:** 2026-11-10 against commit `4ff4579`
+**Sources:** `src/fetcher.rs:L661-L680`, `src/cache/keys.rs:L81-L99`, `src/cache/l2.rs:L30-L35`, `src/riot/endpoints.rs:L107-L313`, `src/archive/matches.rs:L33,L137-L169,L366-L411`, `src/archive/mod.rs:L96-L118,L271-L350`, `src/archive/facts.rs:L19,L329-L379`, `src/archive/builds.rs:L24,L382-L419`, `src/archive/tiers.rs:L39-L110`, `src/archive/ranks.rs:L53-L66`, `src/jobs/analytics.rs:L360-L761,L780-L964,L1013-L1202`, `src/archive/analytics.rs:L72-L107,L214-L785`, `src/archive/analytics/delta.rs`, `src/routes/analytics.rs:L577-L629`, `src/archive/offload.rs:L72-L170`, `src/jobs/offload.rs:L146-L195`, `docs/_meta/scratch/persistence.md`, `docs/_meta/scratch/siblings.md` §1.5
+**Last verified:** 2026-11-10 against commit `97a926a`

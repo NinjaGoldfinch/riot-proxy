@@ -25,7 +25,7 @@ Per-consumer quotas are separate: a 60 s sliding window of `quota_per_min` admis
 | Job | Bulk | `JOB_YIELD_BUDGET_MS` (1000) | The job yields: back to `pending` with `run_after = retry_at`, attempts not counted |
 | Background refresh | Bulk | 15 min | Logged at debug; the stale entry stays |
 
-Sources: `src/fetcher.rs:49-54,147-170,415-420`, `src/jobs/scheduler.rs:124-141`.
+Sources: `src/fetcher.rs:55-60,155-178,486-497`, `src/jobs/scheduler.rs:124-141`.
 
 Bulk callers also respect a ceiling: while a scope has had an interactive request in the last `BULK_IDLE_AFTER_S` (30 s), bulk may use `BULK_USAGE_CEILING` (0.80) of every window; once idle, `BULK_IDLE_CEILING` (0.95). An interactive waiter on a scope makes bulk stand aside until it is served (`src/riot/limiter/mod.rs:117-125,229-235,329-344`; ADR-126).
 
@@ -82,11 +82,11 @@ flowchart TD
     F --> M["metric proxy_rl_429_total{type}; application/method logged as 'accountable 429'"]
 ```
 
-An accountable 429 means the limiter's accounting diverged from Riot's and is logged at error level (`src/riot/limiter/mod.rs:416-430`); the Prometheus rule `AccountableRateLimit429` alerts on it (`ops/prometheus-alerts.yml`). The fetcher's loop is bounded by 8 attempts (`src/fetcher.rs:50,613-651`).
+An accountable 429 means the limiter's accounting diverged from Riot's and is logged at error level (`src/riot/limiter/mod.rs:416-430`); the Prometheus rule `AccountableRateLimit429` alerts on it (`ops/prometheus-alerts.yml`). The fetcher's loop is bounded by 8 attempts (`src/fetcher.rs:56,682-718`).
 
 ## Account clusters
 
-Account-v1 is served by three clusters. A request without a region tries `asia`, `americas`, `europe` in that order, taking the first with a token available now and avoiding a cluster that just answered a service 429; all three share one cache entry keyed on the literal host `account` (`src/riot/routing.rs:163-168`, `src/fetcher.rs:714-752`, `src/cache/keys.rs:81-88`; ADR-066). `sea` platforms route account calls to `asia` (`src/riot/routing.rs:189-196`).
+Account-v1 is served by three clusters. A request without a region tries `asia`, `americas`, `europe` in that order, taking the first with a token available now and avoiding a cluster that just answered a service 429; all three share one cache entry keyed on the literal host `account` (`src/riot/routing.rs:163-168`, `src/fetcher.rs:781-819`, `src/cache/keys.rs:81-88`; ADR-066). `sea` platforms route account calls to `asia` (`src/riot/routing.rs:189-196`).
 
 ## The job queue
 
@@ -111,8 +111,8 @@ Every job kind, its trigger, priority and tables is tabulated in `docs/_meta/scr
 | Limit | Value | Source |
 |---|---|---|
 | tokio worker threads | `min(cores, 4)` | `src/cli/mod.rs:123-126` |
-| SQLite writer | one thread, queue of 1024 closures | `src/db/mod.rs:68-69,207-220` |
-| SQLite readers | `available_parallelism()` connections behind a semaphore | `src/db/mod.rs:112-119,245-248` |
+| SQLite writer | one thread, queue of 1024 closures | `src/db/mod.rs:71-72,241-254` |
+| SQLite readers | `available_parallelism()` connections behind a semaphore | `src/db/mod.rs:115-122,279-282` |
 | Riot HTTP pool | 32 idle connections per host, 60 s idle | `src/riot/client.rs:23-24` |
 | L2 write-behind | 10 000 queued rows, flushed every 2 s or 500 rows | `src/cache/l2.rs:30-35` |
 | Object-store reads | `ARCHIVE_OBJECT_CONCURRENCY` (16) ranged GETs in flight | `src/archive/matches.rs:265-269` |
@@ -121,5 +121,5 @@ Every job kind, its trigger, priority and tables is tabulated in `docs/_meta/scr
 | Request body | 1 MiB | `src/app.rs:30-31` |
 
 ---
-**Sources:** `src/riot/limiter/mod.rs:L50-L175,L229-L300,L307-L431,L532-L606`, `src/riot/limiter/bucket.rs:L15-L162`, `src/riot/limiter/headers.rs:L30-L41`, `src/riot/limiter/persist.rs:L21-L25,L141-L175`, `src/http/quota.rs:L320-L431`, `src/fetcher.rs:L49-L54,L147-L170,L415-L420,L613-L651,L714-L752`, `src/riot/routing.rs:L160-L196`, `src/cache/keys.rs:L81-L88`, `src/jobs/scheduler.rs:L40-L42,L124-L171,L225-L269,L969-L1031,L1076-L1090`, `src/jobs/lanes.rs:L440-L483`, `src/jobs/mod.rs:L74-L94`, `src/db/store.rs:L98-L133`, `src/db/mod.rs:L43-L44,L84-L91,L174-L214`, `src/cli/serve.rs:L103-L109`, `ops/prometheus-alerts.yml`, `docs/design/05-rate-limiter.md`, `docs/design/06-jobs-and-realtime.md`
-**Last verified:** 2026-11-10 against commit `64ea2a8`
+**Sources:** `src/riot/limiter/mod.rs:L50-L175,L229-L300,L307-L431,L532-L606`, `src/riot/limiter/bucket.rs:L15-L162`, `src/riot/limiter/headers.rs:L30-L41`, `src/riot/limiter/persist.rs:L21-L25,L141-L175`, `src/http/quota.rs:L320-L431`, `src/fetcher.rs:L55-L60,L155-L178,L486-L497,L682-L718,L781-L819`, `src/riot/routing.rs:L160-L196`, `src/cache/keys.rs:L81-L88`, `src/jobs/scheduler.rs:L40-L42,L124-L171,L225-L269,L969-L1031,L1076-L1090`, `src/jobs/lanes.rs:L440-L483`, `src/jobs/mod.rs:L74-L94`, `src/db/store.rs:L98-L133`, `src/db/mod.rs:L46-L47,L87-L94,L208-L248`, `src/cli/serve.rs:L103-L109`, `ops/prometheus-alerts.yml`, `docs/design/05-rate-limiter.md`, `docs/design/06-jobs-and-realtime.md`
+**Last verified:** 2026-11-10 against commit `97a926a`

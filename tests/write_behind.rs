@@ -87,7 +87,7 @@ struct Env {
     state: riot_proxy::app::AppState,
     router: axum::Router,
     key: String,
-    _server: MockServer,
+    server: MockServer,
 }
 
 /// The full app over the cold-lookup recording: a player's profile and match
@@ -149,7 +149,7 @@ async fn env() -> Env {
         state,
         router,
         key,
-        _server: server,
+        server,
     }
 }
 
@@ -170,6 +170,28 @@ impl Env {
 
     fn db(&self) -> &Db {
         &self.state.db
+    }
+
+    /// GET `uri` on its own task, so a test can see that it has not answered.
+    fn get_later(&self, uri: &str) -> tokio::task::JoinHandle<common::Reply> {
+        let req = Request::get(uri)
+            .header("authorization", format!("Bearer {}", self.key))
+            .body(Body::empty())
+            .unwrap();
+        tokio::spawn(common::send(self.router.clone(), req))
+    }
+
+    /// Until Riot has been asked for `path`, 5 s at most.
+    async fn riot_asked_for(&self, path: &str) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let asked = self.server.received_requests().await.unwrap_or_default();
+            if asked.iter().any(|r| r.url.path() == path) {
+                return;
+            }
+            assert!(Instant::now() < deadline, "Riot was never asked for {path}");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
     }
 }
 
@@ -468,5 +490,195 @@ async fn past_the_bound_a_detached_write_is_dropped_and_counted() {
         )
         .await,
         1
+    );
+}
+
+// ── AVL-11: `await_store` waits for the write, and only its own caller does ──
+
+/// How long a fetch that must wait for the held writer is watched not to answer.
+const STILL_WAITING: Duration = Duration::from_millis(400);
+
+/// A job's fetch starts the call to Riot and waits for the archive row. A
+/// request for the same match joins that call, or finds the body the job's
+/// write holds, and answers without waiting for the writer; the job goes on
+/// only once the row exists.
+#[tokio::test]
+async fn a_jobs_fetch_does_not_make_a_request_wait_for_its_write() {
+    let e = env().await;
+    let hold = Hold::start(e.db()).await;
+    let job = tokio::spawn({
+        let fetcher = e.state.fetcher.clone();
+        async move {
+            fetcher
+                .fetch(
+                    request("match.byId", MATCH_IDS[0]),
+                    riot_proxy::fetcher::FetchOptions::JOB,
+                )
+                .await
+        }
+    });
+    e.riot_asked_for(&format!("/lol/match/v5/matches/{}", MATCH_IDS[0]))
+        .await;
+
+    let r = e
+        .get_promptly(&format!("/v1/lol/matches/asia/{}", MATCH_IDS[0]))
+        .await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.body, fixture("06-match.byId.body"));
+    assert!(
+        matches!(x_cache(&r), "MISS" | "ARCHIVE"),
+        "joined the job's call or read the body it holds: {}",
+        x_cache(&r)
+    );
+    tokio::time::sleep(STILL_WAITING).await;
+    assert!(!job.is_finished(), "the job waits for its row");
+    assert_eq!(count(e.db(), "SELECT count(*) FROM matches").await, 0);
+
+    hold.end().await;
+    let fetched = job.await.unwrap().unwrap();
+    assert_eq!(fetched.body, fixture("06-match.byId.body"));
+    assert_eq!(
+        count(e.db(), "SELECT count(*) FROM matches").await,
+        1,
+        "the row was there when the job's fetch returned"
+    );
+}
+
+/// A match page fetched while the writer is busy leaves its matches' bodies
+/// waiting to be stored. The champion filter pages the archive's facts, so
+/// it waits for those writes instead of answering without the newest games.
+#[tokio::test]
+async fn a_champion_page_waits_for_the_matches_another_request_is_still_storing() {
+    let e = env().await;
+    let walk = riot_proxy::jobs::archive::BackfillPlayer {
+        puuid: PUUID.into(),
+        platform: "kr".into(),
+        limit: 500,
+        fetch_timeline: None,
+        queue_id: None,
+        reason: Some("lookup".into()),
+    };
+    riot_proxy::jobs::archive::enqueue_backfill(&e.state.jobs, &walk)
+        .await
+        .unwrap();
+    let hold = Hold::start(e.db()).await;
+    let page = format!("/v1/players/{PUUID}/matches?platform=kr&count=5");
+    let r = e.get_promptly(&page).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.json()["matches"].as_array().unwrap().len(), 5);
+
+    // The player's champion in the two newest games of the recording.
+    let filtered = e.get_later(&format!("{page}&champion=134"));
+    tokio::time::sleep(STILL_WAITING).await;
+    assert!(
+        !filtered.is_finished(),
+        "the champion page answered before its matches were stored"
+    );
+
+    hold.end().await;
+    let r = tokio::time::timeout(Duration::from_secs(10), filtered)
+        .await
+        .expect("answers once the writer is free")
+        .unwrap();
+    assert_eq!(r.status, StatusCode::OK);
+    let body = r.json();
+    assert_eq!(
+        body["matchIds"],
+        serde_json::json!([MATCH_IDS[0], MATCH_IDS[1]]),
+        "{body}"
+    );
+    assert_eq!(body["warnings"], serde_json::json!([]), "{body}");
+}
+
+/// A job that finds the body another request's write still holds gets it from
+/// there, and still returns only once the row exists: an `archive:match` job
+/// must not finish before its match is stored.
+#[tokio::test]
+async fn a_jobs_fetch_of_a_body_still_being_stored_waits_for_the_row() {
+    let e = env().await;
+    let hold = Hold::start(e.db()).await;
+    let uri = format!("/v1/lol/matches/asia/{}", MATCH_IDS[0]);
+    assert_eq!(x_cache(&e.get_promptly(&uri).await), "MISS");
+
+    let job = tokio::spawn({
+        let fetcher = e.state.fetcher.clone();
+        async move {
+            fetcher
+                .fetch(
+                    request("match.byId", MATCH_IDS[0]),
+                    riot_proxy::fetcher::FetchOptions::JOB,
+                )
+                .await
+        }
+    });
+    tokio::time::sleep(STILL_WAITING).await;
+    assert!(!job.is_finished(), "the job answered before the row existed");
+    // A request for the same match still does not wait.
+    assert_eq!(x_cache(&e.get_promptly(&uri).await), "ARCHIVE");
+
+    hold.end().await;
+    let fetched = job.await.unwrap().unwrap();
+    assert_eq!(fetched.x_cache, riot_proxy::fetcher::XCache::Archive);
+    assert_eq!(count(e.db(), "SELECT count(*) FROM matches").await, 1);
+}
+
+/// With the write-behind at its bound, a request's write is dropped and
+/// counted as before, but a job's is not: the job makes the write itself and
+/// waits for it.
+#[tokio::test]
+async fn at_the_bound_a_jobs_write_is_made_by_the_job_and_never_dropped() {
+    let e = env().await;
+    e.db().set_detached_limits(1, 1_000_000_000);
+    let hold = Hold::start(e.db()).await;
+    // One request's write fills the bound.
+    let first = format!("/v1/lol/matches/asia/{}", MATCH_IDS[0]);
+    assert_eq!(x_cache(&e.get_promptly(&first).await), "MISS");
+    assert_eq!(e.db().detached_writes(), 1);
+
+    let job = tokio::spawn({
+        let fetcher = e.state.fetcher.clone();
+        async move {
+            fetcher
+                .fetch(
+                    request("match.byId", MATCH_IDS[1]),
+                    riot_proxy::fetcher::FetchOptions::JOB,
+                )
+                .await
+        }
+    });
+    e.riot_asked_for(&format!("/lol/match/v5/matches/{}", MATCH_IDS[1]))
+        .await;
+    tokio::time::sleep(STILL_WAITING).await;
+    assert!(!job.is_finished(), "the job waits for its own write");
+    assert_eq!(e.db().detached_dropped(), 0, "a job's write is not dropped");
+
+    // A request's write at the bound is still dropped, and the request answers.
+    let third = format!("/v1/lol/matches/asia/{}", MATCH_IDS[2]);
+    assert_eq!(x_cache(&e.get_promptly(&third).await), "MISS");
+    // Counted once the last waiter on that call has let go of the write.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while e.db().detached_dropped() == 0 {
+        assert!(Instant::now() < deadline, "the request's write was not dropped");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert_eq!(e.db().detached_dropped(), 1);
+    assert_eq!(e.db().detached_writes(), 1, "and it holds no room");
+
+    hold.end().await;
+    job.await.unwrap().unwrap();
+    e.db().flush_detached().await;
+    assert_eq!(
+        count(
+            e.db(),
+            "SELECT count(*) FROM matches WHERE match_id IN ('KR_8393343196', 'KR_8393320187')"
+        )
+        .await,
+        2,
+        "the request's first write and the job's"
+    );
+    assert_eq!(
+        count(e.db(), "SELECT count(*) FROM matches").await,
+        2,
+        "the dropped write stored nothing"
     );
 }
