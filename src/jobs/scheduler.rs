@@ -1236,7 +1236,10 @@ impl Scheduler {
                         }
                         continue;
                     }
-                    let claimed = me.claim(Clock::now().unix_ms).await;
+                    // A job write, so a claim still queued when shutdown
+                    // interrupts the writer is dropped, not run for a worker
+                    // that is gone (AVL-10).
+                    let claimed = crate::db::job_writes(me.claim(Clock::now().unix_ms)).await;
                     if let Ok(Some(job)) = claimed {
                         me.run(job, worker).await;
                         control.leave();

@@ -37,7 +37,7 @@ just dev            # = cargo run -- serve  (justfile:11-13)
 
 The first `serve` on an empty `DATA_DIR` prints, on stdout as JSON (pretty when stdout is a terminal, `src/config.rs:740-747`):
 
-1. refinery's lines: `schema history table is empty, going to apply all migrations`, then `going to batch apply 27 migrations in single transaction.` naming `V1__init` to `V27__matchup_builds` (`src/db/mod.rs:48-50`, `374-376`).
+1. refinery's lines: `schema history table is empty, going to apply all migrations`, then `going to batch apply 27 migrations in single transaction.` naming `V1__init` to `V27__matchup_builds` (`src/db/mod.rs:49-51`, `374-376`).
 2. `database ready` with `path=<DATA_DIR>/riot-proxy.db` (`src/cli/serve.rs:110-113`).
 3. `bootstrap admin consumer created` with its ULID id (`src/cli/serve.rs:115-126`).
 4. `limiter checkpoint restored rows=0`, `L1 warmed from L2 entries=0`, `listening addr=<HOST>:<PORT>` (the server answers from here on), `boot catch-up done ms=…`, `starting job workers workers=<JOB_CONCURRENCY> kind_limits=…` (`src/cli/serve.rs:134-157`, `385-389`, `564-567`, `412-416`; ADR-209).
@@ -204,4 +204,4 @@ Not re-executed here: `cargo build`, `cargo test` and `just nextest` (a full run
 
 ---
 **Sources:** `rust-toolchain.toml:L1-L5`, `justfile:L1-L52`, `.env.example:L1-L213`, `README.md:L60-L113`, `src/config.rs:L3`, `L617-L631`, `L659-L669`, `L707-L733`, `L943-L969`, `L1046-L1058`, `src/cli/mod.rs:L83-L89`, `src/cli/serve.rs:L110-L113`, `L115-L126`, `L134-L151`, `L153-L155`, `L164-L166`, `L284`, `L409-L413`, `L436-L440`, `L564-L567`, `L573-L579`, `src/cli/key.rs:L13-L57`, `src/consumers.rs:L12-L14`, `L95-L96`, `src/http/auth.rs:L207-L210`, `src/jobs/ticks.rs:L1-L11`, `L70-L106`, `L111-L142`, `L217-L294`, `src/cli/riot.rs:L1-L32`, `L63-L81`, `src/archive/objects.rs:L109-L121`, `acceptance/helpers/env.ts:L19-L25`, `L244-L275`, `acceptance/helpers/setup.ts:L23-L54`, `acceptance/helpers/mock-riot.ts:L7`, `tests/ui.rs:L42-L64`, `tests/dom/package.json`, `acceptance/package.json`, `.github/workflows/ci.yml:L52-L53`, `PROGRESS.md:L390`, `L400`, `L420-L422`, `docs/IMPLEMENTATION.md:L434`, `docs/design/11-showcase.md:L15`, `docs/DECISIONS.md:L1457`, `docs/_meta/scratch/config.md`, `docs/_meta/scratch/persistence.md` §5, `docs/_meta/scratch/siblings.md` §1.2, §1.8
-**Last verified:** 2026-11-10 against commit `4ff4579`
+**Last verified:** 2026-11-10 against commit `64ea2a8`
