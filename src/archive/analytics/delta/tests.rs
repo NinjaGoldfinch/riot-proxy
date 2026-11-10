@@ -644,3 +644,102 @@ fn stale_facts_wait_and_rewriting_counted_ones_makes_the_ladder_dirty() {
     add_matches(&c, 32, 50, 1);
     assert!(ready(&c, "s", "kr", "RANKED_SOLO_5x5").unwrap());
 }
+
+// ── AVL-12: the every-patch rebuild's prune ─────────────────────────────────
+
+/// Rows of every step's table for `patch`.
+fn rows_of(c: &Connection, patch: &str) -> i64 {
+    STEPS
+        .iter()
+        .flat_map(|s| s.tables.iter())
+        .map(|t| {
+            c.query_row(
+                &format!("SELECT count(*) FROM {t} WHERE patch = ?1"),
+                [patch],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+        })
+        .sum()
+}
+
+/// A rebuild of every patch lists the patches when it begins and prunes in a
+/// later transaction. The first matches of a new patch, archived and counted
+/// by a delta in between, are in no list taken before them: their rows must
+/// survive the prune, because their six bits are set and nothing would count
+/// them again.
+#[test]
+fn a_patch_first_counted_after_the_rebuild_began_survives_its_prune() {
+    let mut c = fresh(11, 40);
+    delta(&mut c, &[50]);
+    // The rebuild begins: every patch archived so far.
+    let before = crate::archive::analytics::patch_list(&c, 420, 0).unwrap();
+    assert_eq!(before, ["14.18", "14.17"]);
+
+    // A new patch's first matches arrive and the delta counts them.
+    let mut rng = Rng(99);
+    for i in 0..5 {
+        add_match(&c, &mut rng, &format!("KR_new{i}"));
+    }
+    c.execute(
+        "UPDATE matches SET patch = '14.19', queue_id = 420, remake = 0 WHERE match_id LIKE 'KR_new%'",
+        [],
+    )
+    .unwrap();
+    assert_eq!(delta(&mut c, &[50]), 1);
+    let counted = snapshot(&c);
+    assert!(rows_of(&c, "14.19") > 0, "the new patch was counted");
+
+    // The rebuild's prune, in its own later transaction. It once deleted
+    // every patch not in `before`.
+    let tx = c.transaction().unwrap();
+    crate::archive::analytics::prune_patches(&tx, &kr()).unwrap();
+    tx.commit().unwrap();
+    assert_eq!(snapshot(&c), counted, "nothing of the new patch is pruned");
+    // Its matches keep their bits, so no later delta would have put the rows back.
+    assert_eq!(delta(&mut c, &[50]), 0);
+
+    // A patch no match of the queue has any more is still pruned, and only
+    // from this ladder's rows: another queue's matches do not keep it.
+    c.execute(
+        "UPDATE matches SET queue_id = 440 WHERE match_id LIKE 'KR_new%'",
+        [],
+    )
+    .unwrap();
+    let tx = c.transaction().unwrap();
+    crate::archive::analytics::prune_patches(&tx, &kr()).unwrap();
+    tx.commit().unwrap();
+    assert_eq!(rows_of(&c, "14.19"), 0);
+    assert!(rows_of(&c, "14.18") > 0 && rows_of(&c, "14.17") > 0);
+}
+
+/// The prune's keep set is one read of `matches_patch_queue`, made once for
+/// the statement, and the delete takes the ladder's rows by their key.
+#[test]
+fn the_prune_reads_its_patches_from_the_covering_index() {
+    let c = conn();
+    for t in STEPS.iter().flat_map(|s| s.tables.iter()) {
+        let plan: Vec<String> = c
+            .prepare(&format!(
+                "EXPLAIN QUERY PLAN {}",
+                crate::archive::analytics::prune_sql(t)
+            ))
+            .unwrap()
+            .query_map(params!["s", "kr", "RANKED_SOLO_5x5", 420], |r| r.get(3))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let plan = plan.join(" / ");
+        assert!(
+            plan.contains("LIST SUBQUERY")
+                && plan.contains("matches USING COVERING INDEX matches_patch_queue"),
+            "{t}: {plan}"
+        );
+        assert!(!plan.contains("CORRELATED"), "{t}: {plan}");
+        assert!(
+            plan.contains(&format!("SEARCH {t} USING"))
+                && plan.contains("key_scope=? AND platform=? AND queue=?"),
+            "{t}: {plan}"
+        );
+    }
+}

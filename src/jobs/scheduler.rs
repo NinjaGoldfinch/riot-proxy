@@ -267,13 +267,18 @@ pub fn enqueue_on(conn: &Connection, job: &NewJob, now_ms: i64) -> rusqlite::Res
 
 /// [`enqueue_on`], or, when a pending duplicate holds the dedupe key, lift that
 /// row to `job`'s priority and make it ready now (never lower or later than it
-/// was). A running duplicate is left alone. The caller wakes a worker.
+/// was). A running duplicate keeps running and only its priority is lifted
+/// (AVL-12): the run in progress is not touched, and whatever puts the row
+/// back to `pending` (a yield between a rebuild's turns, a backoff) leaves
+/// its priority alone, so its next claim is at the lifted one. The caller
+/// wakes a worker.
 pub fn enqueue_or_promote_on(conn: &Connection, job: &NewJob, now_ms: i64) -> rusqlite::Result<Enqueued> {
     let out = enqueue_on(conn, job, now_ms)?;
     if !out.created {
         conn.execute(
-            "UPDATE jobs SET priority = MIN(priority, ?2), run_after = MIN(run_after, ?3)
-              WHERE id = ?1 AND state = 'pending'",
+            "UPDATE jobs SET priority = MIN(priority, ?2),
+                    run_after = CASE state WHEN 'pending' THEN MIN(run_after, ?3) ELSE run_after END
+              WHERE id = ?1 AND state IN ('pending', 'running')",
             params![out.id, job.priority, job.run_after.unwrap_or(now_ms)],
         )?;
     }
@@ -441,9 +446,9 @@ impl Queue {
 
     /// Queue a job, or, when a pending duplicate holds its dedupe key, lift
     /// that row to `job`'s priority and make it ready now (never lower or
-    /// later than it was), then wake a worker. A running duplicate is left
-    /// alone. For work someone asked for by hand that should not wait behind
-    /// the queue (DEV-18).
+    /// later than it was), then wake a worker. A running duplicate goes on
+    /// and only its priority is lifted, for its next claim. For work someone
+    /// asked for by hand that should not wait behind the queue (DEV-18).
     pub async fn enqueue_or_promote(&self, job: NewJob) -> Result<Enqueued, DbError> {
         let now = Clock::now().unix_ms;
         let out = self

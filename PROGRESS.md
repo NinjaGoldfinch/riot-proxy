@@ -441,6 +441,7 @@ A production restart on 2026-11-08 logged `listening` and accepted nothing for m
 - [~] AVL-03 stale beats none for `/v1/players/*`: an expired copy served `STALE` when the refresh fails; league entries in L2, the `refreshing` field and composite `X-Cache: STALE` (owner approved 2026-11-09) (#270, feat/AVL-03-stale-beats-none, ADR-212)
 - [~] AVL-07 ticks remember their last run, so `maintenance`, `names:backfill` and `ddragon:sync` do not fire on every restart; per-ladder crawl and rebuild ticks read the crawl log and `analytics_runs`, timelines one loop per region (#269, feat/AVL-07-ticks-remember-last-run, ADR-214)
 - [~] AVL-05 long writes in bounded, resumable transactions: `aggregate:analytics` per step and patch, `maintenance`'s trim in chunks (#272, feat/AVL-05-bounded-rebuild, ADR-215)
+- [~] AVL-12 two rebuild faults: the every-patch prune reads the patches it keeps from `matches` in its own statement, so a patch the delta first counted after the rebuild began keeps its rows; a recompute lifts a `running` rebuild's priority (priority only), so its next turn is claimed at 0 (review of #272; #277, `fix/AVL-12-rebuild-prune-and-recompute`; ADR-215 and ADR-090 amended). `prune_patches` takes no list
 
 ## Owner review at the P0 gate — resolved 2026-09-24 (ADR-014)
 - CORS deferred (off, as v1). License MIT. New metrics use design names without the `proxy_` prefix. Bootstrap-to-stderr and the `NODE_ENV` fallback are confirmed.
