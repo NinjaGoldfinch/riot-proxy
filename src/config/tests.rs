@@ -1049,15 +1049,25 @@ fn status_allow_cidr() {
 fn status_poll_settings() {
     use crate::riot::routing::Platform;
     let c = load(env(&[("LADDER_PLATFORMS", "kr")]));
-    assert_eq!(c.status_poll_interval_s, 300);
+    // Inside `status`'s 300 s soft TTL (owner decision D5, SITE-17).
+    assert_eq!(c.status_poll_interval_s, 240);
     assert_eq!(
         c.status_poll_platforms,
-        Platform::ALL.to_vec(),
+        crate::config::STATUS_POLL_DEFAULT.to_vec(),
         "not LADDER_PLATFORMS"
     );
-    assert_eq!(c.status_poll_platforms.len(), 17);
+    // Every platform but the three the portal's lol-status-v4 list leaves
+    // out (owner decision D3), in `Platform::ALL` order.
+    let left_out: Vec<Platform> = Platform::ALL
+        .into_iter()
+        .filter(|p| !c.status_poll_platforms.contains(p))
+        .collect();
+    assert_eq!(left_out, [Platform::Ph2, Platform::Th2, Platform::Tw2]);
+    let mut ordered = c.status_poll_platforms.clone();
+    ordered.sort_by_key(|p| Platform::ALL.iter().position(|q| q == p));
+    assert_eq!(ordered, c.status_poll_platforms);
     assert_eq!(c.status_recordings_dir, None);
-    let all: Vec<&str> = Platform::ALL.iter().map(|p| p.as_str()).collect();
+    let all: Vec<&str> = c.status_poll_platforms.iter().map(|p| p.as_str()).collect();
     assert_eq!(
         c.redacted()["STATUS_POLL_PLATFORMS"].as_deref(),
         Some(all.join(",").as_str())

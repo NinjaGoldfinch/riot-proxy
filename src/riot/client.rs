@@ -261,8 +261,11 @@ impl UpstreamWatch {
         &self.rate_limits
     }
 
-    /// One answer from Riot with `status`. `probe` is a status check's own
-    /// call, which says nothing about real traffic. Returns whether this
+    /// One answer from Riot with `status`, to a call made as `caller`: a
+    /// status check's probe or the status poller's read says nothing about
+    /// real traffic, and the poller's 401 or 403 says nothing about the key
+    /// (one platform refusing a status read is not the key rejected; the
+    /// probe and real traffic still judge it; SITE-17). Returns whether this
     /// answer turned the key's verdict to rejected: a 401 or 403 when the key
     /// was not already rejected (unknown or accepted before).
     fn answered(
@@ -270,7 +273,7 @@ impl UpstreamWatch {
         scope: &'static str,
         method: &'static str,
         status: u16,
-        probe: bool,
+        caller: Caller,
         at_ms: i64,
     ) -> bool {
         let accepted = (200..300).contains(&status);
@@ -278,7 +281,8 @@ impl UpstreamWatch {
             self.last_success_ms.fetch_max(at_ms, Ordering::Relaxed);
         }
         let mut newly_rejected = false;
-        if accepted || matches!(status, 401 | 403) {
+        let judges_key = accepted || (matches!(status, 401 | 403) && caller != Caller::Poll);
+        if judges_key {
             let mut key = lock(&self.key);
             newly_rejected = !accepted && key.as_ref().is_none_or(|k| k.accepted);
             *key = Some(KeyVerdict {
@@ -289,11 +293,24 @@ impl UpstreamWatch {
                 at_ms,
             });
         }
-        if !probe {
+        if caller == Caller::Traffic {
             lock(&self.traffic).insert(scope, at_ms);
         }
         newly_rejected
     }
+}
+
+/// Who a call to Riot is for, which decides what its answer says about the
+/// key and the scope's traffic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Caller {
+    /// A request's or a job's call: traffic.
+    Traffic,
+    /// `/status`'s probe (STS-02b): judges the key, is not traffic.
+    Probe,
+    /// The status poller (SITE-17): neither traffic nor a judge of a
+    /// rejected key.
+    Poll,
 }
 
 /// A poisoned lock still holds a whole value: each write is one assignment.
@@ -359,17 +376,25 @@ impl RiotClient {
     /// Perform one GET and classify it. Records `proxy_upstream_requests_total`,
     /// `proxy_upstream_latency_seconds` and, on 429, `proxy_rl_429_total`.
     pub async fn send(&self, req: &RiotRequest) -> Result<RiotResponse, RiotError> {
-        self.send_as(req, false).await
+        self.send_as(req, Caller::Traffic).await
     }
 
     /// [`send`](Self::send) for `/status`'s own probe (STS-02b): counted and
     /// judged like any call, but not as traffic on its scope, so a probe
     /// never makes its platform look busy.
     pub async fn send_probe(&self, req: &RiotRequest) -> Result<RiotResponse, RiotError> {
-        self.send_as(req, true).await
+        self.send_as(req, Caller::Probe).await
     }
 
-    async fn send_as(&self, req: &RiotRequest, probe: bool) -> Result<RiotResponse, RiotError> {
+    /// [`send`](Self::send) for the status poller (SITE-17, owner decision
+    /// D7): counted, and in the rate-limit table, but not traffic on its
+    /// scope, and its 401 or 403 neither turns the key's verdict to rejected
+    /// nor logs `RIOT KEY REJECTED` (the poller logs its own failures).
+    pub async fn send_poll(&self, req: &RiotRequest) -> Result<RiotResponse, RiotError> {
+        self.send_as(req, Caller::Poll).await
+    }
+
+    async fn send_as(&self, req: &RiotRequest, caller: Caller) -> Result<RiotResponse, RiotError> {
         let scope = req.target.scope();
         let method = req.endpoint.id;
         let host = req.target.host();
@@ -402,7 +427,7 @@ impl RiotClient {
         let ((status, headers), elapsed) = (res, started.elapsed());
         record(scope, method, &status.to_string(), elapsed);
         let at_ms = crate::clock::Clock::now().unix_ms;
-        let newly_rejected = self.watch.answered(scope, method, status, probe, at_ms);
+        let newly_rejected = self.watch.answered(scope, method, status, caller, at_ms);
         // Every answer with a status, a probe's included (design/14, ADR-206);
         // the fetcher or the probe already read and warned on these headers.
         let limits = crate::riot::limiter::headers::RateLimitHeaders::from_headers_quiet(&headers);
@@ -423,8 +448,12 @@ impl RiotClient {
             404 => RiotErrorKind::NotFound,
             // `/status`'s probe asks every round, so its 401 or 403 logs only
             // when it turns the verdict to rejected (STS-02b, ADR-206).
-            401 | 403 if probe && !newly_rejected => {
+            401 | 403 if caller == Caller::Probe && !newly_rejected => {
                 tracing::debug!(status, method, host = %host, "status probe: the key is still rejected");
+                RiotErrorKind::UpstreamAuth
+            }
+            401 | 403 if caller == Caller::Poll => {
+                tracing::debug!(status, method, host = %host, "status poll refused");
                 RiotErrorKind::UpstreamAuth
             }
             401 | 403 => {
@@ -635,13 +664,13 @@ mod tests {
     fn the_watch_judges_the_key_and_counts_traffic() {
         let w = UpstreamWatch::default();
         assert_eq!(w.key(), None);
-        assert!(!w.answered("oc1", "status.platformData", 200, true, 10));
+        assert!(!w.answered("oc1", "status.platformData", 200, Caller::Probe, 10));
         assert_eq!(w.last_traffic_ms("oc1"), None, "a probe is not traffic");
         assert!(w.key().unwrap().accepted);
         assert_eq!(w.last_success_ms(), Some(10));
 
         assert!(
-            w.answered("oc1", "summoner.byPuuid", 403, false, 20),
+            w.answered("oc1", "summoner.byPuuid", 403, Caller::Traffic, 20),
             "accepted to rejected"
         );
         let k = w.key().unwrap();
@@ -651,24 +680,35 @@ mod tests {
         );
         assert_eq!(w.last_traffic_ms("oc1"), Some(20));
         assert!(
-            !w.answered("oc1", "status.platformData", 401, true, 21),
+            !w.answered("oc1", "status.platformData", 401, Caller::Probe, 21),
             "still rejected"
         );
 
         // Neither a 404, a 429 nor a 5xx says anything about the key.
         for status in [404, 429, 503] {
-            w.answered("kr", "match.byId", status, false, 30);
+            w.answered("kr", "match.byId", status, Caller::Traffic, 30);
         }
         assert!(!w.key().unwrap().accepted);
         assert_eq!(w.last_traffic_ms("kr"), Some(30));
         assert_eq!(w.last_success_ms(), Some(10));
 
-        w.answered("kr", "match.byId", 200, false, 40);
+        w.answered("kr", "match.byId", 200, Caller::Traffic, 40);
         assert!(w.key().unwrap().accepted, "a 2xx accepts it again");
         assert!(
-            UpstreamWatch::default().answered("kr", "match.byId", 401, true, 50),
+            UpstreamWatch::default().answered("kr", "match.byId", 401, Caller::Probe, 50),
             "unknown to rejected"
         );
+
+        // The status poller (SITE-17): not traffic, and its 401 or 403 does
+        // not judge the key; its 2xx is a success like any.
+        let p = UpstreamWatch::default();
+        assert!(!p.answered("tw2", "status.platformData", 403, Caller::Poll, 60));
+        assert_eq!((p.key(), p.last_traffic_ms("tw2")), (None, None));
+        assert!(!p.answered("kr", "status.platformData", 200, Caller::Poll, 61));
+        assert!(p.key().unwrap().accepted);
+        assert_eq!((p.last_success_ms(), p.last_traffic_ms("kr")), (Some(61), None));
+        assert!(!p.answered("tw2", "status.platformData", 401, Caller::Poll, 62));
+        assert!(p.key().unwrap().accepted, "a poll's 401 leaves the verdict");
     }
 
     /// Lines at `level` or above logged while `f` runs on this thread.

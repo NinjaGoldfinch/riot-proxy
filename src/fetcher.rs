@@ -179,9 +179,15 @@ pub struct FetchOptions {
     pub budget: Option<Duration>,
     /// Fail rather than serve the cached copy when the call to Riot fails or
     /// the limiter has no room inside the budget, for a caller that must tell
-    /// a fresh answer from none: the status poller (SITE-13, ADR-219). A
-    /// fetch that joins another caller's call to Riot gets that call's answer.
+    /// a fresh answer from none: the status poller (SITE-13, ADR-219). Such a
+    /// fetch has its own single-flight slot, so it never joins a call it did
+    /// not start (whose budget and fallback are another caller's), and it is
+    /// not counted as a cache read (SITE-17).
     pub fresh_only: bool,
+    /// A status poll, not traffic (SITE-17, owner decision D7): its call
+    /// stamps no traffic on its scope and never turns the key verdict to
+    /// rejected or logs `RIOT KEY REJECTED` (`RiotClient::send_poll`).
+    pub status_poll: bool,
 }
 
 impl FetchOptions {
@@ -193,6 +199,7 @@ impl FetchOptions {
         await_store: true,
         budget: None,
         fresh_only: false,
+        status_poll: false,
     };
 
     /// An interactive fetch: the default.
@@ -203,6 +210,7 @@ impl FetchOptions {
         await_store: false,
         budget: None,
         fresh_only: false,
+        status_poll: false,
     };
 }
 
@@ -506,15 +514,27 @@ impl Fetcher {
             }
         }
 
-        // 3. Miss (or bypass): coalesce, then go upstream.
-        record("miss");
+        // 3. Miss (or bypass): coalesce, then go upstream. A fresh-only read
+        // (the status poller) reads no cache, so it counts as no cache read,
+        // and it runs its own leg: joining another caller's would take that
+        // caller's budget and fallback (SITE-17).
+        if !opts.fresh_only {
+            record("miss");
+        }
         let inner = Arc::clone(&self.inner);
         let leg = Leg {
             priority: opts.priority,
             budget: self.budget_for(opts),
             stale_ok: !opts.fresh_only,
+            status_poll: opts.status_poll,
         };
         let work_key = key.clone();
+        // A cache key never holds a space (paths are percent-encoded).
+        let key = if opts.fresh_only {
+            format!("{key} fresh-only")
+        } else {
+            key
+        };
         // The upstream leg runs on its own task; it logs to this job.
         let current = activity::current();
         let flight = self
@@ -708,6 +728,8 @@ struct Leg {
     /// Serve a cached copy inside its hard TTL when Riot fails or the
     /// limiter has no room (v1 §8.5); off for [`FetchOptions::fresh_only`].
     stale_ok: bool,
+    /// [`FetchOptions::status_poll`]: sent with `RiotClient::send_poll`.
+    status_poll: bool,
 }
 
 impl Leg {
@@ -716,6 +738,7 @@ impl Leg {
         priority: Priority::Bulk,
         budget: BULK_BUDGET,
         stale_ok: true,
+        status_poll: false,
     };
 }
 
@@ -734,6 +757,7 @@ async fn upstream(
         priority,
         budget,
         stale_ok,
+        status_poll,
     } = leg;
     let endpoint: &'static Endpoint = req.endpoint;
     let targets = req.targets();
@@ -784,7 +808,12 @@ async fn upstream(
         }
         let sent = Instant::now();
 
-        let (outcome, headers) = match inner.client.send(&req).await {
+        let sent_by = if status_poll {
+            inner.client.send_poll(&req).await
+        } else {
+            inner.client.send(&req).await
+        };
+        let (outcome, headers) = match sent_by {
             Ok(res) => {
                 let h = RateLimitHeaders::from_headers(&res.headers);
                 (Ok(res), h)

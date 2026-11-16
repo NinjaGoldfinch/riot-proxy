@@ -8,8 +8,8 @@
 
 **Status.** Accepted, executed 2026-10-13 and 2026-10-14 (ADR-067 2026-10-05; ADR-142, ADR-144 2026-10-13).
 
-**Evidence.** `docs/design/07-deployment.md`, `docs/design/12-object-storage-and-hosting.md` §As executed and §Admin hostname behind Access, `README.md` §HTTPS, `src/config.rs:785-790` (the `TLS` refusal).
+**Evidence.** `docs/design/07-deployment.md`, `docs/design/12-object-storage-and-hosting.md` §As executed and §Admin hostname behind Access, `README.md` §HTTPS, `src/config.rs:807-812` (the `TLS` refusal).
 
 ---
-**Sources:** `docs/DECISIONS.md:L792-L799,L1516-L1523,L1534-L1543`, `docs/design/07-deployment.md`, `docs/design/12-object-storage-and-hosting.md`, `src/config.rs:L785-L790`
-**Last verified:** 2026-11-17 against commit `ddc465e`
+**Sources:** `docs/DECISIONS.md:L792-L799,L1516-L1523,L1534-L1543`, `docs/design/07-deployment.md`, `docs/design/12-object-storage-and-hosting.md`, `src/config.rs:L807-L812`
+**Last verified:** 2026-11-17 against commit `9ca718a`

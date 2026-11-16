@@ -256,3 +256,44 @@ async fn shutdown_during_the_catch_up_returns_promptly() {
         "the stop was logged with reason=shutdown signal: {since:?}"
     );
 }
+
+/// `serve` runs the status poller (SITE-13): a round at boot reads every
+/// default platform's `platform-data`, and shutdown stops it (review of #282).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn serve_spawns_the_status_poller_and_shutdown_stops_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let upstream = MockServer::start().await;
+    let reads = || {
+        let upstream = &upstream;
+        async move {
+            upstream
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .filter(|r| r.url.path() == "/lol/status/v4/platform-data")
+                .count()
+        }
+    };
+    let b = boot(dir.path(), &upstream.uri()).await;
+    let want = riot_proxy::config::STATUS_POLL_DEFAULT.len();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while reads().await < want {
+        assert!(
+            Instant::now() < deadline,
+            "the boot round read {} of {want}",
+            reads().await
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    b.hold.release.notify_one();
+    b.stop.notify_one();
+    tokio::time::timeout(Duration::from_secs(30), b.task)
+        .await
+        .expect("serve returns after shutdown")
+        .unwrap()
+        .unwrap();
+    let after = reads().await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(reads().await, after, "nothing reads after shutdown");
+}

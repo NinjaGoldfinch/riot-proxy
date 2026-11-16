@@ -51,7 +51,7 @@ Source: `src/http/error.rs:15-67,158-193`; the complete list with causes is [../
 | `X-Request-Id` | every response | echo of an inbound id (≤128 chars of `[A-Za-z0-9-_.:]`) or a generated ULID |
 | `X-RateLimit-Limit`, `-Remaining`, `-Reset` | every metered response after successful auth, and the 429 | the consumer quota window; not Riot's limits |
 | `Retry-After` | `QUOTA_EXCEEDED`, `RATE_LIMITED` | seconds |
-| `X-Cache` | passthrough, composites, static, analytics, the status summary | `HIT`, `MISS`, `STALE`, `HIT-NEG`, `ARCHIVE`, `BYPASS`; always `HIT` on `GET /v1/lol/status` |
+| `X-Cache` | passthrough, composites, static, analytics, the status summary | `HIT`, `MISS`, `STALE`, `HIT-NEG`, `ARCHIVE`, `BYPASS`; always `HIT` on `GET /v1/lol/status`. On `GET /v1/lol/status/{platform}` a `HIT` is at most 300 s old and a `STALE` up to 600 s (`status`'s TTL; the poller refreshes it every 240 s by default) |
 | `X-Cache-Age` | passthrough, composites, static (always `0`), champion pool | age of the content in whole seconds; never on analytics |
 | `X-Cache-Fetched-Age` | passthrough and composites when known, the status summary | seconds since the body was last fetched from Riot; absent on `ARCHIVE`. On `GET /v1/lol/status`, the stalest available platform's, absent when none is available |
 | `ETag`, `Cache-Control: private, max-age=300` | analytics | weak ETag; `If-None-Match` answers 304 |
@@ -103,4 +103,4 @@ The server reports its version in the OpenAPI document's `info.version` (`/opena
 
 ---
 **Sources:** `src/http/error.rs:L15-L67,L158-L193`, `src/http/request_id.rs:L287-L338`, `src/http/quota.rs:L332-L336`, `src/routes/passthrough.rs:L127-L166,L470-L476`, `src/routes/analytics.rs:L588-L625`, `src/routes/players.rs:L66-L147`, `src/routes/players/refresh.rs:L18-L71`, `src/routes/lol.rs:L417-L475`, `src/status/poll/summary.rs:L1-L245`, `src/riot/endpoints.rs:L121-L328`, `docs/api/openapi.json`, `docs/_meta/scratch/siblings.md` §1.5, `docs/_meta/scratch/routes.md` §1-§4
-**Last verified:** 2026-11-17 against commit `bdc62e7`
+**Last verified:** 2026-11-17 against commit `9ca718a`
