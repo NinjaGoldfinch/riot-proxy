@@ -267,14 +267,39 @@ pub fn enqueue_on(conn: &Connection, job: &NewJob, now_ms: i64) -> rusqlite::Res
 
 /// [`enqueue_on`], or, when a pending duplicate holds the dedupe key, lift that
 /// row to `job`'s priority and make it ready now (never lower or later than it
-/// was). A running duplicate is left alone. The caller wakes a worker.
+/// was). A running duplicate is left alone: the match archive calls this after
+/// every stored match, the one the running job itself just fetched included,
+/// and lifting that row would send a crawl's download into the interactive
+/// band when it yields (AVL-12). Only the recompute,
+/// [`Queue::enqueue_or_promote`], lifts a running row. The caller wakes a
+/// worker.
 pub fn enqueue_or_promote_on(conn: &Connection, job: &NewJob, now_ms: i64) -> rusqlite::Result<Enqueued> {
+    promote_on(conn, job, now_ms, false)
+}
+
+/// [`enqueue_or_promote_on`]; with `lift_running`, a running duplicate keeps
+/// running and only its priority is lifted (AVL-12): the run in progress is
+/// not touched, and whatever puts the row back to `pending` (a yield between
+/// a rebuild's turns, a backoff) leaves its priority alone, so its next claim
+/// is at the lifted one.
+fn promote_on(
+    conn: &Connection,
+    job: &NewJob,
+    now_ms: i64,
+    lift_running: bool,
+) -> rusqlite::Result<Enqueued> {
     let out = enqueue_on(conn, job, now_ms)?;
     if !out.created {
         conn.execute(
-            "UPDATE jobs SET priority = MIN(priority, ?2), run_after = MIN(run_after, ?3)
-              WHERE id = ?1 AND state = 'pending'",
-            params![out.id, job.priority, job.run_after.unwrap_or(now_ms)],
+            "UPDATE jobs SET priority = MIN(priority, ?2),
+                    run_after = CASE state WHEN 'pending' THEN MIN(run_after, ?3) ELSE run_after END
+              WHERE id = ?1 AND (state = 'pending' OR (?4 AND state = 'running'))",
+            params![
+                out.id,
+                job.priority,
+                job.run_after.unwrap_or(now_ms),
+                lift_running
+            ],
         )?;
     }
     Ok(out)
@@ -441,16 +466,18 @@ impl Queue {
 
     /// Queue a job, or, when a pending duplicate holds its dedupe key, lift
     /// that row to `job`'s priority and make it ready now (never lower or
-    /// later than it was), then wake a worker. A running duplicate is left
-    /// alone. For work someone asked for by hand that should not wait behind
-    /// the queue (DEV-18).
+    /// later than it was), then wake a worker. A running duplicate goes on
+    /// and only its priority is lifted, for its next claim (AVL-12). For work
+    /// someone asked for by hand that should not wait behind the queue
+    /// (DEV-18): the analytics recompute is its one caller, and the only
+    /// caller that lifts a running row ([`enqueue_or_promote_on`] does not).
     pub async fn enqueue_or_promote(&self, job: NewJob) -> Result<Enqueued, DbError> {
         let now = Clock::now().unix_ms;
         let out = self
             .db
             .write(move |c| {
                 let tx = c.transaction()?;
-                let out = enqueue_or_promote_on(&tx, &job, now)?;
+                let out = promote_on(&tx, &job, now, true)?;
                 tx.commit()?;
                 Ok::<_, DbError>(out)
             })

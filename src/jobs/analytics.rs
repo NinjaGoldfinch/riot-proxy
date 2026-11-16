@@ -83,7 +83,9 @@ pub async fn enqueue_aggregate(queue: &Queue, platform: &str, ladder: &str) -> R
 /// rebuilds from the matches archived so far instead of after a crawl's
 /// downloads. No running job is interrupted. A rebuild already queued for
 /// the ladder is moved up rather than queued twice; one part-way through
-/// (between its turns, AVL-05) keeps its progress and resumes first. It
+/// keeps its progress and resumes first, whether the request finds it
+/// between two turns or, as nearly always, inside one (AVL-05, AVL-12): the
+/// running row's priority is lifted and its next turn is claimed at it. It
 /// makes no Riot call.
 pub async fn enqueue_aggregate_now(queue: &Queue, platform: &str, ladder: &str) -> Result<Enqueued, DbError> {
     let mut job = aggregate_job(platform, ladder);
@@ -722,7 +724,7 @@ impl AnalyticsContext {
                     let tx = c.transaction()?;
                     let written = match from.at() {
                         At::Prune => {
-                            analytics::prune_patches(&tx, &scope, &from.patches)?;
+                            analytics::prune_patches(&tx, &scope)?;
                             vec![]
                         }
                         At::Step(patch, step) => analytics::rebuild_patch_step(&tx, &scope, patch, step)?,

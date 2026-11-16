@@ -392,7 +392,7 @@ async fn purge_deletes_in_chunks_and_only_what_the_filter_names() {
 }
 
 #[tokio::test]
-async fn enqueue_or_promote_lifts_a_pending_duplicate_and_leaves_a_running_one() {
+async fn enqueue_or_promote_lifts_a_pending_duplicate_and_a_running_ones_priority() {
     let (_d, db) = db();
     let s = sched(&db);
     let q = s.queue().clone();
@@ -414,9 +414,20 @@ async fn enqueue_or_promote_lifts_a_pending_duplicate_and_leaves_a_running_one()
     let claimed = s.claim(Clock::now().unix_ms).await.unwrap().unwrap();
     assert_eq!((claimed.id.as_str(), claimed.priority), (slow.id.as_str(), 0));
 
-    // Running: untouched; a looser request never lowers a pending row.
+    // Running: no second row, and only its priority can change (AVL-12), so
+    // what it does after this turn queues at the asked priority. Its state,
+    // `run_after`, attempts and payload are the running turn's.
+    let running_before = state(&db, &slow.id).await;
     assert!(
         !q.enqueue_or_promote(NewJob::new("aggregate:analytics", 0, json!({})).dedupe("kr:Q"))
+            .await
+            .unwrap()
+            .created
+    );
+    assert_eq!(state(&db, &slow.id).await, running_before);
+    // A looser request never lowers a row, pending or running.
+    assert!(
+        !q.enqueue_or_promote(NewJob::new("aggregate:analytics", 30_000, json!({})).dedupe("kr:Q"))
             .await
             .unwrap()
             .created
@@ -450,12 +461,164 @@ async fn enqueue_or_promote_lifts_a_pending_duplicate_and_leaves_a_running_one()
         ]
     );
 
+    // A running row asked for at a higher priority: the priority alone moves.
+    let walking = s.claim(Clock::now().unix_ms).await.unwrap().unwrap();
+    assert_eq!(
+        (walking.id.as_str(), walking.priority),
+        (walk.id.as_str(), 20_000)
+    );
+    let before = state(&db, &walk.id).await;
+    let mut sooner = NewJob::new("ladder:walk", 100, json!({"other": true})).dedupe("w");
+    sooner.run_after = Some(1);
+    assert!(!q.enqueue_or_promote(sooner).await.unwrap().created);
+    assert_eq!(
+        state(&db, &walk.id).await,
+        before,
+        "state, attempts, run_after and error are the run's"
+    );
+    let id = walk.id.clone();
+    let (priority, payload): (i64, String) = db
+        .read(move |c| {
+            c.query_row("SELECT priority, payload FROM jobs WHERE id = ?1", [id], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .map_err(DbError::from)
+        })
+        .await
+        .unwrap();
+    assert_eq!((priority, payload.as_str()), (100, "{}"));
+    // And it holds through a yield: the next claim is at the lifted priority.
+    let yielded = Err(JobError::Yield {
+        retry_at: Clock::now().unix_ms,
+        payload: None,
+    });
+    s.finish(&walking, &yielded, Clock::now().unix_ms).await.unwrap();
+    let again = s.claim(Clock::now().unix_ms).await.unwrap().unwrap();
+    assert_eq!((again.id.as_str(), again.priority), (walk.id.as_str(), 100));
+
     // No duplicate: queued fresh.
     assert!(
         q.enqueue_or_promote(NewJob::new("aggregate:analytics", 0, json!({})).dedupe("na1:Q"))
             .await
             .unwrap()
             .created
+    );
+}
+
+// ── AVL-12: a recompute moves a running rebuild up ──────────────────────────
+
+/// What each run of a job saw: its kind, priority and payload.
+type Seen = Arc<std::sync::Mutex<Vec<(String, i64, serde_json::Value)>>>;
+
+/// A rebuild in turns: its first turn waits to be released, then yields with
+/// its progress in the payload, as `aggregate:analytics` does; its second
+/// finishes.
+struct InTurns {
+    seen: Seen,
+    in_turn: Arc<Notify>,
+    release: Arc<Notify>,
+}
+
+impl Handler for InTurns {
+    fn run<'a>(&'a self, job: &'a Job) -> futures_util::future::BoxFuture<'a, Result<(), JobError>> {
+        Box::pin(async move {
+            let payload: serde_json::Value = job.payload()?;
+            let first = payload.get("rebuild").is_none();
+            self.seen
+                .lock()
+                .unwrap()
+                .push((job.kind.clone(), job.priority, payload.clone()));
+            if !first {
+                return Ok(());
+            }
+            self.in_turn.notify_one();
+            self.release.notified().await;
+            let mut next = payload;
+            next["rebuild"] = json!({"patch": 1, "step": 2});
+            Err(JobError::Yield {
+                retry_at: Clock::now().unix_ms,
+                payload: Some(next.to_string()),
+            })
+        })
+    }
+}
+
+struct Records(Seen);
+
+impl Handler for Records {
+    fn run<'a>(&'a self, job: &'a Job) -> futures_util::future::BoxFuture<'a, Result<(), JobError>> {
+        Box::pin(async move {
+            self.0
+                .lock()
+                .unwrap()
+                .push((job.kind.clone(), job.priority, json!(null)));
+            Ok(())
+        })
+    }
+}
+
+/// `POST /v1/admin/analytics/recompute` while the ladder's rebuild is in a
+/// turn, which is nearly always: a production turn is one transaction of
+/// seconds and the row is `pending` only between turns. The recompute lifts
+/// the running row's priority, so its next turn is claimed at priority 0,
+/// ahead of the work queued in front of it, with the progress its turn saved.
+#[tokio::test]
+async fn a_recompute_moves_a_running_rebuild_up_from_its_next_turn() {
+    let (_d, db) = db();
+    let seen = Seen::default();
+    let (in_turn, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    let rebuild = InTurns {
+        seen: Arc::clone(&seen),
+        in_turn: Arc::clone(&in_turn),
+        release: Arc::clone(&release),
+    };
+    let s = Scheduler::new(
+        db.clone(),
+        Registry::new()
+            .with("aggregate:analytics", rebuild)
+            .with("ladder:walk", Records(Arc::clone(&seen))),
+    );
+    // The tick's rebuild, at its usual priority, and a crawl's work queued
+    // ahead of it once the rebuild's first turn is under way.
+    let queued = crate::jobs::analytics::enqueue_aggregate(s.queue(), "kr", "RANKED_SOLO_5x5")
+        .await
+        .unwrap();
+    let workers = s.start(1);
+    tokio::time::timeout(Duration::from_secs(10), in_turn.notified())
+        .await
+        .expect("the rebuild's first turn began");
+    s.enqueue(NewJob::new("ladder:walk", 20_000, json!({})))
+        .await
+        .unwrap();
+
+    let asked = crate::jobs::analytics::enqueue_aggregate_now(s.queue(), "kr", "RANKED_SOLO_5x5")
+        .await
+        .unwrap();
+    assert_eq!((asked.id.as_str(), asked.created), (queued.id.as_str(), false));
+    let (state_now, attempts, ..) = state(&db, &queued.id).await;
+    assert_eq!((state_now.as_str(), attempts), ("running", 1), "the turn goes on");
+
+    release.notify_one();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while seen.lock().unwrap().len() < 3 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the second turn and the walk ran");
+    workers.shutdown(Duration::from_secs(1)).await;
+
+    let ladder = json!({"platform": "kr", "queue": "RANKED_SOLO_5x5"});
+    let mut resumed = ladder.clone();
+    resumed["rebuild"] = json!({"patch": 1, "step": 2});
+    assert_eq!(
+        *seen.lock().unwrap(),
+        [
+            ("aggregate:analytics".to_string(), 30_000, ladder),
+            // Ahead of the walk, at the recompute's priority, where it stopped.
+            ("aggregate:analytics".to_string(), 0, resumed),
+            ("ladder:walk".to_string(), 20_000, json!(null)),
+        ]
     );
 }
 

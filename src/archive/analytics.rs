@@ -341,19 +341,29 @@ pub(crate) fn rebuild_patch_step(
     rebuild_step(c, &one, step)
 }
 
+/// One table's rows of a ladder whose patch no archived match of the queue
+/// (`?4`) has. The patches kept are read from `matches` by the statement
+/// itself, through `matches_patch_queue`, never from a list made earlier.
+pub fn prune_sql(table: &str) -> String {
+    format!(
+        "DELETE FROM {table} WHERE key_scope = ?1 AND platform = ?2 AND queue = ?3
+           AND patch NOT IN (SELECT DISTINCT patch FROM matches WHERE queue_id = ?4 AND patch IS NOT NULL)"
+    )
+}
+
 /// Before a rebuild of every patch a patch at a time, in a transaction of
-/// its own: delete the ladder's rows of every step's tables whose patch is
-/// not in `keep` (every patch archived), which a rebuild over all patches at
-/// once deleted with the rest and a per-patch delete never reaches (AVL-05).
-pub fn prune_patches(c: &Connection, s: &Scope, keep: &[String]) -> Result<(), DbError> {
-    let keep = serde_json::to_string(keep).unwrap_or_else(|_| "[]".into());
+/// its own: delete the ladder's rows of every step's tables whose patch no
+/// archived match has, which a rebuild over all patches at once deleted with
+/// the rest and a per-patch delete never reaches (AVL-05). The rebuild's own
+/// patch list is not used: it was read before this transaction, and a patch
+/// whose first matches a delta counted since is not in it, though its rows
+/// are right and its matches' bits are set, so nothing would count them
+/// again (AVL-12).
+pub fn prune_patches(c: &Connection, s: &Scope) -> Result<(), DbError> {
     for t in STEPS.iter().flat_map(|step| step.tables.iter()) {
         c.execute(
-            &format!(
-                "DELETE FROM {t} WHERE key_scope = ?1 AND platform = ?2 AND queue = ?3
-                   AND patch NOT IN (SELECT value FROM json_each(?4))"
-            ),
-            params![s.key_scope, s.platform, s.queue, keep],
+            &prune_sql(t),
+            params![s.key_scope, s.platform, s.queue, s.queue_id],
         )?;
     }
     Ok(())
@@ -368,9 +378,9 @@ pub fn rebuild_by_patch(c: &mut Connection, s: &Scope) -> Result<Written, DbErro
     let patches = match &s.patches {
         Some(p) => p.clone(),
         None => {
-            let all = patch_list(c, s.queue_id, 0)?;
             let tx = c.transaction()?;
-            prune_patches(&tx, s, &all)?;
+            prune_patches(&tx, s)?;
+            let all = patch_list(&tx, s.queue_id, 0)?;
             tx.commit()?;
             all
         }
