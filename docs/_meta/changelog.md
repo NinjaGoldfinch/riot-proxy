@@ -2,6 +2,10 @@
 
 Dated log of changes to this documentation set. One line per change; the newest first.
 
+## 2026-11-17
+
+- CI-07, widened (ADR-214 amended): `workflows/testing.md` §Known flakes records the tick tests' `settle`, the maintenance boot tests' fixed wait and the forced-refresh test's 50 ms margin, and the stress runs before and after. Citations of `src/jobs/ticks.rs` moved with the lines the guards add.
+
 ## 2026-11-10
 
 - SITE-14 (ADR-220): `GET /v1/lol/status`, every polled platform's status in one call from `platform_status` (`StatusSummary`, `PlatformSummary`, `Severity` in the OpenAPI document; `X-Cache: HIT`, the stalest available `X-Cache-Fetched-Age`; 503 `NOT_FOUND` with the poller off). `api/endpoints-riot-lol.md` (the route's section), `api/endpoints.md` (73 paths, 77 operations; `X-Cache-Fetched-Age`), `api/errors.md` (`NOT_FOUND` at 503), `api/openapi.json` (regenerated), `integration/contract.md` (fourteen operations; the headers; the status guarantee), `_meta/inventory.md`; design/03, design/11 (the showcase's **Every platform** card), design/14. Line citations of `src/routes/lol.rs` and `src/routes/docs.rs` moved with the code in every page that cites them.

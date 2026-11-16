@@ -885,8 +885,10 @@ async fn expired_and_riot_answering_inside_the_wait_is_a_miss() {
 /// (review of #274): the consumer spent its refresh window on Riot's answer,
 /// so serving the old copy as `STALE` at 2.25 s would answer
 /// `refreshed: true` with the bytes it asked to replace. Here the refresh
-/// waits 1.6 s for the limiter and Riot answers in 700 ms: past the ordinary
-/// wait, inside the forced one, so it is Riot's answer.
+/// waits 1.8 s for the limiter (inside the 2 s interactive budget) and Riot
+/// answers in 700 ms: about 2.5 s, past the ordinary wait of 2.25 s and
+/// inside the forced one, so it is Riot's answer. The 250 ms margin over the
+/// ordinary wait absorbs a late timer on a loaded runner (CI-07).
 #[tokio::test]
 async fn a_forced_refresh_behind_the_limiter_and_a_slow_answer_gets_riots_answer() {
     let s = setup(&EXPIRING).await;
@@ -907,7 +909,7 @@ async fn a_forced_refresh_behind_the_limiter_and_a_slow_answer_gets_riots_answer
         .acquire("euw1", "summoner.byPuuid", Priority::Interactive, Duration::ZERO)
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
 
     let asked = Instant::now();
     let r = s
