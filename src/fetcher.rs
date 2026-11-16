@@ -79,7 +79,11 @@ pub const STORED_MARGIN: Duration = Duration::from_millis(250);
 /// it; short enough that the by-Riot-ID profile answers inside the site's
 /// 30 s. Its account and platform lookups are never forced and wait at most
 /// 2.25 s each for a stored copy, so the three stages take at most
-/// 2.25 + 2.25 + 20 = 24.5 s.
+/// 2.25 + 2.25 + 20 = 24.5 s. Also how long any read with nothing stored
+/// waits for its fetch before it fails `UPSTREAM_ERROR` (AVL-14): a lookup
+/// stage with nothing stored can take 20 s, so a by-Riot-ID profile whose
+/// account copies are gone can pass the site's 30 s, where before it waited
+/// for the whole fetch.
 pub const FORCED_REFRESH_WAIT: Duration = Duration::from_secs(20);
 
 /// `X-Cache` (v1's four plus design 03's `ARCHIVE` and `BYPASS`; ADR-022, ADR-031).
@@ -562,8 +566,12 @@ impl Fetcher {
     /// A forced refresh (`bypass`, `?refresh=true`) is bounded too, at
     /// [`FORCED_REFRESH_WAIT`], longer than an ordinary read's wait so that
     /// a refresh behind the limiter and a slow answer still gets Riot's
-    /// answer. With nothing stored the fetch is waited for as before, and so
-    /// is a caller that asked to wait for the archive write (`await_store`).
+    /// answer. With nothing stored the fetch is waited for up to
+    /// [`FORCED_REFRESH_WAIT`] and then fails `UPSTREAM_ERROR`, so one part
+    /// with nothing to fall back on does not hold a whole profile for the
+    /// fetch's 76 s (AVL-14, owner decision D4); the leg goes on behind it. A
+    /// caller that asked to wait for the archive write (`await_store`) waits
+    /// for the whole fetch, as before.
     pub async fn fetch_or_stored(
         &self,
         req: RiotRequest,
@@ -587,11 +595,25 @@ impl Fetcher {
                             waited_ms = u64::try_from(wait.as_millis()).unwrap_or(u64::MAX),
                             "serving the stored copy: the refresh has not answered"
                         );
+                        // Read again, after the wait (ADR-212's rule): an entry
+                        // purged meanwhile is not served, a newer one is.
+                        let copy = self.stored_copy(&key).await.unwrap_or(copy);
                         return Ok(served(&copy, XCache::Stale, Instant::now()));
                     }
                 }
             }
-            None => self.fetch(req, opts).await,
+            None if opts.await_store => self.fetch(req, opts).await,
+            None => match tokio::time::timeout(FORCED_REFRESH_WAIT, self.fetch(req, opts)).await {
+                Ok(fetched) => fetched,
+                Err(_) => {
+                    tracing::warn!(
+                        method = endpoint,
+                        waited_ms = u64::try_from(FORCED_REFRESH_WAIT.as_millis()).unwrap_or(u64::MAX),
+                        "nothing stored and the fetch has not answered; giving up"
+                    );
+                    return Err(ApiError::upstream().into());
+                }
+            },
         };
         let err = match fetched {
             Ok(r) => return Ok(r),

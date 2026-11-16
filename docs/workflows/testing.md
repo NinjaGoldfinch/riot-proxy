@@ -101,6 +101,8 @@ Run it before pushing. `riot record` applies the same pattern and refuses to wri
 
 The three helper suites need only `node`: `tests/ui.rs` runs `node --test <file>` from the crate root, skips with `skipping: node not runnable` when it is missing locally, and panics under `CI` (`tests/ui.rs:42-64`). The same binary enforces the showcase coverage rule (`tests/ui.rs:427-468`; [adding-an-endpoint.md](./adding-an-endpoint.md#7-the-showcase-coverage-rule)).
 
+The slowest tests take about 23 s: AVL-14's profiles with Riot silent (`tests/players_routes.rs`) and its fetcher cases (`tests/fetcher_states.rs`) wait out the 20 s bound in real time; the `ci` profile flags a test slow after 60 s (`.config/nextest.toml:L9-L13`).
+
 ## Known flakes
 
 `concurrent_misses_read_once` (analytics cache) flaked under llvm-cov and once under nextest; it now asserts the six reads (five before THR-03 added the slice stamp to the ETag), a 200 and the same body for each, `MISS` or `HIT` per request and at least one `MISS`, and passed 50 runs under `--stress-count` (ADR-174, `docs/DECISIONS.md:1902`). A new flake should fail CI, not pass on a retry: the `ci` profile has `retries = 0` (`.config/nextest.toml:9-10`).

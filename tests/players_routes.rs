@@ -1158,3 +1158,117 @@ async fn a_looked_up_players_games_count_in_analytics_at_their_rank() {
         [("CHALLENGER".to_string(), 3), ("UNKNOWN".to_string(), 27)]
     );
 }
+
+// ── Review of #274 (AVL-14): every part's refresh unanswered ────────────────
+
+/// Riot accepts every call from now on and never answers.
+async fn silence(e: &Env) {
+    e.server.reset().await;
+    Mock::given(path_regex(".*"))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(60)))
+        .mount(&e.server)
+        .await;
+}
+
+/// Every part's entries live 1 s, soft and hard alike.
+const EXPIRE_ALL: [(&str, &str); 2] = [
+    ("CACHE_TTL_OVERRIDES", "account=1,summoner=1,league=1,mastery=1"),
+    ("STALE_WHILE_REVALIDATE", "false"),
+];
+
+/// An ordinary read by PUUID with every part expired and Riot silent
+/// answers inside about 3 s with the stored parts (AVL-09).
+#[tokio::test]
+async fn a_profile_with_every_part_expired_and_riot_silent_answers_inside_the_wait() {
+    let e = env_with(&[], &EXPIRE_ALL).await;
+    let uri = format!("/v1/players/{PUUID}/profile?platform=kr");
+    assert_eq!(e.get(&uri).await.status, StatusCode::OK);
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    silence(&e).await;
+    let asked = std::time::Instant::now();
+    let r = e.get(&uri).await;
+    let took = asked.elapsed();
+    assert!(took < Duration::from_millis(3_500), "{took:?}");
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(x_cache(&r).0, "STALE");
+    let b = r.json();
+    assert_eq!(b["refreshing"], json!(true));
+    assert_eq!(b["warnings"].as_array().unwrap().len(), 4, "{}", b["warnings"]);
+    for part in PARTS {
+        assert!(!b[part].is_null(), "{part}");
+    }
+}
+
+/// A forced refresh by Riot ID with every part expired and Riot silent:
+/// the Riot ID lookup is never forced (2.25 s), the parts are (20 s), so the
+/// answer comes at about 22 s, inside the documented 24.5 s, `refreshed`
+/// with the stored parts. A forced lookup would take 40 s. The account part
+/// is the exception: by Riot ID it is the lookup's answer, so its by-PUUID
+/// entry, which a forced refresh re-reads, was never stored, and it gives up
+/// at 20 s (AVL-14; raised with the owner, review of #274).
+#[tokio::test]
+async fn a_forced_refresh_by_riot_id_with_riot_silent_answers_inside_its_bound() {
+    let e = env_with(&[], &EXPIRE_ALL).await;
+    assert_eq!(e.get(PROFILE).await.status, StatusCode::OK);
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    silence(&e).await;
+    let asked = std::time::Instant::now();
+    let r = e.get(&format!("{PROFILE}&refresh=true")).await;
+    let took = asked.elapsed();
+    assert!(
+        took >= riot_proxy::fetcher::FORCED_REFRESH_WAIT && took < Duration::from_millis(24_500),
+        "{took:?}"
+    );
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(x_cache(&r).0, "STALE");
+    let b = r.json();
+    assert_eq!(
+        (b["refreshed"].clone(), b["refreshing"].clone()),
+        (json!(true), json!(true))
+    );
+    for part in ["summoner", "league", "mastery"] {
+        assert!(!b[part].is_null(), "{part}");
+    }
+    assert_eq!(b["account"], Value::Null);
+    assert!(
+        b["warnings"].as_array().unwrap().contains(&json!(
+            "account unavailable (UPSTREAM_ERROR: Upstream request failed)"
+        )),
+        "{}",
+        b["warnings"]
+    );
+}
+
+/// Owner decision D4: a part with nothing stored gives up at the bound, so
+/// the parts that have copies are served instead of the whole profile
+/// waiting for its fetch (76 s with Riot silent).
+#[tokio::test]
+async fn a_part_with_nothing_stored_gives_up_and_the_others_are_served() {
+    let e = env_with(&["/entries/by-puuid/"], &EXPIRE_ALL).await;
+    let first = e.get(PROFILE).await;
+    assert_eq!(first.json()["league"], Value::Null, "league never stored");
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    silence(&e).await;
+    let asked = std::time::Instant::now();
+    let r = e.get(PROFILE).await;
+    let took = asked.elapsed();
+    assert!(
+        took >= riot_proxy::fetcher::FORCED_REFRESH_WAIT && took < Duration::from_millis(24_500),
+        "{took:?}"
+    );
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(x_cache(&r).0, "STALE");
+    let b = r.json();
+    assert_eq!(b["league"], Value::Null);
+    assert_eq!(b["refreshing"], json!(true));
+    for part in ["account", "summoner", "mastery"] {
+        assert!(!b[part].is_null(), "{part}");
+    }
+    assert!(
+        b["warnings"].as_array().unwrap().contains(&json!(
+            "league unavailable (UPSTREAM_ERROR: Upstream request failed)"
+        )),
+        "{}",
+        b["warnings"]
+    );
+}

@@ -1025,3 +1025,153 @@ async fn a_forced_refresh_joining_a_refresh_frozen_by_the_limiter_serves_the_sto
         "frozen: Riot was not asked again"
     );
 }
+
+// ── Review of #274 (AVL-14) ──────────────────────────────────────────────────
+
+/// Owner decision D4: with nothing stored, a read waits for its fetch at most
+/// `FORCED_REFRESH_WAIT` and then fails `UPSTREAM_ERROR`, so a part with no
+/// copy cannot hold a whole profile for the fetch's 76 s. One call to Riot,
+/// which goes on behind the error.
+#[tokio::test]
+async fn nothing_stored_and_riot_silent_gives_up_at_the_bound() {
+    let s = setup(&EXPIRING).await;
+    mount(
+        &s.server,
+        SUMMONER,
+        ok(r#"{"v":1}"#).set_delay(Duration::from_secs(60)),
+    )
+    .await;
+    let asked = Instant::now();
+    let err = tokio::time::timeout(
+        riot_proxy::fetcher::FORCED_REFRESH_WAIT + Duration::from_secs(3),
+        s.fetcher.fetch_or_stored(summoner(Platform::Euw1), INTERACTIVE),
+    )
+    .await
+    .expect("an answer at the bound")
+    .unwrap_err();
+    assert_eq!(err.api.code.as_str(), "UPSTREAM_ERROR");
+    assert!(
+        asked.elapsed() >= riot_proxy::fetcher::FORCED_REFRESH_WAIT,
+        "{:?}",
+        asked.elapsed()
+    );
+    assert_eq!(upstream_calls(&s.server).await, 1);
+}
+
+/// The leg the timed-out read left behind fills the cache: the next read,
+/// once Riot has answered, is a `HIT` with the new body and no second call.
+#[tokio::test]
+async fn a_refresh_that_answers_after_the_wait_fills_the_cache_for_the_next_read() {
+    let s = setup(&EXPIRING).await;
+    let stored_at = store_then_expire(&s).await;
+    mount(
+        &s.server,
+        SUMMONER,
+        ok(r#"{"v":2}"#).set_delay(Duration::from_secs(3)),
+    )
+    .await;
+    let asked = Instant::now();
+    let first = s
+        .fetcher
+        .fetch_or_stored(summoner(Platform::Euw1), INTERACTIVE)
+        .await
+        .unwrap();
+    assert_stored_copy(&first, stored_at);
+    let waited = asked.elapsed();
+    let limit = s.fetcher.stored_wait(INTERACTIVE);
+    assert!(
+        waited >= limit && waited < limit + Duration::from_millis(500),
+        "{waited:?}"
+    );
+    // Riot answers at 3 s; the copy it stores is fresh for 1 s.
+    tokio::time::sleep(Duration::from_millis(3_400).saturating_sub(asked.elapsed())).await;
+    let next = s
+        .fetcher
+        .fetch_or_stored(summoner(Platform::Euw1), INTERACTIVE)
+        .await
+        .unwrap();
+    assert_eq!(
+        (next.x_cache, next.body.as_ref()),
+        (XCache::Hit, br#"{"v":2}"#.as_ref())
+    );
+    assert_eq!(upstream_calls(&s.server).await, 1);
+}
+
+/// A caller that waits for the archive write (`await_store`) waits for the
+/// whole fetch, stored copy or not, and gets Riot's answer.
+#[tokio::test]
+async fn await_store_waits_for_riot_past_the_stored_copy_wait() {
+    let s = setup(&EXPIRING).await;
+    store_then_expire(&s).await;
+    mount(
+        &s.server,
+        SUMMONER,
+        ok(r#"{"v":2}"#).set_delay(Duration::from_secs(3)),
+    )
+    .await;
+    let asked = Instant::now();
+    let r = s
+        .fetcher
+        .fetch_or_stored(
+            summoner(Platform::Euw1),
+            FetchOptions {
+                await_store: true,
+                ..INTERACTIVE
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        (r.x_cache, r.body.as_ref()),
+        (XCache::Miss, br#"{"v":2}"#.as_ref())
+    );
+    assert!(asked.elapsed() >= Duration::from_secs(3));
+}
+
+/// A forced refresh of a copy still inside its soft TTL, with Riot silent:
+/// the copy, `STALE`, at the forced limit.
+#[tokio::test]
+async fn a_forced_refresh_of_a_fresh_copy_with_riot_silent_serves_it_at_the_limit() {
+    let s = setup(&[]).await;
+    mount(&s.server, SUMMONER, ok(r#"{"v":1}"#)).await;
+    s.fetcher
+        .fetch(summoner(Platform::Euw1), INTERACTIVE)
+        .await
+        .unwrap();
+    s.server.reset().await;
+    mount(
+        &s.server,
+        SUMMONER,
+        ok(r#"{"v":2}"#).set_delay(Duration::from_secs(60)),
+    )
+    .await;
+    let limit = s.fetcher.stored_wait(BYPASS);
+    let asked = Instant::now();
+    let r = tokio::time::timeout(
+        limit + Duration::from_secs(3),
+        s.fetcher.fetch_or_stored(summoner(Platform::Euw1), BYPASS),
+    )
+    .await
+    .expect("the copy at the limit")
+    .unwrap();
+    assert_eq!(
+        (r.x_cache, r.body.as_ref()),
+        (XCache::Stale, br#"{"v":1}"#.as_ref())
+    );
+    assert!(asked.elapsed() >= limit, "{:?}", asked.elapsed());
+    assert_eq!(upstream_calls(&s.server).await, 1);
+}
+
+/// The forced wait is never shorter than the ordinary one: with
+/// `CLIENT_WAIT_BUDGET_MS` above 19 750 it is the budget plus the margin.
+#[tokio::test]
+async fn a_budget_above_the_forced_wait_raises_it() {
+    let s = setup(&[("CLIENT_WAIT_BUDGET_MS", "25000")]).await;
+    assert_eq!(s.fetcher.stored_wait(INTERACTIVE), Duration::from_millis(25_250));
+    assert_eq!(s.fetcher.stored_wait(BYPASS), Duration::from_millis(25_250));
+    let s = setup(&[("CLIENT_WAIT_BUDGET_MS", "19000")]).await;
+    assert_eq!(
+        s.fetcher.stored_wait(BYPASS),
+        riot_proxy::fetcher::FORCED_REFRESH_WAIT
+    );
+}
