@@ -124,7 +124,7 @@ A background task runs every `STATUS_CHECK_INTERVAL_S` (default 30) and stores e
 | `cache` | L2 (SQLite) fails a read, or does not answer one within 2 s two rounds in a row | L2 does not answer a read within 2 s once | L1 is in-process and cannot be unreachable; L2 is the backend |
 | `storage` | | the bucket does not answer a list of one key within 5 s | only when `ARCHIVE_OBJECT_URL` is set; absent from `checks` otherwise |
 
-**The `riot_api` probe** (owner, 2026-11-05). It calls Riot directly through the client and the limiter at bulk priority, skipping the response cache (`status.platformData` is cached for 60 s, so a cached probe would rarely reach Riot), and never writes the cache. Its response does update the rate-limit table and `riot_key`, like any other.
+**The `riot_api` probe** (owner, 2026-11-05). It calls Riot directly through the client and the limiter at bulk priority, skipping the response cache (`status.platformData` was cached for 60 s, and since SITE-13 the status poller keeps it warm, so a cached probe would rarely reach Riot), and never writes the cache. The poller (§Status poller) is a separate task and leaves the probe unchanged. Its response does update the rate-limit table and `riot_key`, like any other.
 
 - The **first platform** of `STATUS_CHECK_PLATFORMS` (default: the `LADDER_PLATFORMS` entries) stands in for the `DEFAULT_PLATFORM` this section first named, which ADR-065 removed from v2 (owner, ADR-206). It is probed every 60 s while the proxy is *active* (it had an upstream response on that platform's scope in the last 60 s that was not a probe, so real traffic already shows Riot answers), and every 30 s while idle.
 - Every other platform in `STATUS_CHECK_PLATFORMS` is probed every 60 s. A failure there degrades `riot_api` and is named in `detail`; it does not make it `down`, since one Riot shard being out is not the proxy being out. When the key's limits allow, the owner can list every platform.
@@ -144,6 +144,17 @@ With the first platform and N others this is at most 2 + N calls a minute, outsi
 - *`riot_key`* reads the client's last verdict when `/status` is read. Before any 2xx, 401 or 403 it is `ok` with detail `pending` (unless the expiry already degrades it). Its `checked_at` is the time of the response it was judged on, and `latency_ms` is null.
 - *`cache`* reads one row's worth of L2's `cache` table. Its 2 s include the wait for a free reader, so one timeout is `degraded` and only a second in a row is `down`; a read SQLite refuses is `down` at once. *`storage`* reads only the first entry of the bucket's listing (one page), never the whole listing.
 - `latency_ms` and `checked_at` of `riot_api` are the first platform's last probe.
+
+## Status poller (SITE-13)
+
+The owner's request of 2026-11-10 (IMPLEMENTATION.md §Post-release — SITE (2), ADR-217, ADR-219): every platform's status is read on a timer, not when a caller asks, so a status read never waits on Riot. It feeds the response cache and a table; it is not one of `/status`'s checks and changes nothing there.
+
+- *A task, not a job.* An in-process task (`status::poll::Poller`), started with the checks after the socket is bound and aborted with them at shutdown, reads `lol-status-v4` `platform-data` (`status.platformData`) on each of `STATUS_POLL_PLATFORMS` (default every platform, `Platform::ALL`, 17; `none` turns it off) at boot and every `STATUS_POLL_INTERVAL_S` (300 s) after. A round that runs long delays the next. Seventeen rows every five minutes would only fill the jobs table.
+- *Through the fetcher.* Each read is a fetch at bulk priority, past the cache read and writing through (`bypass`, `X-Cache: BYPASS`), with `FetchOptions::fresh_only`: it never takes the cached copy in place of Riot's answer, so a failure is seen as one. L1 then holds the body, and `GET /v1/lol/status/{platform}` answers `HIT` with an `X-Cache-Fetched-Age` under one interval. `status`'s TTL is soft 300 s, hard 600 s (design/04 §TTLs). The fetch counts in `proxy_upstream_requests_total` and, as a bypass, as a `miss` in `proxy_cache_reads_total`, like any.
+- *Rate limits.* The reads go through the limiter like any (whether `lol-status-v4` counts against the app limit is not in our sources, ADR-217): 17 calls every 5 min. A platform the limiter has no bulk room for within 1 s (`FetchOptions::budget`) is skipped: nothing is called or stored, and it is read the next round, as the probe is. A typed 429 from Riot freezes the scope as usual (`observe`); the fetcher's re-acquire then finds no room within the second, so that read is counted `skipped` too and writes nothing. A service 429 (no `X-Rate-Limit-Type`) still backs off and retries, then fails.
+- *Each platform's last answer* is stored in `platform_status` (design/04 §Schema, one write per round through `Db::write`): a 200's body (JSON as Riot sent it) and its `fetched_at`; a failure's `failed_at` and error (the fetcher's error code and message, or that the 200 was not JSON), keeping the last body. A 200 keeps the last failure's stamp too, so a reader compares `failed_at` with `fetched_at`. A platform Riot does not serve (the portal's region list for lol-status-v4 has no `tw2`) is just a failure row. `status::poll::stored` reads every row, in `Platform::ALL` order, for SITE-14.
+- *Recordings.* With `STATUS_RECORDINGS_DIR` set, a 200 whose `incidents[]` lists an entry is written there as `<platform>-incident-<id>.json`, one file per platform and incident `id` (an integer in the portal's `StatusDto`), once: a file that exists is never rewritten. The API key is replaced by `[REDACTED]`, and a body that would still hold an `RGAPI-` string is not written (CI greps for it). Unset, nothing is written. These are SITE-16's fixtures.
+- *Metric.* `status_polls_total{platform,result}` counts each platform's read per round: `ok`, `failed` or `skipped` (design/metrics).
 
 ## Outbound events (STS-04)
 
@@ -175,6 +186,9 @@ When `EVENTS_URL` is set, state transitions are POSTed there as the contract's e
 | `STATUS_ALLOW_CIDR` | `127.0.0.1/32,::1/128` | peers that may read `/status` without a key (plus the forwarding-header rule); `none` for none (an empty value is unset, as for every variable); an entry that does not parse refuses the boot |
 | `STATUS_CHECK_INTERVAL_S` | `30` | how often the checks run |
 | `STATUS_CHECK_PLATFORMS` | the `LADDER_PLATFORMS` entries | platforms probed every 60 s besides the default |
+| `STATUS_POLL_INTERVAL_S` | `300` | how often the status poller reads every platform (§Status poller); `60`–`3600` |
+| `STATUS_POLL_PLATFORMS` | every platform | the platforms it reads; `none` turns it off |
+| `STATUS_RECORDINGS_DIR` | unset | where it writes a body with an incident, redacted; unset writes none |
 | `RIOT_API_KEY_EXPIRES_AT` | unset | RFC 3339; `riot_key` is `degraded` within 48 h of it |
 | `EVENTS_URL` | unset | where events are POSTed; unset sends none |
 

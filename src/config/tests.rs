@@ -1043,6 +1043,68 @@ fn status_allow_cidr() {
     assert!(errs.iter().any(|e| e.contains("'10.0.0.0/33'")), "{errs:?}");
 }
 
+/// SITE-13 (design/14 §Status poller, ADR-219): every platform every 300 s
+/// by default, parsed like `STATUS_CHECK_PLATFORMS`; recordings off.
+#[test]
+fn status_poll_settings() {
+    use crate::riot::routing::Platform;
+    let c = load(env(&[("LADDER_PLATFORMS", "kr")]));
+    assert_eq!(c.status_poll_interval_s, 300);
+    assert_eq!(
+        c.status_poll_platforms,
+        Platform::ALL.to_vec(),
+        "not LADDER_PLATFORMS"
+    );
+    assert_eq!(c.status_poll_platforms.len(), 17);
+    assert_eq!(c.status_recordings_dir, None);
+    let all: Vec<&str> = Platform::ALL.iter().map(|p| p.as_str()).collect();
+    assert_eq!(
+        c.redacted()["STATUS_POLL_PLATFORMS"].as_deref(),
+        Some(all.join(",").as_str())
+    );
+    assert_eq!(c.redacted()["STATUS_RECORDINGS_DIR"], None);
+
+    let c = load(env(&[
+        ("STATUS_POLL_PLATFORMS", "OC1, tw2, oc1"),
+        ("STATUS_POLL_INTERVAL_S", "60"),
+        ("STATUS_RECORDINGS_DIR", "/var/lib/riot-proxy/status"),
+    ]));
+    assert_eq!(c.status_poll_platforms, vec![Platform::Oc1, Platform::Tw2]);
+    assert_eq!(c.status_poll_interval_s, 60);
+    assert_eq!(
+        c.status_recordings_dir.as_deref(),
+        Some(std::path::Path::new("/var/lib/riot-proxy/status"))
+    );
+    assert_eq!(c.redacted()["STATUS_POLL_PLATFORMS"].as_deref(), Some("oc1,tw2"));
+    assert_eq!(
+        c.redacted()["STATUS_RECORDINGS_DIR"].as_deref(),
+        Some("/var/lib/riot-proxy/status")
+    );
+
+    let off = load(env(&[("STATUS_POLL_PLATFORMS", "None")]));
+    assert!(off.status_poll_platforms.is_empty());
+    assert_eq!(off.redacted()["STATUS_POLL_PLATFORMS"].as_deref(), Some("none"));
+
+    let errs = errors(env(&[
+        ("STATUS_POLL_PLATFORMS", "kr,mars1"),
+        ("STATUS_POLL_INTERVAL_S", "59"),
+    ]));
+    assert!(
+        errs.iter()
+            .any(|e| e.starts_with("STATUS_POLL_PLATFORMS: ") && e.contains("mars1")),
+        "{errs:?}"
+    );
+    assert!(
+        errs.iter().any(|e| e.starts_with("STATUS_POLL_INTERVAL_S: ")),
+        "{errs:?}"
+    );
+    assert!(
+        errors(env(&[("STATUS_POLL_INTERVAL_S", "3601")]))
+            .iter()
+            .any(|e| e.starts_with("STATUS_POLL_INTERVAL_S: "))
+    );
+}
+
 /// STS-02b (design/14 §Configuration, ADR-206).
 #[test]
 fn status_check_settings() {

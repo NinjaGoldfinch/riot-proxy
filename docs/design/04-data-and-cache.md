@@ -405,6 +405,14 @@ CREATE INDEX jobs_crawl_matches ON jobs(priority, dedupe_key COLLATE NOCASE, sta
 CREATE TABLE metrics_history (                    -- 1440 rows ≈ 24 h at 60 s; maintenance trims
   at INTEGER PRIMARY KEY, point TEXT NOT NULL      -- JSON snapshot
 );
+
+CREATE TABLE platform_status (                    -- V0034 (SITE-13, ADR-219): the status poller's last answer per platform
+  platform   TEXT PRIMARY KEY,                     -- 'oc1'
+  body       TEXT,                                 -- the last 200's lol-status-v4 body (JSON); kept through a failure
+  fetched_at INTEGER,                              -- unix ms of the last 200
+  failed_at  INTEGER,                              -- unix ms of the last failure; kept through a 200
+  error      TEXT                                  -- why the last failure failed
+);
 ```
 
 Migrations are embedded in the binary (`sqlx::migrate!("./src/db/migrations")` or `refinery`) and applied on boot — no `migrate` container, no separate step. `riot-proxy migrate` exists as a subcommand for the paranoid.
@@ -415,7 +423,7 @@ Migrations are embedded in the binary (`sqlx::migrate!("./src/db/migrations")` o
 |---|---|---|---|
 | **Archive** | match, timeline | forever | yes (SQLite) |
 | **L2** | account, summoner, league entries, ladder pages, mastery | soft/hard as v1; a 200 of an endpoint a player page reads kept 24 h past hard TTL (AVL-03, AVL-08) | yes (SQLite `cache`) |
-| **L1** | everything above plus spectator, rotations, status, match-id lists | soft/hard as v1; a 200 of an endpoint a player page reads kept 24 h past hard TTL (AVL-03, AVL-08) | no — rebuilt from L2 on boot or from Riot on first miss |
+| **L1** | everything above plus spectator, rotations, status, match-id lists | soft/hard as v1 (status: 300 s / 600 s, SITE-13); a 200 of an endpoint a player page reads kept 24 h past hard TTL (AVL-03, AVL-08) | no — rebuilt from L2 on boot or from Riot on first miss |
 | **Negative** | spectator 404 (30 s), account 404 (300 s) | fixed | no |
 | **Analytics responses** | the five `/v1/lol/analytics/*` routes' 200 bytes and `ETag` (PERF-03, ADR-169) | none: dropped when a rebuild commits, an `aggregate:delta` run ends (THR-03) or the Data Dragon version moves; LRU of `ANALYTICS_CACHE_ENTRIES` (512) | no — the next rebuild or delta warms the sites' slices |
 
@@ -433,9 +441,9 @@ Two ages per entry (SITE-01, ADR-103). `content_at` is when these bytes were fir
 
 Boot warm (AVL-08): the rows L1 would still hold are streamed into L1, the latest-expiring first, until L1's budget (`CACHE_L1_MAX_MB`) is reached: every row inside its hard TTL off the `cache_hard` index read backwards, then the kept endpoints' 200s up to 24 h past theirs, each endpoint from its own range of the primary key (a key starts with its scope and endpoint). Then a sweep deletes every row past its hard TTL but those kept ones; the daily `maintenance` sweeps the same way. The warm runs before the socket is bound, so its cost is what it reads: bounded by the L1 budget (128 MiB by default) whatever a day's crawl left in L2. The earlier claim here, "sub-second even at tens of thousands of rows", was never measured and did not hold once every 200 was kept a day (ladder pages are tens of kilobytes each); it is withdrawn.
 
-### TTLs (unchanged from v1)
+### TTLs (v1's, but status)
 
-| Endpoint | Soft TTL | Hard TTL (×4) | L2 |
+| Endpoint | Soft TTL | Hard TTL (×4, status ×2) | L2 |
 |---|---|---|---|
 | match / timeline | archive | — | archive |
 | match id list | 120 s | 480 s | no |
@@ -446,9 +454,11 @@ Boot warm (AVL-08): the rows L1 would still hold are streamed into L1, the lates
 | spectator | 30 s (+30 s neg) | 2 min | no |
 | mastery | 1 h | 4 h | yes |
 | rotations | 6 h | 24 h | no |
-| platform status | 60 s | 4 min | no |
+| platform status | 300 s | 600 s | no |
 
 `CACHE_TTL_OVERRIDES=league=120,spectator=20` keeps working.
+
+**Platform status** (owner, SITE-13, ADR-219) was v1's 60 s / 4 min. The status poller (design/14 §Status poller) reads every platform every `STATUS_POLL_INTERVAL_S` (300 s) through the fetcher, past the cache read and writing through, so `GET /v1/lol/status/{platform}` is a `HIT` inside the soft TTL; a copy a late or skipped round left past it is served `STALE` and refreshed in the background, as any. Its hard TTL is soft × 2, not × 4 (`Endpoint::stale_multiplier`), so `CACHE_TTL_OVERRIDES=status=120` gives 120 s / 240 s; with `STALE_WHILE_REVALIDATE=false` hard equals soft as for every endpoint. Each platform's last answer is also kept in `platform_status` (above), which survives a restart.
 
 ### Canonical key
 

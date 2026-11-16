@@ -27,6 +27,11 @@
 //! within the caller's budget and [`STORED_MARGIN`], or within
 //! [`FORCED_REFRESH_WAIT`] for a forced refresh (AVL-09): the leg goes on
 //! behind the answer. The passthrough routes keep v1's rule.
+//!
+//! The status poller (SITE-13, ADR-219) reads with [`FetchOptions::fresh_only`]
+//! and its own limiter [`FetchOptions::budget`]: past the cache read, writing
+//! through, and failing instead of serving the cached copy, so it can tell
+//! Riot's answer from a skip or a failure.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -169,6 +174,14 @@ pub struct FetchOptions {
     /// started the call to Riot, joined another's, or was served a body still
     /// waiting to be stored, and nobody who did not ask waits with it (AVL-11).
     pub await_store: bool,
+    /// Wait at most this for the limiter, in place of what `priority` and
+    /// `job` give (the status poller waits 1 s, SITE-13).
+    pub budget: Option<Duration>,
+    /// Fail rather than serve the cached copy when the call to Riot fails or
+    /// the limiter has no room inside the budget, for a caller that must tell
+    /// a fresh answer from none: the status poller (SITE-13, ADR-219). A
+    /// fetch that joins another caller's call to Riot gets that call's answer.
+    pub fresh_only: bool,
 }
 
 impl FetchOptions {
@@ -178,6 +191,8 @@ impl FetchOptions {
         bypass: false,
         job: true,
         await_store: true,
+        budget: None,
+        fresh_only: false,
     };
 
     /// An interactive fetch: the default.
@@ -186,6 +201,8 @@ impl FetchOptions {
         bypass: false,
         job: false,
         await_store: false,
+        budget: None,
+        fresh_only: false,
     };
 }
 
@@ -492,14 +509,18 @@ impl Fetcher {
         // 3. Miss (or bypass): coalesce, then go upstream.
         record("miss");
         let inner = Arc::clone(&self.inner);
-        let budget = self.budget_for(opts);
-        let (work_key, priority) = (key.clone(), opts.priority);
+        let leg = Leg {
+            priority: opts.priority,
+            budget: self.budget_for(opts),
+            stale_ok: !opts.fresh_only,
+        };
+        let work_key = key.clone();
         // The upstream leg runs on its own task; it logs to this job.
         let current = activity::current();
         let flight = self
             .flight
             .run(key, move || {
-                activity::within(current, upstream(inner, req, work_key, priority, budget))
+                activity::within(current, upstream(inner, req, work_key, leg))
             })
             .await;
         let fetched = flight.value?;
@@ -607,15 +628,16 @@ impl Fetcher {
         }
     }
 
-    /// What a fetch with `opts` may wait for the limiter: `JOB_YIELD_BUDGET_MS`
-    /// for a job, `CLIENT_WAIT_BUDGET_MS` for an interactive caller, and
-    /// [`BULK_BUDGET`] for a bulk one.
+    /// What a fetch with `opts` may wait for the limiter:
+    /// [`FetchOptions::budget`] when the caller set one, else
+    /// `JOB_YIELD_BUDGET_MS` for a job, `CLIENT_WAIT_BUDGET_MS` for an
+    /// interactive caller, and [`BULK_BUDGET`] for a bulk one.
     fn budget_for(&self, opts: FetchOptions) -> Duration {
-        match (opts.job, opts.priority) {
+        opts.budget.unwrap_or(match (opts.job, opts.priority) {
             (true, _) => self.inner.job_budget,
             (false, Priority::Interactive) => self.inner.interactive_budget,
             (false, Priority::Bulk) => BULK_BUDGET,
-        }
+        })
     }
 
     /// The positive copy stored for `key`, however old.
@@ -632,9 +654,7 @@ impl Fetcher {
         tokio::spawn(async move {
             let work_key = key.clone();
             let out = flight
-                .run(key, move || {
-                    upstream(inner, req, work_key, Priority::Bulk, BULK_BUDGET)
-                })
+                .run(key, move || upstream(inner, req, work_key, Leg::REFRESH))
                 .await;
             if let Err(e) = out.value {
                 tracing::debug!(error = %e, "background refresh failed");
@@ -679,18 +699,42 @@ async fn cached_copy(inner: &Inner, key: &str) -> Option<Fetched> {
     }
 }
 
+/// How the upstream leg waits and what it falls back to.
+#[derive(Debug, Clone, Copy)]
+struct Leg {
+    priority: Priority,
+    /// Bounds each wait for the limiter.
+    budget: Duration,
+    /// Serve a cached copy inside its hard TTL when Riot fails or the
+    /// limiter has no room (v1 §8.5); off for [`FetchOptions::fresh_only`].
+    stale_ok: bool,
+}
+
+impl Leg {
+    /// v1 §8.5's background refresh.
+    const REFRESH: Self = Self {
+        priority: Priority::Bulk,
+        budget: BULK_BUDGET,
+        stale_ok: true,
+    };
+}
+
 /// The upstream leg: limiter, HTTP, observe, retries, the cache write and the
 /// archive hand-off, negatives. Runs once per key at a time (single-flight),
-/// on its own task. `budget` bounds each wait for the limiter. The leg never
-/// waits for the archive's write ([`Archive::store_behind`]): it returns the
-/// [`Stored`] that says when it lands, for the callers that want to.
+/// on its own task. The leg never waits for the archive's write
+/// ([`Archive::store_behind`]): it returns the [`Stored`] that says when it
+/// lands, for the callers that want to.
 async fn upstream(
     inner: Arc<Inner>,
     mut req: RiotRequest,
     key: String,
-    priority: Priority,
-    budget: Duration,
+    leg: Leg,
 ) -> Result<Fetched, FetchError> {
+    let Leg {
+        priority,
+        budget,
+        stale_ok,
+    } = leg;
     let endpoint: &'static Endpoint = req.endpoint;
     let targets = req.targets();
     // Clusters that answered a service 429 during this request: tried last.
@@ -715,7 +759,7 @@ async fn upstream(
         {
             Ok(t) => t,
             Err(limited) => {
-                if let Some(copy) = cached_copy(&inner, &key).await {
+                if stale_ok && let Some(copy) = cached_copy(&inner, &key).await {
                     tracing::warn!(method = endpoint.id, "serving stale while rate limited");
                     return Ok(copy);
                 }
@@ -852,7 +896,7 @@ async fn upstream(
                     tokio::time::sleep(jitter(backoff)).await;
                     continue;
                 }
-                if let Some(copy) = cached_copy(&inner, &key).await {
+                if stale_ok && let Some(copy) = cached_copy(&inner, &key).await {
                     tracing::warn!(method = endpoint.id, status = ?err.status, "serving stale on upstream failure");
                     return Ok(copy);
                 }

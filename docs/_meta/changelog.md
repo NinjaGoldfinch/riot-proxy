@@ -4,6 +4,7 @@ Dated log of changes to this documentation set. One line per change; the newest 
 
 ## 2026-11-10
 
+- SITE-13 (ADR-219): the status poller reads every platform's `lol-status-v4` every `STATUS_POLL_INTERVAL_S` (300 s) through the fetcher into L1 and `platform_status` (V0034); `status`'s TTL is 300 s / 600 s; recordings of bodies with an incident go to `STATUS_RECORDINGS_DIR`; `status_polls_total`; `FetchOptions::budget` and `fresh_only`. design/04 (§TTLs, the DDL), design/07 and design/14 (§Status poller, §Configuration), design/metrics; `data/caching.md`, `data/schema.md`, `data/migrations.md`, `workflows/adding-a-migration.md` (next free V0035), `deployment/configuration.md` (three variables), `operations/observability.md` (the metric, the log lines), `integration/monitoring-hooks.md`, `architecture/request-lifecycle.md`, `reference/riot-api-usage.md`, `api/endpoints-riot-lol.md`, the README's configuration table. Line citations of `src/fetcher.rs`, `src/config.rs`, `src/config/tests.rs`, `src/cli/serve.rs`, `src/riot/endpoints.rs`, `src/metrics.rs`, `src/status/mod.rs`, `src/routes/dev.rs`, `.env.example` and `README.md` moved with the code in every page that cites them; each such page's `Last verified` is refreshed.
 - SITE-12 (ADR-218): `totalMatches` on `GET /v1/lol/analytics/champions`, the slice's matches each once (the rows' pick-rate denominator), and `totalGames` described as the returned rows' games. `api/endpoints-players-analytics.md` (the bodies, a paragraph on the two totals), `api/examples.md` (the empty document), `api/openapi.json`, `data/models.md`, `integration/contract.md`, design/11 (the Top champions header). Line citations of `src/routes/analytics.rs` moved with the code in every page that cites them (`architecture/data-flow.md`, `api/pagination-filtering-and-versioning.md`, `_meta/doc-maintenance.md`, `data/caching.md`, `reference/glossary.md`); `workflows/adding-an-endpoint.md` re-verified (it cites `src/ui/showcase.html`); each page's `Last verified` is refreshed.
 
 ## 2026-11-09
@@ -82,4 +83,4 @@ Dated log of changes to this documentation set. One line per change; the newest 
 
 ---
 **Sources:** this documentation set
-**Last verified:** 2026-11-17 against commit `a0a7375`
+**Last verified:** 2026-11-17 against commit `ddc465e`

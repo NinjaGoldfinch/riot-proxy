@@ -13,6 +13,7 @@
 //! `http::auth::require_status_admin`: never keyless, never metered.
 
 pub mod checks;
+pub mod poll;
 pub mod ratelimits;
 pub mod snapshot;
 
