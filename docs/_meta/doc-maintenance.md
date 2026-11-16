@@ -41,7 +41,7 @@ cargo run -q -- spec > docs/api/openapi.json
 npx -y @redocly/cli lint docs/api/openapi.json
 ```
 
-The generator emits `operationId: champions` twice (`GET /v1/lol/analytics/champions` and `GET /v1/players/{puuid}/champions`, from the handler function names in `src/routes/analytics.rs:1031` and `src/routes/players.rs:1082`). Until the code renames one of them, patch the docs copy after regenerating:
+The generator emits `operationId: champions` twice (`GET /v1/lol/analytics/champions` and `GET /v1/players/{puuid}/champions`, from the handler function names in `src/routes/analytics.rs:1049` and `src/routes/players.rs:1082`). Until the code renames one of them, patch the docs copy after regenerating:
 
 ```bash
 python3 - <<'EOF2'
@@ -51,7 +51,7 @@ json.dump(d,open(p,'w'),indent=2,ensure_ascii=False); open(p,'a').write('\n')
 EOF2
 ```
 
-Then cross-check the route table against the document (the repo's own `tests/openapi.rs` asserts `/openapi.json` equals `spec()`; `scripts/compare-openapi.py OLD NEW --prefix /v1/` lists operations missing from NEW).
+Then cross-check the route table against the document (the repo's own `tests/openapi.rs` asserts `/openapi.json` equals `spec()`; `scripts/compare-openapi.py OLD NEW --prefix /v1/` lists operations missing from NEW). The same test file checks that every response declares the headers it sends (SITE-04): a route whose headers differ from its tag's (the analytics routes, the image mirror, `GET /v1/lol/status`) has its own rule in `headers_for` (`src/routes/docs.rs`) and its own assertion there.
 
 ## Checking links
 
@@ -119,5 +119,5 @@ These files are written for a static site generator served from the dev box. The
 The files under [scratch/](./scratch/) are the Phase 0 inventories the set was written from: `routes.md`, `config.md`, `riot-and-cache.md`, `jobs-and-observability.md`, `persistence.md`, `siblings.md`, `tests-tooling-history.md`, plus `WRITING-BRIEF.md` (the writers' shared contract) and `openapi-generated.json` (the unpatched generator output). They are dense, cite line numbers that drift with every change, and are not meant for readers; refresh or delete them when the pages that cite them are re-verified.
 
 ---
-**Sources:** `docs/_meta/scratch/WRITING-BRIEF.md`, `src/routes/analytics.rs:L1031`, `src/routes/players.rs:L1082`, `tests/openapi.rs`, `scripts/compare-openapi.py`, `src/config/tests.rs:L443-L462`
-**Last verified:** 2026-11-09 against commit `0113520`
+**Sources:** `docs/_meta/scratch/WRITING-BRIEF.md`, `src/routes/analytics.rs:L1049`, `src/routes/players.rs:L1082`, `tests/openapi.rs`, `scripts/compare-openapi.py`, `src/config/tests.rs:L443-L462`
+**Last verified:** 2026-11-17 against commit `bdc62e7`

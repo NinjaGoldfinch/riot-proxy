@@ -196,6 +196,13 @@ function detail(p, u, { noTimeline = false, noAnalytics = false, noBuilds = fals
   return null;
 }
 
+/** `GET /v1/lol/status` (SITE-14): two platforms read, one not. */
+const PLATFORMS = [
+  { platform: 'na1', available: true, error: null, incidents: 1, maintenances: 0, worstSeverity: 'critical', maintenanceInProgress: false, fetchedAgeSeconds: 120 },
+  { platform: 'kr', available: true, error: null, incidents: 0, maintenances: 0, worstSeverity: null, maintenanceInProgress: false, fetchedAgeSeconds: 30 },
+  { platform: 'tw2', available: false, error: 'NOT_FOUND: Resource not found upstream', incidents: null, maintenances: null, worstSeverity: null, maintenanceInProgress: null, fetchedAgeSeconds: null },
+];
+
 function api(calls, url, { status = {}, unauthorized = false, ...opts } = {}) {
   const u = new URL(url, 'http://localhost');
   calls.push(`${u.pathname}${u.search}`);
@@ -210,17 +217,20 @@ function api(calls, url, { status = {}, unauthorized = false, ...opts } = {}) {
   if (unauthorized) return [401, { error: { code: 'UNAUTHORIZED', message: 'missing key', requestId: 'r' } }];
   const pl = players(p, u, opts) ?? detail(p, u, opts);
   if (pl) return pl;
+  // `opts.statusAll`: the summary's [status, body] instead, e.g. the poller turned off.
+  if (p === '/v1/lol/status') return opts.statusAll ?? [200, { platforms: PLATFORMS }];
   if (p.startsWith('/v1/lol/status/')) return [200, { id: 'OC1', name: 'Oceania', locales: ['en_US'], maintenances: [], incidents: [], ...status }];
   // `opts.apexSizes` sets a tier's list length, e.g. `{ MASTER: 10000 }` for a league at Riot's cap.
   if (p.startsWith('/v1/lol/league/apex/')) return [200, { tier: p.split('/')[6], queue: p.split('/')[7], name: 'L', leagueId: 'x', entries: Array.from({ length: opts.apexSizes?.[p.split('/')[6]] ?? LADDER }, (_, i) => entry(i)) }];
   if (p.startsWith('/v1/riot/accounts/by-puuid/')) { const id = p.split('/').pop(); return [200, { puuid: id, gameName: `Player ${id}`, tagLine: 'OCE' }]; }
   if (p.startsWith('/v1/lol/rotations/')) return [200, { freeChampionIds: [1, 2], freeChampionIdsForNewPlayers: [1], maxNewPlayerLevel: 10 }];
-  // No tier asked for: one row per champion, every tier summed (ADR-123).
-  if (p === '/v1/lol/analytics/champions') return [200, { platform: 'oc1', queue: u.searchParams.get('queue'), tier: null, patch: '16.19', role: null, computedAt: null, totalGames: 25, champions: [
+  // No tier asked for: one row per champion, every tier summed (ADR-123); 100 matches, so Annie's
+  // 20 picks are her pickRate 0.2 (SITE-12).
+  if (p === '/v1/lol/analytics/champions') return [200, { platform: 'oc1', queue: u.searchParams.get('queue'), tier: null, patch: '16.19', role: null, computedAt: null, totalGames: 25, totalMatches: 100, champions: [
     { championId: 1, championName: 'Annie', tier: null, patch: '16.19', games: 20, wins: 10, winRate: 0.5, share: 0.8, pickRate: 0.2, banRate: 0.05 },
     { championId: 2, championName: 'Olaf', tier: null, patch: '16.19', games: 5, wins: 4, winRate: 0.8, share: 0.2, pickRate: 0.05, banRate: 0 },
   ] }];
   return [404, { error: { code: 'NOT_FOUND', message: p } }];
 }
 
-export { root, html, LADDER, CHAMPS, RUNES, PUUID, BOOTS, MATCH, TIMELINE, DETAIL, MATCHUPS, BUILDS, api };
+export { root, html, LADDER, PLATFORMS, CHAMPS, RUNES, PUUID, BOOTS, MATCH, TIMELINE, DETAIL, MATCHUPS, BUILDS, api };

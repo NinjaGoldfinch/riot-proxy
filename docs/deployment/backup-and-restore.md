@@ -19,13 +19,13 @@ The database is never written to the Onidel bucket, and raw bodies are never in 
 
 ## Copy 1: the daily `VACUUM INTO` backup
 
-The `maintenance` job, ticked every 86 400 s and first 86 400 s after its last run (at once on a boot when that is past or it never ran; a restart inside the day does not run it; ADR-214), runs the backup as its first step (`src/jobs/ticks.rs:121-122,219-296`; `src/jobs/maintenance.rs:224-241`):
+The `maintenance` job, ticked every 86 400 s and first 86 400 s after its last run (at once on a boot when that is past or it never ran; a restart inside the day does not run it; ADR-214), runs the backup as its first step (`src/jobs/ticks.rs:125-126,223-347`; `src/jobs/maintenance.rs:224-241`). With `BACKUP_KEEP` above 0 the last run is one that wrote a backup: the tick counts from the older of its newest `done` row and the newest backup file's modification time, and is due at once when no backup is on disk, so a run that wrote none (today's existed, the guard below skipped it, the copy failed) never puts the next backup 24 h off, and backups stay about a day apart across restarts (`src/jobs/ticks.rs:277-296`; ADR-214 as amended by AVL-13). A backup deleted from the directory is therefore replaced at the next boot. The steps:
 
 - Statement `VACUUM INTO ?1` from a separate read-only connection on a blocking thread, so the writer is not held (`src/jobs/maintenance.rs:59-78`). The copy is consistent and compact (freed pages are not copied).
 - Path `$DATA_DIR/backups/riot-proxy-<YYYY-MM-DD>.db`, UTC date, one per day; today's existing file skips the step (`src/jobs/maintenance.rs:42-43,80-86,289-292`).
 - Written as `backups/.riot-proxy-<date>.db.partial` and renamed when complete; a leftover partial is removed first and on failure (`src/jobs/maintenance.rs:295-299,315-329`).
 - Free-space guard: skipped with the warning `backup skipped: not enough disk` when the backup directory's file system has less than 1.2 × (database + WAL) free; `BACKUP_FREE_FACTOR` (`src/jobs/maintenance.rs:36,303-315`; `docs/DECISIONS.md:1459-1464`, ADR-136).
-- Retention: the newest `BACKUP_KEEP` files matching `riot-proxy-DDDD-DD-DD.db` are kept, default 14, `0` takes none and prunes none (`src/config.rs:831`; `src/jobs/maintenance.rs:88-107,228-240`).
+- Retention: the newest `BACKUP_KEEP` files matching `riot-proxy-DDDD-DD-DD.db` are kept, default 14, `0` takes none and prunes none (`src/config.rs:858`; `src/jobs/maintenance.rs:88-107,228-240`).
 - A failed copy is logged (`backup failed; maintenance goes on`) and the trims, sweep and checkpoint still run (`src/jobs/maintenance.rs:322-330`).
 - Status: `GET /v1/admin/backups` lists the files, `BACKUP_KEEP`, free space and the last run; `POST /v1/admin/maintenance/run` queues the job now (`docs/design/07-deployment.md:185`; `src/jobs/maintenance.rs:129-141`).
 
@@ -68,7 +68,7 @@ sudo rclone --config /etc/riot-proxy/rclone.conf check onidel:riot-proxy-archive
 
 ## Restoring the database
 
-Stop, replace the file, start; then catch the pack map up (`README.md:182`; `docs/design/07-deployment.md:183`; `deploy/README.md:136-138`). Each step checks before the next; never delete a non-empty `-wal`, it holds committed writes (`deploy/README.md:246-265`).
+Stop, replace the file, start; then catch the pack map up (`README.md:183`; `docs/design/07-deployment.md:183`; `deploy/README.md:136-138`). Each step checks before the next; never delete a non-empty `-wal`, it holds committed writes (`deploy/README.md:246-265`).
 
 1. Get the backup: the newest local one in `/var/lib/riot-proxy/data/backups/`, or from R2:
 
@@ -135,5 +135,5 @@ The drill passed on 2026-10-15: the 2026-10-14 backup served a body from R2 with
 Freeing a body empties its blob; the pages go to SQLite's free list and the file does not shrink. Once `archive_offload_pending{step="free"}` is 0 for both kinds, copy the database compactly with `rp backup` and swap it in with the gated steps in `deploy/README.md:222-270` (tmux, `fuser`, header check, `quick_check`, checkpoint, swap). The 2026-10-14 incident, a swap made while the copy was still being written, is recounted there; nothing was lost, and the gates exist because of it.
 
 ---
-**Sources:** `src/jobs/maintenance.rs:L36-L43,L59-L107,L129-L141,L213-L241,L289-L331`, `src/jobs/ticks.rs:L120-L121`, `src/cli/backup.rs:L10-L21`, `src/cli/packs.rs:L32-L83`, `src/archive/recovery.rs:L1-L15,L207-L271`, `src/riot/limiter/persist.rs:L23,L92-L94`, `src/cache/l2.rs:L251-L378`, `src/db/mod.rs:L155-L205`, `src/db/migrations/V0023__body_packs.sql:L3-L5`, `src/config.rs:L831`, `deploy/README.md:L12-L47,L103-L152,L156-L160,L222-L270`, `deploy/riot-proxy-replica.service:L12-L19`, `deploy/riot-proxy-replica.timer:L6-L8`, `docs/design/07-deployment.md:L179-L210`, `docs/design/12-object-storage-and-hosting.md:L208-L212,L359-L434,L808-L830,L938-L946`, `docs/DECISIONS.md:L1459-L1464,L1722-L1730`, `README.md:L134-L142`, `PROGRESS.md:L335`, `reports/OBJ implementation handoff.md:L20`, `docs/_meta/scratch/persistence.md`
-**Last verified:** 2026-11-17 against commit `8bcfd77`
+**Sources:** `src/jobs/maintenance.rs:L36-L43,L59-L107,L129-L141,L213-L241,L289-L331`, `src/jobs/ticks.rs:L124-L125`, `src/cli/backup.rs:L10-L21`, `src/cli/packs.rs:L32-L83`, `src/archive/recovery.rs:L1-L15,L207-L271`, `src/riot/limiter/persist.rs:L23,L92-L94`, `src/cache/l2.rs:L251-L378`, `src/db/mod.rs:L155-L205`, `src/db/migrations/V0023__body_packs.sql:L3-L5`, `src/config.rs:L858`, `deploy/README.md:L12-L47,L103-L152,L156-L160,L222-L270`, `deploy/riot-proxy-replica.service:L12-L19`, `deploy/riot-proxy-replica.timer:L6-L8`, `docs/design/07-deployment.md:L179-L210`, `docs/design/12-object-storage-and-hosting.md:L208-L212,L359-L434,L808-L830,L938-L946`, `docs/DECISIONS.md:L1459-L1464,L1722-L1730`, `README.md:L135-L143`, `PROGRESS.md:L335`, `reports/OBJ implementation handoff.md:L20`, `docs/_meta/scratch/persistence.md`
+**Last verified:** 2026-11-17 against commit `ddc465e`

@@ -117,7 +117,9 @@ pub fn depth_priority(depth: i64) -> i64 {
 /// an `archive:match` that asks for the timeline. Its match is fetched when
 /// missing; its timeline when missing and `want_timeline` (`ARCHIVE_TIMELINES`).
 /// A pending duplicate (a walk's job, say) is lifted to `priority` and made to
-/// ask for the timeline too. Runs inside the caller's write; returns whether
+/// ask for the timeline too. A running one is left alone (AVL-12): it is
+/// usually the job that just stored this match, and keeps its own priority.
+/// Runs inside the caller's write; returns whether
 /// anything was queued or lifted, so the caller knows to wake a worker.
 pub fn queue_missing_half_on(
     conn: &rusqlite::Connection,

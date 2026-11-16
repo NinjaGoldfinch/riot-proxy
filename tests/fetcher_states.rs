@@ -739,3 +739,286 @@ async fn nothing_stored_and_an_upstream_failure_is_upstream_error() {
         (ErrorCode::UpstreamError, 502)
     );
 }
+
+// ── AVL-09: the stored copy in time ─────────────────────────────────────────
+
+/// Riot accepts the connection and does not answer. A timeout is retried
+/// twice, so the whole fetch takes about 76 s; the caller has given up long
+/// before. With a copy stored, the wait is the interactive budget and a
+/// margin, and the copy is served while the call to Riot goes on.
+#[tokio::test]
+async fn expired_and_riot_hanging_serves_the_stored_copy_inside_the_wait() {
+    let s = setup(&EXPIRING).await;
+    let stored_at = store_then_expire(&s).await;
+    mount(
+        &s.server,
+        SUMMONER,
+        ok(r#"{"v":2}"#).set_delay(Duration::from_secs(60)),
+    )
+    .await;
+
+    let asked = Instant::now();
+    let r = tokio::time::timeout(
+        Duration::from_secs(5),
+        s.fetcher.fetch_or_stored(summoner(Platform::Euw1), INTERACTIVE),
+    )
+    .await
+    .expect("the stored copy within 5 s")
+    .unwrap();
+    assert_stored_copy(&r, stored_at);
+    assert!(
+        asked.elapsed() >= s.fetcher.interactive_budget(),
+        "Riot was given the interactive budget first: {:?}",
+        asked.elapsed()
+    );
+    assert_eq!(upstream_calls(&s.server).await, 1, "and it was asked");
+    // The call goes on behind the answer; the next read does not start another.
+    let again = tokio::time::timeout(
+        Duration::from_secs(5),
+        s.fetcher.fetch_or_stored(summoner(Platform::Euw1), INTERACTIVE),
+    )
+    .await
+    .expect("the stored copy again")
+    .unwrap();
+    assert_eq!(again.x_cache, XCache::Stale);
+    assert_eq!(upstream_calls(&s.server).await, 1);
+}
+
+/// The limiter is frozen for a minute. A read of a stale copy serves it and
+/// starts a bulk refresh, which sleeps through the freeze. Once the copy has
+/// passed its hard TTL, a read joins that sleeping refresh: it must not sleep
+/// with it.
+#[tokio::test]
+async fn expired_while_a_refresh_sleeps_through_a_freeze_serves_the_stored_copy() {
+    // Soft TTL 1 s, hard TTL 4 s (stale-while-revalidate on).
+    let s = setup(&[("CACHE_TTL_OVERRIDES", "summoner=1")]).await;
+    mount(&s.server, SUMMONER, ok(r#"{"v":1}"#)).await;
+    s.fetcher
+        .fetch(summoner(Platform::Euw1), INTERACTIVE)
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    s.limiter.freeze(
+        "euw1",
+        Duration::from_secs(60),
+        riot_proxy::riot::limiter::headers::RateLimitType::Application,
+    );
+    let stale = s
+        .fetcher
+        .fetch(summoner(Platform::Euw1), INTERACTIVE)
+        .await
+        .unwrap();
+    assert_eq!(
+        stale.x_cache,
+        XCache::Stale,
+        "inside hard TTL, and a refresh starts"
+    );
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    let r = tokio::time::timeout(
+        Duration::from_secs(3),
+        s.fetcher.fetch_or_stored(summoner(Platform::Euw1), INTERACTIVE),
+    )
+    .await
+    .expect("STALE inside 3 s, not after the freeze")
+    .unwrap();
+    assert_eq!(
+        (r.x_cache, r.body.as_ref()),
+        (XCache::Stale, br#"{"v":1}"#.as_ref())
+    );
+    assert!(
+        r.cache_age >= Duration::from_secs(4),
+        "past hard TTL: {:?}",
+        r.cache_age
+    );
+    assert_eq!(
+        upstream_calls(&s.server).await,
+        1,
+        "frozen: Riot was not asked again"
+    );
+}
+
+/// With nothing stored the wait is unchanged: the fetch's own outcome stands,
+/// however long it takes.
+#[tokio::test]
+async fn nothing_stored_and_riot_slow_still_waits_for_riot() {
+    let s = setup(&EXPIRING).await;
+    mount(
+        &s.server,
+        SUMMONER,
+        ok(r#"{"v":1}"#).set_delay(Duration::from_millis(3_000)),
+    )
+    .await;
+    let asked = Instant::now();
+    let r = s
+        .fetcher
+        .fetch_or_stored(summoner(Platform::Euw1), INTERACTIVE)
+        .await
+        .unwrap();
+    assert_eq!(r.x_cache, XCache::Miss);
+    assert!(asked.elapsed() >= Duration::from_millis(3_000));
+}
+
+/// Riot answering inside the wait is a MISS with the new bytes, as before.
+#[tokio::test]
+async fn expired_and_riot_answering_inside_the_wait_is_a_miss() {
+    let s = setup(&EXPIRING).await;
+    store_then_expire(&s).await;
+    mount(
+        &s.server,
+        SUMMONER,
+        ok(r#"{"v":2}"#).set_delay(Duration::from_millis(500)),
+    )
+    .await;
+    let r = s
+        .fetcher
+        .fetch_or_stored(summoner(Platform::Euw1), INTERACTIVE)
+        .await
+        .unwrap();
+    assert_eq!(
+        (r.x_cache, r.body.as_ref()),
+        (XCache::Miss, br#"{"v":2}"#.as_ref())
+    );
+}
+
+/// A forced refresh (`?refresh=true`) is not cut at an ordinary read's wait
+/// (review of #274): the consumer spent its refresh window on Riot's answer,
+/// so serving the old copy as `STALE` at 2.25 s would answer
+/// `refreshed: true` with the bytes it asked to replace. Here the refresh
+/// waits 1.6 s for the limiter and Riot answers in 700 ms: past the ordinary
+/// wait, inside the forced one, so it is Riot's answer.
+#[tokio::test]
+async fn a_forced_refresh_behind_the_limiter_and_a_slow_answer_gets_riots_answer() {
+    let s = setup(&EXPIRING).await;
+    store_then_expire(&s).await;
+    mount(
+        &s.server,
+        SUMMONER,
+        ok(r#"{"v":2}"#).set_delay(Duration::from_millis(700)),
+    )
+    .await;
+    // One token per 2 s on the method, taken now: the next is 2 s away.
+    s.limiter.configure_method(
+        "euw1",
+        "summoner.byPuuid",
+        &[LimitWindow { limit: 1, seconds: 2 }],
+    );
+    s.limiter
+        .acquire("euw1", "summoner.byPuuid", Priority::Interactive, Duration::ZERO)
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(400)).await;
+
+    let asked = Instant::now();
+    let r = s
+        .fetcher
+        .fetch_or_stored(summoner(Platform::Euw1), BYPASS)
+        .await
+        .unwrap();
+    let waited = asked.elapsed();
+    assert_eq!(
+        (r.x_cache, r.body.as_ref()),
+        (XCache::Bypass, br#"{"v":2}"#.as_ref()),
+        "Riot's answer, not the stored copy"
+    );
+    assert!(
+        waited > s.fetcher.stored_wait(INTERACTIVE),
+        "an ordinary read would have been served the copy by now: {waited:?}"
+    );
+    assert_eq!(upstream_calls(&s.server).await, 1);
+}
+
+/// A forced refresh is bounded too (review of #274): with Riot accepting
+/// and not answering, a forced read waited for the whole fetch (about 76 s)
+/// and the site gave up at 30 s with a 503, though every part had a copy.
+/// It serves the copy as `STALE` at its own limit, longer than an ordinary
+/// read's, and the call to Riot goes on behind it.
+#[tokio::test]
+async fn a_forced_refresh_with_riot_silent_serves_the_stored_copy_at_its_limit() {
+    let s = setup(&EXPIRING).await;
+    let stored_at = store_then_expire(&s).await;
+    mount(
+        &s.server,
+        SUMMONER,
+        ok(r#"{"v":2}"#).set_delay(Duration::from_secs(60)),
+    )
+    .await;
+    let limit = s.fetcher.stored_wait(BYPASS);
+
+    let asked = Instant::now();
+    let r = tokio::time::timeout(
+        limit + Duration::from_secs(3),
+        s.fetcher.fetch_or_stored(summoner(Platform::Euw1), BYPASS),
+    )
+    .await
+    .expect("the stored copy at the forced refresh's limit")
+    .unwrap();
+    let waited = asked.elapsed();
+    assert_stored_copy(&r, stored_at);
+    assert!(waited >= limit, "Riot had the whole limit: {waited:?}");
+    assert!(
+        limit > s.fetcher.stored_wait(INTERACTIVE),
+        "a forced refresh waits longer than an ordinary read"
+    );
+    assert_eq!(upstream_calls(&s.server).await, 1, "Riot was asked once");
+    // The call goes on behind the answer; the next read joins it.
+    let again = s
+        .fetcher
+        .fetch_or_stored(summoner(Platform::Euw1), INTERACTIVE)
+        .await
+        .unwrap();
+    assert_eq!(again.x_cache, XCache::Stale);
+    assert_eq!(upstream_calls(&s.server).await, 1);
+}
+
+/// The limiter is frozen for a minute and a stale read has started a bulk
+/// refresh, which sleeps through the freeze. A forced refresh joins that
+/// call (one call per key): it serves the copy at its limit instead of
+/// sleeping for the rest of the freeze (review of #274).
+#[tokio::test]
+async fn a_forced_refresh_joining_a_refresh_frozen_by_the_limiter_serves_the_stored_copy_at_its_limit() {
+    // Soft TTL 1 s, hard TTL 4 s (stale-while-revalidate on).
+    let s = setup(&[("CACHE_TTL_OVERRIDES", "summoner=1")]).await;
+    mount(&s.server, SUMMONER, ok(r#"{"v":1}"#)).await;
+    s.fetcher
+        .fetch(summoner(Platform::Euw1), INTERACTIVE)
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    s.limiter.freeze(
+        "euw1",
+        Duration::from_secs(60),
+        riot_proxy::riot::limiter::headers::RateLimitType::Application,
+    );
+    let stale = s
+        .fetcher
+        .fetch(summoner(Platform::Euw1), INTERACTIVE)
+        .await
+        .unwrap();
+    assert_eq!(stale.x_cache, XCache::Stale, "and a bulk refresh starts");
+    // Let the refresh take its place as the key's one call, asleep in the
+    // freeze; a forced read that found no call would start its own and fail
+    // at once on the frozen limiter.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let limit = s.fetcher.stored_wait(BYPASS);
+
+    let asked = Instant::now();
+    let r = tokio::time::timeout(
+        limit + Duration::from_secs(3),
+        s.fetcher.fetch_or_stored(summoner(Platform::Euw1), BYPASS),
+    )
+    .await
+    .expect("the stored copy at the limit, not after the freeze")
+    .unwrap();
+    let waited = asked.elapsed();
+    assert_eq!(
+        (r.x_cache, r.body.as_ref()),
+        (XCache::Stale, br#"{"v":1}"#.as_ref())
+    );
+    assert!(waited >= limit, "the refresh had the whole limit: {waited:?}");
+    assert_eq!(
+        upstream_calls(&s.server).await,
+        1,
+        "frozen: Riot was not asked again"
+    );
+}

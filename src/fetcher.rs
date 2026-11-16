@@ -23,8 +23,15 @@
 //! Stale beats none (AVL-03, ADR-212): [`Fetcher::fetch_or_stored`], which the
 //! `/v1/players/*` composites use, also serves a copy past its hard TTL
 //! (`Lookup::Expired`, kept `EXPIRED_KEEP`) as `STALE` with its real ages when
-//! the upstream leg fails for any reason but Riot's 404. The passthrough routes
-//! keep v1's rule.
+//! the upstream leg fails for any reason but Riot's 404, or has not answered
+//! within the caller's budget and [`STORED_MARGIN`], or within
+//! [`FORCED_REFRESH_WAIT`] for a forced refresh (AVL-09): the leg goes on
+//! behind the answer. The passthrough routes keep v1's rule.
+//!
+//! The status poller (SITE-13, ADR-219) reads with [`FetchOptions::fresh_only`]
+//! and its own limiter [`FetchOptions::budget`]: past the cache read, writing
+//! through, and failing instead of serving the cached copy, so it can tell
+//! Riot's answer from a skip or a failure.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -59,6 +66,21 @@ const MAX_ATTEMPTS: u32 = 8;
 pub const BULK_BUDGET: Duration = Duration::from_secs(15 * 60);
 /// A job's trace notes a rate-limit wait from this long on (DEV-19).
 const TRACE_WAIT_FROM: Duration = Duration::from_millis(20);
+/// How long past the caller's budget [`Fetcher::fetch_or_stored`] waits
+/// for a fetch before it serves the stored copy (AVL-09). The budget is what
+/// the limiter may take; this is for Riot's answer on top, so a fetch that got
+/// its token at the last moment and an ordinary answer still wins.
+pub const STORED_MARGIN: Duration = Duration::from_millis(250);
+/// How long [`Fetcher::fetch_or_stored`] waits for a forced refresh
+/// (`bypass`, `?refresh=true`) before it serves the stored copy (AVL-09,
+/// review of #274): not being able to refresh a player must not make the
+/// player's data unavailable. Longer than an ordinary read's wait, so a
+/// refresh that queues for the limiter and gets a slow answer still returns
+/// it; short enough that the by-Riot-ID profile answers inside the site's
+/// 30 s. Its account and platform lookups are never forced and wait at most
+/// 2.25 s each for a stored copy, so the three stages take at most
+/// 2.25 + 2.25 + 20 = 24.5 s.
+pub const FORCED_REFRESH_WAIT: Duration = Duration::from_secs(20);
 
 /// `X-Cache` (v1's four plus design 03's `ARCHIVE` and `BYPASS`; ADR-022, ADR-031).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -139,6 +161,8 @@ impl From<WorkFailed> for FetchError {
 pub struct FetchOptions {
     pub priority: Priority,
     /// Skip every cache read (still writes through): `?refresh=true`, admin only.
+    /// [`Fetcher::fetch_or_stored`] still reads the stored copy, to serve when
+    /// the refresh fails or has not answered by [`FORCED_REFRESH_WAIT`] (AVL-09).
     pub bypass: bool,
     /// A job's fetch: bulk, waiting at most `JOB_YIELD_BUDGET_MS` for the
     /// limiter before failing with `limited_until` set (SCH-01).
@@ -150,6 +174,14 @@ pub struct FetchOptions {
     /// started the call to Riot, joined another's, or was served a body still
     /// waiting to be stored, and nobody who did not ask waits with it (AVL-11).
     pub await_store: bool,
+    /// Wait at most this for the limiter, in place of what `priority` and
+    /// `job` give (the status poller waits 1 s, SITE-13).
+    pub budget: Option<Duration>,
+    /// Fail rather than serve the cached copy when the call to Riot fails or
+    /// the limiter has no room inside the budget, for a caller that must tell
+    /// a fresh answer from none: the status poller (SITE-13, ADR-219). A
+    /// fetch that joins another caller's call to Riot gets that call's answer.
+    pub fresh_only: bool,
 }
 
 impl FetchOptions {
@@ -159,6 +191,8 @@ impl FetchOptions {
         bypass: false,
         job: true,
         await_store: true,
+        budget: None,
+        fresh_only: false,
     };
 
     /// An interactive fetch: the default.
@@ -167,6 +201,8 @@ impl FetchOptions {
         bypass: false,
         job: false,
         await_store: false,
+        budget: None,
+        fresh_only: false,
     };
 }
 
@@ -473,18 +509,18 @@ impl Fetcher {
         // 3. Miss (or bypass): coalesce, then go upstream.
         record("miss");
         let inner = Arc::clone(&self.inner);
-        let budget = match (opts.job, opts.priority) {
-            (true, _) => inner.job_budget,
-            (false, Priority::Interactive) => inner.interactive_budget,
-            (false, Priority::Bulk) => BULK_BUDGET,
+        let leg = Leg {
+            priority: opts.priority,
+            budget: self.budget_for(opts),
+            stale_ok: !opts.fresh_only,
         };
-        let (work_key, priority) = (key.clone(), opts.priority);
+        let work_key = key.clone();
         // The upstream leg runs on its own task; it logs to this job.
         let current = activity::current();
         let flight = self
             .flight
             .run(key, move || {
-                activity::within(current, upstream(inner, req, work_key, priority, budget))
+                activity::within(current, upstream(inner, req, work_key, leg))
             })
             .await;
         let fetched = flight.value?;
@@ -515,6 +551,19 @@ impl Fetcher {
     /// `STALE` with its real ages. With nothing stored, the error stands. The
     /// fetch itself is unchanged: an expired copy still goes upstream first,
     /// inside the caller's budget (`CLIENT_WAIT_BUDGET_MS` for an interactive one).
+    ///
+    /// The stored copy also arrives in time (AVL-09): with one stored, the
+    /// fetch is waited for only [`Fetcher::stored_wait`], then the copy is
+    /// served. Without that bound the copy came after the whole fetch: about
+    /// 76 s when Riot accepts and does not answer (a 25 s timeout, retried
+    /// twice), or the rest of a limiter freeze when the read joined a bulk
+    /// refresh sleeping through it. The upstream leg is the single-flight
+    /// call's own task, so it goes on and fills the cache for the next read.
+    /// A forced refresh (`bypass`, `?refresh=true`) is bounded too, at
+    /// [`FORCED_REFRESH_WAIT`], longer than an ordinary read's wait so that
+    /// a refresh behind the limiter and a slow answer still gets Riot's
+    /// answer. With nothing stored the fetch is waited for as before, and so
+    /// is a caller that asked to wait for the archive write (`await_store`).
     pub async fn fetch_or_stored(
         &self,
         req: RiotRequest,
@@ -522,7 +571,29 @@ impl Fetcher {
     ) -> Result<FetchResult, FetchError> {
         let key = cache_key(&self.inner.scope, &req);
         let endpoint = req.endpoint.id;
-        let err = match self.fetch(req, opts).await {
+        let stored = if opts.await_store {
+            None
+        } else {
+            self.stored_copy(&key).await
+        };
+        let fetched = match stored {
+            Some(copy) => {
+                let wait = self.stored_wait(opts);
+                match tokio::time::timeout(wait, self.fetch(req, opts)).await {
+                    Ok(fetched) => fetched,
+                    Err(_) => {
+                        tracing::warn!(
+                            method = endpoint,
+                            waited_ms = u64::try_from(wait.as_millis()).unwrap_or(u64::MAX),
+                            "serving the stored copy: the refresh has not answered"
+                        );
+                        return Ok(served(&copy, XCache::Stale, Instant::now()));
+                    }
+                }
+            }
+            None => self.fetch(req, opts).await,
+        };
+        let err = match fetched {
             Ok(r) => return Ok(r),
             Err(e) => e,
         };
@@ -530,16 +601,50 @@ impl Fetcher {
         if err.x_cache.is_some() || err.api.code == ErrorCode::NotFound {
             return Err(err);
         }
-        match self.inner.cache.get(&key).await {
-            Lookup::Fresh(e) | Lookup::Stale(e) | Lookup::Expired(e) if !e.is_negative() => {
+        match self.stored_copy(&key).await {
+            Some(copy) => {
                 tracing::warn!(
                     method = endpoint,
                     code = err.api.code.as_str(),
                     "serving the stored copy: the refresh failed"
                 );
-                Ok(served(&e, XCache::Stale, Instant::now()))
+                Ok(served(&copy, XCache::Stale, Instant::now()))
             }
-            _ => Err(err),
+            None => Err(err),
+        }
+    }
+
+    /// How long [`Fetcher::fetch_or_stored`] waits for a fetch with `opts`
+    /// when a copy is stored: the budget the fetch itself gets
+    /// (`budget_for`) and [`STORED_MARGIN`]; for a forced refresh
+    /// ([`FetchOptions::bypass`]), [`FORCED_REFRESH_WAIT`], and never less
+    /// than the ordinary wait.
+    pub fn stored_wait(&self, opts: FetchOptions) -> Duration {
+        let ordinary = self.budget_for(opts) + STORED_MARGIN;
+        if opts.bypass {
+            ordinary.max(FORCED_REFRESH_WAIT)
+        } else {
+            ordinary
+        }
+    }
+
+    /// What a fetch with `opts` may wait for the limiter:
+    /// [`FetchOptions::budget`] when the caller set one, else
+    /// `JOB_YIELD_BUDGET_MS` for a job, `CLIENT_WAIT_BUDGET_MS` for an
+    /// interactive caller, and [`BULK_BUDGET`] for a bulk one.
+    fn budget_for(&self, opts: FetchOptions) -> Duration {
+        opts.budget.unwrap_or(match (opts.job, opts.priority) {
+            (true, _) => self.inner.job_budget,
+            (false, Priority::Interactive) => self.inner.interactive_budget,
+            (false, Priority::Bulk) => BULK_BUDGET,
+        })
+    }
+
+    /// The positive copy stored for `key`, however old.
+    async fn stored_copy(&self, key: &str) -> Option<Arc<CacheEntry>> {
+        match self.inner.cache.get(key).await {
+            Lookup::Fresh(e) | Lookup::Stale(e) | Lookup::Expired(e) if !e.is_negative() => Some(e),
+            _ => None,
         }
     }
 
@@ -549,9 +654,7 @@ impl Fetcher {
         tokio::spawn(async move {
             let work_key = key.clone();
             let out = flight
-                .run(key, move || {
-                    upstream(inner, req, work_key, Priority::Bulk, BULK_BUDGET)
-                })
+                .run(key, move || upstream(inner, req, work_key, Leg::REFRESH))
                 .await;
             if let Err(e) = out.value {
                 tracing::debug!(error = %e, "background refresh failed");
@@ -596,18 +699,42 @@ async fn cached_copy(inner: &Inner, key: &str) -> Option<Fetched> {
     }
 }
 
+/// How the upstream leg waits and what it falls back to.
+#[derive(Debug, Clone, Copy)]
+struct Leg {
+    priority: Priority,
+    /// Bounds each wait for the limiter.
+    budget: Duration,
+    /// Serve a cached copy inside its hard TTL when Riot fails or the
+    /// limiter has no room (v1 §8.5); off for [`FetchOptions::fresh_only`].
+    stale_ok: bool,
+}
+
+impl Leg {
+    /// v1 §8.5's background refresh.
+    const REFRESH: Self = Self {
+        priority: Priority::Bulk,
+        budget: BULK_BUDGET,
+        stale_ok: true,
+    };
+}
+
 /// The upstream leg: limiter, HTTP, observe, retries, the cache write and the
 /// archive hand-off, negatives. Runs once per key at a time (single-flight),
-/// on its own task. `budget` bounds each wait for the limiter. The leg never
-/// waits for the archive's write ([`Archive::store_behind`]): it returns the
-/// [`Stored`] that says when it lands, for the callers that want to.
+/// on its own task. The leg never waits for the archive's write
+/// ([`Archive::store_behind`]): it returns the [`Stored`] that says when it
+/// lands, for the callers that want to.
 async fn upstream(
     inner: Arc<Inner>,
     mut req: RiotRequest,
     key: String,
-    priority: Priority,
-    budget: Duration,
+    leg: Leg,
 ) -> Result<Fetched, FetchError> {
+    let Leg {
+        priority,
+        budget,
+        stale_ok,
+    } = leg;
     let endpoint: &'static Endpoint = req.endpoint;
     let targets = req.targets();
     // Clusters that answered a service 429 during this request: tried last.
@@ -632,7 +759,7 @@ async fn upstream(
         {
             Ok(t) => t,
             Err(limited) => {
-                if let Some(copy) = cached_copy(&inner, &key).await {
+                if stale_ok && let Some(copy) = cached_copy(&inner, &key).await {
                     tracing::warn!(method = endpoint.id, "serving stale while rate limited");
                     return Ok(copy);
                 }
@@ -769,7 +896,7 @@ async fn upstream(
                     tokio::time::sleep(jitter(backoff)).await;
                     continue;
                 }
-                if let Some(copy) = cached_copy(&inner, &key).await {
+                if stale_ok && let Some(copy) = cached_copy(&inner, &key).await {
                     tracing::warn!(method = endpoint.id, status = ?err.status, "serving stale on upstream failure");
                     return Ok(copy);
                 }

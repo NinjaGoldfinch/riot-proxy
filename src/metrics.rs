@@ -71,6 +71,7 @@ pub const AGGREGATE_DELTA_MATCHES_TOTAL: &str = "aggregate_delta_matches_total";
 pub const AGGREGATE_DELTA_BATCH_SECONDS: &str = "aggregate_delta_batch_seconds";
 pub const AGGREGATE_DELTA_BATCH_SIZE: &str = "aggregate_delta_batch_size";
 pub const AGGREGATE_DELTA_PENDING: &str = "aggregate_delta_pending";
+pub const STATUS_POLLS_TOTAL: &str = "status_polls_total";
 
 const UPSTREAM_LATENCY_BUCKETS: &[f64] = &[0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0];
 const RL_WAIT_BUCKETS: &[f64] = &[0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0];
@@ -429,6 +430,14 @@ pub const CATALOGUE: &[MetricDef] = &[
         Kind::Gauge,
         &[],
         "Matches no rebuild or delta has fully counted, at the start of the last aggregate:delta",
+        &[],
+    ),
+    // The status poller (SITE-13, ADR-219): one per platform per round.
+    def(
+        STATUS_POLLS_TOTAL,
+        Kind::Counter,
+        &["platform", "result"],
+        "Status poller reads of lol-status-v4 platform-data: ok (a 200 stored), failed, or skipped (no limiter room within 1 s)",
         &[],
     ),
 ];

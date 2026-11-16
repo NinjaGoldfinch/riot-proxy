@@ -381,6 +381,122 @@ async fn a_rate_limited_timeline_yields_and_the_rerun_fetches_only_it() {
     assert_eq!(paths, [m.to_string(), format!("{m}/timeline")]);
 }
 
+/// AVL-12 (review of #277): the production sink asks for a stored match's
+/// missing timeline at the interactive priority, and the job that stored it
+/// is the duplicate holding the dedupe key. That promotion lifts pending rows
+/// only: a crawl download keeps its own priority while it runs, and when it
+/// yields on its timeline it is claimed again at that priority, not in the
+/// interactive band ahead of polls and lookups.
+#[tokio::test]
+async fn a_download_keeps_its_priority_when_it_stores_its_own_match() {
+    use riot_proxy::jobs::ladder::order;
+    use riot_proxy::jobs::{NewJob, Registry, Scheduler};
+    use riot_proxy::riot::limiter::Priority;
+    use riot_proxy::riot::limiter::headers::LimitWindow;
+
+    let e = env().await;
+    let id = "KR_8393343196";
+    let m = format!("/lol/match/v5/matches/{id}");
+    Mock::given(method("GET"))
+        .and(path(m.as_str()))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(MATCH, "application/json"))
+        .mount(&e.server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("{m}/timeline")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"metadata": {}, "info": {}})))
+        .mount(&e.server)
+        .await;
+    // No room for the timeline: the run stores the match, then yields.
+    let limiter = Arc::new(Limiter::new(0.8));
+    let capped = |limit| [LimitWindow { limit, seconds: 120 }];
+    limiter.configure_method("asia", "match.timeline", &capped(1));
+    limiter
+        .acquire(
+            "asia",
+            "match.timeline",
+            Priority::Interactive,
+            std::time::Duration::ZERO,
+        )
+        .await
+        .unwrap();
+
+    // The sink as `serve` builds it, timelines on.
+    let config = common::config(&[]);
+    let queue = Queue::new(e.db.clone());
+    let archive = Arc::new(
+        SqliteArchive::new(e.db.clone(), KeyScope::from_key(&config.riot_api_key))
+            .queue_missing_halves(queue.clone(), true),
+    );
+    let ctx = ArchiveContext {
+        fetcher: common::fetcher(&config, &e.server.uri(), Arc::clone(&limiter), Some(archive)),
+        queue: queue.clone(),
+        hub: e.hub.clone(),
+        key_scope: e.scope.clone(),
+        archive_timelines: true,
+        lookup_backfill_limit: 10_000,
+    };
+    let payload = json!({"matchId": id, "fetchTimeline": true});
+    queue
+        .enqueue(NewJob::new("archive:match", order::MATCH, payload).dedupe(id))
+        .await
+        .unwrap();
+    let s = Scheduler::with_queue(queue.clone(), Registry::new());
+    let row = |job: String| {
+        e.db.read(move |c| {
+            c.query_row("SELECT state, priority FROM jobs WHERE id = ?1", [job], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            })
+            .map_err(DbError::from)
+        })
+    };
+
+    let job = s.claim(i64::MAX).await.unwrap().unwrap();
+    assert_eq!(job.priority, order::MATCH);
+    let first = ctx.archive_match(&job).await;
+    assert!(matches!(first, Err(JobError::Yield { .. })), "{first:?}");
+    let stored: bool =
+        e.db.read(move |c| {
+            c.query_row(
+                "SELECT EXISTS (SELECT 1 FROM matches WHERE match_id = ?1)",
+                [id],
+                |r| r.get(0),
+            )
+            .map_err(DbError::from)
+        })
+        .await
+        .unwrap();
+    assert!(
+        stored,
+        "the run stored its match, so the sink saw the timeline missing"
+    );
+    assert_eq!(
+        row(job.id.clone()).await.unwrap(),
+        ("running".to_string(), order::MATCH),
+        "the running download keeps its priority"
+    );
+
+    s.finish(&job, &first, i64::MAX).await.unwrap();
+    assert_eq!(
+        row(job.id.clone()).await.unwrap(),
+        ("pending".to_string(), order::MATCH),
+        "the yield goes back at the download's priority"
+    );
+
+    limiter.configure_method("asia", "match.timeline", &capped(100));
+    let again = s.claim(i64::MAX).await.unwrap().unwrap();
+    assert_eq!(
+        (again.id.as_str(), again.priority),
+        (job.id.as_str(), order::MATCH)
+    );
+    ctx.archive_match(&again).await.unwrap();
+    assert_eq!(
+        e.archive_jobs().await,
+        [(id.to_string(), order::MATCH)],
+        "one row, never lifted"
+    );
+}
+
 /// ME-01: europe serves an `ME1_` match. ME-02: `me1` is a platform, so the
 /// ranked match's participants are stamped (`UNKNOWN`: no me1 ladder or rank
 /// lookup placed them), leaving nothing for the boot tier check to find.
