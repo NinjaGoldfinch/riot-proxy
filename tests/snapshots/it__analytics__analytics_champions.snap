@@ -173,5 +173,6 @@ expression: redact(body.clone())
   "role": null,
   "side": null,
   "tier": null,
-  "totalGames": 10
+  "totalGames": 10,
+  "totalMatches": 1
 }

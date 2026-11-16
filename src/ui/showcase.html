@@ -938,7 +938,9 @@ async function loadTop() {
     <div><h3 class="muted" style="font-size:12px;margin:8px 0 2px">Highest win rate</h3>${list(top.winRate, (c) => `${pct(c.winRate)}<small>${c.games} games</small>`)}</div>
     <div><h3 class="muted" style="font-size:12px;margin:8px 0 2px">Most played</h3>${list(top.played, (c) => `${c.games}<small>${pct(c.winRate)} win</small>`)}</div>
   </div>`;
-  $('#topMeta', el).textContent = `${patchLabel(state.patch)} · ${QUEUES.find(([q]) => q === state.queue)?.[1]}`;
+  // The slice's matches, each once (SITE-12): totalGames counts a match once per player in the rows.
+  const matches = res.json?.totalMatches ?? 0;
+  $('#topMeta', el).textContent = `${patchLabel(state.patch)} · ${QUEUES.find(([q]) => q === state.queue)?.[1]} · ${matches.toLocaleString()} match${matches === 1 ? '' : 'es'}`;
 }
 
 // ---------- player (DEV-07)

@@ -792,6 +792,8 @@ test('top champions read every patch by default and the patch picker refetches t
   const p = await page();
   assert.ok(p.calls.includes('/v1/lol/analytics/champions?platform=oc1&queue=RANKED_SOLO_5x5&patch=all&limit=500'));
   assert.ok(p.text('#topMeta').startsWith('all patches'));
+  // The slice's matches, each once (SITE-12), not totalGames' player-games.
+  assert.ok(p.text('#topMeta').endsWith(' · 100 matches'), p.text('#topMeta'));
   assert.ok(p.calls.includes('/v1/lol/analytics/patches?queue=RANKED_SOLO_5x5&platform=oc1'), 'the ladder list, no champion');
   assert.equal(p.$('#top [data-patch]').options[0].textContent, 'All patches · 1,240 games');
   const sel = p.$('#top [data-patch]');

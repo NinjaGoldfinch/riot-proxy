@@ -129,7 +129,17 @@ pub struct ChampionStatsResponse {
     /// The newest row's recompute time.
     #[schema(required = true)]
     computed_at: Option<String>,
+    /// Participant games over the rows returned, after `limit` and
+    /// `minGames`: a match counts once for each of its players in them, so
+    /// a full slice counts a match ten times. The sum of `champions[].games`.
     total_games: i64,
+    /// Matches in the slice, each counted once (SITE-12): the denominator of
+    /// every row's `pickRate` and `banRate`. Without `tier`, every match in
+    /// the slice (platform, queue, patch); with `minTier`, those with a player
+    /// at or above it; with `tier`, those with a player at that tier. Every
+    /// role and side; `limit` and `minGames` don't change it. 0 when there is
+    /// no patch.
+    total_matches: i64,
     champions: Vec<ChampionStatEntry>,
 }
 
@@ -429,8 +439,9 @@ const ALL_PATCHES: &str = "all";
 /// get a 304 now. Change it whenever that happens again: FLT-02 made the
 /// matchups, builds and detail sections honour `tier`, which they ignored,
 /// and added `side` to every body; FLT-03 added `minTier` to the same four;
-/// FLT-04 added `opponentId` and `winRateLow` to the builds.
-const STATS_SHAPE: &str = "tier-side-range-opponent";
+/// FLT-04 added `opponentId` and `winRateLow` to the builds; SITE-12 added
+/// `totalMatches` to the champions list.
+const STATS_SHAPE: &str = "tier-side-range-opponent-matches";
 
 /// What the analytics reads need, built once at boot and shared by the
 /// routes and the rebuild's warm (PERF-03).
@@ -683,6 +694,12 @@ impl Rates {
             bans: banned,
         }
     }
+
+    /// The matches a row at `tier` divides its picks and bans by: `Some` a
+    /// tier's, `None` the summed or range row's. 0 when there are none.
+    fn matches_at(&self, tier: &Option<String>) -> i64 {
+        self.matches.get(tier).copied().unwrap_or(0)
+    }
 }
 
 /// v1 `enrichChampionStats`: rates, averages and shares over exactly `rows`.
@@ -692,7 +709,7 @@ fn enrich(rows: Vec<StatRow>, rates: &Rates, names: &HashMap<i64, String>) -> (i
     let entries = rows
         .into_iter()
         .map(|r| {
-            let matches = rates.matches.get(&r.tier).copied().filter(|m| *m > 0);
+            let matches = Some(rates.matches_at(&r.tier)).filter(|m| *m > 0);
             // No ban row in a slice that exists is a computed zero (v1).
             let bans = rates
                 .bans
@@ -1010,7 +1027,8 @@ pub(crate) async fn compute(reads: &Reads, query: &Request) -> Result<Entry, Fai
         pick and ban rates over every match in the slice (platform, queue, patch), each match counted once however \
         many tiers its players were in, and averages over all the champion's games. With `tier`, a row per champion \
         at that tier, its rates over the matches that had a player at the tier. `minGames` and `limit` apply to the \
-        rows returned. Recomputed per (platform, queue) when a crawl completes. Sends an `ETag`; a matching \
+        rows returned: `totalGames` sums their games, while `totalMatches` is the rates' denominator, each match \
+        once, whatever `limit` and `minGames`. Recomputed per (platform, queue) when a crawl completes. Sends an `ETag`; a matching \
         `If-None-Match` gets 304. Kept in memory until the next recompute: `X-Cache: HIT` from memory, `MISS` read from the tables. Games Riot flagged as \
         remakes are left out unless `remakes=include`.",
     params(
@@ -1067,6 +1085,9 @@ async fn champions_doc(
     let computed_at = newest(rows.iter().map(|r| r.computed_at));
     let ids: Vec<i64> = rows.iter().map(|r| r.champion_id).collect();
     let names = reads.mirror.champion_names(&ids).await;
+    // Every row's tier is the request's: the named one, or `None` for the
+    // summed and range rows, so this is the one `pickRate` denominator.
+    let total_matches = rates.matches_at(&c.tier_part());
     let (total_games, champions) = enrich(rows, &rates, &names);
     let slice = slice_stamp(reads, c, patch.as_ref()).await?;
     let tag = etag(&[
@@ -1098,6 +1119,7 @@ async fn champions_doc(
             role: c.role.clone(),
             computed_at,
             total_games,
+            total_matches,
             champions,
         },
     )
@@ -1855,6 +1877,31 @@ mod tests {
             &HashMap::new(),
         );
         assert!(e[0].pick_rate.is_none() && e[0].ban_rate.is_none());
+    }
+
+    /// `totalMatches` (SITE-12) is the entry a row's `pickRate` divides by:
+    /// the totals for a summed or range row, a tier's slice for its rows, 0
+    /// for a tier with no slice and for no patch at all.
+    #[test]
+    fn matches_at_is_the_pick_rate_denominator() {
+        let rates = Rates::new(vec![("IRON".into(), 3), ("GOLD".into(), 5)], vec![], 4, vec![]);
+        assert_eq!(rates.matches_at(&None), 4);
+        assert_eq!(rates.matches_at(&Some("GOLD".into())), 5);
+        assert_eq!(rates.matches_at(&Some("MASTER".into())), 0);
+        assert_eq!(Rates::default().matches_at(&None), 0);
+        let (_, e) = enrich(
+            vec![StatRow {
+                tier: Some("GOLD".into()),
+                matches_picked: 2,
+                ..e_row()
+            }],
+            &rates,
+            &HashMap::new(),
+        );
+        assert_eq!(
+            e[0].pick_rate,
+            Some(rate(2, rates.matches_at(&Some("GOLD".into()))))
+        );
     }
 
     fn e_row() -> StatRow {
