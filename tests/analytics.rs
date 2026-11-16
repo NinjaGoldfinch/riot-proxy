@@ -233,6 +233,96 @@ async fn before_any_recompute_the_routes_answer_empty_documents() {
         e.get("/v1/lol/analytics/champions/134/matchups").await.json()["matchups"],
         json!([])
     );
+
+    // SITE-12 changed the shape marker in every analytics tag, so a
+    // validator a client kept from before `totalMatches` existed gets the new
+    // body, not a 304. The tag is rebuilt here as `routes::analytics::etag`
+    // builds it, checked against the one served, then with the old marker.
+    let uri = "/v1/lol/analytics/champions?queue=RANKED_SOLO_5x5&limit=2";
+    let version = e.state.ddragon.current_version().await;
+    let tag_with = |marker: &str| {
+        use base64::Engine as _;
+        use sha2::Digest as _;
+        let material = [
+            "champions",
+            marker,
+            "~",
+            "~",
+            version.as_deref().unwrap_or("~"),
+            "~",
+            "RANKED_SOLO_5x5",
+            "~",
+            "~",
+            "~",
+            "~",
+            "~",
+            "0",
+            "2",
+            "exclude",
+        ]
+        .join("|");
+        format!(
+            "W/\"{}\"",
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .encode(sha2::Sha256::digest(material.as_bytes()))
+        )
+    };
+    let now = e.get(uri).await;
+    assert_eq!(tag(&now), tag_with("tier-side-range-opponent-matches"));
+    let before = tag_with("tier-side-range-opponent");
+    let r = e.call("GET", uri, &e.reader, Some(&before), None).await;
+    assert_eq!(r.status, StatusCode::OK, "a tag from before totalMatches");
+    assert_eq!(r.json()["totalMatches"], 0);
+}
+
+/// `tier=UNKNOWN` (ADR-105) is the players no ladder or lookup placed:
+/// `totalMatches` counts the matches with such a player, and a range from
+/// IRON up leaves them out (SITE-12, review of #281). Here no player of the
+/// remake is placed, two of whom also played the ranked game; the ranked
+/// game's other eight are MASTER.
+#[tokio::test]
+async fn total_matches_of_the_unknown_tier_and_a_range_without_it() {
+    let e = env().await;
+    e.on_ladder(RANKED, &|_| "MASTER").await;
+    let unplaced: Vec<String> = serde_json::from_slice::<Value>(REMAKE).unwrap()["metadata"]["participants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p.as_str().unwrap().to_string())
+        .collect();
+    e.state
+        .db
+        .write(move |c| {
+            for p in unplaced {
+                c.execute("DELETE FROM ladder_entries WHERE puuid = ?1", [p])?;
+            }
+            Ok::<_, DbError>(())
+        })
+        .await
+        .unwrap();
+    for (id, body) in [("KR_8393343196", RANKED), ("KR_8393320187", REMAKE)] {
+        matches::put(&e.state.db, id, "asia", &e.scope, body.to_vec().into(), 1)
+            .await
+            .unwrap();
+    }
+    e.aggregate().await;
+    let totals = |q: &'static str| {
+        let e = &e;
+        async move {
+            let v = e
+                .get(&format!(
+                    "/v1/lol/analytics/champions?patch=all&remakes=include{q}"
+                ))
+                .await
+                .json();
+            (v["totalGames"].as_i64(), v["totalMatches"].as_i64())
+        }
+    };
+    assert_eq!(totals("").await, (Some(20), Some(2)));
+    // Both matches have an unplaced player; only the ranked game has a placed one.
+    assert_eq!(totals("&tier=UNKNOWN").await, (Some(12), Some(2)));
+    assert_eq!(totals("&minTier=IRON").await, (Some(8), Some(1)));
+    assert_eq!(totals("&tier=MASTER").await, (Some(8), Some(1)));
 }
 
 #[tokio::test]
@@ -714,6 +804,15 @@ async fn without_a_platform_the_routes_sum_every_platform() {
         e.get("/v1/lol/analytics/champions?platform=euw1").await.json()["totalGames"],
         0
     );
+    // totalMatches (SITE-12) sums the platforms too; a platform with none is 0.
+    assert_eq!(
+        (&all["totalMatches"], &kr["totalMatches"], &na["totalMatches"]),
+        (&json!(2), &json!(1), &json!(1))
+    );
+    assert_eq!(
+        e.get("/v1/lol/analytics/champions?platform=euw1").await.json()["totalMatches"],
+        0
+    );
 }
 
 #[tokio::test]
@@ -769,6 +868,22 @@ async fn patch_all_sums_every_patch_and_the_patch_list_offers_them() {
     );
     // Matches per tier are summed too, so a rate over both patches stays put.
     assert_eq!(first["pickRate"], newest["champions"][0]["pickRate"]);
+    // totalMatches (SITE-12): every patch's summed with `patch=all`, the
+    // newest patch's without `patch`.
+    let older = e.get("/v1/lol/analytics/champions?patch=16.18").await.json();
+    let named = e.get("/v1/lol/analytics/champions?patch=16.19").await.json();
+    assert_eq!(
+        (
+            &newest["totalMatches"],
+            &named["totalMatches"],
+            &older["totalMatches"]
+        ),
+        (&json!(1), &json!(1), &json!(1))
+    );
+    assert_eq!(
+        all["totalMatches"].as_i64(),
+        Some(named["totalMatches"].as_i64().unwrap() + older["totalMatches"].as_i64().unwrap())
+    );
 
     let id = first["championId"].as_i64().unwrap();
     let d = e
@@ -1058,6 +1173,16 @@ async fn total_matches_counts_each_match_once() {
     assert_eq!(totals(&one), (Some(2), Some(2)));
     let min2 = list("&remakes=include&minGames=2").await;
     assert_eq!(totals(&min2), (Some(4), Some(2)));
+    // No row left: still the slice's matches.
+    let none_left = list("&remakes=include&minGames=999").await;
+    assert_eq!(
+        (
+            &none_left["champions"],
+            &none_left["computedAt"],
+            totals(&none_left)
+        ),
+        (&json!([]), &Value::Null, (Some(0), Some(2)))
+    );
     // Rates have no role or side: neither does their denominator.
     for q in ["&remakes=include&role=MIDDLE", "&remakes=include&side=blue"] {
         assert_eq!(list(q).await["totalMatches"], 2, "{q}");
@@ -2484,8 +2609,24 @@ async fn a_delta_adding_a_game_gives_a_new_tag_and_one_outside_the_slice_a_304()
     let e = env().await;
     e.seed_stamped().await;
     let uri = "/v1/lol/analytics/champions?patch=16.19&minGames=0";
+    // totalMatches (SITE-12) moves with the delta in every tier slice: the
+    // seed's players are all MASTER.
+    let sliced = ["", "&tier=MASTER", "&minTier=MASTER"];
+    let matches = |want: i64| {
+        let e = &e;
+        async move {
+            for q in sliced {
+                assert_eq!(
+                    e.get(&format!("{uri}{q}")).await.json()["totalMatches"],
+                    want,
+                    "{q}"
+                );
+            }
+        }
+    };
     let first = e.get(uri).await;
     assert_eq!(first.json()["totalGames"], 10);
+    matches(1).await;
     // The ranked game again: a game more for every row of the slice.
     e.archive_as("KR_9000000001", RANKED).await;
     e.delta().await;
@@ -2493,11 +2634,13 @@ async fn a_delta_adding_a_game_gives_a_new_tag_and_one_outside_the_slice_a_304()
     assert_eq!(moved.status, StatusCode::OK);
     assert_ne!(tag(&moved), tag(&first));
     assert_eq!(moved.json()["totalGames"], 20);
+    matches(2).await;
     // A remake: no row of the slice remakes are left out of.
     e.archive_as("KR_9000000002", REMAKE).await;
     e.delta().await;
     let same = e.call("GET", uri, &e.reader, Some(&tag(&moved)), None).await;
     assert_eq!(same.status, StatusCode::NOT_MODIFIED);
+    matches(2).await;
     // And the delta's output is the rebuild's.
     let counted = e.get(uri).await.body;
     e.delta_ctx(500)

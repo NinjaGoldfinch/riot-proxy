@@ -225,8 +225,8 @@ function api(calls, url, { status = {}, unauthorized = false, ...opts } = {}) {
   if (p.startsWith('/v1/riot/accounts/by-puuid/')) { const id = p.split('/').pop(); return [200, { puuid: id, gameName: `Player ${id}`, tagLine: 'OCE' }]; }
   if (p.startsWith('/v1/lol/rotations/')) return [200, { freeChampionIds: [1, 2], freeChampionIdsForNewPlayers: [1], maxNewPlayerLevel: 10 }];
   // No tier asked for: one row per champion, every tier summed (ADR-123); 100 matches, so Annie's
-  // 20 picks are her pickRate 0.2 (SITE-12).
-  if (p === '/v1/lol/analytics/champions') return [200, { platform: 'oc1', queue: u.searchParams.get('queue'), tier: null, patch: '16.19', role: null, computedAt: null, totalGames: 25, totalMatches: 100, champions: [
+  // 20 picks are her pickRate 0.2 (SITE-12). `opts.totalMatches` replaces the 100.
+  if (p === '/v1/lol/analytics/champions') return [200, { platform: 'oc1', queue: u.searchParams.get('queue'), tier: null, patch: '16.19', role: null, computedAt: null, totalGames: 25, totalMatches: opts.totalMatches ?? 100, champions: [
     { championId: 1, championName: 'Annie', tier: null, patch: '16.19', games: 20, wins: 10, winRate: 0.5, share: 0.8, pickRate: 0.2, banRate: 0.05 },
     { championId: 2, championName: 'Olaf', tier: null, patch: '16.19', games: 5, wins: 4, winRate: 0.8, share: 0.2, pickRate: 0.05, banRate: 0 },
   ] }];

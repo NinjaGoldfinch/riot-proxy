@@ -822,6 +822,11 @@ test('top champions read every patch by default and the patch picker refetches t
   assert.ok(p.text('#topMeta').startsWith('all patches'));
   // The slice's matches, each once (SITE-12), not totalGames' player-games.
   assert.ok(p.text('#topMeta').endsWith(' · 100 matches'), p.text('#topMeta'));
+  // One match is singular; thousands are grouped (review of #281).
+  const one = await page({ totalMatches: 1 });
+  assert.ok(one.text('#topMeta').endsWith(' · 1 match'), one.text('#topMeta'));
+  const many = await page({ totalMatches: 1240 });
+  assert.ok(many.text('#topMeta').endsWith(' · 1,240 matches'), many.text('#topMeta'));
   assert.ok(p.calls.includes('/v1/lol/analytics/patches?queue=RANKED_SOLO_5x5&platform=oc1'), 'the ladder list, no champion');
   assert.equal(p.$('#top [data-patch]').options[0].textContent, 'All patches · 1,240 games');
   const sel = p.$('#top [data-patch]');

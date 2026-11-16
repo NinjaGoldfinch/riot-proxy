@@ -2,6 +2,10 @@
 
 Dated log of changes to this documentation set. One line per change; the newest first.
 
+## 2026-11-17
+
+- SITE-19: the example analytics ETag in `api/examples.md`, `api/endpoints-players-analytics.md` and `api/pagination-filtering-and-versioning.md` is the one a server at `9ca718a` sends since SITE-12's `STATS_SHAPE` marker (`W/"SauT-…"`); `src/routes/analytics.rs` citations in those pages, `api/errors.md` and `_meta/gaps.md` re-pointed; snapshot file names are `it__…`.
+
 ## 2026-11-10
 
 - SITE-14 (ADR-220): `GET /v1/lol/status`, every polled platform's status in one call from `platform_status` (`StatusSummary`, `PlatformSummary`, `Severity` in the OpenAPI document; `X-Cache: HIT`, the stalest available `X-Cache-Fetched-Age`; 503 `NOT_FOUND` with the poller off). `api/endpoints-riot-lol.md` (the route's section), `api/endpoints.md` (73 paths, 77 operations; `X-Cache-Fetched-Age`), `api/errors.md` (`NOT_FOUND` at 503), `api/openapi.json` (regenerated), `integration/contract.md` (fourteen operations; the headers; the status guarantee), `_meta/inventory.md`; design/03, design/11 (the showcase's **Every platform** card), design/14. Line citations of `src/routes/lol.rs` and `src/routes/docs.rs` moved with the code in every page that cites them.
@@ -84,4 +88,4 @@ Dated log of changes to this documentation set. One line per change; the newest 
 
 ---
 **Sources:** this documentation set
-**Last verified:** 2026-11-17 against commit `bdc62e7`
+**Last verified:** 2026-11-17 against commit `9ca718a`
