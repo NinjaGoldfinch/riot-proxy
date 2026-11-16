@@ -182,7 +182,7 @@ The binary's own RSS is dominated by the SQLite page cache (`cache_size`, 64 MB 
 
 ## Backups & restore
 
-- **Automatic:** `maintenance` runs `VACUUM INTO "$DATA_DIR/backups/riot-proxy-<date>.db"` daily, keeps `BACKUP_KEEP` (14). This is a consistent snapshot taken while the service runs. It is a full copy of the file, so on a box whose disk cannot hold the database twice set `BACKUP_KEEP=0` and copy off-box by hand instead. The step skips itself, with a warning, when the disk has less than 1.2 × the database's size free, and a copy that fails is removed and logged; neither stops the day's trims, sweep and checkpoint (ADR-136).
+- **Automatic:** `maintenance` runs `VACUUM INTO "$DATA_DIR/backups/riot-proxy-<date>.db"` daily, keeps `BACKUP_KEEP` (14). Its tick is due a day after the newest backup was written, whatever runs wrote none since, and at boot when there is none (AVL-13). This is a consistent snapshot taken while the service runs. It is a full copy of the file, so on a box whose disk cannot hold the database twice set `BACKUP_KEEP=0` and copy off-box by hand instead. The step skips itself, with a warning, when the disk has less than 1.2 × the database's size free, and a copy that fails is removed and logged; neither stops the day's trims, sweep and checkpoint (ADR-136).
 - **Manual:** `./riot-proxy backup /path/out.db` (same statement) — or `sqlite3 riot-proxy.db ".backup out.db"`.
 - **Restore:** stop the service, replace the file, start. There is nothing else to restore; the L1 cache and job heap rebuild themselves and the limiter defaults to conservative on a stale checkpoint.
 - **Off-box:** `rclone`/`restic` the `backups/` directory; it is plain files.
