@@ -436,7 +436,7 @@ pub struct Config {
     /// (SITE-13, design/14 §Status poller).
     pub status_poll_interval_s: u32,
     /// The platforms the status poller reads, in order without repeats.
-    /// Defaults to every platform; `none` is empty and turns it off.
+    /// Defaults to [`STATUS_POLL_DEFAULT`]; `none` is empty and turns it off.
     pub status_poll_platforms: Vec<Platform>,
     /// Where the status poller writes a redacted body with an incident, one
     /// file per platform and incident id. Unset: none is written.

@@ -1,7 +1,7 @@
 //! The status poller (SITE-13, design/14 §Status poller, ADR-219). An
 //! in-process task, not a job, reads `lol-status-v4` `platform-data`
-//! (`status.platformData`) on each of `STATUS_POLL_PLATFORMS` (every platform
-//! by default) at boot and every `STATUS_POLL_INTERVAL_S` (300) after.
+//! (`status.platformData`) on each of `STATUS_POLL_PLATFORMS` (all but `ph2`,
+//! `th2`, `tw2` by default) at boot and every `STATUS_POLL_INTERVAL_S` (240).
 //!
 //! Each read goes through the fetcher at bulk priority, past the cache read
 //! and writing through ([`READ`]), so L1 holds the body and
