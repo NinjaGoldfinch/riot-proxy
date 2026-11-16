@@ -43,7 +43,11 @@ impl ResponseCache {
         body: Bytes,
         ttls: &Ttls,
     ) -> Option<Arc<CacheEntry>> {
-        let entry = self.l1.put(key, body, ttls).await?;
+        let entry = if endpoint.keep_expired {
+            self.l1.put_kept(key, body, ttls).await?
+        } else {
+            self.l1.put(key, body, ttls).await?
+        };
         self.persist(key, endpoint, &entry);
         Some(entry)
     }

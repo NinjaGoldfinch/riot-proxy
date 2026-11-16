@@ -6,8 +6,12 @@
 //!   → limiter → client → observe → cache write → archive write (or rank record)
 //! ```
 //!
-//! The archive write is awaited only by a job's fetch; an interactive one
-//! hands it to the archive's write-behind and returns (AVL-02, ADR-210).
+//! The archive write is always handed to the archive's write-behind, so the
+//! call to Riot is over, for everyone waiting on it, when Riot has answered
+//! (AVL-02, ADR-210). A fetch that reads the archive next
+//! ([`FetchOptions::await_store`]: every job, the champion page) then waits
+//! for that write on its own, whether it started the call, joined it, or
+//! found the body still waiting to be stored ([`Stored`], AVL-11).
 //!
 //! The upstream leg owns v1's retry policy (ADR-017, ADR-021): 5xx and network
 //! failures retry twice after 250/750 ms; a typed 429 freezes the scope (via
@@ -26,6 +30,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
+use futures_util::FutureExt;
+use futures_util::future::{BoxFuture, Shared};
 use tokio::time::Instant;
 
 use crate::cache::ResponseCache;
@@ -137,10 +143,12 @@ pub struct FetchOptions {
     /// A job's fetch: bulk, waiting at most `JOB_YIELD_BUDGET_MS` for the
     /// limiter before failing with `limited_until` set (SCH-01).
     pub job: bool,
-    /// Wait for the archive to store a fresh body before answering, for a
-    /// caller that reads the archive next: every job, and the champion page.
-    /// Otherwise the write runs behind the answer (AVL-02, ADR-210). A fetch
-    /// that joins another caller's call to Riot gets that caller's choice.
+    /// Wait for the archive to store the body before answering, for a caller
+    /// that reads the archive next: every job, and the champion page.
+    /// Otherwise the write runs behind the answer (AVL-02, ADR-210). The wait
+    /// is this caller's alone ([`Stored`]): it holds whether the caller
+    /// started the call to Riot, joined another's, or was served a body still
+    /// waiting to be stored, and nobody who did not ask waits with it (AVL-11).
     pub await_store: bool,
 }
 
@@ -182,16 +190,79 @@ pub trait Archive: Send + Sync + 'static {
     }
     /// [`Archive::put`] for an immutable endpoint, [`Archive::observe`] for
     /// the rest, without the caller waiting for the write (AVL-02, ADR-210):
-    /// what an interactive fetch does with a fresh body. An archive with a
-    /// write-behind queue starts the write and returns; one without (the
-    /// default) awaits it. Either way it is stored once this resolves or soon
-    /// after, and [`Archive::get`] should find a detached body at once.
+    /// what the upstream leg does with every fresh body. An archive with a
+    /// write-behind queue starts the write and returns the [`Stored`] that
+    /// says when it has landed, and [`Archive::get`] finds the body at once;
+    /// one without (the default) awaits the write here and has nothing left
+    /// to wait for.
     fn store_behind<'a>(
         &'a self,
         req: &'a RiotRequest,
         body: Bytes,
-    ) -> futures_util::future::BoxFuture<'a, ()> {
-        store(self, req, body)
+    ) -> futures_util::future::BoxFuture<'a, Stored> {
+        Box::pin(async move {
+            store(self, req, body).await;
+            Stored::done()
+        })
+    }
+    /// The write that the body [`Archive::get`] serves for `req` is still
+    /// waiting on, if it is one handed to [`Archive::store_behind`] and not
+    /// yet stored; otherwise nothing to wait for.
+    fn storing(&self, _req: &RiotRequest) -> Stored {
+        Stored::done()
+    }
+}
+
+/// When a body handed to the archive has been stored (AVL-11): what
+/// [`Archive::store_behind`] returns, shared by everyone the call to Riot
+/// answered. Only a fetch with [`FetchOptions::await_store`] waits on it.
+/// Cheap to clone; every clone resolves together.
+#[derive(Clone, Default)]
+pub struct Stored(Option<Shared<BoxFuture<'static, ()>>>);
+
+impl Stored {
+    /// Nothing to wait for: already stored, or nothing to store.
+    pub fn done() -> Self {
+        Self(None)
+    }
+
+    /// Stored once `write` resolves. `write` is polled only while some clone
+    /// is being waited on: a wait for a write under way elsewhere costs
+    /// nothing unpolled, and a write passed here itself is made by whoever
+    /// waits for it.
+    pub fn when(write: impl std::future::Future<Output = ()> + Send + 'static) -> Self {
+        Self(Some(write.boxed().shared()))
+    }
+
+    /// A handle for a write under way elsewhere, and the sender that write
+    /// drops (or sends on) once it has landed.
+    pub fn pending() -> (tokio::sync::oneshot::Sender<()>, Self) {
+        let (landed, wait) = tokio::sync::oneshot::channel::<()>();
+        (
+            landed,
+            Self::when(async move {
+                // Resolved by a send or by the sender's drop alike.
+                let _ = wait.await;
+            }),
+        )
+    }
+
+    /// Wait for the write.
+    pub async fn wait(self) {
+        if let Some(write) = self.0 {
+            write.await;
+        }
+    }
+}
+
+impl std::fmt::Debug for Stored {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let state = match &self.0 {
+            None => "done",
+            Some(w) if w.peek().is_some() => "landed",
+            Some(_) => "pending",
+        };
+        f.debug_tuple("Stored").field(&state).finish()
     }
 }
 
@@ -229,6 +300,8 @@ struct Fetched {
     fetched_at: Instant,
     /// Upstream failed and this is the cached copy.
     stale: bool,
+    /// When the archive has stored this body ([`FetchOptions::await_store`]).
+    stored: Stored,
 }
 
 struct Inner {
@@ -357,6 +430,11 @@ impl Fetcher {
             if req.endpoint.immutable
                 && let Some(body) = self.inner.archive.get(&req).await
             {
+                // The body may be one another caller's write still holds; a
+                // caller that reads the archive next waits for that write.
+                if opts.await_store {
+                    self.inner.archive.storing(&req).wait().await;
+                }
                 record("hit");
                 return Ok(FetchResult {
                     body,
@@ -401,22 +479,21 @@ impl Fetcher {
             (false, Priority::Bulk) => BULK_BUDGET,
         };
         let (work_key, priority) = (key.clone(), opts.priority);
-        // A job wants the archive row before it moves on; most callers do
-        // not wait for the write (AVL-02, ADR-210).
-        let store = if opts.await_store {
-            Store::Await
-        } else {
-            Store::Behind
-        };
         // The upstream leg runs on its own task; it logs to this job.
         let current = activity::current();
         let flight = self
             .flight
             .run(key, move || {
-                activity::within(current, upstream(inner, req, work_key, priority, budget, store))
+                activity::within(current, upstream(inner, req, work_key, priority, budget))
             })
             .await;
         let fetched = flight.value?;
+        // The leg handed the body to the archive and ended. A job wants the
+        // row before it moves on, whoever started the call; nobody else
+        // waits for the write (AVL-02, AVL-11).
+        if opts.await_store {
+            fetched.stored.clone().wait().await;
+        }
         let x_cache = match (fetched.stale, opts.bypass) {
             (true, _) => XCache::Stale,
             (false, true) => XCache::Bypass,
@@ -473,7 +550,7 @@ impl Fetcher {
             let work_key = key.clone();
             let out = flight
                 .run(key, move || {
-                    upstream(inner, req, work_key, Priority::Bulk, BULK_BUDGET, Store::Behind)
+                    upstream(inner, req, work_key, Priority::Bulk, BULK_BUDGET)
                 })
                 .await;
             if let Err(e) = out.value {
@@ -513,31 +590,23 @@ async fn cached_copy(inner: &Inner, key: &str) -> Option<Fetched> {
             content_at: e.content_at,
             fetched_at: e.fetched_at,
             stale: true,
+            stored: Stored::done(),
         }),
         _ => None,
     }
 }
 
-/// How the upstream leg hands a fresh body to the archive (AVL-02, ADR-210).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Store {
-    /// Wait for the write: [`FetchOptions::await_store`].
-    Await,
-    /// Return without waiting ([`Archive::store_behind`]): everything else.
-    Behind,
-}
-
-/// The upstream leg: limiter, HTTP, observe, retries, cache and archive writes,
-/// negatives. Runs once per key at a time (single-flight), on its own task.
-/// `budget` bounds each wait for the limiter; `store` says whether the leg
-/// waits for the archive's write.
+/// The upstream leg: limiter, HTTP, observe, retries, the cache write and the
+/// archive hand-off, negatives. Runs once per key at a time (single-flight),
+/// on its own task. `budget` bounds each wait for the limiter. The leg never
+/// waits for the archive's write ([`Archive::store_behind`]): it returns the
+/// [`Stored`] that says when it lands, for the callers that want to.
 async fn upstream(
     inner: Arc<Inner>,
     mut req: RiotRequest,
     key: String,
     priority: Priority,
     budget: Duration,
-    store_as: Store,
 ) -> Result<Fetched, FetchError> {
     let endpoint: &'static Endpoint = req.endpoint;
     let targets = req.targets();
@@ -616,10 +685,7 @@ async fn upstream(
         let err = match outcome {
             Ok(res) => {
                 let ttls = inner.policy.ttls(endpoint);
-                match store_as {
-                    Store::Await => store(inner.archive.as_ref(), &req, res.body.clone()).await,
-                    Store::Behind => inner.archive.store_behind(&req, res.body.clone()).await,
-                }
+                let stored = inner.archive.store_behind(&req, res.body.clone()).await;
                 let fetched_at = Instant::now();
                 let content_at = match inner.cache.put(&key, endpoint, res.body.clone(), &ttls).await {
                     Some(entry) => entry.content_at,
@@ -630,6 +696,7 @@ async fn upstream(
                     content_at,
                     fetched_at,
                     stale: false,
+                    stored,
                 });
             }
             Err(e) => e,

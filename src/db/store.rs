@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 
 use futures_util::future::BoxFuture;
-use rusqlite::OptionalExtension;
+use rusqlite::{Connection, OptionalExtension};
 
 use super::{Db, DbError};
 use crate::jobs::scheduler::{self, Job};
@@ -153,19 +153,60 @@ impl Store for SqliteStore {
         Box::pin(self.db.write(|c| super::migrate(c).map(drop)))
     }
 
+    /// A claim is of use only to the worker that made it, so it is a
+    /// [`Db::write_for_caller`]: a worker aborted at shutdown while its claim
+    /// waits for the writer claims nothing, and a claim that ran as its
+    /// worker went is put back ([`unclaim`]). The row stays `pending` with no
+    /// attempt counted, instead of `running` for nobody (AVL-10).
     fn claim_job(&self, now_ms: i64, filter: &ClaimFilter) -> BoxFuture<'_, Result<Option<Job>, DbError>> {
         let filter = filter.clone();
-        Box::pin(self.db.write(move |c| {
-            c.query_row(
-                &claim_sql(Engine::Sqlite),
-                rusqlite::named_params! {
-                    "$1": now_ms, "$2": filter.lanes, "$3": filter.methods, "$4": filter.kinds,
-                },
-                scheduler::row,
-            )
-            .optional()
-            .map_err(DbError::from)
-        }))
+        Box::pin(self.db.write_for_caller(
+            move |c| {
+                c.query_row(
+                    &claim_sql(Engine::Sqlite),
+                    rusqlite::named_params! {
+                        "$1": now_ms, "$2": filter.lanes, "$3": filter.methods, "$4": filter.kinds,
+                    },
+                    scheduler::row,
+                )
+                .optional()
+                .map_err(DbError::from)
+            },
+            |c, claimed| {
+                let Ok(Some(job)) = claimed else { return };
+                match unclaim(c, &job.id) {
+                    Ok(_) => tracing::debug!(id = %job.id, kind = %job.kind, "claim put back: its worker was gone"),
+                    Err(e) => {
+                        tracing::warn!(id = %job.id, kind = %job.kind, error = %e, "could not put back a claim whose worker was gone; the row stays running until the next boot");
+                    }
+                }
+            },
+        ))
+    }
+}
+
+/// What [`claim_sql`] did to row `?1`, undone: `pending` again, the attempt
+/// not counted. `run_after`, the payload and the last error are as they were.
+pub const UNCLAIM_SQL: &str =
+    "UPDATE jobs SET state = 'pending', claimed_at = NULL, attempts = max(attempts - 1, 0)
+  WHERE id = ?1 AND state = 'running'";
+
+/// Tries [`unclaim`] makes when the shutdown interrupt, which repeats while a
+/// job write runs on, cancels the statement.
+const UNCLAIM_TRIES: usize = 4;
+
+/// Put a row [`SqliteStore::claim_job`] just claimed back to `pending`.
+/// Returns whether it was `running`.
+pub fn unclaim(conn: &Connection, id: &str) -> Result<bool, DbError> {
+    let mut tries = 0;
+    loop {
+        tries += 1;
+        match conn.execute(UNCLAIM_SQL, [id]) {
+            Ok(n) => return Ok(n > 0),
+            Err(rusqlite::Error::SqliteFailure(f, _))
+                if f.code == rusqlite::ErrorCode::OperationInterrupted && tries < UNCLAIM_TRIES => {}
+            Err(e) => return Err(e.into()),
+        }
     }
 }
 

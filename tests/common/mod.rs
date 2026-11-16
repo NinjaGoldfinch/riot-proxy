@@ -80,6 +80,7 @@ pub fn app_with(env: &[(&str, &str)], upstream: &str) -> (tempfile::TempDir, App
         db.clone(),
         dir.path().join("backups"),
         config.backup_keep as usize,
+        riot_proxy::cache::l2::Kept::none(),
     ));
     // As `serve` builds it (PERF-03).
     let analytics = std::sync::Arc::new(riot_proxy::routes::analytics::cache::Analytics::new(

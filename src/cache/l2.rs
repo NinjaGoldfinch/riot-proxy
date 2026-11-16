@@ -6,9 +6,12 @@
 //! crash loses at most one batch window of L2 writes; L1 and Riot cover it. The
 //! request path never waits: with the queue full, an entry is dropped and logged.
 //!
-//! Boot: [`warm`] loads every row L1 would still hold into L1, then [`sweep`]
-//! deletes the rest. A positive row is kept [`EXPIRED_KEEP`] past its hard TTL,
-//! as L1 keeps it, so a player's stored parts survive a restart (AVL-03, ADR-212).
+//! Boot: [`warm`] streams the rows L1 would still hold into L1, the
+//! latest-expiring first, until L1's budget is reached; then [`sweep`] deletes
+//! the rows that are of no more use. A 200 of an endpoint a player's page
+//! reads ([`Kept`]) is kept [`EXPIRED_KEEP`] past its hard TTL, as L1 keeps
+//! it, so a player's stored parts survive a restart (AVL-03, ADR-212). Every
+//! other row is loaded only inside its hard TTL and swept at it (AVL-08).
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
@@ -18,9 +21,11 @@ use bytes::Bytes;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use crate::cache::l1::{CacheEntry, EXPIRED_KEEP, L1};
+use crate::cache::keys::{KeyScope, endpoint_prefix};
+use crate::cache::l1::{CacheEntry, EXPIRED_KEEP, L1, entry_weight};
 use crate::clock::Clock;
 use crate::db::{Db, DbError};
+use crate::riot::endpoints::ENDPOINTS;
 
 /// design/04: flush every 2 s …
 pub const FLUSH_EVERY: Duration = Duration::from_secs(2);
@@ -53,15 +58,69 @@ impl Row {
         }
     }
 
-    pub fn to_entry(&self, clock: Clock) -> CacheEntry {
+    /// The L1 entry this row was. `kept` says whether it is one of [`Kept`]'s
+    /// rows: a 200 that is read as `Expired` for [`EXPIRED_KEEP`] past its
+    /// hard TTL.
+    pub fn to_entry(&self, clock: Clock, kept: bool) -> CacheEntry {
+        let hard_expires = clock.to_instant(self.hard_expires);
         CacheEntry {
             status: self.status,
             body: self.body.clone(),
             content_at: clock.to_instant(self.content_at),
             fetched_at: clock.to_instant(self.fetched_at),
             soft_expires: clock.to_instant(self.soft_expires),
-            hard_expires: clock.to_instant(self.hard_expires),
+            hard_expires,
+            kept_until: if kept && self.status == 200 {
+                hard_expires + EXPIRED_KEEP
+            } else {
+                hard_expires
+            },
         }
+    }
+}
+
+/// Which L2 rows outlive their hard TTL (AVL-03, AVL-08): the 200s of the
+/// endpoints with [`keep_expired`](crate::riot::endpoints::Endpoint::keep_expired),
+/// under the process's key scope. A cache key starts with its scope and
+/// endpoint, so each endpoint's rows are one range of the table's primary
+/// key: [`warm`] reads the kept rows through those ranges and never visits
+/// another endpoint's expired rows. Rows of another key scope hold another
+/// key's ids and are never kept.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Kept {
+    /// `[from, to)` of each kept endpoint's keys.
+    ranges: Vec<(String, String)>,
+}
+
+impl Kept {
+    /// Nothing is kept past its hard TTL.
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    /// The kept endpoints that are persisted at all, under `scope`.
+    pub fn for_scope(scope: &KeyScope) -> Self {
+        let ranges = ENDPOINTS
+            .iter()
+            .filter(|e| e.keep_expired && e.persist_l2)
+            .map(|e| {
+                let from = endpoint_prefix(scope, e.id);
+                // The prefix ends in ':'; ';' is the next byte, so this is
+                // the first key past every key that starts with it.
+                let mut to = from.clone();
+                to.pop();
+                to.push(';');
+                (from, to)
+            })
+            .collect();
+        Self { ranges }
+    }
+
+    /// Whether `key` is one of a kept endpoint's.
+    pub fn holds(&self, key: &str) -> bool {
+        self.ranges
+            .iter()
+            .any(|(from, to)| key >= from.as_str() && key < to.as_str())
     }
 }
 
@@ -189,50 +248,169 @@ fn keep_ms() -> i64 {
     i64::try_from(EXPIRED_KEEP.as_millis()).unwrap_or(i64::MAX)
 }
 
-/// Load every row L1 would still hold into `l1`: a negative one inside its
-/// TTL, a positive one up to [`EXPIRED_KEEP`] past its hard TTL. Returns how many.
-pub async fn warm(db: &Db, l1: &L1) -> Result<usize, DbError> {
-    let clock = Clock::now();
-    let now_ms = clock.unix_ms;
-    let kept_ms = now_ms.saturating_sub(keep_ms());
-    let rows: Vec<Row> = db
-        .read(move |c| {
-            // A row from before V0009 has no fetch time: its content's is the best there is.
-            let mut stmt = c.prepare(
-                "SELECT key, body, status, content_at, COALESCE(fetched_at, content_at), soft_expires, hard_expires
-                 FROM cache WHERE hard_expires > ?2 AND (status = 200 OR hard_expires > ?1)",
-            )?;
-            let rows = stmt
-                .query_map([now_ms, kept_ms], |r| {
-                    Ok(Row {
-                        key: r.get(0)?,
-                        body: Bytes::from(r.get::<_, Vec<u8>>(1)?),
-                        status: r.get(2)?,
-                        content_at: r.get(3)?,
-                        fetched_at: r.get(4)?,
-                        soft_expires: r.get(5)?,
-                        hard_expires: r.get(6)?,
-                    })
-                })?
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok::<_, DbError>(rows)
-        })
-        .await?;
-    for row in &rows {
-        l1.insert_entry(&row.key, row.to_entry(clock)).await;
-    }
-    Ok(rows.len())
+/// The rows inside their hard TTL (`?1` is now), the latest-expiring first:
+/// `cache_hard` read backwards, so rows come in order with no sort and the
+/// read can stop at any row. A row from before V0009 has no fetch time: its
+/// content's is the best there is.
+pub const WARM_LIVE_SQL: &str =
+    "SELECT key, body, status, content_at, COALESCE(fetched_at, content_at), soft_expires, hard_expires
+   FROM cache WHERE hard_expires > ?1 ORDER BY hard_expires DESC";
+
+/// One kept endpoint's 200s past their hard TTL (`?4` is now) by no more than
+/// `EXPIRED_KEEP` (`?3`): the endpoint's range of the primary key (`?1` to
+/// `?2`). The `+` keeps the planner off `cache_hard`, whose range holds every
+/// endpoint's expired rows.
+pub const WARM_KEPT_SQL: &str = "SELECT hard_expires, rowid FROM cache
+   WHERE key >= ?1 AND key < ?2 AND status = 200 AND +hard_expires > ?3 AND +hard_expires <= ?4";
+
+/// One row by its rowid.
+pub const WARM_ROW_SQL: &str =
+    "SELECT key, body, status, content_at, COALESCE(fetched_at, content_at), soft_expires, hard_expires
+   FROM cache WHERE rowid = ?1";
+
+/// Rows the reader may hold ahead of L1 while [`warm`] streams.
+const WARM_AHEAD: usize = 64;
+
+/// What [`warm`] did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Warmed {
+    /// Rows loaded into L1.
+    pub loaded: usize,
+    /// Their weight against L1's budget.
+    pub bytes: u64,
+    /// The next row did not fit L1's budget, so the rest were left in L2.
+    pub full: bool,
 }
 
-/// Delete the rows [`warm`] would skip. Returns how many.
-pub async fn sweep(db: &Db) -> Result<usize, DbError> {
+fn read_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
+    Ok(Row {
+        key: r.get(0)?,
+        body: Bytes::from(r.get::<_, Vec<u8>>(1)?),
+        status: r.get(2)?,
+        content_at: r.get(3)?,
+        fetched_at: r.get(4)?,
+        soft_expires: r.get(5)?,
+        hard_expires: r.get(6)?,
+    })
+}
+
+/// Hand `send` the rows [`warm`] loads, the latest-expiring first, until it
+/// returns `false`: every row inside its hard TTL, then the kept endpoints'
+/// 200s that passed it within [`EXPIRED_KEEP`]. Each row is read when it is
+/// handed over; of the kept rows only their ids are listed first, to order them.
+fn stream_rows(
+    c: &rusqlite::Connection,
+    now_ms: i64,
+    kept: &Kept,
+    mut send: impl FnMut(Row, bool) -> bool,
+) -> Result<(), DbError> {
+    let mut live = c.prepare(WARM_LIVE_SQL)?;
+    let mut rows = live.query([now_ms])?;
+    while let Some(r) = rows.next()? {
+        let row = read_row(r)?;
+        let is_kept = kept.holds(&row.key);
+        if !send(row, is_kept) {
+            return Ok(());
+        }
+    }
+    let kept_ms = now_ms.saturating_sub(keep_ms());
+    let mut ids: Vec<(i64, i64)> = Vec::new();
+    let mut of_range = c.prepare(WARM_KEPT_SQL)?;
+    for (from, to) in &kept.ranges {
+        let found = of_range.query_map(rusqlite::params![from, to, kept_ms, now_ms], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })?;
+        for id in found {
+            ids.push(id?);
+        }
+    }
+    // Most recently expired first; the rowid settles a tie the same way each time.
+    ids.sort_unstable_by(|a, b| b.cmp(a));
+    let mut by_id = c.prepare(WARM_ROW_SQL)?;
+    for (_, rowid) in ids {
+        let mut rows = by_id.query([rowid])?;
+        if let Some(r) = rows.next()? {
+            let row = read_row(r)?;
+            if !send(row, true) {
+                return Ok(());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Load the rows L1 would still hold into `l1`: every row inside its hard
+/// TTL, and `kept`'s 200s up to [`EXPIRED_KEEP`] past theirs. They are
+/// streamed from a reader, the latest-expiring first, and the load stops at
+/// the first row that does not fit `l1`'s budget (`CACHE_L1_MAX_MB`), so what
+/// boot reads and holds is bounded by that budget, not by what a day of
+/// traffic left in L2 (AVL-08).
+pub async fn warm(db: &Db, l1: &L1, kept: &Kept) -> Result<Warmed, DbError> {
+    let clock = Clock::now();
+    let now_ms = clock.unix_ms;
+    let (tx, mut rx) = mpsc::channel::<(Row, bool)>(WARM_AHEAD);
+    let kept = kept.clone();
+    let read = db.read(move |c| {
+        // A send fails once `load` has stopped listening: the budget is full.
+        stream_rows(c, now_ms, &kept, |row, is_kept| {
+            tx.blocking_send((row, is_kept)).is_ok()
+        })
+    });
+    let load = async move {
+        let budget = l1.max_bytes();
+        let mut out = Warmed::default();
+        while let Some((row, is_kept)) = rx.recv().await {
+            let weight = entry_weight(&row.key, row.body.len());
+            if out.bytes.saturating_add(weight) > budget {
+                out.full = true;
+                break;
+            }
+            l1.insert_entry(&row.key, row.to_entry(clock, is_kept)).await;
+            out.loaded += 1;
+            out.bytes += weight;
+        }
+        // Dropping the receiver here is what stops the reader.
+        out
+    };
+    let (read, out) = tokio::join!(read, load);
+    read?;
+    Ok(out)
+}
+
+/// `DELETE` for [`sweep`] with `kept` key ranges: every row past its hard
+/// TTL (`?1` is now) but the kept endpoints' 200s that passed it within
+/// `EXPIRED_KEEP` (`?2`). The ranges are `?3` to `?4`, `?5` to `?6` and so on.
+/// The rows come from `cache_hard`'s range below now.
+pub fn sweep_sql(kept: usize) -> String {
+    if kept == 0 {
+        return "DELETE FROM cache WHERE hard_expires <= ?1".to_string();
+    }
+    let ranges = (0..kept)
+        .map(|i| format!("(key >= ?{} AND key < ?{})", 3 + 2 * i, 4 + 2 * i))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    format!(
+        "DELETE FROM cache WHERE hard_expires <= ?1
+            AND NOT (status = 200 AND hard_expires > ?2 AND ({ranges}))"
+    )
+}
+
+/// Delete the rows [`warm`] would never load again: every row past its hard
+/// TTL except `kept`'s 200s inside [`EXPIRED_KEEP`]. Returns how many.
+pub async fn sweep(db: &Db, kept: &Kept) -> Result<usize, DbError> {
     let now_ms = Clock::now().unix_ms;
     let kept_ms = now_ms.saturating_sub(keep_ms());
+    let kept = kept.clone();
     db.write(move |c| {
-        Ok(c.execute(
-            "DELETE FROM cache WHERE hard_expires <= ?1 AND (status <> 200 OR hard_expires <= ?2)",
-            [now_ms, kept_ms],
-        )?)
+        let mut params: Vec<rusqlite::types::Value> = vec![now_ms.into()];
+        if !kept.ranges.is_empty() {
+            params.push(kept_ms.into());
+        }
+        for (from, to) in &kept.ranges {
+            params.push(from.clone().into());
+            params.push(to.clone().into());
+        }
+        Ok(c.execute(&sweep_sql(kept.ranges.len()), rusqlite::params_from_iter(params))?)
     })
     .await
 }

@@ -2291,3 +2291,94 @@ async fn job_writes_queued_before_the_interrupt_are_dropped_and_later_ones_run()
     .expect("a later job write");
     assert!(marker_exists(&db).await);
 }
+
+// ── AVL-10: a write only its caller can use ─────────────────────────────────
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_caller_bound_write_whose_caller_left_while_it_queued_never_runs() {
+    let (_dir, db) = open_temp(1);
+    let (release, holder) = hold_writer(&db);
+    let (ran, undone) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)));
+    let queued = tokio::spawn({
+        let (db, ran, undone) = (db.clone(), Arc::clone(&ran), Arc::clone(&undone));
+        async move {
+            db.write_for_caller(
+                move |_| {
+                    ran.store(true, Ordering::SeqCst);
+                    Ok::<_, DbError>(7)
+                },
+                move |_, _| undone.store(true, Ordering::SeqCst),
+            )
+            .await
+        }
+    });
+    while db.write_queued() == 0 {
+        tokio::task::yield_now().await;
+    }
+    queued.abort();
+    assert!(queued.await.expect_err("aborted").is_cancelled());
+    release.send(()).expect("release");
+    holder.await.expect("join");
+    // Whatever was queued has had its turn by the time this returns.
+    db.write(|_| Ok::<_, DbError>(())).await.expect("barrier");
+    assert!(!ran.load(Ordering::SeqCst), "nobody was left to use it");
+    assert!(!undone.load(Ordering::SeqCst), "nothing to undo");
+}
+
+#[tokio::test]
+async fn a_caller_bound_write_whose_caller_leaves_while_it_runs_is_undone() {
+    let (_dir, db) = open_temp(1);
+    let (started, running) = std::sync::mpsc::channel::<()>();
+    let (release, held) = std::sync::mpsc::channel::<()>();
+    let undone = Arc::new(std::sync::Mutex::new(None));
+    let caller = tokio::spawn({
+        let (db, undone) = (db.clone(), Arc::clone(&undone));
+        async move {
+            db.write_for_caller(
+                move |c| {
+                    c.execute_batch("CREATE TABLE avl10_marker (x)")?;
+                    let _ = started.send(());
+                    let _ = held.recv();
+                    Ok::<_, DbError>(7)
+                },
+                move |c, unsent: Result<i32, DbError>| {
+                    let dropped = c.execute_batch("DROP TABLE avl10_marker").is_ok();
+                    *undone.lock().expect("lock") = Some((unsent.ok(), dropped));
+                },
+            )
+            .await
+        }
+    });
+    tokio::task::spawn_blocking(move || running.recv())
+        .await
+        .expect("join")
+        .expect("the write started");
+    caller.abort();
+    assert!(caller.await.expect_err("aborted").is_cancelled());
+    release.send(()).expect("release");
+    db.write(|_| Ok::<_, DbError>(())).await.expect("barrier");
+    assert_eq!(
+        *undone.lock().expect("lock"),
+        Some((Some(7), true)),
+        "undone with the result nobody received, on the writer's connection"
+    );
+}
+
+#[tokio::test]
+async fn a_caller_bound_write_answers_its_caller_like_any_write() {
+    let (_dir, db) = open_temp(1);
+    let undone = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&undone);
+    let n = db
+        .write_for_caller(
+            |c| {
+                c.query_row("SELECT 41 + 1", [], |r| r.get::<_, i64>(0))
+                    .map_err(DbError::from)
+            },
+            move |_, _| flag.store(true, Ordering::SeqCst),
+        )
+        .await
+        .expect("write");
+    assert_eq!(n, 42);
+    assert!(!undone.load(Ordering::SeqCst));
+}
