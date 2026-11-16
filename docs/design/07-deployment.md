@@ -153,7 +153,7 @@ Same variable names as v1 where the concept survives; removed variables are list
 | `AGGREGATE_DELTA_TARGET_MS` | `100` | **new** — the statement time a delta batch aims for; each batch is sized from the last one's. `20`–`1000` |
 | `AGGREGATE_DELTA_BATCH` | `500` | **new** — the most matches in one delta batch (the first after a restart is 50, none under 5). `5`–`5000` |
 | `STATUS_POLL_INTERVAL_S` | `300` | **new** — how often the status poller reads `lol-status-v4` on every platform below, at bulk priority, into the response cache and `platform_status` (design/14 §Status poller, SITE-13, ADR-219); `60`–`3600`. Past 300 s the per-platform route's copy goes past its soft TTL between rounds |
-| `STATUS_POLL_PLATFORMS` | every platform | **new** — the platforms the poller reads, in order without repeats; `none` turns the poller off |
+| `STATUS_POLL_PLATFORMS` | every platform | **new** — the platforms the poller reads, in order without repeats; `none` turns the poller off, and `GET /v1/lol/status`, which it feeds, then answers 404 `NOT_FOUND` |
 | `STATUS_RECORDINGS_DIR` | unset | **new** — where the poller writes a 200 body that lists an incident, one file per platform and incident id, written once, with the API key redacted; unset writes none |
 | `BOOTSTRAP_ADMIN_KEY` | — | printed on first `serve`, no separate migrate step |
 | everything else (`CACHE_TTL_OVERRIDES`, `NEG_TTL_*`, `CLIENT_WAIT_BUDGET_MS`, `BULK_USAGE_CEILING`, `STALE_WHILE_REVALIDATE`, `METRICS_*`, `TRACK_POLL_*`, `TRACK_CATCHUP_LIMIT`, `LADDER_*`, `FACTS_REEXTRACT_BATCH`, `AGGREGATE_PATCH_LIMIT`, `AGGREGATE_INTERVAL_S`, `ADMIN_IP_ALLOWLIST`, `AUTH_DISABLED`, `DEV_UI`, `DOCS_UI`, `DASHBOARD_UI`, `LOG_LEVEL`) | as v1 | unchanged |

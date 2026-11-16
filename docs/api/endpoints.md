@@ -137,9 +137,9 @@ x-request-id: 01M5B6GNQ9SCSC5X3GTAV136MG
 
 | Method | Path | Response | Handler |
 |---|---|---|---|
-| GET | `/docs` | Scalar HTML reference | `src/routes/docs.rs:L410` |
-| GET | `/openapi.json` | the document, pretty JSON | `src/routes/docs.rs:L402-L405` |
-| GET | `/openapi.yaml` | `Content-Type: application/yaml` | `src/routes/docs.rs:L406-L409` |
+| GET | `/docs` | Scalar HTML reference | `src/routes/docs.rs:L413` |
+| GET | `/openapi.json` | the document, pretty JSON | `src/routes/docs.rs:L405-L408` |
+| GET | `/openapi.yaml` | `Content-Type: application/yaml` | `src/routes/docs.rs:L409-L412` |
 
 No key. Not listed in the document itself. `riot-proxy spec` prints the same JSON from the CLI.
 
@@ -241,5 +241,5 @@ The frame shape is `src/events.rs:L159-L172`; data fields per event are listed i
 - Gauge `proxy_ws_connections`; counter `events_published_total{name}`.
 
 ---
-**Sources:** `src/app.rs:L30-L35,L71-L121,L258-L264`, `src/routes/docs.rs:L86-L153,L386-L399`, `src/routes/health.rs:L21-L200`, `src/routes/ui.rs:L94-L233`, `src/routes/dev.rs:L33-L255`, `src/routes/ws.rs:L497-L572`, `src/ws/protocol.rs:L23-L147`, `src/ws/socket.rs:L38-L206`, `src/ws/hub.rs:L20-L205`, `src/http/auth.rs:L141-L423`, `src/status/mod.rs:L151-L247`, `src/status/ratelimits.rs:L103-L246`, `src/http/quota.rs:L320-L431`, `src/http/request_id.rs:L287-L339`, `src/http/validate.rs:L21-L88`, `src/routes/passthrough.rs:L401-L476`, `src/fetcher.rs:L66-L100,L454-L525,L867-L905`, `src/riot/routing.rs:L48-L196`, `docs/DECISIONS.md` ADR-216, `docs/_meta/scratch/routes.md`, `docs/design/12-object-storage-and-hosting.md:L904-L925`, `tests/snapshots/http__unknown_route_404.snap`, `tests/snapshots/ws_hub__ws_session.snap`, live capture against `target/debug/riot-proxy` 2.7.0
-**Last verified:** 2026-11-17 against commit `bdc62e7`
+**Sources:** `src/app.rs:L30-L35,L71-L121,L258-L264`, `src/routes/docs.rs:L86-L153,L389-L402`, `src/routes/health.rs:L21-L200`, `src/routes/ui.rs:L94-L233`, `src/routes/dev.rs:L33-L255`, `src/routes/ws.rs:L497-L572`, `src/ws/protocol.rs:L23-L147`, `src/ws/socket.rs:L38-L206`, `src/ws/hub.rs:L20-L205`, `src/http/auth.rs:L141-L423`, `src/status/mod.rs:L151-L247`, `src/status/ratelimits.rs:L103-L246`, `src/http/quota.rs:L320-L431`, `src/http/request_id.rs:L287-L339`, `src/http/validate.rs:L21-L88`, `src/routes/passthrough.rs:L401-L476`, `src/fetcher.rs:L66-L100,L454-L525,L867-L905`, `src/riot/routing.rs:L48-L196`, `docs/DECISIONS.md` ADR-216, `docs/_meta/scratch/routes.md`, `docs/design/12-object-storage-and-hosting.md:L904-L925`, `tests/snapshots/http__unknown_route_404.snap`, `tests/snapshots/ws_hub__ws_session.snap`, live capture against `target/debug/riot-proxy` 2.7.0
+**Last verified:** 2026-11-17 against commit `9ca718a`

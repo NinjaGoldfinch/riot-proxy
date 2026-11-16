@@ -2,6 +2,10 @@
 
 Dated log of changes to this documentation set. One line per change; the newest first.
 
+## 2026-11-17
+
+- SITE-18 (ADR-220 amended): `api/endpoints-riot-lol.md`, `integration/contract.md`, design/14 and `docs/api/openapi.json` say an available status entry is at most two poll intervals old and an older one is unavailable; `api/errors.md`, `deployment/configuration.md`, design/07, `README.md` and `.env.example` say the poller off makes `GET /v1/lol/status` a 404 (was 503); `api/errors.md` and `operations/observability.md` add the route's 500 and its two log lines; the schemas are renamed.
+
 ## 2026-11-10
 
 - SITE-14 (ADR-220): `GET /v1/lol/status`, every polled platform's status in one call from `platform_status` (`StatusSummary`, `PlatformSummary`, `Severity` in the OpenAPI document; `X-Cache: HIT`, the stalest available `X-Cache-Fetched-Age`; 503 `NOT_FOUND` with the poller off). `api/endpoints-riot-lol.md` (the route's section), `api/endpoints.md` (73 paths, 77 operations; `X-Cache-Fetched-Age`), `api/errors.md` (`NOT_FOUND` at 503), `api/openapi.json` (regenerated), `integration/contract.md` (fourteen operations; the headers; the status guarantee), `_meta/inventory.md`; design/03, design/11 (the showcase's **Every platform** card), design/14. Line citations of `src/routes/lol.rs` and `src/routes/docs.rs` moved with the code in every page that cites them.
@@ -84,4 +88,4 @@ Dated log of changes to this documentation set. One line per change; the newest 
 
 ---
 **Sources:** this documentation set
-**Last verified:** 2026-11-17 against commit `bdc62e7`
+**Last verified:** 2026-11-17 against commit `9ca718a`

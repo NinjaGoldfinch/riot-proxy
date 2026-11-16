@@ -36,7 +36,7 @@ Every error from a proxy route has this body and status; `requestId` is the valu
 | `BAD_REGION` | 400 | the platform or region value is wrong or in the wrong case (`EUW1` is refused, `euw1` accepted) |
 | `UNAUTHORIZED` | 401 | the key is missing, unknown or revoked |
 | `FORBIDDEN` | 403 | wrong scope, or an admin call from a disallowed address |
-| `NOT_FOUND` | 404 | Riot has nothing (`X-Cache: HIT-NEG` when answered from the negative cache), or no such route. At **503** on `GET /v1/lol/status` only: this deployment does not poll platform status (`STATUS_POLL_PLATFORMS=none`); no `Retry-After`, waiting does not change it |
+| `NOT_FOUND` | 404 | Riot has nothing (`X-Cache: HIT-NEG` when answered from the negative cache), or no such route, or a feature this deployment turned off: on `GET /v1/lol/status`, it does not poll platform status (`STATUS_POLL_PLATFORMS=none`; a 503 before SITE-18) |
 | `QUOTA_EXCEEDED` | 429 | this consumer's quota; wait `retryAfter` |
 | `INTERNAL` | 500 | report with the request id |
 | `UPSTREAM_ERROR` | 502 | Riot failed or rejected the key; retrying soon rarely helps |
@@ -84,7 +84,7 @@ Validation rules and examples for each are in [../api/endpoints.md](../api/endpo
 ## Guarantees and their limits
 
 - **Freshness.** A `HIT` is at most the endpoint's soft TTL old (summoner 1 h, league entries 5 min, match ids 2 min, spectator 30 s, account 24 h); a `STALE` may be up to four times that and is being refreshed. Matches and timelines are immutable and served from the archive forever. Analytics answers change only when a rebuild finishes (after each completed crawl or an operator's recompute).
-- **Status.** `GET /v1/lol/status` lists every platform the proxy polls (all 17 by default) whatever Riot answers: a platform whose last read failed, or that has not been read since boot, is `available: false` with `error`, and the call is still a 200. It is read from the proxy's own table, so it answers inside the site's 2 s deadline even while Riot is down.
+- **Status.** `GET /v1/lol/status` lists every platform the proxy polls whatever Riot answers: a platform whose last read failed, that has never been read (no stored 200), or whose last 200 is older than two poll intervals is `available: false` with `error`, and the call is still a 200. An available entry is therefore at most two poll intervals old; check `fetchedAgeSeconds` for its age. It is read from the proxy's own table, so it answers inside the site's 2 s deadline even while Riot is down.
 - **Partial answers.** Composite routes return `null` parts and a `warnings[]` entry instead of failing when one upstream call fails; only when every part fails is the profile a 404.
 - **Refresh.** `?refresh=true` on `/v1/players/*` wins one refresh per part per player per 60 s; the losers are told `refreshed:false` and `refreshAvailableIn`. On passthrough routes `?refresh=true` is honoured only for admin-scoped keys and silently ignored otherwise.
 - **Rate limits.** A consumer's own quota is independent of Riot's. Interactive requests wait at most 2 s for a Riot token; beyond that the answer is `503 RATE_LIMITED` or a `STALE` copy. The proxy never exposes Riot's limit headers.
@@ -102,5 +102,5 @@ The server reports its version in the OpenAPI document's `info.version` (`/opena
 `GET /v1/ws` with `?token=` or the bearer header. First frame `{"op":"ready","consumer":"…"}`; `{"op":"subscribe","topics":["player:<puuid>","patch"]}` answers `{"op":"subscribed","topics":[…]}`; events arrive as `{"op":"event","event":"game.started","topic":"player:…","at":1760000000000,"data":{…}}`. The site does not use it. Protocol details in [../api/endpoints.md](../api/endpoints.md#v1ws-the-realtime-socket).
 
 ---
-**Sources:** `src/http/error.rs:L15-L67,L158-L193`, `src/http/request_id.rs:L287-L338`, `src/http/quota.rs:L332-L336`, `src/routes/passthrough.rs:L127-L166,L470-L476`, `src/routes/analytics.rs:L588-L625`, `src/routes/players.rs:L66-L147`, `src/routes/players/refresh.rs:L18-L71`, `src/routes/lol.rs:L417-L475`, `src/status/poll/summary.rs:L1-L245`, `src/riot/endpoints.rs:L121-L328`, `docs/api/openapi.json`, `docs/_meta/scratch/siblings.md` §1.5, `docs/_meta/scratch/routes.md` §1-§4
-**Last verified:** 2026-11-17 against commit `bdc62e7`
+**Sources:** `src/http/error.rs:L15-L67,L158-L193`, `src/http/request_id.rs:L287-L338`, `src/http/quota.rs:L332-L336`, `src/routes/passthrough.rs:L127-L166,L470-L476`, `src/routes/analytics.rs:L588-L625`, `src/routes/players.rs:L66-L147`, `src/routes/players/refresh.rs:L18-L71`, `src/routes/lol.rs:L417-L480`, `src/status/poll/summary.rs:L1-L278`, `src/riot/endpoints.rs:L121-L328`, `docs/api/openapi.json`, `docs/_meta/scratch/siblings.md` §1.5, `docs/_meta/scratch/routes.md` §1-§4
+**Last verified:** 2026-11-17 against commit `9ca718a`

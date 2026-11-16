@@ -1,7 +1,7 @@
 //! `GET /v1/lol/status` (SITE-14, ADR-220) against a wiremock Riot read by
 //! the real status poller: every polled platform from `platform_status`, a
 //! failing platform as `available: false` in a 200, no call to Riot on read,
-//! the headers, and a 503 when the poller is off.
+//! the headers, and a 404 when the poller is off.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use crate::common;
@@ -160,6 +160,10 @@ async fn every_polled_platform_in_one_call_without_calling_riot() {
         ]})
     );
     assert_eq!(r.headers["x-cache"], "HIT");
+    assert_eq!(
+        r.headers["content-type"], "application/json; charset=utf-8",
+        "the charset form every read route sends (review of #283)"
+    );
     assert!(header_u64(&r, "x-cache-fetched-age") < 5);
     assert!(!r.headers.contains_key("x-cache-age"), "no content age");
     assert!(r.headers.contains_key("x-request-id"));
@@ -227,13 +231,14 @@ async fn a_failure_after_a_200_is_unavailable_with_the_last_200s_age() {
     );
 }
 
-/// `STATUS_POLL_PLATFORMS=none`: no poller, nothing stored, a 503 without
-/// `Retry-After` (waiting does not change it). Still metered and keyed.
+/// `STATUS_POLL_PLATFORMS=none`: no poller, nothing stored, a 404
+/// `NOT_FOUND` as every switched-off feature answers (owner decision D2,
+/// SITE-18; #283 answered 503), without `Retry-After`. Still metered and keyed.
 #[tokio::test]
-async fn the_poller_off_is_a_503() {
+async fn the_poller_off_is_a_404() {
     let e = env("none", 10_000).await;
     let r = e.get("/v1/lol/status").await;
-    assert_eq!(r.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
     let err = &r.json()["error"];
     assert_eq!(err["code"], "NOT_FOUND");
     assert_eq!(
@@ -265,4 +270,201 @@ async fn keyed_like_the_platform_route_and_metered_once() {
     assert_eq!(header_u64(&r, "x-ratelimit-remaining"), 4);
     let r = e.get("/v1/lol/status").await;
     assert_eq!(header_u64(&r, "x-ratelimit-remaining"), 3);
+}
+
+// ── Review of #283 (SITE-18) ─────────────────────────────────────────────────
+
+/// Store a row as a poller (this process's or an earlier one's) would.
+async fn stored_row(
+    e: &Env,
+    platform: &str,
+    body: Option<String>,
+    fetched_ago_s: Option<i64>,
+    failed: Option<(i64, &str)>,
+) {
+    let now = riot_proxy::clock::Clock::now().unix_ms;
+    let (platform, failed) = (
+        platform.to_string(),
+        failed.map(|(ago, err)| (now - ago * 1000, err.to_string())),
+    );
+    e.state
+        .db
+        .write(move |c| {
+            c.execute(
+                "INSERT INTO platform_status (platform, body, fetched_at, failed_at, error) VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![
+                    platform,
+                    body,
+                    fetched_ago_s.map(|s| now - s * 1000),
+                    failed.as_ref().map(|f| f.0),
+                    failed.as_ref().map(|f| f.1.clone())
+                ],
+            )?;
+            Ok::<_, riot_proxy::db::DbError>(())
+        })
+        .await
+        .unwrap();
+}
+
+/// Owner decision D1: an entry whose last 200 is older than two poll
+/// intervals (here 2 × 240 s, a row a skipped poll left behind) is
+/// unavailable, keeps its age, and is not the stalest available age.
+#[tokio::test]
+async fn an_entry_older_than_two_intervals_is_unavailable() {
+    let server = MockServer::start().await;
+    let (_dir, state, router) = common::app_with(
+        &[
+            ("STATUS_POLL_PLATFORMS", "oc1,kr"),
+            ("STATUS_POLL_INTERVAL_S", "240"),
+        ],
+        &server.uri(),
+    );
+    let key = consumers::create(
+        &state.db,
+        NewConsumer {
+            name: "site".into(),
+            scopes: vec![Scope::Read],
+            quota_per_min: 100,
+            key: None,
+        },
+    )
+    .await
+    .unwrap()
+    .key
+    .expose()
+    .to_string();
+    let e = Env {
+        _dir,
+        state,
+        router,
+        server,
+        key,
+    };
+    stored_row(&e, "kr", Some(quiet("KR")), Some(481), None).await;
+    stored_row(&e, "oc1", Some(quiet("OC1")), Some(30), None).await;
+    let r = e.get("/v1/lol/status").await;
+    assert_eq!(r.status, StatusCode::OK);
+    let body = r.json();
+    let kr = &body["platforms"][0];
+    assert_eq!(kr["platform"], "kr");
+    assert_eq!(kr["available"], false);
+    let error = kr["error"].as_str().unwrap();
+    assert!(error.starts_with("stale: last read 48"), "{error}");
+    assert_eq!(kr["incidents"], serde_json::Value::Null);
+    assert!(kr["fetchedAgeSeconds"].as_u64().unwrap() >= 481);
+    assert_eq!(body["platforms"][1]["available"], true);
+    assert!(
+        header_u64(&r, "x-cache-fetched-age") < 35,
+        "the stalest available one is oc1's"
+    );
+    assert_eq!(e.upstream_calls().await, 0);
+}
+
+/// Rows survive a restart, so a new process serves what an earlier one
+/// stored before its own first round; an entry with no stored 200 is `not
+/// read yet` whatever the boot.
+#[tokio::test]
+async fn rows_from_an_earlier_process_are_served_before_the_first_round() {
+    let e = env("oc1,kr", 10_000).await;
+    stored_row(&e, "oc1", Some(quiet("OC1")), Some(100), None).await;
+    let r = e.get("/v1/lol/status").await;
+    let body = r.json();
+    let kr = &body["platforms"][0];
+    let oc1 = &body["platforms"][1];
+    assert_eq!(
+        (kr["available"].clone(), kr["error"].clone()),
+        (json!(false), json!("not read yet"))
+    );
+    assert_eq!(oc1["available"], true);
+    let age = oc1["fetchedAgeSeconds"].as_u64().unwrap();
+    assert!((100..105).contains(&age), "{age}");
+    assert_eq!(e.upstream_calls().await, 0);
+}
+
+/// A key without the `read` scope is a 403, as on the per-platform route.
+#[tokio::test]
+async fn a_key_without_read_is_a_403() {
+    let e = env("oc1", 10_000).await;
+    let admin_only = consumers::create(
+        &e.state.db,
+        NewConsumer {
+            name: "ops".into(),
+            scopes: vec![Scope::Admin],
+            quota_per_min: 100,
+            key: None,
+        },
+    )
+    .await
+    .unwrap()
+    .key
+    .expose()
+    .to_string();
+    let r = common::send(
+        e.router.clone(),
+        Request::get("/v1/lol/status")
+            .header("authorization", format!("Bearer {admin_only}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+}
+
+/// With the default configuration every default platform is listed, in
+/// `Platform::ALL` order.
+#[tokio::test]
+async fn the_default_configuration_lists_the_default_platforms_in_order() {
+    let (_dir, state, router) = common::app_with(&[], "http://127.0.0.1:9");
+    let key = consumers::create(
+        &state.db,
+        NewConsumer {
+            name: "site".into(),
+            scopes: vec![Scope::Read],
+            quota_per_min: 100,
+            key: None,
+        },
+    )
+    .await
+    .unwrap()
+    .key
+    .expose()
+    .to_string();
+    let r = common::send(
+        router,
+        Request::get("/v1/lol/status")
+            .header("authorization", format!("Bearer {key}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    let listed: Vec<String> = r.json()["platforms"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["platform"].as_str().unwrap().to_string())
+        .collect();
+    let want: Vec<String> = Platform::ALL
+        .into_iter()
+        .filter(|p| state.config.status_poll_platforms.contains(p))
+        .map(|p| p.as_str().to_string())
+        .collect();
+    assert_eq!(listed, want);
+    assert_eq!(listed.len(), state.config.status_poll_platforms.len());
+}
+
+/// A failed read of `platform_status` is a 500 `INTERNAL`.
+#[tokio::test]
+async fn a_failed_platform_status_read_is_a_500() {
+    let e = env("oc1", 10_000).await;
+    e.state
+        .db
+        .write(|c| {
+            c.execute_batch("DROP TABLE platform_status")?;
+            Ok::<_, riot_proxy::db::DbError>(())
+        })
+        .await
+        .unwrap();
+    let r = e.get("/v1/lol/status").await;
+    assert_eq!(r.status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(r.json()["error"]["code"], "INTERNAL");
 }

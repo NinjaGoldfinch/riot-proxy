@@ -24,7 +24,7 @@ expression: doc
         }
       },
       "X-Cache": {
-        "description": "Where the body came from: `HIT`, `MISS`, `STALE`, `HIT-NEG` (a cached 404), `ARCHIVE` (the match archive) or `BYPASS` (`?refresh=true`). On the analytics routes, `HIT` is a response kept in memory since the last recompute and `MISS` one read from the tables.",
+        "description": "Where the body came from: `HIT`, `MISS`, `STALE`, `HIT-NEG` (a cached 404), `ARCHIVE` (the match archive) or `BYPASS` (`?refresh=true`). On the analytics routes, `HIT` is a response kept in memory since the last recompute and `MISS` one read from the tables. On `/v1/lol/status`, always `HIT`: read from the status poller's table.",
         "schema": {
           "type": "string"
         }
@@ -2536,6 +2536,15 @@ expression: doc
         ],
         "type": "string"
       },
+      "IncidentSeverity": {
+        "description": "An incident's `incident_severity`, in the site's order: `critical` over\n`warning` over `info`.",
+        "enum": [
+          "info",
+          "warning",
+          "critical"
+        ],
+        "type": "string"
+      },
       "JobActivity": {
         "description": "What each worker is doing (DEV-19).",
         "properties": {
@@ -3601,15 +3610,15 @@ expression: doc
         },
         "type": "object"
       },
-      "PlatformSummary": {
+      "PlatformStatusEntry": {
         "description": "One platform in `GET /v1/lol/status`.",
         "properties": {
           "available": {
-            "description": "Whether the counts below describe the platform's current status: the\npoller has stored a 200 from Riot for it and its last read since has\nnot failed. `false` with `error` saying why; the counts are then `null`.",
+            "description": "Whether the counts below describe the platform's current status: the\npoller has stored a 200 from Riot for it, its last read since has not\nfailed, and that 200 is at most two poll intervals old. `false` with\n`error` saying why; the counts are then `null`.",
             "type": "boolean"
           },
           "error": {
-            "description": "Why the entry is unavailable: the last read's error (the proxy's\nerror code and message, e.g. `NOT_FOUND: Resource not found upstream`),\nor `not read yet`. `null` when available.",
+            "description": "Why the entry is unavailable: the last read's error (the proxy's\nerror code and message, e.g. `NOT_FOUND: Resource not found upstream`),\n`not read yet` (never read: no stored 200), `stale: last read N s\nago` (the last 200 is older than two poll intervals) or `unexpected\nbody`. `null` when available.",
             "type": [
               "string",
               "null"
@@ -3657,7 +3666,7 @@ expression: doc
           "worstSeverity": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/Severity",
+                "$ref": "#/components/schemas/IncidentSeverity",
                 "description": "The worst `incident_severity` among the incidents: `critical` over\n`warning` over `info`. `null` with no incident that has one of those\nthree, or when unavailable. A value outside the three is not counted."
               },
               {
@@ -3675,6 +3684,22 @@ expression: doc
           "worstSeverity",
           "maintenanceInProgress",
           "fetchedAgeSeconds"
+        ],
+        "type": "object"
+      },
+      "PlatformStatusSummary": {
+        "description": "`GET /v1/lol/status`: every platform the status poller reads.",
+        "properties": {
+          "platforms": {
+            "description": "One entry per platform in `STATUS_POLL_PLATFORMS`, in the proxy's\nplatform order. An available entry is at most two poll intervals old;\nan older one is unavailable (`fetchedAgeSeconds` says how old).",
+            "items": {
+              "$ref": "#/components/schemas/PlatformStatusEntry"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "platforms"
         ],
         "type": "object"
       },
@@ -5049,15 +5074,6 @@ expression: doc
         ],
         "type": "object"
       },
-      "Severity": {
-        "description": "An incident's `incident_severity`, in the site's order: `critical` over\n`warning` over `info`.",
-        "enum": [
-          "info",
-          "warning",
-          "critical"
-        ],
-        "type": "string"
-      },
       "Snapshot": {
         "description": "v1 `MetricsSnapshot`, field for field and in v1's order.",
         "properties": {
@@ -5426,22 +5442,6 @@ expression: doc
           "checks",
           "metrics",
           "metrics_meta"
-        ],
-        "type": "object"
-      },
-      "StatusSummary": {
-        "description": "`GET /v1/lol/status`: every platform the status poller reads.",
-        "properties": {
-          "platforms": {
-            "description": "One entry per platform in `STATUS_POLL_PLATFORMS` (every platform by\ndefault), in the proxy's platform order, each at most one poll\ninterval old when available.",
-            "items": {
-              "$ref": "#/components/schemas/PlatformSummary"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "platforms"
         ],
         "type": "object"
       },
@@ -15824,14 +15824,14 @@ expression: doc
     },
     "/v1/lol/status": {
       "get": {
-        "description": "Every platform's status in one call, summarised from Riot's lol-status-v4 `platform-data`. **Never calls Riot**: the status poller reads each platform in `STATUS_POLL_PLATFORMS` (every platform by default) every `STATUS_POLL_INTERVAL_S` (300 s by default) and this route reads what it stored, so an available entry is at most one poll interval old (`fetchedAgeSeconds`).\n\n`platforms` lists each polled platform once, in the proxy's platform order (`na1` … `vn2`). An entry is `available: false`, with `error` saying why and its counts `null`, until the poller has read a 200 for it, and again whenever its latest read failed (a platform Riot does not serve, such as `tw2`, which the portal's lol-status-v4 region list omits, is just such an entry); the call is still a 200. `X-Cache` is `HIT`, and `X-Cache-Fetched-Age` is the stalest available entry's `fetchedAgeSeconds` (not sent when none is available). For a platform's whole body, titles and updates included, use `/v1/lol/status/{platform}`, which the poller keeps cached.\n\n503 with `NOT_FOUND` when this deployment does not poll (`STATUS_POLL_PLATFORMS=none`).",
+        "description": "Every platform's status in one call, summarised from Riot's lol-status-v4 `platform-data`. **Never calls Riot**: the status poller reads each platform in `STATUS_POLL_PLATFORMS` every `STATUS_POLL_INTERVAL_S` and this route reads what it stored, so an available entry is at most two poll intervals old; an older one is unavailable (`fetchedAgeSeconds` says how old).\n\n`platforms` lists each polled platform once, in the proxy's platform order (`na1` … `vn2`). An entry is `available: false`, with `error` saying why and its counts `null`, until the poller has read a 200 for it, whenever its latest read failed (a platform Riot does not serve is just such an entry), and when its last 200 is older than two poll intervals; the call is still a 200. `X-Cache` is `HIT`, and `X-Cache-Fetched-Age` is the stalest available entry's `fetchedAgeSeconds` (not sent when none is available). For a platform's whole body, titles and updates included, use `/v1/lol/status/{platform}`, which the poller keeps cached.\n\n404 with `NOT_FOUND` when this deployment does not poll (`STATUS_POLL_PLATFORMS=none`).",
         "operationId": "status_summary",
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/StatusSummary"
+                  "$ref": "#/components/schemas/PlatformStatusSummary"
                 }
               }
             },
@@ -15887,7 +15887,7 @@ expression: doc
               }
             }
           },
-          "429": {
+          "404": {
             "content": {
               "application/json": {
                 "schema": {
@@ -15895,11 +15895,8 @@ expression: doc
                 }
               }
             },
-            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`).",
+            "description": "The status poller is off on this deployment (`STATUS_POLL_PLATFORMS=none`): `NOT_FOUND`, as for every feature switched off. Do not retry.",
             "headers": {
-              "Retry-After": {
-                "$ref": "#/components/headers/Retry-After"
-              },
               "X-RateLimit-Limit": {
                 "$ref": "#/components/headers/X-RateLimit-Limit"
               },
@@ -15914,7 +15911,7 @@ expression: doc
               }
             }
           },
-          "503": {
+          "429": {
             "content": {
               "application/json": {
                 "schema": {
@@ -15922,8 +15919,11 @@ expression: doc
                 }
               }
             },
-            "description": "The status poller is off on this deployment (`STATUS_POLL_PLATFORMS=none`): `NOT_FOUND`, without `Retry-After`, since waiting does not change it.",
+            "description": "Your consumer quota is spent (`QUOTA_EXCEEDED`).",
             "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/Retry-After"
+              },
               "X-RateLimit-Limit": {
                 "$ref": "#/components/headers/X-RateLimit-Limit"
               },
