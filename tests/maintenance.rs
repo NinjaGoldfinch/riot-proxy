@@ -530,7 +530,7 @@ async fn a_boot_queues_maintenance_only_when_it_is_due() {
     let restarted = tempfile::tempdir().unwrap();
     let finished = maintenance_ran(restarted.path(), 3 * 3_600_000).await;
     // That run's backup, written a moment before the run ended.
-    let backup = backup_written(restarted.path(), finished - 2_000);
+    let backup = backup_written_at(restarted.path(), finished - 2_000);
     assert_eq!(
         maintenance_queued_by_a_boot(restarted.path(), 0).await,
         0,
@@ -563,7 +563,7 @@ async fn maintenance_ran(dir: &Path, ago_ms: i64) -> i64 {
 
 /// A daily backup under `dir`, named for the UTC day of `at_ms` and last
 /// written then.
-fn backup_written(dir: &Path, at_ms: i64) -> std::path::PathBuf {
+fn backup_written_at(dir: &Path, at_ms: i64) -> std::path::PathBuf {
     let backup_dir = dir.join("backups");
     std::fs::create_dir_all(&backup_dir).unwrap();
     let path = backup_dir.join(backup_name(at_ms));
@@ -594,7 +594,7 @@ async fn a_boot_queues_maintenance_when_the_last_run_wrote_no_backup() {
     // Today's existed already: the newest backup is over a day old by now.
     let existed = tempfile::tempdir().unwrap();
     let finished = maintenance_ran(existed.path(), 3 * 3_600_000).await;
-    backup_written(existed.path(), finished - 22 * 3_600_000);
+    backup_written_at(existed.path(), finished - 22 * 3_600_000);
     assert_eq!(
         maintenance_queued_by_a_boot(existed.path(), 1).await,
         1,
@@ -604,7 +604,7 @@ async fn a_boot_queues_maintenance_when_the_last_run_wrote_no_backup() {
     // The newest backup is 23 h old: due in an hour, not 21 h from now.
     let soon = tempfile::tempdir().unwrap();
     let finished = maintenance_ran(soon.path(), 3 * 3_600_000).await;
-    backup_written(soon.path(), finished - 20 * 3_600_000);
+    backup_written_at(soon.path(), finished - 20 * 3_600_000);
     assert_eq!(
         maintenance_queued_by_a_boot(soon.path(), 0).await,
         0,
@@ -623,6 +623,17 @@ async fn with_backups_off_a_boot_counts_from_the_last_run_alone() {
         "ran 3 h ago: not before 21 h from now"
     );
     assert!(!dir.path().join("backups").exists());
+
+    // A backup 25 h old left from when backups were on: still the run alone
+    // (review of #278), so none.
+    let left = tempfile::tempdir().unwrap();
+    let finished = maintenance_ran(left.path(), 3 * 3_600_000).await;
+    backup_written_at(left.path(), finished - 22 * 3_600_000);
+    assert_eq!(
+        maintenance_queued_by_a_boot_with(left.path(), &[("BACKUP_KEEP", "0")], 0).await,
+        0,
+        "BACKUP_KEEP=0 never reads backups/"
+    );
 }
 
 /// AVL-08: `serve` sweeps L2 at boot and in `maintenance` with the same rule.

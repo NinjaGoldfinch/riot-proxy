@@ -275,15 +275,20 @@ pub async fn last_run(db: &Db, key_scope: &str, tick: &Tick) -> Result<Option<i6
 
 /// When the newest daily backup in `dir` was written, unix ms: the file's
 /// modification time, which is the copy's last write (the rename into place
-/// keeps it). `None` when there is no backup or it cannot be read.
-pub async fn newest_backup_ms(dir: &Path) -> Option<i64> {
-    let newest = crate::jobs::maintenance::backups(dir)
-        .await
-        .ok()?
-        .into_iter()
-        .next()?;
-    let written = tokio::fs::metadata(&newest).await.ok()?.modified().ok()?;
-    i64::try_from(written.duration_since(UNIX_EPOCH).ok()?.as_millis()).ok()
+/// keeps it). `Ok(None)` when there is no backup (or no directory yet); an
+/// error when the directory cannot be listed or the newest file's time
+/// cannot be read, which [`first_fire`] reports rather than take for "no
+/// backup" (review of #278).
+pub async fn newest_backup_ms(dir: &Path) -> std::io::Result<Option<i64>> {
+    let Some(newest) = crate::jobs::maintenance::backups(dir).await?.into_iter().next() else {
+        return Ok(None);
+    };
+    let written = tokio::fs::metadata(&newest).await?.modified()?;
+    let ms = written
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| std::io::Error::other(format!("{} was written before 1970", newest.display())))?
+        .as_millis();
+    Ok(Some(i64::try_from(ms).unwrap_or(i64::MAX)))
 }
 
 /// What the `maintenance` tick counts from when backups are on (AVL-13): the
@@ -334,7 +339,19 @@ pub async fn first_fire(
     let (kinds::MAINTENANCE, Some(dir)) = (tick.kind, backups) else {
         return first_delay(last, tick.period, now_ms);
     };
-    let newest_backup = newest_backup_ms(dir).await;
+    let newest_backup = match newest_backup_ms(dir).await {
+        Ok(newest) => newest,
+        Err(e) => {
+            // Not "no backup": say so, then fire, as an unreadable last run does.
+            tracing::warn!(
+                kind = tick.kind,
+                dir = %dir.display(),
+                error = %e,
+                "backup directory could not be read; maintenance is due now"
+            );
+            return Duration::ZERO;
+        }
+    };
     let due = first_delay(backup_anchor(last, newest_backup), tick.period, now_ms);
     if due.is_zero() && !first_delay(last, tick.period, now_ms).is_zero() {
         // Say why a restart runs maintenance inside a day of its last run.
