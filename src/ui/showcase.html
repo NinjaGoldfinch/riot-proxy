@@ -49,6 +49,15 @@
   .banner { border-radius: 10px; padding: 10px 14px; margin-bottom: 16px; border: 1px solid var(--warn); background: #2a2210; }
   .banner.critical { border-color: var(--bad); background: #2a1215; }
   .banner b { margin-right: 6px; }
+  /* Every platform's status (SITE-14): one chip per polled platform, wrapping. */
+  .pstats { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .pstat { font: 12px var(--mono); padding: 2px 9px; border-radius: 10px; border: 1px solid var(--line); white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+  .pstat b { font-weight: 600; margin-right: 6px; }
+  .pstat.ok b { color: var(--good); }
+  .pstat.info { border-color: var(--accent); }
+  .pstat.warn { border-color: var(--warn); background: #2a2210; }
+  .pstat.critical { border-color: var(--bad); background: #2a1215; }
+  .pstat.down { border-style: dashed; color: var(--dim); }
   table { border-collapse: collapse; width: 100%; font-size: 13px; }
   th, td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
   th { color: var(--dim); font-weight: 500; font-size: 12px; }
@@ -209,6 +218,7 @@
     "GET /v1/lol/league/apex/{platform}/{tier}/{queue}": "home: ladder",
     "GET /v1/riot/accounts/by-puuid/{puuid}": "home: ladder names",
     "GET /v1/lol/status/{platform}": "home: status banner",
+    "GET /v1/lol/status": "home: every platform's status card",
     "GET /v1/lol/rotations/{platform}": "home: free rotation",
     "GET /v1/lol/analytics/champions": "home: top champions",
     "GET /v1/static/{file}": "champion names and icons",
@@ -304,6 +314,22 @@ function statusNotices(doc, locale = 'en_US') {
     ...(doc?.maintenances ?? []).map((s) => ({ kind: 'Maintenance', severity: s.maintenance_status ?? '', title: title(s) })),
     ...(doc?.incidents ?? []).map((s) => ({ kind: 'Incident', severity: s.incident_severity ?? '', title: title(s) })),
   ];
+}
+
+/** Seconds ago, coarsely: `40 s ago`, then as `ago`. */
+const secsAgo = (s, now = Date.now()) => (s == null ? '' : s < 60 ? `${s} s ago` : ago(now - s * 1000, now));
+
+/** One `GET /v1/lol/status` entry as a chip (SITE-14): its tone, a short note, and the rest for its title. */
+function platformChip(e) {
+  const code = String(e?.platform ?? '').toUpperCase();
+  const read = e?.fetchedAgeSeconds != null ? `last read ${secsAgo(e.fetchedAgeSeconds)}` : 'never read';
+  if (!e?.available) return { code, tone: 'down', note: 'unavailable', title: `${code}: ${e?.error ?? 'unavailable'} · ${read}` };
+  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+  const parts = [e.incidents ? plural(e.incidents, 'incident') : '', e.maintenances ? plural(e.maintenances, 'maintenance') : ''].filter(Boolean);
+  const tone = e.worstSeverity === 'critical' ? 'critical' : e.incidents || e.maintenanceInProgress ? 'warn' : e.maintenances ? 'info' : 'ok';
+  const note = parts.join(', ') || 'ok';
+  const extra = [e.worstSeverity ? `worst ${e.worstSeverity}` : '', e.maintenanceInProgress ? 'maintenance in progress' : '', read].filter(Boolean);
+  return { code, tone, note, title: `${code}: ${note} · ${extra.join(' · ')}` };
 }
 
 /** The top `n` champions by win rate and by games played, from the route's rows: one per champion, every tier summed (ADR-123). */
@@ -800,10 +826,14 @@ const platform = () => { const v = store.get('rp.showcase.platform', ''); return
 /** Home's platform picker (SITE-10): the ladder, status, rotation and top champions are per platform. */
 const homeBar = () => `<div class="homebar"><label for="hPlatform" class="muted">Platform</label><select id="hPlatform" aria-label="platform"><option value="">platform…</option>${(cfg?.platforms ?? []).map((p) => `<option value="${esc(p.value)}" ${p.value === platform() ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}</select></div>`;
 
+/** Every platform's status (SITE-14): not per platform, so it is there with or without a pick. */
+const platformsCard = `<section class="card" id="platforms"><header><h2>Every platform</h2></header><p class="muted">loading…</p></section>`;
+
 function renderHome() {
   viewSeq++;
   if (!platform()) {
-    $('#view').innerHTML = `${homeBar()}<div class="card empty">Pick a platform here to load its ladder, status, rotation and top champions.</div>`;
+    $('#view').innerHTML = `${homeBar()}<div class="card empty">Pick a platform here to load its ladder, status, rotation and top champions.</div>${platformsCard}`;
+    loadPlatforms();
     return;
   }
   $('#view').innerHTML = `${homeBar()}<div id="status"></div>
@@ -812,11 +842,13 @@ function renderHome() {
       <section class="card" id="ladder"></section>
     </div>
     <div>
+      ${platformsCard}
       <section class="card" id="rotation"><header><h2>Free champion rotation</h2></header><p class="muted">loading…</p></section>
       <section class="card" id="top"><header><h2>Top champions</h2></header><p class="muted">loading…</p></section>
     </div>
   </div>`;
   loadStatus();
+  loadPlatforms();
   loadLadder();
   loadRotation();
   loadTop();
@@ -828,6 +860,18 @@ async function loadStatus() {
   const notices = statusNotices(res.json, navigator.language?.replace('-', '_'));
   $('#status').innerHTML = notices.map((n) =>
     `<div class="banner ${n.severity === 'critical' ? 'critical' : ''}"><b>${esc(n.kind)}</b>${esc(n.title)} ${sources('GET /v1/lol/status/{platform}')}</div>`).join('');
+}
+
+async function loadPlatforms() {
+  const res = await get('/v1/lol/status');
+  const el = $('#platforms');
+  if (!el) return;
+  const head = `<header><h2>Every platform</h2></header><div>${sources('GET /v1/lol/status')}</div>`;
+  if (!res.ok) { el.innerHTML = head + failure(res); return; }
+  const list = res.json?.platforms ?? [];
+  if (!list.length) { el.innerHTML = head + `<p class="empty">No platform is polled.</p>`; return; }
+  el.innerHTML = head + `<div class="pstats">${list.map(platformChip).map((c) =>
+    `<span class="pstat ${c.tone}" data-platform="${esc(c.code.toLowerCase())}" title="${esc(c.title)}"><b>${esc(c.code)}</b>${esc(c.note)}</span>`).join('')}</div>`;
 }
 
 async function loadLadder() {

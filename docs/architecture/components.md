@@ -48,7 +48,7 @@ flowchart TB
     jobs --> db
 ```
 
-Reads from a route or a job all pass through the fetcher; the archive is the only module that touches object storage; the scheduler is the only module that claims jobs.
+Reads from a route or a job all pass through the fetcher (`GET /v1/lol/status` reads the `platform_status` rows the status poller wrote through it, SITE-14); the archive is the only module that touches object storage; the scheduler is the only module that claims jobs.
 
 ## Responsibilities
 
@@ -84,4 +84,4 @@ The design these modules implement is `docs/design/03-architecture.md`; where th
 
 ---
 **Sources:** `src/lib.rs`, `src/app.rs:L40-L121`, `src/cli/mod.rs:L71-L123`, `src/routes/docs.rs:L116-L153`, `src/fetcher.rs:L16-L21,L170-L208`, `src/riot/client.rs:L1-L7`, `src/archive/mod.rs:L216-L235`, `src/db/mod.rs:L238-L246,L310-L408`, `src/jobs/scheduler.rs:L124-L141`, `docs/design/03-architecture.md#component-diagram`
-**Last verified:** 2026-11-17 against commit `ddc465e`
+**Last verified:** 2026-11-17 against commit `bdc62e7`

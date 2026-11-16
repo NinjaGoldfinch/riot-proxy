@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 
-import { html, LADDER, PUUID, BOOTS, MATCH, RUNES, api } from './fake-api.mjs';
+import { html, LADDER, PLATFORMS, PUUID, BOOTS, MATCH, RUNES, api } from './fake-api.mjs';
 
 async function page({ platform = 'oc1', hash = '', hold = null, ...opts } = {}) {
   const calls = [];
@@ -38,11 +38,12 @@ async function page({ platform = 'oc1', hash = '', hold = null, ...opts } = {}) 
   const settle = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 5)); };
   await settle();
   const click = async (sel) => { $(sel).click(); await settle(); };
+  const $$ = (sel) => [...w.document.querySelectorAll(sel)];
   const text = (sel) => $(sel)?.textContent ?? '';
   const rows = () => [...w.document.querySelectorAll('#ladder tbody tr')];
   const pick = async (sel, value) => { const el = $(sel); el.value = value; el.dispatchEvent(new w.Event('change', { bubbles: true })); await settle(); };
   const search = async (value) => { const form = $('#search'); form.elements.id.value = value; form.dispatchEvent(new w.Event('submit', { cancelable: true })); await settle(); };
-  return { w, $, calls, modes, errors, scrolled, settle, click, pick, search, text, rows, release };
+  return { w, $, $$, calls, modes, errors, scrolled, settle, click, pick, search, text, rows, release };
 }
 
 test('without a platform the home view asks for one on its own picker and calls nothing platform-scoped', async () => {
@@ -50,7 +51,9 @@ test('without a platform the home view asks for one on its own picker and calls 
   assert.ok(p.text('#view').includes('Pick a platform here'));
   assert.equal(p.$('#view #hPlatform').value, '');
   assert.deepEqual([...p.$('#hPlatform').options].map((o) => [o.value, o.textContent]), [['', 'platform…'], ['oc1', 'Oceania'], ['kr', 'Korea']]);
-  assert.deepEqual(p.calls.filter((c) => c.startsWith('/v1/lol/')), []);
+  // Every platform's status is not per platform (SITE-14).
+  assert.deepEqual(p.calls.filter((c) => c.startsWith('/v1/lol/')), ['/v1/lol/status']);
+  assert.equal(p.$$('#platforms .pstat').length, PLATFORMS.length);
   assert.deepEqual(p.errors, []);
 });
 
@@ -128,6 +131,31 @@ test('clicking a named ladder row routes to the player view', async () => {
   assert.equal(p.w.location.hash, `#/player/Player%20P${LADDER - 1}/OCE`);
   assert.ok(p.calls.includes(`/v1/players/by-riot-id/Player%20P${LADDER - 1}/OCE/profile?topMastery=3`));
   assert.ok(p.text('#pHead').includes(`Player P${LADDER - 1} #OCE`));
+  assert.deepEqual(p.errors, []);
+});
+
+test('the home view lists every platform from one call, in its order, with what each has (SITE-14)', async () => {
+  const p = await page();
+  assert.equal(p.calls.filter((c) => c === '/v1/lol/status').length, 1);
+  const chips = p.$$('#platforms .pstat');
+  assert.deepEqual(chips.map((c) => [c.dataset.platform, c.className, c.textContent]), [
+    ['na1', 'pstat critical', 'NA11 incident'],
+    ['kr', 'pstat ok', 'KRok'],
+    ['tw2', 'pstat down', 'TW2unavailable'],
+  ]);
+  assert.equal(chips[0].title, 'NA1: 1 incident · worst critical · last read 2 min ago');
+  assert.ok(chips[2].title.includes('NOT_FOUND: Resource not found upstream'));
+  assert.ok(p.$('#platforms a.src[title^="GET /v1/lol/status:"]'), 'its chip names the route');
+  await p.pick('#hPlatform', 'kr');
+  assert.equal(p.$$('#platforms .pstat').length, 3, 'still there after a pick');
+  assert.deepEqual(p.errors, []);
+});
+
+test('the platforms card shows the error when the poller is off', async () => {
+  const p = await page({ statusAll: [503, { error: { code: 'NOT_FOUND', message: 'The status poller is off on this deployment (STATUS_POLL_PLATFORMS=none)', requestId: 'r' } }] });
+  assert.equal(p.$$('#platforms .pstat').length, 0);
+  assert.ok(p.text('#platforms .err').includes('503 · NOT_FOUND: The status poller is off'));
+  assert.ok(p.$('#ladder tbody tr'), 'the rest of home is unaffected');
   assert.deepEqual(p.errors, []);
 });
 

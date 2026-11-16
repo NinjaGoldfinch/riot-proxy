@@ -61,7 +61,7 @@ With the defaults every page is on (`src/config.rs:781-783`, `784-787`):
 
 | Page | What | Key needed |
 |---|---|---|
-| `http://127.0.0.1:8080/docs` | the OpenAPI reference (Scalar) and `/openapi.json`, `/openapi.yaml` (`src/routes/docs.rs:385-399`) | no |
+| `http://127.0.0.1:8080/docs` | the OpenAPI reference (Scalar) and `/openapi.json`, `/openapi.yaml` (`src/routes/docs.rs:397-411`) | no |
 | `/dev` and `/dev/showcase` | the dev explorer and the example frontend; never served when `ENV=production` (`README.md:88`; `src/config.rs:781-783`) | the page loads without one; its API calls need a read key unless `AUTH_DISABLED` (`docs/design/11-showcase.md:15`) |
 | `/dashboard` | the operational dashboard; inert without an admin key (`.env.example:221-222`) | admin key in the page |
 | `/healthz`, `/readyz`, `/metrics` | ops routes | no |
@@ -204,4 +204,4 @@ Not re-executed here: `cargo build`, `cargo test` and `just nextest` (a full run
 
 ---
 **Sources:** `rust-toolchain.toml:L1-L5`, `justfile:L1-L52`, `.env.example:L1-L222`, `README.md:L60-L114`, `src/config.rs:L3`, `L643-L657`, `L685-L695`, `L733-L759`, `L973-L999`, `L1076-L1088`, `src/cli/mod.rs:L83-L89`, `src/cli/serve.rs:L110-L113`, `L115-L126`, `L134-L151`, `L153-L155`, `L164-L166`, `L284`, `L409-L414`, `L440-L444`, `L574-L577`, `L583-L589`, `src/cli/key.rs:L13-L57`, `src/consumers.rs:L12-L14`, `L95-L96`, `src/http/auth.rs:L207-L210`, `src/jobs/ticks.rs:L1-L11`, `L76-L112`, `L117-L148`, `L223-L347`, `src/cli/riot.rs:L1-L32`, `L63-L81`, `src/archive/objects.rs:L109-L121`, `acceptance/helpers/env.ts:L19-L25`, `L244-L275`, `acceptance/helpers/setup.ts:L23-L54`, `acceptance/helpers/mock-riot.ts:L7`, `tests/ui.rs:L42-L64`, `tests/dom/package.json`, `acceptance/package.json`, `.github/workflows/ci.yml:L52-L53`, `PROGRESS.md:L390`, `L400`, `L420-L422`, `docs/IMPLEMENTATION.md:L434`, `docs/design/11-showcase.md:L15`, `docs/DECISIONS.md:L1457`, `docs/_meta/scratch/config.md`, `docs/_meta/scratch/persistence.md` §5, `docs/_meta/scratch/siblings.md` §1.2, §1.8
-**Last verified:** 2026-11-17 against commit `ddc465e`
+**Last verified:** 2026-11-17 against commit `bdc62e7`

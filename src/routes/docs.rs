@@ -174,7 +174,8 @@ const HEADERS: [(&str, Type, &str); 10] = [
     (
         "X-Cache-Fetched-Age",
         Type::Integer,
-        "Seconds since the proxy last read it from Riot, changed or not. Not sent for `ARCHIVE`.",
+        "Seconds since the proxy last read it from Riot, changed or not. Not sent for `ARCHIVE`. On \
+         `/v1/lol/status`, the stalest available platform's, not sent when none is available.",
     ),
     (
         "X-RateLimit-Limit",
@@ -209,6 +210,9 @@ const HEADERS: [(&str, Type, &str); 10] = [
     ),
 ];
 
+/// `GET /v1/lol/status`, the polled platforms' summary (SITE-14).
+const STATUS_SUMMARY: &str = "/v1/lol/status";
+
 /// Read routes, behind the consumer key and quota.
 const READ_TAGS: [&str; 4] = ["players", "riot", "lol", "static"];
 
@@ -230,7 +234,9 @@ fn headers_for(path: &str, op: &Operation, status: &str) -> Vec<&'static str> {
     if tagged(&[READ_TAGS.as_slice(), &["admin"]].concat()) && !matches!(status, "401" | "403") {
         out.extend(["X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"]);
     }
-    if matches!(status, "429" | "503") {
+    // The status summary's 503 is the poller turned off, not a wait (SITE-14).
+    let summary = path == STATUS_SUMMARY;
+    if status == "429" || (status == "503" && !summary) {
         out.push("Retry-After");
     }
     // The analytics routes keep their responses in memory per rebuild
@@ -241,6 +247,12 @@ fn headers_for(path: &str, op: &Operation, status: &str) -> Vec<&'static str> {
     let ok = status.starts_with('2');
     if analytics && (ok || status == "304") {
         out.push("X-Cache");
+    }
+    // The status summary is read from the poller's table: `HIT`, and the
+    // stalest platform's fetch age; no content age (SITE-14, ADR-220).
+    if summary && ok {
+        out.extend(["X-Cache", "X-Cache-Fetched-Age"]);
+        return out;
     }
     if cached && ok {
         out.extend(["X-Cache", "X-Cache-Age"]);
