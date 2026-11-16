@@ -2,6 +2,10 @@
 
 Dated log of changes to this documentation set. One line per change; the newest first.
 
+## 2026-11-17
+
+- SITE-20 (ADR-217 amended): the SITE (2) plan section in `IMPLEMENTATION.md` and `PROGRESS.md` corrected after the review of #280 (the three platforms the portal leaves out, the poller-off answer, skips and staleness, SITE-15 and SITE-16 made buildable, the stacked-task rule, a row for the spec itself).
+
 ## 2026-11-10
 
 - SITE-14 (ADR-220): `GET /v1/lol/status`, every polled platform's status in one call from `platform_status` (`StatusSummary`, `PlatformSummary`, `Severity` in the OpenAPI document; `X-Cache: HIT`, the stalest available `X-Cache-Fetched-Age`; 503 `NOT_FOUND` with the poller off). `api/endpoints-riot-lol.md` (the route's section), `api/endpoints.md` (73 paths, 77 operations; `X-Cache-Fetched-Age`), `api/errors.md` (`NOT_FOUND` at 503), `api/openapi.json` (regenerated), `integration/contract.md` (fourteen operations; the headers; the status guarantee), `_meta/inventory.md`; design/03, design/11 (the showcase's **Every platform** card), design/14. Line citations of `src/routes/lol.rs` and `src/routes/docs.rs` moved with the code in every page that cites them.
@@ -84,4 +88,4 @@ Dated log of changes to this documentation set. One line per change; the newest 
 
 ---
 **Sources:** this documentation set
-**Last verified:** 2026-11-17 against commit `bdc62e7`
+**Last verified:** 2026-11-17 against commit `9ca718a`
