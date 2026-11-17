@@ -238,6 +238,9 @@ async fn before_any_recompute_the_routes_answer_empty_documents() {
     // validator a client kept from before `totalMatches` existed gets the new
     // body, not a 304. The tag is rebuilt here as `routes::analytics::etag`
     // builds it, checked against the one served, then with the old marker.
+    // When this fails after a change to `STATS_SHAPE` or to the tag's
+    // parts, update `material` here and the example tag in the three docs
+    // pages `docs/_meta/doc-maintenance.md` names, from a running server.
     let uri = "/v1/lol/analytics/champions?queue=RANKED_SOLO_5x5&limit=2";
     let version = e.state.ddragon.current_version().await;
     let tag_with = |marker: &str| {
@@ -305,6 +308,10 @@ async fn total_matches_of_the_unknown_tier_and_a_range_without_it() {
             .await
             .unwrap();
     }
+    // A third match, every player placed: the UNKNOWN slice is now short of
+    // the total, so its count cannot be the total's by accident.
+    e.on_ladder(RANKED, &|_| "MASTER").await;
+    e.archive_as("KR_9000000001", RANKED).await;
     e.aggregate().await;
     let totals = |q: &'static str| {
         let e = &e;
@@ -318,11 +325,12 @@ async fn total_matches_of_the_unknown_tier_and_a_range_without_it() {
             (v["totalGames"].as_i64(), v["totalMatches"].as_i64())
         }
     };
-    assert_eq!(totals("").await, (Some(20), Some(2)));
-    // Both matches have an unplaced player; only the ranked game has a placed one.
+    assert_eq!(totals("").await, (Some(30), Some(3)));
+    // The first two matches have an unplaced player; the third has none.
     assert_eq!(totals("&tier=UNKNOWN").await, (Some(12), Some(2)));
-    assert_eq!(totals("&minTier=IRON").await, (Some(8), Some(1)));
-    assert_eq!(totals("&tier=MASTER").await, (Some(8), Some(1)));
+    // The ranked game and the third have placed players; the remake has none.
+    assert_eq!(totals("&minTier=IRON").await, (Some(18), Some(2)));
+    assert_eq!(totals("&tier=MASTER").await, (Some(18), Some(2)));
 }
 
 #[tokio::test]
@@ -772,6 +780,8 @@ async fn without_a_platform_the_routes_sum_every_platform() {
                 "champion_items",
                 "champion_runes",
                 "champion_spells",
+                "analytics_floor_totals",
+                "champion_ban_floor_totals",
             ] {
                 c.execute_batch(&format!(
                     "CREATE TEMP TABLE copy AS SELECT * FROM {table} WHERE platform = 'kr';
@@ -813,6 +823,21 @@ async fn without_a_platform_the_routes_sum_every_platform() {
         e.get("/v1/lol/analytics/champions?platform=euw1").await.json()["totalMatches"],
         0
     );
+    let m_all = e.get("/v1/lol/analytics/champions?minTier=MASTER").await.json();
+    let m_kr = e
+        .get("/v1/lol/analytics/champions?platform=kr&minTier=MASTER")
+        .await
+        .json();
+    // With a floor tier the match count is read from `analytics_floor_totals`,
+    // which sums over the platforms the same way.
+    assert_eq!(
+        (&m_all["totalGames"], &m_all["totalMatches"]),
+        (&json!(20), &json!(2))
+    );
+    assert_eq!(
+        (&m_kr["totalGames"], &m_kr["totalMatches"]),
+        (&json!(10), &json!(1))
+    );
 }
 
 #[tokio::test]
@@ -835,6 +860,8 @@ async fn patch_all_sums_every_patch_and_the_patch_list_offers_them() {
                 "champion_items",
                 "champion_runes",
                 "champion_spells",
+                "analytics_floor_totals",
+                "champion_ban_floor_totals",
             ] {
                 c.execute_batch(&format!(
                     "CREATE TEMP TABLE copy AS SELECT * FROM {table} WHERE patch = '16.19';
@@ -883,6 +910,20 @@ async fn patch_all_sums_every_patch_and_the_patch_list_offers_them() {
     assert_eq!(
         all["totalMatches"].as_i64(),
         Some(named["totalMatches"].as_i64().unwrap() + older["totalMatches"].as_i64().unwrap())
+    );
+    let m_all = e
+        .get("/v1/lol/analytics/champions?patch=all&minTier=MASTER")
+        .await
+        .json();
+    let m_new = e.get("/v1/lol/analytics/champions?minTier=MASTER").await.json();
+    // And with a floor tier, from `analytics_floor_totals`, over the patches.
+    assert_eq!(
+        (&m_all["totalGames"], &m_all["totalMatches"]),
+        (&json!(20), &json!(2))
+    );
+    assert_eq!(
+        (&m_new["totalGames"], &m_new["totalMatches"]),
+        (&json!(10), &json!(1))
     );
 
     let id = first["championId"].as_i64().unwrap();

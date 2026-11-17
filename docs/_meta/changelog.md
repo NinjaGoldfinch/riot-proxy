@@ -4,7 +4,7 @@ Dated log of changes to this documentation set. One line per change; the newest 
 
 ## 2026-11-17
 
-- SITE-19: the example analytics ETag in `api/examples.md`, `api/endpoints-players-analytics.md` and `api/pagination-filtering-and-versioning.md` is the one a server at `9ca718a` sends since SITE-12's `STATS_SHAPE` marker (`W/"SauT-…"`); `src/routes/analytics.rs` citations in those pages, `api/errors.md` and `_meta/gaps.md` re-pointed; snapshot file names are `it__…`.
+- SITE-19: the example analytics ETag in `api/examples.md`, `api/endpoints-players-analytics.md` and `api/pagination-filtering-and-versioning.md` is the one a server at `9ca718a` sends since SITE-12's `STATS_SHAPE` marker (`W/"SauT-…"`); `src/routes/analytics.rs` citations in those pages, `api/errors.md` and `_meta/gaps.md` re-pointed; snapshot file names are `it__…` in `api/endpoints-players-analytics.md`, `api/errors.md`, `api/pagination-filtering-and-versioning.md` and `api/examples.md`; `_meta/doc-maintenance.md` has a row tying the example tag to `STATS_SHAPE`.
 
 ## 2026-11-10
 
