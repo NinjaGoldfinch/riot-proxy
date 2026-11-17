@@ -99,10 +99,10 @@ Notation: `int(min..=max)` means a whole number in that range, `bool` accepts `t
 | `FACTS_REEXTRACT_BATCH` | int(1..=10000) | `500` | no | matches per `facts:reextract` batch | `500` | `src/config.rs:884` |
 | `AGGREGATE_PATCH_LIMIT` | int(0..=100) | `4` | no | patches rebuilt per recompute; `0` rebuilds every patch | `0` | `src/config.rs:885` |
 | `AGGREGATE_INTERVAL_S` | int(0..=604800) | `0` | no | seconds between unprompted recomputes; `0` off | `0` | `src/config.rs:887` |
-| `AGGREGATE_DELTA_S` | int(0..=86400) | `60` | no | seconds between `aggregate:delta` runs, which count newly archived matches in short write transactions (THR-03, ADR-182); `0` off, and crawls and rank lookups queue full recomputes instead | `60` | `src/config.rs:888`; `.env.example:155-161` |
+| `AGGREGATE_DELTA_S` | int(0..=86400) | `60` | no | seconds between `aggregate:delta` runs, which count newly archived matches in short write transactions (THR-03, ADR-182); `0` off, and crawls and rank lookups queue full recomputes instead | `60` | `src/config.rs:888`; `.env.example:160-166` |
 | `AGGREGATE_DELTA_TARGET_MS` | int(20..=1000) | `100` | no | the statement time each delta batch is sized toward | `100` | `src/config.rs:889` |
 | `AGGREGATE_DELTA_BATCH` | int(5..=5000) | `500` | no | the most matches in one delta batch | `500` | `src/config.rs:890` |
-| `ANALYTICS_CACHE_ENTRIES` | int(0..=4096) | `512` | no | analytics responses kept in memory (about 40 kB each) | `512` | `src/config.rs:886`; `.env.example:162-164` |
+| `ANALYTICS_CACHE_ENTRIES` | int(0..=4096) | `512` | no | analytics responses kept in memory (about 40 kB each) | `512` | `src/config.rs:886`; `.env.example:167-169` |
 
 ## Static data
 
