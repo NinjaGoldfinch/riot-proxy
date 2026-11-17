@@ -150,4 +150,4 @@ The crawl is written in one transaction; a partial unique index refuses a second
 
 ---
 **Sources:** `src/app.rs:L105-L120`, `src/http/request_id.rs:L287-L338`, `src/http/auth.rs:L353-L405`, `src/fetcher.rs:L61-L69,L455-L554,L734-L964`, `src/riot/endpoints.rs:L146-L156,L541-L549`, `src/singleflight.rs:L1-L12`, `src/archive/mod.rs:L96-L269`, `src/archive/matches.rs:L191-L328`, `src/routes/lol.rs:L61-L72`, `src/routes/players.rs:L73-L121,L152-L174,L283-L363,L601-L661`, `src/routes/players/refresh.rs:L18-L71`, `src/routes/admin.rs:L1703-L1736`, `src/jobs/ladder.rs:L247-L328,L917-L927`, `src/db/store.rs:L98-L133`, `src/jobs/scheduler.rs:L124-L141`, `docs/_meta/scratch/riot-and-cache.md` §1.5, `docs/_meta/scratch/siblings.md` §1.3
-**Last verified:** 2026-11-17 against commit `9ca718a`
+**Last verified:** 2026-11-18 against commit `101740c`

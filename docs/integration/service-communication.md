@@ -105,4 +105,4 @@ The dashboard at `https://admin.ninjagoldfinch.lol/dashboard` (Cloudflare Access
 
 ---
 **Sources:** `docs/_meta/scratch/siblings.md` §1.3-§1.5, §2.2, §4, `ninjagoldfinch-lol/src/lib/server/proxy.ts:L28-L87`, `ninjagoldfinch-lol/src/lib/server/errors.ts:L16-L33`, `src/riot/client.rs:L25-L29,L330-L338`, `src/jobs/ddragon.rs:L22-L32,L260-L261`, `deploy/README.md`, `ninja-monitor/README.md:L50-L81`
-**Last verified:** 2026-11-17 against commit `9ca718a`
+**Last verified:** 2026-11-18 against commit `101740c`

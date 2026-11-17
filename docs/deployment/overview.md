@@ -144,4 +144,4 @@ The proxy only ever talks to the Onidel bucket; R2 is reached only by `rclone` f
 
 ---
 **Sources:** `docs/design/07-deployment.md:L59-L97,L177,L225`, `docs/design/12-object-storage-and-hosting.md:L58-L112,L424-L446,L474-L487,L532-L558,L585-L641,L772-L848,L850-L937`, `deploy/README.md:L24-L36,L51,L93,L140-L152`, `deploy/riot-proxy-replica.service:L12-L19`, `deploy/riot-proxy-replica.timer:L6-L8`, `README.md:L117-L133`, `PROGRESS.md:L325`, `src/config.rs:L766-L773,L785-L790`, `src/cli/serve.rs:L255-L259,L483-L490`, `src/jobs/maintenance.rs:L42-L43`, `docs/_meta/scratch/siblings.md`, `docs/_meta/scratch/persistence.md`
-**Last verified:** 2026-11-18 against commit `a717e24`
+**Last verified:** 2026-11-18 against commit `101740c`

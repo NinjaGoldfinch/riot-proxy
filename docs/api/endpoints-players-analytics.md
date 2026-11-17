@@ -163,4 +163,4 @@ What ninjagoldfinch.lol sends: `queue=RANKED_SOLO_5x5`, optional `patch` and `ro
 
 ---
 **Sources:** `src/routes/players.rs:L5-L7,L73-L174,L225-L272,L283-L302,L398-L414,L445-L537,L592-L661,L687-L735,L891-L911,L961,L989-L1003,L1082-L1162`, `src/routes/summary.rs:L14-L43`, `src/http/refresh.rs:L18-L71`, `src/http/validate.rs:L185-L250`, `src/routes/analytics.rs:L1-L3,L52-L56,L111-L144,L163-L188,L240-L277,L336-L431,L497-L640,L660-L669,L766-L782,L784-L789,L920-L1000,L1049,L1153,L1259,L1531,L1670`, `src/routes/analytics/cache.rs:L1-L19,L89-L137,L181-L264`, `tests/snapshots/players_routes__*.snap`, `tests/snapshots/analytics__*.snap`, `docs/DECISIONS.md` ADR-065, ADR-123, `docs/_meta/scratch/routes.md` §1.4-1.5, `docs/_meta/scratch/siblings.md` §1.5, live capture against `target/debug/riot-proxy` 2.7.0
-**Last verified:** 2026-11-17 against commit `9ca718a`
+**Last verified:** 2026-11-18 against commit `101740c`
