@@ -381,7 +381,7 @@ ninjagoldfinch.lol's `/champions` data took 3.9 s, all of it the proxy's analyti
 - [x] CI-04 one integration-test binary (#224, ADR-176)
 - [x] CI-05 less debug info in dev and test builds (#225, ADR-177)
 - [~] CI-06 `sqlite_writes_are_timed_and_the_queue_is_a_gauge` waits for the writer's own bookkeeping before it asserts: it failed in CI run 42563140692 (2026-11-09) and in 170 of 508 runs under load, none of 496 after (#279, `test/CI-06-write-metrics-scrape-race`)
-- [~] CI-07 the `ticks` tests wait for the tick loops, not for the rows to look settled: three tests failed in 29 of 300 runs under load, the 17 tick tests none in 100 iterations after; widened 2026-11-17: the maintenance boot tests poll for an expected row and the forced-refresh test has a 250 ms margin; the tick, boot and forced-refresh tests failed 12 of 40 stress iterations under load at `9ca718a`, none after (ADR-214 amended, `test/CI-07-ticks-test-flakes`)
+- [~] CI-07 the `ticks` tests wait for the tick loops, not for the rows to look settled: three tests failed in 29 of 300 runs under load, the 17 tick tests none in 100 iterations after; widened 2026-11-17: the maintenance boot tests poll for an expected row and the forced-refresh test's Riot answer alone (2.4 s) outlasts the 2.25 s it asserts; a unit test pins the two `busy` guards; the tick, boot and forced-refresh tests failed 12 of 40 stress iterations under load at `9ca718a`, none after (ADR-214 amended, `test/CI-07-ticks-test-flakes`, #284)
 
 ## DOC — the documentation set (owner request 2026-10-19)
 

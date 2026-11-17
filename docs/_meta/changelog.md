@@ -4,7 +4,7 @@ Dated log of changes to this documentation set. One line per change; the newest 
 
 ## 2026-11-17
 
-- CI-07, widened (ADR-214 amended): `workflows/testing.md` §Known flakes records the tick tests' `settle`, the maintenance boot tests' fixed wait and the forced-refresh test's 50 ms margin, and the stress runs before and after. Citations of `src/jobs/ticks.rs` moved with the lines the guards add.
+- CI-07, widened (ADR-214 amended): `workflows/testing.md` §Known flakes records the tick tests' `settle`, the maintenance boot tests' fixed wait and the forced-refresh test's 50 ms margin, and the stress runs before and after. Citations of `src/jobs/ticks.rs` moved with the lines the guards add. In review (#284): the forced-refresh test's Riot answer is 2.4 s, a unit test pins the `busy` guards, §Known flakes records the `ops` job's one failure (the updater's whole-second health deadline, suspected) and `deployment/upgrade-and-rollback.md` cites `Ticks::start_with_backups` to its end.
 
 ## 2026-11-10
 

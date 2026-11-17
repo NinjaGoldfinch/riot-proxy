@@ -437,6 +437,8 @@ impl Ticks {
         for tick in loops(&schedule, &ladders) {
             let (scheduler, scope, stopped) = (scheduler.clone(), key_scope.to_string(), stopped.clone());
             let backups = backups.clone();
+            // The boot guard is made here, before `spawn`: made inside the
+            // task, `busy` would read 0 until the task is first polled.
             let (reading, count) = (Busy::new(&busy), Arc::clone(&busy));
             set.spawn(async move {
                 let due = first_fire(scheduler.db(), &scope, &tick, boot.unix_ms, backups.as_deref()).await;
@@ -459,6 +461,9 @@ impl Ticks {
                     let (scheduler, scope, tick, count) =
                         (scheduler.clone(), scope.clone(), tick.clone(), Arc::clone(&count));
                     async move {
+                        // The fire guard is made at the fire's first poll,
+                        // before it awaits anything, and lives until its
+                        // enqueue has landed.
                         let _firing = Busy::new(&count);
                         match fire(&scheduler, &scope, &tick).await {
                             Ok(n) => tracing::debug!(tick = tick.kind, key = %tick.key(), queued = n, "tick"),
@@ -475,7 +480,8 @@ impl Ticks {
     }
 
     /// How many loops are reading their last run or firing now: 0 when
-    /// every loop waits for its next tick.
+    /// every loop waits for its next tick. Only the tick tests' `settle`
+    /// reads it.
     pub fn busy(&self) -> usize {
         self.busy.load(Ordering::SeqCst)
     }

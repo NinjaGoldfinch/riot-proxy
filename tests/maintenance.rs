@@ -496,12 +496,16 @@ async fn maintenance_queued_by_a_boot_with(dir: &Path, env: &[(&str, &str)], exp
             }
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         }
+        assert!(
+            n >= expect,
+            "polled 10 s for {expect} maintenance row(s) and found {n}"
+        );
         n
     } else {
         // Nothing to wait for when none is due: give a tick that would fire
         // at boot time to do so, then count. A fixed wait cannot prove a
-        // deferral; `src/jobs/ticks/tests.rs` asserts the exact delay under
-        // paused time.
+        // deferral; the unit tests in `src/jobs/ticks/tests.rs` assert the
+        // delay `first_fire` returns.
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         queued(&path, "maintenance")
     };
