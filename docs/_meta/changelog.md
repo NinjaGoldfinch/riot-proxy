@@ -90,4 +90,4 @@ Dated log of changes to this documentation set. One line per change; the newest 
 
 ---
 **Sources:** this documentation set
-**Last verified:** 2026-11-17 against commit `9ca718a`
+**Last verified:** 2026-11-18 against commit `a717e24`
