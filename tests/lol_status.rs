@@ -232,7 +232,7 @@ async fn a_failure_after_a_200_is_unavailable_with_the_last_200s_age() {
 }
 
 /// `STATUS_POLL_PLATFORMS=none`: no poller, nothing stored, a 404
-/// `NOT_FOUND` as every switched-off feature answers (owner decision D2,
+/// `NOT_FOUND` as every switched-off feature answers (owner decision of 2026-11-17,
 /// SITE-18; #283 answered 503), without `Retry-After`. Still metered and keyed.
 #[tokio::test]
 async fn the_poller_off_is_a_404() {
@@ -246,6 +246,15 @@ async fn the_poller_off_is_a_404() {
         "The status poller is off on this deployment (STATUS_POLL_PLATFORMS=none)"
     );
     assert!(!r.headers.contains_key("retry-after"));
+    assert!(!r.headers.contains_key("x-cache"), "not a cache read");
+    assert!(
+        r.headers["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("application/json"),
+        "{:?}",
+        r.headers["content-type"]
+    );
     assert!(r.headers.contains_key("x-ratelimit-remaining"));
     assert!(r.headers.contains_key("x-request-id"));
     assert_eq!(e.upstream_calls().await, 0);
@@ -306,11 +315,12 @@ async fn stored_row(
         .unwrap();
 }
 
-/// Owner decision D1: an entry whose last 200 is older than two poll
-/// intervals (here 2 × 240 s, a row a skipped poll left behind) is
-/// unavailable, keeps its age, and is not the stalest available age.
+/// Owner decisions of 2026-11-17: an entry whose last 200 is older than two
+/// poll intervals and the 60 s grace (here 2 × 240 + 60 s, a row skipped
+/// polls left behind) is unavailable, keeps its age, and is not the stalest
+/// available age.
 #[tokio::test]
-async fn an_entry_older_than_two_intervals_is_unavailable() {
+async fn an_entry_older_than_two_intervals_and_the_grace_is_unavailable() {
     let server = MockServer::start().await;
     let (_dir, state, router) = common::app_with(
         &[
@@ -340,7 +350,7 @@ async fn an_entry_older_than_two_intervals_is_unavailable() {
         server,
         key,
     };
-    stored_row(&e, "kr", Some(quiet("KR")), Some(481), None).await;
+    stored_row(&e, "kr", Some(quiet("KR")), Some(541), None).await;
     stored_row(&e, "oc1", Some(quiet("OC1")), Some(30), None).await;
     let r = e.get("/v1/lol/status").await;
     assert_eq!(r.status, StatusCode::OK);
@@ -349,9 +359,9 @@ async fn an_entry_older_than_two_intervals_is_unavailable() {
     assert_eq!(kr["platform"], "kr");
     assert_eq!(kr["available"], false);
     let error = kr["error"].as_str().unwrap();
-    assert!(error.starts_with("stale: last read 48"), "{error}");
+    assert!(error.starts_with("stale: last read 54"), "{error}");
     assert_eq!(kr["incidents"], serde_json::Value::Null);
-    assert!(kr["fetchedAgeSeconds"].as_u64().unwrap() >= 481);
+    assert!(kr["fetchedAgeSeconds"].as_u64().unwrap() >= 541);
     assert_eq!(body["platforms"][1]["available"], true);
     assert!(
         header_u64(&r, "x-cache-fetched-age") < 35,
@@ -467,4 +477,67 @@ async fn a_failed_platform_status_read_is_a_500() {
     let r = e.get("/v1/lol/status").await;
     assert_eq!(r.status, StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(r.json()["error"]["code"], "INTERNAL");
+}
+
+// ── Review of #289 ───────────────────────────────────────────────────────────
+
+/// Every entry stale is still a 200 and `HIT`, with every entry
+/// `available: false` and no `X-Cache-Fetched-Age`, since none is available.
+#[tokio::test]
+async fn every_entry_stale_is_a_200_with_no_fetched_age() {
+    let e = env("oc1,kr", 10_000).await;
+    stored_row(&e, "oc1", Some(quiet("OC1")), Some(2_000), None).await;
+    stored_row(&e, "kr", Some(quiet("KR")), Some(2_000), None).await;
+    let r = e.get("/v1/lol/status").await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.headers["x-cache"], "HIT");
+    assert!(!r.headers.contains_key("x-cache-fetched-age"), "{:?}", r.headers);
+    let body = r.json();
+    let platforms = body["platforms"].as_array().unwrap();
+    assert_eq!(platforms.len(), 2);
+    for p in platforms {
+        assert_eq!(p["available"], false, "{p}");
+        assert!(p["error"].as_str().unwrap().starts_with("stale: "), "{p}");
+    }
+    assert_eq!(e.upstream_calls().await, 0);
+}
+
+/// What an unavailable entry reports, in order: a failure after the last
+/// 200 over staleness (a 200 from 2000 s ago and a failure from 1000 s ago
+/// is the failure's error, with the 200's age), and a stored body that is not
+/// an object over staleness (`unexpected body`).
+#[tokio::test]
+async fn a_failure_and_an_unexpected_body_are_reported_over_staleness() {
+    let e = env("oc1,kr", 10_000).await;
+    stored_row(
+        &e,
+        "oc1",
+        Some(quiet("OC1")),
+        Some(2_000),
+        Some((1_000, "UPSTREAM_ERROR: Upstream request failed")),
+    )
+    .await;
+    stored_row(&e, "kr", Some("[]".into()), Some(2_000), None).await;
+    let body = e.get("/v1/lol/status").await.json();
+    let (kr, oc1) = (&body["platforms"][0], &body["platforms"][1]);
+    assert_eq!(
+        (kr["platform"].as_str(), oc1["platform"].as_str()),
+        (Some("kr"), Some("oc1"))
+    );
+    assert_eq!(
+        (
+            oc1["available"].clone(),
+            oc1["error"].clone(),
+            oc1["fetchedAgeSeconds"].clone()
+        ),
+        (
+            json!(false),
+            json!("UPSTREAM_ERROR: Upstream request failed"),
+            json!(2_000)
+        )
+    );
+    assert_eq!(
+        (kr["available"].clone(), kr["error"].clone()),
+        (json!(false), json!("unexpected body"))
+    );
 }

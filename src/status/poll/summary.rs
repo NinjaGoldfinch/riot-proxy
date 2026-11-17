@@ -109,14 +109,15 @@ pub struct PlatformStatusEntry {
     pub platform: String,
     /// Whether the counts below describe the platform's current status: the
     /// poller has stored a 200 from Riot for it, its last read since has not
-    /// failed, and that 200 is at most two poll intervals old. `false` with
-    /// `error` saying why; the counts are then `null`.
+    /// failed, and that 200 is at most two poll intervals and 60 s old.
+    /// `false` with `error` saying why; the counts are then `null`.
     pub available: bool,
     /// Why the entry is unavailable: the last read's error (the proxy's
     /// error code and message, e.g. `NOT_FOUND: Resource not found upstream`),
     /// `not read yet` (never read: no stored 200), `stale: last read N s
-    /// ago` (the last 200 is older than two poll intervals) or `unexpected
-    /// body`. `null` when available.
+    /// ago` (the last 200 is older than two poll intervals and 60 s),
+    /// `unexpected body` (the stored 200 is not a JSON object) or `the
+    /// stored body is not JSON`. `null` when available.
     #[schema(required = true)]
     pub error: Option<String>,
     /// How many incidents Riot lists (`incidents[]`). `null` when unavailable.
@@ -145,8 +146,9 @@ pub struct PlatformStatusEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct PlatformStatusSummary {
     /// One entry per platform in `STATUS_POLL_PLATFORMS`, in the proxy's
-    /// platform order. An available entry is at most two poll intervals old;
-    /// an older one is unavailable (`fetchedAgeSeconds` says how old).
+    /// platform order. An available entry is at most two poll intervals and
+    /// 60 s old; an older one is unavailable (`fetchedAgeSeconds` says how
+    /// old).
     pub platforms: Vec<PlatformStatusEntry>,
 }
 
@@ -171,7 +173,7 @@ fn age_seconds(now_ms: i64, then_ms: i64) -> u64 {
 
 /// The entry for `platform` from its stored row, if any, at `now_ms`. A
 /// last 200 older than `max_age_s` is not reported as current (SITE-18,
-/// owner decision D1): a skipped poll writes nothing, so without the bound a
+/// owner decision of 2026-11-17): a skipped poll writes nothing, so without the bound a
 /// row could stay `available` for hours, most likely while Riot rate limits.
 pub fn entry(
     platform: Platform,
@@ -252,10 +254,17 @@ pub fn summarize(
     }
 }
 
-/// The oldest an available entry may be: two poll intervals (owner decision
-/// D1), so one skipped or late round does not make a platform unavailable.
+/// How long past two poll intervals an entry stays available: one round's
+/// read, which the poller bounds at 60 s (SITE-17's per-read deadline), so
+/// the round after a skipped one has time to land (owner decision of
+/// 2026-11-17).
+pub const STALE_GRACE_S: u64 = 60;
+
+/// The oldest an available entry may be: two poll intervals and
+/// [`STALE_GRACE_S`] (owner decisions of 2026-11-17), so one skipped round
+/// does not make a platform unavailable while the next round's read lands.
 pub fn max_age_s(poll_interval_s: u32) -> u64 {
-    2 * u64::from(poll_interval_s)
+    2 * u64::from(poll_interval_s) + STALE_GRACE_S
 }
 
 /// An `incident_severity` outside the portal's three is logged once per
@@ -534,23 +543,28 @@ mod tests {
         );
     }
 
-    /// Owner decision D1 (SITE-18): an entry whose last 200 is older than two
-    /// poll intervals, with no failure since (a skipped poll writes nothing),
-    /// is unavailable, its counts `null`, its age kept; just under, it is not.
+    /// Owner decisions of 2026-11-17 (SITE-18, review of #289): an entry whose
+    /// last 200 is older than two poll intervals and the 60 s grace, with no
+    /// failure since (a skipped poll writes nothing), is unavailable, its
+    /// counts `null`, its age kept; at the bound, it is not. Two intervals
+    /// and 5 s, where the round after a skipped one is still landing, is
+    /// available.
     #[test]
-    fn an_entry_older_than_two_intervals_is_stale_and_unavailable() {
-        assert_eq!(max_age_s(240), 480);
+    fn an_entry_older_than_two_intervals_and_the_grace_is_stale_and_unavailable() {
+        assert_eq!(max_age_s(240), 540);
         let at = |age_ms: i64| {
             entry(
                 Platform::Kr,
                 Some(&row(Platform::Kr, Some(BODY), Some(NOW - age_ms), None)),
                 NOW,
-                480,
+                max_age_s(240),
             )
         };
-        let under = at(480_000);
+        let landing = at(485_000);
+        assert!(landing.available, "two intervals and 5 s: {landing:?}");
+        let under = at(540_000);
         assert!(under.available, "{under:?}");
-        let over = at(481_000);
+        let over = at(541_000);
         assert_eq!(
             (
                 over.available,
@@ -559,16 +573,16 @@ mod tests {
                 over.worst_severity,
                 over.fetched_age_seconds
             ),
-            (false, Some("stale: last read 481 s ago"), None, None, Some(481))
+            (false, Some("stale: last read 541 s ago"), None, None, Some(541))
         );
         let s = summarize(
             &[Platform::Kr, Platform::Oc1],
             &[
-                row(Platform::Kr, Some(BODY), Some(NOW - 481_000), None),
+                row(Platform::Kr, Some(BODY), Some(NOW - 541_000), None),
                 row(Platform::Oc1, Some(BODY), Some(NOW - 30_000), None),
             ],
             NOW,
-            480,
+            max_age_s(240),
         );
         assert_eq!(
             s.stalest_available_age(),

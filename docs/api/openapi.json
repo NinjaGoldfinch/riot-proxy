@@ -10015,7 +10015,7 @@
           "lol"
         ],
         "summary": "Every platform's status",
-        "description": "Every platform's status in one call, summarised from Riot's lol-status-v4 `platform-data`. **Never calls Riot**: the status poller reads each platform in `STATUS_POLL_PLATFORMS` every `STATUS_POLL_INTERVAL_S` and this route reads what it stored, so an available entry is at most two poll intervals old; an older one is unavailable (`fetchedAgeSeconds` says how old).\n\n`platforms` lists each polled platform once, in the proxy's platform order (`na1` … `vn2`). An entry is `available: false`, with `error` saying why and its counts `null`, until the poller has read a 200 for it, whenever its latest read failed (a platform Riot does not serve is just such an entry), and when its last 200 is older than two poll intervals; the call is still a 200. `X-Cache` is `HIT`, and `X-Cache-Fetched-Age` is the stalest available entry's `fetchedAgeSeconds` (not sent when none is available). For a platform's whole body, titles and updates included, use `/v1/lol/status/{platform}`, which the poller keeps cached.\n\n404 with `NOT_FOUND` when this deployment does not poll (`STATUS_POLL_PLATFORMS=none`).",
+        "description": "Every platform's status in one call, summarised from Riot's lol-status-v4 `platform-data`. **Never calls Riot**: the status poller reads each platform in `STATUS_POLL_PLATFORMS` every `STATUS_POLL_INTERVAL_S` and this route reads what it stored, so an available entry is at most two poll intervals and 60 s old; an older one is unavailable (`fetchedAgeSeconds` says how old).\n\n`platforms` lists each polled platform once, in the proxy's platform order (`na1` … `vn2`). An entry is `available: false`, with `error` saying why and its counts `null`, until the poller has read a 200 for it, whenever its latest read failed (a platform Riot does not serve is just such an entry), and when its last 200 is older than two poll intervals and 60 s; the call is still a 200. `X-Cache` is `HIT`, and `X-Cache-Fetched-Age` is the stalest available entry's `fetchedAgeSeconds` (not sent when none is available). For a platform's whole body, titles and updates included, use `/v1/lol/status/{platform}`, which the poller keeps cached.\n\n404 with `NOT_FOUND` when this deployment does not poll (`STATUS_POLL_PLATFORMS=none`).",
         "operationId": "status_summary",
         "responses": {
           "200": {
@@ -16744,14 +16744,14 @@
           },
           "available": {
             "type": "boolean",
-            "description": "Whether the counts below describe the platform's current status: the\npoller has stored a 200 from Riot for it, its last read since has not\nfailed, and that 200 is at most two poll intervals old. `false` with\n`error` saying why; the counts are then `null`."
+            "description": "Whether the counts below describe the platform's current status: the\npoller has stored a 200 from Riot for it, its last read since has not\nfailed, and that 200 is at most two poll intervals and 60 s old.\n`false` with `error` saying why; the counts are then `null`."
           },
           "error": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Why the entry is unavailable: the last read's error (the proxy's\nerror code and message, e.g. `NOT_FOUND: Resource not found upstream`),\n`not read yet` (never read: no stored 200), `stale: last read N s\nago` (the last 200 is older than two poll intervals) or `unexpected\nbody`. `null` when available."
+            "description": "Why the entry is unavailable: the last read's error (the proxy's\nerror code and message, e.g. `NOT_FOUND: Resource not found upstream`),\n`not read yet` (never read: no stored 200), `stale: last read N s\nago` (the last 200 is older than two poll intervals and 60 s),\n`unexpected body` (the stored 200 is not a JSON object) or `the\nstored body is not JSON`. `null` when available."
           },
           "incidents": {
             "type": [
@@ -16812,7 +16812,7 @@
             "items": {
               "$ref": "#/components/schemas/PlatformStatusEntry"
             },
-            "description": "One entry per platform in `STATUS_POLL_PLATFORMS`, in the proxy's\nplatform order. An available entry is at most two poll intervals old;\nan older one is unavailable (`fetchedAgeSeconds` says how old)."
+            "description": "One entry per platform in `STATUS_POLL_PLATFORMS`, in the proxy's\nplatform order. An available entry is at most two poll intervals and\n60 s old; an older one is unavailable (`fetchedAgeSeconds` says how\nold)."
           }
         }
       },

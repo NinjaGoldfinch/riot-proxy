@@ -418,11 +418,11 @@ async fn platform_status(
 const STATUS_SUMMARY_NOTES: &str = "Every platform's status in one call, summarised from Riot's lol-status-v4 \
     `platform-data`. **Never calls Riot**: the status poller reads each platform in `STATUS_POLL_PLATFORMS` \
     every `STATUS_POLL_INTERVAL_S` and this route reads what it stored, so an available entry is at most two \
-    poll intervals old; an older one is unavailable (`fetchedAgeSeconds` says how old).\n\n\
+    poll intervals and 60 s old; an older one is unavailable (`fetchedAgeSeconds` says how old).\n\n\
     `platforms` lists each polled platform once, in the proxy's platform order (`na1` … `vn2`). An entry is \
     `available: false`, with `error` saying why and its counts `null`, until the poller has read a 200 for it, \
     whenever its latest read failed (a platform Riot does not serve is just such an entry), and when its last \
-    200 is older than two poll intervals; the call is still a 200. `X-Cache` is `HIT`, and `X-Cache-Fetched-Age` \
+    200 is older than two poll intervals and 60 s; the call is still a 200. `X-Cache` is `HIT`, and `X-Cache-Fetched-Age` \
     is the stalest available entry's `fetchedAgeSeconds` (not sent when none is available). For a platform's \
     whole body, titles and updates included, use `/v1/lol/status/{platform}`, which the poller keeps cached.\n\n\
     404 with `NOT_FOUND` when this deployment does not poll (`STATUS_POLL_PLATFORMS=none`).";
@@ -471,7 +471,7 @@ async fn status_summary(State(s): State<AppState>) -> Response {
 
 /// `STATUS_POLL_PLATFORMS=none`: nothing is polled, so there is nothing to
 /// summarise. `NOT_FOUND` at 404, as every switched-off feature answers
-/// (owner decision D2, SITE-18; #283 sent it at 503).
+/// (owner decision of 2026-11-17, SITE-18; #283 sent it at 503).
 fn poller_off() -> ApiError {
     ApiError::new(
         ErrorCode::NotFound,

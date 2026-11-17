@@ -4,7 +4,7 @@ Dated log of changes to this documentation set. One line per change; the newest 
 
 ## 2026-11-17
 
-- SITE-18 (ADR-220 amended): `api/endpoints-riot-lol.md`, `integration/contract.md`, design/14 and `docs/api/openapi.json` say an available status entry is at most two poll intervals old and an older one is unavailable; `api/errors.md`, `deployment/configuration.md`, design/07, `README.md` and `.env.example` say the poller off makes `GET /v1/lol/status` a 404 (was 503); `api/errors.md` and `operations/observability.md` add the route's 500 and its two log lines; the schemas are renamed.
+- SITE-18 (ADR-220 amended): `api/endpoints-riot-lol.md`, `integration/contract.md`, design/14 and `docs/api/openapi.json` say an available status entry is at most two poll intervals old and an older one is unavailable; `api/errors.md`, `deployment/configuration.md`, design/07, `README.md` and `.env.example` say the poller off makes `GET /v1/lol/status` a 404 (was 503); `api/errors.md` and `operations/observability.md` add the route's 500 and its two log lines; the schemas are renamed. In review (#289): an entry stays available for two poll intervals and a 60 s grace, so one skipped round does not flip a platform while the next read lands (`api/endpoints-riot-lol.md`, `integration/contract.md`, design/07 and design/14, `deployment/configuration.md`, `.env.example`, ADR-220, `docs/api/openapi.json`); `STATUS_POLL_INTERVAL_S`'s rows say it bounds the summary too; troubleshooting §37 is new; the `error` field lists `the stored body is not JSON`.
 
 ## 2026-11-10
 
