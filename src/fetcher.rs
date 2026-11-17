@@ -175,7 +175,7 @@ pub struct FetchOptions {
     /// waiting to be stored, and nobody who did not ask waits with it (AVL-11).
     pub await_store: bool,
     /// Wait at most this for the limiter, in place of what `priority` and
-    /// `job` give (the status poller waits 1 s, SITE-13).
+    /// `job` give (the status poller waits 30 s, `poll::ROOM`, SITE-17).
     pub budget: Option<Duration>,
     /// Fail rather than serve the cached copy when the call to Riot fails or
     /// the limiter has no room inside the budget, for a caller that must tell
@@ -184,7 +184,7 @@ pub struct FetchOptions {
     /// not start (whose budget and fallback are another caller's), and it is
     /// not counted as a cache read (SITE-17).
     pub fresh_only: bool,
-    /// A status poll, not traffic (SITE-17, owner decision D7): its call
+    /// A status poll, not traffic (SITE-17, owner decision of 2026-11-17): its call
     /// stamps no traffic on its scope and never turns the key verdict to
     /// rejected or logs `RIOT KEY REJECTED` (`RiotClient::send_poll`).
     pub status_poll: bool,

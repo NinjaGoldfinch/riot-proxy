@@ -146,11 +146,13 @@ pub enum ConfigError {
     DataDir { path: PathBuf, source: std::io::Error },
 }
 
-/// `STATUS_POLL_PLATFORMS`' default (SITE-17, owner decision D3): every
+/// `STATUS_POLL_PLATFORMS`' default (SITE-17, owner decision of 2026-11-17): every
 /// platform but `ph2`, `th2` and `tw2`, which the portal's lol-status-v4
-/// region list does not name (read 2026-11-17). `ph2` and `th2` answer HTTP
-/// 530 to any request; `tw2` answers, and is added back once a keyed read has
-/// seen a 200. In [`Platform::ALL`] order.
+/// region list does not name (read 2026-11-17). For `ph2` and `th2`, on
+/// 2026-11-17 a keyless GET of `/lol/status/v4/platform-data` got HTTP 530
+/// with body `error code: 1016` from both hosts; `tw2` answered Riot's own
+/// 401, and is added back once a keyed read has seen a 200. In
+/// [`Platform::ALL`] order.
 pub const STATUS_POLL_DEFAULT: [Platform; 14] = [
     Platform::Na1,
     Platform::Br1,

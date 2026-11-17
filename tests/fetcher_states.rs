@@ -1025,7 +1025,7 @@ async fn a_forced_refresh_joining_a_refresh_frozen_by_the_limiter_serves_the_sto
 
 /// `FetchOptions::budget` replaces the interactive budget for the limiter
 /// (SITE-13; the merge of #274 and #282 resolved `budget_for` as
-/// `opts.budget.unwrap_or(…)`): the next token 1 s off fails a 500 ms budget
+/// `opts.budget.unwrap_or(…)`): the next token 1 s off fails a 100 ms budget
 /// with `RATE_LIMITED` though it is inside the 2 s interactive one, and the
 /// stored-copy wait follows the budget too (review of #282, SITE-17).
 #[tokio::test]
@@ -1042,10 +1042,10 @@ async fn a_fetch_budget_shorter_than_the_interactive_one_is_what_the_limiter_get
         .await
         .unwrap();
     let short = FetchOptions {
-        budget: Some(Duration::from_millis(500)),
+        budget: Some(Duration::from_millis(100)),
         ..INTERACTIVE
     };
-    assert_eq!(s.fetcher.stored_wait(short), Duration::from_millis(750));
+    assert_eq!(s.fetcher.stored_wait(short), Duration::from_millis(350));
     let asked = Instant::now();
     let err = s
         .fetcher

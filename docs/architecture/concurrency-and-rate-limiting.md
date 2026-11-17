@@ -4,7 +4,7 @@ How riot-proxy stays inside Riot's limits with one key, how interactive requests
 
 ## The limiter model
 
-One `Limiter` holds a map of scopes. A scope is a routing value on a Riot host: a platform such as `euw1` or a region such as `europe` (`src/riot/limiter/mod.rs:97-110`, `src/riot/endpoints.rs:361-367`). Each scope has application windows and, per method id, method windows; each window is a sliding log of admission instants with a `limit` and a `seconds` length (ADR-023, `src/riot/limiter/bucket.rs:15-121`). A request is admitted only if every applicable window has room now.
+One `Limiter` holds a map of scopes. A scope is a routing value on a Riot host: a platform such as `euw1` or a region such as `europe` (`src/riot/limiter/mod.rs:97-110`, `src/riot/endpoints.rs:362-368`). Each scope has application windows and, per method id, method windows; each window is a sliding log of admission instants with a `limit` and a `seconds` length (ADR-023, `src/riot/limiter/bucket.rs:15-121`). A request is admitted only if every applicable window has room now.
 
 | Aspect | Behaviour | Source |
 |---|---|---|

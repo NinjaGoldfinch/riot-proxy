@@ -1043,13 +1043,14 @@ fn status_allow_cidr() {
     assert!(errs.iter().any(|e| e.contains("'10.0.0.0/33'")), "{errs:?}");
 }
 
-/// SITE-13 (design/14 §Status poller, ADR-219): every platform every 300 s
-/// by default, parsed like `STATUS_CHECK_PLATFORMS`; recordings off.
+/// SITE-13 (design/14 §Status poller, ADR-219), SITE-17: every platform but
+/// `ph2`, `th2` and `tw2` every 240 s by default, parsed like
+/// `STATUS_CHECK_PLATFORMS`; recordings off.
 #[test]
 fn status_poll_settings() {
     use crate::riot::routing::Platform;
     let c = load(env(&[("LADDER_PLATFORMS", "kr")]));
-    // Inside `status`'s 300 s soft TTL (owner decision D5, SITE-17).
+    // Inside `status`'s 300 s soft TTL (owner decision of 2026-11-17, SITE-17).
     assert_eq!(c.status_poll_interval_s, 240);
     assert_eq!(
         c.status_poll_platforms,
@@ -1057,7 +1058,7 @@ fn status_poll_settings() {
         "not LADDER_PLATFORMS"
     );
     // Every platform but the three the portal's lol-status-v4 list leaves
-    // out (owner decision D3), in `Platform::ALL` order.
+    // out (owner decision of 2026-11-17), in `Platform::ALL` order.
     let left_out: Vec<Platform> = Platform::ALL
         .into_iter()
         .filter(|p| !c.status_poll_platforms.contains(p))

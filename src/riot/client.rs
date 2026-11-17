@@ -24,7 +24,7 @@ const POOL_MAX_IDLE_PER_HOST: usize = 32;
 const POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// v1: 10 s for headers + 15 s for the body.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(25);
+pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(25);
 
 pub const X_RIOT_TOKEN: &str = "x-riot-token";
 pub const X_RATE_LIMIT_TYPE: &str = "x-rate-limit-type";
@@ -170,15 +170,17 @@ pub struct RiotError {
     pub headers: Box<HeaderMap>,
 }
 
+/// The message of the `UPSTREAM_ERROR` a 401 or 403 from Riot becomes; the
+/// status poller tells a refused read by it (SITE-17).
+pub const UPSTREAM_AUTH_FAILED: &str = "Upstream authentication failed";
+
 impl RiotError {
     /// v1 `RiotError.toProxyError`: what the client of the proxy is told. Never
     /// says the Riot key was rejected; that is an operator problem.
     pub fn to_api_error(&self) -> ApiError {
         match &self.kind {
             RiotErrorKind::NotFound => ApiError::not_found("Resource not found upstream"),
-            RiotErrorKind::UpstreamAuth => {
-                ApiError::new(ErrorCode::UpstreamError, "Upstream authentication failed")
-            }
+            RiotErrorKind::UpstreamAuth => ApiError::new(ErrorCode::UpstreamError, UPSTREAM_AUTH_FAILED),
             RiotErrorKind::RateLimited { retry_after, .. } => {
                 ApiError::new(ErrorCode::RateLimited, "Upstream rate limited")
                     .with_retry_after(retry_after.unwrap_or(1))
@@ -226,6 +228,9 @@ pub struct UpstreamWatch {
     traffic: Mutex<HashMap<&'static str, i64>>,
     /// What Riot's rate-limit headers last said (STS-03, ADR-207).
     rate_limits: crate::status::ratelimits::RateLimitTable,
+    /// The status poller's last 401 or 403, which judges nothing on its own
+    /// ([`UpstreamWatch::polls_refused`]).
+    poll_refusal: Mutex<Option<KeyVerdict>>,
 }
 
 /// The key as Riot last judged it: a 2xx accepts it, a 401 or 403 rejects it.
@@ -293,8 +298,44 @@ impl UpstreamWatch {
                 at_ms,
             });
         }
+        if caller == Caller::Poll && matches!(status, 401 | 403) {
+            *lock(&self.poll_refusal) = Some(KeyVerdict {
+                accepted: false,
+                status,
+                method,
+                scope,
+                at_ms,
+            });
+        }
         if caller == Caller::Traffic {
             lock(&self.traffic).insert(scope, at_ms);
+        }
+        newly_rejected
+    }
+
+    /// The status poller ended a round in which every read that reached
+    /// Riot was refused (401 or 403), and at least one was: that judges the
+    /// key, where one platform's refusal does not (owner decision of
+    /// 2026-11-17, SITE-17). The verdict turns rejected, from the poller's
+    /// last refusal, and `RIOT KEY REJECTED` is logged once, when it turns;
+    /// a verdict already rejected stays so and logs nothing. Returns whether
+    /// it turned, as [`UpstreamWatch::answered`] does for one answer (what
+    /// fires `riot_key_rejected`, design/14). The next 2xx, a poll's
+    /// included, accepts the key again.
+    pub fn polls_refused(&self) -> bool {
+        let Some(refusal) = lock(&self.poll_refusal).clone() else {
+            return false;
+        };
+        let mut key = lock(&self.key);
+        let newly_rejected = key.as_ref().is_none_or(|k| k.accepted);
+        if newly_rejected {
+            tracing::error!(
+                status = refusal.status,
+                method = refusal.method,
+                scope = refusal.scope,
+                "RIOT KEY REJECTED — check RIOT_API_KEY (dev keys expire every 24h); every status poll this round was refused"
+            );
+            *key = Some(refusal);
         }
         newly_rejected
     }
@@ -308,8 +349,9 @@ enum Caller {
     Traffic,
     /// `/status`'s probe (STS-02b): judges the key, is not traffic.
     Probe,
-    /// The status poller (SITE-17): neither traffic nor a judge of a
-    /// rejected key.
+    /// The status poller (SITE-17): not traffic, and its 401 or 403 does
+    /// not judge the key on its own; a round wholly refused does
+    /// ([`UpstreamWatch::polls_refused`]).
     Poll,
 }
 
@@ -387,7 +429,7 @@ impl RiotClient {
     }
 
     /// [`send`](Self::send) for the status poller (SITE-17, owner decision
-    /// D7): counted, and in the rate-limit table, but not traffic on its
+    /// of 2026-11-17): counted, and in the rate-limit table, but not traffic on its
     /// scope, and its 401 or 403 neither turns the key's verdict to rejected
     /// nor logs `RIOT KEY REJECTED` (the poller logs its own failures).
     pub async fn send_poll(&self, req: &RiotRequest) -> Result<RiotResponse, RiotError> {
@@ -806,6 +848,71 @@ mod tests {
         let (_, text) = logged(tracing::Level::DEBUG, client.send_probe(&probe)).await;
         assert!(text.contains("status probe: the key is still rejected"), "{text}");
         assert!(!text.contains(REJECTED), "{text}");
+    }
+
+    /// SITE-17: a status poll's 401 or 403 logs `status poll refused` at
+    /// debug, never `RIOT KEY REJECTED`, and leaves the key's verdict alone;
+    /// the same answer to a real call logs it.
+    #[tokio::test]
+    async fn a_polls_refusal_is_debug_and_does_not_judge_the_key() {
+        use wiremock::matchers::path;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        const REJECTED: &str = "RIOT KEY REJECTED";
+
+        let server = MockServer::start().await;
+        let client = RiotClient::build(
+            &Secret::new("RGAPI-test"),
+            "riot-proxy-test",
+            Base::Fixed(server.uri()),
+        )
+        .unwrap();
+        let e = ep("status.platformData");
+        let req = RiotRequest::new(e, e.target_for_platform(Platform::Tw2), &[]).unwrap();
+        Mock::given(path("/lol/status/v4/platform-data"))
+            .respond_with(ResponseTemplate::new(403))
+            .mount(&server)
+            .await;
+
+        let (out, text) = logged(tracing::Level::DEBUG, client.send_poll(&req)).await;
+        let err = out.unwrap_err();
+        assert!(matches!(err.kind, RiotErrorKind::UpstreamAuth), "{err:?}");
+        assert!(text.contains("status poll refused"), "{text}");
+        assert!(!text.contains(REJECTED), "{text}");
+        assert_eq!(client.watch().key(), None, "the verdict is untouched");
+
+        let (_, text) = logged(tracing::Level::WARN, client.send(&req)).await;
+        assert_eq!(text.matches(REJECTED).count(), 1, "{text}");
+    }
+
+    /// Owner decision of 2026-11-17 (SITE-17): a round in which every poll
+    /// that reached Riot was refused judges the key, once; one already
+    /// rejected stays so without another line; a 2xx accepts it again.
+    #[tokio::test]
+    async fn a_wholly_refused_round_rejects_the_key_once() {
+        const REJECTED: &str = "RIOT KEY REJECTED";
+        let w = UpstreamWatch::default();
+        assert!(!w.polls_refused(), "no refusal recorded: nothing to judge");
+        assert_eq!(w.key(), None);
+
+        w.answered("kr", "status.platformData", 200, Caller::Poll, 10);
+        w.answered("tw2", "status.platformData", 403, Caller::Poll, 11);
+        assert!(w.key().unwrap().accepted, "one refusal alone judges nothing");
+        let (turned, text) = logged(tracing::Level::WARN, async { w.polls_refused() }).await;
+        assert!(turned);
+        assert_eq!(text.matches(REJECTED).count(), 1, "{text}");
+        let k = w.key().unwrap();
+        assert_eq!(
+            (k.accepted, k.status, k.method, k.scope, k.at_ms),
+            (false, 403, "status.platformData", "tw2", 11)
+        );
+
+        w.answered("kr", "status.platformData", 401, Caller::Poll, 20);
+        let (turned, text) = logged(tracing::Level::WARN, async { w.polls_refused() }).await;
+        assert!(!turned, "already rejected");
+        assert!(!text.contains(REJECTED), "{text}");
+
+        w.answered("kr", "status.platformData", 200, Caller::Poll, 30);
+        assert!(w.key().unwrap().accepted, "a poll's 2xx accepts it again");
     }
 
     /// STS-03 (design/14 §Rate-limit table): a real answer and a probe's

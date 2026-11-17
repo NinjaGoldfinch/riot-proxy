@@ -17,7 +17,7 @@ Common parameter rules (`src/http/validate.rs`):
 
 ## `/v1/riot/*`: account-v1
 
-Riot endpoint: `account.byRiotId` `/riot/account/v1/accounts/by-riot-id/{gameName}/{tagLine}`, `account.byPuuid` `/riot/account/v1/accounts/by-puuid/{puuid}`, `account.regionByPuuid` `/riot/account/v1/region/by-game/lol/by-puuid/{puuid}` (`src/riot/endpoints.rs:L126-L147`, `L287-L304`). Soft TTL 86 400 s, hard 345 600 s, negative TTL 300 s, persisted to L2.
+Riot endpoint: `account.byRiotId` `/riot/account/v1/accounts/by-riot-id/{gameName}/{tagLine}`, `account.byPuuid` `/riot/account/v1/accounts/by-puuid/{puuid}`, `account.regionByPuuid` `/riot/account/v1/region/by-game/lol/by-puuid/{puuid}` (`src/riot/endpoints.rs:L126-L147`, `L287-L305`). Soft TTL 86 400 s, hard 345 600 s, negative TTL 300 s, persisted to L2.
 
 | Method | Path | Params | Riot call | Handler |
 |---|---|---|---|---|
@@ -149,5 +149,5 @@ ninjagoldfinch.lol does not use these image routes; its browser loads icons stra
 > **TODO (unverified):** whether `ServeDir` sends `Last-Modified` and honours `If-Modified-Since` for images written by the fill route on a later request; the behaviour is tower-http's (`docs/_meta/scratch/routes.md` §7).
 
 ---
-**Sources:** `src/routes/riot.rs:L127-L300`, `src/routes/lol.rs:L37-L475`, `src/status/poll/summary.rs:L1-L245`, `src/routes/statics.rs:L4-L292`, `src/routes/passthrough.rs:L325-L476`, `src/http/validate.rs:L53-L166,L232-L244`, `src/riot/endpoints.rs:L126-L330`, `src/riot/ladder.rs:L7-L26`, `src/riot/routing.rs:L138-L205`, `src/static/mod.rs:L28-L101`, `src/fetcher.rs:L473-L499`, `tests/snapshots/lol_routes__lol_routes_upstream_calls.snap`, `tests/snapshots/ddragon__ddragon_file_headers.snap`, `tests/snapshots/ddragon__ddragon_missing_headers.snap`, `docs/_meta/scratch/routes.md` §1.2-1.3,1.6-1.7, `docs/_meta/scratch/riot-and-cache.md` §2, live capture against `target/debug/riot-proxy` 2.7.0
+**Sources:** `src/routes/riot.rs:L127-L300`, `src/routes/lol.rs:L37-L475`, `src/status/poll/summary.rs:L1-L245`, `src/routes/statics.rs:L4-L292`, `src/routes/passthrough.rs:L325-L476`, `src/http/validate.rs:L53-L166,L232-L244`, `src/riot/endpoints.rs:L126-L331`, `src/riot/ladder.rs:L7-L26`, `src/riot/routing.rs:L138-L205`, `src/static/mod.rs:L28-L101`, `src/fetcher.rs:L473-L499`, `tests/snapshots/lol_routes__lol_routes_upstream_calls.snap`, `tests/snapshots/ddragon__ddragon_file_headers.snap`, `tests/snapshots/ddragon__ddragon_missing_headers.snap`, `docs/_meta/scratch/routes.md` §1.2-1.3,1.6-1.7, `docs/_meta/scratch/riot-and-cache.md` §2, live capture against `target/debug/riot-proxy` 2.7.0
 **Last verified:** 2026-11-17 against commit `9ca718a`

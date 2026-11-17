@@ -145,7 +145,7 @@ No key. Not listed in the document itself. `riot-proxy spec` prints the same JSO
 
 ## Dev and dashboard pages (toggles)
 
-`DEV_UI` defaults on but is forced off when `ENV=production`; `DASHBOARD_UI` defaults on (`src/config.rs:L803-L805`, `L861-L864`). None of these are in the OpenAPI document.
+`DEV_UI` defaults on but is forced off when `ENV=production`; `DASHBOARD_UI` defaults on (`src/config.rs:L805-L807`, `L863-L866`). None of these are in the OpenAPI document.
 
 | Method | Path | Toggle | Auth | Response | Handler |
 |---|---|---|---|---|---|

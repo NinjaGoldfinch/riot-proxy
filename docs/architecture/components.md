@@ -56,7 +56,7 @@ Reads from a route or a job all pass through the fetcher (`GET /v1/lol/status` r
 |---|---|---|
 | `app.rs` | Builds the axum router and the middleware stack, runs the server with a 10 s graceful drain | `router()`, `serve()`, `AppState` (`src/app.rs:40-69,71-121,268-302`) |
 | `cli/` | Subcommands: `serve`, `migrate`, `key`, `healthcheck`, `spec`, `backup`, `migrate-v1`, `packs`, and `riot` behind the `dev-cli` feature | `cli::run` (`src/cli/mod.rs:71-123`); the boot sequence in `cli/serve.rs` |
-| `config.rs` | Flags, environment and `.env` merged by figment, validated as a whole; production refusals; `Secret` wrapper | `Config::load`, `VARS` (`src/config.rs:23-105,699-733`) |
+| `config.rs` | Flags, environment and `.env` merged by figment, validated as a whole; production refusals; `Secret` wrapper | `Config::load`, `VARS` (`src/config.rs:23-105,701-735`) |
 | `http/` | Request ids, auth guards (`require_read`, `require_admin`), per-consumer quota, CORS for the admin API, the error envelope, validators, recent-request rings | `src/http/auth.rs`, `quota.rs`, `cors.rs`, `error.rs`, `validate.rs`, `recent.rs` |
 | `routes/` | One file per prefix; handlers carry `#[utoipa::path]` so the OpenAPI document is generated from the same registration (`routes::docs::api_router`) | `src/routes/docs.rs:116-153` |
 | `fetcher.rs` | The single read funnel: archive, L1, single-flight, limiter, client, store; stale-while-revalidate; retries; `X-Cache` values | `Fetcher::fetch`, `FetchOptions` (`src/fetcher.rs:442-545,621-892`) |

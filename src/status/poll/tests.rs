@@ -416,9 +416,9 @@ fn request(platform: Platform) -> RiotRequest {
     RiotRequest::new(Endpoint::by_id(METHOD).unwrap(), Target::Platform(platform), &[]).unwrap()
 }
 
-/// Through the real fetcher: no limiter room within a second is a skip,
-/// even with a copy in L1 (it is never served in place of Riot's answer);
-/// room inside the second is a read, here one nothing answers.
+/// Through the real fetcher: no limiter room within [`ROOM`] (30 s) is a
+/// skip, even with a copy in L1 (it is never served in place of Riot's
+/// answer); room inside it is a read, here one nothing answers.
 #[tokio::test(start_paused = true)]
 async fn the_fetcher_skips_a_platform_without_room_within_a_second() {
     let config = config();
@@ -654,4 +654,46 @@ async fn an_unwritable_recordings_directory_is_reported_and_the_rows_still_store
     };
     assert!(fine.check().await.is_ok());
     assert!(files(&fine.dir).is_empty(), "the check leaves nothing behind");
+}
+
+// ── Review of #288 ───────────────────────────────────────────────────────────
+
+/// The default interval keeps `GET /v1/lol/status/{platform}`'s copy inside
+/// `status`'s soft TTL from one round to the next, even when the next
+/// round's read waits out the limiter's whole room and the client's whole
+/// timeout before Riot answers: the interval was chosen for that (owner
+/// decision of 2026-11-17, SITE-17).
+#[test]
+fn the_default_interval_keeps_the_route_inside_the_soft_ttl() {
+    let config = config();
+    let interval = Duration::from_secs(config.status_poll_interval_s.into());
+    assert_eq!(interval, Duration::from_secs(240));
+    let ttls = crate::riot::endpoints::TtlPolicy::from_config(&config).ttls(Endpoint::by_id(METHOD).unwrap());
+    let soft = ttls.soft.unwrap();
+    assert_eq!(soft, Duration::from_secs(300));
+    assert!(
+        interval + ROOM + crate::riot::client::REQUEST_TIMEOUT < soft,
+        "{interval:?} + {ROOM:?} + the client's timeout is not under {soft:?}"
+    );
+}
+
+/// `spawn` checks `STATUS_RECORDINGS_DIR` before its first round.
+#[tokio::test]
+async fn spawn_checks_the_recordings_directory_first() {
+    let (dir, db) = temp_db();
+    let file = dir.path().join("a-file");
+    std::fs::write(&file, b"x").unwrap();
+    let recordings = Recordings {
+        dir: file.join("status"),
+        key: Secret::new(KEY),
+    };
+    let (script, _calls) = Script::new(vec![(Platform::Oc1, vec![ok(Platform::Oc1)])]);
+    let p = poller(script, &db, &[Platform::Oc1], Some(recordings));
+    let ((), log) = logged(async {
+        let task = p.spawn();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        task.abort();
+    })
+    .await;
+    assert!(log.contains("STATUS_RECORDINGS_DIR cannot be written"), "{log}");
 }

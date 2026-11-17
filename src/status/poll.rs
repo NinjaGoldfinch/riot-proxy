@@ -21,7 +21,7 @@
 //! calls are not traffic: they stamp no traffic on their scope, so the probe
 //! keeps its cadence, and a 401 or 403 to one never turns the key's verdict
 //! to rejected or logs `RIOT KEY REJECTED` (`RiotClient::send_poll`, owner
-//! decision D7). A platform whose reads start or stop failing is logged once
+//! decision of 2026-11-17). A platform whose reads start or stop failing is logged once
 //! each way.
 
 use std::collections::{BTreeSet, HashMap};
@@ -39,8 +39,9 @@ use crate::app::AppState;
 use crate::config::Secret;
 use crate::db::{Db, DbError};
 use crate::fetcher::{FetchError, FetchOptions, FetchResult, Fetcher, XCache};
+use crate::http::ErrorCode;
 use crate::metrics::STATUS_POLLS_TOTAL;
-use crate::riot::client::{RequestError, RiotRequest};
+use crate::riot::client::{RequestError, RiotRequest, UPSTREAM_AUTH_FAILED, UpstreamWatch};
 use crate::riot::endpoints::{Endpoint, Target};
 use crate::riot::limiter::Priority;
 use crate::riot::routing::Platform;
@@ -49,7 +50,7 @@ use crate::riot::routing::Platform;
 pub const METHOD: &str = "status.platformData";
 /// No limiter room within this skips a platform until the next round. Nothing
 /// waits on the poller, so it waits longer than the probe's second (owner
-/// decision D8, SITE-17).
+/// decision of 2026-11-17, SITE-17).
 pub const ROOM: Duration = Duration::from_secs(30);
 /// A read not ended by this is stored as failed, so one platform that accepts
 /// and never answers does not hold the others' rows: the limiter's wait and
@@ -79,6 +80,9 @@ pub enum Read {
     Body(Bytes),
     /// The limiter had no room within [`ROOM`]: nothing was asked.
     Skipped,
+    /// Riot answered 401 or 403: stored as a failure, and a round of
+    /// nothing else judges the key (owner decision of 2026-11-17).
+    Refused(String),
     /// Anything else, and why.
     Failed(String),
 }
@@ -127,6 +131,9 @@ pub fn read_of(out: Result<FetchResult, FetchError>) -> Read {
         }
         Ok(r) => Read::Body(r.body),
         Err(e) if e.limited_until.is_some() => Read::Skipped,
+        Err(e) if e.api.code == ErrorCode::UpstreamError && e.api.message == UPSTREAM_AUTH_FAILED => {
+            Read::Refused(format!("{}: {}", e.api.code.as_str(), e.api.message))
+        }
         Err(e) => Read::Failed(format!("{}: {}", e.api.code.as_str(), e.api.message)),
     }
 }
@@ -321,6 +328,10 @@ pub struct Poller {
     last_ok: Mutex<HashMap<Platform, bool>>,
     /// Each read's deadline: [`DEADLINE`], shorter in tests.
     deadline: Duration,
+    /// Where a round whose every read that reached Riot was refused is
+    /// reported ([`UpstreamWatch::polls_refused`]); the client's own in
+    /// production, none for a scripted reader unless a test sets one.
+    watch: Option<Arc<UpstreamWatch>>,
 }
 
 impl std::fmt::Debug for Poller {
@@ -353,7 +364,7 @@ impl Poller {
             Duration::from_secs(config.status_poll_interval_s.into()),
             recordings,
         )
-        .map(Some)
+        .map(|p| Some(p.with_watch(Arc::clone(state.fetcher.client().watch()))))
     }
 
     /// A poller reading `platforms` through `reader`.
@@ -381,7 +392,15 @@ impl Poller {
             recordings,
             last_ok: Mutex::new(HashMap::new()),
             deadline: DEADLINE,
+            watch: None,
         })
+    }
+
+    /// This poller reporting wholly refused rounds to `watch`.
+    #[must_use]
+    pub fn with_watch(mut self, watch: Arc<UpstreamWatch>) -> Self {
+        self.watch = Some(watch);
+        self
     }
 
     /// This poller with another read deadline than [`DEADLINE`].
@@ -432,8 +451,13 @@ impl Poller {
 
     /// One round: every platform read at once, each with its own
     /// [`DEADLINE`], and each platform's row stored as its read ends, so a
-    /// slow platform delays no other's (SITE-17). Returns what it did with
-    /// each, in the configured order.
+    /// slow platform delays no other's (SITE-17). Then, if every read that
+    /// reached Riot was refused (401 or 403) and at least one was, the key
+    /// is judged rejected ([`UpstreamWatch::polls_refused`]; owner decision
+    /// of 2026-11-17): a skipped read did not reach Riot, and any other
+    /// outcome (a 200, another status, no answer within the deadline, a
+    /// network failure) means the round does not judge it. Returns what it
+    /// did with each platform, in the configured order.
     pub async fn round(&self) -> Vec<(Platform, Polled)> {
         use futures_util::StreamExt as _;
         let mut reads: futures_util::stream::FuturesUnordered<_> = self
@@ -449,8 +473,20 @@ impl Poller {
             })
             .collect();
         let mut out = Vec::with_capacity(self.platforms.len());
+        let (mut refused, mut other) = (0usize, 0usize);
         while let Some((i, platform, read, at_ms)) = reads.next().await {
+            match read {
+                Read::Refused(_) => refused += 1,
+                Read::Skipped => {}
+                Read::Body(_) | Read::Failed(_) => other += 1,
+            }
             out.push((i, platform, self.settle(platform, read, at_ms).await));
+        }
+        if refused > 0
+            && other == 0
+            && let Some(watch) = &self.watch
+        {
+            watch.polls_refused();
         }
         out.sort_by_key(|(i, ..)| *i);
         out.into_iter().map(|(_, p, polled)| (p, polled)).collect()
@@ -468,7 +504,9 @@ impl Poller {
                 }
                 Err(error) => (Polled::Failed, Some(Row::Failed { error, at_ms })),
             },
-            Read::Failed(error) => (Polled::Failed, Some(Row::Failed { error, at_ms })),
+            Read::Failed(error) | Read::Refused(error) => {
+                (Polled::Failed, Some(Row::Failed { error, at_ms }))
+            }
             Read::Skipped => (Polled::Skipped, None),
         };
         match &row {

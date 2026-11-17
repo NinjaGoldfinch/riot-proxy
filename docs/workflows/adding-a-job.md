@@ -27,7 +27,7 @@ The numbers are `MAX_ATTEMPTS = 5`, `BACKOFF_BASE = 30 s` and `backoff()` (`src/
 
 ### 1. The kind string
 
-Add a constant to `jobs::kinds` and append it to `kinds::ALL` (`src/jobs/mod.rs:19-71`). The name is `area:verb` in v1's style (`poll:live`, `archive:match`). `ALL` is what `JOB_KIND_LIMITS` validates against and what `GET /v1/admin/jobs?kind=` accepts (`src/config.rs:1320-1351`; ADR-137).
+Add a constant to `jobs::kinds` and append it to `kinds::ALL` (`src/jobs/mod.rs:19-71`). The name is `area:verb` in v1's style (`poll:live`, `archive:match`). `ALL` is what `JOB_KIND_LIMITS` validates against and what `GET /v1/admin/jobs?kind=` accepts (`src/config.rs:1322-1353`; ADR-137).
 
 ### 2. Lane, or cap
 
