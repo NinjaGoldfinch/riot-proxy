@@ -12,4 +12,4 @@
 
 ---
 **Sources:** `docs/DECISIONS.md:L57-L67,L87-L93,L639-L668,L760-L791,L1324-L1334,L1609-L1617`, `src/app.rs:L243-L255`, `src/riot/endpoints.rs:L589-L600`
-**Last verified:** 2026-11-17 against commit `ddc465e`
+**Last verified:** 2026-11-17 against commit `9ca718a`
