@@ -102,7 +102,7 @@ Jobs live in the SQLite `jobs` table; there is no in-memory queue (ADR-047, ADR-
 | Recovery | Rows left `running` by a crash go back to `pending` on boot | `src/jobs/scheduler.rs:996-1006` |
 | Idle | A worker with nothing claimable sleeps until the next `run_after` or blocked lane frees, at most 1 s, and is woken by any enqueue | `src/jobs/scheduler.rs:1029-1058` |
 | Analytics on the writer | `aggregate:analytics` holds the writer for one patch's step at a time, 50 ms apart, gives its worker back after each 5 s turn and resumes from its job payload (AVL-05, ADR-215), and runs one at a time (`JOB_KIND_LIMITS`); `aggregate:delta` (THR-03) is one job for every ladder, deduped to one, whose batches are separate write transactions sized toward `AGGREGATE_DELTA_TARGET_MS` with a 50 ms pause between them, so other writes interleave | `src/jobs/analytics.rs:101-104,1215-1309` |
-| Retention | `done` rows are deleted after 7 days by `maintenance`, a kind at a time and 5 000 a write (AVL-05); `failed` rows stay until purged | `src/jobs/maintenance.rs:38,346-389` |
+| Retention | `done` rows are deleted after 7 days by `maintenance`, a kind at a time and 5 000 a write (AVL-05); `failed` rows stay until purged | `src/jobs/maintenance.rs:38,353-396` |
 
 Every job kind, its trigger, priority and tables is tabulated in `docs/_meta/scratch/jobs-and-observability.md` §3 and summarised for operators in [../operations/runbook.md](../operations/runbook.md).
 
@@ -122,4 +122,4 @@ Every job kind, its trigger, priority and tables is tabulated in `docs/_meta/scr
 
 ---
 **Sources:** `src/riot/limiter/mod.rs:L50-L175,L229-L300,L307-L431,L532-L606`, `src/riot/limiter/bucket.rs:L15-L162`, `src/riot/limiter/headers.rs:L30-L41`, `src/riot/limiter/persist.rs:L21-L25,L141-L175`, `src/http/quota.rs:L320-L431`, `src/fetcher.rs:L62-L67,L187-L214,L522-L533,L809-L845,L908-L946`, `src/riot/routing.rs:L160-L196`, `src/cache/keys.rs:L81-L88`, `src/jobs/scheduler.rs:L40-L42,L124-L171,L225-L306,L467-L487,L996-L1058,L1103-L1117`, `src/jobs/archive.rs:L116-L162`, `src/jobs/lanes.rs:L440-L483`, `src/jobs/mod.rs:L74-L94`, `src/db/store.rs:L98-L133`, `src/db/mod.rs:L46-L47,L87-L94,L208-L248`, `src/cli/serve.rs:L103-L109`, `ops/prometheus-alerts.yml`, `docs/design/05-rate-limiter.md`, `docs/design/06-jobs-and-realtime.md`
-**Last verified:** 2026-11-17 against commit `ddc465e`
+**Last verified:** 2026-11-18 against commit `a717e24`

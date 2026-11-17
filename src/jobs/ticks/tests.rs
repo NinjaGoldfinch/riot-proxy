@@ -797,14 +797,18 @@ fn the_backup_anchor_is_the_older_of_the_last_run_and_the_newest_backup() {
 #[tokio::test]
 async fn the_newest_backup_is_the_newest_name_and_its_time_is_the_files() {
     let dir = tempfile::tempdir().unwrap();
-    assert_eq!(newest_backup_ms(dir.path()).await, None, "no directory");
-    assert_eq!(newest_backup_ms(&dir.path().join("backups")).await, None);
+    assert_eq!(newest_backup_ms(dir.path()).await.unwrap(), None, "no backup");
+    assert_eq!(
+        newest_backup_ms(&dir.path().join("backups")).await.unwrap(),
+        None,
+        "no directory yet"
+    );
     let older = backup_written(dir.path(), 30 * HOUR_MS);
     let newest = backup_written(dir.path(), 5 * HOUR_MS);
     assert!(newest > older, "the date in the name orders them");
     // Not a daily backup: never read.
     std::fs::write(dir.path().join("riot-proxy-notes.db"), b"mine").unwrap();
-    let at = newest_backup_ms(dir.path()).await.unwrap();
+    let at = newest_backup_ms(dir.path()).await.unwrap().unwrap();
     let ago = Clock::now().unix_ms - at;
     assert!((5 * HOUR_MS..5 * HOUR_MS + 60_000).contains(&ago), "{ago}");
 }
@@ -864,4 +868,180 @@ async fn a_run_that_wrote_its_backup_is_the_last_run() {
     let empty = d.path().join("none");
     let due = first_fire(&db, "s1", &other, Clock::now().unix_ms, Some(&empty)).await;
     assert_eq!(due.as_secs().div_ceil(60), 21 * 60);
+}
+
+// ── Review of #278 (AVL-15): an unreadable directory, the log line, edges ──
+
+/// What `f` logged at `info` and above on this thread.
+async fn logged<F: std::future::Future>(f: F) -> (F::Output, String) {
+    use tracing_subscriber::Layer as _;
+    use tracing_subscriber::layer::SubscriberExt as _;
+    #[derive(Clone, Default)]
+    struct Buf(Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Buf {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let buf = Buf::default();
+    let writer = buf.clone();
+    let subscriber = tracing_subscriber::registry().with(
+        tracing_subscriber::fmt::layer()
+            .with_writer(move || writer.clone())
+            .with_ansi(false)
+            .with_filter(tracing_subscriber::filter::LevelFilter::INFO),
+    );
+    let out = {
+        let _guard = tracing::subscriber::set_default(subscriber);
+        f.await
+    };
+    let text = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
+    (out, text)
+}
+
+/// Sets `path`'s modification time to `ago_ms` before now (negative: ahead).
+fn written_ago(path: &std::path::Path, ago_ms: i64) {
+    let at = Clock::now().unix_ms - ago_ms;
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + Duration::from_millis(u64::try_from(at).unwrap()))
+        .unwrap();
+}
+
+/// The newest backup is the newest *name*, and its time is that file's own,
+/// even when an older-named file was written later.
+#[tokio::test]
+async fn the_newest_named_backup_counts_by_its_own_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let newest = backup_written(dir.path(), HOUR_MS);
+    backup_written(dir.path(), 26 * HOUR_MS);
+    written_ago(&newest, 30 * HOUR_MS);
+    let ago = Clock::now().unix_ms - newest_backup_ms(dir.path()).await.unwrap().unwrap();
+    assert!((30 * HOUR_MS..30 * HOUR_MS + 60_000).contains(&ago), "{ago}");
+}
+
+/// A directory that cannot be listed, or a newest file whose time cannot be
+/// read, is not "no backup" (review of #278): `first_fire` warns, naming the
+/// directory and the error, and fires at once.
+#[tokio::test]
+async fn an_unreadable_backup_directory_is_warned_about_and_the_tick_fires() {
+    let (d, db) = db();
+    done(&db, kinds::MAINTENANCE, kinds::MAINTENANCE, 3 * HOUR_MS).await;
+
+    // Not a directory: listing it fails.
+    let not_a_dir = d.path().join("backups-file");
+    std::fs::write(&not_a_dir, b"x").unwrap();
+    assert!(newest_backup_ms(&not_a_dir).await.is_err());
+    let (due, log) = logged(maintenance_due_min(&db, Some(&not_a_dir))).await;
+    assert_eq!(due, 0);
+    assert!(
+        log.contains("backup directory could not be read; maintenance is due now"),
+        "{log}"
+    );
+    assert!(log.contains("WARN") && log.contains("backups-file"), "{log}");
+    assert!(!log.contains("no backup written within the period"), "{log}");
+
+    // The newest name is a link to nothing: its time cannot be read, and the
+    // error names the link, not only the directory (review of #286).
+    let dangling = d.path().join("backups");
+    backup_written(&dangling, 26 * HOUR_MS);
+    let link = crate::jobs::maintenance::backup_name(Clock::now().unix_ms);
+    std::os::unix::fs::symlink(d.path().join("gone"), dangling.join(&link)).unwrap();
+    let err = newest_backup_ms(&dangling).await.unwrap_err();
+    assert!(err.to_string().contains(&link), "{err}");
+    let (due, log) = logged(maintenance_due_min(&db, Some(&dangling))).await;
+    assert_eq!(due, 0);
+    assert!(log.contains("backup directory could not be read"), "{log}");
+    assert!(log.contains("WARN") && log.contains(&link), "{log}");
+    assert!(!log.contains("no backup written within the period"), "{log}");
+}
+
+/// A newest backup dated before 1970 is an error naming the file, not "no
+/// backup": `first_fire` warns and fires at once (review of #286).
+#[tokio::test]
+async fn a_newest_backup_dated_before_1970_is_an_error_naming_it() {
+    let (d, db) = db();
+    done(&db, kinds::MAINTENANCE, kinds::MAINTENANCE, 3 * HOUR_MS).await;
+    let backups = d.path().join("backups");
+    let file = backup_written(&backups, HOUR_MS);
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH - Duration::from_secs(86_400))
+        .unwrap();
+    let name = file.file_name().unwrap().to_string_lossy().to_string();
+    let err = newest_backup_ms(&backups).await.unwrap_err();
+    assert!(
+        err.to_string().contains(&name) && err.to_string().contains("before 1970"),
+        "{err}"
+    );
+    let (due, log) = logged(maintenance_due_min(&db, Some(&backups))).await;
+    assert_eq!(due, 0);
+    assert!(
+        log.contains("WARN") && log.contains("backup directory could not be read") && log.contains(&name),
+        "{log}"
+    );
+}
+
+/// `no backup written within the period; maintenance is due now` is logged
+/// only when the last run alone would defer the tick and the backup does
+/// not: not when both defer, and not when there is no run at all.
+#[tokio::test]
+async fn the_due_now_line_is_logged_only_when_the_backup_alone_brings_the_tick_forward() {
+    const LINE: &str = "no backup written within the period; maintenance is due now";
+    let (d, db) = db();
+    let backups = d.path().join("backups");
+    // No run on record: due at once, as on a first boot, without the line.
+    let (due, log) = logged(maintenance_due_min(&db, Some(&backups))).await;
+    assert_eq!(due, 0);
+    assert!(!log.contains(LINE), "{log}");
+
+    done(&db, kinds::MAINTENANCE, kinds::MAINTENANCE, 3 * HOUR_MS).await;
+    // The run alone defers; no backup on disk: due now, with the line.
+    let (due, log) = logged(maintenance_due_min(&db, Some(&backups))).await;
+    assert_eq!(due, 0);
+    assert!(log.contains(LINE), "{log}");
+
+    // That run wrote its backup: both defer, no line.
+    backup_written(&backups, 3 * HOUR_MS + 2_000);
+    let (due, log) = logged(maintenance_due_min(&db, Some(&backups))).await;
+    assert_eq!(due, 21 * 60);
+    assert!(!log.contains(LINE), "{log}");
+}
+
+/// The review's case: the last run 30 h ago (overdue on its own) and a backup
+/// an hour old: due at once, whatever the backup says.
+#[tokio::test]
+async fn an_overdue_run_is_due_at_once_whatever_the_backup() {
+    let (d, db) = db();
+    let backups = d.path().join("backups");
+    backup_written(&backups, HOUR_MS);
+    done(&db, kinds::MAINTENANCE, kinds::MAINTENANCE, 30 * HOUR_MS).await;
+    assert_eq!(maintenance_due_min(&db, Some(&backups)).await, 0);
+}
+
+/// Clocks that moved: a backup stamped in the future counts from the run;
+/// with both in the future the tick waits one period, never longer.
+#[tokio::test]
+async fn a_backup_stamped_in_the_future_counts_from_the_run() {
+    let (d, db) = db();
+    let backups = d.path().join("backups");
+    let file = backup_written(&backups, 0);
+    written_ago(&file, -2 * HOUR_MS);
+    done(&db, kinds::MAINTENANCE, kinds::MAINTENANCE, 3 * HOUR_MS).await;
+    assert_eq!(maintenance_due_min(&db, Some(&backups)).await, 21 * 60);
+
+    let (d2, db2) = self::db();
+    let backups = d2.path().join("backups");
+    let file = backup_written(&backups, 0);
+    written_ago(&file, -2 * HOUR_MS);
+    done(&db2, kinds::MAINTENANCE, kinds::MAINTENANCE, -HOUR_MS).await;
+    assert_eq!(maintenance_due_min(&db2, Some(&backups)).await, 24 * 60);
 }
