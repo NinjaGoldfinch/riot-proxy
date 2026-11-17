@@ -739,6 +739,14 @@ async fn a_manual_recompute_lifts_a_running_rebuild_for_its_next_turn() {
         )
         .await
         .unwrap();
+    // A download waiting at 105: the lifted row is claimed ahead of it.
+    q.enqueue(riot_proxy::jobs::NewJob::new(
+        "archive:match",
+        105,
+        json!({"matchId": "KR_1"}),
+    ))
+    .await
+    .unwrap();
     let next = store
         .claim_job(i64::MAX, &ClaimFilter::open())
         .await
@@ -3000,6 +3008,33 @@ async fn an_every_patch_rebuild_keeps_a_patch_the_delta_counted_after_it_began()
     let counted = e.count(new_rows).await;
     assert!(counted > 0, "the delta counted the new patch");
 
+    // Rows of a patch no match has, which only the prune removes: a prune
+    // that does nothing leaves them.
+    let orphan_rows = "SELECT count(*) FROM champion_matchups WHERE patch = '16.18'";
+    e.state
+        .db
+        .write(|c| {
+            c.execute_batch(
+                "CREATE TEMP TABLE copy AS SELECT * FROM champion_matchups WHERE patch = '16.19';
+                 UPDATE copy SET patch = '16.18';
+                 INSERT INTO champion_matchups SELECT * FROM copy;
+                 DROP TABLE copy;",
+            )?;
+            Ok::<_, DbError>(())
+        })
+        .await
+        .unwrap();
+    assert!(
+        e.count(orphan_rows).await > 0,
+        "the fixture has matchup rows to copy"
+    );
+    assert_eq!(
+        e.count("SELECT count(*) FROM matches WHERE patch = '16.18'")
+            .await,
+        0,
+        "no match has the patch"
+    );
+
     // The rebuild runs on from its payload, prune first, to the end.
     let mut payload = payload.to_string();
     for turn in 0.. {
@@ -3018,6 +3053,27 @@ async fn an_every_patch_rebuild_keeps_a_patch_the_delta_counted_after_it_began()
             .await,
         0
     );
+    assert_eq!(
+        e.count(orphan_rows).await,
+        0,
+        "the prune dropped the rows of a patch no match has"
+    );
+    // Nothing is left for a delta to count, and the ladder is still
+    // stamped. Checked here, before the clean rebuild below stamps every
+    // match whatever the job left.
+    let done = ctx
+        .delta_ladder(&riot_proxy::jobs::analytics::Ladder {
+            platform: KR_SOLO.0.into(),
+            queue: KR_SOLO.1.into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(done.matches, 0);
+    assert_eq!(
+        e.count("SELECT count(*) FROM analytics_stamped WHERE stamped_at IS NOT NULL AND dirty_at IS NULL")
+            .await,
+        1
+    );
 
     // What a clean rebuild of every patch gives, on the same archive.
     let after_job = analytics_rows(&e.state.db).await;
@@ -3035,16 +3091,6 @@ async fn an_every_patch_rebuild_keeps_a_patch_the_delta_counted_after_it_began()
         .await
         .unwrap();
     assert_eq!(after_job, analytics_rows(&e.state.db).await);
-
-    // And nothing is left for a delta to count.
-    let done = ctx
-        .delta_ladder(&riot_proxy::jobs::analytics::Ladder {
-            platform: KR_SOLO.0.into(),
-            queue: KR_SOLO.1.into(),
-        })
-        .await
-        .unwrap();
-    assert_eq!(done.matches, 0);
 }
 
 /// AVL-06 (ADR-213): `tiers:backfill` sweeps from each prefix's cursor and

@@ -4,7 +4,7 @@ Dated log of changes to this documentation set. One line per change; the newest 
 
 ## 2026-11-17
 
-- AVL-16: `workflows/adding-a-job.md` says `Queue::enqueue_or_promote` also lifts a running duplicate's priority and `enqueue_or_promote_on` does not, and when to use which (its `src/jobs/scheduler.rs` citations re-pointed); `operations/runbook.md` §19 step 4 says the recompute's 202 waits for the writer, how to see the lift, and that the rebuild keeps priority 0 for its remaining turns. Tests only otherwise.
+- AVL-16: `workflows/adding-a-job.md` says `Queue::enqueue_or_promote` also lifts a running duplicate's priority and `enqueue_or_promote_on` does not, and when to use which (the Dedupe key bullet's `src/jobs/scheduler.rs` citations re-pointed; the page's other `scheduler.rs` citations are left to the citation sweep); `operations/runbook.md` §19 step 4 says the recompute's 202 waits for the writer, how to see the lift, and that the rebuild keeps priority 0 for its remaining turns; its check command now shows each row's `dedupeKey` (the ladder) and says when the row is `pending` and what a `payload.rebuild` object means. Tests only otherwise.
 
 ## 2026-11-10
 
