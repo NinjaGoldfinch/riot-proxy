@@ -289,6 +289,58 @@ async fn a_failed_run_is_remembered_with_its_error() {
     assert_eq!(last.error, Some(err.to_string()));
 }
 
+/// The tick counts backups in the job's own directory, and only when the job
+/// takes them (AVL-15).
+#[tokio::test]
+async fn the_tick_counts_backups_where_the_job_writes_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    let backup_dir = dir.path().join("elsewhere");
+    let off = Maintenance::new(db.clone(), backup_dir.clone(), 0, Kept::none());
+    assert_eq!(off.tick_backups(), None, "BACKUP_KEEP=0");
+    let on = Maintenance::new(db, backup_dir.clone(), 3, Kept::none());
+    assert_eq!(on.tick_backups(), Some(backup_dir));
+}
+
+/// Review of #286: a backup directory that cannot be listed fails the run at
+/// its retention listing, before the trims. The run is retried (the job ends
+/// `failed` after its attempts) and nothing is trimmed, swept or checkpointed
+/// until the directory is readable; the `maintenance` tick still queues it
+/// (AVL-15). Pinned as it is: whether the trims should go on is open.
+#[tokio::test]
+async fn an_unlistable_backup_directory_fails_the_run_before_the_trims() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    seed(&db).await;
+    let backup_dir = dir.path().join("backups");
+    std::fs::write(&backup_dir, b"not a directory").unwrap();
+    let m = Maintenance::new(db, backup_dir, KEEP_BACKUPS, Kept::none())
+        .with_disk_free(Arc::new(|_| Ok(u64::MAX)));
+
+    let err = m.run_once(NOW).await.unwrap_err();
+    assert!(
+        matches!(&err, riot_proxy::jobs::scheduler::JobError::Retry(e) if e.contains("Not a directory")),
+        "{err:?}"
+    );
+    assert_eq!(m.last().unwrap().report, None);
+    // Nothing trimmed or swept: every seeded row is still there.
+    let live = dir.path().join("riot-proxy.db");
+    assert_eq!(
+        ids(&live, "SELECT id FROM jobs ORDER BY id"),
+        ["new-done", "old-done", "old-failed", "pending"]
+    );
+    assert_eq!(ids(&live, "SELECT key FROM cache ORDER BY key"), ["gone", "kept"]);
+    let c = rusqlite::Connection::open(&live).unwrap();
+    let history: i64 = c
+        .query_row("SELECT count(*) FROM metrics_history", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(history, 2);
+    drop(c);
+    // And not checkpointed: the WAL still holds the seed.
+    let wal = dir.path().join("riot-proxy.db-wal");
+    assert!(std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0) > 0);
+}
+
 /// AVL-05 (ADR-215): `done` jobs are trimmed a kind at a time and at most
 /// 5 000 rows a write, as `DELETE /v1/admin/jobs` deletes, and only those
 /// past the retention: newer `done` rows and rows in any other state stay.

@@ -278,12 +278,18 @@ pub async fn last_run(db: &Db, key_scope: &str, tick: &Tick) -> Result<Option<i6
 /// keeps it). `Ok(None)` when there is no backup (or no directory yet); an
 /// error when the directory cannot be listed or the newest file's time
 /// cannot be read, which [`first_fire`] reports rather than take for "no
-/// backup" (review of #278).
+/// backup" (review of #278). An error about the newest file names it, so a
+/// dangling link does not read as a missing directory (review of #286).
 pub async fn newest_backup_ms(dir: &Path) -> std::io::Result<Option<i64>> {
     let Some(newest) = crate::jobs::maintenance::backups(dir).await?.into_iter().next() else {
         return Ok(None);
     };
-    let written = tokio::fs::metadata(&newest).await?.modified()?;
+    let named = |e: std::io::Error| std::io::Error::new(e.kind(), format!("{}: {e}", newest.display()));
+    let written = tokio::fs::metadata(&newest)
+        .await
+        .map_err(named)?
+        .modified()
+        .map_err(named)?;
     let ms = written
         .duration_since(UNIX_EPOCH)
         .map_err(|_| std::io::Error::other(format!("{} was written before 1970", newest.display())))?

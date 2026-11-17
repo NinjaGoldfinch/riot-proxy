@@ -945,19 +945,49 @@ async fn an_unreadable_backup_directory_is_warned_about_and_the_tick_fires() {
         "{log}"
     );
     assert!(log.contains("WARN") && log.contains("backups-file"), "{log}");
+    assert!(!log.contains("no backup written within the period"), "{log}");
 
-    // The newest name is a link to nothing: its time cannot be read.
+    // The newest name is a link to nothing: its time cannot be read, and the
+    // error names the link, not only the directory (review of #286).
     let dangling = d.path().join("backups");
     backup_written(&dangling, 26 * HOUR_MS);
-    std::os::unix::fs::symlink(
-        d.path().join("gone"),
-        dangling.join(crate::jobs::maintenance::backup_name(Clock::now().unix_ms)),
-    )
-    .unwrap();
-    assert!(newest_backup_ms(&dangling).await.is_err());
+    let link = crate::jobs::maintenance::backup_name(Clock::now().unix_ms);
+    std::os::unix::fs::symlink(d.path().join("gone"), dangling.join(&link)).unwrap();
+    let err = newest_backup_ms(&dangling).await.unwrap_err();
+    assert!(err.to_string().contains(&link), "{err}");
     let (due, log) = logged(maintenance_due_min(&db, Some(&dangling))).await;
     assert_eq!(due, 0);
     assert!(log.contains("backup directory could not be read"), "{log}");
+    assert!(log.contains("WARN") && log.contains(&link), "{log}");
+    assert!(!log.contains("no backup written within the period"), "{log}");
+}
+
+/// A newest backup dated before 1970 is an error naming the file, not "no
+/// backup": `first_fire` warns and fires at once (review of #286).
+#[tokio::test]
+async fn a_newest_backup_dated_before_1970_is_an_error_naming_it() {
+    let (d, db) = db();
+    done(&db, kinds::MAINTENANCE, kinds::MAINTENANCE, 3 * HOUR_MS).await;
+    let backups = d.path().join("backups");
+    let file = backup_written(&backups, HOUR_MS);
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH - Duration::from_secs(86_400))
+        .unwrap();
+    let name = file.file_name().unwrap().to_string_lossy().to_string();
+    let err = newest_backup_ms(&backups).await.unwrap_err();
+    assert!(
+        err.to_string().contains(&name) && err.to_string().contains("before 1970"),
+        "{err}"
+    );
+    let (due, log) = logged(maintenance_due_min(&db, Some(&backups))).await;
+    assert_eq!(due, 0);
+    assert!(
+        log.contains("WARN") && log.contains("backup directory could not be read") && log.contains(&name),
+        "{log}"
+    );
 }
 
 /// `no backup written within the period; maintenance is due now` is logged
