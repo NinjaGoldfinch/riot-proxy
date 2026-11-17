@@ -4,7 +4,7 @@ Dated log of changes to this documentation set. One line per change; the newest 
 
 ## 2026-11-17
 
-- SITE-20 (ADR-217 amended): the SITE (2) plan section in `IMPLEMENTATION.md` and `PROGRESS.md` corrected after the review of #280 (the three platforms the portal leaves out, the poller-off answer, skips and staleness, SITE-15 and SITE-16 made buildable, the stacked-task rule, a row for the spec itself).
+- SITE-20 (ADR-217 amended): the SITE (2) plan section in `IMPLEMENTATION.md` and `PROGRESS.md` corrected after the review of #280 (the three platforms the portal leaves out, with the 530s as observed on 2026-11-17 rather than as a standing Riot fact; the poller-off answer, skips and staleness; SITE-16 made buildable, its recordings' directories named; SITE-15's rewrite waits for the owner, and its rows say not to start it; the stacked-task rule with its command, and the order with SITE-17 to SITE-20 in it; a key for the owner's decisions of 2026-11-17, in place of labels defined nowhere; a row for the spec itself).
 
 ## 2026-11-10
 
