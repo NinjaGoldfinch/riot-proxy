@@ -7,7 +7,7 @@
 fail-fast = false
 # No retries: a flaky test should fail CI, not pass on its second try.
 retries = 0
-# The slowest test takes about 23 s (AVL-14's forced and nothing-stored profiles); a hang is killed after 3 min and named.
+# The slowest tests take about 11 s (AVL-14's profiles with Riot silent, with the 20 s bound shortened to 5 s); a hang is killed after 3 min and named.
 slow-timeout = { period = "60s", terminate-after = 3 }
 # Failures print as they happen and again at the end.
 failure-output = "immediate-final"

@@ -58,7 +58,7 @@ impl Handler for ClashSyncHandler {
 }
 ```
 
-Register it in `jobs::handlers`, which builds the `Registry` with `.with(kinds::X, handler)` and is called once by `serve` (`src/jobs/mod.rs:96-174`). A kind that exists only under some configuration is added afterwards in `serve`, as the two bucket kinds are (`src/cli/serve.rs:337-359`). A job whose kind has no handler fails with `no handler for job kind '…'` (`src/jobs/scheduler.rs:1159-1162`).
+Register it in `jobs::handlers`, which builds the `Registry` with `.with(kinds::X, handler)` and is called once by `serve` (`src/jobs/mod.rs:96-174`). A kind that exists only under some configuration is added afterwards in `serve`, as the two bucket kinds are (`src/cli/serve.rs:338-360`). A job whose kind has no handler fails with `no handler for job kind '…'` (`src/jobs/scheduler.rs:1159-1162`).
 
 ### 4. Priority, dedupe, payload
 
@@ -68,7 +68,7 @@ Register it in `jobs::handlers`, which builds the `Registry` with `.with(kinds::
 
 ### 5. Calling Riot from a job
 
-Every job fetch uses `Fetcher::fetch(req, FetchOptions::JOB)`: bulk priority, no bypass, and a wait of at most `JOB_YIELD_BUDGET_MS` for the limiter before the fetch fails with `limited_until` set (`src/fetcher.rs:164-211`). Convert the error with `JobError::from_fetch`, which yields when the limiter had no room and retries otherwise (`src/jobs/scheduler.rs:131-142`); `archive:match` is the model, including treating an upstream 404 as `Fail` because retrying cannot help (`src/jobs/archive.rs:278-313`). A long job hands its worker back between batches with `JobError::take_turns()` (yield with `retry_at = now`), optionally carrying a new payload so it resumes where it stopped (`src/jobs/scheduler.rs:123-129`, `144-150`; `ladder:walk` every 10 pages, `timelines:backfill` every 25 timelines).
+Every job fetch uses `Fetcher::fetch(req, FetchOptions::JOB)`: bulk priority, no bypass, and a wait of at most `JOB_YIELD_BUDGET_MS` for the limiter before the fetch fails with `limited_until` set (`src/fetcher.rs:168-215`). Convert the error with `JobError::from_fetch`, which yields when the limiter had no room and retries otherwise (`src/jobs/scheduler.rs:131-142`); `archive:match` is the model, including treating an upstream 404 as `Fail` because retrying cannot help (`src/jobs/archive.rs:278-313`). A long job hands its worker back between batches with `JobError::take_turns()` (yield with `retry_at = now`), optionally carrying a new payload so it resumes where it stopped (`src/jobs/scheduler.rs:123-129`, `144-150`; `ladder:walk` every 10 pages, `timelines:backfill` every 25 timelines).
 
 ### 6. Activity tracing
 
@@ -166,5 +166,5 @@ Then: `jobs::handlers` gets `.with(kinds::CLASH_SYNC, clash::ClashSyncHandler(Ar
 9. design/06 catalogue row, concurrency and runbook docs, ADR, `PROGRESS.md`.
 
 ---
-**Sources:** `src/jobs/mod.rs:L19-L179`, `src/jobs/scheduler.rs:L1-L19`, `L36-L165`, `L225-L254`, `L443-L477`, `L1103-L1177`, `src/jobs/lanes.rs:L1-L78`, `src/jobs/ticks.rs:L1-L11`, `L78-L114`, `L119-L150`, `L202-L403`, `src/jobs/activity.rs:L363-L378`, `src/jobs/archive.rs:L278-L321`, `L456`, `src/jobs/names.rs:L193`, `L208-L232`, `src/fetcher.rs:L164-L211`, `src/cli/serve.rs:L337-L359`, `src/routes/admin.rs:L2295-L2306`, `src/app.rs:L53`, `src/events.rs:L113-L124`, `src/ws/hub.rs:L100-L103`, `src/metrics.rs:L101-L103`, `L486-L497`, `src/config.rs:L129`, `src/config/tests.rs:L443-L462`, `src/db/migrations/V0001__init.sql:L44`, `tests/jobs.rs:L43-L101`, `src/jobs/ticks/tests.rs:L36-L51`, `src/jobs/scheduler/tests.rs:L31-L40`, `docs/design/06-jobs-and-realtime.md:L84-L158`, `docs/DECISIONS.md:L1443-L1452` (ADR-134), `.env.example:L35-L38`, `PROGRESS.md:L388`
+**Sources:** `src/jobs/mod.rs:L19-L179`, `src/jobs/scheduler.rs:L1-L19`, `L36-L165`, `L225-L254`, `L443-L477`, `L1103-L1177`, `src/jobs/lanes.rs:L1-L78`, `src/jobs/ticks.rs:L1-L11`, `L78-L114`, `L119-L150`, `L202-L403`, `src/jobs/activity.rs:L363-L378`, `src/jobs/archive.rs:L278-L321`, `L456`, `src/jobs/names.rs:L193`, `L208-L232`, `src/fetcher.rs:L168-L215`, `src/cli/serve.rs:L338-L360`, `src/routes/admin.rs:L2295-L2306`, `src/app.rs:L53`, `src/events.rs:L113-L124`, `src/ws/hub.rs:L100-L103`, `src/metrics.rs:L101-L103`, `L486-L497`, `src/config.rs:L129`, `src/config/tests.rs:L443-L462`, `src/db/migrations/V0001__init.sql:L44`, `tests/jobs.rs:L43-L101`, `src/jobs/ticks/tests.rs:L36-L51`, `src/jobs/scheduler/tests.rs:L31-L40`, `docs/design/06-jobs-and-realtime.md:L84-L158`, `docs/DECISIONS.md:L1443-L1452` (ADR-134), `.env.example:L35-L38`, `PROGRESS.md:L388`
 **Last verified:** 2026-11-18 against commit `a717e24`

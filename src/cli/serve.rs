@@ -202,6 +202,7 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         interactive_budget: Duration::from_millis(config.client_wait_budget_ms),
         job_budget: Duration::from_millis(config.job_yield_budget_ms),
         swr: config.stale_while_revalidate,
+        forced_wait: crate::fetcher::FORCED_REFRESH_WAIT,
     });
 
     // Before "listening": a SIGTERM from then on must be a clean shutdown, not

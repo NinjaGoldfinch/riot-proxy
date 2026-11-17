@@ -118,7 +118,7 @@ sequenceDiagram
             F-->>C: part served X-Cache: STALE with its real ages (AVL-03)
         end
         opt /v1/players/* only: not answered within budget + 250 ms (20 s forced) and a copy is stored
-            F-->>C: part served X-Cache: STALE; the leg goes on (AVL-09)
+            F-->>C: part served X-Cache: STALE, the leg goes on (AVL-09)
         end
     end
 ```
