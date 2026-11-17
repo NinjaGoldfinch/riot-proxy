@@ -364,19 +364,33 @@ async fn pending(db: &Db) -> Vec<String> {
 }
 
 /// Let the tick loops run what the clock has reached, and return what is
-/// pending then. Time stays paused: a read goes through `spawn_blocking`,
-/// which holds the clock still, and nothing here sleeps, so nothing moves the
-/// clock behind the test's back.
-async fn settle(db: &Db) -> Vec<String> {
-    let mut last = pending(db).await;
-    let mut same = 0;
-    while same < 20 {
-        tokio::task::yield_now().await;
-        let now = pending(db).await;
-        same = if now == last { same + 1 } else { 0 };
-        last = now;
+/// pending then. A loop's read of its last run and a fire's enqueue run on
+/// the readers and the writer thread, outside the paused clock and as slow as
+/// the box is: wait until no loop is busy ([`Ticks::busy`]), not for the
+/// rows to look settled, which under load returned before a write had landed
+/// (CI-07). Time stays paused: the waits go through `spawn_blocking`, which
+/// holds the clock still, and nothing here sleeps on it.
+async fn settle(db: &Db, ticks: &Ticks) -> Vec<String> {
+    let since = std::time::Instant::now();
+    loop {
+        // A loop the clock has reached wakes and starts its fire, counted
+        // busy from its first poll, within a few turns of this runtime.
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        if ticks.busy() == 0 {
+            break;
+        }
+        assert!(
+            since.elapsed() < Duration::from_secs(30),
+            "the tick loops are still busy after 30 s: busy() = {}",
+            ticks.busy()
+        );
+        tokio::task::spawn_blocking(|| std::thread::sleep(Duration::from_millis(1)))
+            .await
+            .unwrap();
     }
-    last
+    pending(db).await
 }
 
 /// What a worker does with every pending row: finish it now. Through a
@@ -498,20 +512,74 @@ async fn a_kind_that_ran_half_a_period_ago_first_fires_half_a_period_later() {
     done(&db, kinds::MAINTENANCE, kinds::MAINTENANCE, 50_000).await;
     let s = Scheduler::new(db.clone(), Registry::new());
     let ticks = Ticks::start(&s, "s1", vec![(kinds::MAINTENANCE, Duration::from_secs(100))]);
-    assert!(settle(&db).await.is_empty(), "not at boot");
-    advance(49).await;
-    assert!(settle(&db).await.is_empty(), "49 s in");
-    advance(1).await;
-    assert_eq!(settle(&db).await, ["maintenance:maintenance"], "50 s in");
+    assert!(settle(&db, &ticks).await.is_empty(), "not at boot");
+    // 45 s, not 49: the run is stamped on the wall clock, which moves on
+    // between `done` and `start` as slowly as the box is.
+    advance(45).await;
+    assert!(settle(&db, &ticks).await.is_empty(), "45 s in");
+    advance(5).await;
+    assert_eq!(settle(&db, &ticks).await, ["maintenance:maintenance"], "50 s in");
     finish_all(&d).await;
-    advance(98).await;
-    assert!(settle(&db).await.is_empty(), "148 s in");
-    advance(2).await;
+    advance(95).await;
+    assert!(settle(&db, &ticks).await.is_empty(), "145 s in");
+    advance(5).await;
     assert_eq!(
-        settle(&db).await,
+        settle(&db, &ticks).await,
         ["maintenance:maintenance"],
         "then every period"
     );
+    ticks.shutdown().await;
+}
+
+/// The two guards `settle` relies on (CI-07): a loop counts as busy from
+/// `start` itself, before its boot read is first polled, and a fire from its
+/// first poll until its enqueue has landed. Without the first, `settle` could
+/// read 0 before a loop had started; without the second, before a fire held
+/// up on the writer had written.
+#[tokio::test(start_paused = true)]
+async fn a_loop_is_busy_from_start_and_a_fire_until_its_write_lands() {
+    let (_d, db) = db();
+    done(&db, kinds::MAINTENANCE, kinds::MAINTENANCE, 50_000).await;
+    // Due 90 s in, after the fire below.
+    done(&db, kinds::DDRAGON_SYNC, kinds::DDRAGON_SYNC, 10_000).await;
+    let s = Scheduler::new(db.clone(), Registry::new());
+    let period = Duration::from_secs(100);
+    let ticks = Ticks::start(
+        &s,
+        "s1",
+        vec![(kinds::MAINTENANCE, period), (kinds::DDRAGON_SYNC, period)],
+    );
+    assert_eq!(ticks.busy(), 2, "both loops, before either is polled");
+    assert!(settle(&db, &ticks).await.is_empty(), "not at boot");
+
+    // Hold the writer thread until released.
+    let (started_tx, started) = std::sync::mpsc::channel::<()>();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let writer = db.clone();
+    let held = tokio::spawn(async move {
+        writer
+            .write(move |_| {
+                started_tx.send(()).unwrap();
+                released.recv().unwrap();
+                Ok::<_, DbError>(())
+            })
+            .await
+    });
+    tokio::task::spawn_blocking(move || started.recv().unwrap())
+        .await
+        .unwrap();
+
+    advance(50).await;
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(ticks.busy(), 1, "maintenance's fire, held at its enqueue");
+    release.send(()).unwrap();
+    // `settle` before awaiting the held write: an await on the writer thread
+    // would let the paused clock jump to ddragon:sync's tick.
+    assert_eq!(settle(&db, &ticks).await, ["maintenance:maintenance"]);
+    assert_eq!(ticks.busy(), 0);
+    held.await.unwrap().unwrap();
     ticks.shutdown().await;
 }
 
@@ -544,7 +612,7 @@ async fn none_or_an_old_run_fires_at_once_and_the_polls_and_delta_always_do() {
     .to_vec();
     let ticks = Ticks::start(&s, "s1", schedule);
     assert_eq!(
-        settle(&db).await,
+        settle(&db, &ticks).await,
         [
             "aggregate:delta:aggregate:delta",
             "maintenance:maintenance",
@@ -557,10 +625,10 @@ async fn none_or_an_old_run_fires_at_once_and_the_polls_and_delta_always_do() {
     );
     finish_all(&d).await;
     advance(85).await;
-    assert!(settle(&db).await.is_empty(), "85 s in");
+    assert!(settle(&db, &ticks).await.is_empty(), "85 s in");
     advance(5).await;
     assert_eq!(
-        settle(&db).await,
+        settle(&db, &ticks).await,
         ["ddragon:sync:ddragon:sync"],
         "ddragon:sync at its own time"
     );
@@ -604,7 +672,7 @@ async fn each_ladder_and_region_remembers_its_own_last_run() {
         ladders,
     );
     assert_eq!(
-        settle(&db).await,
+        settle(&db, &ticks).await,
         [
             // Only a completed rebuild counts, not a failed one or a delta.
             "aggregate:analytics:euw1:RANKED_SOLO_5x5",
@@ -618,10 +686,10 @@ async fn each_ladder_and_region_remembers_its_own_last_run() {
     );
     finish_all(&d).await;
     advance(65).await;
-    assert!(settle(&db).await.is_empty(), "65 s in");
+    assert!(settle(&db, &ticks).await.is_empty(), "65 s in");
     advance(5).await;
     assert_eq!(
-        settle(&db).await,
+        settle(&db, &ticks).await,
         [
             "aggregate:analytics:kr:RANKED_SOLO_5x5",
             "ladder:crawl:kr:RANKED_SOLO_5x5",
