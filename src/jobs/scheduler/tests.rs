@@ -507,6 +507,69 @@ async fn enqueue_or_promote_lifts_a_pending_duplicate_and_a_running_ones_priorit
 
 // ── AVL-12: a recompute moves a running rebuild up ──────────────────────────
 
+/// The lift on a running row is its priority alone, and it is kept by
+/// whatever puts the row back to `pending`: a backoff (`Retry`, its
+/// `run_after` in the future) and a boot's `recover` (AVL-12; review of
+/// #277).
+#[tokio::test]
+async fn a_lifted_running_row_keeps_its_priority_through_a_retry_and_a_recovery() {
+    let (_d, db) = db();
+    let s = sched(&db);
+    let q = s.queue().clone();
+    let priority_of = |id: String| {
+        let db = db.clone();
+        async move {
+            db.read(move |c| {
+                c.query_row("SELECT state, priority FROM jobs WHERE id = ?1", [id], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+                })
+                .map_err(DbError::from)
+            })
+            .await
+            .unwrap()
+        }
+    };
+    let lift = |key: &'static str| {
+        let q = q.clone();
+        async move {
+            assert!(
+                !q.enqueue_or_promote(NewJob::new("aggregate:analytics", 0, json!({})).dedupe(key))
+                    .await
+                    .unwrap()
+                    .created
+            );
+        }
+    };
+
+    // A backoff: pending again, not before its `run_after`, still at 0.
+    s.enqueue(NewJob::new("aggregate:analytics", 30_000, json!({})).dedupe("kr:Q"))
+        .await
+        .unwrap();
+    let retried = s.claim(Clock::now().unix_ms).await.unwrap().unwrap();
+    assert_eq!(retried.priority, 30_000);
+    lift("kr:Q").await;
+    let now = Clock::now().unix_ms;
+    s.finish(&retried, &Err(JobError::Retry("Riot down".into())), now)
+        .await
+        .unwrap();
+    let (st, attempts, run_after, _) = state(&db, &retried.id).await;
+    assert_eq!((st.as_str(), attempts), ("pending", 1));
+    assert!(run_after > now, "backed off: {run_after} <= {now}");
+    assert_eq!(priority_of(retried.id.clone()).await, ("pending".into(), 0));
+
+    // A process that died mid-turn: `recover` puts it back at 0 too.
+    s.enqueue(NewJob::new("aggregate:analytics", 30_000, json!({})).dedupe("na1:Q"))
+        .await
+        .unwrap();
+    let interrupted = s.claim(Clock::now().unix_ms).await.unwrap().unwrap();
+    assert_eq!(interrupted.priority, 30_000);
+    lift("na1:Q").await;
+    assert_eq!(s.recover().await.unwrap().requeued, 1);
+    assert_eq!(priority_of(interrupted.id.clone()).await, ("pending".into(), 0));
+    let again = s.claim(Clock::now().unix_ms).await.unwrap().unwrap();
+    assert_eq!((again.id.as_str(), again.priority), (interrupted.id.as_str(), 0));
+}
+
 /// What each run of a job saw: its kind, priority and payload.
 type Seen = Arc<std::sync::Mutex<Vec<(String, i64, serde_json::Value)>>>;
 
