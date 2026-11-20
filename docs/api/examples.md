@@ -196,18 +196,18 @@ ETAG=$(curl -si -H "Authorization: Bearer $KEY" "$BASE/v1/lol/analytics/champion
 curl -si -H "Authorization: Bearer $KEY" -H "If-None-Match: $ETAG" "$BASE/v1/lol/analytics/champions?queue=RANKED_SOLO_5x5&limit=2"
 ```
 
-Captured, first call then the revalidation (the `etag` value recomputed for THR-03, whose slice stamp added a part to every analytics tag):
+Captured, first call then the revalidation, on an empty database with Data Dragon `16.20.1` mirrored (the `etag` value recomputed for THR-03, whose slice stamp added a part to every analytics tag, and again for SITE-12, whose `STATS_SHAPE` marker became `tier-side-range-opponent-matches`; taken from a running server at `9ca718a`):
 
 ```text
 HTTP/1.1 200 OK
 cache-control: private, max-age=300
-etag: W/"pG-2XjBV9zuyNBcF5V3Tf_TERlw-OdnaWXVDeIr2mTM"
+etag: W/"SauT-iinG0trDNmv8WIWuqtq65wUCmDNzmGSJk97mRE"
 x-cache: MISS
 
 {"platform":null,"queue":"RANKED_SOLO_5x5","tier":null,"minTier":null,"side":null,"patch":null,"role":null,"computedAt":null,"totalGames":0,"totalMatches":0,"champions":[]}
 
 HTTP/1.1 304 Not Modified
-etag: W/"pG-2XjBV9zuyNBcF5V3Tf_TERlw-OdnaWXVDeIr2mTM"
+etag: W/"SauT-iinG0trDNmv8WIWuqtq65wUCmDNzmGSJk97mRE"
 x-cache: HIT
 ```
 
@@ -313,5 +313,5 @@ x-ratelimit-reset: 60
 Note that 401 and 403 carry no `X-RateLimit-*` headers (refused before metering) while the 400 does. Every response carries `X-Request-Id`; send your own with `-H 'X-Request-Id: my-trace-123'` and it is echoed back (captured).
 
 ---
-**Sources:** live capture against `target/debug/riot-proxy` 2.7.0 (`RIOT_API_KEY=RGAPI-docs-not-a-key`, port 18092, keys minted with `riot-proxy key create`), `README.md` "First run", `src/cli/mod.rs`, `src/routes/riot.rs:L127-L300`, `src/routes/lol.rs:L37-L480`, `src/routes/players.rs:L445-L735`, `src/routes/analytics.rs:L497-L625`, `src/routes/admin.rs:L180-L219,L454-L502,L838-L882,L1040,L1586-L1616,L1703-L1736,L2503`, `src/routes/ws.rs:L525-L572`, `src/ws/socket.rs:L63-L206`, `tests/snapshots/ws_hub__ws_session.snap`, `docs/_meta/scratch/routes.md`
-**Last verified:** 2026-11-21 against commit `8f606c8`
+**Sources:** live capture against `target/debug/riot-proxy` 2.7.0 (`RIOT_API_KEY=RGAPI-docs-not-a-key`, port 18092, keys minted with `riot-proxy key create`), `README.md` "First run", `src/cli/mod.rs`, `src/routes/riot.rs:L127-L300`, `src/routes/lol.rs:L37-L480`, `src/routes/players.rs:L445-L735`, `src/routes/analytics.rs:L497-L625`, `src/routes/admin.rs:L180-L219,L454-L502,L838-L882,L1040,L1586-L1616,L1703-L1736,L2503`, `src/routes/ws.rs:L525-L572`, `src/ws/socket.rs:L63-L206`, `tests/snapshots/it__ws_hub__ws_session.snap`, `docs/_meta/scratch/routes.md`
+**Last verified:** 2026-11-21 against commit `72fcd7a`
