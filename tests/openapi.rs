@@ -178,6 +178,12 @@ fn responses_declare_the_headers_they_send() {
                 .collect();
             // The image mirror is outside the keyed API: no quota, no cache tier.
             let images = path.starts_with("/ddragon/");
+            if path == "/v1/lol/status" {
+                assert!(
+                    op["responses"].get("503").is_none(),
+                    "the poller off is a 404 since SITE-18"
+                );
+            }
             let read = !images
                 && tags
                     .iter()
@@ -189,9 +195,8 @@ fn responses_declare_the_headers_they_send() {
                 for (h, r) in res["headers"].as_object().unwrap() {
                     assert_eq!(r["$ref"], format!("#/components/headers/{h}"), "{at}");
                 }
-                // SITE-14: the status summary's 503 is the poller turned off, not a wait.
                 let summary = path == "/v1/lol/status";
-                if status == "429" || (status == "503" && !summary) {
+                if status == "429" || status == "503" {
                     assert!(has("Retry-After"), "{at}");
                 }
                 if read && status.as_str() != "401" && status.as_str() != "403" {
@@ -210,8 +215,9 @@ fn responses_declare_the_headers_they_send() {
                         "{at}"
                     );
                 }
-                if summary && status == "503" {
-                    assert!(!has("Retry-After"), "{at}");
+                // SITE-18: the poller off is a 404 `NOT_FOUND`, not a wait or a cache read.
+                if summary && status == "404" {
+                    assert!(!has("X-Cache") && !has("Retry-After"), "{at}");
                 }
                 if read && status.starts_with('2') && !path.starts_with("/v1/lol/analytics") && !summary {
                     assert!(has("X-Cache") && has("X-Cache-Age"), "{at}");

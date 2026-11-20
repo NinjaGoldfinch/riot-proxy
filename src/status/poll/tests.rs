@@ -698,3 +698,80 @@ async fn spawn_checks_the_recordings_directory_first() {
     .await;
     assert!(log.contains("STATUS_RECORDINGS_DIR cannot be written"), "{log}");
 }
+
+// ── Review of #289 ───────────────────────────────────────────────────────────
+
+/// Owner decision of 2026-11-17: a round ok, a round skipped, and a third
+/// round whose read is still landing (held here as Riot taking 5 s): 2 s
+/// into the third round the stored row is the first round's, two intervals
+/// and 2 s old, and the platform is still available. With a bound of
+/// exactly two intervals it would read `stale`.
+#[tokio::test(start_paused = true)]
+async fn after_a_skipped_round_the_platform_stays_available_while_the_next_read_lands() {
+    struct Held {
+        reads: Mutex<VecDeque<Read>>,
+        third: tokio::sync::Notify,
+        started: mpsc::UnboundedSender<usize>,
+    }
+    impl Reader for Held {
+        fn read(&self, _req: RiotRequest) -> BoxFuture<'_, Read> {
+            let (n, read) = {
+                let mut reads = self.reads.lock().unwrap();
+                (3 - reads.len(), reads.pop_front().expect("three rounds"))
+            };
+            let _ = self.started.send(n);
+            Box::pin(async move {
+                if n == 2 {
+                    self.third.notified().await;
+                }
+                read
+            })
+        }
+    }
+    let (_dir, db) = temp_db();
+    let interval_s = 240;
+    let (started, mut rounds) = mpsc::unbounded_channel();
+    let reader = Arc::new(Held {
+        reads: Mutex::new(VecDeque::from([
+            Read::Body(body("first", &[], "first")),
+            Read::Skipped,
+            Read::Body(body("third", &[], "third")),
+        ])),
+        third: tokio::sync::Notify::new(),
+        started,
+    });
+    let p = Poller::with_reader(
+        Arc::clone(&reader) as Arc<dyn Reader>,
+        db.clone(),
+        &[Platform::Oc1],
+        Duration::from_secs(interval_s.into()),
+        None,
+    )
+    .unwrap();
+    let task = p.spawn();
+    for want in 0..3 {
+        assert_eq!(rounds.recv().await, Some(want));
+    }
+    // The third round's read has started and not landed.
+    let rows = stored(&db).await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].body.as_deref().unwrap().contains("first"), "{rows:?}");
+    let first_ms = rows[0].fetched_at_ms.unwrap();
+    let two_s_into_the_third = first_ms + (2 * i64::from(interval_s) + 2) * 1000;
+    let s = summary::summarize(
+        &[Platform::Oc1],
+        &rows,
+        two_s_into_the_third,
+        summary::max_age_s(interval_s),
+    );
+    assert!(s.platforms[0].available, "{:?}", s.platforms[0]);
+    let exactly_two = summary::summarize(
+        &[Platform::Oc1],
+        &rows,
+        two_s_into_the_third,
+        2 * u64::from(interval_s),
+    );
+    assert!(!exactly_two.platforms[0].available, "the bound before the grace");
+    reader.third.notify_one();
+    task.abort();
+}
