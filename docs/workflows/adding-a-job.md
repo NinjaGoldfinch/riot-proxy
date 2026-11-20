@@ -167,4 +167,4 @@ Then: `jobs::handlers` gets `.with(kinds::CLASH_SYNC, clash::ClashSyncHandler(Ar
 
 ---
 **Sources:** `src/jobs/mod.rs:L19-L179`, `src/jobs/scheduler.rs:L1-L19`, `L36-L165`, `L225-L254`, `L443-L477`, `L1103-L1177`, `src/jobs/lanes.rs:L1-L78`, `src/jobs/ticks.rs:L1-L11`, `L78-L114`, `L119-L150`, `L202-L403`, `src/jobs/activity.rs:L363-L378`, `src/jobs/archive.rs:L278-L321`, `L456`, `src/jobs/names.rs:L193`, `L208-L232`, `src/fetcher.rs:L168-L223`, `src/cli/serve.rs:L338-L360`, `src/routes/admin.rs:L2295-L2306`, `src/app.rs:L53`, `src/events.rs:L113-L124`, `src/ws/hub.rs:L100-L103`, `src/metrics.rs:L101-L103`, `L486-L497`, `src/config.rs:L129`, `src/config/tests.rs:L443-L462`, `src/db/migrations/V0001__init.sql:L44`, `tests/jobs.rs:L43-L101`, `src/jobs/ticks/tests.rs:L36-L51`, `src/jobs/scheduler/tests.rs:L31-L40`, `docs/design/06-jobs-and-realtime.md:L84-L158`, `docs/DECISIONS.md:L1443-L1452` (ADR-134), `.env.example:L35-L38`, `PROGRESS.md:L388`
-**Last verified:** 2026-11-18 against commit `101740c`
+**Last verified:** 2026-11-20 against commit `1f37fc7`

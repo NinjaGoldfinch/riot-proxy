@@ -77,4 +77,4 @@ Disk and memory sizing for the archive and the bucket are in `../deployment/capa
 
 ---
 **Sources:** `docs/DECISIONS.md:1732-1818`, `docs/perf/PERF-03-design.md:1-120`, `docs/design/07-deployment.md:169-177`, `docs/design/12-object-storage-and-hosting.md:261-267,480-486,781-799`, `PROGRESS.md:325,366`, `scripts/perf-synthetic.py:1-24`, `src/routes/analytics/cache.rs:1-19`, `src/routes/players.rs:292-331,746-767`, `src/archive/matches.rs:265-269`, `src/jobs/analytics.rs:533-780,799-884,895-987,1215-1309`, `src/archive/analytics/delta.rs:31-52`, `docs/thr/THR-03-plan.md`, `src/db/mod.rs:61-62,71-72,241-254,290-291`, `src/cli/mod.rs:125`, `src/config.rs:129,861-871,888-891,902,909-914,936-949,1322-1353`, `src/cache/l1.rs:131-144`, `src/fetcher.rs:163-223`, `src/riot/limiter/headers.rs:31-42`, `src/riot/limiter/mod.rs:177-184,329-344`, `src/http/recent.rs:38`
-**Last verified:** 2026-11-18 against commit `101740c`
+**Last verified:** 2026-11-20 against commit `1f37fc7`

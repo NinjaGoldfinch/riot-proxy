@@ -136,4 +136,4 @@ Freeing a body empties its blob; the pages go to SQLite's free list and the file
 
 ---
 **Sources:** `src/jobs/maintenance.rs:L36-L43,L59-L107,L129-L141,L220-L248,L296-L338`, `src/jobs/ticks.rs:L127-L128,L225-L372,L276-L309`, `src/cli/backup.rs:L10-L21`, `src/cli/packs.rs:L32-L83`, `src/archive/recovery.rs:L1-L15,L207-L271`, `src/riot/limiter/persist.rs:L23,L92-L94`, `src/cache/l2.rs:L251-L378`, `src/db/mod.rs:L155-L205`, `src/db/migrations/V0023__body_packs.sql:L3-L5`, `src/config.rs:L882`, `deploy/README.md:L12-L47,L103-L152,L156-L160,L222-L270`, `deploy/riot-proxy-replica.service:L12-L19`, `deploy/riot-proxy-replica.timer:L6-L8`, `docs/design/07-deployment.md:L179-L210`, `docs/design/12-object-storage-and-hosting.md:L208-L212,L359-L434,L808-L830,L938-L946`, `docs/DECISIONS.md:L1459-L1464,L1722-L1730`, `README.md:L135-L143`, `PROGRESS.md:L335`, `reports/OBJ implementation handoff.md:L20`, `docs/_meta/scratch/persistence.md`
-**Last verified:** 2026-11-18 against commit `a717e24`
+**Last verified:** 2026-11-20 against commit `1f37fc7`

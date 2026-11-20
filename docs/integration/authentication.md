@@ -71,4 +71,4 @@ The CI `test` job greps `src/`, `tests/` and `docs/` for `RGAPI-` key shapes and
 
 ---
 **Sources:** `src/consumers.rs:L12,L95-L107,L154-L172,L256-L333`, `src/http/auth.rs:L29-L52,L116-L156,L204-L212,L292-L405`, `src/http/quota.rs:L320-L431`, `src/routes/admin.rs:L180-L219,L248-L326`, `src/routes/docs.rs:L86-L153`, `src/cli/key.rs:L46-L83`, `src/cli/serve.rs:L64-L75,L456-L465`, `src/config.rs:L799-L803`, `.github/workflows/ci.yml:L52-L53`, `docs/design/12-object-storage-and-hosting.md` §Admin hostname behind Access
-**Last verified:** 2026-11-18 against commit `101740c`
+**Last verified:** 2026-11-20 against commit `1f37fc7`
