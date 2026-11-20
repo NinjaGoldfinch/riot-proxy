@@ -1041,6 +1041,52 @@ async fn a_forced_refresh_joining_a_refresh_frozen_by_the_limiter_serves_the_sto
     );
 }
 
+/// `FetchOptions::budget` replaces the interactive budget for the limiter
+/// (SITE-13; the merge of #274 and #282 resolved `budget_for` as
+/// `opts.budget.unwrap_or(…)`): the next token 1 s off fails a 100 ms budget
+/// with `RATE_LIMITED` though it is inside the 2 s interactive one, and the
+/// stored-copy wait follows the budget too (review of #282, SITE-17).
+#[tokio::test]
+async fn a_fetch_budget_shorter_than_the_interactive_one_is_what_the_limiter_gets() {
+    let s = setup(&[]).await;
+    mount(&s.server, SUMMONER, ok(r#"{"v":1}"#)).await;
+    s.limiter.configure_method(
+        "euw1",
+        "summoner.byPuuid",
+        &[LimitWindow { limit: 1, seconds: 1 }],
+    );
+    s.limiter
+        .acquire("euw1", "summoner.byPuuid", Priority::Interactive, Duration::ZERO)
+        .await
+        .unwrap();
+    let short = FetchOptions {
+        budget: Some(Duration::from_millis(100)),
+        ..INTERACTIVE
+    };
+    assert_eq!(s.fetcher.stored_wait(short), Duration::from_millis(350));
+    let asked = Instant::now();
+    let err = s
+        .fetcher
+        .fetch(summoner(Platform::Euw1), short)
+        .await
+        .unwrap_err();
+    assert_eq!(err.api.code, ErrorCode::RateLimited);
+    assert!(err.limited_until.is_some());
+    assert!(
+        asked.elapsed() < Duration::from_millis(500),
+        "{:?}",
+        asked.elapsed()
+    );
+    assert_eq!(upstream_calls(&s.server).await, 0);
+    // The interactive budget waits for the same token.
+    let r = s
+        .fetcher
+        .fetch(summoner(Platform::Euw1), INTERACTIVE)
+        .await
+        .unwrap();
+    assert_eq!(r.x_cache, XCache::Miss);
+}
+
 // ── Review of #274 (AVL-14) ──────────────────────────────────────────────────
 
 /// Owner decision of 2026-11-17: with nothing stored, a read waits for its

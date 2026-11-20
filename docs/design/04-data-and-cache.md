@@ -458,7 +458,7 @@ Boot warm (AVL-08): the rows L1 would still hold are streamed into L1, the lates
 
 `CACHE_TTL_OVERRIDES=league=120,spectator=20` keeps working.
 
-**Platform status** (owner, SITE-13, ADR-219) was v1's 60 s / 4 min. The status poller (design/14 §Status poller) reads every platform every `STATUS_POLL_INTERVAL_S` (300 s) through the fetcher, past the cache read and writing through, so `GET /v1/lol/status/{platform}` is a `HIT` inside the soft TTL; a copy a late or skipped round left past it is served `STALE` and refreshed in the background, as any. Its hard TTL is soft × 2, not × 4 (`Endpoint::stale_multiplier`), so `CACHE_TTL_OVERRIDES=status=120` gives 120 s / 240 s; with `STALE_WHILE_REVALIDATE=false` hard equals soft as for every endpoint. Each platform's last answer is also kept in `platform_status` (above), which survives a restart.
+**Platform status** (owner, SITE-13, ADR-219) was v1's 60 s / 4 min. The status poller (design/14 §Status poller) reads every platform every `STATUS_POLL_INTERVAL_S` (240 s since SITE-17, inside the 300 s soft TTL) through the fetcher, past the cache read and writing through, so `GET /v1/lol/status/{platform}` is a `HIT` inside the soft TTL; a copy a late or skipped round left past it is served `STALE` and refreshed in the background, as any. Its hard TTL is soft × 2, not × 4 (`Endpoint::stale_multiplier`), so `CACHE_TTL_OVERRIDES=status=120` gives 120 s / 240 s; with `STALE_WHILE_REVALIDATE=false` hard equals soft as for every endpoint. Each platform's last answer is also kept in `platform_status` (above), which survives a restart.
 
 ### Canonical key
 

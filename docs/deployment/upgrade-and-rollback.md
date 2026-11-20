@@ -13,7 +13,7 @@ The first `serve` of a new binary runs the boot sequence in `src/cli/serve.rs:94
 | Step | What happens | Evidence |
 |---|---|---|
 | Migrations | `Db::open` runs every pending embedded migration, grouped in one transaction, before readers open or the writer thread starts; already-applied versions are skipped. There is no "migrations applied" log line, only `database ready` afterwards, or `DbError::Migration` on failure | `src/db/mod.rs:228-236,571-573`; `docs/_meta/scratch/jobs-and-observability.md:295` |
-| Direction | forward-only: `src/db/migrations/` holds `V0001` to `V0029` with no down files; rebuild-style migrations copy into `_vNN` tables, drop and rename | `docs/_meta/scratch/persistence.md:17,21-51` |
+| Direction | forward-only: `src/db/migrations/` holds `V0001` to `V0034` (`V0031` is not assigned) with no down files; rebuild-style migrations copy into `_vNN` tables, drop and rename | `docs/_meta/scratch/persistence.md:17,21-51` |
 | Limiter | the checkpoint in `limiter_state` is restored (`limiter checkpoint restored rows=`); a row older than 120 s restores every window as full, so the first requests after a long stop wait rather than burst | `src/cli/serve.rs:134-138`; `src/riot/limiter/persist.rs:23,92-94` |
 | Caches | L1 is warmed from the unexpired L2 rows and a player's rows up to a day past expiry, newest first up to `CACHE_L1_MAX_MB`, and the other expired rows are swept (`L1 warmed from L2 entries= bytes= full=`) | `src/cli/serve.rs:144-157`; `src/cache/l2.rs:251-378` |
 | Running jobs | `recover()` sets every job left `running` by the previous process back to `pending`, keeping its attempts (`re-queued jobs a previous process left running jobs=`); one interrupted on its last (fifth) attempt is `failed` with `interrupted on its last attempt: the process stopped while it ran` instead, so a job that kills the process cannot crash-loop it (`failed jobs a previous process left running on their last attempt jobs=n`, warn; REV-04, ADR-189) | `src/cli/serve.rs`; `src/jobs/scheduler.rs` (`Scheduler::recover`) |
@@ -64,7 +64,7 @@ A binary older than the database's newest migration does not start. `migrate` ru
 
 ## Rolling back a migration
 
-Migrations are forward-only, so undoing one means restoring the pre-upgrade backup (`docs/design/07-deployment.md:235`). The backup must come from before the upgrade: the daily backup runs first in `maintenance`, which is why it precedes the day's other steps, and step 1 above exists for the same reason.
+Migrations are forward-only, so undoing one means restoring the pre-upgrade backup. The release that first carries SITE-13 migrates (`V0034__platform_status`, after `V0032` and `V0033` of the AVL series), so rolling it back is a restore, not a redeploy (`docs/design/07-deployment.md:235`). The backup must come from before the upgrade: the daily backup runs first in `maintenance`, which is why it precedes the day's other steps, and step 1 above exists for the same reason.
 
 1. `sudo systemctl stop riot-proxy`.
 2. Restore the file: [backup-and-restore.md](./backup-and-restore.md), "Restoring the database". With the service stopped, fold the current file's WAL in before moving it aside; never delete a non-empty `-wal` (`deploy/README.md:246-265`).
@@ -87,4 +87,4 @@ Rolling back only the object-storage feature is configuration, not a restore: un
 
 ---
 **Sources:** `.github/workflows/release.yml:L262-L279`, `.github/workflows/deploy.yml`, `docs/workflows/release-process.md`, `docs/design/07-deployment.md:L181,L220,L229-L235`, `docs/design/12-object-storage-and-hosting.md:L941-L949`, `deploy/README.md:L121-L138,L246-L265`, `src/cli/serve.rs:L73-L587`, `src/cli/mod.rs`, `src/cli/backup.rs:L10-L21`, `src/db/mod.rs:L155-L205,L521-L525`, refinery-core 0.9.2 `src/runner.rs:L240-L241` and `src/traits/mod.rs:L26-L28`, `src/jobs/scheduler.rs:L1010-L1041,L1377-L1394`, `src/jobs/ticks.rs:L437,L474-L500`, `src/jobs/maintenance.rs:L36,L38,L353-L396,L310-L322`, `src/jobs/archive.rs:L188-L193`, `src/riot/limiter/persist.rs:L23,L92-L94`, `src/cache/l2.rs:L251-L378`, `src/consumers.rs:L228-L283`, `src/routes/health.rs:L152-L204`, `src/routes/admin.rs:L2501-L2528`, `src/app.rs:L35,L309-L322`, `docs/DECISIONS.md:L1722-L1730`, `docs/_meta/scratch/jobs-and-observability.md`, `docs/_meta/scratch/persistence.md`, `docs/_meta/scratch/routes.md:L157,L168,L187`
-**Last verified:** 2026-11-18 against commit `101740c`
+**Last verified:** 2026-11-20 against commit `1f37fc7`

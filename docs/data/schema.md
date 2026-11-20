@@ -130,7 +130,7 @@ Indexes: `jobs_dedupe UNIQUE (kind, dedupe_key) WHERE state IN ('pending','runni
 | `at` | INTEGER | PRIMARY KEY | unix ms of the sample |
 | `point` | TEXT | NOT NULL | JSON `HistoryPoint` (`src/stats.rs:379-394`) |
 
-Written every `METRICS_HISTORY_INTERVAL_S` (default 60 s) by `INSERT OR REPLACE` (`src/stats.rs:1023-1046`). Read by `GET /v1/admin/metrics/history`. Retention: each write keeps only the newest 1 440 rows (`src/stats.rs:43,1037-1040`) and `maintenance` deletes rows older than 24 h (`maintenance.rs:40,250-253`).
+Written every `METRICS_HISTORY_INTERVAL_S` (default 60 s) by `INSERT OR REPLACE` (`src/stats.rs:1023-1046`). Read by `GET /v1/admin/metrics/history`. Retention: each write keeps only the newest 1 440 rows (`src/stats.rs:43,1037-1040`) and `maintenance` deletes rows older than 24 h (`maintenance.rs:40,257-260`).
 
 ### platform_status
 
@@ -144,7 +144,7 @@ Written every `METRICS_HISTORY_INTERVAL_S` (default 60 s) by `INSERT OR REPLACE`
 | `failed_at` | INTEGER | nullable | unix ms of the last failure (any other answer, no answer, or a 200 that is not JSON) |
 | `error` | TEXT | nullable | the last failure's reason: the fetcher's error code and message, e.g. `NOT_FOUND: Resource not found upstream` |
 
-Written once a round by the status poller in one transaction (`src/status/poll.rs:247-270`): a 200 upserts `body` and `fetched_at`, a failure `failed_at` and `error`, each leaving the other pair as it was, so a failure keeps the last body and a reader compares the two stamps. A platform the limiter had no room for writes nothing that round. Not keyed by `key_scope`: the feed is Riot's whatever key read it. Read by `status::poll::stored` (every row, in `Platform::ALL` order; SITE-14's summary route). Retention: one row per platform, overwritten each round; a platform dropped from `STATUS_POLL_PLATFORMS` keeps its last row. `/dev/reset` empties it.
+Written by the status poller one platform at a time, one write each as that platform's read ends (SITE-17; `src/status/poll.rs:282-305`): a 200 upserts `body` and `fetched_at`, a failure `failed_at` and `error`, each leaving the other pair as it was, so a failure keeps the last body and a reader compares the two stamps. A platform the limiter had no room for writes nothing that round, and a write that fails loses that platform's row for the round only. Not keyed by `key_scope`: the feed is Riot's whatever key read it. Read by `status::poll::stored` (every row, in `Platform::ALL` order; SITE-14's summary route). Retention: one row per platform, overwritten each round; a platform dropped from `STATUS_POLL_PLATFORMS` keeps its last row. `/dev/reset` empties it.
 
 ### players
 
@@ -348,4 +348,4 @@ Index `body_locations_pack (pack_id)` (`V0023:30`). Written by `locate_on` (upse
 
 ---
 **Sources:** `src/db/migrations/V0001__init.sql`, `V0002__archive.sql`, `V0003__cs_and_duration.sql`, `V0005__analytics.sql`, `V0007__job_lane.sql`, `V0009__cache_fetched_at.sql`, `V0012__match_builds.sql`, `V0013__timelines_standalone.sql`, `V0018__timeline_gaps.sql`, `V0019__tier_on_facts.sql`, `V0020__without_rowid_derived.sql`, `V0021__facts_without_rowid.sql`, `V0022__jobs_state_kind.sql`, `V0023__body_packs.sql`, `V0024__matches_archived.sql`, `V0028__jobs_crawl_matches.sql`, `V0029__analytics_counted.sql`, `src/db/mod.rs:L27-L47`, `src/db/mod.rs:L523-L525`, `src/archive/matches.rs:L33-L103`, `src/archive/matches.rs:L193-L230`, `src/archive/matches.rs:L390-L446`, `src/archive/analytics/delta.rs:L98-L145`, `src/archive/facts.rs:L19`, `src/archive/facts.rs:L292-L379`, `src/archive/builds.rs:L24`, `src/archive/pack.rs:L287-L354`, `src/archive/offload.rs:L147-L170`, `src/archive/tiers.rs:L43-L68`, `src/cache/l2.rs:L220-L416`, `src/riot/limiter/persist.rs:L23-L25`, `src/riot/limiter/persist.rs:L178-L213`, `src/consumers.rs:L105-L107`, `src/consumers.rs:L141-L155`, `src/consumers.rs:L213-L283`, `src/jobs/maintenance.rs:L38-L40`, `src/jobs/maintenance.rs:L250-L267,L353-L396`, `src/stats.rs:L43`, `src/stats.rs:L379-L394`, `src/stats.rs:L1028-L1044`, `src/routes/dev.rs:L41-L86`, `docs/_meta/scratch/persistence.md`, `docs/design/04-data-and-cache.md`, `docs/design/12-object-storage-and-hosting.md:L159-L221`
-**Last verified:** 2026-11-18 against commit `a717e24`
+**Last verified:** 2026-11-20 against commit `1f37fc7`

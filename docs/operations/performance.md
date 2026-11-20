@@ -6,7 +6,7 @@ Where riot-proxy spends time, the measurements that exist, the knobs that move t
 
 **Analytics reads (the PERF series).** `GET /v1/lol/analytics/champions?queue=RANKED_SOLO_5x5&patch=all&minGames=0&limit=500`, the site's call, took 3.9 s on production in October 2026 (`docs/DECISIONS.md:1734`). Three changes fixed it: every read now seeks on its key (PERF-01, ADR-167), tierless reads sum a tier-summed table `champion_stats_totals` (PERF-02, ADR-168), and the five analytics routes keep each 200's bytes and `ETag` in memory per aggregate generation (PERF-03, ADR-169). A hit, 200 or 304, runs no `Db::read` and sends `X-Cache: HIT`; a miss sends `MISS`; the cache is cleared and warmed by every rebuild and every `aggregate:delta` run that counted something (`docs/DECISIONS.md:1782-1799`; `src/routes/analytics/cache.rs:1-19`). Concurrent misses share one computation (`SingleFlight`, `:1791`). A rebuild warms 5 entries per queue with 18 reads, 93 ms on the synthetic copy (`:1799`); champion pages are not warmed and fill on first view.
 
-**The player page composite.** `/v1/players/{puuid}/profile` fans out to four Riot reads at once (`account.byPuuid`, `summoner.byPuuid`, `league.entriesByPuuid`, `mastery.topByPuuid`; `src/routes/players.rs:292-331`), each through the limiter with the 2 s interactive budget (`CLIENT_WAIT_BUDGET_MS`, `src/config.rs:847`); the page's latency is the slowest part. With copies stored and Riot slow or silent, each stage waits at most 2.25 s (`CLIENT_WAIT_BUDGET_MS` + 250 ms) before serving the copy, 20 s on a forced refresh; by Riot ID there are up to three stages (Riot ID, the player's platform when `?platform=` is absent, the parts), so up to 6.75 s, or 24.5 s forced. A part with nothing stored gives up at 20 s (AVL-09, AVL-14). `/v1/players/{puuid}/matches` fetches `match.byId` for every id not already archived (`:799-820`), so a cold player costs up to `count` Riot calls and a warm one none.
+**The player page composite.** `/v1/players/{puuid}/profile` fans out to four Riot reads at once (`account.byPuuid`, `summoner.byPuuid`, `league.entriesByPuuid`, `mastery.topByPuuid`; `src/routes/players.rs:292-331`), each through the limiter with the 2 s interactive budget (`CLIENT_WAIT_BUDGET_MS`, `src/config.rs:871`); the page's latency is the slowest part. With copies stored and Riot slow or silent, each stage waits at most 2.25 s (`CLIENT_WAIT_BUDGET_MS` + 250 ms) before serving the copy, 20 s on a forced refresh; by Riot ID there are up to three stages (Riot ID, the player's platform when `?platform=` is absent, the parts), so up to 6.75 s, or 24.5 s forced. A part with nothing stored gives up at 20 s (AVL-09, AVL-14). `/v1/players/{puuid}/matches` fetches `match.byId` for every id not already archived (`:823-844`), so a cold player costs up to `count` Riot calls and a warm one none.
 
 **Archive reads.** A match inside `ARCHIVE_BODY_LOCAL_DAYS` (14) is a local zstd blob; outside it the body comes from its pack by ranged GET, a few of them at 1 to 3 ms each in the same data centre (`docs/design/12-object-storage-and-hosting.md:261-267`), fetched one `get_ranges` call per pack with `ARCHIVE_OBJECT_CONCURRENCY` packs in flight (`src/archive/matches.rs:265-269`). The player page reads always fall inside the window (`:276`).
 
@@ -39,22 +39,22 @@ The synthetic database and the before/after SQL are reproducible with `python3 s
 
 | Knob | Default (range) | Moves | Evidence |
 |---|---|---|---|
-| `JOB_CONCURRENCY` | 8 (≥ 1) | worker tasks; the lever on CPU and writer contention. 2 on a 2-vCPU host | `src/config.rs:840`; `docs/design/07-deployment.md:175` |
-| `JOB_KIND_LIMITS` | `aggregate:analytics=1,archive:offload=1` | running cap per lane-less kind; `none` lifts all | `src/config.rs:129`, `:828`, `:1256-1318` |
-| `JOB_YIELD_BUDGET_MS` | 1000 (0 to 900 000) | how long a job's fetch waits for the limiter before freeing its worker | `src/config.rs:842`; `src/fetcher.rs:163-207` |
-| `CLIENT_WAIT_BUDGET_MS` | 2000 (≥ 0) | how long an interactive request waits for a token before `RATE_LIMITED` or a `STALE` copy | `src/config.rs:847`; `src/fetcher.rs:209-215` |
-| `BULK_USAGE_CEILING` / `BULK_IDLE_CEILING` / `BULK_IDLE_AFTER_S` | 0.8 / 0.95 / 30 | bulk's share of each window while a scope is busy / after it idles / the idle threshold | `src/config.rs:848-850`, `:894-914` |
-| `CACHE_L1_MAX_MB` | 128 (1 to 1 048 576) | L1 weight budget; an entry larger than the budget is not kept | `src/config.rs:844`; `src/cache/l1.rs:131-144` |
-| `ANALYTICS_CACHE_ENTRIES` | 512 (0 to 4096) | analytics responses kept; about 41 kB each at most, so about 21 MB at 512 and 170 MB at 4096; 0 disables | `src/config.rs:889`; `docs/DECISIONS.md:1800` |
-| `ARCHIVE_OBJECT_CONCURRENCY` | 16 (1 to 256) | ranged GETs in flight when reading offloaded bodies | `src/config.rs:867` |
-| `ARCHIVE_BODY_LOCAL_DAYS` | 14 (0 to 365) | how long a packed body stays local, so which reads touch the bucket | `src/config.rs:869` |
-| `ARCHIVE_PACK_TARGET_BYTES` | 64 MiB (1 MiB to 1 GiB) | pack size, so object count and when an offload is queued | `src/config.rs:870` |
-| `ARCHIVE_OFFLOAD_PACE_MS` | 50 (0 to 60 000) | pause between offload turns, a brake on writer and bandwidth use | `src/config.rs:871` |
-| `LADDER_BACKFILL_LIMIT` | 100 (0 to 10 000) | match ids walked per discovered player: one Riot call per 100 | `src/config.rs:881` |
-| `AGGREGATE_PATCH_LIMIT` | 4 (0 to 100) | patches rebuilt per recompute; 0 is every patch | `src/config.rs:888` |
-| `AGGREGATE_DELTA_S` | 60 (0 to 86 400) | how often `aggregate:delta` counts new matches; 0 turns it off and crawls queue full rebuilds again | `src/config.rs:891` |
-| `AGGREGATE_DELTA_TARGET_MS` | 100 (20 to 1000) | the statement time a delta batch is sized toward: lower holds the writer for less at a time, over more batches | `src/config.rs:892` |
-| `AGGREGATE_DELTA_BATCH` | 500 (5 to 5000) | the most matches in one delta batch | `src/config.rs:893` |
+| `JOB_CONCURRENCY` | 8 (≥ 1) | worker tasks; the lever on CPU and writer contention. 2 on a 2-vCPU host | `src/config.rs:864`; `docs/design/07-deployment.md:175` |
+| `JOB_KIND_LIMITS` | `aggregate:analytics=1,archive:offload=1` | running cap per lane-less kind; `none` lifts all | `src/config.rs:129`, `:852`, `:1280-1342` |
+| `JOB_YIELD_BUDGET_MS` | 1000 (0 to 900 000) | how long a job's fetch waits for the limiter before freeing its worker | `src/config.rs:866`; `src/fetcher.rs:163-214` |
+| `CLIENT_WAIT_BUDGET_MS` | 2000 (≥ 0) | how long an interactive request waits for a token before `RATE_LIMITED` or a `STALE` copy | `src/config.rs:871`; `src/fetcher.rs:216-223` |
+| `BULK_USAGE_CEILING` / `BULK_IDLE_CEILING` / `BULK_IDLE_AFTER_S` | 0.8 / 0.95 / 30 | bulk's share of each window while a scope is busy / after it idles / the idle threshold | `src/config.rs:872-874`, `:918-938` |
+| `CACHE_L1_MAX_MB` | 128 (1 to 1 048 576) | L1 weight budget; an entry larger than the budget is not kept | `src/config.rs:868`; `src/cache/l1.rs:131-144` |
+| `ANALYTICS_CACHE_ENTRIES` | 512 (0 to 4096) | analytics responses kept; about 41 kB each at most, so about 21 MB at 512 and 170 MB at 4096; 0 disables | `src/config.rs:913`; `docs/DECISIONS.md:1800` |
+| `ARCHIVE_OBJECT_CONCURRENCY` | 16 (1 to 256) | ranged GETs in flight when reading offloaded bodies | `src/config.rs:891` |
+| `ARCHIVE_BODY_LOCAL_DAYS` | 14 (0 to 365) | how long a packed body stays local, so which reads touch the bucket | `src/config.rs:893` |
+| `ARCHIVE_PACK_TARGET_BYTES` | 64 MiB (1 MiB to 1 GiB) | pack size, so object count and when an offload is queued | `src/config.rs:894` |
+| `ARCHIVE_OFFLOAD_PACE_MS` | 50 (0 to 60 000) | pause between offload turns, a brake on writer and bandwidth use | `src/config.rs:895` |
+| `LADDER_BACKFILL_LIMIT` | 100 (0 to 10 000) | match ids walked per discovered player: one Riot call per 100 | `src/config.rs:905` |
+| `AGGREGATE_PATCH_LIMIT` | 4 (0 to 100) | patches rebuilt per recompute; 0 is every patch | `src/config.rs:912` |
+| `AGGREGATE_DELTA_S` | 60 (0 to 86 400) | how often `aggregate:delta` counts new matches; 0 turns it off and crawls queue full rebuilds again | `src/config.rs:915` |
+| `AGGREGATE_DELTA_TARGET_MS` | 100 (20 to 1000) | the statement time a delta batch is sized toward: lower holds the writer for less at a time, over more batches | `src/config.rs:916` |
+| `AGGREGATE_DELTA_BATCH` | 500 (5 to 5000) | the most matches in one delta batch | `src/config.rs:917` |
 | tokio worker threads | `min(cores, 4)`, not configurable | async executors; 4 on the 6-vCPU box | `src/cli/mod.rs:125` |
 | SQLite reader pool | `available_parallelism()`, fallback 4, not configurable | concurrent reads; 6 on `ngf-prod-syd1` | `src/db/mod.rs:290-291`; `PROGRESS.md:325` |
 | SQLite `cache_size` / `mmap_size` | 64 MiB / 256 MiB per connection, not configurable | page cache and memory-mapped I/O | `src/db/mod.rs:61-62` |
@@ -76,5 +76,5 @@ Extrapolated, not measured: design/07's sizing table and its 2-vCPU worker advic
 Disk and memory sizing for the archive and the bucket are in `../deployment/capacity.md`.
 
 ---
-**Sources:** `docs/DECISIONS.md:1732-1818`, `docs/perf/PERF-03-design.md:1-120`, `docs/design/07-deployment.md:169-177`, `docs/design/12-object-storage-and-hosting.md:261-267,480-486,781-799`, `PROGRESS.md:325,366`, `scripts/perf-synthetic.py:1-24`, `src/routes/analytics/cache.rs:1-19`, `src/routes/players.rs:292-331,746-767`, `src/archive/matches.rs:265-269`, `src/jobs/analytics.rs:533-780,799-884,895-987,1215-1309`, `src/archive/analytics/delta.rs:31-52`, `docs/thr/THR-03-plan.md`, `src/db/mod.rs:61-62,71-72,241-254,290-291`, `src/cli/mod.rs:125`, `src/config.rs:129,837-847,864-867,878,885-890,912-925,1298-1329`, `src/cache/l1.rs:131-144`, `src/fetcher.rs:163-215`, `src/riot/limiter/headers.rs:31-42`, `src/riot/limiter/mod.rs:177-184,329-344`, `src/http/recent.rs:38`
-**Last verified:** 2026-11-18 against commit `101740c`
+**Sources:** `docs/DECISIONS.md:1732-1818`, `docs/perf/PERF-03-design.md:1-120`, `docs/design/07-deployment.md:169-177`, `docs/design/12-object-storage-and-hosting.md:261-267,480-486,781-799`, `PROGRESS.md:325,366`, `scripts/perf-synthetic.py:1-24`, `src/routes/analytics/cache.rs:1-19`, `src/routes/players.rs:292-331,746-767`, `src/archive/matches.rs:265-269`, `src/jobs/analytics.rs:533-780,799-884,895-987,1215-1309`, `src/archive/analytics/delta.rs:31-52`, `docs/thr/THR-03-plan.md`, `src/db/mod.rs:61-62,71-72,241-254,290-291`, `src/cli/mod.rs:125`, `src/config.rs:129,861-871,888-891,902,909-914,936-949,1322-1353`, `src/cache/l1.rs:131-144`, `src/fetcher.rs:163-223`, `src/riot/limiter/headers.rs:31-42`, `src/riot/limiter/mod.rs:177-184,329-344`, `src/http/recent.rs:38`
+**Last verified:** 2026-11-20 against commit `1f37fc7`

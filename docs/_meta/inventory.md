@@ -25,7 +25,7 @@ What is in the riot-proxy repository at commit `7491ff6` (version 2.7.0), gather
 | `src/fetcher.rs`, `src/singleflight.rs`, `src/cache/` | the read funnel, in-flight coalescing, L1 and L2 caches, key scheme |
 | `src/archive/` and its `*/tests.rs` dirs | bodies, facts, builds, tiers, ranks, player pools, analytics rebuilds, packs, object store, offload, index recovery |
 | `src/jobs/` and `src/jobs/{activity,ladder,offload,scheduler,ticks,timelines}/` | scheduler, lanes, ticks, every job handler, live activity traces |
-| `src/db/`, `src/db/migrations/` | writer thread, reader pool, disk gauges, the Postgres stub, 30 refinery migrations `V0001`…`V0030` (next free `V0031`) |
+| `src/db/`, `src/db/migrations/` | writer thread, reader pool, disk gauges, the Postgres stub, 33 refinery migrations `V0001`…`V0034` (`V0031` unassigned; next free `V0035`) |
 | `src/events/`, `src/ws/` | event catalogue and the WebSocket hub, socket, protocol, metrics topic |
 | `src/static/`, `src/ui/` | Data Dragon mirror and image fill; the three embedded pages (`dev-ui.html`, `showcase.html`, `admin.html`) |
 | `src/config.rs`, `src/config/tests.rs` | the configuration surface and its validation |
@@ -75,7 +75,7 @@ Details in [scratch/riot-and-cache.md](./scratch/riot-and-cache.md) §1–§2 an
 
 | Store | What | Where documented |
 |---|---|---|
-| SQLite `$DATA_DIR/riot-proxy.db` (WAL, `synchronous=NORMAL`), 43 tables after `V0030` | consumers, cache (L2), limiter checkpoint, jobs, metrics history, players, matches, timelines, facts, bans, builds, timeline gaps, ladder crawls and entries, ranks, analytics tables, pack map | [../data/schema.md](../data/schema.md), [scratch/persistence.md](./scratch/persistence.md) |
+| SQLite `$DATA_DIR/riot-proxy.db` (WAL, `synchronous=NORMAL`), 45 tables after `V0034` (refinery's history table included) | consumers, cache (L2), limiter checkpoint, jobs, metrics history, players, matches, timelines, facts, bans, builds, timeline gaps, ladder crawls and entries, ranks, analytics tables, pack map | [../data/schema.md](../data/schema.md), [scratch/persistence.md](./scratch/persistence.md) |
 | In-memory | L1 response cache (moka, `CACHE_L1_MAX_MB`), auth cache, analytics response cache, recent rings, job activity traces | [../data/caching.md](../data/caching.md) |
 | Disk | `$DATA_DIR/ddragon/<version>/…`, `$DATA_DIR/backups/riot-proxy-<date>.db` | [scratch/persistence.md](./scratch/persistence.md) §5 |
 | Onidel Object Storage `riot-proxy-archive` | `packs/{matches,timelines}/<yyyy>/<mm>/<ulid>.pack`, `index/{packs,locations}-<date>.jsonl.zst` | [../integration/object-storage.md](../integration/object-storage.md) |
@@ -87,7 +87,7 @@ Three workflows, no deploy step: `ci.yml` (fmt, clippy, test, ui, coverage, acce
 
 ## Configuration surface
 
-68 variables read from flags, environment and `.env` (`src/config.rs:23-105`), plus the legacy `NODE_ENV` fallback and the `TLS` refusal; ten global CLI flags. Complete table in [../deployment/configuration.md](../deployment/configuration.md), evidence in [scratch/config.md](./scratch/config.md).
+81 variables (the length of `config::VARS`) read from flags, environment and `.env` (`src/config.rs:23-105`), plus the legacy `NODE_ENV` fallback and the `TLS` refusal; ten global CLI flags. Complete table in [../deployment/configuration.md](../deployment/configuration.md), evidence in [scratch/config.md](./scratch/config.md).
 
 ## Build, test, lint, release, deploy tooling
 
@@ -126,4 +126,4 @@ cargo tree --depth 1 --all-features
 
 ---
 **Sources:** `Cargo.toml`, `rust-toolchain.toml`, `justfile`, `src/lib.rs`, `src/cli/mod.rs:L35-L67`, `src/cli/serve.rs:L73-L483`, `src/routes/docs.rs:L116-L153`, `src/jobs/mod.rs:L20-L71`, `src/jobs/ticks.rs:L119-L150`, `src/config.rs:L23-L105`, `.github/workflows/*.yml`, `docs/_meta/scratch/*.md`, `git log`, `git tag`
-**Last verified:** 2026-11-18 against commit `101740c`
+**Last verified:** 2026-11-20 against commit `1f37fc7`
