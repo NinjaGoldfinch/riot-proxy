@@ -48,6 +48,23 @@ async fn env(failing: &[&str]) -> Env {
 
 /// [`env`] with config overrides.
 async fn env_with(failing: &[&str], config: &[(&str, &str)]) -> Env {
+    env_wait(failing, config, riot_proxy::fetcher::FORCED_REFRESH_WAIT).await
+}
+
+/// The fetcher's forced wait in the tests of its bound
+/// (`FetcherParts::forced_wait`, 20 s in production), so none waits 20 s.
+const FORCED: Duration = Duration::from_secs(5);
+
+/// An ordinary read's wait for a stored copy: `CLIENT_WAIT_BUDGET_MS` and
+/// the 250 ms margin.
+const ORDINARY: Duration = Duration::from_millis(2_250);
+
+/// [`env_with`] with the fetcher's forced wait at [`FORCED`].
+async fn env_forced(failing: &[&str], config: &[(&str, &str)]) -> Env {
+    env_wait(failing, config, FORCED).await
+}
+
+async fn env_wait(failing: &[&str], config: &[(&str, &str)], forced_wait: Duration) -> Env {
     let server = MockServer::start().await;
     for f in failing {
         Mock::given(path_regex(format!(".*{f}.*")))
@@ -98,7 +115,7 @@ async fn env_with(failing: &[&str], config: &[(&str, &str)]) -> Env {
             .mount(&server)
             .await;
     }
-    let (dir, state, router) = common::app_with(config, &server.uri());
+    let (dir, state, router) = common::app_with_wait(config, &server.uri(), forced_wait);
     let key = consumers::create(
         &state.db,
         NewConsumer {
@@ -1157,4 +1174,231 @@ async fn a_looked_up_players_games_count_in_analytics_at_their_rank() {
         tiers,
         [("CHALLENGER".to_string(), 3), ("UNKNOWN".to_string(), 27)]
     );
+}
+
+// ── Review of #274 (AVL-14): every part's refresh unanswered ────────────────
+
+/// Riot accepts every call from now on and never answers.
+async fn silence(e: &Env) {
+    e.server.reset().await;
+    Mock::given(path_regex(".*"))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(60)))
+        .mount(&e.server)
+        .await;
+}
+
+/// Every part's entries live 1 s, soft and hard alike.
+const EXPIRE_ALL: [(&str, &str); 2] = [
+    ("CACHE_TTL_OVERRIDES", "account=1,summoner=1,league=1,mastery=1"),
+    ("STALE_WHILE_REVALIDATE", "false"),
+];
+
+/// An ordinary read by PUUID with every part expired and Riot silent
+/// answers inside about 3 s with the stored parts (AVL-09).
+#[tokio::test]
+async fn a_profile_with_every_part_expired_and_riot_silent_answers_inside_the_wait() {
+    let e = env_with(&[], &EXPIRE_ALL).await;
+    let uri = format!("/v1/players/{PUUID}/profile?platform=kr");
+    assert_eq!(e.get(&uri).await.status, StatusCode::OK);
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    silence(&e).await;
+    let asked = std::time::Instant::now();
+    let r = e.get(&uri).await;
+    let took = asked.elapsed();
+    assert!(took < Duration::from_millis(3_500), "{took:?}");
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(x_cache(&r).0, "STALE");
+    let b = r.json();
+    assert_eq!(b["refreshing"], json!(true));
+    assert_eq!(b["warnings"].as_array().unwrap().len(), 4, "{}", b["warnings"]);
+    for part in PARTS {
+        assert!(!b[part].is_null(), "{part}");
+    }
+}
+
+/// A forced refresh by Riot ID with every part expired and Riot silent:
+/// the Riot ID lookup is never forced (2.25 s), the parts are (20 s in
+/// production, [`FORCED`] here), so the answer comes at about 22 s, inside
+/// the documented 24.5 s, `refreshed` with the stored parts. A forced lookup
+/// would take 40 s. The account part is the exception: by Riot ID it is the
+/// lookup's answer, so its by-PUUID entry, which a forced refresh re-reads,
+/// was never stored, and it gives up at the bound (AVL-14; raised with the
+/// owner, review of #274).
+#[tokio::test]
+async fn a_forced_refresh_by_riot_id_with_riot_silent_answers_inside_its_bound() {
+    let e = env_forced(&[], &EXPIRE_ALL).await;
+    assert_eq!(e.get(PROFILE).await.status, StatusCode::OK);
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    silence(&e).await;
+    let asked = std::time::Instant::now();
+    let r = e.get(&format!("{PROFILE}&refresh=true")).await;
+    let took = asked.elapsed();
+    assert!(took >= FORCED && took < ORDINARY * 2 + FORCED, "{took:?}");
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(x_cache(&r).0, "STALE");
+    let b = r.json();
+    assert_eq!(
+        (b["refreshed"].clone(), b["refreshing"].clone()),
+        (json!(true), json!(true))
+    );
+    for part in ["summoner", "league", "mastery"] {
+        assert!(!b[part].is_null(), "{part}");
+    }
+    // A known gap, not the intended answer: AVL-17 (proposed) falls back to
+    // the lookup's account as `STALE` when the forced `account.byPuuid`
+    // fails, so a by-Riot-ID profile never has a `null` account.
+    assert_eq!(b["account"], Value::Null);
+    assert!(
+        b["warnings"].as_array().unwrap().contains(&json!(
+            "account unavailable (UPSTREAM_ERROR: Upstream request failed)"
+        )),
+        "{}",
+        b["warnings"]
+    );
+}
+
+/// Owner decision of 2026-11-17: a part with nothing stored gives up at the
+/// bound, so the parts that have copies are served instead of the whole
+/// profile waiting for its fetch (76 s with Riot silent).
+#[tokio::test]
+async fn a_part_with_nothing_stored_gives_up_and_the_others_are_served() {
+    let e = env_forced(&["/entries/by-puuid/"], &EXPIRE_ALL).await;
+    let first = e.get(PROFILE).await;
+    assert_eq!(first.json()["league"], Value::Null, "league never stored");
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    silence(&e).await;
+    let asked = std::time::Instant::now();
+    let r = e.get(PROFILE).await;
+    let took = asked.elapsed();
+    assert!(took >= FORCED && took < ORDINARY * 2 + FORCED, "{took:?}");
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(x_cache(&r).0, "STALE");
+    let b = r.json();
+    assert_eq!(b["league"], Value::Null);
+    assert_eq!(b["refreshing"], json!(true));
+    for part in ["account", "summoner", "mastery"] {
+        assert!(!b[part].is_null(), "{part}");
+    }
+    assert!(
+        b["warnings"].as_array().unwrap().contains(&json!(
+            "league unavailable (UPSTREAM_ERROR: Upstream request failed)"
+        )),
+        "{}",
+        b["warnings"]
+    );
+}
+
+/// `account.regionByPuuid` is never forced (review of #285): a forced
+/// refresh by Riot ID without `?platform=`, every stage expired and Riot
+/// silent, waits the ordinary 2.25 s for each lookup (the Riot ID, then the
+/// platform) and the bound only for the parts. In production that is about
+/// 24.5 s, inside the site's 30 s; a forced platform lookup would add a
+/// second bound, 44.5 s, which here is `ORDINARY + 2 × FORCED`, past what
+/// the assertion allows.
+#[tokio::test]
+async fn a_forced_refresh_by_riot_id_without_a_platform_never_forces_the_platform_lookup() {
+    let e = env_forced(&[], &EXPIRE_ALL).await;
+    active_region(&e, region_body("kr")).await;
+    let uri = "/v1/players/by-riot-id/Hide%20on%20bush/KR1/profile";
+    assert_eq!(e.get(uri).await.status, StatusCode::OK);
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    silence(&e).await;
+    let asked = std::time::Instant::now();
+    let r = e.get(&format!("{uri}?refresh=true")).await;
+    let took = asked.elapsed();
+    assert!(
+        took >= FORCED && took < ORDINARY * 2 + FORCED + Duration::from_secs(1),
+        "{took:?}"
+    );
+    assert!(took < ORDINARY + FORCED * 2, "{took:?}");
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(x_cache(&r).0, "STALE");
+    let b = r.json();
+    assert_eq!(
+        (b["platform"].as_str(), b["refreshed"].clone()),
+        (Some("kr"), json!(true))
+    );
+    for part in ["summoner", "league", "mastery"] {
+        assert!(!b[part].is_null(), "{part}");
+    }
+}
+
+/// The lookup gives up too: by Riot ID with nothing stored and Riot silent,
+/// the account lookup fails at the bound, and with no PUUID there is no
+/// profile: a 502 `UPSTREAM_ERROR`, with no `X-Cache` header.
+#[tokio::test]
+async fn a_lookup_with_nothing_stored_and_riot_silent_is_a_502_at_the_bound() {
+    let e = env_forced(&[], &[]).await;
+    silence(&e).await;
+    let asked = std::time::Instant::now();
+    let r = e.get(PROFILE).await;
+    let took = asked.elapsed();
+    assert!(
+        took >= FORCED && took < FORCED + Duration::from_secs(2),
+        "{took:?}"
+    );
+    assert_eq!(r.status, StatusCode::BAD_GATEWAY);
+    assert_eq!(r.json()["error"]["code"], "UPSTREAM_ERROR");
+    assert!(r.headers.get("x-cache").is_none(), "{:?}", r.headers);
+    assert_eq!(e.calls_to("/accounts/by-riot-id/").await, 1);
+}
+
+/// Match ids that live 1 s, soft and hard alike.
+const EXPIRE_IDS: [(&str, &str); 2] = [
+    ("CACHE_TTL_OVERRIDES", "matchIds=1"),
+    ("STALE_WHILE_REVALIDATE", "false"),
+];
+
+/// The match page with Riot silent: the expired id list is served `STALE`
+/// at 2.25 s, then a match never archived gives up at the bound and is named
+/// in `warnings`; the four archived ones are served.
+#[tokio::test]
+async fn a_match_page_with_riot_silent_serves_the_stale_ids_and_names_the_unarchived_match() {
+    let missing = MATCH_IDS[1];
+    let e = env_forced(&[&format!("/matches/{missing}")], &EXPIRE_IDS).await;
+    let first = e.get(&page("&count=5")).await;
+    assert_eq!(first.status, StatusCode::OK);
+    assert_eq!(first.json()["matches"].as_array().unwrap().len(), 4);
+    // The four matches are archived behind the page (AVL-02).
+    e.state.db.flush_detached().await;
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    silence(&e).await;
+    let asked = std::time::Instant::now();
+    let r = e.get(&page("&count=5")).await;
+    let took = asked.elapsed();
+    // The id list's 2.25 s, then the bound for the unarchived match.
+    assert!(
+        took >= ORDINARY + FORCED && took < ORDINARY + FORCED + Duration::from_secs(2),
+        "{took:?}"
+    );
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(x_cache(&r).0, "STALE");
+    let b = r.json();
+    assert_eq!(b["matchIds"], json!(MATCH_IDS));
+    assert_eq!(b["matches"].as_array().unwrap().len(), 4);
+    assert_eq!(b["refreshing"], json!(true));
+    let warnings = b["warnings"].as_array().unwrap();
+    assert!(
+        warnings.contains(&json!(format!(
+            "match {missing} unavailable (UPSTREAM_ERROR: Upstream request failed)"
+        ))),
+        "{warnings:?}"
+    );
+}
+
+/// With the id list never stored and Riot silent the page has no ids and
+/// fails: a 502 at the bound.
+#[tokio::test]
+async fn a_match_page_with_no_ids_stored_and_riot_silent_is_a_502() {
+    let e = env_forced(&[], &[]).await;
+    silence(&e).await;
+    let asked = std::time::Instant::now();
+    let r = e.get(&page("&count=5")).await;
+    let took = asked.elapsed();
+    assert!(
+        took >= FORCED && took < FORCED + Duration::from_secs(2),
+        "{took:?}"
+    );
+    assert_eq!(r.status, StatusCode::BAD_GATEWAY);
+    assert_eq!(r.json()["error"]["code"], "UPSTREAM_ERROR");
 }

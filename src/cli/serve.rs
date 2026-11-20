@@ -202,6 +202,7 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         interactive_budget: Duration::from_millis(config.client_wait_budget_ms),
         job_budget: Duration::from_millis(config.job_yield_budget_ms),
         swr: config.stale_while_revalidate,
+        forced_wait: crate::fetcher::FORCED_REFRESH_WAIT,
     });
 
     // Before "listening": a SIGTERM from then on must be a clean shutdown, not
@@ -295,6 +296,7 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         Some(_) => maintenance.then_bucket_jobs(queue.clone()),
         None => maintenance,
     });
+    let tick_backups = maintenance.tick_backups();
     // One per process: the routes serve from it, the rebuild clears and warms it.
     let analytics_cache = Arc::new(crate::routes::analytics::cache::Analytics::new(
         crate::routes::analytics::Reads::new(db.clone(), Arc::clone(&mirror), &scope, &config.ladder_queues),
@@ -456,8 +458,8 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
             crate::jobs::ticks::running_schedule(&config),
             crate::jobs::ticks::ladders(&config),
             // With backups on, a maintenance run that wrote none is not the
-            // tick's last run (AVL-13).
-            (config.backup_keep > 0).then(|| config.data_dir.join("backups")),
+            // tick's last run (AVL-13): the job's own directory.
+            tick_backups,
         );
         let history = crate::stats::spawn_sampler(
             Arc::clone(&stats),

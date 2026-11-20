@@ -33,10 +33,24 @@ async fn setup(env: &[(&str, &str)]) -> Setup {
 }
 
 async fn setup_with(env: &[(&str, &str)], archive: Option<Arc<dyn Archive>>) -> Setup {
+    setup_full(env, archive, riot_proxy::fetcher::FORCED_REFRESH_WAIT).await
+}
+
+/// The forced wait the tests of the 20 s bound use instead
+/// (`FetcherParts::forced_wait`): longer than an ordinary read's 2.25 s, so
+/// the two stay apart, and short enough that a test does not wait 20 s.
+const FORCED: Duration = Duration::from_secs(4);
+
+/// [`setup`] with the fetcher's forced wait at [`FORCED`].
+async fn setup_forced(env: &[(&str, &str)]) -> Setup {
+    setup_full(env, None, FORCED).await
+}
+
+async fn setup_full(env: &[(&str, &str)], archive: Option<Arc<dyn Archive>>, forced_wait: Duration) -> Setup {
     let server = MockServer::start().await;
     let config = common::config(env);
     let limiter = Arc::new(Limiter::new(0.8));
-    let fetcher = common::fetcher(&config, &server.uri(), Arc::clone(&limiter), archive);
+    let fetcher = common::fetcher_with(&config, &server.uri(), Arc::clone(&limiter), archive, forced_wait);
     Setup {
         server,
         fetcher,
@@ -838,8 +852,9 @@ async fn expired_while_a_refresh_sleeps_through_a_freeze_serves_the_stored_copy(
     );
 }
 
-/// With nothing stored the wait is unchanged: the fetch's own outcome stands,
-/// however long it takes.
+/// With nothing stored a fetch inside the bound is waited for: the fetch's
+/// own outcome stands, if it comes within 20 s (`Fetcher::unstored_wait`,
+/// AVL-14).
 #[tokio::test]
 async fn nothing_stored_and_riot_slow_still_waits_for_riot() {
     let s = setup(&EXPIRING).await;
@@ -885,8 +900,11 @@ async fn expired_and_riot_answering_inside_the_wait_is_a_miss() {
 /// (review of #274): the consumer spent its refresh window on Riot's answer,
 /// so serving the old copy as `STALE` at 2.25 s would answer
 /// `refreshed: true` with the bytes it asked to replace. Here the refresh
-/// waits 1.6 s for the limiter and Riot answers in 700 ms: past the ordinary
-/// wait, inside the forced one, so it is Riot's answer.
+/// waits 1.8 s for the limiter (inside the 2 s interactive budget) and Riot
+/// answers in 2.4 s: about 4.2 s, inside the forced wait, so it is Riot's
+/// answer. Riot's answer alone outlasts the ordinary wait of 2.25 s, so the
+/// assertion that the read waited past it holds however late the timers
+/// fire on a loaded runner (CI-07).
 #[tokio::test]
 async fn a_forced_refresh_behind_the_limiter_and_a_slow_answer_gets_riots_answer() {
     let s = setup(&EXPIRING).await;
@@ -894,7 +912,7 @@ async fn a_forced_refresh_behind_the_limiter_and_a_slow_answer_gets_riots_answer
     mount(
         &s.server,
         SUMMONER,
-        ok(r#"{"v":2}"#).set_delay(Duration::from_millis(700)),
+        ok(r#"{"v":2}"#).set_delay(Duration::from_millis(2_400)),
     )
     .await;
     // One token per 2 s on the method, taken now: the next is 2 s away.
@@ -907,7 +925,7 @@ async fn a_forced_refresh_behind_the_limiter_and_a_slow_answer_gets_riots_answer
         .acquire("euw1", "summoner.byPuuid", Priority::Interactive, Duration::ZERO)
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
 
     let asked = Instant::now();
     let r = s
@@ -935,7 +953,7 @@ async fn a_forced_refresh_behind_the_limiter_and_a_slow_answer_gets_riots_answer
 /// read's, and the call to Riot goes on behind it.
 #[tokio::test]
 async fn a_forced_refresh_with_riot_silent_serves_the_stored_copy_at_its_limit() {
-    let s = setup(&EXPIRING).await;
+    let s = setup_forced(&EXPIRING).await;
     let stored_at = store_then_expire(&s).await;
     mount(
         &s.server,
@@ -978,7 +996,7 @@ async fn a_forced_refresh_with_riot_silent_serves_the_stored_copy_at_its_limit()
 #[tokio::test]
 async fn a_forced_refresh_joining_a_refresh_frozen_by_the_limiter_serves_the_stored_copy_at_its_limit() {
     // Soft TTL 1 s, hard TTL 4 s (stale-while-revalidate on).
-    let s = setup(&[("CACHE_TTL_OVERRIDES", "summoner=1")]).await;
+    let s = setup_forced(&[("CACHE_TTL_OVERRIDES", "summoner=1")]).await;
     mount(&s.server, SUMMONER, ok(r#"{"v":1}"#)).await;
     s.fetcher
         .fetch(summoner(Platform::Euw1), INTERACTIVE)
@@ -1067,4 +1085,274 @@ async fn a_fetch_budget_shorter_than_the_interactive_one_is_what_the_limiter_get
         .await
         .unwrap();
     assert_eq!(r.x_cache, XCache::Miss);
+}
+
+// ── Review of #274 (AVL-14) ──────────────────────────────────────────────────
+
+/// Owner decision of 2026-11-17: with nothing stored, a read waits for its
+/// fetch at most `Fetcher::unstored_wait` (20 s in production) and then fails
+/// `UPSTREAM_ERROR`, so a part with no copy cannot hold a whole profile for
+/// the fetch's 76 s. One call to Riot, which goes on behind the error.
+#[tokio::test]
+async fn nothing_stored_and_riot_silent_gives_up_at_the_bound() {
+    let s = setup_forced(&EXPIRING).await;
+    let bound = s.fetcher.unstored_wait(INTERACTIVE);
+    assert_eq!(bound, FORCED);
+    mount(
+        &s.server,
+        SUMMONER,
+        ok(r#"{"v":1}"#).set_delay(Duration::from_secs(60)),
+    )
+    .await;
+    let asked = Instant::now();
+    let err = tokio::time::timeout(
+        bound + Duration::from_secs(3),
+        s.fetcher.fetch_or_stored(summoner(Platform::Euw1), INTERACTIVE),
+    )
+    .await
+    .expect("an answer at the bound")
+    .unwrap_err();
+    assert_eq!(err.api.code.as_str(), "UPSTREAM_ERROR");
+    assert!(asked.elapsed() >= bound, "{:?}", asked.elapsed());
+    assert_eq!(upstream_calls(&s.server).await, 1);
+}
+
+/// The leg the timed-out read left behind fills the cache: the next read,
+/// once Riot has answered, is a `HIT` with the new body and no second call.
+#[tokio::test]
+async fn a_refresh_that_answers_after_the_wait_fills_the_cache_for_the_next_read() {
+    let s = setup(&EXPIRING).await;
+    let stored_at = store_then_expire(&s).await;
+    mount(
+        &s.server,
+        SUMMONER,
+        ok(r#"{"v":2}"#).set_delay(Duration::from_secs(3)),
+    )
+    .await;
+    let asked = Instant::now();
+    let first = s
+        .fetcher
+        .fetch_or_stored(summoner(Platform::Euw1), INTERACTIVE)
+        .await
+        .unwrap();
+    assert_stored_copy(&first, stored_at);
+    let waited = asked.elapsed();
+    let limit = s.fetcher.stored_wait(INTERACTIVE);
+    assert!(
+        waited >= limit && waited < limit + Duration::from_millis(500),
+        "{waited:?}"
+    );
+    // Riot answers at about 3 s and the copy it stores is fresh for 1 s:
+    // read once the leg has ended, not at a fixed time.
+    leg_ended(&s).await;
+    let next = s
+        .fetcher
+        .fetch_or_stored(summoner(Platform::Euw1), INTERACTIVE)
+        .await
+        .unwrap();
+    assert_eq!(
+        (next.x_cache, next.body.as_ref()),
+        (XCache::Hit, br#"{"v":2}"#.as_ref())
+    );
+    assert_eq!(upstream_calls(&s.server).await, 1);
+}
+
+/// A caller that waits for the archive write (`await_store`) waits for the
+/// whole fetch, stored copy or not, and gets Riot's answer.
+#[tokio::test]
+async fn await_store_waits_for_riot_past_the_stored_copy_wait() {
+    let s = setup(&EXPIRING).await;
+    store_then_expire(&s).await;
+    mount(
+        &s.server,
+        SUMMONER,
+        ok(r#"{"v":2}"#).set_delay(Duration::from_secs(3)),
+    )
+    .await;
+    let asked = Instant::now();
+    let r = s
+        .fetcher
+        .fetch_or_stored(
+            summoner(Platform::Euw1),
+            FetchOptions {
+                await_store: true,
+                ..INTERACTIVE
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        (r.x_cache, r.body.as_ref()),
+        (XCache::Miss, br#"{"v":2}"#.as_ref())
+    );
+    assert!(asked.elapsed() >= Duration::from_secs(3));
+}
+
+/// A forced refresh of a copy still inside its soft TTL, with Riot silent:
+/// the copy, `STALE`, at the forced limit.
+#[tokio::test]
+async fn a_forced_refresh_of_a_fresh_copy_with_riot_silent_serves_it_at_the_limit() {
+    let s = setup_forced(&[]).await;
+    mount(&s.server, SUMMONER, ok(r#"{"v":1}"#)).await;
+    s.fetcher
+        .fetch(summoner(Platform::Euw1), INTERACTIVE)
+        .await
+        .unwrap();
+    s.server.reset().await;
+    mount(
+        &s.server,
+        SUMMONER,
+        ok(r#"{"v":2}"#).set_delay(Duration::from_secs(60)),
+    )
+    .await;
+    let limit = s.fetcher.stored_wait(BYPASS);
+    let asked = Instant::now();
+    let r = tokio::time::timeout(
+        limit + Duration::from_secs(3),
+        s.fetcher.fetch_or_stored(summoner(Platform::Euw1), BYPASS),
+    )
+    .await
+    .expect("the copy at the limit")
+    .unwrap();
+    assert_eq!(
+        (r.x_cache, r.body.as_ref()),
+        (XCache::Stale, br#"{"v":1}"#.as_ref())
+    );
+    assert!(asked.elapsed() >= limit, "{:?}", asked.elapsed());
+    assert_eq!(upstream_calls(&s.server).await, 1);
+}
+
+/// The forced wait, and the wait with nothing stored, are never shorter than
+/// the ordinary one: with `CLIENT_WAIT_BUDGET_MS` above 19 750 both are the
+/// budget plus the margin, so a fetch still inside the limiter's budget is
+/// not failed at 20 s (review of #285).
+#[tokio::test]
+async fn a_budget_above_the_forced_wait_raises_it() {
+    let s = setup(&[("CLIENT_WAIT_BUDGET_MS", "25000")]).await;
+    let raised = Duration::from_millis(25_250);
+    assert_eq!(s.fetcher.stored_wait(INTERACTIVE), raised);
+    assert_eq!(s.fetcher.stored_wait(BYPASS), raised);
+    assert_eq!(s.fetcher.unstored_wait(INTERACTIVE), raised);
+    assert_eq!(s.fetcher.unstored_wait(BYPASS), raised);
+    let s = setup(&[("CLIENT_WAIT_BUDGET_MS", "19000")]).await;
+    let forced = riot_proxy::fetcher::FORCED_REFRESH_WAIT;
+    assert_eq!(s.fetcher.stored_wait(BYPASS), forced);
+    assert_eq!(s.fetcher.unstored_wait(INTERACTIVE), forced);
+    assert_eq!(s.fetcher.unstored_wait(BYPASS), forced);
+    let s = setup(&[]).await;
+    assert_eq!(s.fetcher.unstored_wait(INTERACTIVE), forced, "the default budget");
+}
+
+/// Until the single-flight leg behind a timed-out read has ended (stored
+/// Riot's answer), for 10 s at most.
+async fn leg_ended(s: &Setup) {
+    for _ in 0..200 {
+        if s.fetcher.inflight_count() == 0 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("the leg was still in flight after 10 s");
+}
+
+/// A copy purged while the read waited is not served (owner decision of
+/// 2026-11-17): the read fails `UPSTREAM_ERROR` at the wait, as one with
+/// nothing stored from the start does, instead of serving the copy it read
+/// before the wait.
+#[tokio::test]
+async fn a_copy_purged_during_the_wait_fails_the_read() {
+    let s = setup(&EXPIRING).await;
+    store_then_expire(&s).await;
+    mount(
+        &s.server,
+        SUMMONER,
+        ok(r#"{"v":2}"#).set_delay(Duration::from_secs(60)),
+    )
+    .await;
+    let fetcher = s.fetcher.clone();
+    let read = tokio::spawn(async move {
+        fetcher
+            .fetch_or_stored(summoner(Platform::Euw1), INTERACTIVE)
+            .await
+    });
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let purged = s
+        .fetcher
+        .cache()
+        .l1
+        .invalidate_where(|k| k.contains("summoner"))
+        .await;
+    assert_eq!(purged.len(), 1, "{purged:?}");
+    let err = tokio::time::timeout(Duration::from_secs(5), read)
+        .await
+        .expect("an answer at the wait")
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(err.api.code.as_str(), "UPSTREAM_ERROR");
+    assert_eq!(err.x_cache, None, "not a stored copy");
+}
+
+/// `await_store` waits for the whole fetch with nothing stored too: Riot's
+/// answer after the bound is returned, not the bound's `UPSTREAM_ERROR`
+/// (the `await_store` arm of `fetch_or_stored`).
+#[tokio::test]
+async fn await_store_with_nothing_stored_gets_an_answer_after_the_bound() {
+    let s = setup_forced(&EXPIRING).await;
+    let late = s.fetcher.unstored_wait(INTERACTIVE) + Duration::from_secs(1);
+    mount(&s.server, SUMMONER, ok(r#"{"v":1}"#).set_delay(late)).await;
+    let asked = Instant::now();
+    let r = s
+        .fetcher
+        .fetch_or_stored(
+            summoner(Platform::Euw1),
+            FetchOptions {
+                await_store: true,
+                ..INTERACTIVE
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        (r.x_cache, r.body.as_ref()),
+        (XCache::Miss, br#"{"v":1}"#.as_ref())
+    );
+    assert!(asked.elapsed() >= late, "{:?}", asked.elapsed());
+}
+
+/// The leg a give-up leaves behind goes on and fills the cache: Riot answers
+/// just after the bound, the read has failed at it, and the next read is a
+/// `HIT` with one call to Riot.
+#[tokio::test]
+async fn the_leg_after_a_give_up_fills_the_cache() {
+    let s = setup_forced(&EXPIRING).await;
+    let bound = s.fetcher.unstored_wait(INTERACTIVE);
+    mount(
+        &s.server,
+        SUMMONER,
+        ok(r#"{"v":1}"#).set_delay(bound + Duration::from_millis(500)),
+    )
+    .await;
+    let asked = Instant::now();
+    let err = s
+        .fetcher
+        .fetch_or_stored(summoner(Platform::Euw1), INTERACTIVE)
+        .await
+        .unwrap_err();
+    assert_eq!(err.api.code.as_str(), "UPSTREAM_ERROR");
+    let waited = asked.elapsed();
+    assert!(
+        waited >= bound && waited < bound + Duration::from_millis(500),
+        "{waited:?}"
+    );
+    leg_ended(&s).await;
+    let next = s
+        .fetcher
+        .fetch_or_stored(summoner(Platform::Euw1), INTERACTIVE)
+        .await
+        .unwrap();
+    assert_eq!(
+        (next.x_cache, next.body.as_ref()),
+        (XCache::Hit, br#"{"v":1}"#.as_ref())
+    );
+    assert_eq!(upstream_calls(&s.server).await, 1);
 }

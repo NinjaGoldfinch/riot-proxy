@@ -409,6 +409,7 @@ fn fetcher(config: &Config, limiter: &Arc<Limiter>) -> Fetcher {
         interactive_budget: Duration::from_millis(config.client_wait_budget_ms),
         job_budget: Duration::from_millis(config.job_yield_budget_ms),
         swr: config.stale_while_revalidate,
+        forced_wait: crate::fetcher::FORCED_REFRESH_WAIT,
     })
 }
 

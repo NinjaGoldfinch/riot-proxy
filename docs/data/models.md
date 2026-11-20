@@ -9,13 +9,13 @@ The in-code types riot-proxy moves data through: the Riot request model, cache e
 | Field | Type | Source | Notes |
 |---|---|---|---|
 | `endpoint` | `&'static Endpoint` | registry `src/riot/endpoints.rs:125-335` | one of 18 ids, e.g. `match.byId` |
-| `target` | `Target` | caller's routing value | `Platform(oc1)` or `Region(sea)` (`endpoints.rs:348-368`); `host()` gives `oc1.api.riotgames.com`, `scope()` the limiter's app scope |
+| `target` | `Target` | caller's routing value | `Platform(oc1)` or `Region(sea)` (`endpoints.rs:349-369`); `host()` gives `oc1.api.riotgames.com`, `scope()` the limiter's app scope |
 | `path` | `String` | `Endpoint::path_template` filled in order | percent-encoded |
 | `params` | `Vec<String>` | path values as they appear in `path` | joined into the cache key |
 | `query` | `Vec<(&str, String)>` | only names in `Endpoint::query` | sorted and hashed into the cache key |
 | `pick_cluster` | `bool` | account-v1 only | the fetcher picks the first free cluster (ADR-066) |
 
-`Endpoint` (`endpoints.rs:41-69`): `id`, `host: HostKind` (`Platform`, `Regional`, `Account`; `endpoints.rs:19-27`), `path_template`, `query`, `method_scope_key` (always the id), `override_key` (`CACHE_TTL_OVERRIDES` group), `soft_ttl: Option<Duration>` (`None` = immutable, archived forever), `persist_l2`, `keep_expired` (a 200 kept a day past its hard TTL for the player composites, AVL-08), `stale_multiplier` (4, or 2 for `status.platformData` via `.stale_x(2)`, SITE-13), `immutable`, `negative: NegTtl` (`None`, `Default`, `Account`). `Ttls` (`endpoints.rs:494-501`) is the registry resolved under the running config: `soft`, `hard` (soft × `stale_multiplier` with stale-while-revalidate, `endpoints.rs:528-535`), `negative`.
+`Endpoint` (`endpoints.rs:41-69`): `id`, `host: HostKind` (`Platform`, `Regional`, `Account`; `endpoints.rs:19-27`), `path_template`, `query`, `method_scope_key` (always the id), `override_key` (`CACHE_TTL_OVERRIDES` group), `soft_ttl: Option<Duration>` (`None` = immutable, archived forever), `persist_l2`, `keep_expired` (a 200 kept a day past its hard TTL for the player composites, AVL-08), `stale_multiplier` (4, or 2 for `status.platformData` via `.stale_x(2)`, SITE-13), `immutable`, `negative: NegTtl` (`None`, `Default`, `Account`). `Ttls` (`endpoints.rs:495-502`) is the registry resolved under the running config: `soft`, `hard` (soft × `stale_multiplier` with stale-while-revalidate, `endpoints.rs:529-536`), `negative`.
 
 ## Cache entry
 

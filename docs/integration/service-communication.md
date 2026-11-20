@@ -47,7 +47,7 @@ Direction: site server to proxy, over loopback in production (`PROXY_URL=http://
 
 Sources: `ninjagoldfinch-lol/src/lib/server/{profile,patch,static-data,match,champions,champion-page}.ts`, cited line by line in `docs/_meta/scratch/siblings.md` §1.5.
 
-Timeouts and errors on the site's side (`origin/main`): 5 s for analytics and static calls, 30 s otherwise, then a 503; proxy responses are collapsed to three visitor states: 404 for `NOT_FOUND` and `VALIDATION`, 429 with `retryAfter` for `QUOTA_EXCEEDED` and `RATE_LIMITED`, 503 for everything else (`src/lib/server/errors.ts:16-33`, `proxy.ts:55-87`). The site reads `X-Request-Id` on failure and `Retry-After` on 429, logs `X-Cache` for slow analytics calls, and ignores `X-RateLimit-*`, `X-Cache-Age` and `ETag`.
+Timeouts and errors on the site's side (`origin/main`): 5 s for analytics and static calls, 30 s otherwise, then a 503 (a Refresh, call 1 with `?refresh=true`, can take up to 24.5 s of those 30 s when Riot is slow, and may come back `refreshed: true` with stale parts and `refreshing: true`; a profile whose Riot ID lookup has nothing stored can take 20 s per such stage; AVL-09, AVL-14); proxy responses are collapsed to three visitor states: 404 for `NOT_FOUND` and `VALIDATION`, 429 with `retryAfter` for `QUOTA_EXCEEDED` and `RATE_LIMITED`, 503 for everything else (`src/lib/server/errors.ts:16-33`, `proxy.ts:55-87`). The site reads `X-Request-Id` on failure and `Retry-After` on 429, logs `X-Cache` for slow analytics calls, and ignores `X-RateLimit-*`, `X-Cache-Age` and `ETag`.
 
 The following sequence shows the profile page, the most common interaction.
 
@@ -105,4 +105,4 @@ The dashboard at `https://admin.ninjagoldfinch.lol/dashboard` (Cloudflare Access
 
 ---
 **Sources:** `docs/_meta/scratch/siblings.md` §1.3-§1.5, §2.2, §4, `ninjagoldfinch-lol/src/lib/server/proxy.ts:L28-L87`, `ninjagoldfinch-lol/src/lib/server/errors.ts:L16-L33`, `src/riot/client.rs:L25-L29,L389-L397`, `src/jobs/ddragon.rs:L22-L32,L260-L261`, `deploy/README.md`, `ninja-monitor/README.md:L50-L81`
-**Last verified:** 2026-11-17 against commit `9ca718a`
+**Last verified:** 2026-11-18 against commit `101740c`

@@ -26,7 +26,10 @@
 //! the upstream leg fails for any reason but Riot's 404, or has not answered
 //! within the caller's budget and [`STORED_MARGIN`], or within
 //! [`FORCED_REFRESH_WAIT`] for a forced refresh (AVL-09): the leg goes on
-//! behind the answer. The passthrough routes keep v1's rule.
+//! behind the answer. With nothing stored, a fetch that has not answered
+//! within [`FORCED_REFRESH_WAIT`] (or the ordinary wait, when longer) fails
+//! `UPSTREAM_ERROR` and its leg goes on too (AVL-14). The passthrough routes
+//! keep v1's rule.
 //!
 //! The status poller (SITE-13, ADR-219) reads with [`FetchOptions::fresh_only`]
 //! and its own limiter [`FetchOptions::budget`]: past the cache read, writing
@@ -79,7 +82,12 @@ pub const STORED_MARGIN: Duration = Duration::from_millis(250);
 /// it; short enough that the by-Riot-ID profile answers inside the site's
 /// 30 s. Its account and platform lookups are never forced and wait at most
 /// 2.25 s each for a stored copy, so the three stages take at most
-/// 2.25 + 2.25 + 20 = 24.5 s.
+/// 2.25 + 2.25 + 20 = 24.5 s. Also how long any read with nothing stored
+/// waits for its fetch before it fails `UPSTREAM_ERROR` (AVL-14,
+/// [`Fetcher::unstored_wait`]): a lookup stage with nothing stored can take
+/// 20 s, so a by-Riot-ID profile whose account copies are gone can pass the
+/// site's 30 s, where before it waited for the whole fetch. The fetcher reads
+/// it from [`FetcherParts::forced_wait`], which only tests shorten.
 pub const FORCED_REFRESH_WAIT: Duration = Duration::from_secs(20);
 
 /// `X-Cache` (v1's four plus design 03's `ARCHIVE` and `BYPASS`; ADR-022, ADR-031).
@@ -358,6 +366,7 @@ struct Inner {
     interactive_budget: Duration,
     job_budget: Duration,
     swr: bool,
+    forced_wait: Duration,
 }
 
 #[derive(Clone)]
@@ -388,6 +397,10 @@ pub struct FetcherParts {
     pub job_budget: Duration,
     /// `STALE_WHILE_REVALIDATE`
     pub swr: bool,
+    /// How long [`Fetcher::fetch_or_stored`] waits for a forced refresh, or
+    /// for a fetch with nothing stored, at least: [`FORCED_REFRESH_WAIT`].
+    /// Only tests shorten it.
+    pub forced_wait: Duration,
 }
 
 impl Fetcher {
@@ -402,6 +415,7 @@ impl Fetcher {
             interactive_budget,
             job_budget,
             swr,
+            forced_wait,
         } = parts;
         Self {
             inner: Arc::new(Inner {
@@ -414,6 +428,7 @@ impl Fetcher {
                 interactive_budget,
                 job_budget,
                 swr,
+                forced_wait,
             }),
             flight: Arc::new(SingleFlight::new()),
         }
@@ -582,8 +597,14 @@ impl Fetcher {
     /// A forced refresh (`bypass`, `?refresh=true`) is bounded too, at
     /// [`FORCED_REFRESH_WAIT`], longer than an ordinary read's wait so that
     /// a refresh behind the limiter and a slow answer still gets Riot's
-    /// answer. With nothing stored the fetch is waited for as before, and so
-    /// is a caller that asked to wait for the archive write (`await_store`).
+    /// answer. With nothing stored the fetch is waited for up to
+    /// [`Fetcher::unstored_wait`] (20 s, or the ordinary wait when that is
+    /// longer) and then fails `UPSTREAM_ERROR`, so one part with nothing to
+    /// fall back on does not hold a whole profile for the fetch's 76 s
+    /// (AVL-14, owner decision of 2026-11-17); the leg goes on behind it. A
+    /// copy purged during the wait fails the read the same way (owner
+    /// decision of 2026-11-17). A caller that asked to wait for the archive
+    /// write (`await_store`) waits for the whole fetch, as before.
     pub async fn fetch_or_stored(
         &self,
         req: RiotRequest,
@@ -597,21 +618,49 @@ impl Fetcher {
             self.stored_copy(&key).await
         };
         let fetched = match stored {
-            Some(copy) => {
+            Some(_) => {
                 let wait = self.stored_wait(opts);
                 match tokio::time::timeout(wait, self.fetch(req, opts)).await {
                     Ok(fetched) => fetched,
                     Err(_) => {
+                        let waited_ms = u64::try_from(wait.as_millis()).unwrap_or(u64::MAX);
+                        // Read again, after the wait (ADR-212's rule): a newer
+                        // copy is served, and an entry purged meanwhile is not:
+                        // with nothing stored now the read fails, as one with
+                        // nothing stored from the start does (owner decision
+                        // of 2026-11-17).
+                        let Some(copy) = self.stored_copy(&key).await else {
+                            tracing::warn!(
+                                method = endpoint,
+                                waited_ms,
+                                "nothing stored and the fetch has not answered; giving up"
+                            );
+                            return Err(ApiError::upstream().into());
+                        };
                         tracing::warn!(
                             method = endpoint,
-                            waited_ms = u64::try_from(wait.as_millis()).unwrap_or(u64::MAX),
+                            waited_ms,
                             "serving the stored copy: the refresh has not answered"
                         );
                         return Ok(served(&copy, XCache::Stale, Instant::now()));
                     }
                 }
             }
-            None => self.fetch(req, opts).await,
+            None if opts.await_store => self.fetch(req, opts).await,
+            None => {
+                let wait = self.unstored_wait(opts);
+                match tokio::time::timeout(wait, self.fetch(req, opts)).await {
+                    Ok(fetched) => fetched,
+                    Err(_) => {
+                        tracing::warn!(
+                            method = endpoint,
+                            waited_ms = u64::try_from(wait.as_millis()).unwrap_or(u64::MAX),
+                            "nothing stored and the fetch has not answered; giving up"
+                        );
+                        return Err(ApiError::upstream().into());
+                    }
+                }
+            }
         };
         let err = match fetched {
             Ok(r) => return Ok(r),
@@ -642,10 +691,19 @@ impl Fetcher {
     pub fn stored_wait(&self, opts: FetchOptions) -> Duration {
         let ordinary = self.budget_for(opts) + STORED_MARGIN;
         if opts.bypass {
-            ordinary.max(FORCED_REFRESH_WAIT)
+            ordinary.max(self.inner.forced_wait)
         } else {
             ordinary
         }
+    }
+
+    /// How long [`Fetcher::fetch_or_stored`] waits for a fetch with `opts`
+    /// when nothing is stored, before it fails `UPSTREAM_ERROR` (AVL-14):
+    /// [`FORCED_REFRESH_WAIT`], or the ordinary wait when that is longer, so
+    /// a `CLIENT_WAIT_BUDGET_MS` above 20 s does not fail a fetch still
+    /// inside the limiter's budget.
+    pub fn unstored_wait(&self, opts: FetchOptions) -> Duration {
+        (self.budget_for(opts) + STORED_MARGIN).max(self.inner.forced_wait)
     }
 
     /// What a fetch with `opts` may wait for the limiter:
