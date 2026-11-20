@@ -285,9 +285,10 @@ pub const ENDPOINTS: &[Endpoint] = &[
         false,
         NoNeg,
     ),
-    // v1 cached it 60 s (hard 240 s). The status poller reads every platform
-    // every `STATUS_POLL_INTERVAL_S` (300) and writes through, so the route
-    // is answered from cache (owner, SITE-13, ADR-219).
+    // v1 cached it 60 s (hard 240 s). The status poller reads every polled
+    // platform every `STATUS_POLL_INTERVAL_S` (240 by default, SITE-17) and
+    // writes through, so the route is answered from cache (owner, SITE-13,
+    // ADR-219).
     ep(
         "status.platformData",
         OnPlatform,

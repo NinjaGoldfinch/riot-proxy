@@ -24,6 +24,8 @@
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, UNIX_EPOCH};
 
 use rusqlite::OptionalExtension;
@@ -273,15 +275,26 @@ pub async fn last_run(db: &Db, key_scope: &str, tick: &Tick) -> Result<Option<i6
 
 /// When the newest daily backup in `dir` was written, unix ms: the file's
 /// modification time, which is the copy's last write (the rename into place
-/// keeps it). `None` when there is no backup or it cannot be read.
-pub async fn newest_backup_ms(dir: &Path) -> Option<i64> {
-    let newest = crate::jobs::maintenance::backups(dir)
+/// keeps it). `Ok(None)` when there is no backup (or no directory yet); an
+/// error when the directory cannot be listed or the newest file's time
+/// cannot be read, which [`first_fire`] reports rather than take for "no
+/// backup" (review of #278). An error about the newest file names it, so a
+/// dangling link does not read as a missing directory (review of #286).
+pub async fn newest_backup_ms(dir: &Path) -> std::io::Result<Option<i64>> {
+    let Some(newest) = crate::jobs::maintenance::backups(dir).await?.into_iter().next() else {
+        return Ok(None);
+    };
+    let named = |e: std::io::Error| std::io::Error::new(e.kind(), format!("{}: {e}", newest.display()));
+    let written = tokio::fs::metadata(&newest)
         .await
-        .ok()?
-        .into_iter()
-        .next()?;
-    let written = tokio::fs::metadata(&newest).await.ok()?.modified().ok()?;
-    i64::try_from(written.duration_since(UNIX_EPOCH).ok()?.as_millis()).ok()
+        .map_err(named)?
+        .modified()
+        .map_err(named)?;
+    let ms = written
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| std::io::Error::other(format!("{} was written before 1970", newest.display())))?
+        .as_millis();
+    Ok(Some(i64::try_from(ms).unwrap_or(i64::MAX)))
 }
 
 /// What the `maintenance` tick counts from when backups are on (AVL-13): the
@@ -332,7 +345,19 @@ pub async fn first_fire(
     let (kinds::MAINTENANCE, Some(dir)) = (tick.kind, backups) else {
         return first_delay(last, tick.period, now_ms);
     };
-    let newest_backup = newest_backup_ms(dir).await;
+    let newest_backup = match newest_backup_ms(dir).await {
+        Ok(newest) => newest,
+        Err(e) => {
+            // Not "no backup": say so, then fire, as an unreadable last run does.
+            tracing::warn!(
+                kind = tick.kind,
+                dir = %dir.display(),
+                error = %e,
+                "backup directory could not be read; maintenance is due now"
+            );
+            return Duration::ZERO;
+        }
+    };
     let due = first_delay(backup_anchor(last, newest_backup), tick.period, now_ms);
     if due.is_zero() && !first_delay(last, tick.period, now_ms).is_zero() {
         // Say why a restart runs maintenance inside a day of its last run.
@@ -380,6 +405,24 @@ pub async fn fire(scheduler: &Scheduler, key_scope: &str, tick: &Tick) -> Result
 pub struct Ticks {
     stop: watch::Sender<bool>,
     set: JoinSet<()>,
+    /// Loops reading their last run or firing ([`Ticks::busy`]).
+    busy: Arc<AtomicUsize>,
+}
+
+/// Counts one loop as at work in [`Ticks::busy`] while it lives.
+struct Busy(Arc<AtomicUsize>);
+
+impl Busy {
+    fn new(count: &Arc<AtomicUsize>) -> Self {
+        count.fetch_add(1, Ordering::SeqCst);
+        Self(Arc::clone(count))
+    }
+}
+
+impl Drop for Busy {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 impl Ticks {
@@ -412,12 +455,17 @@ impl Ticks {
     ) -> Self {
         let (stop, stopped) = watch::channel(false);
         let mut set = JoinSet::new();
+        let busy = Arc::new(AtomicUsize::new(0));
         let boot = Clock::now();
         for tick in loops(&schedule, &ladders) {
             let (scheduler, scope, stopped) = (scheduler.clone(), key_scope.to_string(), stopped.clone());
             let backups = backups.clone();
+            // The boot guard is made here, before `spawn`: made inside the
+            // task, `busy` would read 0 until the task is first polled.
+            let (reading, count) = (Busy::new(&busy), Arc::clone(&busy));
             set.spawn(async move {
                 let due = first_fire(scheduler.db(), &scope, &tick, boot.unix_ms, backups.as_deref()).await;
+                drop(reading);
                 if !due.is_zero() {
                     match tick.target {
                         Target::Kind => {
@@ -433,8 +481,13 @@ impl Ticks {
                 }
                 let first = due.saturating_sub(boot.instant.elapsed());
                 every(tick.period, first, stopped, move || {
-                    let (scheduler, scope, tick) = (scheduler.clone(), scope.clone(), tick.clone());
+                    let (scheduler, scope, tick, count) =
+                        (scheduler.clone(), scope.clone(), tick.clone(), Arc::clone(&count));
                     async move {
+                        // The fire guard is made at the fire's first poll,
+                        // before it awaits anything, and lives until its
+                        // enqueue has landed.
+                        let _firing = Busy::new(&count);
                         match fire(&scheduler, &scope, &tick).await {
                             Ok(n) => tracing::debug!(tick = tick.kind, key = %tick.key(), queued = n, "tick"),
                             Err(e) => {
@@ -446,7 +499,14 @@ impl Ticks {
                 .await;
             });
         }
-        Self { stop, set }
+        Self { stop, set, busy }
+    }
+
+    /// How many loops are reading their last run or firing now: 0 when
+    /// every loop waits for its next tick. Only the tick tests' `settle`
+    /// reads it.
+    pub fn busy(&self) -> usize {
+        self.busy.load(Ordering::SeqCst)
     }
 
     pub async fn shutdown(mut self) {

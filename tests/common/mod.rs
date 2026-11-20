@@ -36,6 +36,17 @@ pub fn app() -> (tempfile::TempDir, AppState, Router) {
 
 /// A full app whose Riot client talks to `upstream` (a wiremock URI).
 pub fn app_with(env: &[(&str, &str)], upstream: &str) -> (tempfile::TempDir, AppState, Router) {
+    app_with_wait(env, upstream, riot_proxy::fetcher::FORCED_REFRESH_WAIT)
+}
+
+/// As [`app_with`], with the fetcher's forced wait (`FetcherParts::forced_wait`,
+/// 20 s in production) set to `forced_wait`, so a test of the bound need not
+/// wait 20 s.
+pub fn app_with_wait(
+    env: &[(&str, &str)],
+    upstream: &str,
+    forced_wait: std::time::Duration,
+) -> (tempfile::TempDir, AppState, Router) {
     let dir = tempfile::tempdir().expect("tempdir");
     let db = Db::open(&dir.path().join("riot-proxy.db"), 2).expect("db");
     let config = config(env);
@@ -50,11 +61,12 @@ pub fn app_with(env: &[(&str, &str)], upstream: &str) -> (tempfile::TempDir, App
         riot_proxy::cache::keys::KeyScope::for_config(&config),
     )
     .queue_missing_halves(jobs.clone(), config.archive_timelines);
-    let fetcher = fetcher(
+    let fetcher = fetcher_with(
         &config,
         upstream,
         std::sync::Arc::clone(&limiter),
         Some(std::sync::Arc::new(archive)),
+        forced_wait,
     );
     let auth = std::sync::Arc::new(riot_proxy::http::auth::Auth::new(&config, db.clone()));
     let hub = riot_proxy::ws::Hub::new();
@@ -153,6 +165,23 @@ pub fn fetcher(
     limiter: std::sync::Arc<riot_proxy::riot::limiter::Limiter>,
     archive: Option<std::sync::Arc<dyn riot_proxy::fetcher::Archive>>,
 ) -> riot_proxy::fetcher::Fetcher {
+    fetcher_with(
+        config,
+        upstream,
+        limiter,
+        archive,
+        riot_proxy::fetcher::FORCED_REFRESH_WAIT,
+    )
+}
+
+/// As [`fetcher`], with `FetcherParts::forced_wait` set to `forced_wait`.
+pub fn fetcher_with(
+    config: &Config,
+    upstream: &str,
+    limiter: std::sync::Arc<riot_proxy::riot::limiter::Limiter>,
+    archive: Option<std::sync::Arc<dyn riot_proxy::fetcher::Archive>>,
+    forced_wait: std::time::Duration,
+) -> riot_proxy::fetcher::Fetcher {
     use riot_proxy::fetcher::{Fetcher, FetcherParts, NoArchive};
     Fetcher::new(FetcherParts {
         client: riot_proxy::riot::client::RiotClient::with_base_url(config, upstream).expect("client"),
@@ -167,5 +196,6 @@ pub fn fetcher(
         interactive_budget: std::time::Duration::from_millis(config.client_wait_budget_ms),
         job_budget: std::time::Duration::from_millis(config.job_yield_budget_ms),
         swr: config.stale_while_revalidate,
+        forced_wait,
     })
 }

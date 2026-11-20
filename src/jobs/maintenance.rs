@@ -178,6 +178,13 @@ impl Maintenance {
         }
     }
 
+    /// The directory the `maintenance` tick counts its backups in (AVL-13):
+    /// this job's own, when it takes backups (`BACKUP_KEEP` above 0), so the
+    /// tick can never look somewhere the job does not write (review of #278).
+    pub fn tick_backups(&self) -> Option<PathBuf> {
+        (self.keep > 0).then(|| self.backup_dir.clone())
+    }
+
     /// Queue `archive:offload` (OBJ-03) and `archive:index-snapshot`
     /// (OBJ-04) on `queue` after every run.
     #[must_use]

@@ -98,13 +98,21 @@ struct Booted {
 }
 
 async fn boot(data_dir: &std::path::Path, riot_url: &str) -> Booted {
+    boot_with(data_dir, riot_url, &[]).await
+}
+
+/// [`boot`] with more config.
+async fn boot_with(data_dir: &std::path::Path, riot_url: &str, more: &[(&str, &str)]) -> Booted {
     let port = free_port();
-    let config = common::config(&[
+    let port_s = port.to_string();
+    let mut env = vec![
         ("DATA_DIR", data_dir.to_str().unwrap()),
-        ("PORT", &port.to_string()),
+        ("PORT", port_s.as_str()),
         ("HOST", "127.0.0.1"),
         ("LOG_LEVEL", "warn"),
-    ]);
+    ];
+    env.extend_from_slice(more);
+    let config = common::config(&env);
     let hold = CatchUpHold::default();
     let stop = Arc::new(Notify::new());
     // Installed before `serve` logs anything.
@@ -254,5 +262,72 @@ async fn shutdown_during_the_catch_up_returns_promptly() {
                 && l.contains("reason=shutdown signal")
         }),
         "the stop was logged with reason=shutdown signal: {since:?}"
+    );
+}
+
+/// `serve` runs the status poller (SITE-13): a round at boot reads every
+/// default platform's `platform-data`, and shutdown stops it (review of #282).
+/// `oc1`'s answer is held for 3 s and lists an incident: a poller still
+/// running after shutdown would write its recording when that read lands
+/// (review of #288); the next round is 240 s away, so counting reads alone
+/// cannot tell.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn serve_spawns_the_status_poller_and_shutdown_stops_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let upstream = MockServer::start().await;
+    let held = Duration::from_secs(3);
+    wiremock::Mock::given(wiremock::matchers::path("/lol/status/v4/platform-data"))
+        .and(wiremock::matchers::header("x-riot-host", "oc1.api.riotgames.com"))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200)
+                .set_body_string(
+                    r#"{"id":"OC1","name":"Oceania","locales":["en_US"],"maintenances":[],"incidents":[{"id":42,"titles":[]}]}"#,
+                )
+                .set_delay(held),
+        )
+        .mount(&upstream)
+        .await;
+    let recordings = dir.path().join("recordings");
+    let reads = || {
+        let upstream = &upstream;
+        async move {
+            upstream
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .filter(|r| r.url.path() == "/lol/status/v4/platform-data")
+                .count()
+        }
+    };
+    let b = boot_with(
+        dir.path(),
+        &upstream.uri(),
+        &[("STATUS_RECORDINGS_DIR", recordings.to_str().unwrap())],
+    )
+    .await;
+    let want = riot_proxy::config::STATUS_POLL_DEFAULT.len();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while reads().await < want {
+        assert!(
+            Instant::now() < deadline,
+            "the boot round read {} of {want}",
+            reads().await
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    b.hold.release.notify_one();
+    b.stop.notify_one();
+    tokio::time::timeout(Duration::from_secs(30), b.task)
+        .await
+        .expect("serve returns after shutdown")
+        .unwrap()
+        .unwrap();
+    let after = reads().await;
+    tokio::time::sleep(held + Duration::from_secs(1)).await;
+    assert_eq!(reads().await, after, "nothing reads after shutdown");
+    assert!(
+        !recordings.join("oc1-incident-42.json").exists(),
+        "the poller settled oc1's read after shutdown"
     );
 }

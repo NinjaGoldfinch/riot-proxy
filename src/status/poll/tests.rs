@@ -259,7 +259,7 @@ async fn a_recording_is_written_only_with_an_incident_once_per_id_and_has_no_key
     let out = dir.path().join("recordings");
     let recordings = Recordings {
         dir: out.clone(),
-        key: KEY.into(),
+        key: Secret::new(KEY),
     };
     let leaked = format!("a title quoting {KEY}");
     let (script, _calls) = Script::new(vec![
@@ -409,6 +409,7 @@ fn fetcher(config: &Config, limiter: &Arc<Limiter>) -> Fetcher {
         interactive_budget: Duration::from_millis(config.client_wait_budget_ms),
         job_budget: Duration::from_millis(config.job_yield_budget_ms),
         swr: config.stale_while_revalidate,
+        forced_wait: crate::fetcher::FORCED_REFRESH_WAIT,
     })
 }
 
@@ -416,9 +417,9 @@ fn request(platform: Platform) -> RiotRequest {
     RiotRequest::new(Endpoint::by_id(METHOD).unwrap(), Target::Platform(platform), &[]).unwrap()
 }
 
-/// Through the real fetcher: no limiter room within a second is a skip,
-/// even with a copy in L1 (it is never served in place of Riot's answer);
-/// room inside the second is a read, here one nothing answers.
+/// Through the real fetcher: no limiter room within [`ROOM`] (30 s) is a
+/// skip, even with a copy in L1 (it is never served in place of Riot's
+/// answer); room inside it is a read, here one nothing answers.
 #[tokio::test(start_paused = true)]
 async fn the_fetcher_skips_a_platform_without_room_within_a_second() {
     let config = config();
@@ -432,7 +433,7 @@ async fn the_fetcher_skips_a_platform_without_room_within_a_second() {
         .await
         .unwrap();
 
-    limiter.freeze("oc1", Duration::from_secs(30), RateLimitType::Service);
+    limiter.freeze("oc1", Duration::from_secs(90), RateLimitType::Service);
     let started = Instant::now();
     assert_eq!(f.read(req.clone()).await, Read::Skipped);
     assert!(started.elapsed() <= ROOM, "{:?}", started.elapsed());
@@ -446,6 +447,256 @@ async fn the_fetcher_skips_a_platform_without_room_within_a_second() {
         started.elapsed() >= Duration::from_millis(500),
         "it waited for room"
     );
+}
+
+// ── Review of #282 (SITE-17) ─────────────────────────────────────────────────
+
+/// What `f` logged at `info` and above on this thread.
+async fn logged<F: std::future::Future>(f: F) -> (F::Output, String) {
+    use tracing_subscriber::Layer as _;
+    use tracing_subscriber::layer::SubscriberExt as _;
+    #[derive(Clone, Default)]
+    struct Buf(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Buf {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let buf = Buf::default();
+    let writer = buf.clone();
+    let subscriber = tracing_subscriber::registry().with(
+        tracing_subscriber::fmt::layer()
+            .with_writer(move || writer.clone())
+            .with_ansi(false)
+            .with_filter(tracing_subscriber::filter::LevelFilter::INFO),
+    );
+    let out = {
+        let _guard = tracing::subscriber::set_default(subscriber);
+        f.await
+    };
+    let text = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
+    (out, text)
+}
+
+/// The scenario of the review: a consumer's read of a stale copy starts a
+/// bulk refresh, which sleeps in the limiter through a 10-minute freeze.
+/// The poller's read of the same key runs its own call (it once joined that
+/// refresh and waited with it, holding the whole round): no room within
+/// [`ROOM`], so a skip, at once.
+#[tokio::test(start_paused = true)]
+async fn a_read_never_joins_a_refresh_it_did_not_start() {
+    let config = config();
+    let limiter = Arc::new(Limiter::new(0.8));
+    let f = fetcher(&config, &limiter);
+    let req = request(Platform::Kr);
+    let key = crate::cache::keys::cache_key(f.key_scope(), &req);
+    let ttls = crate::riot::endpoints::TtlPolicy::from_config(&config).ttls(req.endpoint);
+    f.cache()
+        .put(&key, req.endpoint, body("kr", &[], "cached"), &ttls)
+        .await
+        .unwrap();
+    tokio::time::advance(Duration::from_secs(301)).await;
+    limiter.freeze("kr", Duration::from_secs(600), RateLimitType::Service);
+
+    let consumer = f.fetch(req.clone(), FetchOptions::INTERACTIVE).await.unwrap();
+    assert_eq!(consumer.x_cache, XCache::Stale, "and a refresh starts");
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(f.inflight_count(), 1, "the refresh, asleep in the limiter");
+
+    let started = Instant::now();
+    let read = tokio::time::timeout(ROOM + Duration::from_secs(1), f.read(req))
+        .await
+        .expect("the read did not wait with the refresh");
+    assert_eq!(read, Read::Skipped);
+    assert!(started.elapsed() <= ROOM, "{:?}", started.elapsed());
+}
+
+/// A reader for which one platform never answers.
+struct Hangs(Platform);
+
+impl Reader for Hangs {
+    fn read(&self, req: RiotRequest) -> BoxFuture<'_, Read> {
+        let Target::Platform(platform) = req.target else {
+            panic!("status is read per platform")
+        };
+        let hang = platform == self.0;
+        Box::pin(async move {
+            if hang {
+                std::future::pending::<()>().await;
+            }
+            ok(platform)
+        })
+    }
+}
+
+/// One platform that accepts and never answers does not hold the others'
+/// rows: each is stored as its read ends, and the silent one is a failure at
+/// the deadline.
+#[tokio::test]
+async fn a_platform_that_never_answers_does_not_hold_the_others_rows() {
+    let (_dir, db) = temp_db();
+    let p = Arc::new(
+        poller(
+            Arc::new(Hangs(Platform::Euw1)),
+            &db,
+            &[Platform::Oc1, Platform::Euw1, Platform::Kr],
+            None,
+        )
+        .with_deadline(Duration::from_secs(2)),
+    );
+    let started = std::time::Instant::now();
+    let round = tokio::spawn({
+        let p = Arc::clone(&p);
+        async move { p.round().await }
+    });
+    let mut others = Vec::new();
+    for _ in 0..150 {
+        others = stored(&db).await.unwrap();
+        if others.len() == 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "the others were stored before the deadline: {:?}",
+        started.elapsed()
+    );
+    let platforms: Vec<Platform> = others.iter().map(|r| r.platform).collect();
+    assert_eq!(platforms, [Platform::Kr, Platform::Oc1]);
+
+    let done = round.await.unwrap();
+    assert!(started.elapsed() >= Duration::from_secs(2));
+    assert_eq!(
+        done,
+        [
+            (Platform::Oc1, Polled::Ok),
+            (Platform::Euw1, Polled::Failed),
+            (Platform::Kr, Polled::Ok)
+        ],
+        "in the configured order"
+    );
+    let rows = stored(&db).await.unwrap();
+    assert_eq!(
+        row(&rows, Platform::Euw1).error.as_deref(),
+        Some("no answer within 2 s")
+    );
+}
+
+/// A platform whose reads start failing is logged once at `warn` with the
+/// error, and once at `info` when it answers again; repeats are quiet.
+#[tokio::test]
+async fn a_change_of_state_is_logged_once_each_way() {
+    let (_dir, db) = temp_db();
+    let (script, _calls) = Script::new(vec![(
+        Platform::Oc1,
+        vec![
+            ok(Platform::Oc1),
+            Read::Failed("UPSTREAM_ERROR: first".into()),
+            Read::Failed("UPSTREAM_ERROR: second".into()),
+            ok(Platform::Oc1),
+            ok(Platform::Oc1),
+        ],
+    )]);
+    let p = poller(script, &db, &[Platform::Oc1], None);
+    let ((), log) = logged(async {
+        for _ in 0..5 {
+            p.round().await;
+        }
+    })
+    .await;
+    assert_eq!(log.matches("status poll failing").count(), 1, "{log}");
+    assert!(
+        log.contains("WARN") && log.contains("UPSTREAM_ERROR: first"),
+        "{log}"
+    );
+    assert!(!log.contains("UPSTREAM_ERROR: second"), "{log}");
+    assert_eq!(log.matches("status poll answering again").count(), 1, "{log}");
+}
+
+/// `STATUS_RECORDINGS_DIR` that cannot be written is reported loudly when
+/// the poller starts, not when the first incident arrives, and the rounds
+/// still store their rows. `{:?}` of the recordings never prints the key.
+#[tokio::test]
+async fn an_unwritable_recordings_directory_is_reported_and_the_rows_still_stored() {
+    let (dir, db) = temp_db();
+    let file = dir.path().join("a-file");
+    std::fs::write(&file, b"x").unwrap();
+    let recordings = Recordings {
+        dir: file.join("status"),
+        key: Secret::new(KEY),
+    };
+    assert!(recordings.check().await.is_err());
+    assert!(!format!("{recordings:?}").contains(KEY));
+
+    let (script, _calls) = Script::new(vec![(
+        Platform::Oc1,
+        vec![Read::Body(body("oc1", &[7], "an incident"))],
+    )]);
+    let p = poller(script, &db, &[Platform::Oc1], Some(recordings));
+    let (writable, log) = logged(p.check_recordings()).await;
+    assert!(!writable);
+    assert!(
+        log.contains("ERROR") && log.contains("STATUS_RECORDINGS_DIR cannot be written"),
+        "{log}"
+    );
+    assert_eq!(p.round().await, [(Platform::Oc1, Polled::Ok)]);
+    assert!(stored(&db).await.unwrap()[0].body.is_some());
+
+    let fine = Recordings {
+        dir: dir.path().join("status"),
+        key: Secret::new(KEY),
+    };
+    assert!(fine.check().await.is_ok());
+    assert!(files(&fine.dir).is_empty(), "the check leaves nothing behind");
+}
+
+// ── Review of #288 ───────────────────────────────────────────────────────────
+
+/// The default interval keeps `GET /v1/lol/status/{platform}`'s copy inside
+/// `status`'s soft TTL from one round to the next, even when the next
+/// round's read waits out the limiter's whole room and the client's whole
+/// timeout before Riot answers: the interval was chosen for that (owner
+/// decision of 2026-11-17, SITE-17).
+#[test]
+fn the_default_interval_keeps_the_route_inside_the_soft_ttl() {
+    let config = config();
+    let interval = Duration::from_secs(config.status_poll_interval_s.into());
+    assert_eq!(interval, Duration::from_secs(240));
+    let ttls = crate::riot::endpoints::TtlPolicy::from_config(&config).ttls(Endpoint::by_id(METHOD).unwrap());
+    let soft = ttls.soft.unwrap();
+    assert_eq!(soft, Duration::from_secs(300));
+    assert!(
+        interval + ROOM + crate::riot::client::REQUEST_TIMEOUT < soft,
+        "{interval:?} + {ROOM:?} + the client's timeout is not under {soft:?}"
+    );
+}
+
+/// `spawn` checks `STATUS_RECORDINGS_DIR` before its first round.
+#[tokio::test]
+async fn spawn_checks_the_recordings_directory_first() {
+    let (dir, db) = temp_db();
+    let file = dir.path().join("a-file");
+    std::fs::write(&file, b"x").unwrap();
+    let recordings = Recordings {
+        dir: file.join("status"),
+        key: Secret::new(KEY),
+    };
+    let (script, _calls) = Script::new(vec![(Platform::Oc1, vec![ok(Platform::Oc1)])]);
+    let p = poller(script, &db, &[Platform::Oc1], Some(recordings));
+    let ((), log) = logged(async {
+        let task = p.spawn();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        task.abort();
+    })
+    .await;
+    assert!(log.contains("STATUS_RECORDINGS_DIR cannot be written"), "{log}");
 }
 
 // ── Review of #289 ───────────────────────────────────────────────────────────
