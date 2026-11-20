@@ -164,7 +164,8 @@ const HEADERS: [(&str, Type, &str); 10] = [
         Type::String,
         "Where the body came from: `HIT`, `MISS`, `STALE`, `HIT-NEG` (a cached 404), \
          `ARCHIVE` (the match archive) or `BYPASS` (`?refresh=true`). On the analytics routes, `HIT` is \
-         a response kept in memory since the last recompute and `MISS` one read from the tables.",
+         a response kept in memory since the last recompute and `MISS` one read from the tables. On \
+         `/v1/lol/status`, always `HIT`: read from the status poller's table.",
     ),
     (
         "X-Cache-Age",
@@ -234,9 +235,8 @@ fn headers_for(path: &str, op: &Operation, status: &str) -> Vec<&'static str> {
     if tagged(&[READ_TAGS.as_slice(), &["admin"]].concat()) && !matches!(status, "401" | "403") {
         out.extend(["X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"]);
     }
-    // The status summary's 503 is the poller turned off, not a wait (SITE-14).
     let summary = path == STATUS_SUMMARY;
-    if status == "429" || (status == "503" && !summary) {
+    if status == "429" || status == "503" {
         out.push("Retry-After");
     }
     // The analytics routes keep their responses in memory per rebuild
@@ -249,9 +249,12 @@ fn headers_for(path: &str, op: &Operation, status: &str) -> Vec<&'static str> {
         out.push("X-Cache");
     }
     // The status summary is read from the poller's table: `HIT`, and the
-    // stalest platform's fetch age; no content age (SITE-14, ADR-220).
-    if summary && ok {
-        out.extend(["X-Cache", "X-Cache-Fetched-Age"]);
+    // stalest platform's fetch age; no content age (SITE-14, ADR-220). Its
+    // 404 is the poller turned off, never a cached 404 (SITE-18).
+    if summary {
+        if ok {
+            out.extend(["X-Cache", "X-Cache-Fetched-Age"]);
+        }
         return out;
     }
     if cached && ok {

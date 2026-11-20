@@ -47,7 +47,7 @@ Direction: site server to proxy, over loopback in production (`PROXY_URL=http://
 
 Sources: `ninjagoldfinch-lol/src/lib/server/{profile,patch,static-data,match,champions,champion-page}.ts`, cited line by line in `docs/_meta/scratch/siblings.md` §1.5.
 
-Timeouts and errors on the site's side (`origin/main`): 5 s for analytics and static calls, 30 s otherwise, then a 503; proxy responses are collapsed to three visitor states: 404 for `NOT_FOUND` and `VALIDATION`, 429 with `retryAfter` for `QUOTA_EXCEEDED` and `RATE_LIMITED`, 503 for everything else (`src/lib/server/errors.ts:16-33`, `proxy.ts:55-87`). The site reads `X-Request-Id` on failure and `Retry-After` on 429, logs `X-Cache` for slow analytics calls, and ignores `X-RateLimit-*`, `X-Cache-Age` and `ETag`.
+Timeouts and errors on the site's side (`origin/main`): 5 s for analytics and static calls, 30 s otherwise, then a 503 (a Refresh, call 1 with `?refresh=true`, can take up to 24.5 s of those 30 s when Riot is slow, and may come back `refreshed: true` with stale parts and `refreshing: true`; a profile whose Riot ID lookup has nothing stored can take 20 s per such stage; AVL-09, AVL-14); proxy responses are collapsed to three visitor states: 404 for `NOT_FOUND` and `VALIDATION`, 429 with `retryAfter` for `QUOTA_EXCEEDED` and `RATE_LIMITED`, 503 for everything else (`src/lib/server/errors.ts:16-33`, `proxy.ts:55-87`). The site reads `X-Request-Id` on failure and `Retry-After` on 429, logs `X-Cache` for slow analytics calls, and ignores `X-RateLimit-*`, `X-Cache-Age` and `ETag`.
 
 The following sequence shows the profile page, the most common interaction.
 
@@ -81,7 +81,7 @@ Two sequential round trips are the minimum because the match page needs the prof
 | `https://ddragon.leagueoflegends.com` (`/api/versions.json`, `/cdn/<v>/data/<locale>/*.json`, images) | HTTPS, no auth, connect 15 s, total 60 s | `ddragon:sync` every `DDRAGON_SYNC_S` (3600 s), at boot only when that long has passed since the last sync (ADR-214); images on first request | a failed sync keeps what is on disk and retries as a job; a failed image is a 502 and nothing is kept |
 | `https://static.developer.riotgames.com/docs/lol/queues.json` | HTTPS, no auth | every sync | keeps the previous file |
 
-Sources: `src/riot/client.rs:25-29,330-338`, `src/jobs/ddragon.rs:22-32,260-261`, `src/static/images.rs`.
+Sources: `src/riot/client.rs:25-29,389-397`, `src/jobs/ddragon.rs:22-32,260-261`, `src/static/images.rs`.
 
 ## riot-proxy to object storage
 
@@ -104,5 +104,5 @@ The dashboard at `https://admin.ninjagoldfinch.lol/dashboard` (Cloudflare Access
 > **TODO (unverified):** the production value of the site's `PROXY_URL` and the name of its consumer key were not read (`/etc/ninjagoldfinch-lol/env` is not in any repo); loopback and a `read`-scoped key are inferred from the site's README and `docs/design/12-object-storage-and-hosting.md` §As executed.
 
 ---
-**Sources:** `docs/_meta/scratch/siblings.md` §1.3-§1.5, §2.2, §4, `ninjagoldfinch-lol/src/lib/server/proxy.ts:L28-L87`, `ninjagoldfinch-lol/src/lib/server/errors.ts:L16-L33`, `src/riot/client.rs:L25-L29,L330-L338`, `src/jobs/ddragon.rs:L22-L32,L260-L261`, `deploy/README.md`, `ninja-monitor/README.md:L50-L81`
-**Last verified:** 2026-11-09 against commit `199b559`
+**Sources:** `docs/_meta/scratch/siblings.md` §1.3-§1.5, §2.2, §4, `ninjagoldfinch-lol/src/lib/server/proxy.ts:L28-L87`, `ninjagoldfinch-lol/src/lib/server/errors.ts:L16-L33`, `src/riot/client.rs:L25-L29,L389-L397`, `src/jobs/ddragon.rs:L22-L32,L260-L261`, `deploy/README.md`, `ninja-monitor/README.md:L50-L81`
+**Last verified:** 2026-11-20 against commit `1f37fc7`

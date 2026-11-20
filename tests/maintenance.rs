@@ -289,6 +289,58 @@ async fn a_failed_run_is_remembered_with_its_error() {
     assert_eq!(last.error, Some(err.to_string()));
 }
 
+/// The tick counts backups in the job's own directory, and only when the job
+/// takes them (AVL-15).
+#[tokio::test]
+async fn the_tick_counts_backups_where_the_job_writes_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    let backup_dir = dir.path().join("elsewhere");
+    let off = Maintenance::new(db.clone(), backup_dir.clone(), 0, Kept::none());
+    assert_eq!(off.tick_backups(), None, "BACKUP_KEEP=0");
+    let on = Maintenance::new(db, backup_dir.clone(), 3, Kept::none());
+    assert_eq!(on.tick_backups(), Some(backup_dir));
+}
+
+/// Review of #286: a backup directory that cannot be listed fails the run at
+/// its retention listing, before the trims. The run is retried (the job ends
+/// `failed` after its attempts) and nothing is trimmed, swept or checkpointed
+/// until the directory is readable; the `maintenance` tick still queues it
+/// (AVL-15). Pinned as it is: whether the trims should go on is open.
+#[tokio::test]
+async fn an_unlistable_backup_directory_fails_the_run_before_the_trims() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    seed(&db).await;
+    let backup_dir = dir.path().join("backups");
+    std::fs::write(&backup_dir, b"not a directory").unwrap();
+    let m = Maintenance::new(db, backup_dir, KEEP_BACKUPS, Kept::none())
+        .with_disk_free(Arc::new(|_| Ok(u64::MAX)));
+
+    let err = m.run_once(NOW).await.unwrap_err();
+    assert!(
+        matches!(&err, riot_proxy::jobs::scheduler::JobError::Retry(e) if e.contains("Not a directory")),
+        "{err:?}"
+    );
+    assert_eq!(m.last().unwrap().report, None);
+    // Nothing trimmed or swept: every seeded row is still there.
+    let live = dir.path().join("riot-proxy.db");
+    assert_eq!(
+        ids(&live, "SELECT id FROM jobs ORDER BY id"),
+        ["new-done", "old-done", "old-failed", "pending"]
+    );
+    assert_eq!(ids(&live, "SELECT key FROM cache ORDER BY key"), ["gone", "kept"]);
+    let c = rusqlite::Connection::open(&live).unwrap();
+    let history: i64 = c
+        .query_row("SELECT count(*) FROM metrics_history", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(history, 2);
+    drop(c);
+    // And not checkpointed: the WAL still holds the seed.
+    let wal = dir.path().join("riot-proxy.db-wal");
+    assert!(std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0) > 0);
+}
+
 /// AVL-05 (ADR-215): `done` jobs are trimmed a kind at a time and at most
 /// 5 000 rows a write, as `DELETE /v1/admin/jobs` deletes, and only those
 /// past the retention: newer `done` rows and rows in any other state stay.
@@ -440,13 +492,14 @@ fn queued(db_path: &Path, kind: &str) -> usize {
 
 /// Boot `serve` on `dir` until its ticks have run (the `aggregate:delta`
 /// tick fires at once on every boot), then return how many `maintenance`
-/// rows the boot queued.
-async fn maintenance_queued_by_a_boot(dir: &Path) -> usize {
-    maintenance_queued_by_a_boot_with(dir, &[]).await
+/// rows the boot queued, once `expect` of them are there (10 s at most) or,
+/// when `expect` is 0, after a fixed wait.
+async fn maintenance_queued_by_a_boot(dir: &Path, expect: usize) -> usize {
+    maintenance_queued_by_a_boot_with(dir, &[], expect).await
 }
 
 /// [`maintenance_queued_by_a_boot`] with more of the environment set.
-async fn maintenance_queued_by_a_boot_with(dir: &Path, env: &[(&str, &str)]) -> usize {
+async fn maintenance_queued_by_a_boot_with(dir: &Path, env: &[(&str, &str)], expect: usize) -> usize {
     // `serve_with` listens for this process's signals; another test's SIGTERM
     // must not stop this server (AVL-04).
     let _signals = crate::common::SIGNALS.lock().await;
@@ -482,10 +535,32 @@ async fn maintenance_queued_by_a_boot_with(dir: &Path, env: &[(&str, &str)]) -> 
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
     assert!(ticked, "the ticks never ran");
-    // Each loop reads its last run in a moment, so a maintenance tick due at
-    // boot has fired by now or does within this wait.
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    let n = queued(&path, "maintenance");
+    let n = if expect > 0 {
+        // Before its row exists the maintenance loop reads its last run, lists
+        // `backups/` and reads the newest file's time (AVL-13), which on a
+        // loaded runner can take longer than any fixed wait (CI-07): wait for
+        // the row itself, as CI-06 waits for the metric.
+        let mut n = 0;
+        for _ in 0..400 {
+            n = queued(&path, "maintenance");
+            if n >= expect {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        assert!(
+            n >= expect,
+            "polled 10 s for {expect} maintenance row(s) and found {n}"
+        );
+        n
+    } else {
+        // Nothing to wait for when none is due: give a tick that would fire
+        // at boot time to do so, then count. A fixed wait cannot prove a
+        // deferral; the unit tests in `src/jobs/ticks/tests.rs` assert the
+        // delay `first_fire` returns.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        queued(&path, "maintenance")
+    };
     task.abort();
     let _ = task.await;
     n
@@ -499,7 +574,7 @@ async fn a_boot_queues_maintenance_only_when_it_is_due() {
     let fresh = tempfile::tempdir().unwrap();
     drop(open(fresh.path()));
     assert_eq!(
-        maintenance_queued_by_a_boot(fresh.path()).await,
+        maintenance_queued_by_a_boot(fresh.path(), 1).await,
         1,
         "a fresh database: at once"
     );
@@ -507,9 +582,9 @@ async fn a_boot_queues_maintenance_only_when_it_is_due() {
     let restarted = tempfile::tempdir().unwrap();
     let finished = maintenance_ran(restarted.path(), 3 * 3_600_000).await;
     // That run's backup, written a moment before the run ended.
-    let backup = backup_written(restarted.path(), finished - 2_000);
+    let backup = backup_written_at(restarted.path(), finished - 2_000);
     assert_eq!(
-        maintenance_queued_by_a_boot(restarted.path()).await,
+        maintenance_queued_by_a_boot(restarted.path(), 0).await,
         0,
         "ran 3 h ago and wrote its backup: not before 21 h from now"
     );
@@ -540,7 +615,7 @@ async fn maintenance_ran(dir: &Path, ago_ms: i64) -> i64 {
 
 /// A daily backup under `dir`, named for the UTC day of `at_ms` and last
 /// written then.
-fn backup_written(dir: &Path, at_ms: i64) -> std::path::PathBuf {
+fn backup_written_at(dir: &Path, at_ms: i64) -> std::path::PathBuf {
     let backup_dir = dir.join("backups");
     std::fs::create_dir_all(&backup_dir).unwrap();
     let path = backup_dir.join(backup_name(at_ms));
@@ -557,13 +632,13 @@ fn backup_written(dir: &Path, at_ms: i64) -> std::path::PathBuf {
 
 /// AVL-13: with backups on, a `maintenance` run that wrote no backup is not
 /// the tick's last run, so the backup it did not write is not deferred a day.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_boot_queues_maintenance_when_the_last_run_wrote_no_backup() {
     // The disk guard skipped it, or the copy failed: nothing in `backups/`.
     let skipped = tempfile::tempdir().unwrap();
     maintenance_ran(skipped.path(), 3 * 3_600_000).await;
     assert_eq!(
-        maintenance_queued_by_a_boot(skipped.path()).await,
+        maintenance_queued_by_a_boot(skipped.path(), 1).await,
         1,
         "ran 3 h ago, no backup on disk: due at boot"
     );
@@ -571,9 +646,9 @@ async fn a_boot_queues_maintenance_when_the_last_run_wrote_no_backup() {
     // Today's existed already: the newest backup is over a day old by now.
     let existed = tempfile::tempdir().unwrap();
     let finished = maintenance_ran(existed.path(), 3 * 3_600_000).await;
-    backup_written(existed.path(), finished - 22 * 3_600_000);
+    backup_written_at(existed.path(), finished - 22 * 3_600_000);
     assert_eq!(
-        maintenance_queued_by_a_boot(existed.path()).await,
+        maintenance_queued_by_a_boot(existed.path(), 1).await,
         1,
         "ran 3 h ago, the newest backup 25 h old: due at boot"
     );
@@ -581,21 +656,36 @@ async fn a_boot_queues_maintenance_when_the_last_run_wrote_no_backup() {
     // The newest backup is 23 h old: due in an hour, not 21 h from now.
     let soon = tempfile::tempdir().unwrap();
     let finished = maintenance_ran(soon.path(), 3 * 3_600_000).await;
-    backup_written(soon.path(), finished - 20 * 3_600_000);
-    assert_eq!(maintenance_queued_by_a_boot(soon.path()).await, 0, "not at boot");
+    backup_written_at(soon.path(), finished - 20 * 3_600_000);
+    assert_eq!(
+        maintenance_queued_by_a_boot(soon.path(), 0).await,
+        0,
+        "not at boot"
+    );
 }
 
 /// `BACKUP_KEEP=0` takes no backups, so the last run alone counts, as before.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn with_backups_off_a_boot_counts_from_the_last_run_alone() {
     let dir = tempfile::tempdir().unwrap();
     maintenance_ran(dir.path(), 3 * 3_600_000).await;
     assert_eq!(
-        maintenance_queued_by_a_boot_with(dir.path(), &[("BACKUP_KEEP", "0")]).await,
+        maintenance_queued_by_a_boot_with(dir.path(), &[("BACKUP_KEEP", "0")], 0).await,
         0,
         "ran 3 h ago: not before 21 h from now"
     );
     assert!(!dir.path().join("backups").exists());
+
+    // A backup 25 h old left from when backups were on: still the run alone
+    // (review of #278), so none.
+    let left = tempfile::tempdir().unwrap();
+    let finished = maintenance_ran(left.path(), 3 * 3_600_000).await;
+    backup_written_at(left.path(), finished - 22 * 3_600_000);
+    assert_eq!(
+        maintenance_queued_by_a_boot_with(left.path(), &[("BACKUP_KEEP", "0")], 0).await,
+        0,
+        "BACKUP_KEEP=0 never reads backups/"
+    );
 }
 
 /// AVL-08: `serve` sweeps L2 at boot and in `maintenance` with the same rule.
