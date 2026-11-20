@@ -146,6 +146,30 @@ pub enum ConfigError {
     DataDir { path: PathBuf, source: std::io::Error },
 }
 
+/// `STATUS_POLL_PLATFORMS`' default (SITE-17, owner decision of 2026-11-17): every
+/// platform but `ph2`, `th2` and `tw2`, which the portal's lol-status-v4
+/// region list does not name (read 2026-11-17). For `ph2` and `th2`, on
+/// 2026-11-17 a keyless GET of `/lol/status/v4/platform-data` got HTTP 530
+/// with body `error code: 1016` from both hosts; `tw2` answered Riot's own
+/// 401, and is added back once a keyed read has seen a 200. In
+/// [`Platform::ALL`] order.
+pub const STATUS_POLL_DEFAULT: [Platform; 14] = [
+    Platform::Na1,
+    Platform::Br1,
+    Platform::La1,
+    Platform::La2,
+    Platform::Euw1,
+    Platform::Eun1,
+    Platform::Tr1,
+    Platform::Ru,
+    Platform::Me1,
+    Platform::Kr,
+    Platform::Jp1,
+    Platform::Oc1,
+    Platform::Sg2,
+    Platform::Vn2,
+];
+
 /// A value that must never reach a log line. `Debug` and `Display` print `[REDACTED]`.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Secret(String);
@@ -414,7 +438,7 @@ pub struct Config {
     /// (SITE-13, design/14 §Status poller).
     pub status_poll_interval_s: u32,
     /// The platforms the status poller reads, in order without repeats.
-    /// Defaults to every platform; `none` is empty and turns it off.
+    /// Defaults to [`STATUS_POLL_DEFAULT`]; `none` is empty and turns it off.
     pub status_poll_platforms: Vec<Platform>,
     /// Where the status poller writes a redacted body with an incident, one
     /// file per platform and incident id. Unset: none is written.
@@ -808,7 +832,7 @@ impl Config {
             .map(|p| v.platform("LADDER_PLATFORMS", p))
             .collect();
         let status_check_platforms = v.platform_list("STATUS_CHECK_PLATFORMS", &ladder_platforms);
-        let status_poll_platforms = v.platform_list("STATUS_POLL_PLATFORMS", &Platform::ALL);
+        let status_poll_platforms = v.platform_list("STATUS_POLL_PLATFORMS", &STATUS_POLL_DEFAULT);
         let riot_api_key_expires_at_ms = v.timestamp_ms("RIOT_API_KEY_EXPIRES_AT");
 
         let objects = v.object_store(env);
@@ -897,7 +921,7 @@ impl Config {
             status_allow_cidr: v.cidrs("STATUS_ALLOW_CIDR", DEFAULT_STATUS_ALLOW_CIDR),
             status_check_interval_s: v.int("STATUS_CHECK_INTERVAL_S", 30, 1, 3_600),
             status_check_platforms,
-            status_poll_interval_s: v.int("STATUS_POLL_INTERVAL_S", 300, 60, 3_600),
+            status_poll_interval_s: v.int("STATUS_POLL_INTERVAL_S", 240, 60, 3_600),
             status_poll_platforms,
             status_recordings_dir: v.opt_string("STATUS_RECORDINGS_DIR").map(PathBuf::from),
             riot_api_key_expires_at_ms,

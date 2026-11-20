@@ -1,13 +1,15 @@
 //! The status poller (SITE-13, design/14 §Status poller, ADR-219). An
 //! in-process task, not a job, reads `lol-status-v4` `platform-data`
-//! (`status.platformData`) on each of `STATUS_POLL_PLATFORMS` (every platform
-//! by default) at boot and every `STATUS_POLL_INTERVAL_S` (300) after.
+//! (`status.platformData`) on each of `STATUS_POLL_PLATFORMS` (all but `ph2`,
+//! `th2`, `tw2` by default) at boot and every `STATUS_POLL_INTERVAL_S` (240).
 //!
 //! Each read goes through the fetcher at bulk priority, past the cache read
 //! and writing through ([`READ`]), so L1 holds the body and
 //! `GET /v1/lol/status/{platform}` answers `HIT` (`status`'s TTL is 300 s,
-//! hard 600 s). A platform the limiter has no room for within a second is
-//! skipped until the next round, as `/status`'s probe is.
+//! hard 600 s). A platform the limiter has no room for within [`ROOM`] (30 s)
+//! is skipped until the next round. Each read has its own call to Riot,
+//! never one another caller started, and a deadline ([`DEADLINE`]); each
+//! platform's row is stored as its read ends (SITE-17).
 //!
 //! Each platform's last answer is stored in `platform_status` ([`stored`]
 //! reads it): the last 200's body and `fetched_at`, and the last failure's
@@ -15,11 +17,16 @@
 //! incident is written, redacted, to `STATUS_RECORDINGS_DIR` when it is set,
 //! one file per platform and incident id, once ([`Recordings`]).
 //!
-//! `/status`'s `riot_api` probe is separate and unchanged (design/14 §Checks).
+//! `/status`'s `riot_api` probe is separate (design/14 §Checks). The poller's
+//! calls are not traffic: they stamp no traffic on their scope, so the probe
+//! keeps its cadence, and a 401 or 403 to one never turns the key's verdict
+//! to rejected or logs `RIOT KEY REJECTED` (`RiotClient::send_poll`, owner
+//! decision of 2026-11-17). A platform whose reads start or stop failing is logged once
+//! each way.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -29,30 +36,40 @@ use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
 use crate::app::AppState;
+use crate::config::Secret;
 use crate::db::{Db, DbError};
 use crate::fetcher::{FetchError, FetchOptions, FetchResult, Fetcher, XCache};
+use crate::http::ErrorCode;
 use crate::metrics::STATUS_POLLS_TOTAL;
-use crate::riot::client::{RequestError, RiotRequest};
+use crate::riot::client::{RequestError, RiotRequest, UPSTREAM_AUTH_FAILED, UpstreamWatch};
 use crate::riot::endpoints::{Endpoint, Target};
 use crate::riot::limiter::Priority;
 use crate::riot::routing::Platform;
 
 /// The endpoint the poller reads.
 pub const METHOD: &str = "status.platformData";
-/// No limiter room within this skips a platform until the next round.
-pub const ROOM: Duration = Duration::from_secs(1);
+/// No limiter room within this skips a platform until the next round. Nothing
+/// waits on the poller, so it waits longer than the probe's second (owner
+/// decision of 2026-11-17, SITE-17).
+pub const ROOM: Duration = Duration::from_secs(30);
+/// A read not ended by this is stored as failed, so one platform that accepts
+/// and never answers does not hold the others' rows: the limiter's wait and
+/// one call to Riot (25 s), with room to spare. The call goes on behind it.
+pub const DEADLINE: Duration = Duration::from_secs(60);
 /// What a recording has in place of the API key. It never contains `RGAPI-`,
 /// which CI greps for.
 pub const REDACTED: &str = "[REDACTED]";
 
 /// How the poller fetches: bulk, past the cache read and writing through
-/// (`X-Cache: BYPASS`), at most [`ROOM`] for the limiter, and never served
-/// the cached copy in place of Riot's answer.
+/// (`X-Cache: BYPASS`), at most [`ROOM`] for the limiter, never served the
+/// cached copy in place of Riot's answer and never joining another caller's
+/// call, and as a status poll, not traffic.
 pub const READ: FetchOptions = FetchOptions {
     priority: Priority::Bulk,
     bypass: true,
     budget: Some(ROOM),
     fresh_only: true,
+    status_poll: true,
     ..FetchOptions::INTERACTIVE
 };
 
@@ -63,6 +80,9 @@ pub enum Read {
     Body(Bytes),
     /// The limiter had no room within [`ROOM`]: nothing was asked.
     Skipped,
+    /// Riot answered 401 or 403: stored as a failure, and a round of
+    /// nothing else judges the key (owner decision of 2026-11-17).
+    Refused(String),
     /// Anything else, and why.
     Failed(String),
 }
@@ -102,8 +122,8 @@ impl Reader for Fetcher {
 
 /// A fetch with [`READ`] as a [`Read`]. Our own limiter's refusal
 /// (`limited_until`) is a skip. A `STALE` answer, which a [`READ`] fetch
-/// gets only by joining another caller's call to Riot that failed, is a
-/// failure: Riot did not answer.
+/// never gets now that it runs its own call (SITE-17), would be a failure:
+/// Riot did not answer.
 pub fn read_of(out: Result<FetchResult, FetchError>) -> Read {
     match out {
         Ok(r) if r.x_cache == XCache::Stale => {
@@ -111,18 +131,33 @@ pub fn read_of(out: Result<FetchResult, FetchError>) -> Read {
         }
         Ok(r) => Read::Body(r.body),
         Err(e) if e.limited_until.is_some() => Read::Skipped,
+        Err(e) if e.api.code == ErrorCode::UpstreamError && e.api.message == UPSTREAM_AUTH_FAILED => {
+            Read::Refused(format!("{}: {}", e.api.code.as_str(), e.api.message))
+        }
         Err(e) => Read::Failed(format!("{}: {}", e.api.code.as_str(), e.api.message)),
     }
 }
 
-/// Where bodies with an incident are written, and the key to redact from them.
+/// Where bodies with an incident are written, and the key to redact from
+/// them, held as a [`Secret`] so no `{:?}` prints it.
 #[derive(Debug, Clone)]
 pub struct Recordings {
     pub dir: PathBuf,
-    pub key: String,
+    pub key: Secret,
 }
 
 impl Recordings {
+    /// Whether the directory can be written: created if missing, then a file
+    /// written and removed. Checked once at the poller's start, so a path the
+    /// service user cannot write (outside `ReadWritePaths` under systemd) is
+    /// reported at boot, not when the first incident arrives (SITE-17).
+    pub async fn check(&self) -> std::io::Result<()> {
+        tokio::fs::create_dir_all(&self.dir).await?;
+        let probe = self.dir.join(".riot-proxy-write-check");
+        tokio::fs::write(&probe, b"").await?;
+        tokio::fs::remove_file(&probe).await
+    }
+
     /// `<dir>/<platform>-incident-<id>.json`.
     pub fn path(&self, platform: Platform, id: i64) -> PathBuf {
         self.dir.join(format!("{}-incident-{id}.json", platform.as_str()))
@@ -135,7 +170,7 @@ impl Recordings {
         if ids.is_empty() {
             return;
         }
-        let Some(redacted) = redact(text, &self.key) else {
+        let Some(redacted) = redact(text, self.key.expose()) else {
             tracing::warn!(
                 platform = platform.as_str(),
                 "a status body with an incident holds an RGAPI- string; not recorded"
@@ -242,7 +277,7 @@ enum Row {
     Failed { error: String, at_ms: i64 },
 }
 
-/// Store a round's rows in one write: a 200 replaces the body and
+/// Store rows in one write: a 200 replaces the body and
 /// `fetched_at`, a failure `failed_at` and `error`; each keeps the other's.
 fn store(c: &mut rusqlite::Connection, rows: &[(Platform, Row)]) -> Result<(), DbError> {
     let tx = c.transaction()?;
@@ -288,6 +323,15 @@ pub struct Poller {
     /// Each platform's request, built once.
     platforms: Vec<(Platform, RiotRequest)>,
     recordings: Option<Recordings>,
+    /// Each platform's last stored outcome, `true` for a 200, to log a
+    /// change of state once (SITE-17).
+    last_ok: Mutex<HashMap<Platform, bool>>,
+    /// Each read's deadline: [`DEADLINE`], shorter in tests.
+    deadline: Duration,
+    /// Where a round whose every read that reached Riot was refused is
+    /// reported ([`UpstreamWatch::polls_refused`]); the client's own in
+    /// production, none for a scripted reader unless a test sets one.
+    watch: Option<Arc<UpstreamWatch>>,
 }
 
 impl std::fmt::Debug for Poller {
@@ -311,7 +355,7 @@ impl Poller {
         }
         let recordings = config.status_recordings_dir.clone().map(|dir| Recordings {
             dir,
-            key: config.riot_api_key.expose().to_string(),
+            key: config.riot_api_key.clone(),
         });
         Self::with_reader(
             Arc::new(state.fetcher.clone()),
@@ -320,7 +364,7 @@ impl Poller {
             Duration::from_secs(config.status_poll_interval_s.into()),
             recordings,
         )
-        .map(Some)
+        .map(|p| Some(p.with_watch(Arc::clone(state.fetcher.client().watch()))))
     }
 
     /// A poller reading `platforms` through `reader`.
@@ -346,13 +390,56 @@ impl Poller {
             interval,
             platforms,
             recordings,
+            last_ok: Mutex::new(HashMap::new()),
+            deadline: DEADLINE,
+            watch: None,
         })
+    }
+
+    /// This poller reporting wholly refused rounds to `watch`.
+    #[must_use]
+    pub fn with_watch(mut self, watch: Arc<UpstreamWatch>) -> Self {
+        self.watch = Some(watch);
+        self
+    }
+
+    /// This poller with another read deadline than [`DEADLINE`].
+    #[must_use]
+    pub fn with_deadline(mut self, deadline: Duration) -> Self {
+        self.deadline = deadline;
+        self
+    }
+
+    /// The interval between rounds (`STATUS_POLL_INTERVAL_S`).
+    pub fn interval(&self) -> Duration {
+        self.interval
+    }
+
+    /// Check `STATUS_RECORDINGS_DIR` and say loudly, once, when it cannot be
+    /// written. Recording stays on: a directory fixed later works. Returns
+    /// whether it can be written (`true` when recording is off).
+    pub async fn check_recordings(&self) -> bool {
+        let Some(r) = &self.recordings else {
+            return true;
+        };
+        match r.check().await {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::error!(
+                    dir = %r.dir.display(),
+                    error = %e,
+                    "STATUS_RECORDINGS_DIR cannot be written; status recordings will fail until it can"
+                );
+                false
+            }
+        }
     }
 
     /// Run a round now and then every interval, until aborted. A round that
     /// runs long delays the next instead of bunching them up.
     pub fn spawn(self) -> JoinHandle<()> {
         tokio::spawn(async move {
+            self.check_recordings().await;
             let mut every = tokio::time::interval(self.interval);
             every.set_missed_tick_behavior(MissedTickBehavior::Delay);
             loop {
@@ -362,57 +449,113 @@ impl Poller {
         })
     }
 
-    /// One round: every platform read at once, then their rows stored in
-    /// one write. Returns what it did with each, in the configured order.
+    /// One round: every platform read at once, each with its own
+    /// [`DEADLINE`], and each platform's row stored as its read ends, so a
+    /// slow platform delays no other's (SITE-17). Then, if every read that
+    /// reached Riot was refused (401 or 403) and at least one was, the key
+    /// is judged rejected ([`UpstreamWatch::polls_refused`]; owner decision
+    /// of 2026-11-17): a skipped read did not reach Riot, and any other
+    /// outcome (a 200, another status, no answer within the deadline, a
+    /// network failure) means the round does not judge it. Returns what it
+    /// did with each platform, in the configured order.
     pub async fn round(&self) -> Vec<(Platform, Polled)> {
-        let reads = futures_util::future::join_all(self.platforms.iter().map(|(platform, req)| async {
-            let read = self.reader.read(req.clone()).await;
-            (*platform, read, crate::clock::Clock::now().unix_ms)
-        }))
-        .await;
-        let mut rows = Vec::with_capacity(reads.len());
-        let mut out = Vec::with_capacity(reads.len());
-        for (platform, read, at_ms) in reads {
-            let (polled, row) = match read {
-                Read::Body(body) => match parse(&body) {
-                    Ok((text, value)) => {
-                        if let Some(r) = &self.recordings {
-                            r.record(platform, &text, &value).await;
-                        }
-                        (Polled::Ok, Some(Row::Body { text, at_ms }))
-                    }
-                    Err(error) => (Polled::Failed, Some(Row::Failed { error, at_ms })),
-                },
-                Read::Failed(error) => (Polled::Failed, Some(Row::Failed { error, at_ms })),
-                Read::Skipped => (Polled::Skipped, None),
-            };
-            match &row {
-                Some(Row::Failed { error, .. }) => {
-                    tracing::debug!(platform = platform.as_str(), %error, "status poll failed");
-                }
-                None => tracing::debug!(
-                    platform = platform.as_str(),
-                    "status poll skipped, no room in the rate limiter"
-                ),
-                Some(Row::Body { .. }) => {}
+        use futures_util::StreamExt as _;
+        let mut reads: futures_util::stream::FuturesUnordered<_> = self
+            .platforms
+            .iter()
+            .enumerate()
+            .map(|(i, (platform, req))| async move {
+                let read = match tokio::time::timeout(self.deadline, self.reader.read(req.clone())).await {
+                    Ok(read) => read,
+                    Err(_) => Read::Failed(format!("no answer within {} s", self.deadline.as_secs_f64())),
+                };
+                (i, *platform, read, crate::clock::Clock::now().unix_ms)
+            })
+            .collect();
+        let mut out = Vec::with_capacity(self.platforms.len());
+        let (mut refused, mut other) = (0usize, 0usize);
+        while let Some((i, platform, read, at_ms)) = reads.next().await {
+            match read {
+                Read::Refused(_) => refused += 1,
+                Read::Skipped => {}
+                Read::Body(_) | Read::Failed(_) => other += 1,
             }
-            metrics::counter!(
-                STATUS_POLLS_TOTAL,
-                "platform" => platform.as_str(),
-                "result" => polled.as_str()
-            )
-            .increment(1);
-            if let Some(row) = row {
-                rows.push((platform, row));
-            }
-            out.push((platform, polled));
+            out.push((i, platform, self.settle(platform, read, at_ms).await));
         }
-        if !rows.is_empty()
-            && let Err(e) = self.db.write(move |c| store(c, &rows)).await
+        if refused > 0
+            && other == 0
+            && let Some(watch) = &self.watch
         {
-            tracing::warn!(error = %e, "status poll results not stored");
+            watch.polls_refused();
         }
-        out
+        out.sort_by_key(|(i, ..)| *i);
+        out.into_iter().map(|(_, p, polled)| (p, polled)).collect()
+    }
+
+    /// One platform's read: recorded, logged, counted and stored.
+    async fn settle(&self, platform: Platform, read: Read, at_ms: i64) -> Polled {
+        let (polled, row) = match read {
+            Read::Body(body) => match parse(&body) {
+                Ok((text, value)) => {
+                    if let Some(r) = &self.recordings {
+                        r.record(platform, &text, &value).await;
+                    }
+                    (Polled::Ok, Some(Row::Body { text, at_ms }))
+                }
+                Err(error) => (Polled::Failed, Some(Row::Failed { error, at_ms })),
+            },
+            Read::Failed(error) | Read::Refused(error) => {
+                (Polled::Failed, Some(Row::Failed { error, at_ms }))
+            }
+            Read::Skipped => (Polled::Skipped, None),
+        };
+        match &row {
+            Some(Row::Failed { error, .. }) => {
+                tracing::debug!(platform = platform.as_str(), %error, "status poll failed");
+            }
+            None => tracing::debug!(
+                platform = platform.as_str(),
+                "status poll skipped, no room in the rate limiter"
+            ),
+            Some(Row::Body { .. }) => {}
+        }
+        if let Some(row) = &row {
+            self.log_change(platform, row);
+        }
+        metrics::counter!(
+            STATUS_POLLS_TOTAL,
+            "platform" => platform.as_str(),
+            "result" => polled.as_str()
+        )
+        .increment(1);
+        if let Some(row) = row {
+            let rows = [(platform, row)];
+            if let Err(e) = self.db.write(move |c| store(c, &rows)).await {
+                tracing::warn!(platform = platform.as_str(), error = %e, "status poll result not stored");
+            }
+        }
+        polled
+    }
+
+    /// Log a platform whose reads start failing (`warn`, with the error) or
+    /// answer again (`info`), once each way; a first failure since boot
+    /// counts as a change, a first success does not (SITE-17).
+    fn log_change(&self, platform: Platform, row: &Row) {
+        let ok = matches!(row, Row::Body { .. });
+        let before = self
+            .last_ok
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(platform, ok);
+        match (before, row) {
+            (Some(true) | None, Row::Failed { error, .. }) => {
+                tracing::warn!(platform = platform.as_str(), %error, "status poll failing");
+            }
+            (Some(false), Row::Body { .. }) => {
+                tracing::info!(platform = platform.as_str(), "status poll answering again");
+            }
+            _ => {}
+        }
     }
 }
 

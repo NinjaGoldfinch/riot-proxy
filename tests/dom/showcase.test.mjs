@@ -152,9 +152,10 @@ test('the home view lists every platform from one call, in its order, with what 
 });
 
 test('the platforms card shows the error when the poller is off', async () => {
-  const p = await page({ statusAll: [503, { error: { code: 'NOT_FOUND', message: 'The status poller is off on this deployment (STATUS_POLL_PLATFORMS=none)', requestId: 'r' } }] });
+  // A 404 since SITE-18 (owner decision D2); #283 answered 503.
+  const p = await page({ statusAll: [404, { error: { code: 'NOT_FOUND', message: 'The status poller is off on this deployment (STATUS_POLL_PLATFORMS=none)', requestId: 'r' } }] });
   assert.equal(p.$$('#platforms .pstat').length, 0);
-  assert.ok(p.text('#platforms .err').includes('503 · NOT_FOUND: The status poller is off'));
+  assert.ok(p.text('#platforms .err').includes('404 · NOT_FOUND: The status poller is off'));
   assert.ok(p.$('#ladder tbody tr'), 'the rest of home is unaffected');
   assert.deepEqual(p.errors, []);
 });
@@ -822,6 +823,11 @@ test('top champions read every patch by default and the patch picker refetches t
   assert.ok(p.text('#topMeta').startsWith('all patches'));
   // The slice's matches, each once (SITE-12), not totalGames' player-games.
   assert.ok(p.text('#topMeta').endsWith(' · 100 matches'), p.text('#topMeta'));
+  // One match is singular; thousands are grouped (review of #281).
+  const one = await page({ totalMatches: 1 });
+  assert.ok(one.text('#topMeta').endsWith(' · 1 match'), one.text('#topMeta'));
+  const many = await page({ totalMatches: 1240 });
+  assert.ok(many.text('#topMeta').endsWith(' · 1,240 matches'), many.text('#topMeta'));
   assert.ok(p.calls.includes('/v1/lol/analytics/patches?queue=RANKED_SOLO_5x5&platform=oc1'), 'the ladder list, no champion');
   assert.equal(p.$('#top [data-patch]').options[0].textContent, 'All patches · 1,240 games');
   const sel = p.$('#top [data-patch]');

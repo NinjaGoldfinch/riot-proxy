@@ -30,7 +30,8 @@ groups:
         # deployment rather than one api process at a time. With no traffic both
         # rates are zero, the division is NaN, and the comparison drops the
         # sample — an idle proxy is not a failing one, and the `for` timer
-        # restarts when traffic resumes.
+        # restarts when traffic resumes. The status poller's reads count as no
+        # cache read (SITE-17), so they do not make an idle proxy's ratio 0.
         expr: |
           sum(rate(proxy_cache_reads_total{state=~"hit|neg|stale"}[5m]))
             / sum(rate(proxy_cache_reads_total[5m])) < 0.7

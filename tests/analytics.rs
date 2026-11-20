@@ -233,6 +233,104 @@ async fn before_any_recompute_the_routes_answer_empty_documents() {
         e.get("/v1/lol/analytics/champions/134/matchups").await.json()["matchups"],
         json!([])
     );
+
+    // SITE-12 changed the shape marker in every analytics tag, so a
+    // validator a client kept from before `totalMatches` existed gets the new
+    // body, not a 304. The tag is rebuilt here as `routes::analytics::etag`
+    // builds it, checked against the one served, then with the old marker.
+    // When this fails after a change to `STATS_SHAPE` or to the tag's
+    // parts, update `material` here and the example tag in the three docs
+    // pages `docs/_meta/doc-maintenance.md` names, from a running server.
+    let uri = "/v1/lol/analytics/champions?queue=RANKED_SOLO_5x5&limit=2";
+    let version = e.state.ddragon.current_version().await;
+    let tag_with = |marker: &str| {
+        use base64::Engine as _;
+        use sha2::Digest as _;
+        let material = [
+            "champions",
+            marker,
+            "~",
+            "~",
+            version.as_deref().unwrap_or("~"),
+            "~",
+            "RANKED_SOLO_5x5",
+            "~",
+            "~",
+            "~",
+            "~",
+            "~",
+            "0",
+            "2",
+            "exclude",
+        ]
+        .join("|");
+        format!(
+            "W/\"{}\"",
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .encode(sha2::Sha256::digest(material.as_bytes()))
+        )
+    };
+    let now = e.get(uri).await;
+    assert_eq!(tag(&now), tag_with("tier-side-range-opponent-matches"));
+    let before = tag_with("tier-side-range-opponent");
+    let r = e.call("GET", uri, &e.reader, Some(&before), None).await;
+    assert_eq!(r.status, StatusCode::OK, "a tag from before totalMatches");
+    assert_eq!(r.json()["totalMatches"], 0);
+}
+
+/// `tier=UNKNOWN` (ADR-105) is the players no ladder or lookup placed:
+/// `totalMatches` counts the matches with such a player, and a range from
+/// IRON up leaves them out (SITE-12, review of #281). Here no player of the
+/// remake is placed, two of whom also played the ranked game; the ranked
+/// game's other eight are MASTER.
+#[tokio::test]
+async fn total_matches_of_the_unknown_tier_and_a_range_without_it() {
+    let e = env().await;
+    e.on_ladder(RANKED, &|_| "MASTER").await;
+    let unplaced: Vec<String> = serde_json::from_slice::<Value>(REMAKE).unwrap()["metadata"]["participants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p.as_str().unwrap().to_string())
+        .collect();
+    e.state
+        .db
+        .write(move |c| {
+            for p in unplaced {
+                c.execute("DELETE FROM ladder_entries WHERE puuid = ?1", [p])?;
+            }
+            Ok::<_, DbError>(())
+        })
+        .await
+        .unwrap();
+    for (id, body) in [("KR_8393343196", RANKED), ("KR_8393320187", REMAKE)] {
+        matches::put(&e.state.db, id, "asia", &e.scope, body.to_vec().into(), 1)
+            .await
+            .unwrap();
+    }
+    // A third match, every player placed: the UNKNOWN slice is now short of
+    // the total, so its count cannot be the total's by accident.
+    e.on_ladder(RANKED, &|_| "MASTER").await;
+    e.archive_as("KR_9000000001", RANKED).await;
+    e.aggregate().await;
+    let totals = |q: &'static str| {
+        let e = &e;
+        async move {
+            let v = e
+                .get(&format!(
+                    "/v1/lol/analytics/champions?patch=all&remakes=include{q}"
+                ))
+                .await
+                .json();
+            (v["totalGames"].as_i64(), v["totalMatches"].as_i64())
+        }
+    };
+    assert_eq!(totals("").await, (Some(30), Some(3)));
+    // The first two matches have an unplaced player; the third has none.
+    assert_eq!(totals("&tier=UNKNOWN").await, (Some(12), Some(2)));
+    // The ranked game and the third have placed players; the remake has none.
+    assert_eq!(totals("&minTier=IRON").await, (Some(18), Some(2)));
+    assert_eq!(totals("&tier=MASTER").await, (Some(18), Some(2)));
 }
 
 #[tokio::test]
@@ -661,6 +759,104 @@ async fn a_manual_recompute_goes_ahead_of_the_queue() {
     );
 }
 
+/// AVL-12 (review of #277): the route against a rebuild that is running.
+/// A rebuild is `pending` only between turns, so the request nearly always
+/// finds it running: it answers 202, the run in progress keeps its state and
+/// attempts, its priority is lifted, and after the turn yields with its
+/// progress the next claim is that row at 0 with that progress.
+#[tokio::test]
+async fn a_manual_recompute_lifts_a_running_rebuild_for_its_next_turn() {
+    use riot_proxy::db::store::{ClaimFilter, SqliteStore, Store};
+    use riot_proxy::jobs::analytics::enqueue_aggregate;
+    use riot_proxy::jobs::{JobError, Registry, Scheduler};
+    let e = env().await;
+    let q = &e.state.jobs;
+    let crawl_end = enqueue_aggregate(q, "kr", "RANKED_SOLO_5x5").await.unwrap();
+    let store = SqliteStore::new(e.state.db.clone());
+    let turn = store
+        .claim_job(i64::MAX, &ClaimFilter::open())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (turn.id.as_str(), turn.priority, turn.attempts),
+        (crawl_end.id.as_str(), 30_000, 1)
+    );
+    let row = |id: String| {
+        let db = e.state.db.clone();
+        async move {
+            db.read(move |c| {
+                c.query_row(
+                    "SELECT state, attempts, priority, payload FROM jobs WHERE id = ?1",
+                    [id],
+                    |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            r.get::<_, u32>(1)?,
+                            r.get::<_, i64>(2)?,
+                            r.get::<_, String>(3)?,
+                        ))
+                    },
+                )
+                .map_err(riot_proxy::db::DbError::from)
+            })
+            .await
+            .unwrap()
+        }
+    };
+    let (_, _, _, payload) = row(turn.id.clone()).await;
+
+    let r = e
+        .call(
+            "POST",
+            "/v1/admin/analytics/recompute",
+            &e.admin,
+            None,
+            Some(json!({"platform": "kr", "queue": "RANKED_SOLO_5x5"})),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::ACCEPTED);
+    assert_eq!(
+        row(turn.id.clone()).await,
+        ("running".to_string(), 1, 0, payload.clone()),
+        "still running, the same attempt and payload; priority 0"
+    );
+
+    // The turn ends as a rebuild's turn does: a yield with its progress.
+    let mut progress: serde_json::Value = serde_json::from_str(&payload).unwrap();
+    progress["rebuild"] = json!({"patch": 1, "step": 2});
+    let now = riot_proxy::clock::Clock::now().unix_ms;
+    Scheduler::new(e.state.db.clone(), Registry::new())
+        .finish(
+            &turn,
+            &Err(JobError::Yield {
+                retry_at: now,
+                payload: Some(progress.to_string()),
+            }),
+            now,
+        )
+        .await
+        .unwrap();
+    // A download waiting at 105: the lifted row is claimed ahead of it.
+    q.enqueue(riot_proxy::jobs::NewJob::new(
+        "archive:match",
+        105,
+        json!({"matchId": "KR_1"}),
+    ))
+    .await
+    .unwrap();
+    let next = store
+        .claim_job(i64::MAX, &ClaimFilter::open())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((next.id.as_str(), next.priority), (crawl_end.id.as_str(), 0));
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&next.payload).unwrap(),
+        progress
+    );
+}
+
 /// ADR-065: no platform sums every ladder; `?platform=` narrows to one.
 #[tokio::test]
 async fn without_a_platform_the_routes_sum_every_platform() {
@@ -682,6 +878,8 @@ async fn without_a_platform_the_routes_sum_every_platform() {
                 "champion_items",
                 "champion_runes",
                 "champion_spells",
+                "analytics_floor_totals",
+                "champion_ban_floor_totals",
             ] {
                 c.execute_batch(&format!(
                     "CREATE TEMP TABLE copy AS SELECT * FROM {table} WHERE platform = 'kr';
@@ -714,6 +912,30 @@ async fn without_a_platform_the_routes_sum_every_platform() {
         e.get("/v1/lol/analytics/champions?platform=euw1").await.json()["totalGames"],
         0
     );
+    // totalMatches (SITE-12) sums the platforms too; a platform with none is 0.
+    assert_eq!(
+        (&all["totalMatches"], &kr["totalMatches"], &na["totalMatches"]),
+        (&json!(2), &json!(1), &json!(1))
+    );
+    assert_eq!(
+        e.get("/v1/lol/analytics/champions?platform=euw1").await.json()["totalMatches"],
+        0
+    );
+    let m_all = e.get("/v1/lol/analytics/champions?minTier=MASTER").await.json();
+    let m_kr = e
+        .get("/v1/lol/analytics/champions?platform=kr&minTier=MASTER")
+        .await
+        .json();
+    // With a floor tier the match count is read from `analytics_floor_totals`,
+    // which sums over the platforms the same way.
+    assert_eq!(
+        (&m_all["totalGames"], &m_all["totalMatches"]),
+        (&json!(20), &json!(2))
+    );
+    assert_eq!(
+        (&m_kr["totalGames"], &m_kr["totalMatches"]),
+        (&json!(10), &json!(1))
+    );
 }
 
 #[tokio::test]
@@ -736,6 +958,8 @@ async fn patch_all_sums_every_patch_and_the_patch_list_offers_them() {
                 "champion_items",
                 "champion_runes",
                 "champion_spells",
+                "analytics_floor_totals",
+                "champion_ban_floor_totals",
             ] {
                 c.execute_batch(&format!(
                     "CREATE TEMP TABLE copy AS SELECT * FROM {table} WHERE patch = '16.19';
@@ -769,6 +993,36 @@ async fn patch_all_sums_every_patch_and_the_patch_list_offers_them() {
     );
     // Matches per tier are summed too, so a rate over both patches stays put.
     assert_eq!(first["pickRate"], newest["champions"][0]["pickRate"]);
+    // totalMatches (SITE-12): every patch's summed with `patch=all`, the
+    // newest patch's without `patch`.
+    let older = e.get("/v1/lol/analytics/champions?patch=16.18").await.json();
+    let named = e.get("/v1/lol/analytics/champions?patch=16.19").await.json();
+    assert_eq!(
+        (
+            &newest["totalMatches"],
+            &named["totalMatches"],
+            &older["totalMatches"]
+        ),
+        (&json!(1), &json!(1), &json!(1))
+    );
+    assert_eq!(
+        all["totalMatches"].as_i64(),
+        Some(named["totalMatches"].as_i64().unwrap() + older["totalMatches"].as_i64().unwrap())
+    );
+    let m_all = e
+        .get("/v1/lol/analytics/champions?patch=all&minTier=MASTER")
+        .await
+        .json();
+    let m_new = e.get("/v1/lol/analytics/champions?minTier=MASTER").await.json();
+    // And with a floor tier, from `analytics_floor_totals`, over the patches.
+    assert_eq!(
+        (&m_all["totalGames"], &m_all["totalMatches"]),
+        (&json!(20), &json!(2))
+    );
+    assert_eq!(
+        (&m_new["totalGames"], &m_new["totalMatches"]),
+        (&json!(10), &json!(1))
+    );
 
     let id = first["championId"].as_i64().unwrap();
     let d = e
@@ -1058,6 +1312,16 @@ async fn total_matches_counts_each_match_once() {
     assert_eq!(totals(&one), (Some(2), Some(2)));
     let min2 = list("&remakes=include&minGames=2").await;
     assert_eq!(totals(&min2), (Some(4), Some(2)));
+    // No row left: still the slice's matches.
+    let none_left = list("&remakes=include&minGames=999").await;
+    assert_eq!(
+        (
+            &none_left["champions"],
+            &none_left["computedAt"],
+            totals(&none_left)
+        ),
+        (&json!([]), &Value::Null, (Some(0), Some(2)))
+    );
     // Rates have no role or side: neither does their denominator.
     for q in ["&remakes=include&role=MIDDLE", "&remakes=include&side=blue"] {
         assert_eq!(list(q).await["totalMatches"], 2, "{q}");
@@ -2484,8 +2748,24 @@ async fn a_delta_adding_a_game_gives_a_new_tag_and_one_outside_the_slice_a_304()
     let e = env().await;
     e.seed_stamped().await;
     let uri = "/v1/lol/analytics/champions?patch=16.19&minGames=0";
+    // totalMatches (SITE-12) moves with the delta in every tier slice: the
+    // seed's players are all MASTER.
+    let sliced = ["", "&tier=MASTER", "&minTier=MASTER"];
+    let matches = |want: i64| {
+        let e = &e;
+        async move {
+            for q in sliced {
+                assert_eq!(
+                    e.get(&format!("{uri}{q}")).await.json()["totalMatches"],
+                    want,
+                    "{q}"
+                );
+            }
+        }
+    };
     let first = e.get(uri).await;
     assert_eq!(first.json()["totalGames"], 10);
+    matches(1).await;
     // The ranked game again: a game more for every row of the slice.
     e.archive_as("KR_9000000001", RANKED).await;
     e.delta().await;
@@ -2493,11 +2773,13 @@ async fn a_delta_adding_a_game_gives_a_new_tag_and_one_outside_the_slice_a_304()
     assert_eq!(moved.status, StatusCode::OK);
     assert_ne!(tag(&moved), tag(&first));
     assert_eq!(moved.json()["totalGames"], 20);
+    matches(2).await;
     // A remake: no row of the slice remakes are left out of.
     e.archive_as("KR_9000000002", REMAKE).await;
     e.delta().await;
     let same = e.call("GET", uri, &e.reader, Some(&tag(&moved)), None).await;
     assert_eq!(same.status, StatusCode::NOT_MODIFIED);
+    matches(2).await;
     // And the delta's output is the rebuild's.
     let counted = e.get(uri).await.body;
     e.delta_ctx(500)
@@ -2801,6 +3083,198 @@ async fn a_rebuild_in_turns_yields_after_each_transaction_and_ends_as_one_turn_d
         got.push(redact(e.get(uri).await.json()));
     }
     assert_eq!(got, want);
+}
+
+/// Every row of every rebuild step's table but `computed_at`, sorted: what
+/// two ways of counting the same archive must agree on.
+async fn analytics_rows(db: &riot_proxy::db::Db) -> Vec<(String, Vec<String>)> {
+    const TABLES: [&str; 16] = [
+        "analytics_slices",
+        "analytics_match_totals",
+        "champion_stats",
+        "champion_stats_totals",
+        "champion_bans",
+        "champion_ban_totals",
+        "analytics_floor_totals",
+        "champion_ban_floor_totals",
+        "champion_matchups",
+        "champion_items",
+        "champion_runes",
+        "champion_spells",
+        "champion_builds",
+        "champion_build_parts",
+        "champion_matchup_builds",
+        "champion_matchup_build_parts",
+    ];
+    db.read(|c| {
+        let mut out = vec![];
+        for t in TABLES {
+            let cols: Vec<String> = c
+                .prepare(&format!(
+                    "SELECT name FROM pragma_table_info('{t}') WHERE name <> 'computed_at' ORDER BY cid"
+                ))?
+                .query_map([], |r| r.get(0))?
+                .collect::<Result<_, _>>()?;
+            let row = cols
+                .iter()
+                .map(|c| format!("quote({c})"))
+                .collect::<Vec<_>>()
+                .join(" || '|' || ");
+            let rows: Vec<String> = c
+                .prepare(&format!("SELECT {row} FROM {t} ORDER BY 1"))?
+                .query_map([], |r| r.get(0))?
+                .collect::<Result<_, _>>()?;
+            out.push((t.to_string(), rows));
+        }
+        Ok::<_, DbError>(out)
+    })
+    .await
+    .unwrap()
+}
+
+/// AVL-12 (review of #277): the every-patch rebuild's prune race through the
+/// real job. The rebuild listed its patches when it began; a new patch's
+/// first matches are archived and counted by a delta before the rebuild's
+/// prune runs. Run to completion from that payload, the rebuild keeps the
+/// new patch's rows (their matches keep their bits, so nothing would count
+/// them again), the tables are what a clean rebuild of every patch gives,
+/// and a delta after it finds nothing.
+#[tokio::test]
+async fn an_every_patch_rebuild_keeps_a_patch_the_delta_counted_after_it_began() {
+    use riot_proxy::jobs::JobError;
+    let ladder = json!({"platform": KR_SOLO.0, "queue": KR_SOLO.1});
+    let e = env().await;
+    e.seed().await;
+    e.seed_builds().await;
+    // `AGGREGATE_PATCH_LIMIT=0` and the delta on: the first rebuild stamps
+    // the ladder.
+    e.delta_ctx(500)
+        .aggregate(&job("aggregate:analytics", ladder.clone()))
+        .await
+        .unwrap();
+    let ctx = e.delta_ctx(500);
+
+    // A rebuild begins: its payload lists every patch archived so far,
+    // before its prune has run (as `start_rebuild` leaves it).
+    let first = match ctx
+        .aggregate_turn(
+            &job("aggregate:analytics", ladder.clone()),
+            std::time::Duration::ZERO,
+        )
+        .await
+    {
+        Err(JobError::Yield { payload: Some(p), .. }) => p,
+        other => panic!("{other:?}"),
+    };
+    let mut payload: Value = serde_json::from_str(&first).unwrap();
+    let rebuild = &mut payload["rebuild"];
+    assert_eq!(rebuild["everyPatch"], true);
+    assert_eq!(rebuild["patches"], json!(["16.19"]));
+    rebuild["pruned"] = json!(false);
+    rebuild["patch"] = json!(0);
+    rebuild["step"] = json!(0);
+
+    // A new patch's first match arrives and the delta counts it.
+    e.archive_as("KR_9000000001", RANKED).await;
+    e.state
+        .db
+        .write(|c| {
+            c.execute(
+                "UPDATE matches SET patch = '16.20' WHERE match_id = 'KR_9000000001'",
+                [],
+            )?;
+            Ok::<_, DbError>(())
+        })
+        .await
+        .unwrap();
+    e.delta().await;
+    let new_rows = "SELECT count(*) FROM champion_stats WHERE patch = '16.20'";
+    let counted = e.count(new_rows).await;
+    assert!(counted > 0, "the delta counted the new patch");
+
+    // Rows of a patch no match has, which only the prune removes: a prune
+    // that does nothing leaves them.
+    let orphan_rows = "SELECT count(*) FROM champion_matchups WHERE patch = '16.18'";
+    e.state
+        .db
+        .write(|c| {
+            c.execute_batch(
+                "CREATE TEMP TABLE copy AS SELECT * FROM champion_matchups WHERE patch = '16.19';
+                 UPDATE copy SET patch = '16.18';
+                 INSERT INTO champion_matchups SELECT * FROM copy;
+                 DROP TABLE copy;",
+            )?;
+            Ok::<_, DbError>(())
+        })
+        .await
+        .unwrap();
+    assert!(
+        e.count(orphan_rows).await > 0,
+        "the fixture has matchup rows to copy"
+    );
+    assert_eq!(
+        e.count("SELECT count(*) FROM matches WHERE patch = '16.18'")
+            .await,
+        0,
+        "no match has the patch"
+    );
+
+    // The rebuild runs on from its payload, prune first, to the end.
+    let mut payload = payload.to_string();
+    for turn in 0.. {
+        assert!(turn < 100, "never ends");
+        let mut j = job("aggregate:analytics", ladder.clone());
+        j.payload.clone_from(&payload);
+        match ctx.aggregate_turn(&j, std::time::Duration::ZERO).await {
+            Ok(()) => break,
+            Err(JobError::Yield { payload: Some(p), .. }) => payload = p,
+            Err(other) => panic!("{other:?}"),
+        }
+    }
+    assert_eq!(e.count(new_rows).await, counted, "the new patch's rows survive");
+    assert_eq!(
+        e.count("SELECT count(*) FROM analytics_counted WHERE bits <> 63")
+            .await,
+        0
+    );
+    assert_eq!(
+        e.count(orphan_rows).await,
+        0,
+        "the prune dropped the rows of a patch no match has"
+    );
+    // Nothing is left for a delta to count, and the ladder is still
+    // stamped. Checked here, before the clean rebuild below stamps every
+    // match whatever the job left.
+    let done = ctx
+        .delta_ladder(&riot_proxy::jobs::analytics::Ladder {
+            platform: KR_SOLO.0.into(),
+            queue: KR_SOLO.1.into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(done.matches, 0);
+    assert_eq!(
+        e.count("SELECT count(*) FROM analytics_stamped WHERE stamped_at IS NOT NULL AND dirty_at IS NULL")
+            .await,
+        1
+    );
+
+    // What a clean rebuild of every patch gives, on the same archive.
+    let after_job = analytics_rows(&e.state.db).await;
+    let scope = riot_proxy::archive::analytics::Scope {
+        key_scope: e.scope.clone(),
+        platform: KR_SOLO.0.into(),
+        queue: KR_SOLO.1.into(),
+        queue_id: 420,
+        patches: None,
+        now: riot_proxy::clock::Clock::now().unix_ms,
+    };
+    e.state
+        .db
+        .write(move |c| riot_proxy::archive::analytics::rebuild_by_patch(c, &scope))
+        .await
+        .unwrap();
+    assert_eq!(after_job, analytics_rows(&e.state.db).await);
 }
 
 /// AVL-06 (ADR-213): `tiers:backfill` sweeps from each prefix's cursor and

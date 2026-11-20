@@ -17,7 +17,7 @@ Common parameter rules (`src/http/validate.rs`):
 
 ## `/v1/riot/*`: account-v1
 
-Riot endpoint: `account.byRiotId` `/riot/account/v1/accounts/by-riot-id/{gameName}/{tagLine}`, `account.byPuuid` `/riot/account/v1/accounts/by-puuid/{puuid}`, `account.regionByPuuid` `/riot/account/v1/region/by-game/lol/by-puuid/{puuid}` (`src/riot/endpoints.rs:L126-L147`, `L287-L304`). Soft TTL 86 400 s, hard 345 600 s, negative TTL 300 s, persisted to L2.
+Riot endpoint: `account.byRiotId` `/riot/account/v1/accounts/by-riot-id/{gameName}/{tagLine}`, `account.byPuuid` `/riot/account/v1/accounts/by-puuid/{puuid}`, `account.regionByPuuid` `/riot/account/v1/region/by-game/lol/by-puuid/{puuid}` (`src/riot/endpoints.rs:L126-L147`, `L287-L305`). Soft TTL 86 400 s, hard 345 600 s, negative TTL 300 s, persisted to L2.
 
 | Method | Path | Params | Riot call | Handler |
 |---|---|---|---|---|
@@ -33,9 +33,9 @@ The pinned and picked variants share one cache entry (`src/routes/riot.rs:L155-L
 {"puuid":"AbCdEfGhIjKlMnOpQrStUvWxYz0123456789AbCdEfGhIjKlMnOpQrStUvWxYz0123456789AbCdEf","gameName":"Hide on bush","tagLine":"KR1"}
 ```
 
-A Riot ID that does not exist is `404 NOT_FOUND` `Resource not found upstream`, and the 404 is cached for 300 s, so the next call is `404` with `X-Cache: HIT-NEG` and message `Resource not found upstream (negative-cached)` (`src/fetcher.rs:L485-L491`).
+A Riot ID that does not exist is `404 NOT_FOUND` `Resource not found upstream`, and the 404 is cached for 300 s, so the next call is `404` with `X-Cache: HIT-NEG` and message `Resource not found upstream (negative-cached)` (`src/fetcher.rs:L508-L514`).
 
-> **TODO (unverified):** the 200 body of `/v1/riot/accounts/region/by-puuid/{puuid}` is not typed in the OpenAPI document (it is not in `RIOT_BODIES`, `src/routes/docs.rs:L312-L345`); the proxy forwards Riot's `AccountRegionDTO` bytes unchanged.
+> **TODO (unverified):** the 200 body of `/v1/riot/accounts/region/by-puuid/{puuid}` is not typed in the OpenAPI document (it is not in `RIOT_BODIES`, `src/routes/docs.rs:L315-L348`); the proxy forwards Riot's `AccountRegionDTO` bytes unchanged.
 
 ## `/v1/lol/*`: League passthrough
 
@@ -54,7 +54,7 @@ A Riot ID that does not exist is `404 NOT_FOUND` `Resource not found upstream`, 
 | GET | `/v1/lol/status/{platform}` | platform | `status.platformData` `/lol/status/v4/platform-data` | soft 300 s; kept warm by the status poller, so usually `HIT` (SITE-13) | `src/routes/lol.rs:L408` |
 | GET | `/v1/lol/status` | none | **none**: a typed summary of every polled platform from `platform_status` (SITE-14, [below](#every-platforms-status-get-v1lolstatus)) | always `HIT` | `src/routes/lol.rs:L443` |
 
-Hard TTL is soft × 4 while `STALE_WHILE_REVALIDATE=true` (default); the full table with line references is in [../reference/riot-api-usage.md](../reference/riot-api-usage.md). Exact upstream URLs per route are asserted in `tests/snapshots/lol_routes__lol_routes_upstream_calls.snap`.
+Hard TTL is soft × 4 while `STALE_WHILE_REVALIDATE=true` (default), except `status.platformData`, soft × 2 (300 s / 600 s, so the status poller's copy is a `HIT` between rounds; `Endpoint::stale_multiplier`, SITE-13); the full table with line references is in [../reference/riot-api-usage.md](../reference/riot-api-usage.md). Exact upstream URLs per route are asserted in `tests/snapshots/lol_routes__lol_routes_upstream_calls.snap`.
 
 Match routes derive the region from the id's prefix (`EUW1_` is `europe`; `ME1_` is the `me1` platform's, also `europe`, ADR-143 and ADR-216). A declared region that disagrees is refused before any Riot call (`src/routes/lol.rs:L61-L72`):
 
@@ -67,7 +67,7 @@ Page past the end of a ladder division gives an empty array, not an error (`src/
 
 ### Every platform's status: `GET /v1/lol/status`
 
-The one `/v1/lol/*` route that never calls Riot and is not a passthrough (SITE-14, ADR-220). The status poller reads each platform in `STATUS_POLL_PLATFORMS` every `STATUS_POLL_INTERVAL_S` (300 s) into `platform_status` ([../operations/observability.md](../operations/observability.md) has its metric); this route summarises those rows (`src/status/poll/summary.rs:L215-L226`). Same read key and scope as the per-platform route, and one call is one request against the consumer quota, however many platforms it lists. An available entry is at most one poll interval old.
+The one `/v1/lol/*` route that never calls Riot and is not a passthrough (SITE-14, ADR-220). The status poller reads each platform in `STATUS_POLL_PLATFORMS` every `STATUS_POLL_INTERVAL_S` (240 s) into `platform_status` ([../operations/observability.md](../operations/observability.md) has its metric); this route summarises those rows (`src/status/poll/summary.rs:L238-L268`). Same read key and scope as the per-platform route, and one call is one request against the consumer quota, however many platforms it lists. An available entry is at most two poll intervals and a 60 s grace old; an older one is unavailable (SITE-18).
 
 ```text
 GET /v1/lol/status
@@ -84,15 +84,15 @@ x-cache-fetched-age: 41
 | Field | Meaning |
 |---|---|
 | `platforms` | one entry per platform in `STATUS_POLL_PLATFORMS`, in the platform order of [endpoints.md](endpoints.md#regions-and-platforms) (`na1` … `vn2`) |
-| `available` | the poller has stored a 200 and no read has failed since; otherwise `false`, the counts are `null` (not read from the older body), and the call is still a 200 |
-| `error` | why not available: the last failure's error (`CODE: message`) or `not read yet`; `null` when available |
+| `available` | the poller has stored a 200, no read has failed since, and that 200 is at most two poll intervals and a 60 s grace old; otherwise `false`, the counts are `null` (not read from the older body), and the call is still a 200 |
+| `error` | why not available: the last failure's error (`CODE: message`), `not read yet` (no stored 200), `stale: last read N s ago` (older than two poll intervals and a 60 s grace), `unexpected body` (a stored 200 that is not an object) or `the stored body is not JSON` (a damaged row); `null` when available |
 | `incidents` | entries in Riot's `incidents[]` |
 | `maintenances` | entries in `maintenances[]` whose `maintenance_status` is not `complete` |
 | `worstSeverity` | the worst incident `incident_severity`, `critical` > `warning` > `info`, or `null`; any other value is logged once and not counted |
 | `maintenanceInProgress` | a maintenance has `maintenance_status: "in_progress"` |
 | `fetchedAgeSeconds` | seconds since the last 200, available or not; `null` before any |
 
-`X-Cache` is always `HIT`; `X-Cache-Fetched-Age` is the stalest **available** entry's age and is left out when none is available; there is no `X-Cache-Age`. With the poller off (`STATUS_POLL_PLATFORMS=none`) the route answers `503` with code `NOT_FOUND` and no `Retry-After` (`src/routes/lol.rs:L469-L475`). Riot's field names are the portal's `PlatformDataDto` and `StatusDto` (ADR-217); a body without them counts as listing nothing.
+`X-Cache` is always `HIT`; `X-Cache-Fetched-Age` is the stalest **available** entry's age and is left out when none is available; there is no `X-Cache-Age`. With the poller off (`STATUS_POLL_PLATFORMS=none`) the route answers `404` `NOT_FOUND`, as every switched-off feature does (`src/routes/lol.rs:L472-L480`; SITE-18, owner decision of 2026-11-17; #283 answered 503). The body is sent as `application/json; charset=utf-8`, like every read route. Riot's field names are the portal's `PlatformDataDto` and `StatusDto` (ADR-217); a body without them counts as listing nothing.
 
 Example, a match (shortened; Riot's `MatchDto`, served from the archive after the first fetch):
 
@@ -149,5 +149,5 @@ ninjagoldfinch.lol does not use these image routes; its browser loads icons stra
 > **TODO (unverified):** whether `ServeDir` sends `Last-Modified` and honours `If-Modified-Since` for images written by the fill route on a later request; the behaviour is tower-http's (`docs/_meta/scratch/routes.md` §7).
 
 ---
-**Sources:** `src/routes/riot.rs:L127-L300`, `src/routes/lol.rs:L37-L475`, `src/status/poll/summary.rs:L1-L245`, `src/routes/statics.rs:L4-L292`, `src/routes/passthrough.rs:L325-L476`, `src/http/validate.rs:L53-L166,L232-L244`, `src/riot/endpoints.rs:L126-L330`, `src/riot/ladder.rs:L7-L26`, `src/riot/routing.rs:L138-L205`, `src/static/mod.rs:L28-L101`, `src/fetcher.rs:L465-L491`, `tests/snapshots/lol_routes__lol_routes_upstream_calls.snap`, `tests/snapshots/ddragon__ddragon_file_headers.snap`, `tests/snapshots/ddragon__ddragon_missing_headers.snap`, `docs/_meta/scratch/routes.md` §1.2-1.3,1.6-1.7, `docs/_meta/scratch/riot-and-cache.md` §2, live capture against `target/debug/riot-proxy` 2.7.0
-**Last verified:** 2026-11-17 against commit `bdc62e7`
+**Sources:** `src/routes/riot.rs:L127-L300`, `src/routes/lol.rs:L37-L480`, `src/status/poll/summary.rs:L1-L287`, `src/routes/statics.rs:L4-L292`, `src/routes/passthrough.rs:L325-L476`, `src/http/validate.rs:L53-L166,L232-L244`, `src/riot/endpoints.rs:L126-L331`, `src/riot/ladder.rs:L7-L26`, `src/riot/routing.rs:L138-L205`, `src/static/mod.rs:L28-L101`, `src/fetcher.rs:L488-L514`, `tests/snapshots/lol_routes__lol_routes_upstream_calls.snap`, `tests/snapshots/ddragon__ddragon_file_headers.snap`, `tests/snapshots/ddragon__ddragon_missing_headers.snap`, `docs/_meta/scratch/routes.md` §1.2-1.3,1.6-1.7, `docs/_meta/scratch/riot-and-cache.md` §2, live capture against `target/debug/riot-proxy` 2.7.0
+**Last verified:** 2026-11-21 against commit `8f606c8`

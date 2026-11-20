@@ -9,7 +9,7 @@ Shared behaviour (`src/routes/players.rs:L73-L121`, `L152-L174`):
 - `Content-Type: application/json; charset=utf-8`.
 - `X-Cache` is `STALE` if any part was served past its soft TTL, else `MISS` if any part was a miss or bypass, else `HIT` (AVL-03, ADR-212); `X-Cache-Age` is the oldest part's content age; `X-Cache-Fetched-Age` is the oldest fetched age when any part has one. The body also reports ages per part (`ageSeconds`, `fetchedAgeSeconds`), which is what the site reads (site ADR-019).
 - A part that fails becomes `null` and adds a `warnings[]` entry `"<part> unavailable (<CODE>: <message>)"`; only the id-list failure on the match page fails the whole request.
-- **Stale beats none** (AVL-03, ADR-212). A part whose refresh fails for any reason but Riot's 404 (the limiter's budget, a 429, a 5xx, a timeout) is served from its stored copy, up to a day past its hard TTL, rather than left out (the account, summoner, league, top-mastery and match-id-list parts keep theirs that long; AVL-08); a part past its soft TTL is served at once and refreshed in the background. Either way the body says `"refreshing": true`, the part keeps its real `ageSeconds`/`fetchedAgeSeconds`, and `warnings[]` names it: `"<part> served stale (last read from Riot <n> s ago)"`. A part with nothing stored waits for the limiter at most `CLIENT_WAIT_BUDGET_MS` and fails as above.
+- **Stale beats none** (AVL-03, ADR-212). A part whose refresh fails for any reason but Riot's 404 (the limiter's budget, a 429, a 5xx, a timeout) is served from its stored copy, up to a day past its hard TTL, rather than left out (the account, summoner, league, top-mastery and match-id-list parts keep theirs that long; AVL-08); a part past its soft TTL is served at once and refreshed in the background. Either way the body says `"refreshing": true`, the part keeps its real `ageSeconds`/`fetchedAgeSeconds`, and `warnings[]` names it: `"<part> served stale (last read from Riot <n> s ago)"`. With a copy stored, a part is also served `STALE` once its refresh has not answered within `CLIENT_WAIT_BUDGET_MS` + 250 ms (AVL-09); the refresh goes on and fills the cache. A part with nothing stored waits for its fetch at most 20 s and then fails as above, `UPSTREAM_ERROR` (AVL-14); when the limiter has no room for it within `CLIENT_WAIT_BUDGET_MS` it still fails `RATE_LIMITED` then. A won `?refresh=true` waits up to 20 s per call for Riot and can answer `refreshed: true` with `refreshing: true` and stale parts.
 - `?refresh=true` is accepted from **any** consumer (unlike the passthrough routes) but metered: one claim per 60 s per `(part, puuid)` (`src/http/refresh.rs:L18`, `L43-L71`). Losing the race is not an error: the body says `"refreshed":false` and `"refreshAvailableIn":<seconds>`. `refresh` must be exactly `true` or `false` (`src/http/validate.rs:L185-L192`).
 - `?platform` is validated case-sensitively; an unknown value is `400 BAD_REGION` `querystring/platform must be equal to one of the allowed values` (`src/http/validate.rs:L194-L198`).
 
@@ -24,7 +24,7 @@ Shared behaviour (`src/routes/players.rs:L73-L121`, `L152-L174`):
 
 Errors specific to this route: all four parts failing is `404 NOT_FOUND` `No profile data available for this PUUID` (`src/routes/players.rs:L398-L400`); a Riot ID whose account has no `puuid` is `404` `Riot ID '{gameName}#{tagLine}' did not resolve to a PUUID` (`L505-L513`); an unparsable `region` from `account.regionByPuuid` is `502 UPSTREAM_ERROR` (`L283-L302`). A successful profile upserts the `players` row (`L403-L414`).
 
-Response `ProfileBody` (`src/routes/players.rs:L225-L257`), shortened from `tests/snapshots/players_routes__players_profile.snap`:
+Response `ProfileBody` (`src/routes/players.rs:L225-L257`), shortened from `tests/snapshots/it__players_routes__players_profile.snap`:
 
 ```json
 {
@@ -52,7 +52,7 @@ Response `ProfileBody` (`src/routes/players.rs:L225-L257`), shortened from `test
 
 The first page (`start=0`) of a player not yet walked queues a `backfill:player` job and reports it as `backfill{jobId,status,limit}` (`L547-L599`, `L484-L492`); `limit` is `LOOKUP_BACKFILL_LIMIT`, by default the whole history (`4294967295`).
 
-Response `MatchPage` (`src/routes/players.rs:L541-L577`, `MatchSummary` `src/routes/summary.rs:L14-L43`), shortened from `tests/snapshots/players_routes__players_match_page.snap`:
+Response `MatchPage` (`src/routes/players.rs:L541-L577`, `MatchSummary` `src/routes/summary.rs:L14-L43`), shortened from `tests/snapshots/it__players_routes__players_match_page.snap`:
 
 ```json
 {
@@ -88,7 +88,7 @@ x-cache-age: 0
 {"puuid":"AbC…","platform":null,"queue":null,"patch":null,"archivedGames":0,"champions":[]}
 ```
 
-With data, `champions[]` rows are `{championId, games, wins, winRate, avgKda, csPerMin, lastPlayedAt}` (`tests/snapshots/players_routes__players_champion_pool.snap`).
+With data, `champions[]` rows are `{championId, games, wins, winRate, avgKda, csPerMin, lastPlayedAt}` (`tests/snapshots/it__players_routes__players_champion_pool.snap`).
 
 ## `/v1/lol/analytics/*`: champion analytics
 
@@ -127,14 +127,14 @@ GET /v1/lol/analytics/champions?queue=RANKED_SOLO_5x5&limit=2
 HTTP/1.1 200 OK
 content-type: application/json; charset=utf-8
 cache-control: private, max-age=300
-etag: W/"pG-2XjBV9zuyNBcF5V3Tf_TERlw-OdnaWXVDeIr2mTM"
+etag: W/"SauT-iinG0trDNmv8WIWuqtq65wUCmDNzmGSJk97mRE"
 x-cache: MISS
 
 {"platform":null,"queue":"RANKED_SOLO_5x5","tier":null,"minTier":null,"side":null,"patch":null,"role":null,"computedAt":null,"totalGames":0,"totalMatches":0,"champions":[]}
 
-GET … with If-None-Match: W/"pG-2XjBV9zuyNBcF5V3Tf_TERlw-OdnaWXVDeIr2mTM"
+GET … with If-None-Match: W/"SauT-iinG0trDNmv8WIWuqtq65wUCmDNzmGSJk97mRE"
 HTTP/1.1 304 Not Modified
-etag: W/"pG-2XjBV9zuyNBcF5V3Tf_TERlw-OdnaWXVDeIr2mTM"
+etag: W/"SauT-iinG0trDNmv8WIWuqtq65wUCmDNzmGSJk97mRE"
 x-cache: HIT
 ```
 
@@ -142,7 +142,7 @@ A read failure is `500 INTERNAL` (`L638`).
 
 ### Bodies
 
-`champions` (`ChampionStatsResponse`, `src/routes/analytics.rs:L111-L144`), one row per champion from `tests/snapshots/analytics__analytics_champions.snap`:
+`champions` (`ChampionStatsResponse`, `src/routes/analytics.rs:L111-L144`), one row per champion from `tests/snapshots/it__analytics__analytics_champions.snap`:
 
 ```json
 {"platform": null, "queue": "RANKED_SOLO_5x5", "tier": null, "minTier": null, "side": null, "patch": "16.19", "role": null,
@@ -153,14 +153,14 @@ A read failure is `500 INTERNAL` (`L638`).
 
 `totalGames` sums the games of the rows returned, so it moves with `limit` and `minGames` and counts a match once for each of its players in them (ten for a full slice). `totalMatches` (SITE-12, ADR-218) counts the slice's matches once each: the denominator of every row's `pickRate` and `banRate`, which is every match in the slice without `tier`, those with a player at or above `minTier`, or those with a player at `tier`; every role and side; 0 when no patch is aggregated.
 
-`champions/{championId}` (`ChampionDetailResponse`, `L240-L277`) adds `championName`, `stats[]` (the summed row, or the named tier's), `byTier[]` (one row per tier), `matchups[]` (`{opponentId, role, games, wins, winRate}`), `items[]` (`{itemId, games, wins, winRate}`), `runes[]` (`{keystoneId, subStyleId, …}`), `spells[]` (`{spellA, spellB, …}`) and `sectionsComputedAt{stats,matchups,items,runes,spells}` (`tests/snapshots/analytics__analytics_champion_detail.snap`).
+`champions/{championId}` (`ChampionDetailResponse`, `L240-L277`) adds `championName`, `stats[]` (the summed row, or the named tier's), `byTier[]` (one row per tier), `matchups[]` (`{opponentId, role, games, wins, winRate}`), `items[]` (`{itemId, games, wins, winRate}`), `runes[]` (`{keystoneId, subStyleId, …}`), `spells[]` (`{spellA, spellB, …}`) and `sectionsComputedAt{stats,matchups,items,runes,spells}` (`tests/snapshots/it__analytics__analytics_champion_detail.snap`).
 
-`champions/{championId}/builds` (`ChampionBuildsResponse`, `L362-L400`) returns `builds[]` of set builds: `{core: [6655, 3157], games, wins, winRate, winRateLow, pickRate, starter[], boots[], next[[…],[…],[…]], runes[], spells[], skillOrder[{order: "QEW", …}]}`; `winRateLow` is the Wilson lower bound (`L660-L669`). `role` is always set in the response (`tests/snapshots/analytics__analytics_champion_builds.snap`).
+`champions/{championId}/builds` (`ChampionBuildsResponse`, `L362-L400`) returns `builds[]` of set builds: `{core: [6655, 3157], games, wins, winRate, winRateLow, pickRate, starter[], boots[], next[[…],[…],[…]], runes[], spells[], skillOrder[{order: "QEW", …}]}`; `winRateLow` is the Wilson lower bound (`L660-L669`). `role` is always set in the response (`tests/snapshots/it__analytics__analytics_champion_builds.snap`).
 
 `patches` (`AnalyticsPatchesResponse`, `L418-L431`): `{"platform":null,"queue":"RANKED_SOLO_5x5","championId":null,"side":null,"patches":[…]}`.
 
 What ninjagoldfinch.lol sends: `queue=RANKED_SOLO_5x5`, optional `patch` and `role`, `minGames=0`, `limit=500` on the list, `limit=10` on the detail, `limit=200` on matchups; never `tier`, `side` or `minTier` (`docs/_meta/scratch/siblings.md` §1.5).
 
 ---
-**Sources:** `src/routes/players.rs:L5-L7,L73-L174,L225-L272,L283-L302,L398-L414,L445-L537,L592-L661,L687-L735,L891-L911,L961,L989-L1003,L1082-L1162`, `src/routes/summary.rs:L14-L43`, `src/http/refresh.rs:L18-L71`, `src/http/validate.rs:L185-L250`, `src/routes/analytics.rs:L1-L3,L52-L56,L111-L144,L163-L188,L240-L277,L336-L431,L497-L640,L660-L669,L766-L782,L784-L789,L920-L1000,L1049,L1153,L1259,L1531,L1670`, `src/routes/analytics/cache.rs:L1-L19,L89-L137,L181-L264`, `tests/snapshots/players_routes__*.snap`, `tests/snapshots/analytics__*.snap`, `docs/DECISIONS.md` ADR-065, ADR-123, `docs/_meta/scratch/routes.md` §1.4-1.5, `docs/_meta/scratch/siblings.md` §1.5, live capture against `target/debug/riot-proxy` 2.7.0
-**Last verified:** 2026-11-17 against commit `a0a7375`
+**Sources:** `src/routes/players.rs:L5-L7,L73-L174,L225-L272,L283-L302,L398-L414,L445-L537,L592-L661,L687-L735,L891-L911,L961,L989-L1003,L1082-L1162`, `src/routes/summary.rs:L14-L43`, `src/http/refresh.rs:L18-L71`, `src/http/validate.rs:L185-L250`, `src/routes/analytics.rs:L1-L3,L52-L56,L111-L144,L163-L188,L240-L277,L336-L431,L497-L640,L660-L669,L766-L782,L784-L789,L920-L1000,L1049,L1153,L1259,L1531,L1670`, `src/routes/analytics/cache.rs:L1-L19,L89-L137,L181-L264`, `tests/snapshots/it__players_routes__*.snap`, `tests/snapshots/it__analytics__*.snap`, `docs/DECISIONS.md` ADR-065, ADR-123, `docs/_meta/scratch/routes.md` §1.4-1.5, `docs/_meta/scratch/siblings.md` §1.5, live capture against `target/debug/riot-proxy` 2.7.0
+**Last verified:** 2026-11-21 against commit `72fcd7a`

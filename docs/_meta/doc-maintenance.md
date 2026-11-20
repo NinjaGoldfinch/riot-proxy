@@ -26,6 +26,7 @@ Which documents to touch when which code changes, how to regenerate the generate
 | A job kind, tick or priority | `architecture/concurrency-and-rate-limiting.md`, `operations/runbook.md`, `workflows/adding-a-job.md` |
 | Limiter, cache or fetcher behaviour | `architecture/request-lifecycle.md`, `architecture/concurrency-and-rate-limiting.md`, `data/caching.md`, `reference/riot-api-usage.md` |
 | A Riot endpoint | `reference/riot-api-usage.md`, `data/caching.md` (TTLs), `workflows/adding-a-riot-call.md` |
+| The analytics `STATS_SHAPE` marker or another part of the analytics `ETag` (`src/routes/analytics.rs`) | the example tag in `api/examples.md`, `api/endpoints-players-analytics.md` and `api/pagination-filtering-and-versioning.md`, taken from a running server; `tests/analytics.rs` rebuilds the tag and fails until its material is updated |
 | A metric, log line or health body | `operations/observability.md`, `integration/monitoring-hooks.md`, `docs/design/metrics.md` (a unit test checks it) |
 | Object storage layout, lifecycle or credentials | `integration/object-storage.md`, `deployment/backup-and-restore.md`, `deployment/security.md`, `deploy/README.md` |
 | A workflow file | `workflows/ci.md`, `workflows/release-process.md` |
@@ -51,7 +52,7 @@ json.dump(d,open(p,'w'),indent=2,ensure_ascii=False); open(p,'a').write('\n')
 EOF2
 ```
 
-Then cross-check the route table against the document (the repo's own `tests/openapi.rs` asserts `/openapi.json` equals `spec()`; `scripts/compare-openapi.py OLD NEW --prefix /v1/` lists operations missing from NEW). The same test file checks that every response declares the headers it sends (SITE-04): a route whose headers differ from its tag's (the analytics routes, the image mirror, `GET /v1/lol/status`) has its own rule in `headers_for` (`src/routes/docs.rs`) and its own assertion there.
+Then cross-check the route table against the document (the repo's own `tests/openapi.rs` asserts `/openapi.json` equals `spec()`; `scripts/compare-openapi.py OLD NEW --prefix /v1/` lists operations missing from NEW). The same test file checks that every response declares the headers it sends (SITE-04): a route whose headers differ from its tag's (the analytics routes, the image mirror, `GET /v1/lol/status`) has its own rule in `headers_for` (`src/routes/docs.rs`) and its own assertion there (the status summary's poller-off 404 declares neither `X-Cache` nor `Retry-After`, and it has no 503, SITE-18).
 
 ## Checking links
 
@@ -119,5 +120,5 @@ These files are written for a static site generator served from the dev box. The
 The files under [scratch/](./scratch/) are the Phase 0 inventories the set was written from: `routes.md`, `config.md`, `riot-and-cache.md`, `jobs-and-observability.md`, `persistence.md`, `siblings.md`, `tests-tooling-history.md`, plus `WRITING-BRIEF.md` (the writers' shared contract) and `openapi-generated.json` (the unpatched generator output). They are dense, cite line numbers that drift with every change, and are not meant for readers; refresh or delete them when the pages that cite them are re-verified.
 
 ---
-**Sources:** `docs/_meta/scratch/WRITING-BRIEF.md`, `src/routes/analytics.rs:L1049`, `src/routes/players.rs:L1082`, `tests/openapi.rs`, `scripts/compare-openapi.py`, `src/config/tests.rs:L443-L462`
-**Last verified:** 2026-11-17 against commit `bdc62e7`
+**Sources:** `docs/_meta/scratch/WRITING-BRIEF.md`, `src/routes/analytics.rs:L1049`, `src/routes/players.rs:L1082`, `tests/openapi.rs`, `scripts/compare-openapi.py`, `src/config/tests.rs:L443-L462`, `src/routes/analytics.rs:L444`
+**Last verified:** 2026-11-21 against commit `72fcd7a`
