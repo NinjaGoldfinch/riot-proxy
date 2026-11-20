@@ -29,7 +29,7 @@ Steps 1 to 5 are code; 6 and 7 are tests that fail until the route is documented
 
 ### 1. Registry entry (only when it fans out to Riot)
 
-If the route calls a Riot method the proxy does not yet know, add its `ep(` row to `ENDPOINTS` and its id to `V2_ADDED` in `src/riot/endpoints.rs` first; the unit tests there pin the table (`src/riot/endpoints.rs:125-334`, `541-580`). The whole procedure, the TTL sources and the replay fixture are in [adding-a-riot-call.md](./adding-a-riot-call.md). For the example the id is `clash.playerByPuuid` on `HostKind::Platform`. A route that only reads what is already archived skips this step.
+If the route calls a Riot method the proxy does not yet know, add its `ep(` row to `ENDPOINTS` and its id to `V2_ADDED` in `src/riot/endpoints.rs` first; the unit tests there pin the table (`src/riot/endpoints.rs:125-335`, `542-581`). The whole procedure, the TTL sources and the replay fixture are in [adding-a-riot-call.md](./adding-a-riot-call.md). For the example the id is `clash.playerByPuuid` on `HostKind::Platform`. A route that only reads what is already archived skips this step.
 
 ### 2. The handler
 
@@ -65,7 +65,7 @@ The path template uses `{name}` segments; a wildcard is `{*name}` (`src/routes/s
 
 ### 3. Register it
 
-Add `.routes(routes!(clash_players_by_puuid))` to the file's `router()` (`src/routes/lol.rs:37-51`). Every area router is already merged into the `read` group of `routes::docs::api_router`, which gets the `require_read` guard, and `admin::router()` into the `admin` group with `require_admin` (`src/routes/docs.rs:118-153`). A new file needs a `pub mod` line in `src/routes/mod.rs` and a `.merge(routes::<file>::router())` in the right group of `api_router`; nothing else, since `api_router` is the single source for both the served routes and the OpenAPI document (`src/routes/docs.rs:116-117`, `368-371`). Auth, per-key quota, `X-RateLimit-*`, `X-Request-Id`, the request metric labelled with the matched template, compression and the body limit all come from the app layers (`src/app.rs:71-133`).
+Add `.routes(routes!(clash_players_by_puuid))` to the file's `router()` (`src/routes/lol.rs:37-51`). Every area router is already merged into the `read` group of `routes::docs::api_router`, which gets the `require_read` guard, and `admin::router()` into the `admin` group with `require_admin` (`src/routes/docs.rs:118-153`). A new file needs a `pub mod` line in `src/routes/mod.rs` and a `.merge(routes::<file>::router())` in the right group of `api_router`; nothing else, since `api_router` is the single source for both the served routes and the OpenAPI document (`src/routes/docs.rs:116-117`, `371-374`). Auth, per-key quota, `X-RateLimit-*`, `X-Request-Id`, the request metric labelled with the matched template, compression and the body limit all come from the app layers (`src/app.rs:71-133`).
 
 ### 4. Validate
 
@@ -122,5 +122,5 @@ Record the decision as the next free `ADR-nnn` in `docs/DECISIONS.md` and tick t
 9. `just lint`, `just test`; CI green ([ci.md](./ci.md)).
 
 ---
-**Sources:** `src/routes/docs.rs:L116-L153`, `L374-L377`, `src/routes/riot.rs:L21-L84`, `src/routes/lol.rs:L37-L112`, `L217-L229`, `src/routes/passthrough.rs:L17-L89`, `L94-L167`, `src/routes/mod.rs:L3-L15`, `src/routes/statics.rs:L71`, `src/http/validate.rs:L21-L31`, `L67-L253`, `src/app.rs:L71-L133`, `src/riot/endpoints.rs:L125-L334`, `L559-L599`, `src/cli/mod.rs:L73-L82`, `src/ui/showcase.html:L231-L241`, `tests/ui.rs:L427-L471`, `tests/openapi.rs:L9-L60`, `tests/lol_routes.rs:L22-L80`, `tests/riot_routes.rs:L16-L80`, `L243-L245`, `docs/design/11-showcase.md:L117-L131`, `docs/IMPLEMENTATION.md:L18`, `L22-L24`, `L94`, `PROGRESS.md:L389-L390`, `L392`, `.github/PULL_REQUEST_TEMPLATE.md:L21`
-**Last verified:** 2026-11-17 against commit `bdc62e7`
+**Sources:** `src/routes/docs.rs:L116-L153`, `L377-L380`, `src/routes/riot.rs:L21-L84`, `src/routes/lol.rs:L37-L112`, `L217-L229`, `src/routes/passthrough.rs:L17-L89`, `L94-L167`, `src/routes/mod.rs:L3-L15`, `src/routes/statics.rs:L71`, `src/http/validate.rs:L21-L31`, `L67-L253`, `src/app.rs:L71-L133`, `src/riot/endpoints.rs:L125-L335`, `L560-L600`, `src/cli/mod.rs:L73-L82`, `src/ui/showcase.html:L231-L241`, `tests/ui.rs:L427-L471`, `tests/openapi.rs:L9-L60`, `tests/lol_routes.rs:L22-L80`, `tests/riot_routes.rs:L16-L80`, `L243-L245`, `docs/design/11-showcase.md:L117-L131`, `docs/IMPLEMENTATION.md:L18`, `L22-L24`, `L94`, `PROGRESS.md:L389-L390`, `L392`, `.github/PULL_REQUEST_TEMPLATE.md:L21`
+**Last verified:** 2026-11-21 against commit `8f606c8`

@@ -437,7 +437,7 @@ pub const CATALOGUE: &[MetricDef] = &[
         STATUS_POLLS_TOTAL,
         Kind::Counter,
         &["platform", "result"],
-        "Status poller reads of lol-status-v4 platform-data: ok (a 200 stored), failed, or skipped (no limiter room within 1 s)",
+        "Status poller reads of lol-status-v4 platform-data: ok (a 200 stored), failed, or skipped (no limiter room within 30 s)",
         &[],
     ),
 ];

@@ -364,19 +364,33 @@ async fn pending(db: &Db) -> Vec<String> {
 }
 
 /// Let the tick loops run what the clock has reached, and return what is
-/// pending then. Time stays paused: a read goes through `spawn_blocking`,
-/// which holds the clock still, and nothing here sleeps, so nothing moves the
-/// clock behind the test's back.
-async fn settle(db: &Db) -> Vec<String> {
-    let mut last = pending(db).await;
-    let mut same = 0;
-    while same < 20 {
-        tokio::task::yield_now().await;
-        let now = pending(db).await;
-        same = if now == last { same + 1 } else { 0 };
-        last = now;
+/// pending then. A loop's read of its last run and a fire's enqueue run on
+/// the readers and the writer thread, outside the paused clock and as slow as
+/// the box is: wait until no loop is busy ([`Ticks::busy`]), not for the
+/// rows to look settled, which under load returned before a write had landed
+/// (CI-07). Time stays paused: the waits go through `spawn_blocking`, which
+/// holds the clock still, and nothing here sleeps on it.
+async fn settle(db: &Db, ticks: &Ticks) -> Vec<String> {
+    let since = std::time::Instant::now();
+    loop {
+        // A loop the clock has reached wakes and starts its fire, counted
+        // busy from its first poll, within a few turns of this runtime.
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        if ticks.busy() == 0 {
+            break;
+        }
+        assert!(
+            since.elapsed() < Duration::from_secs(30),
+            "the tick loops are still busy after 30 s: busy() = {}",
+            ticks.busy()
+        );
+        tokio::task::spawn_blocking(|| std::thread::sleep(Duration::from_millis(1)))
+            .await
+            .unwrap();
     }
-    last
+    pending(db).await
 }
 
 /// What a worker does with every pending row: finish it now. Through a
@@ -498,20 +512,74 @@ async fn a_kind_that_ran_half_a_period_ago_first_fires_half_a_period_later() {
     done(&db, kinds::MAINTENANCE, kinds::MAINTENANCE, 50_000).await;
     let s = Scheduler::new(db.clone(), Registry::new());
     let ticks = Ticks::start(&s, "s1", vec![(kinds::MAINTENANCE, Duration::from_secs(100))]);
-    assert!(settle(&db).await.is_empty(), "not at boot");
-    advance(49).await;
-    assert!(settle(&db).await.is_empty(), "49 s in");
-    advance(1).await;
-    assert_eq!(settle(&db).await, ["maintenance:maintenance"], "50 s in");
+    assert!(settle(&db, &ticks).await.is_empty(), "not at boot");
+    // 45 s, not 49: the run is stamped on the wall clock, which moves on
+    // between `done` and `start` as slowly as the box is.
+    advance(45).await;
+    assert!(settle(&db, &ticks).await.is_empty(), "45 s in");
+    advance(5).await;
+    assert_eq!(settle(&db, &ticks).await, ["maintenance:maintenance"], "50 s in");
     finish_all(&d).await;
-    advance(98).await;
-    assert!(settle(&db).await.is_empty(), "148 s in");
-    advance(2).await;
+    advance(95).await;
+    assert!(settle(&db, &ticks).await.is_empty(), "145 s in");
+    advance(5).await;
     assert_eq!(
-        settle(&db).await,
+        settle(&db, &ticks).await,
         ["maintenance:maintenance"],
         "then every period"
     );
+    ticks.shutdown().await;
+}
+
+/// The two guards `settle` relies on (CI-07): a loop counts as busy from
+/// `start` itself, before its boot read is first polled, and a fire from its
+/// first poll until its enqueue has landed. Without the first, `settle` could
+/// read 0 before a loop had started; without the second, before a fire held
+/// up on the writer had written.
+#[tokio::test(start_paused = true)]
+async fn a_loop_is_busy_from_start_and_a_fire_until_its_write_lands() {
+    let (_d, db) = db();
+    done(&db, kinds::MAINTENANCE, kinds::MAINTENANCE, 50_000).await;
+    // Due 90 s in, after the fire below.
+    done(&db, kinds::DDRAGON_SYNC, kinds::DDRAGON_SYNC, 10_000).await;
+    let s = Scheduler::new(db.clone(), Registry::new());
+    let period = Duration::from_secs(100);
+    let ticks = Ticks::start(
+        &s,
+        "s1",
+        vec![(kinds::MAINTENANCE, period), (kinds::DDRAGON_SYNC, period)],
+    );
+    assert_eq!(ticks.busy(), 2, "both loops, before either is polled");
+    assert!(settle(&db, &ticks).await.is_empty(), "not at boot");
+
+    // Hold the writer thread until released.
+    let (started_tx, started) = std::sync::mpsc::channel::<()>();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let writer = db.clone();
+    let held = tokio::spawn(async move {
+        writer
+            .write(move |_| {
+                started_tx.send(()).unwrap();
+                released.recv().unwrap();
+                Ok::<_, DbError>(())
+            })
+            .await
+    });
+    tokio::task::spawn_blocking(move || started.recv().unwrap())
+        .await
+        .unwrap();
+
+    advance(50).await;
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(ticks.busy(), 1, "maintenance's fire, held at its enqueue");
+    release.send(()).unwrap();
+    // `settle` before awaiting the held write: an await on the writer thread
+    // would let the paused clock jump to ddragon:sync's tick.
+    assert_eq!(settle(&db, &ticks).await, ["maintenance:maintenance"]);
+    assert_eq!(ticks.busy(), 0);
+    held.await.unwrap().unwrap();
     ticks.shutdown().await;
 }
 
@@ -544,7 +612,7 @@ async fn none_or_an_old_run_fires_at_once_and_the_polls_and_delta_always_do() {
     .to_vec();
     let ticks = Ticks::start(&s, "s1", schedule);
     assert_eq!(
-        settle(&db).await,
+        settle(&db, &ticks).await,
         [
             "aggregate:delta:aggregate:delta",
             "maintenance:maintenance",
@@ -557,10 +625,10 @@ async fn none_or_an_old_run_fires_at_once_and_the_polls_and_delta_always_do() {
     );
     finish_all(&d).await;
     advance(85).await;
-    assert!(settle(&db).await.is_empty(), "85 s in");
+    assert!(settle(&db, &ticks).await.is_empty(), "85 s in");
     advance(5).await;
     assert_eq!(
-        settle(&db).await,
+        settle(&db, &ticks).await,
         ["ddragon:sync:ddragon:sync"],
         "ddragon:sync at its own time"
     );
@@ -604,7 +672,7 @@ async fn each_ladder_and_region_remembers_its_own_last_run() {
         ladders,
     );
     assert_eq!(
-        settle(&db).await,
+        settle(&db, &ticks).await,
         [
             // Only a completed rebuild counts, not a failed one or a delta.
             "aggregate:analytics:euw1:RANKED_SOLO_5x5",
@@ -618,10 +686,10 @@ async fn each_ladder_and_region_remembers_its_own_last_run() {
     );
     finish_all(&d).await;
     advance(65).await;
-    assert!(settle(&db).await.is_empty(), "65 s in");
+    assert!(settle(&db, &ticks).await.is_empty(), "65 s in");
     advance(5).await;
     assert_eq!(
-        settle(&db).await,
+        settle(&db, &ticks).await,
         [
             "aggregate:analytics:kr:RANKED_SOLO_5x5",
             "ladder:crawl:kr:RANKED_SOLO_5x5",
@@ -729,14 +797,18 @@ fn the_backup_anchor_is_the_older_of_the_last_run_and_the_newest_backup() {
 #[tokio::test]
 async fn the_newest_backup_is_the_newest_name_and_its_time_is_the_files() {
     let dir = tempfile::tempdir().unwrap();
-    assert_eq!(newest_backup_ms(dir.path()).await, None, "no directory");
-    assert_eq!(newest_backup_ms(&dir.path().join("backups")).await, None);
+    assert_eq!(newest_backup_ms(dir.path()).await.unwrap(), None, "no backup");
+    assert_eq!(
+        newest_backup_ms(&dir.path().join("backups")).await.unwrap(),
+        None,
+        "no directory yet"
+    );
     let older = backup_written(dir.path(), 30 * HOUR_MS);
     let newest = backup_written(dir.path(), 5 * HOUR_MS);
     assert!(newest > older, "the date in the name orders them");
     // Not a daily backup: never read.
     std::fs::write(dir.path().join("riot-proxy-notes.db"), b"mine").unwrap();
-    let at = newest_backup_ms(dir.path()).await.unwrap();
+    let at = newest_backup_ms(dir.path()).await.unwrap().unwrap();
     let ago = Clock::now().unix_ms - at;
     assert!((5 * HOUR_MS..5 * HOUR_MS + 60_000).contains(&ago), "{ago}");
 }
@@ -796,4 +868,180 @@ async fn a_run_that_wrote_its_backup_is_the_last_run() {
     let empty = d.path().join("none");
     let due = first_fire(&db, "s1", &other, Clock::now().unix_ms, Some(&empty)).await;
     assert_eq!(due.as_secs().div_ceil(60), 21 * 60);
+}
+
+// ── Review of #278 (AVL-15): an unreadable directory, the log line, edges ──
+
+/// What `f` logged at `info` and above on this thread.
+async fn logged<F: std::future::Future>(f: F) -> (F::Output, String) {
+    use tracing_subscriber::Layer as _;
+    use tracing_subscriber::layer::SubscriberExt as _;
+    #[derive(Clone, Default)]
+    struct Buf(Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Buf {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let buf = Buf::default();
+    let writer = buf.clone();
+    let subscriber = tracing_subscriber::registry().with(
+        tracing_subscriber::fmt::layer()
+            .with_writer(move || writer.clone())
+            .with_ansi(false)
+            .with_filter(tracing_subscriber::filter::LevelFilter::INFO),
+    );
+    let out = {
+        let _guard = tracing::subscriber::set_default(subscriber);
+        f.await
+    };
+    let text = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
+    (out, text)
+}
+
+/// Sets `path`'s modification time to `ago_ms` before now (negative: ahead).
+fn written_ago(path: &std::path::Path, ago_ms: i64) {
+    let at = Clock::now().unix_ms - ago_ms;
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + Duration::from_millis(u64::try_from(at).unwrap()))
+        .unwrap();
+}
+
+/// The newest backup is the newest *name*, and its time is that file's own,
+/// even when an older-named file was written later.
+#[tokio::test]
+async fn the_newest_named_backup_counts_by_its_own_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let newest = backup_written(dir.path(), HOUR_MS);
+    backup_written(dir.path(), 26 * HOUR_MS);
+    written_ago(&newest, 30 * HOUR_MS);
+    let ago = Clock::now().unix_ms - newest_backup_ms(dir.path()).await.unwrap().unwrap();
+    assert!((30 * HOUR_MS..30 * HOUR_MS + 60_000).contains(&ago), "{ago}");
+}
+
+/// A directory that cannot be listed, or a newest file whose time cannot be
+/// read, is not "no backup" (review of #278): `first_fire` warns, naming the
+/// directory and the error, and fires at once.
+#[tokio::test]
+async fn an_unreadable_backup_directory_is_warned_about_and_the_tick_fires() {
+    let (d, db) = db();
+    done(&db, kinds::MAINTENANCE, kinds::MAINTENANCE, 3 * HOUR_MS).await;
+
+    // Not a directory: listing it fails.
+    let not_a_dir = d.path().join("backups-file");
+    std::fs::write(&not_a_dir, b"x").unwrap();
+    assert!(newest_backup_ms(&not_a_dir).await.is_err());
+    let (due, log) = logged(maintenance_due_min(&db, Some(&not_a_dir))).await;
+    assert_eq!(due, 0);
+    assert!(
+        log.contains("backup directory could not be read; maintenance is due now"),
+        "{log}"
+    );
+    assert!(log.contains("WARN") && log.contains("backups-file"), "{log}");
+    assert!(!log.contains("no backup written within the period"), "{log}");
+
+    // The newest name is a link to nothing: its time cannot be read, and the
+    // error names the link, not only the directory (review of #286).
+    let dangling = d.path().join("backups");
+    backup_written(&dangling, 26 * HOUR_MS);
+    let link = crate::jobs::maintenance::backup_name(Clock::now().unix_ms);
+    std::os::unix::fs::symlink(d.path().join("gone"), dangling.join(&link)).unwrap();
+    let err = newest_backup_ms(&dangling).await.unwrap_err();
+    assert!(err.to_string().contains(&link), "{err}");
+    let (due, log) = logged(maintenance_due_min(&db, Some(&dangling))).await;
+    assert_eq!(due, 0);
+    assert!(log.contains("backup directory could not be read"), "{log}");
+    assert!(log.contains("WARN") && log.contains(&link), "{log}");
+    assert!(!log.contains("no backup written within the period"), "{log}");
+}
+
+/// A newest backup dated before 1970 is an error naming the file, not "no
+/// backup": `first_fire` warns and fires at once (review of #286).
+#[tokio::test]
+async fn a_newest_backup_dated_before_1970_is_an_error_naming_it() {
+    let (d, db) = db();
+    done(&db, kinds::MAINTENANCE, kinds::MAINTENANCE, 3 * HOUR_MS).await;
+    let backups = d.path().join("backups");
+    let file = backup_written(&backups, HOUR_MS);
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH - Duration::from_secs(86_400))
+        .unwrap();
+    let name = file.file_name().unwrap().to_string_lossy().to_string();
+    let err = newest_backup_ms(&backups).await.unwrap_err();
+    assert!(
+        err.to_string().contains(&name) && err.to_string().contains("before 1970"),
+        "{err}"
+    );
+    let (due, log) = logged(maintenance_due_min(&db, Some(&backups))).await;
+    assert_eq!(due, 0);
+    assert!(
+        log.contains("WARN") && log.contains("backup directory could not be read") && log.contains(&name),
+        "{log}"
+    );
+}
+
+/// `no backup written within the period; maintenance is due now` is logged
+/// only when the last run alone would defer the tick and the backup does
+/// not: not when both defer, and not when there is no run at all.
+#[tokio::test]
+async fn the_due_now_line_is_logged_only_when_the_backup_alone_brings_the_tick_forward() {
+    const LINE: &str = "no backup written within the period; maintenance is due now";
+    let (d, db) = db();
+    let backups = d.path().join("backups");
+    // No run on record: due at once, as on a first boot, without the line.
+    let (due, log) = logged(maintenance_due_min(&db, Some(&backups))).await;
+    assert_eq!(due, 0);
+    assert!(!log.contains(LINE), "{log}");
+
+    done(&db, kinds::MAINTENANCE, kinds::MAINTENANCE, 3 * HOUR_MS).await;
+    // The run alone defers; no backup on disk: due now, with the line.
+    let (due, log) = logged(maintenance_due_min(&db, Some(&backups))).await;
+    assert_eq!(due, 0);
+    assert!(log.contains(LINE), "{log}");
+
+    // That run wrote its backup: both defer, no line.
+    backup_written(&backups, 3 * HOUR_MS + 2_000);
+    let (due, log) = logged(maintenance_due_min(&db, Some(&backups))).await;
+    assert_eq!(due, 21 * 60);
+    assert!(!log.contains(LINE), "{log}");
+}
+
+/// The review's case: the last run 30 h ago (overdue on its own) and a backup
+/// an hour old: due at once, whatever the backup says.
+#[tokio::test]
+async fn an_overdue_run_is_due_at_once_whatever_the_backup() {
+    let (d, db) = db();
+    let backups = d.path().join("backups");
+    backup_written(&backups, HOUR_MS);
+    done(&db, kinds::MAINTENANCE, kinds::MAINTENANCE, 30 * HOUR_MS).await;
+    assert_eq!(maintenance_due_min(&db, Some(&backups)).await, 0);
+}
+
+/// Clocks that moved: a backup stamped in the future counts from the run;
+/// with both in the future the tick waits one period, never longer.
+#[tokio::test]
+async fn a_backup_stamped_in_the_future_counts_from_the_run() {
+    let (d, db) = db();
+    let backups = d.path().join("backups");
+    let file = backup_written(&backups, 0);
+    written_ago(&file, -2 * HOUR_MS);
+    done(&db, kinds::MAINTENANCE, kinds::MAINTENANCE, 3 * HOUR_MS).await;
+    assert_eq!(maintenance_due_min(&db, Some(&backups)).await, 21 * 60);
+
+    let (d2, db2) = self::db();
+    let backups = d2.path().join("backups");
+    let file = backup_written(&backups, 0);
+    written_ago(&file, -2 * HOUR_MS);
+    done(&db2, kinds::MAINTENANCE, kinds::MAINTENANCE, -HOUR_MS).await;
+    assert_eq!(maintenance_due_min(&db2, Some(&backups)).await, 24 * 60);
 }

@@ -15,7 +15,7 @@ use std::sync::Arc;
 use axum::Extension;
 use axum::extract::rejection::PathRejection;
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderValue, StatusCode};
+use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
@@ -27,7 +27,7 @@ use crate::http::{ApiError, ErrorCode, validate};
 use crate::riot::endpoints::{Endpoint, Target};
 use crate::riot::ladder::{APEX_TIERS, DIVISIONS, PAGED_TIERS, RANKED_QUEUES, apex_endpoint};
 use crate::riot::routing::{Platform, Region};
-use crate::routes::passthrough::{PassthroughResponses, fetch, request};
+use crate::routes::passthrough::{JSON, PassthroughResponses, fetch, request};
 use crate::routes::riot::bad_path;
 use crate::status::poll::{self, summary};
 
@@ -417,27 +417,27 @@ async fn platform_status(
 /// What `GET /v1/lol/status` says about where its data comes from.
 const STATUS_SUMMARY_NOTES: &str = "Every platform's status in one call, summarised from Riot's lol-status-v4 \
     `platform-data`. **Never calls Riot**: the status poller reads each platform in `STATUS_POLL_PLATFORMS` \
-    (every platform by default) every `STATUS_POLL_INTERVAL_S` (300 s by default) and this route reads what it \
-    stored, so an available entry is at most one poll interval old (`fetchedAgeSeconds`).\n\n\
+    every `STATUS_POLL_INTERVAL_S` and this route reads what it stored, so an available entry is at most two \
+    poll intervals and 60 s old; an older one is unavailable (`fetchedAgeSeconds` says how old).\n\n\
     `platforms` lists each polled platform once, in the proxy's platform order (`na1` … `vn2`). An entry is \
     `available: false`, with `error` saying why and its counts `null`, until the poller has read a 200 for it, \
-    and again whenever its latest read failed (a platform Riot does not serve, such as `tw2`, which the portal's \
-    lol-status-v4 region list omits, is just such an entry); the call is still a 200. `X-Cache` is `HIT`, and `X-Cache-Fetched-Age` is the stalest \
-    available entry's `fetchedAgeSeconds` (not sent when none is available). For a platform's whole body, \
-    titles and updates included, use `/v1/lol/status/{platform}`, which the poller keeps cached.\n\n\
-    503 with `NOT_FOUND` when this deployment does not poll (`STATUS_POLL_PLATFORMS=none`).";
+    whenever its latest read failed (a platform Riot does not serve is just such an entry), and when its last \
+    200 is older than two poll intervals and 60 s; the call is still a 200. `X-Cache` is `HIT`, and `X-Cache-Fetched-Age` \
+    is the stalest available entry's `fetchedAgeSeconds` (not sent when none is available). For a platform's \
+    whole body, titles and updates included, use `/v1/lol/status/{platform}`, which the poller keeps cached.\n\n\
+    404 with `NOT_FOUND` when this deployment does not poll (`STATUS_POLL_PLATFORMS=none`).";
 
 #[utoipa::path(
     get, path = "/v1/lol/status", tag = "lol",
     summary = "Every platform's status",
     description = STATUS_SUMMARY_NOTES,
     responses(
-        (status = 200, description = "Every polled platform, in platform order", body = summary::StatusSummary),
+        (status = 200, description = "Every polled platform, in platform order", body = summary::PlatformStatusSummary),
         (status = 401, description = "Missing or invalid key.", body = ErrorResponse),
         (status = 403, description = "The key lacks a scope.", body = ErrorResponse),
         (status = 429, description = "Your consumer quota is spent (`QUOTA_EXCEEDED`).", body = ErrorResponse),
-        (status = 503, description = "The status poller is off on this deployment (`STATUS_POLL_PLATFORMS=none`): \
-            `NOT_FOUND`, without `Retry-After`, since waiting does not change it.", body = ErrorResponse),
+        (status = 404, description = "The status poller is off on this deployment (`STATUS_POLL_PLATFORMS=none`): \
+            `NOT_FOUND`, as for every feature switched off. Do not retry.", body = ErrorResponse),
     ),
 )]
 async fn status_summary(State(s): State<AppState>) -> Response {
@@ -452,9 +452,15 @@ async fn status_summary(State(s): State<AppState>) -> Response {
             return ApiError::internal().into_response();
         }
     };
-    let body = summary::summarize(listed, &rows, crate::clock::Clock::now().unix_ms);
+    let max_age = summary::max_age_s(s.config.status_poll_interval_s);
+    let body = summary::summarize(listed, &rows, crate::clock::Clock::now().unix_ms, max_age);
     let fetched_age = body.stalest_available_age();
-    let mut res = axum::Json(body).into_response();
+    // The charset form every other read route sends (`passthrough::JSON`).
+    let bytes = match serde_json::to_vec(&body) {
+        Ok(b) => b,
+        Err(_) => return ApiError::internal().into_response(),
+    };
+    let mut res = (StatusCode::OK, [(header::CONTENT_TYPE, JSON)], bytes).into_response();
     let h = res.headers_mut();
     h.insert("x-cache", HeaderValue::from_static("HIT"));
     if let Some(age) = fetched_age {
@@ -464,14 +470,13 @@ async fn status_summary(State(s): State<AppState>) -> Response {
 }
 
 /// `STATUS_POLL_PLATFORMS=none`: nothing is polled, so there is nothing to
-/// summarise. v1's closed code set has no "turned off"; `NOT_FOUND` is its
-/// "we do not serve it", at 503 as the series spec asks (ADR-220).
+/// summarise. `NOT_FOUND` at 404, as every switched-off feature answers
+/// (owner decision of 2026-11-17, SITE-18; #283 sent it at 503).
 fn poller_off() -> ApiError {
     ApiError::new(
         ErrorCode::NotFound,
         "The status poller is off on this deployment (STATUS_POLL_PLATFORMS=none)",
     )
-    .with_status(StatusCode::SERVICE_UNAVAILABLE)
 }
 
 #[cfg(test)]

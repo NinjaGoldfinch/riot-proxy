@@ -152,9 +152,10 @@ test('the home view lists every platform from one call, in its order, with what 
 });
 
 test('the platforms card shows the error when the poller is off', async () => {
-  const p = await page({ statusAll: [503, { error: { code: 'NOT_FOUND', message: 'The status poller is off on this deployment (STATUS_POLL_PLATFORMS=none)', requestId: 'r' } }] });
+  // A 404 since SITE-18 (owner decision D2); #283 answered 503.
+  const p = await page({ statusAll: [404, { error: { code: 'NOT_FOUND', message: 'The status poller is off on this deployment (STATUS_POLL_PLATFORMS=none)', requestId: 'r' } }] });
   assert.equal(p.$$('#platforms .pstat').length, 0);
-  assert.ok(p.text('#platforms .err').includes('503 · NOT_FOUND: The status poller is off'));
+  assert.ok(p.text('#platforms .err').includes('404 · NOT_FOUND: The status poller is off'));
   assert.ok(p.$('#ladder tbody tr'), 'the rest of home is unaffected');
   assert.deepEqual(p.errors, []);
 });
