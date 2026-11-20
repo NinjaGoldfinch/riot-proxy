@@ -215,4 +215,4 @@ From session notes, not from the live file. The box's env file was last describe
 
 ---
 **Sources:** `src/config.rs:L3,L23-L197,L216-L281,L472-L623,L626-L686,L701-L715,L737-L966,L992-L1046,L1050-L1197,L1244-L1390`, `src/config/tests.rs:L44-L50,L192-L203,L269-L279,L367-L382,L443-L462,L598-L604,L883-L889`, `src/cli/mod.rs:L29-L88`, `src/cli/serve.rs:L64-L75,L102-L104,L456-L465`, `src/consumers.rs:L95-L107,L154-L157,L308-L333`, `src/http/auth.rs:L66-L77,L128-L139,L196-L202`, `src/riot/client.rs:L386-L388`, `src/riot/endpoints.rs:L469-L489`, `src/routes/admin.rs:L2501-L2528`, `src/archive/objects.rs:L142,L201-L204`, `.env.example`, `README.md:L97,L102`, `.github/workflows/ci.yml:L52-L53`, `deploy/README.md:L24-L28,L51-L72,L151`, `docs/design/07-deployment.md:L125`, `docs/design/12-object-storage-and-hosting.md:L437-L446,L484,L806-L807,L828-L830,L868-L873`, `docs/DECISIONS.md:L1862`, `reports/OBJ implementation handoff.md:L20`, `docs/_meta/scratch/config.md`
-**Last verified:** 2026-11-20 against commit `1f37fc7`
+**Last verified:** 2026-11-21 against commit `8f606c8`

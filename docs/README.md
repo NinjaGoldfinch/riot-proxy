@@ -94,4 +94,4 @@ riot-proxy is the single Rust binary that stands between the ninjagoldfinch.lol 
 
 ---
 **Sources:** this documentation set; `README.md`; `docs/design/README.md`
-**Last verified:** 2026-11-20 against commit `1f37fc7`
+**Last verified:** 2026-11-21 against commit `8f606c8`
