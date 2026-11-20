@@ -944,7 +944,7 @@ async function loadRotation() {
   const head = `<header><h2>Free champion rotation</h2></header><div>${sources('GET /v1/lol/rotations/{platform}', 'GET /v1/static/{file}')}</div>`;
   const res = await get(`/v1/lol/rotations/${platform()}`);
   if (!res.ok) { el.innerHTML = head + failure(res); return; }
-  const ids = res.json?.freeChampionIds ?? [];
+  const ids = res.json?.sr ?? res.json?.freeChampionIds ?? []; // Riot sends `sr` (recorded 2026-11-20, SITE-21); v1's example `freeChampionIds`
   el.innerHTML = head + (ids.length
     ? `<div class="icons" style="margin-top:8px">${ids.map((id) => `<a class="champ" href="#/champion/${id}">${champIcon(id)}${esc(champions[id]?.name ?? `#${id}`)}</a>`).join('')}</div>`
     : `<p class="empty">No rotation published.</p>`);

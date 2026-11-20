@@ -183,6 +183,18 @@ test('rotation and top champions use the local icon mirror and champion names', 
   assert.ok(p.text('#topMeta').startsWith('all patches'));
 });
 
+test("the rotation reads Riot's `sr`, falls back to v1's `freeChampionIds`, and says when it is empty", async () => {
+  const icons = (p) => [...p.w.document.querySelectorAll('#rotation img')].map((i) => i.getAttribute('src').split('/').pop());
+  // Riot's body as recorded on production 2026-11-20 had only `sr` and `newplayer` (SITE-21);
+  // the free rotation is `sr`, not the new-player list.
+  assert.deepEqual(icons(await page({ rotation: { sr: [2], newplayer: [1] } })), ['Olaf.png']);
+  assert.deepEqual(icons(await page({ rotation: { freeChampionIds: [1], freeChampionIdsForNewPlayers: [2], maxNewPlayerLevel: 10 } })), ['Annie.png']);
+  const empty = await page({ rotation: { sr: [], newplayer: [1] } });
+  assert.deepEqual(icons(empty), []);
+  assert.ok(empty.text('#rotation').includes('No rotation published.'));
+  assert.deepEqual(empty.errors, []);
+});
+
 test('every API call revalidates, so a recompute shows without waiting out max-age', async () => {
   const p = await page();
   const api = p.modes.filter(([url]) => url.startsWith('/v1/'));

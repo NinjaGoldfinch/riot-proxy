@@ -5,6 +5,7 @@ Dated log of changes to this documentation set. One line per change; the newest 
 ## 2026-11-21
 
 - STS-04 (ADR-223): outbound events. design/14 §Outbound events gains its as-built notes; `EVENTS_URL` in `deployment/configuration.md` (and its secrets table), `deployment/security.md`, `integration/monitoring-hooks.md` §Outbound events, `operations/observability.md` and the README. Pages citing `src/riot/client.rs`, `src/status/checks.rs`, `src/status/mod.rs`, `src/config.rs`, `src/cli/serve.rs`, `src/config/tests.rs` or `.env.example` re-pointed and re-verified against `f254678`.
+- SITE-21 (ADR-217 amended): `workflows/adding-an-endpoint.md`, `workflows/development-setup.md` and `workflows/testing.md` re-verified against `f254678` (the showcase's rotation card and the acceptance mock's rotations body changed; no citation moved).
 - Release 2.11.0: `api/openapi.json` `info.version` is `2.11.0`, as `api/endpoints.md` says; the version examples in `deploy/proxmox` and `workflows/release-process.md` follow. `_meta/inventory.md`, `integration/environments.md`, `reference/dependencies.md` and `workflows/code-style-and-conventions.md` re-verified (they cite `Cargo.toml`, `Cargo.lock` or `deploy/proxmox/README.md`).
 
 ## 2026-11-17

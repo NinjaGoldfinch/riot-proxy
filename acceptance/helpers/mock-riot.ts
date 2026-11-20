@@ -228,7 +228,7 @@ function riot(path: string, query: URLSearchParams): Answer {
     return ok([{ championId: 134, championLevel: 7, championPoints: 123456 }], 'mastery');
   }
   if (path === '/lol/platform/v3/champion-rotations') {
-    return ok({ freeChampionIds: [1, 2, 3], freeChampionIdsForNewPlayers: [1], maxNewPlayerLevel: 10 }, 'rotations');
+    return ok({ sr: [1, 2, 3], newplayer: [1] }, 'rotations');
   }
   if (path === '/lol/status/v4/platform-data') {
     return ok({ id: 'OC1', name: 'Oceania', locales: ['en_AU'], maintenances: [], incidents: [] }, 'status');
