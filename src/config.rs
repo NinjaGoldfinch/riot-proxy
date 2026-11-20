@@ -94,6 +94,7 @@ pub const VARS: &[&str] = &[
     "STATUS_POLL_PLATFORMS",
     "STATUS_RECORDINGS_DIR",
     "RIOT_API_KEY_EXPIRES_AT",
+    "EVENTS_URL",
     "ADMIN_CORS_ORIGINS",
     "BOOTSTRAP_ADMIN_KEY",
     "AUTH_DISABLED",
@@ -193,6 +194,53 @@ impl fmt::Debug for Secret {
 impl fmt::Display for Secret {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("[REDACTED]")
+    }
+}
+
+/// `EVENTS_URL` (STS-04, design/14 §Outbound events): where events are
+/// POSTed, `http` or `https`. A webhook URL often carries its token in the
+/// path or query, so `Debug` and `Display` show the scheme and host only.
+#[derive(Clone, PartialEq, Eq)]
+pub struct EventsUrl(reqwest::Url);
+
+impl EventsUrl {
+    /// An absolute `http://` or `https://` URL with a host. The message never
+    /// repeats the value, which may hold a token.
+    pub fn parse(raw: &str) -> Result<Self, &'static str> {
+        let url = reqwest::Url::parse(raw.trim()).map_err(|_| "is not a URL")?;
+        if !matches!(url.scheme(), "http" | "https") {
+            return Err("must be an http:// or https:// URL");
+        }
+        if url.host_str().is_none_or(str::is_empty) {
+            return Err("has no host");
+        }
+        Ok(Self(url))
+    }
+
+    /// The whole URL, token and all: for the request, never for a log line.
+    pub fn url(&self) -> &reqwest::Url {
+        &self.0
+    }
+
+    /// The host, with the port when one is given: what a log line names.
+    pub fn host(&self) -> String {
+        let host = self.0.host_str().unwrap_or_default();
+        match self.0.port() {
+            Some(port) => format!("{host}:{port}"),
+            None => host.to_string(),
+        }
+    }
+}
+
+impl fmt::Debug for EventsUrl {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}://{}/{REDACTED}", self.0.scheme(), self.host())
+    }
+}
+
+impl fmt::Display for EventsUrl {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self, f)
     }
 }
 
@@ -446,6 +494,8 @@ pub struct Config {
     /// `RIOT_API_KEY_EXPIRES_AT` in unix ms: `riot_key` is `degraded` from
     /// 48 h before it.
     pub riot_api_key_expires_at_ms: Option<i64>,
+    /// Where outbound events are POSTed (STS-04); unset sends none.
+    pub events_url: Option<EventsUrl>,
     /// Exact origins (`https://host[:port]`) allowed to call the admin API,
     /// `/v1/ws` and the health routes from a browser; empty sends no CORS
     /// headers at all (ADM-07, ADR-014's deferral closed).
@@ -607,6 +657,11 @@ impl Config {
             (
                 "RIOT_API_KEY_EXPIRES_AT",
                 self.riot_api_key_expires_at_ms.map(crate::build_info::rfc3339),
+            ),
+            // The whole URL may be a webhook's token.
+            (
+                "EVENTS_URL",
+                self.events_url.as_ref().map(|_| REDACTED.to_string()),
             ),
             ("ADMIN_CORS_ORIGINS", s(self.admin_cors_origins.join(","))),
             (
@@ -834,6 +889,9 @@ impl Config {
         let status_check_platforms = v.platform_list("STATUS_CHECK_PLATFORMS", &ladder_platforms);
         let status_poll_platforms = v.platform_list("STATUS_POLL_PLATFORMS", &STATUS_POLL_DEFAULT);
         let riot_api_key_expires_at_ms = v.timestamp_ms("RIOT_API_KEY_EXPIRES_AT");
+        let events_url = v
+            .opt_string("EVENTS_URL")
+            .and_then(|raw| EventsUrl::parse(&raw).map_err(|m| v.push("EVENTS_URL", m)).ok());
 
         let objects = v.object_store(env);
         let archive_object_read_only = v.bool("ARCHIVE_OBJECT_READ_ONLY", false);
@@ -925,6 +983,7 @@ impl Config {
             status_poll_platforms,
             status_recordings_dir: v.opt_string("STATUS_RECORDINGS_DIR").map(PathBuf::from),
             riot_api_key_expires_at_ms,
+            events_url,
             admin_cors_origins: v.origins("ADMIN_CORS_ORIGINS"),
             bootstrap_admin_key: v.opt_string("BOOTSTRAP_ADMIN_KEY").map(Secret::new),
             auth_disabled,

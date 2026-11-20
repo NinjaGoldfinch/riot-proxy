@@ -27,14 +27,14 @@ The numbers are `MAX_ATTEMPTS = 5`, `BACKOFF_BASE = 30 s` and `backoff()` (`src/
 
 ### 1. The kind string
 
-Add a constant to `jobs::kinds` and append it to `kinds::ALL` (`src/jobs/mod.rs:19-71`). The name is `area:verb` in v1's style (`poll:live`, `archive:match`). `ALL` is what `JOB_KIND_LIMITS` validates against and what `GET /v1/admin/jobs?kind=` accepts (`src/config.rs:1322-1353`; ADR-137).
+Add a constant to `jobs::kinds` and append it to `kinds::ALL` (`src/jobs/mod.rs:19-71`). The name is `area:verb` in v1's style (`poll:live`, `archive:match`). `ALL` is what `JOB_KIND_LIMITS` validates against and what `GET /v1/admin/jobs?kind=` accepts (`src/config.rs:1381-1412`; ADR-137).
 
 ### 2. Lane, or cap
 
 Decide whether the job calls Riot:
 
 - **It calls Riot.** Give it a lane in `jobs::lanes::of` and add the kind to `LANED` (`src/jobs/lanes.rs:44-78`). The lane is the limiter scope its requests hit (the platform for league and spectator methods, the region for match-v5) and the method it mainly calls, derived from the kind and payload at enqueue so every producer agrees (`src/jobs/lanes.rs:1-6`); use `on(method, platform)` or `on_region(method, region)` (`src/jobs/lanes.rs:26-40`). The claim then skips the kind while the limiter has no bulk room for that lane and method, and spreads workers across lanes (`src/jobs/scheduler.rs:7-9`). A laned kind **cannot** be capped by `JOB_KIND_LIMITS`: the config refuses it with `'<kind>' calls Riot; the rate limiter paces it` (ADR-134, `docs/DECISIONS.md:1448`).
-- **It does not.** Leave it out of `of` and `LANED`. It is then always claimable and becomes cappable: operators may write `JOB_KIND_LIMITS=<kind>=1`, and the default already caps `aggregate:analytics` and `archive:offload` at one (`src/config.rs:129`). If the job is heavy on CPU or the write lock, say so in `.env.example`'s comment for `JOB_KIND_LIMITS` (`.env.example:35-38`) and consider adding it to the default.
+- **It does not.** Leave it out of `of` and `LANED`. It is then always claimable and becomes cappable: operators may write `JOB_KIND_LIMITS=<kind>=1`, and the default already caps `aggregate:analytics` and `archive:offload` at one (`src/config.rs:130`). If the job is heavy on CPU or the write lock, say so in `.env.example`'s comment for `JOB_KIND_LIMITS` (`.env.example:35-38`) and consider adding it to the default.
 
 ### 3. The handler
 
@@ -166,5 +166,5 @@ Then: `jobs::handlers` gets `.with(kinds::CLASH_SYNC, clash::ClashSyncHandler(Ar
 9. design/06 catalogue row, concurrency and runbook docs, ADR, `PROGRESS.md`.
 
 ---
-**Sources:** `src/jobs/mod.rs:L19-L179`, `src/jobs/scheduler.rs:L1-L19`, `L36-L165`, `L225-L254`, `L268-L306`, `L454-L487`, `L1103-L1177`, `src/jobs/analytics.rs:L81-L94`, `src/jobs/lanes.rs:L1-L78`, `src/jobs/ticks.rs:L1-L11`, `L78-L114`, `L119-L150`, `L202-L403`, `src/jobs/activity.rs:L363-L378`, `src/jobs/archive.rs:L278-L321`, `L456`, `src/jobs/names.rs:L193`, `L208-L232`, `src/fetcher.rs:L168-L223`, `src/cli/serve.rs:L338-L360`, `src/routes/admin.rs:L2295-L2306`, `src/app.rs:L53`, `src/events.rs:L113-L124`, `src/ws/hub.rs:L100-L103`, `src/metrics.rs:L101-L103`, `L486-L497`, `src/config.rs:L129`, `src/config/tests.rs:L443-L462`, `src/db/migrations/V0001__init.sql:L44`, `tests/jobs.rs:L43-L101`, `src/jobs/ticks/tests.rs:L36-L51`, `src/jobs/scheduler/tests.rs:L31-L40`, `docs/design/06-jobs-and-realtime.md:L84-L158`, `docs/DECISIONS.md:L1443-L1452` (ADR-134), `.env.example:L35-L38`, `PROGRESS.md:L388`
-**Last verified:** 2026-11-21 against commit `e7393f6`
+**Sources:** `src/jobs/mod.rs:L19-L179`, `src/jobs/scheduler.rs:L1-L19`, `L36-L165`, `L225-L254`, `L268-L306`, `L454-L487`, `L1103-L1177`, `src/jobs/analytics.rs:L81-L94`, `src/jobs/lanes.rs:L1-L78`, `src/jobs/ticks.rs:L1-L11`, `L78-L114`, `L119-L150`, `L202-L403`, `src/jobs/activity.rs:L363-L378`, `src/jobs/archive.rs:L278-L321`, `L456`, `src/jobs/names.rs:L193`, `L208-L232`, `src/fetcher.rs:L168-L223`, `src/cli/serve.rs:L338-L360`, `src/routes/admin.rs:L2295-L2306`, `src/app.rs:L53`, `src/events.rs:L113-L124`, `src/ws/hub.rs:L100-L103`, `src/metrics.rs:L101-L103`, `L486-L497`, `src/config.rs:L130`, `src/config/tests.rs:L443-L462`, `src/db/migrations/V0001__init.sql:L44`, `tests/jobs.rs:L43-L101`, `src/jobs/ticks/tests.rs:L36-L51`, `src/jobs/scheduler/tests.rs:L31-L40`, `docs/design/06-jobs-and-realtime.md:L84-L158`, `docs/DECISIONS.md:L1443-L1452` (ADR-134), `.env.example:L35-L38`, `PROGRESS.md:L388`
+**Last verified:** 2026-11-21 against commit `f254678`

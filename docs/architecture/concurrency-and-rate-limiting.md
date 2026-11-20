@@ -113,7 +113,7 @@ Every job kind, its trigger, priority and tables is tabulated in `docs/_meta/scr
 | tokio worker threads | `min(cores, 4)` | `src/cli/mod.rs:123-126` |
 | SQLite writer | one thread, queue of 1024 closures | `src/db/mod.rs:71-72,241-254` |
 | SQLite readers | `available_parallelism()` connections behind a semaphore | `src/db/mod.rs:115-122,279-282` |
-| Riot HTTP pool | 32 idle connections per host, 60 s idle | `src/riot/client.rs:23-24` |
+| Riot HTTP pool | 32 idle connections per host, 60 s idle | `src/riot/client.rs:24-25` |
 | L2 write-behind | 10 000 queued rows, flushed every 2 s or 500 rows | `src/cache/l2.rs:30-35` |
 | Object-store reads | `ARCHIVE_OBJECT_CONCURRENCY` (16) ranged GETs in flight | `src/archive/matches.rs:265-269` |
 | WebSocket | 256 events buffered per topic; 200 topics per socket; ping every 30 s, dropped after 2 missed | `src/ws/hub.rs:20`, `src/ws/protocol.rs:23-29` |
@@ -122,4 +122,4 @@ Every job kind, its trigger, priority and tables is tabulated in `docs/_meta/scr
 
 ---
 **Sources:** `src/riot/limiter/mod.rs:L50-L175,L229-L300,L307-L431,L532-L606`, `src/riot/limiter/bucket.rs:L15-L162`, `src/riot/limiter/headers.rs:L30-L41`, `src/riot/limiter/persist.rs:L21-L25,L141-L175`, `src/http/quota.rs:L320-L431`, `src/fetcher.rs:L65-L70,L201-L230,L557-L568,L896-L932,L995-L1033`, `src/riot/routing.rs:L160-L196`, `src/cache/keys.rs:L81-L88`, `src/jobs/scheduler.rs:L40-L42,L124-L171,L225-L306,L467-L487,L996-L1058,L1103-L1117`, `src/jobs/archive.rs:L116-L162`, `src/jobs/lanes.rs:L440-L483`, `src/jobs/mod.rs:L74-L94`, `src/db/store.rs:L98-L133`, `src/db/mod.rs:L46-L47,L87-L94,L208-L248`, `src/cli/serve.rs:L103-L109`, `ops/prometheus-alerts.yml`, `docs/design/05-rate-limiter.md`, `docs/design/06-jobs-and-realtime.md`
-**Last verified:** 2026-11-20 against commit `1f37fc7`
+**Last verified:** 2026-11-21 against commit `f254678`

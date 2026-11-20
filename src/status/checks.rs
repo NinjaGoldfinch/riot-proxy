@@ -387,6 +387,17 @@ impl Checker {
         };
         let ((), cache_failed, ()) = tokio::join!(probes, cache, storage);
         self.cache_failed = cache_failed;
+        // The round's results and the live freeze, once, for the events
+        // (STS-04): a no-op without `EVENTS_URL`.
+        let events = self.client.watch().events();
+        if events.is_on() {
+            events.round(
+                status.results.get(RIOT_API).as_ref(),
+                status.results.get(CACHE).as_ref(),
+                super::freeze_s(limiter),
+                crate::clock::Clock::now().unix_ms,
+            );
+        }
     }
 }
 
