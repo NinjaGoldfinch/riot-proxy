@@ -94,4 +94,4 @@ The validator changes when the `aggregate:analytics` job rewrites the slice (its
 
 ---
 **Sources:** `src/routes/lol.rs:L162-L163,L180-L187,L217-L243`, `src/routes/players.rs:L551,L654-L692,L846-L866`, `src/routes/admin.rs:L775-L780,L1337-L1356,L1848-L1857,L1953-L1995,L2038-L2041,L2323-L2327,L2564-L2574`, `src/routes/analytics.rs:L52-L56,L497-L572,L585-L627,L766-L782,L917-L962`, `src/routes/ui.rs:L113-L131`, `src/http/validate.rs:L211-L250`, `src/http/recent.rs:L111-L113`, `src/riot/ladder.rs:L14-L26`, `tests/snapshots/it__lol_routes__lol_routes_upstream_calls.snap`, `docs/DECISIONS.md` ADR-065, ADR-066, ADR-123, ADR-143, ADR-166, `docs/api/openapi.json`, `README.md`, `docs/_meta/scratch/siblings.md` §1.3-1.5, §5-6, live capture against `target/debug/riot-proxy` 2.7.0
-**Last verified:** 2026-11-17 against commit `9ca718a`
+**Last verified:** 2026-11-21 against commit `72fcd7a`
