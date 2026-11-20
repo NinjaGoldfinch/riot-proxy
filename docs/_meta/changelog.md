@@ -2,6 +2,10 @@
 
 Dated log of changes to this documentation set. One line per change; the newest first.
 
+## 2026-11-21
+
+- Release 2.11.0: `api/openapi.json` `info.version` is `2.11.0`, as `api/endpoints.md` says; the version examples in `deploy/proxmox` and `workflows/release-process.md` follow. `_meta/inventory.md`, `integration/environments.md`, `reference/dependencies.md` and `workflows/code-style-and-conventions.md` re-verified (they cite `Cargo.toml`, `Cargo.lock` or `deploy/proxmox/README.md`).
+
 ## 2026-11-17
 
 - SITE-20 (ADR-217 amended): the SITE (2) plan section in `IMPLEMENTATION.md` and `PROGRESS.md` corrected after the review of #280 (the three platforms the portal leaves out, with the 530s as observed on 2026-11-17 rather than as a standing Riot fact; the poller-off answer, skips and staleness; SITE-16 made buildable, its recordings' directories named; SITE-15's rewrite waits for the owner, and its rows say not to start it; the stacked-task rule with its command, and the order with SITE-17 to SITE-20 in it; a key for the owner's decisions of 2026-11-17, in place of labels defined nowhere; a row for the spec itself).
@@ -96,4 +100,4 @@ Dated log of changes to this documentation set. One line per change; the newest 
 
 ---
 **Sources:** this documentation set
-**Last verified:** 2026-11-21 against commit `184d9c8`
+**Last verified:** 2026-11-21 against commit `074e7a2`

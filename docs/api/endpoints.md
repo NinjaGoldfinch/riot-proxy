@@ -9,7 +9,7 @@ The human-readable reference for every route riot-proxy 2.7.0 serves. This page 
 | [endpoints-players-analytics.md](endpoints-players-analytics.md) | `/v1/players/*`, `/v1/lol/analytics/*` |
 | [endpoints-admin.md](endpoints-admin.md) | all 40 `/v1/admin/*` operations |
 
-The machine-readable contract is [openapi.json](openapi.json) (OpenAPI 3.1.0, `info.version` `2.10.0`, 73 paths, 77 operations). The server builds that document from the same router it serves, so the two cannot drift (`src/routes/docs.rs:L116-L153`). Errors are in [errors.md](errors.md); paging, filters, ETags and versioning in [pagination-filtering-and-versioning.md](pagination-filtering-and-versioning.md); copy-pasteable walkthroughs in [examples.md](examples.md).
+The machine-readable contract is [openapi.json](openapi.json) (OpenAPI 3.1.0, `info.version` `2.11.0`, 73 paths, 77 operations). The server builds that document from the same router it serves, so the two cannot drift (`src/routes/docs.rs:L116-L153`). Errors are in [errors.md](errors.md); paging, filters, ETags and versioning in [pagination-filtering-and-versioning.md](pagination-filtering-and-versioning.md); copy-pasteable walkthroughs in [examples.md](examples.md).
 
 ## Conventions
 
@@ -242,4 +242,4 @@ The frame shape is `src/events.rs:L159-L172`; data fields per event are listed i
 
 ---
 **Sources:** `src/app.rs:L30-L35,L71-L121,L258-L264`, `src/routes/docs.rs:L86-L153,L389-L402`, `src/routes/health.rs:L21-L200`, `src/routes/ui.rs:L94-L233`, `src/routes/dev.rs:L33-L255`, `src/routes/ws.rs:L497-L572`, `src/ws/protocol.rs:L23-L147`, `src/ws/socket.rs:L38-L206`, `src/ws/hub.rs:L20-L205`, `src/http/auth.rs:L141-L423`, `src/status/mod.rs:L151-L247`, `src/status/ratelimits.rs:L103-L246`, `src/http/quota.rs:L320-L431`, `src/http/request_id.rs:L287-L339`, `src/http/validate.rs:L21-L88`, `src/routes/passthrough.rs:L401-L476`, `src/fetcher.rs:L69-L108,L477-L560,L954-L992`, `src/riot/routing.rs:L48-L196`, `docs/DECISIONS.md` ADR-216, `docs/_meta/scratch/routes.md`, `docs/design/12-object-storage-and-hosting.md:L904-L925`, `tests/snapshots/http__unknown_route_404.snap`, `tests/snapshots/ws_hub__ws_session.snap`, live capture against `target/debug/riot-proxy` 2.7.0
-**Last verified:** 2026-11-21 against commit `8f606c8`
+**Last verified:** 2026-11-21 against commit `074e7a2`
