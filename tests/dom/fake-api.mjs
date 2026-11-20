@@ -223,7 +223,8 @@ function api(calls, url, { status = {}, unauthorized = false, ...opts } = {}) {
   // `opts.apexSizes` sets a tier's list length, e.g. `{ MASTER: 10000 }` for a league at Riot's cap.
   if (p.startsWith('/v1/lol/league/apex/')) return [200, { tier: p.split('/')[6], queue: p.split('/')[7], name: 'L', leagueId: 'x', entries: Array.from({ length: opts.apexSizes?.[p.split('/')[6]] ?? LADDER }, (_, i) => entry(i)) }];
   if (p.startsWith('/v1/riot/accounts/by-puuid/')) { const id = p.split('/').pop(); return [200, { puuid: id, gameName: `Player ${id}`, tagLine: 'OCE' }]; }
-  if (p.startsWith('/v1/lol/rotations/')) return [200, { freeChampionIds: [1, 2], freeChampionIdsForNewPlayers: [1], maxNewPlayerLevel: 10 }];
+  // Riot's shape as recorded on production 2026-11-20 (SITE-21); `opts.rotation` replaces the body.
+  if (p.startsWith('/v1/lol/rotations/')) return [200, opts.rotation ?? { sr: [1, 2], newplayer: [1] }];
   // No tier asked for: one row per champion, every tier summed (ADR-123); 100 matches, so Annie's
   // 20 picks are her pickRate 0.2 (SITE-12). `opts.totalMatches` replaces the 100.
   if (p === '/v1/lol/analytics/champions') return [200, { platform: 'oc1', queue: u.searchParams.get('queue'), tier: null, patch: '16.19', role: null, computedAt: null, totalGames: 25, totalMatches: opts.totalMatches ?? 100, champions: [
