@@ -676,6 +676,80 @@ async fn a_typed_service_429_with_retry_after_also_freezes() {
     assert_eq!(l.frozen_for(SCOPE), Some(Duration::from_secs(2)));
 }
 
+/// RL-01 (ADR-224): a type we do not know freezes like `service`. Production
+/// saw `X-Rate-Limit-Type: server` on 2026-11-20; the `Retry-After` it came
+/// with is not on record, so the 7 here is made up. It is a warn, never the
+/// accountable-429 error: it says nothing about our accounting.
+#[tokio::test(start_paused = true)]
+async fn a_429_of_an_unknown_type_with_retry_after_freezes_as_service_does() {
+    use std::sync::Mutex;
+    #[derive(Clone, Default)]
+    struct Buf(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Buf {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let buf = Buf::default();
+    let writer = buf.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(move || writer.clone())
+        .with_ansi(false)
+        .with_max_level(tracing::Level::TRACE)
+        .finish();
+
+    let l = limiter_with_app("100:10");
+    tracing::subscriber::with_default(subscriber, || {
+        l.observe(
+            SCOPE,
+            "m",
+            &headers(&[
+                ("x-rate-limit-type", "server"),
+                ("retry-after", "7"),
+                ("x-app-rate-limit-count", "5:10"),
+            ]),
+        );
+    });
+    assert_eq!(l.frozen_for(SCOPE), Some(Duration::from_secs(7)));
+    assert_eq!(l.longest_freeze(), Some(Duration::from_secs(7)));
+    assert_eq!(used(&l, "100:10"), 5, "its counts are absorbed like any 429's");
+
+    let log = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
+    assert!(log.contains("unknown X-Rate-Limit-Type"), "{log}");
+    assert!(
+        log.contains("429 of an unknown type with Retry-After; scope frozen"),
+        "{log}"
+    );
+    assert!(!log.contains("ERROR"), "not an accountable 429: {log}");
+    assert!(!log.contains("accountable 429"), "{log}");
+
+    // Every method on the scope waits it out, as after any freeze.
+    let e = take(&l, "other").await.unwrap_err();
+    assert_eq!(e.retry_at - Instant::now(), Duration::from_secs(7));
+    advance(Duration::from_secs(7)).await;
+    assert_eq!(l.frozen_for(SCOPE), None);
+    take(&l, "other").await.unwrap();
+}
+
+/// RL-01 leaves this as it was: without a `Retry-After` there is nothing to
+/// freeze for, whatever the type says, and the fetcher backs off (ADR-021).
+#[tokio::test(start_paused = true)]
+async fn an_unknown_type_without_retry_after_touches_nothing() {
+    let l = limiter_with_app("100:10");
+    l.observe(SCOPE, "m", &headers(&[("x-rate-limit-type", "server")]));
+    l.observe(
+        SCOPE,
+        "m",
+        &headers(&[("x-rate-limit-type", "server"), ("retry-after", "soon")]),
+    );
+    assert_eq!(l.frozen_for(SCOPE), None);
+    assert_eq!(used(&l, "100:10"), 0);
+}
+
 /// `riot_retry_after_s` (design/14): the longest freeze on any scope.
 #[tokio::test(start_paused = true)]
 async fn the_longest_freeze_is_across_scopes() {

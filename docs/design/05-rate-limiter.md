@@ -77,6 +77,7 @@ After every upstream response:
 3. On `429`:
    - `X-Rate-Limit-Type: application|method` + `Retry-After` → `freeze(scope, now + retry_after)`; log at `error` (our accounting was wrong).
    - No type header → service limit: don't touch buckets; the caller (client.rs) backs off `250ms × 2^attempt ± 25 %` up to 3 attempts.
+   - Any other type with `Retry-After` (as built: `service`, ADR-024; a value Riot's portal does not document, RL-01, ADR-224) → the same freeze, logged at `warn`: it is not our accounting. Production answered timeline reads with `X-Rate-Limit-Type: server` on 2026-11-20; the portal lists only `application`, `method` and `service`. A type without `Retry-After` is the untyped case.
 
 ## Priorities and fairness
 
@@ -146,7 +147,7 @@ The sections above are the original design. Where they differ, the implementatio
 |---|---|---|---|
 | Window algorithm | Fixed window: `count`, `reset_at`, reset on expiry | **Sliding log**: admission instants per window, as v1 (#17). No rolling interval ever holds more than `limit`, boundaries included | ADR-023 |
 | Riot count sync | `count = max(count, riot_count)` | Pad with entries stamped at sync time up to Riot's count. Never lowers, never moves our own stamps | ADR-023, ADR-024 |
-| Freeze trigger | `application\|method` + `Retry-After` | Any typed 429 with a numeric `Retry-After`, `service` included (v1). Error log only for application/method | ADR-024 |
+| Freeze trigger | `application\|method` + `Retry-After` | Any typed 429 with a numeric `Retry-After`, `service` included (v1) and, since RL-01, a type we do not know (`server` was seen on production): before RL-01 an unknown value was read as no type, nothing froze, and the fetcher, which takes any type with a `Retry-After` for a freeze, called again at once. Error log only for application/method | ADR-024, ADR-224 |
 | Service-429 backoff | client.rs, 250 ms × 2ⁿ ± 25 %, 3 tries | Fetcher (P3-05), **v1's** 500 ms × 2ⁿ capped at 8 s, ± 20 %, 3 tries. The client never retries | ADR-017, ADR-021 |
 | Interactive over budget | Implied wait | Fail at once with `RATE_LIMITED` and the exact `retry_at` when the wait cannot fit the budget (v1 waited the whole budget) | ADR-025 |
 | Bulk ceiling | Any window ≥ ceiling · limit | Same, strictly: bulk needs `used < ceiling × limit` in every app and method window (8/10 at 0.80 blocks) | ADR-025 |

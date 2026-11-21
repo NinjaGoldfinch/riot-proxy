@@ -50,12 +50,18 @@ pub enum RateLimitType {
     Method,
     /// An underlying service limited us; our buckets are fine.
     Service,
+    /// A value that is none of the three the portal documents (production
+    /// saw `server`, 2026-11-20). Not ours to account for; with a
+    /// `Retry-After` it freezes the scope as `Service` does (RL-01, ADR-224).
+    Unknown,
 }
 
 impl RateLimitType {
-    pub fn parse(raw: &str) -> Option<Self> {
+    /// Any header value is a type: one the portal does not document is
+    /// [`Unknown`](Self::Unknown), and is warned about.
+    pub fn parse(raw: &str) -> Self {
         let parsed = Self::parse_quiet(raw);
-        if parsed.is_none() {
+        if parsed == Self::Unknown {
             tracing::warn!(
                 value = raw.trim().to_ascii_lowercase(),
                 "unknown X-Rate-Limit-Type"
@@ -66,12 +72,12 @@ impl RateLimitType {
 
     /// [`parse`](Self::parse) without the warning, for a second read of a
     /// response that was already read once (STS-03's rate-limit table).
-    pub fn parse_quiet(raw: &str) -> Option<Self> {
+    pub fn parse_quiet(raw: &str) -> Self {
         match raw.trim().to_ascii_lowercase().as_str() {
-            "application" => Some(Self::Application),
-            "method" => Some(Self::Method),
-            "service" => Some(Self::Service),
-            _ => None,
+            "application" => Self::Application,
+            "method" => Self::Method,
+            "service" => Self::Service,
+            _ => Self::Unknown,
         }
     }
 
@@ -80,6 +86,7 @@ impl RateLimitType {
             Self::Application => "application",
             Self::Method => "method",
             Self::Service => "service",
+            Self::Unknown => "unknown",
         }
     }
 }
@@ -159,6 +166,7 @@ pub struct RateLimitHeaders {
     pub app_counts: Option<Vec<CountWindow>>,
     pub method_limits: Option<Vec<LimitWindow>>,
     pub method_counts: Option<Vec<CountWindow>>,
+    /// `X-Rate-Limit-Type`, whatever it says; `None` only without the header.
     pub limit_type: Option<RateLimitType>,
     /// `Retry-After`, in seconds.
     pub retry_after: Option<u64>,
@@ -190,7 +198,7 @@ impl RateLimitHeaders {
             app_counts: counts_of(X_APP_RATE_LIMIT_COUNT, get(X_APP_RATE_LIMIT_COUNT), warn),
             method_limits: limits_of(X_METHOD_RATE_LIMIT, get(X_METHOD_RATE_LIMIT), warn),
             method_counts: counts_of(X_METHOD_RATE_LIMIT_COUNT, get(X_METHOD_RATE_LIMIT_COUNT), warn),
-            limit_type: get(X_RATE_LIMIT_TYPE).and_then(limit_type),
+            limit_type: get(X_RATE_LIMIT_TYPE).map(limit_type),
             retry_after: get(RETRY_AFTER).and_then(|v| v.trim().parse().ok()),
         }
     }
@@ -275,14 +283,36 @@ mod tests {
 
     #[test]
     fn rate_limit_type() {
-        assert_eq!(
-            RateLimitType::parse("application"),
-            Some(RateLimitType::Application)
-        );
-        assert_eq!(RateLimitType::parse("METHOD"), Some(RateLimitType::Method));
-        assert_eq!(RateLimitType::parse(" service "), Some(RateLimitType::Service));
-        assert_eq!(RateLimitType::parse("nope"), None);
+        assert_eq!(RateLimitType::parse("application"), RateLimitType::Application);
+        assert_eq!(RateLimitType::parse("METHOD"), RateLimitType::Method);
+        assert_eq!(RateLimitType::parse(" service "), RateLimitType::Service);
         assert_eq!(RateLimitType::Method.as_str(), "method");
+    }
+
+    /// RL-01: a value the portal does not document is still a type. `server`
+    /// is what production saw on 2026-11-20; nothing else about it is known.
+    #[test]
+    fn a_type_we_do_not_know_is_unknown_not_absent() {
+        for raw in ["server", " Server ", "nope", ""] {
+            assert_eq!(RateLimitType::parse(raw), RateLimitType::Unknown, "{raw:?}");
+            assert_eq!(RateLimitType::parse_quiet(raw), RateLimitType::Unknown, "{raw:?}");
+        }
+        assert_eq!(RateLimitType::Unknown.as_str(), "unknown");
+
+        let mut h = HeaderMap::new();
+        h.insert(X_RATE_LIMIT_TYPE, "server".parse().unwrap());
+        h.insert(RETRY_AFTER, "4".parse().unwrap());
+        for read in [
+            RateLimitHeaders::from_headers(&h),
+            RateLimitHeaders::from_headers_quiet(&h),
+        ] {
+            assert_eq!(
+                (read.limit_type, read.retry_after),
+                (Some(RateLimitType::Unknown), Some(4))
+            );
+        }
+        h.remove(X_RATE_LIMIT_TYPE);
+        assert_eq!(RateLimitHeaders::from_headers(&h).limit_type, None);
     }
 
     #[test]
@@ -353,7 +383,7 @@ mod tests {
         assert_eq!(quiet, loud);
         assert_eq!(loud.app_limits, Some(vec![lw(20, 1), lw(100, 120)]));
         assert_eq!(loud.method_counts, None);
-        assert_eq!(loud.limit_type, None);
+        assert_eq!(loud.limit_type, Some(RateLimitType::Unknown));
         assert!(
             loud_log.contains("malformed rate-limit windows skipped"),
             "{loud_log}"
@@ -367,7 +397,7 @@ mod tests {
             RateLimitHeaders::from_headers_quiet(&ok).limit_type,
             Some(RateLimitType::Service)
         );
-        assert_eq!(RateLimitType::parse_quiet("nope"), None);
+        assert_eq!(RateLimitType::parse_quiet("nope"), RateLimitType::Unknown);
     }
 
     #[test]

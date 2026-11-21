@@ -71,14 +71,14 @@ The key never goes in the URL (`src/riot/client.rs:L469`). Client settings: 10 s
 
 ## The rate-limit model
 
-Riot enforces limits per API key per routing host (the limiter's *scope*) at two levels, and tells the client what they are in every response. The proxy never hard-codes a limit; it learns from the headers (`src/riot/limiter/headers.rs`, `src/riot/limiter/mod.rs:L370-L401`).
+Riot enforces limits per API key per routing host (the limiter's *scope*) at two levels, and tells the client what they are in every response. The proxy never hard-codes a limit; it learns from the headers (`src/riot/limiter/headers.rs`, `src/riot/limiter/mod.rs:L371-L402`).
 
 | Header from Riot | What it carries | What the proxy does |
 |---|---|---|
 | `X-App-Rate-Limit` | `limit:seconds,…` application windows for the key on that host, for example `20:1,100:120` | reconfigures the scope's app windows; sliding logs (ADR-023) |
 | `X-App-Rate-Limit-Count` | `count:seconds,…` current usage | pads each window up to Riot's count so a restart or an outside caller cannot overrun |
 | `X-Method-Rate-Limit` / `-Count` | the same per method | per-method windows keyed by endpoint id |
-| `X-Rate-Limit-Type` | on a 429: `application`, `method` or `service` | with a numeric `Retry-After`, freezes the whole scope for that long (any type, ADR-024); `application`/`method` are logged as accounting errors |
+| `X-Rate-Limit-Type` | on a 429: `application`, `method` or `service` (the portal's three); production also saw `server` (2026-11-20), which no source of ours documents | with a numeric `Retry-After`, freezes the whole scope for that long (any type, ADR-024; a type we do not know included, logged `unknown X-Rate-Limit-Type` at warn, RL-01, ADR-224); `application`/`method` are logged as accounting errors |
 | `Retry-After` | seconds | the freeze length; forwarded as `retryAfter` on `RATE_LIMITED` |
 
 A fresh scope starts with the bootstrap limits `20:1,100:120`, which are the personal (development) key's limits: 20 requests per second and 100 per 2 minutes (`BOOTSTRAP_APP_LIMITS`, `src/riot/limiter/headers.rs:L31-L42`). That is roughly 0.83 requests per second sustained per host, which bounds everything the proxy does with the current key. Inspect a scope with `GET /v1/admin/limits/{scope}`:
@@ -113,5 +113,5 @@ Through the running server, `GET /v1/admin/debug/riot?scope=<platform|region>&pa
 - Data Dragon version list: <https://ddragon.leagueoflegends.com/api/versions.json>
 
 ---
-**Sources:** `src/riot/endpoints.rs:L13-L15,L124-L335,L409-L429,L523-L544`, `src/riot/routing.rs:L114-L212`, `src/riot/client.rs:L24-L30,L91-L131,L147,L407-L477,L529`, `src/riot/limiter/headers.rs:L31-L42,L90-L196`, `src/riot/limiter/mod.rs:L370-L431`, `src/riot/ladder.rs:L14-L20`, `src/fetcher.rs:L59-L69,L929-L1035`, `src/cache/keys.rs:L81-L88`, `src/jobs/ddragon.rs:L22-L25,L83-L97,L108-L152,L255-L285`, `src/static/mod.rs:L28-L35`, `src/static/images.rs:L32-L39`, `src/routes/admin.rs:L1077-L1206`, `src/cli/riot.rs`, `src/config.rs:L115,L907,L924-L925`, `docs/contract/v1-endpoints.txt`, `docs/design/03-architecture.md:L32-L36`, `docs/DECISIONS.md` ADR-001, ADR-007, ADR-023, ADR-024, ADR-059, ADR-066, ADR-143, ADR-216, `docs/_meta/scratch/riot-and-cache.md` §1-§4, `docs/_meta/scratch/jobs-and-observability.md` §3, `docs/_meta/scratch/WRITING-BRIEF.md`, `README.md`
-**Last verified:** 2026-11-21 against commit `5655af7`
+**Sources:** `src/riot/endpoints.rs:L13-L15,L124-L335,L409-L429,L523-L544`, `src/riot/routing.rs:L114-L212`, `src/riot/client.rs:L24-L30,L91-L131,L147,L407-L477,L529`, `src/riot/limiter/headers.rs:L31-L42,L97-L204`, `src/riot/limiter/mod.rs:L371-L440`, `src/riot/ladder.rs:L14-L20`, `src/fetcher.rs:L59-L69,L929-L1035`, `src/cache/keys.rs:L81-L88`, `src/jobs/ddragon.rs:L22-L25,L83-L97,L108-L152,L255-L285`, `src/static/mod.rs:L28-L35`, `src/static/images.rs:L32-L39`, `src/routes/admin.rs:L1077-L1206`, `src/cli/riot.rs`, `src/config.rs:L115,L907,L924-L925`, `docs/contract/v1-endpoints.txt`, `docs/design/03-architecture.md:L32-L36`, `docs/DECISIONS.md` ADR-001, ADR-007, ADR-023, ADR-024, ADR-059, ADR-066, ADR-143, ADR-216, `docs/_meta/scratch/riot-and-cache.md` §1-§4, `docs/_meta/scratch/jobs-and-observability.md` §3, `docs/_meta/scratch/WRITING-BRIEF.md`, `README.md`
+**Last verified:** 2026-11-21 against commit `9d288ff`
