@@ -365,7 +365,8 @@ impl Limiter {
     /// 1. New `X-App-Rate-Limit` / `X-Method-Rate-Limit` windows reconfigure the
     ///    buckets, keeping admissions in windows of the same length.
     /// 2. `-Count` headers sync each window up to Riot's count, never down.
-    /// 3. A typed 429 (`X-Rate-Limit-Type` + `Retry-After`) freezes the scope.
+    /// 3. A typed 429 (`X-Rate-Limit-Type` + `Retry-After`) freezes the scope,
+    ///    whatever the type says, one we do not know included (ADR-224).
     ///    An untyped 429 changes nothing; the caller backs off (ADR-021).
     pub fn observe(&self, scope: &str, method: &str, headers: &RateLimitHeaders) {
         let now = Instant::now();
@@ -402,8 +403,9 @@ impl Limiter {
 
     /// Block every acquire on `scope`, every method, for `retry_after`. A longer
     /// freeze already in place is kept. Application and method 429s mean our own
-    /// accounting was wrong and are logged at error (v1 §9.4). Metrics are the
-    /// client's job, so this never counts a 429.
+    /// accounting was wrong and are logged at error (v1 §9.4); a service 429 or
+    /// one of a type we do not know is not ours to account for, and is a warn.
+    /// Metrics are the client's job, so this never counts a 429.
     pub fn freeze(&self, scope: &str, retry_after: Duration, kind: RateLimitType) {
         let until = Instant::now() + retry_after;
         {
@@ -425,6 +427,13 @@ impl Limiter {
                     scope,
                     retry_after_s = retry_after.as_secs(),
                     "service 429 with Retry-After; scope frozen"
+                );
+            }
+            RateLimitType::Unknown => {
+                tracing::warn!(
+                    scope,
+                    retry_after_s = retry_after.as_secs(),
+                    "429 of an unknown type with Retry-After; scope frozen"
                 );
             }
         }

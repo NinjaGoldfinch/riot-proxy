@@ -1116,6 +1116,53 @@ async fn riot_api_down_three_rounds_then_recovered() {
     worker.abort();
 }
 
+/// RL-01 (ADR-224): a 429 of a type we do not know, with a `Retry-After`
+/// over 10 s, is a freeze like any: the limiter holds the scope,
+/// `riot_retry_after_s` and the table show it, and `riot_rate_limited` fires
+/// once, from the response and not again from the round that follows.
+/// Synthetic: `server` is what production saw (2026-11-20); the 11 is ours.
+#[tokio::test]
+async fn a_429_of_an_unknown_type_is_a_freeze_and_fires_riot_rate_limited() {
+    let (e, hook, worker) = with_events(&[("STATUS_CHECK_PLATFORMS", "oc1")]).await;
+    let headers = [
+        ("x-rate-limit-type".to_string(), "server".to_string()),
+        ("retry-after".to_string(), "11".to_string()),
+    ];
+    mock_platform(&e, "oc1.api.riotgames.com", 429, &headers).await;
+    let admin = e.key("rl-admin-unknown", vec![Scope::Read, Scope::Admin]).await;
+    let mut c = checker(&e);
+    let start = tokio::time::Instant::now();
+    c.round(start).await;
+    assert_eq!(probes(&e).await, 1);
+
+    let frozen = e.state.limiter.frozen_for("oc1").expect("oc1 is frozen");
+    assert!(
+        frozen > Duration::from_secs(9) && frozen <= Duration::from_secs(11),
+        "{frozen:?}"
+    );
+    let body = e
+        .get(OUTSIDE, "/status/ratelimits", Some(&admin), &[])
+        .await
+        .json();
+    assert!(
+        matches!(body["retry_after_s"].as_u64(), Some(10 | 11)),
+        "{}",
+        body["retry_after_s"]
+    );
+    assert_eq!(body["scopes"]["oc1"]["retry_after"]["s"], 11);
+
+    let got = posted(&hook, 1).await;
+    let events: Vec<_> = got.iter().map(|g| g.0["event"].as_str().unwrap()).collect();
+    assert_eq!(
+        events,
+        ["riot_rate_limited"],
+        "once: the round does not repeat it"
+    );
+    assert_eq!(got[0].0["severity"], "warning");
+    assert_eq!(got[0].0["detail"], serde_json::json!({ "retry_after_s": 11 }));
+    worker.abort();
+}
+
 /// design/14: a status request never calls the event URL.
 #[tokio::test]
 async fn a_status_request_makes_no_call_to_the_event_url() {
