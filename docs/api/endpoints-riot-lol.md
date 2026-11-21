@@ -35,7 +35,7 @@ The pinned and picked variants share one cache entry (`src/routes/riot.rs:L155-L
 
 A Riot ID that does not exist is `404 NOT_FOUND` `Resource not found upstream`, and the 404 is cached for 300 s, so the next call is `404` with `X-Cache: HIT-NEG` and message `Resource not found upstream (negative-cached)` (`src/fetcher.rs:L508-L514`).
 
-> **TODO (unverified):** the 200 body of `/v1/riot/accounts/region/by-puuid/{puuid}` is not typed in the OpenAPI document (it is not in `RIOT_BODIES`, `src/routes/docs.rs:L315-L348`); the proxy forwards Riot's `AccountRegionDTO` bytes unchanged.
+> **TODO (unverified):** the 200 body of `/v1/riot/accounts/region/by-puuid/{puuid}` is not typed in the OpenAPI document (it is not in `RIOT_BODIES`, `src/routes/docs.rs:L315-L350`); the proxy forwards Riot's `AccountRegionDTO` bytes unchanged.
 
 ## `/v1/lol/*`: League passthrough
 
@@ -55,6 +55,12 @@ A Riot ID that does not exist is `404 NOT_FOUND` `Resource not found upstream`, 
 | GET | `/v1/lol/status` | none | **none**: a typed summary of every polled platform from `platform_status` (SITE-14, [below](#every-platforms-status-get-v1lolstatus)) | always `HIT` | `src/routes/lol.rs:L443` |
 
 Hard TTL is soft × 4 while `STALE_WHILE_REVALIDATE=true` (default), except `status.platformData`, soft × 2 (300 s / 600 s, so the status poller's copy is a `HIT` between rounds; `Endpoint::stale_multiplier`, SITE-13); the full table with line references is in [../reference/riot-api-usage.md](../reference/riot-api-usage.md). Exact upstream URLs per route are asserted in `tests/snapshots/lol_routes__lol_routes_upstream_calls.snap`.
+
+Ten passthrough routes have a schema for Riot's body on their 200 in the OpenAPI document (`RIOT_BODIES`, `src/routes/docs.rs:L315-L350`): the four account routes (`AccountDto`), the summoner (`SummonerDTO`), both league-entries routes (a list of `LeagueEntryDTO`), mastery (a list of `ChampionMasteryDto`) (SITE-05, ADR-110), and since SITE-16 (ADR-222) the rotations (`ChampionInfo`) and the per-platform status (`PlatformDataDto`, with `StatusDto`, `ContentDto` and `UpdateDto`; `src/routes/riot_schemas.rs:L149-L221`). The schemas only document: nothing validates or reshapes the body, and it may carry fields they do not name. A field is required only where Riot's developer portal and every recorded body agree. In `StatusDto`, `archive_at` and `updated_at` are always there and may be `null`; `maintenance_status` and `incident_severity` are optional and may be `null` (a recorded incident has `maintenance_status: null` or no such key, and no maintenance entry is recorded). Riot's legal values are named in the descriptions and are not `enum`s, so a generated type is `string`. The rotations body is Riot's `sr` and `newplayer`, not v1's `freeChampionIds` (`tests/fixtures/replay/champion-rotations/oc1.json`):
+
+```json
+{"sr":[29,30,40,43,62,75,103,110,112,115,120,134,157,161,200,222,240,254,777,902],"newplayer":[17,18,33,37,51,54,80,82,89,91,112,113,115,131,134,145,222,254,350,875]}
+```
 
 Match routes derive the region from the id's prefix (`EUW1_` is `europe`; `ME1_` is the `me1` platform's, also `europe`, ADR-143 and ADR-216). A declared region that disagrees is refused before any Riot call (`src/routes/lol.rs:L61-L72`):
 
@@ -149,5 +155,5 @@ ninjagoldfinch.lol does not use these image routes; its browser loads icons stra
 > **TODO (unverified):** whether `ServeDir` sends `Last-Modified` and honours `If-Modified-Since` for images written by the fill route on a later request; the behaviour is tower-http's (`docs/_meta/scratch/routes.md` §7).
 
 ---
-**Sources:** `src/routes/riot.rs:L127-L300`, `src/routes/lol.rs:L37-L480`, `src/status/poll/summary.rs:L1-L287`, `src/routes/statics.rs:L4-L292`, `src/routes/passthrough.rs:L325-L476`, `src/http/validate.rs:L53-L166,L232-L244`, `src/riot/endpoints.rs:L126-L331`, `src/riot/ladder.rs:L7-L26`, `src/riot/routing.rs:L138-L205`, `src/static/mod.rs:L28-L101`, `src/fetcher.rs:L488-L514`, `tests/snapshots/lol_routes__lol_routes_upstream_calls.snap`, `tests/snapshots/ddragon__ddragon_file_headers.snap`, `tests/snapshots/ddragon__ddragon_missing_headers.snap`, `docs/_meta/scratch/routes.md` §1.2-1.3,1.6-1.7, `docs/_meta/scratch/riot-and-cache.md` §2, live capture against `target/debug/riot-proxy` 2.7.0
-**Last verified:** 2026-11-21 against commit `8f606c8`
+**Sources:** `src/routes/riot.rs:L127-L300`, `src/routes/lol.rs:L37-L480`, `src/routes/docs.rs:L315-L350`, `src/routes/riot_schemas.rs:L149-L221`, `tests/fixtures/replay/champion-rotations/oc1.json`, `src/status/poll/summary.rs:L1-L287`, `src/routes/statics.rs:L4-L292`, `src/routes/passthrough.rs:L325-L476`, `src/http/validate.rs:L53-L166,L232-L244`, `src/riot/endpoints.rs:L126-L331`, `src/riot/ladder.rs:L7-L26`, `src/riot/routing.rs:L138-L205`, `src/static/mod.rs:L28-L101`, `src/fetcher.rs:L488-L514`, `tests/snapshots/lol_routes__lol_routes_upstream_calls.snap`, `tests/snapshots/ddragon__ddragon_file_headers.snap`, `tests/snapshots/ddragon__ddragon_missing_headers.snap`, `docs/_meta/scratch/routes.md` §1.2-1.3,1.6-1.7, `docs/_meta/scratch/riot-and-cache.md` §2, live capture against `target/debug/riot-proxy` 2.7.0
+**Last verified:** 2026-11-21 against commit `9d288ff`

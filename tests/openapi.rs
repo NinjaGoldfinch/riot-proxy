@@ -341,3 +341,62 @@ fn recorded_riot_bodies_fit_their_schemas() {
         "#/components/schemas/LeagueEntryDTO"
     );
 }
+
+/// SITE-16: every checked-in status and rotations recording fits the schema
+/// its passthrough route's 200 carries, each required field included, down
+/// through the incidents, their titles and their updates.
+#[test]
+fn recorded_status_and_rotations_bodies_fit_their_schemas() {
+    let doc: serde_json::Value = serde_json::from_str(&docs::spec().to_json().unwrap()).unwrap();
+    for (route, name, dir, at_least) in [
+        (
+            "/v1/lol/status/{platform}",
+            "PlatformDataDto",
+            "status-platform-data",
+            3,
+        ),
+        (
+            "/v1/lol/rotations/{platform}",
+            "ChampionInfo",
+            "champion-rotations",
+            1,
+        ),
+    ] {
+        let schema = &doc["paths"][route]["get"]["responses"]["200"]["content"]["application/json"]["schema"];
+        assert_eq!(schema["$ref"], format!("#/components/schemas/{name}"), "{route}");
+        let required = doc["components"]["schemas"][name]["required"].as_array().unwrap();
+        assert!(!required.is_empty(), "{name} requires nothing");
+        let dir = format!("{}/tests/fixtures/replay/{dir}", env!("CARGO_MANIFEST_DIR"));
+        let mut checked = 0;
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|e| e != "json") {
+                continue;
+            }
+            let body: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            conforms(&doc, schema, &body, &path.display().to_string());
+            checked += 1;
+        }
+        assert!(
+            checked >= at_least,
+            "{dir}: {checked} recordings, expected {at_least}"
+        );
+    }
+    // The recordings exercise the nested schemas: each status body lists an incident with an update.
+    let status = &doc["components"]["schemas"];
+    for (name, field) in [
+        ("StatusDto", "titles"),
+        ("StatusDto", "updates"),
+        ("UpdateDto", "translations"),
+        ("ContentDto", "content"),
+    ] {
+        assert!(
+            status[name]["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|f| f == field),
+            "{name}.{field} is not required"
+        );
+    }
+}

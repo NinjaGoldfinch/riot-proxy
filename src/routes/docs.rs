@@ -79,7 +79,7 @@ Each response in this document declares the headers it sends.
         crate::routes::statics::ddragon_image,
         crate::routes::statics::ddragon_rune_image,
     ),
-    components(schemas(crate::http::error::ErrorResponse, crate::routes::statics::ImageKind)),
+    components(schemas(crate::http::error::ErrorResponse, crate::routes::statics::ImageKind, crate::routes::riot_schemas::PlatformDataDto, crate::routes::riot_schemas::ChampionInfo)),
 )]
 struct ApiDoc;
 
@@ -310,9 +310,9 @@ fn declare_headers(doc: &mut Document) {
     }
 }
 
-/// Passthrough routes whose 200 is one of Riot's documented DTOs (SITE-05):
-/// path, schema name, and whether Riot returns a list of them.
-const RIOT_BODIES: [(&str, &str, bool); 8] = [
+/// Passthrough routes whose 200 is one of Riot's documented DTOs (SITE-05,
+/// SITE-16): path, schema name, and whether Riot returns a list of them.
+const RIOT_BODIES: [(&str, &str, bool); 10] = [
     ("/v1/riot/accounts/by-puuid/{puuid}", "AccountDto", false),
     ("/v1/riot/accounts/by-puuid/{region}/{puuid}", "AccountDto", false),
     (
@@ -345,6 +345,8 @@ const RIOT_BODIES: [(&str, &str, bool); 8] = [
         "ChampionMasteryDto",
         true,
     ),
+    ("/v1/lol/rotations/{platform}", "ChampionInfo", false),
+    ("/v1/lol/status/{platform}", "PlatformDataDto", false),
 ];
 
 /// Give those routes' 200 its schema. The body is still Riot's, verbatim.

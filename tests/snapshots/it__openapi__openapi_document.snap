@@ -1306,6 +1306,32 @@ expression: doc
         ],
         "type": "object"
       },
+      "ChampionInfo": {
+        "description": "champion-v3 `ChampionInfo`: the free champion rotation.",
+        "properties": {
+          "newplayer": {
+            "description": "A list of champion IDs available to players under summoner level 11.",
+            "items": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "sr": {
+            "description": "A list of champion IDs available to all players on Summoner's Rift.",
+            "items": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "newplayer",
+          "sr"
+        ],
+        "type": "object"
+      },
       "ChampionItemEntry": {
         "properties": {
           "games": {
@@ -1876,6 +1902,23 @@ expression: doc
           "scopes",
           "quotaPerMin",
           "disabledAt"
+        ],
+        "type": "object"
+      },
+      "ContentDto": {
+        "description": "lol-status-v4 `ContentDto`: a text in one locale.",
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "locale": {
+            "description": "e.g. `en_US`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "locale",
+          "content"
         ],
         "type": "object"
       },
@@ -3608,6 +3651,45 @@ expression: doc
             ]
           }
         },
+        "type": "object"
+      },
+      "PlatformDataDto": {
+        "description": "lol-status-v4 `PlatformDataDto`: one platform's maintenances and incidents.",
+        "properties": {
+          "id": {
+            "description": "The platform as Riot names it, e.g. `NA1`.",
+            "type": "string"
+          },
+          "incidents": {
+            "items": {
+              "$ref": "#/components/schemas/StatusDto"
+            },
+            "type": "array"
+          },
+          "locales": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "maintenances": {
+            "description": "Empty in every recorded body, so no maintenance entry has been checked\nagainst `StatusDto`.",
+            "items": {
+              "$ref": "#/components/schemas/StatusDto"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "locales",
+          "maintenances",
+          "incidents"
+        ],
         "type": "object"
       },
       "PlatformStatusEntry": {
@@ -5346,6 +5428,75 @@ expression: doc
         ],
         "type": "object"
       },
+      "StatusDto": {
+        "description": "lol-status-v4 `StatusDto`: one maintenance or one incident. Every recorded\nentry is an incident; what a maintenance entry carries is the portal's\nword alone.",
+        "properties": {
+          "archive_at": {
+            "description": "`null` in every recorded body.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "incident_severity": {
+            "description": "Legal values: `info`, `warning`, `critical`. On every recorded incident;\nnot required, and `null` is allowed, because no maintenance entry is\nrecorded and `maintenance_status` is `null` or left out on an incident.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "maintenance_status": {
+            "description": "Legal values: `scheduled`, `in_progress`, `complete`. On the recorded\nincidents it is `null` or left out.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "platforms": {
+            "description": "Legal values: `windows`, `macos`, `android`, `ios`, `ps4`, `xbone`, `switch`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "titles": {
+            "items": {
+              "$ref": "#/components/schemas/ContentDto"
+            },
+            "type": "array"
+          },
+          "updated_at": {
+            "description": "`null` on an entry that has not been updated.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updates": {
+            "items": {
+              "$ref": "#/components/schemas/UpdateDto"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "titles",
+          "updates",
+          "created_at",
+          "archive_at",
+          "updated_at",
+          "platforms"
+        ],
+        "type": "object"
+      },
       "StatusLevel": {
         "description": "A check's or the whole service's state, worst last.",
         "enum": [
@@ -5676,6 +5827,50 @@ expression: doc
           }
         ],
         "description": "The stored row, plus the history walk tracking queued, if it did (v1 #46)."
+      },
+      "UpdateDto": {
+        "description": "lol-status-v4 `UpdateDto`: one update posted to a maintenance or incident.",
+        "properties": {
+          "author": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "publish": {
+            "type": "boolean"
+          },
+          "publish_locations": {
+            "description": "Legal values: `riotclient`, `riotstatus`, `game`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "translations": {
+            "items": {
+              "$ref": "#/components/schemas/ContentDto"
+            },
+            "type": "array"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "author",
+          "publish",
+          "publish_locations",
+          "translations",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
       },
       "WindowUsage": {
         "properties": {
@@ -15409,7 +15604,11 @@ expression: doc
         "responses": {
           "200": {
             "content": {
-              "application/json": {}
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChampionInfo"
+                }
+              }
             },
             "description": "Riot's payload, unmodified. `X-Cache` and `X-Cache-Age` describe where it came from.",
             "headers": {
@@ -15963,7 +16162,11 @@ expression: doc
         "responses": {
           "200": {
             "content": {
-              "application/json": {}
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlatformDataDto"
+                }
+              }
             },
             "description": "Riot's payload, unmodified. `X-Cache` and `X-Cache-Age` describe where it came from.",
             "headers": {

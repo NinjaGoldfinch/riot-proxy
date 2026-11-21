@@ -5,7 +5,9 @@
 //! Fields, types and descriptions are Riot's developer portal's (account-v1
 //! `AccountDto`, summoner-v4 `SummonerDTO`, league-v4 `LeagueEntryDTO` and
 //! `MiniSeriesDTO`, champion-mastery-v4 `ChampionMasteryDto`,
-//! `NextSeasonMilestonesDto` and `RewardConfigDto`, read 2026-10-09). A field
+//! `NextSeasonMilestonesDto` and `RewardConfigDto`, read 2026-10-09;
+//! lol-status-v4 `PlatformDataDto`, `StatusDto`, `ContentDto` and `UpdateDto`
+//! and champion-v3 `ChampionInfo`, read 2026-11-21, SITE-16, ADR-222). A field
 //! is required only if the portal doesn't call it optional and every recorded
 //! body (`tests/fixtures/replay`) has it. Riot adds fields, so a body may carry
 //! more than these (JSON Schema allows extra properties by default).
@@ -142,4 +144,78 @@ pub struct RewardConfigDto {
     reward_type: String,
     /// Maximum reward
     maximum_reward: i32,
+}
+
+/// lol-status-v4 `PlatformDataDto`: one platform's maintenances and incidents.
+#[derive(Serialize, ToSchema)]
+#[schema(as = PlatformDataDto)]
+pub struct PlatformDataDto {
+    /// The platform as Riot names it, e.g. `NA1`.
+    id: String,
+    name: String,
+    locales: Vec<String>,
+    /// Empty in every recorded body, so no maintenance entry has been checked
+    /// against `StatusDto`.
+    maintenances: Vec<StatusDto>,
+    incidents: Vec<StatusDto>,
+}
+
+/// lol-status-v4 `StatusDto`: one maintenance or one incident. Every recorded
+/// entry is an incident; what a maintenance entry carries is the portal's
+/// word alone.
+#[derive(Serialize, ToSchema)]
+#[schema(as = StatusDto)]
+pub struct StatusDto {
+    id: i32,
+    /// Legal values: `scheduled`, `in_progress`, `complete`. On the recorded
+    /// incidents it is `null` or left out.
+    maintenance_status: Option<String>,
+    /// Legal values: `info`, `warning`, `critical`. On every recorded incident;
+    /// not required, and `null` is allowed, because no maintenance entry is
+    /// recorded and `maintenance_status` is `null` or left out on an incident.
+    incident_severity: Option<String>,
+    titles: Vec<ContentDto>,
+    updates: Vec<UpdateDto>,
+    created_at: String,
+    /// `null` in every recorded body.
+    #[schema(required = true)]
+    archive_at: Option<String>,
+    /// `null` on an entry that has not been updated.
+    #[schema(required = true)]
+    updated_at: Option<String>,
+    /// Legal values: `windows`, `macos`, `android`, `ios`, `ps4`, `xbone`, `switch`.
+    platforms: Vec<String>,
+}
+
+/// lol-status-v4 `ContentDto`: a text in one locale.
+#[derive(Serialize, ToSchema)]
+#[schema(as = ContentDto)]
+pub struct ContentDto {
+    /// e.g. `en_US`.
+    locale: String,
+    content: String,
+}
+
+/// lol-status-v4 `UpdateDto`: one update posted to a maintenance or incident.
+#[derive(Serialize, ToSchema)]
+#[schema(as = UpdateDto)]
+pub struct UpdateDto {
+    id: i32,
+    author: String,
+    publish: bool,
+    /// Legal values: `riotclient`, `riotstatus`, `game`.
+    publish_locations: Vec<String>,
+    translations: Vec<ContentDto>,
+    created_at: String,
+    updated_at: String,
+}
+
+/// champion-v3 `ChampionInfo`: the free champion rotation.
+#[derive(Serialize, ToSchema)]
+#[schema(as = ChampionInfo)]
+pub struct ChampionInfo {
+    /// A list of champion IDs available to players under summoner level 11.
+    newplayer: Vec<i64>,
+    /// A list of champion IDs available to all players on Summoner's Rift.
+    sr: Vec<i64>,
 }

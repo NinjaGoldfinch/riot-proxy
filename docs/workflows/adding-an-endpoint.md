@@ -65,7 +65,7 @@ The path template uses `{name}` segments; a wildcard is `{*name}` (`src/routes/s
 
 ### 3. Register it
 
-Add `.routes(routes!(clash_players_by_puuid))` to the file's `router()` (`src/routes/lol.rs:37-51`). Every area router is already merged into the `read` group of `routes::docs::api_router`, which gets the `require_read` guard, and `admin::router()` into the `admin` group with `require_admin` (`src/routes/docs.rs:118-153`). A new file needs a `pub mod` line in `src/routes/mod.rs` and a `.merge(routes::<file>::router())` in the right group of `api_router`; nothing else, since `api_router` is the single source for both the served routes and the OpenAPI document (`src/routes/docs.rs:116-117`, `371-374`). Auth, per-key quota, `X-RateLimit-*`, `X-Request-Id`, the request metric labelled with the matched template, compression and the body limit all come from the app layers (`src/app.rs:71-133`).
+Add `.routes(routes!(clash_players_by_puuid))` to the file's `router()` (`src/routes/lol.rs:37-51`). Every area router is already merged into the `read` group of `routes::docs::api_router`, which gets the `require_read` guard, and `admin::router()` into the `admin` group with `require_admin` (`src/routes/docs.rs:118-153`). A new file needs a `pub mod` line in `src/routes/mod.rs` and a `.merge(routes::<file>::router())` in the right group of `api_router`; nothing else, since `api_router` is the single source for both the served routes and the OpenAPI document (`src/routes/docs.rs:116-117`, `396-400`). Auth, per-key quota, `X-RateLimit-*`, `X-Request-Id`, the request metric labelled with the matched template, compression and the body limit all come from the app layers (`src/app.rs:71-133`).
 
 ### 4. Validate
 
@@ -80,6 +80,8 @@ Use `http::validate` for v1's rules, before any upstream call, and never hand-ro
 `tests/openapi.rs` snapshots the whole document with insta (`tests/openapi.rs:9-13`), so the new route makes `cargo test --test it openapi::` fail until `tests/snapshots/it__openapi__openapi_document.snap` is updated (every `tests/*.rs` is a module of the single `it` binary since CI-04, ADR-176). Review the diff deliberately: the new path, its parameters, the `PassthroughResponses` set (200/400/401/403/404/429/502/503, `src/routes/passthrough.rs:17-89`) and nothing else should change (`docs/IMPLEMENTATION.md:94`; `PROGRESS.md:389`). The pull request template has a box for it (`.github/PULL_REQUEST_TEMPLATE.md:21`).
 
 > **TODO (unverified):** how the snapshot is meant to be accepted. Nothing in the repository mentions `cargo insta` or `INSTA_UPDATE`; insta's own workflow (a `.snap.new` beside the snapshot, then `cargo insta review`) is the assumption.
+
+A passthrough's 200 is `{}` in the document unless it is given one of Riot's DTOs: a struct in `src/routes/riot_schemas.rs` under the portal's name, and a row in `RIOT_BODIES` (`src/routes/docs.rs:315-350`). A field is required only where Riot's developer portal and every recorded body agree (`src/routes/riot_schemas.rs:1-12`; ADR-110, ADR-222), and `tests/openapi.rs:345-402` checks every recording in the route's fixture directory against the schema.
 
 The same test also checks `/openapi.json` equals what `riot-proxy spec` prints (`tests/openapi.rs:52-60`), and `scripts/compare-openapi.py` compares operations against v1's document for the `/v1/riot/` and `/v1/lol/` prefixes (`PROGRESS.md:389`).
 
@@ -122,5 +124,5 @@ Record the decision as the next free `ADR-nnn` in `docs/DECISIONS.md` and tick t
 9. `just lint`, `just test`; CI green ([ci.md](./ci.md)).
 
 ---
-**Sources:** `src/routes/docs.rs:L116-L153`, `L377-L380`, `src/routes/riot.rs:L21-L84`, `src/routes/lol.rs:L37-L112`, `L217-L229`, `src/routes/passthrough.rs:L17-L89`, `L94-L167`, `src/routes/mod.rs:L3-L15`, `src/routes/statics.rs:L71`, `src/http/validate.rs:L21-L31`, `L67-L253`, `src/app.rs:L71-L133`, `src/riot/endpoints.rs:L125-L335`, `L560-L600`, `src/cli/mod.rs:L73-L82`, `src/ui/showcase.html:L231-L241`, `tests/ui.rs:L427-L471`, `tests/openapi.rs:L9-L60`, `tests/lol_routes.rs:L22-L80`, `tests/riot_routes.rs:L16-L80`, `L243-L245`, `docs/design/11-showcase.md:L117-L131`, `docs/IMPLEMENTATION.md:L18`, `L22-L24`, `L94`, `PROGRESS.md:L389-L390`, `L392`, `.github/PULL_REQUEST_TEMPLATE.md:L21`
-**Last verified:** 2026-11-21 against commit `f254678`
+**Sources:** `src/routes/docs.rs:L116-L153`, `L315-L350`, `L379-L382`, `L396-L400`, `src/routes/riot_schemas.rs:L1-L12`, `src/routes/riot.rs:L21-L84`, `src/routes/lol.rs:L37-L112`, `L217-L229`, `src/routes/passthrough.rs:L17-L89`, `L94-L167`, `src/routes/mod.rs:L3-L15`, `src/routes/statics.rs:L71`, `src/http/validate.rs:L21-L31`, `L67-L253`, `src/app.rs:L71-L133`, `src/riot/endpoints.rs:L125-L335`, `L560-L600`, `src/cli/mod.rs:L73-L82`, `src/ui/showcase.html:L231-L241`, `tests/ui.rs:L427-L471`, `tests/openapi.rs:L9-L60`, `L345-L402`, `tests/lol_routes.rs:L22-L80`, `tests/riot_routes.rs:L16-L80`, `L243-L245`, `docs/design/11-showcase.md:L117-L131`, `docs/IMPLEMENTATION.md:L18`, `L22-L24`, `L94`, `PROGRESS.md:L389-L390`, `L392`, `.github/PULL_REQUEST_TEMPLATE.md:L21`
+**Last verified:** 2026-11-21 against commit `9d288ff`
