@@ -61,7 +61,7 @@ With the defaults every page is on (`src/config.rs:860-862`, `863-866`):
 
 | Page | What | Key needed |
 |---|---|---|
-| `http://127.0.0.1:8080/docs` | the OpenAPI reference (Scalar) and `/openapi.json`, `/openapi.yaml` (`src/routes/docs.rs:400-414`) | no |
+| `http://127.0.0.1:8080/docs` | the OpenAPI reference (Scalar) and `/openapi.json`, `/openapi.yaml` (`src/routes/docs.rs:402-416`) | no |
 | `/dev` and `/dev/showcase` | the dev explorer and the example frontend; never served when `ENV=production` (`README.md:88`; `src/config.rs:860-862`) | the page loads without one; its API calls need a read key unless `AUTH_DISABLED` (`docs/design/11-showcase.md:15`) |
 | `/dashboard` | the operational dashboard; inert without an admin key (`.env.example:239-240`) | admin key in the page |
 | `/healthz`, `/readyz`, `/metrics` | ops routes | no |
@@ -204,4 +204,4 @@ Not re-executed here: `cargo build`, `cargo test` and `just nextest` (a full run
 
 ---
 **Sources:** `rust-toolchain.toml:L1-L5`, `justfile:L1-L52`, `.env.example:L1-L240`, `README.md:L60-L114`, `src/config.rs:L3`, `L722-L736`, `L764-L774`, `L812-L838`, `L1056-L1082`, `L1159-L1171`, `src/cli/mod.rs:L83-L89`, `src/cli/serve.rs:L110-L113`, `L115-L126`, `L134-L151`, `L159-L161`, `L170-L172`, `L291`, `L416-L425`, `L450-L455`, `L613-L616`, `L630-L636`, `src/cli/key.rs:L13-L57`, `src/consumers.rs:L12-L14`, `L95-L96`, `src/http/auth.rs:L207-L210`, `src/jobs/ticks.rs:L1-L11`, `L78-L114`, `L119-L150`, `L225-L372`, `src/cli/riot.rs:L1-L32`, `L63-L81`, `src/archive/objects.rs:L109-L121`, `acceptance/helpers/env.ts:L19-L25`, `L244-L275`, `acceptance/helpers/setup.ts:L23-L54`, `acceptance/helpers/mock-riot.ts:L7`, `tests/ui.rs:L42-L64`, `tests/dom/package.json`, `acceptance/package.json`, `.github/workflows/ci.yml:L52-L53`, `PROGRESS.md:L390`, `L400`, `L420-L422`, `docs/IMPLEMENTATION.md:L434`, `docs/design/11-showcase.md:L15`, `docs/DECISIONS.md:L1457`, `docs/_meta/scratch/config.md`, `docs/_meta/scratch/persistence.md` §5, `docs/_meta/scratch/siblings.md` §1.2, §1.8
-**Last verified:** 2026-11-21 against commit `5655af7`
+**Last verified:** 2026-11-21 against commit `65ccdc9`
