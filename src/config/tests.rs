@@ -1175,3 +1175,42 @@ fn status_check_settings() {
         "{errs:?}"
     );
 }
+
+/// STS-04 (design/14 §Configuration): `EVENTS_URL` is optional, `http` or
+/// `https` only, and never shown whole.
+#[test]
+fn events_url() {
+    assert_eq!(load(env(&[])).events_url, None, "unset sends none");
+    assert_eq!(load(env(&[])).redacted()["EVENTS_URL"], None);
+
+    let raw = "https://hooks.example.com:8443/notify/s3cr3t-token?sig=abc";
+    let c = load(env(&[("EVENTS_URL", raw)]));
+    let url = c.events_url.as_ref().expect("set");
+    assert_eq!(url.url().as_str(), raw, "the request gets it whole");
+    assert_eq!(url.host(), "hooks.example.com:8443");
+    assert_eq!(c.redacted()["EVENTS_URL"].as_deref(), Some(REDACTED));
+    for shown in [format!("{url:?}"), url.to_string(), format!("{c:?}")] {
+        assert!(!shown.contains("s3cr3t") && !shown.contains("sig="), "{shown}");
+    }
+    assert_eq!(url.to_string(), "https://hooks.example.com:8443/[REDACTED]");
+    let plain = load(env(&[("EVENTS_URL", "http://127.0.0.1:9000/events")]));
+    assert_eq!(plain.events_url.unwrap().host(), "127.0.0.1:9000");
+
+    for bad in [
+        "ftp://hooks.example.com/x",
+        "hooks.example.com/x",
+        "file:///tmp/x",
+        "https://",
+    ] {
+        let errs = errors(env(&[("EVENTS_URL", bad)]));
+        assert!(
+            errs.iter().any(|e| e.starts_with("EVENTS_URL: ")),
+            "{bad}: {errs:?}"
+        );
+    }
+    let errs = errors(env(&[("EVENTS_URL", "ftp://hooks.example.com/s3cr3t")]));
+    assert!(
+        errs.iter().all(|e| !e.contains("s3cr3t")),
+        "never repeats the value: {errs:?}"
+    );
+}

@@ -41,7 +41,7 @@ sequenceDiagram
     end
 ```
 
-The order of checks is archive, then L1, then single-flight, then the limiter and the client (`src/fetcher.rs:463-574`). Numbers in the diagram: the interactive wait budget is `CLIENT_WAIT_BUDGET_MS`, default 2000 (`src/config.rs:868`); a background refresh runs at bulk priority with a 15 minute budget (`src/fetcher.rs:67-69`); the summoner endpoint's soft TTL is 3600 s and its hard TTL is four times that while `STALE_WHILE_REVALIDATE` is on (`src/riot/endpoints.rs:146-156,542-550`). A fresh negative entry answers `404 NOT_FOUND` with `X-Cache: HIT-NEG` (`src/fetcher.rs:482-489`). The single-flight leader's task is spawned, so a waiter that disconnects does not waste the limiter token (`src/singleflight.rs:1-12`).
+The order of checks is archive, then L1, then single-flight, then the limiter and the client (`src/fetcher.rs:463-574`). Numbers in the diagram: the interactive wait budget is `CLIENT_WAIT_BUDGET_MS`, default 2000 (`src/config.rs:926`); a background refresh runs at bulk priority with a 15 minute budget (`src/fetcher.rs:67-69`); the summoner endpoint's soft TTL is 3600 s and its hard TTL is four times that while `STALE_WHILE_REVALIDATE` is on (`src/riot/endpoints.rs:146-156,542-550`). A fresh negative entry answers `404 NOT_FOUND` with `X-Cache: HIT-NEG` (`src/fetcher.rs:482-489`). The single-flight leader's task is spawned, so a waiter that disconnects does not waste the limiter token (`src/singleflight.rs:1-12`).
 
 When Riot answers badly, the fetcher decides (`src/fetcher.rs:886-992`): a 404 is negative-cached for `NEG_TTL_SECONDS` (30 s; 300 s for account lookups); a 401 or 403 becomes `502 UPSTREAM_ERROR` at once and logs `RIOT KEY REJECTED`; a typed 429 with a numeric `Retry-After` freezes the scope and the loop re-acquires, up to 8 attempts; an untyped 429 tries the other account clusters, then backs off 500 ms, 1 s, 2 s with 20 % jitter for three tries; a 5xx or network failure retries after 250 ms and 750 ms, then serves a cached copy inside its hard TTL as `STALE` or fails `510`. The `/v1/players/*` composites go one step further (`Fetcher::fetch_or_stored`, AVL-03, ADR-212): when a part's fetch fails for any reason but a 404, a copy up to a day past its hard TTL is served as `STALE` with its real ages. With a copy stored, the fetch is waited for only `CLIENT_WAIT_BUDGET_MS` plus 250 ms (`Fetcher::stored_wait`, AVL-09; a forced `?refresh=true` read up to `FORCED_REFRESH_WAIT`, 20 s) before the copy is served; the call to Riot goes on behind the answer and fills the cache. A part with nothing stored waits for its fetch at most 20 s (`Fetcher::unstored_wait`, or the ordinary wait when `CLIENT_WAIT_BUDGET_MS` makes that longer), then fails `UPSTREAM_ERROR` while the call goes on (AVL-14); so does a part whose copy was purged during the wait. The status poller goes the other way (`FetchOptions::fresh_only` with a 1 s `budget`, SITE-13, ADR-219): it never takes the cached copy in place of Riot's answer, so our limiter's refusal is a skip and anything else a failure. The full table is in [../api/errors.md](../api/errors.md).
 
@@ -138,9 +138,9 @@ The crawl is written in one transaction; a partial unique index refuses a second
 
 | Where | Value | Source |
 |---|---|---|
-| Riot connect / total | 10 s / 25 s | `src/riot/client.rs:25-27` |
-| Interactive wait for a limiter token | `CLIENT_WAIT_BUDGET_MS` = 2000 | `src/config.rs:868` |
-| Job wait before yielding | `JOB_YIELD_BUDGET_MS` = 1000 | `src/config.rs:863` |
+| Riot connect / total | 10 s / 25 s | `src/riot/client.rs:26-28` |
+| Interactive wait for a limiter token | `CLIENT_WAIT_BUDGET_MS` = 2000 | `src/config.rs:926` |
+| Job wait before yielding | `JOB_YIELD_BUDGET_MS` = 1000 | `src/config.rs:921` |
 | Background refresh budget | 15 min | `src/fetcher.rs:67-69` |
 | `/readyz` SQLite probe (idle writer) | 2 s, of which 1.5 s waiting for the write lock | `src/routes/health.rs:21-27` |
 | `/readyz` stall threshold (busy writer) | 5 s without progress stamps or CPU | `src/routes/health.rs:34-46` |
@@ -150,4 +150,4 @@ The crawl is written in one transaction; a partial unique index refuses a second
 
 ---
 **Sources:** `src/app.rs:L105-L120`, `src/http/request_id.rs:L287-L338`, `src/http/auth.rs:L353-L405`, `src/fetcher.rs:L61-L69,L463-L574,L754-L993`, `src/riot/endpoints.rs:L146-L156,L542-L550`, `src/singleflight.rs:L1-L12`, `src/archive/mod.rs:L96-L269`, `src/archive/matches.rs:L191-L328`, `src/routes/lol.rs:L61-L72`, `src/routes/players.rs:L73-L121,L152-L174,L283-L363,L601-L661`, `src/routes/players/refresh.rs:L18-L71`, `src/routes/admin.rs:L1703-L1736`, `src/jobs/ladder.rs:L247-L328,L917-L927`, `src/db/store.rs:L98-L133`, `src/jobs/scheduler.rs:L124-L141`, `docs/_meta/scratch/riot-and-cache.md` §1.5, `docs/_meta/scratch/siblings.md` §1.3
-**Last verified:** 2026-11-20 against commit `1f37fc7`
+**Last verified:** 2026-11-21 against commit `5655af7`

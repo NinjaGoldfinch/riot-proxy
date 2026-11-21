@@ -180,6 +180,16 @@ When `EVENTS_URL` is set, state transitions are POSTed there as the contract's e
 - `host` is the machine's hostname (`gethostname`), the same as `/status`'s.
 - Nothing here formats for Discord or any other service.
 
+**As built (STS-04, ADR-223).**
+
+- *Where each fires.* `riot_key_rejected` fires where the Riot client's key verdict turns rejected: `UpstreamWatch::answered` for one answer, `UpstreamWatch::polls_refused` for a wholly refused poll round. No second state machine. The other six come from `status::outbound::Tracker`, fed once at the end of each check round (`Checker::round`) with the stored `riot_api` and `cache` and `riot_retry_after_s` read then.
+- *`riot_rate_limited` on the response path too.* A response whose headers make the limiter freeze a scope (`X-Rate-Limit-Type` and `Retry-After`, the condition in `Limiter::observe`) for more than 10 s fires it at once (`RiotClient::send_as`), so a freeze that starts and ends between two rounds is still reported. Only a round clears it, from the limiter, so `riot_rate_limit_cleared` comes up to one interval after the freeze ends. A freeze restored from `limiter_state` at boot is seen by the first round.
+- *"3 consecutive intervals"* is three check rounds in a row with the stored `riot_api` `down`; a round that is not `down` starts the count again. While the first platform is active it is probed every 60 s, so the three rounds can rest on two probes. With no `STATUS_CHECK_PLATFORMS`, `riot_api` is absent and neither of its events fires.
+- *`detail`* (owner, 2026-11-21): `riot_key_rejected` `{status, method, scope}`; `riot_rate_limited` `{retry_after_s}`; `riot_upstream_down` and `cache_unavailable` `{detail}`, the check's own `detail`; the three recoveries `{}`.
+- *Delivery.* `status::outbound::start`, called by `serve`, puts the handle on the Riot client's watch, where the checks read it, and spawns the worker. The worker has its own HTTP client (the embedded roots, 5 s per attempt), so a POST never carries `X-Riot-Token`; it sends `Content-Type: application/json`. When every attempt fails at once they land at 0, 1, 3, 7 and 15 s; a timeout adds its 5 s to each. One worker, so an event being retried holds back the ones queued behind it. The worker is aborted at shutdown, and what is still queued is lost.
+- *In memory only.* A restart forgets the tracker: a key still rejected fires `riot_key_rejected` again, once per process, and a pair that closes across a restart sends no closing event. No Prometheus metric (ADR-203): a drop logs `warn` (`event queue full; event dropped`, `event not delivered; dropped`), a queued and a delivered event log `info`, a retry `debug`.
+- *`EVENTS_URL`* must be an absolute `http://` or `https://` URL with a host, or the boot is refused, with a message that does not repeat the value. A webhook URL often carries its token, so it reads `[REDACTED]` in `/v1/admin/info`, and log lines name its host only (`events_host`).
+
 ## Configuration
 
 | Variable | Default | Meaning |

@@ -409,6 +409,8 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
         status: Arc::new(crate::status::Status::new(started)),
     };
     let checker = crate::status::checks::Checker::new(&state)?;
+    // State changes POSTed to EVENTS_URL (STS-04), when it is set.
+    let events = crate::status::outbound::start(&state).context("the events client")?;
     let poller = crate::status::poll::Poller::new(&state)?;
     let router = app::router(state, metrics);
 
@@ -494,6 +496,10 @@ pub async fn serve_with(config: Config, options: ServeOptions) -> anyhow::Result
     checks.abort();
     if let Some(polls) = polls {
         polls.abort();
+    }
+    // What is still queued is lost (design/14).
+    if let Some(events) = events {
+        events.abort();
     }
     metrics_topic.abort();
     if let Some(history) = history {

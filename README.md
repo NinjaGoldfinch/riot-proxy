@@ -182,6 +182,23 @@ curl -H "Authorization: Bearer $ADMIN_KEY" http://127.0.0.1:8080/status/ratelimi
 <!-- TODO (owner): paste a /status/ratelimits body captured from a real run with a dev key here, as the /status sample above was. Not the design's example: that one is illustrative, not observed. -->
 > **TODO (owner):** an example `/status/ratelimits` response, to be captured from a real run against Riot with a development key. The fields are in [design/14](docs/design/14-status.md#rate-limit-table-sts-03) and the OpenAPI document (`RateLimitReport`).
 
+#### Outbound events
+
+With `EVENTS_URL` set, each state change is POSTed there as one JSON event in the shared contract, from a background worker, so nothing waits on it ([design/14](docs/design/14-status.md#outbound-events-sts-04), ADR-223). Transitions only: a key that stays rejected sends one event, not one a round.
+
+```json
+{ "schema": 1, "service": "riot-proxy", "host": "ngf-prod-syd1", "event": "riot_key_rejected", "severity": "critical", "at": "2026-11-05T01:00:00Z", "detail": { "status": 403, "method": "summoner.byPuuid", "scope": "oc1" } }
+```
+
+| Event | Severity | Sent when | `detail` |
+|---|---|---|---|
+| `riot_key_rejected` | critical | Riot answers 401 or 403 and the key was not already rejected (once at boot with a bad key) | `status`, `method`, `scope` |
+| `riot_rate_limited` / `riot_rate_limit_cleared` | warning / info | a scope is frozen more than 10 s after a 429 / nothing is frozen any more | `retry_after_s` / none |
+| `riot_upstream_down` / `riot_upstream_recovered` | critical / info | `riot_api` has been `down` three check rounds in a row / it no longer is | the check's `detail` / none |
+| `cache_unavailable` / `cache_recovered` | critical / info | the `cache` check goes `down` / it no longer is | the check's `detail` / none |
+
+Any 2xx is delivered; anything else is retried after 1, 2, 4 and 8 s, then dropped with a warning in the log. At most 64 events wait; more are dropped with a warning. Nothing is kept across a restart, so a key still rejected after one is reported again. The URL often holds a webhook's token: it reads `[REDACTED]` in `/v1/admin/info` and the log names its host only. The POST never carries the Riot key. No Discord or other formatting: point it at whatever turns the event into a message.
+
 Logs are JSON on stdout. Every request carries a `request_id`, echoed as `X-Request-Id`.
 
 ### Backups

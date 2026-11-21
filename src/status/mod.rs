@@ -11,8 +11,12 @@
 //! `GET /status/ratelimits` (STS-03, ADR-207) answers the rate-limit table
 //! (`ratelimits`) to the admin key only, through
 //! `http::auth::require_status_admin`: never keyless, never metered.
+//!
+//! Outbound events (STS-04) are `outbound`'s: state changes POSTed to
+//! `EVENTS_URL` by a worker of their own, never from a status request.
 
 pub mod checks;
+pub mod outbound;
 pub mod poll;
 pub mod ratelimits;
 pub mod snapshot;
@@ -41,7 +45,13 @@ pub const RIOT_RETRY_AFTER_S: &str = "riot_retry_after_s";
 /// in whole seconds rounded up; 0 when nothing is throttled (design/14
 /// §Rate-limit table). Read live, so it clears as soon as the freeze does.
 pub fn retry_after_s(state: &AppState) -> u64 {
-    state.limiter.longest_freeze().map_or(0, checks::ceil_secs)
+    freeze_s(&state.limiter)
+}
+
+/// [`retry_after_s`] from the limiter alone, as the checks read it for
+/// `riot_rate_limited` (STS-04).
+pub fn freeze_s(limiter: &crate::riot::limiter::Limiter) -> u64 {
+    limiter.longest_freeze().map_or(0, checks::ceil_secs)
 }
 
 /// What `/status` knows about this process from its start.

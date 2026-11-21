@@ -53,7 +53,7 @@ What is in the riot-proxy repository at commit `7491ff6` (version 2.7.0), gather
 | Entry | Where |
 |---|---|
 | Binary `riot-proxy` with subcommands `serve`, `migrate`, `key {create,list,revoke}`, `healthcheck`, `spec`, `migrate-v1`, `backup`, `packs {reindex,restore-index,snapshot}`, and `riot {get,record}` (dev-cli) | `src/cli/mod.rs:35-67` |
-| Server bootstrap (23 ordered steps) | `src/cli/serve.rs:94-512`, summarised in [scratch/jobs-and-observability.md](./scratch/jobs-and-observability.md) §1 |
+| Server bootstrap (23 ordered steps) | `src/cli/serve.rs:94-518`, summarised in [scratch/jobs-and-observability.md](./scratch/jobs-and-observability.md) §1 |
 | HTTP routes (77 documented operations on 73 paths plus docs, pages, dev reset, `/ddragon` files, fallback) | registered in `src/routes/docs.rs:116-153`; table in [scratch/routes.md](./scratch/routes.md) §1 and [../api/endpoints.md](../api/endpoints.md) |
 | WebSocket `/v1/ws` | `src/routes/ws.rs:497-499`, protocol in `src/ws/protocol.rs` |
 | Ticks (periodic enqueues): `poll:live` 60 s, `poll:rank` 600 s, `poll:matches` 300 s, `ddragon:sync` 3600 s, `maintenance` and `names:backfill` daily, `ladder:crawl` on `LADDER_CRAWL_S`, `aggregate:analytics` on `AGGREGATE_INTERVAL_S`, `aggregate:delta` on `AGGREGATE_DELTA_S` (60 s), `timelines:backfill` hourly when enabled | `src/jobs/ticks.rs:119-150` |
@@ -87,7 +87,7 @@ Three workflows, no deploy step: `ci.yml` (fmt, clippy, test, ui, coverage, acce
 
 ## Configuration surface
 
-81 variables (the length of `config::VARS`) read from flags, environment and `.env` (`src/config.rs:23-105`), plus the legacy `NODE_ENV` fallback and the `TLS` refusal; ten global CLI flags. Complete table in [../deployment/configuration.md](../deployment/configuration.md), evidence in [scratch/config.md](./scratch/config.md).
+81 variables (the length of `config::VARS`) read from flags, environment and `.env` (`src/config.rs:23-106`), plus the legacy `NODE_ENV` fallback and the `TLS` refusal; ten global CLI flags. Complete table in [../deployment/configuration.md](../deployment/configuration.md), evidence in [scratch/config.md](./scratch/config.md).
 
 ## Build, test, lint, release, deploy tooling
 
@@ -125,5 +125,5 @@ cargo tree --depth 1 --all-features
 ```
 
 ---
-**Sources:** `Cargo.toml`, `rust-toolchain.toml`, `justfile`, `src/lib.rs`, `src/cli/mod.rs:L35-L67`, `src/cli/serve.rs:L73-L483`, `src/routes/docs.rs:L116-L153`, `src/jobs/mod.rs:L20-L71`, `src/jobs/ticks.rs:L119-L150`, `src/config.rs:L23-L105`, `.github/workflows/*.yml`, `docs/_meta/scratch/*.md`, `git log`, `git tag`
-**Last verified:** 2026-11-21 against commit `074e7a2`
+**Sources:** `Cargo.toml`, `rust-toolchain.toml`, `justfile`, `src/lib.rs`, `src/cli/mod.rs:L35-L67`, `src/cli/serve.rs:L73-L485`, `src/routes/docs.rs:L116-L153`, `src/jobs/mod.rs:L20-L71`, `src/jobs/ticks.rs:L119-L150`, `src/config.rs:L23-L106`, `.github/workflows/*.yml`, `docs/_meta/scratch/*.md`, `git log`, `git tag`
+**Last verified:** 2026-11-21 against commit `5655af7`

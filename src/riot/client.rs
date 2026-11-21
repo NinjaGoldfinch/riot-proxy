@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use axum::http::{HeaderMap, HeaderValue, header};
@@ -18,6 +18,7 @@ use crate::config::{Config, Secret};
 use crate::http::{ApiError, ErrorCode};
 use crate::metrics::{RL_429_TOTAL, UPSTREAM_LATENCY_SECONDS, UPSTREAM_REQUESTS_TOTAL};
 use crate::riot::endpoints::{Endpoint, PathError, Target, encode_component};
+use crate::status::outbound::Events;
 
 /// v1 undici pool: 32 connections per host, 60 s keep-alive.
 const POOL_MAX_IDLE_PER_HOST: usize = 32;
@@ -231,6 +232,9 @@ pub struct UpstreamWatch {
     /// The status poller's last 401 or 403, which judges nothing on its own
     /// ([`UpstreamWatch::polls_refused`]).
     poll_refusal: Mutex<Option<KeyVerdict>>,
+    /// Where `riot_key_rejected` and a 429's freeze go (STS-04); unset, the
+    /// no-op handle.
+    events: OnceLock<Events>,
 }
 
 /// The key as Riot last judged it: a 2xx accepts it, a 401 or 403 rejects it.
@@ -266,13 +270,25 @@ impl UpstreamWatch {
         &self.rate_limits
     }
 
+    /// Send events from here on to `events` (STS-04, `status::outbound::start`).
+    /// Set once: a second call is ignored.
+    pub fn set_events(&self, events: Events) {
+        let _ = self.events.set(events);
+    }
+
+    /// The events handle: a no-op until [`set_events`](Self::set_events).
+    pub fn events(&self) -> &Events {
+        self.events.get().unwrap_or(&crate::status::outbound::NONE)
+    }
+
     /// One answer from Riot with `status`, to a call made as `caller`: a
     /// status check's probe or the status poller's read says nothing about
     /// real traffic, and the poller's 401 or 403 says nothing about the key
     /// (one platform refusing a status read is not the key rejected; the
     /// probe and real traffic still judge it; SITE-17). Returns whether this
     /// answer turned the key's verdict to rejected: a 401 or 403 when the key
-    /// was not already rejected (unknown or accepted before).
+    /// was not already rejected (unknown or accepted before), which is also
+    /// when `riot_key_rejected` is emitted (design/14).
     fn answered(
         &self,
         scope: &'static str,
@@ -290,13 +306,17 @@ impl UpstreamWatch {
         if judges_key {
             let mut key = lock(&self.key);
             newly_rejected = !accepted && key.as_ref().is_none_or(|k| k.accepted);
-            *key = Some(KeyVerdict {
+            let verdict = KeyVerdict {
                 accepted,
                 status,
                 method,
                 scope,
                 at_ms,
-            });
+            };
+            if newly_rejected {
+                self.events().key_rejected(&verdict);
+            }
+            *key = Some(verdict);
         }
         if caller == Caller::Poll && matches!(status, 401 | 403) {
             *lock(&self.poll_refusal) = Some(KeyVerdict {
@@ -320,8 +340,8 @@ impl UpstreamWatch {
     /// last refusal, and `RIOT KEY REJECTED` is logged once, when it turns;
     /// a verdict already rejected stays so and logs nothing. Returns whether
     /// it turned, as [`UpstreamWatch::answered`] does for one answer (what
-    /// fires `riot_key_rejected`, design/14). The next 2xx, a poll's
-    /// included, accepts the key again.
+    /// fires `riot_key_rejected`, design/14, emitted here when it turns). The
+    /// next 2xx, a poll's included, accepts the key again.
     pub fn polls_refused(&self) -> bool {
         let Some(refusal) = lock(&self.poll_refusal).clone() else {
             return false;
@@ -335,6 +355,7 @@ impl UpstreamWatch {
                 scope = refusal.scope,
                 "RIOT KEY REJECTED — check RIOT_API_KEY (dev keys expire every 24h); every status poll this round was refused"
             );
+            self.events().key_rejected(&refusal);
             *key = Some(refusal);
         }
         newly_rejected
@@ -474,6 +495,12 @@ impl RiotClient {
         // the fetcher or the probe already read and warned on these headers.
         let limits = crate::riot::limiter::headers::RateLimitHeaders::from_headers_quiet(&headers);
         self.watch.rate_limits.record(scope, method, &limits, at_ms);
+        // The headers the limiter freezes a scope on (`Limiter::observe`):
+        // a freeze over 10 s fires `riot_rate_limited` now, even one that
+        // ends before the next check round (STS-04).
+        if let (Some(_), Some(retry_after_s)) = (limits.limit_type, limits.retry_after) {
+            self.watch.events().frozen(retry_after_s, at_ms);
+        }
 
         if (200..300).contains(&status) {
             #[allow(clippy::cast_possible_truncation)]
@@ -848,6 +875,129 @@ mod tests {
         let (_, text) = logged(tracing::Level::DEBUG, client.send_probe(&probe)).await;
         assert!(text.contains("status probe: the key is still rejected"), "{text}");
         assert!(!text.contains(REJECTED), "{text}");
+    }
+
+    /// The events the watch emits (STS-04, design/14): `riot_key_rejected`
+    /// once per turn of the verdict, whatever turned it.
+    fn rejections(
+        rx: &mut tokio::sync::mpsc::Receiver<crate::status::outbound::Event>,
+    ) -> Vec<serde_json::Value> {
+        std::iter::from_fn(|| rx.try_recv().ok())
+            .map(|e| {
+                assert_eq!(e.event.as_str(), "riot_key_rejected");
+                e.detail
+            })
+            .collect()
+    }
+
+    /// A bad key at boot fires once; again only after an accepted answer.
+    #[test]
+    fn riot_key_rejected_fires_once_per_rejection() {
+        let w = UpstreamWatch::default();
+        let (events, mut rx) = Events::channel("h");
+        w.set_events(events);
+        assert!(w.events().is_on());
+
+        w.answered("oc1", "summoner.byPuuid", 401, Caller::Traffic, 10);
+        assert_eq!(
+            rejections(&mut rx),
+            [serde_json::json!({ "status": 401, "method": "summoner.byPuuid", "scope": "oc1" })],
+            "unknown to rejected"
+        );
+        w.answered("oc1", "summoner.byPuuid", 401, Caller::Traffic, 11);
+        w.answered("oc1", "status.platformData", 403, Caller::Probe, 12);
+        assert_eq!(rejections(&mut rx).len(), 0, "still rejected");
+
+        w.answered("kr", "match.byId", 200, Caller::Traffic, 20);
+        w.answered("kr", "status.platformData", 403, Caller::Probe, 21);
+        assert_eq!(
+            rejections(&mut rx),
+            [serde_json::json!({ "status": 403, "method": "status.platformData", "scope": "kr" })],
+            "accepted, then rejected again"
+        );
+    }
+
+    /// A lone poll refusal fires nothing; a wholly refused round fires once.
+    #[test]
+    fn a_polls_refusal_fires_only_as_a_wholly_refused_round() {
+        let w = UpstreamWatch::default();
+        let (events, mut rx) = Events::channel("h");
+        w.set_events(events);
+        w.answered("tw2", "status.platformData", 403, Caller::Poll, 10);
+        assert_eq!(rejections(&mut rx).len(), 0);
+        assert!(w.polls_refused());
+        assert_eq!(
+            rejections(&mut rx),
+            [serde_json::json!({ "status": 403, "method": "status.platformData", "scope": "tw2" })]
+        );
+        assert!(!w.polls_refused());
+        assert_eq!(rejections(&mut rx).len(), 0);
+    }
+
+    /// Without `EVENTS_URL` the watch has the no-op handle; setting one
+    /// twice keeps the first.
+    #[test]
+    fn the_watchs_events_are_set_once() {
+        let w = UpstreamWatch::default();
+        assert!(!w.events().is_on());
+        w.answered("oc1", "summoner.byPuuid", 401, Caller::Traffic, 10);
+        let (first, mut rx) = Events::channel("h");
+        let (second, mut other) = Events::channel("h");
+        w.set_events(first);
+        w.set_events(second);
+        w.answered("oc1", "summoner.byPuuid", 200, Caller::Traffic, 20);
+        w.answered("oc1", "summoner.byPuuid", 401, Caller::Traffic, 21);
+        assert_eq!(rejections(&mut rx).len(), 1);
+        assert!(other.try_recv().is_err());
+    }
+
+    /// A 429 that freezes a scope for more than 10 s fires `riot_rate_limited`
+    /// on the response path; a shorter one, or one the limiter would not
+    /// freeze on (no `X-Rate-Limit-Type`), does not.
+    #[tokio::test]
+    async fn a_429_freezing_over_10_s_fires_riot_rate_limited() {
+        use wiremock::matchers::path;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        let client = RiotClient::build(&Secret::new("RGAPI-test"), "t", Base::Fixed(server.uri())).unwrap();
+        let (events, mut rx) = Events::channel("h");
+        client.watch().set_events(events);
+        let e = ep("summoner.byPuuid");
+        let req = RiotRequest::new(e, e.target_for_platform(Platform::Oc1), &["P"]).unwrap();
+        let answer = |retry_after: &'static str, limit_type: Option<&'static str>| {
+            let mut t = ResponseTemplate::new(429).insert_header("retry-after", retry_after);
+            if let Some(kind) = limit_type {
+                t = t.insert_header(X_RATE_LIMIT_TYPE, kind);
+            }
+            let server = &server;
+            async move {
+                server.reset().await;
+                Mock::given(path("/lol/summoner/v4/summoners/by-puuid/P"))
+                    .respond_with(t)
+                    .mount(server)
+                    .await;
+            }
+        };
+        let fired = |rx: &mut tokio::sync::mpsc::Receiver<crate::status::outbound::Event>| {
+            std::iter::from_fn(|| rx.try_recv().ok())
+                .map(|e| (e.event.as_str(), e.detail))
+                .collect::<Vec<_>>()
+        };
+
+        answer("10", Some("method")).await;
+        let _ = client.send(&req).await;
+        answer("60", None).await;
+        let _ = client.send(&req).await;
+        assert_eq!(fired(&mut rx), [], "10 s is not above 10; no type, no freeze");
+        answer("11", Some("application")).await;
+        let _ = client.send(&req).await;
+        assert_eq!(
+            fired(&mut rx),
+            [("riot_rate_limited", serde_json::json!({ "retry_after_s": 11 }))]
+        );
+        answer("30", Some("service")).await;
+        let _ = client.send(&req).await;
+        assert_eq!(fired(&mut rx), [], "already limited until a round sees 0");
     }
 
     /// SITE-17: a status poll's 401 or 403 logs `status poll refused` at

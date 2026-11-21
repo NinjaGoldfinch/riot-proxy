@@ -1009,3 +1009,130 @@ async fn ratelimits_takes_the_admin_key_only() {
         assert_eq!(body["scopes"], serde_json::json!({}), "{peer}");
     }
 }
+
+// ---- outbound events (STS-04, design/14 §Outbound events) ----
+
+/// An app whose events go to a second mock, the worker started as `serve`
+/// starts it.
+async fn with_events(extra: &[(&str, &str)]) -> (Env, MockServer, tokio::task::JoinHandle<()>) {
+    let hook = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/hook/s3cr3t"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&hook)
+        .await;
+    let url = format!("{}/hook/s3cr3t", hook.uri());
+    let mut env_vars = extra.to_vec();
+    env_vars.push(("EVENTS_URL", &url));
+    let e = env(&env_vars).await;
+    let worker = riot_proxy::status::outbound::start(&e.state)
+        .unwrap()
+        .expect("EVENTS_URL is set");
+    (e, hook, worker)
+}
+
+/// What the event URL got once `n` POSTs arrived (or 5 s passed), plus
+/// anything in the 300 ms after: the bodies, as JSON.
+async fn posted(hook: &MockServer, n: usize) -> Vec<(serde_json::Value, wiremock::Request)> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while hook.received_requests().await.unwrap().len() < n && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    hook.received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|r| (serde_json::from_slice(&r.body).unwrap(), r))
+        .collect()
+}
+
+/// IMPLEMENTATION STS-04: an invalid key gives exactly one
+/// `riot_key_rejected` across rounds, and `riot_key: down`; the POST
+/// carries the contract's event and never the Riot key.
+#[tokio::test]
+async fn a_rejected_key_sends_one_riot_key_rejected() {
+    let (e, hook, worker) = with_events(&[("STATUS_CHECK_PLATFORMS", "oc1")]).await;
+    mock_probe(&e, 403).await;
+    let mut c = checker(&e);
+    let start = tokio::time::Instant::now();
+    for i in 0..3 {
+        c.round(start + Duration::from_secs(30 * i)).await;
+    }
+    assert_eq!(
+        probes(&e).await,
+        3,
+        "the idle first platform is probed every round"
+    );
+    let got = posted(&hook, 1).await;
+    assert_eq!(got.len(), 1, "{:?}", got.iter().map(|g| &g.0).collect::<Vec<_>>());
+    let (event, req) = &got[0];
+    assert_eq!(event["schema"], 1);
+    assert_eq!(event["service"], "riot-proxy");
+    assert_eq!(event["event"], "riot_key_rejected");
+    assert_eq!(event["severity"], "critical");
+    assert_eq!(
+        event["detail"],
+        serde_json::json!({ "status": 403, "method": "status.platformData", "scope": "oc1" })
+    );
+    let body = e.get(LOCAL, "/status", None, &[]).await.json();
+    assert_eq!(event["host"], body["host"], "gethostname, as /status");
+    assert_eq!(check(&body, "riot_key")["status"], "down");
+    assert!(req.headers.get("x-riot-token").is_none(), "{:?}", req.headers);
+    assert_eq!(req.headers.get("content-type").unwrap(), "application/json");
+    worker.abort();
+}
+
+/// `riot_upstream_down` on the third `down` round in a row, its detail the
+/// check's; `riot_upstream_recovered` on the first round after that is not.
+#[tokio::test]
+async fn riot_api_down_three_rounds_then_recovered() {
+    let (e, hook, worker) = with_events(&[("STATUS_CHECK_PLATFORMS", "oc1")]).await;
+    mock_probe(&e, 503).await;
+    let mut c = checker(&e);
+    let start = tokio::time::Instant::now();
+    for i in 0..2 {
+        c.round(start + Duration::from_secs(30 * i)).await;
+    }
+    assert!(posted(&hook, 0).await.is_empty(), "two down rounds fire nothing");
+    c.round(start + Duration::from_secs(60)).await;
+    let got = posted(&hook, 1).await;
+    assert_eq!(got.len(), 1);
+    assert_eq!(got[0].0["event"], "riot_upstream_down");
+    assert_eq!(
+        got[0].0["detail"],
+        serde_json::json!({ "detail": "oc1: Riot answered 503" })
+    );
+
+    e.server.reset().await;
+    mock_probe(&e, 200).await;
+    c.round(start + Duration::from_secs(90)).await;
+    c.round(start + Duration::from_secs(120)).await;
+    let got = posted(&hook, 2).await;
+    let events: Vec<_> = got.iter().map(|g| g.0["event"].as_str().unwrap()).collect();
+    assert_eq!(events, ["riot_upstream_down", "riot_upstream_recovered"]);
+    assert_eq!(got[1].0["severity"], "info");
+    assert_eq!(got[1].0["detail"], serde_json::json!({}));
+    worker.abort();
+}
+
+/// design/14: a status request never calls the event URL.
+#[tokio::test]
+async fn a_status_request_makes_no_call_to_the_event_url() {
+    let (e, hook, worker) = with_events(&[]).await;
+    for _ in 0..3 {
+        assert_eq!(e.get(LOCAL, "/status", None, &[]).await.status, StatusCode::OK);
+    }
+    assert!(posted(&hook, 0).await.is_empty());
+    worker.abort();
+}
+
+/// Without `EVENTS_URL` nothing starts and the watch's handle is the no-op.
+#[tokio::test]
+async fn without_events_url_nothing_is_sent() {
+    let e = env(&[("STATUS_CHECK_PLATFORMS", "oc1")]).await;
+    assert!(riot_proxy::status::outbound::start(&e.state).unwrap().is_none());
+    mock_probe(&e, 403).await;
+    round(&e).await;
+    assert!(!e.state.fetcher.client().watch().events().is_on());
+}
