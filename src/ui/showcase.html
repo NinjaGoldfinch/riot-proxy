@@ -168,6 +168,7 @@
   .card .tools.builds .stat { font-variant-numeric: tabular-nums; }
   .card .tools.builds .stat small { margin-left: 4px; color: var(--dim); }
   .card .tools.builds button.small { opacity: .55; } /* fewer than SMALL_SAMPLE games (FLT-05) */
+  #cMatchups tr.small { opacity: .55; } /* a matchup of fewer than SMALL_SAMPLE games (MU-01) */
   /* One player's build on the match page (BLD-04): champion portraits as tabs, then three rows. */
   .card .tools.bplayers { flex-wrap: nowrap; gap: 2px; }
   .card .tools.bplayers button { padding: 2px; line-height: 0; }
@@ -594,6 +595,12 @@ function vsChoices(matchups, picked, name) {
 }
 /** Below this many games a build is dimmed and says so (FLT-05; MU-01 shares it). */
 const SMALL_SAMPLE = 10;
+/** The Matchups card's two orders (MU-01): most games first, then win rate; or most reliable first, by `winRateLow`
+ *  (the low end of the win rate's 95 % interval, from the route), then games. */
+const MATCHUP_ORDER = {
+  games: (a, b) => b.games - a.games || b.winRate - a.winRate,
+  confidence: (a, b) => (b.winRateLow ?? 0) - (a.winRateLow ?? 0) || b.games - a.games,
+};
 /** The patch picker (DEV-21): every patch summed first, then each patch the ladder has analytics for, newest first. */
 function patchChoices(patches) {
   const list = patches ?? [];
@@ -1423,7 +1430,8 @@ function renderGold(tl, match) {
 // scrolled: the `#/champion/{id}/builds` hash whose Builds card was last scrolled to (SITE-10).
 // tier and side: the slice the page reads (FLT-02), '' for every tier / both sides, a tier or a range ('DIAMOND+', FLT-03); kept across champions.
 // vs and lane: the opponent the Builds card is narrowed to and the lane a matchup link named (FLT-05), from the hash only.
-const ch = { id: null, role: '', builds: null, buildsFailed: null, tab: 0, scrolled: '', tier: '', side: '', vs: null, lane: '', matchups: null };
+// sort: the Matchups card's order (MU-01), 'games' or 'confidence'; page state only, kept across lanes, champions and slices, never sent.
+const ch = { id: null, role: '', builds: null, buildsFailed: null, tab: 0, scrolled: '', tier: '', side: '', vs: null, lane: '', matchups: null, sort: 'games' };
 /** The champion view's platform: the one picked on the page, else the home view's; '' is every platform. */
 const champRegion = () => state.region ?? platform();
 /** The champion view's tier picker and side toggle (FLT-02). UNKNOWN is the players no ladder or lookup placed.
@@ -1583,10 +1591,17 @@ function renderMatchups() {
   const roles = roleList(ch.matchups);
   if (ch.role && !roles.includes(ch.role)) ch.role = '';
   const tabs = roles.length > 1 ? [['', 'All'], ...roles.map((r) => [r, titleCase(r)])].map(([r, l]) => `<button data-role="${r}" class="${r === ch.role ? 'on' : ''}">${l}</button>`).join('') : '';
-  const rows = ch.matchups.filter((m) => !ch.role || m.role === ch.role).sort((a, b) => b.games - a.games || b.winRate - a.winRate);
-  el.innerHTML = `<header><h2>Matchups</h2>${sliceTag()}<div class="tools">${tabs}</div></header><div>${sources(OP.matchups)}</div>` + (rows.length
-    ? `<p class="muted note">Win rate of ${esc(champions[ch.id]?.name ?? 'this champion')} against each lane opponent, most games first. A lane opens the builds against that opponent there.</p>
-      <div class="scroll tall"><table><thead><tr><th>Against</th><th>Lane</th><th class="n">Games</th><th>Win rate</th></tr></thead><tbody>${rows.map((m) => `<tr>
+  // The order re-sorts the rows already held (the 200 most played); the route's `sort` is never sent (MU-01).
+  const rows = ch.matchups.filter((m) => !ch.role || m.role === ch.role).sort(MATCHUP_ORDER[ch.sort] ?? MATCHUP_ORDER.games);
+  const order = [['games', 'Most played'], ['confidence', 'Most reliable']].map(([v, l]) => `<button data-msort="${v}" class="${v === ch.sort ? 'on' : ''}">${l}</button>`).join('');
+  const tools = rows.length ? `${tabs}${tabs ? '<span style="width:8px"></span>' : ''}${order}` : tabs;
+  const how = ch.sort === 'confidence'
+    ? 'most reliable first: ranked by the low end of each win rate\'s 95 % interval, so a few lucky games don\'t lead'
+    : 'most games first. <em>Most reliable</em> ranks by the low end of each win rate\'s 95 % interval instead, so a few lucky games don\'t lead';
+  const small = (m) => m.games < SMALL_SAMPLE;
+  el.innerHTML = `<header><h2>Matchups</h2>${sliceTag()}<div class="tools">${tools}</div></header><div>${sources(OP.matchups)}</div>` + (rows.length
+    ? `<p class="muted note">Win rate of ${esc(champions[ch.id]?.name ?? 'this champion')} against each lane opponent, ${how}. Rows of fewer than ${SMALL_SAMPLE} games are dimmed. A lane opens the builds against that opponent there.</p>
+      <div class="scroll tall"><table><thead><tr><th>Against</th><th>Lane</th><th class="n">Games</th><th>Win rate</th></tr></thead><tbody>${rows.map((m) => `<tr${small(m) ? ` class="small" title="fewer than ${SMALL_SAMPLE} games"` : ''}>
       <td class="name">${champLink(m.opponentId, 'sm')} ${esc(champions[m.opponentId]?.name ?? m.opponentName ?? `#${m.opponentId}`)}</td>
       <td><a href="#/champion/${esc(ch.id)}/builds/vs/${esc(m.opponentId)}/${esc(m.role)}" title="${esc(champName(ch.id))}'s builds against ${esc(champName(m.opponentId))} in ${esc(titleCase(m.role))}">${esc(titleCase(m.role))}</a></td><td class="n">${m.games.toLocaleString()}</td>
       <td><span class="wr"><span class="bar"><i style="width:${(m.winRate ?? 0) * 100}%"></i></span>${pct(m.winRate)}</span></td></tr>`).join('')}</tbody></table></div>`
@@ -1617,6 +1632,7 @@ document.addEventListener('click', (ev) => {
   if ('mastery' in t.dataset) { pl.masteryAll = !pl.masteryAll; renderMastery(); }
   if (t.dataset.cqueue) { state.queue = t.dataset.cqueue; route(); }
   if (t.dataset.role !== undefined) { ch.role = t.dataset.role; renderMatchups(); }
+  if (t.dataset.msort) { ch.sort = t.dataset.msort; renderMatchups(); }
   if (t.dataset.build !== undefined) { ch.tab = Number(t.dataset.build); renderBuilds(); }
   if (t.dataset.cside !== undefined) { ch.side = t.dataset.cside; route(); }
   if (t.dataset.bplayer) { mb.puuid = t.dataset.bplayer; renderBuild(); }

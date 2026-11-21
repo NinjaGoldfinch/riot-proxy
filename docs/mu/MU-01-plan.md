@@ -84,6 +84,8 @@ Write the route tests first and see them fail on `main`'s code.
 
 Past about 600 lines of diff outside generated files (`openapi.json`, snapshots), the showcase half (§4, the jsdom tests, design/11) becomes MU-01b on its own branch, as FLT-05 was split from FLT-04. Stop and say so rather than batching.
 
+2026-11-21: the route half alone came to about 570 lines; the owner decided the showcase half lands on the same branch, in one PR (the split is waived for this task).
+
 ---
 **Sources:** `docs/IMPLEMENTATION.md` §Post-release — MU (the spec); every `file:line` above is as of the commit below, as the plan's first line says
 **Last verified:** 2026-11-21 against commit `65ccdc9`

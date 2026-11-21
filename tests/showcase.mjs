@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 const html = readFileSync(new URL('../src/ui/showcase.html', import.meta.url), 'utf8');
 const block = html.match(/\/\/ -{10} pure helpers[^\n]*\n([\s\S]*?)\/\/ -{10} end pure helpers/);
 assert.ok(block, 'the pure helpers block is marked in showcase.html');
-const h = new Function(`${block[1]}; return { APEX, QUEUES, LADDER_PAGE, APEX_LIST_CAP, apexCapNote, tierColour, winRate, pct, sortLadder, ladderPage, championIndex, imageUrl, statusNotices, secsAgo, platformChip, topChampions, parseRiotId, parseRoute, champKey, findChampion, explorerLink, rankLabel, rankCards, queueNames, spellIndex, outcome, kda, durationSecs, clock, ago, masterySummary, liveGame, TIERS, SIDES, matchHref, matchTeams, goldDiff, goldScale, signedGold, tierRows, runeIndex, runePair, runeUrl, itemIndex, bootsIndex, itemSlots, roleList, thousands, patchChoices, pickPatch, patchLabel, BUILD_STARTER_MS, SHOP_VISIT_GAP_MS, itemCatalog, playerBuild, shopVisits, vsChoices, SMALL_SAMPLE, splitWarnings, refreshingNote };`)();
+const h = new Function(`${block[1]}; return { APEX, QUEUES, LADDER_PAGE, APEX_LIST_CAP, apexCapNote, tierColour, winRate, pct, sortLadder, ladderPage, championIndex, imageUrl, statusNotices, secsAgo, platformChip, topChampions, parseRiotId, parseRoute, champKey, findChampion, explorerLink, rankLabel, rankCards, queueNames, spellIndex, outcome, kda, durationSecs, clock, ago, masterySummary, liveGame, TIERS, SIDES, matchHref, matchTeams, goldDiff, goldScale, signedGold, tierRows, runeIndex, runePair, runeUrl, itemIndex, bootsIndex, itemSlots, roleList, thousands, patchChoices, pickPatch, patchLabel, BUILD_STARTER_MS, SHOP_VISIT_GAP_MS, itemCatalog, playerBuild, shopVisits, vsChoices, SMALL_SAMPLE, MATCHUP_ORDER, splitWarnings, refreshingNote };`)();
 
 test('apex tiers and queues are the ones the apex route accepts', () => {
   assert.deepEqual(h.APEX, ['CHALLENGER', 'GRANDMASTER', 'MASTER']);
@@ -541,6 +541,18 @@ test('vs hashes and the vs picker choices (FLT-05)', () => {
   assert.deepEqual(h.vsChoices(list, 145, name).at(-1), [145, null], 'an unlisted pick last, without a count');
   assert.deepEqual(h.vsChoices(null, 145, name), [[145, null]], 'before the matchups arrive');
   assert.equal(h.SMALL_SAMPLE, 10);
+});
+
+test("the Matchups card's two orders: most games, or the highest winRateLow then most games (MU-01)", () => {
+  const rows = [
+    { id: 'a', games: 9, winRate: 0.3333, winRateLow: 0.1206 }, { id: 'b', games: 5, winRate: 0.6, winRateLow: 0.2307 },
+    { id: 'c', games: 2, winRate: 1, winRateLow: 0.3424 }, { id: 'd', games: 5, winRate: 0.8, winRateLow: 0.3755 },
+    { id: 'e', games: 3, winRate: 0, winRateLow: 0 }, { id: 'f', games: 4, winRate: 0, winRateLow: 0 },
+  ];
+  const by = (order) => [...rows].sort(h.MATCHUP_ORDER[order]).map((r) => r.id).join('');
+  assert.equal(by('games'), 'adbfec', 'games, then win rate');
+  assert.equal(by('confidence'), 'dcbafe', 'winRateLow, then games');
+  assert.equal([{ id: 'x', games: 1, winRate: 1 }, { id: 'y', games: 2, winRate: 0, winRateLow: 0 }].sort(h.MATCHUP_ORDER.confidence)[0].id, 'y', 'a row without winRateLow counts as 0');
 });
 
 test('a composite\'s warnings split into failed parts and stale ones (AVL-03)', () => {

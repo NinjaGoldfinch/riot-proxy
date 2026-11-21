@@ -127,12 +127,16 @@ const DETAIL = { championId: 1, championName: 'Annie', queue: 'RANKED_SOLO_5x5',
   items: [{ itemId: 3078, games: 12, wins: 8, winRate: 0.667 }],
   spells: [{ spellA: 4, spellB: 14, games: 20, wins: 11, winRate: 0.55 }],
   runes: [{ keystoneId: 8010, subStyleId: 8100, games: 15, wins: 9, winRate: 0.6 }],
-  matchups: [{ opponentId: 2, opponentName: 'Olaf', role: 'MIDDLE', games: 5, wins: 3, winRate: 0.6 }] };
+  matchups: [{ opponentId: 2, opponentName: 'Olaf', role: 'MIDDLE', games: 5, wins: 3, winRate: 0.6, winRateLow: 0.2307 }] };
 const MATCHUPS = { championId: 1, championName: 'Annie', queue: 'RANKED_SOLO_5x5', platform: 'oc1', role: null, patch: '16.19', computedAt: null, matchups: [
-  { opponentId: 2, opponentName: 'Olaf', role: 'MIDDLE', games: 5, wins: 3, winRate: 0.6 },
-  { opponentId: 3, opponentName: 'Galio', role: 'MIDDLE', games: 9, wins: 3, winRate: 0.333 },
-  { opponentId: 2, opponentName: 'Olaf', role: 'TOP', games: 2, wins: 2, winRate: 1 },
+  // winRateLow: the route's 95 % Wilson lower bound (MU-01). Most played first is Galio, Olaf MIDDLE, Olaf TOP;
+  // most reliable first is Olaf TOP (2/2), Olaf MIDDLE (3/5), Galio (3/9). Every row is under SMALL_SAMPLE games.
+  { opponentId: 2, opponentName: 'Olaf', role: 'MIDDLE', games: 5, wins: 3, winRate: 0.6, winRateLow: 0.2307 },
+  { opponentId: 3, opponentName: 'Galio', role: 'MIDDLE', games: 9, wins: 3, winRate: 0.333, winRateLow: 0.1206 },
+  { opponentId: 2, opponentName: 'Olaf', role: 'TOP', games: 2, wins: 2, winRate: 1, winRateLow: 0.3424 },
 ] };
+// `tenGames: true` adds a row of exactly SMALL_SAMPLE games, which is not dimmed (MU-01).
+const TEN_GAMES = { opponentId: 103, opponentName: 'Ahri', role: 'MIDDLE', games: 10, wins: 6, winRate: 0.6, winRateLow: 0.3127 };
 // The proxy's ChampionBuildsResponse (BLD-03): two builds in the most-played role, the second
 // with nothing past its core.
 const BUILDS = { championId: 1, championName: 'Annie', platform: 'oc1', queue: 'RANKED_SOLO_5x5', patch: 'all', role: 'MIDDLE', computedAt: '2026-10-08T00:00:00Z', totalGames: 40, builds: [
@@ -158,7 +162,7 @@ const VS_BUILDS = {
 const mine = (doc, n) => JSON.parse(JSON.stringify(doc).replaceAll(MATCH.info.participants[n - 1].puuid, PUUID));
 // `playing: { n: [championId, championName] }` puts participant n on that champion in the match.
 const playAs = (doc, playing) => ({ ...doc, info: { ...doc.info, participants: doc.info.participants.map((x) => (playing[x.participantId] ? { ...x, championId: playing[x.participantId][0], championName: playing[x.participantId][1] } : x)) } });
-function detail(p, u, { noTimeline = false, noAnalytics = false, noBuilds = false, buildsFail = false, meIn = 0, playing = null }) {
+function detail(p, u, { noTimeline = false, noAnalytics = false, noBuilds = false, buildsFail = false, matchupsFail = false, tenGames = false, meIn = 0, playing = null }) {
   let m;
   if ((m = p.match(/^\/v1\/lol\/matches\/([a-z]+)\/([A-Z0-9]+_\d+)(\/timeline)?$/))) {
     if (m[2] === 'OC1_1') return [404, { error: { code: 'NOT_FOUND', message: 'no match', requestId: 'r' } }];
@@ -185,13 +189,14 @@ function detail(p, u, { noTimeline = false, noAnalytics = false, noBuilds = fals
     return [200, noAnalytics || noBuilds || u.searchParams.get('patch') === '16.19' ? { ...BUILDS, totalGames: 0, builds: [] } : BUILDS];
   }
   if ((m = p.match(/^\/v1\/lol\/analytics\/champions\/(\d+)(\/matchups)?$/))) {
+    if (m[2] && matchupsFail) return [503, { error: { code: 'INTERNAL', message: 'try later', requestId: 'r' } }];
     // 16.19 stands in for a patch too new to clear minGames: listed, but empty.
     if (noAnalytics || u.searchParams.get('patch') === '16.19') return [200, m[2] ? { ...MATCHUPS, matchups: [] } : { ...DETAIL, totalGames: 0, stats: [], byTier: [], items: [], spells: [], runes: [], matchups: [] }];
     // A range (FLT-03): byTier holds the range's tiers only.
     const floor = u.searchParams.get('minTier');
     const ORDER = ['IRON', 'BRONZE', 'SILVER', 'GOLD', 'PLATINUM', 'EMERALD', 'DIAMOND', 'MASTER', 'GRANDMASTER', 'CHALLENGER'];
     if (floor && !m[2]) return [200, { ...DETAIL, minTier: floor, byTier: DETAIL.byTier.filter((r) => ORDER.indexOf(r.tier) >= ORDER.indexOf(floor)) }];
-    return [200, m[2] ? MATCHUPS : DETAIL];
+    return [200, m[2] ? (tenGames ? { ...MATCHUPS, matchups: [...MATCHUPS.matchups, TEN_GAMES] } : MATCHUPS) : DETAIL];
   }
   return null;
 }

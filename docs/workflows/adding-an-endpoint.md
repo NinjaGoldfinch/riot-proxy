@@ -85,7 +85,7 @@ The same test also checks `/openapi.json` equals what `riot-proxy spec` prints (
 
 ### 7. The showcase coverage rule
 
-`/dev/showcase` must either use every `GET` operation tagged `players`, `riot`, `lol` or `static`, or list it under `notShowcased` with a reason; `tests/ui.rs::showcase_covers_every_read_route` reads the OpenAPI document and fails otherwise (`docs/design/11-showcase.md:117-131`; `tests/ui.rs:427-468`). The two maps sit in `<script type="application/json" id="coverage">` in `src/ui/showcase.html` (`src/ui/showcase.html:231-241` for `notShowcased`). For the example, either a card calls it (and the path up to its first parameter must appear in the page's script, `tests/ui.rs:470-471`) or:
+`/dev/showcase` must either use every `GET` operation tagged `players`, `riot`, `lol` or `static`, or list it under `notShowcased` with a reason; `tests/ui.rs::showcase_covers_every_read_route` reads the OpenAPI document and fails otherwise (`docs/design/11-showcase.md:117-131`; `tests/ui.rs:427-468`). The two maps sit in `<script type="application/json" id="coverage">` in `src/ui/showcase.html` (`src/ui/showcase.html:232-242` for `notShowcased`). For the example, either a card calls it (and the path up to its first parameter must appear in the page's script, `tests/ui.rs:470-471`) or:
 
 ```json
 "GET /v1/lol/clash/players/{platform}/{puuid}": "planned: a Clash card in a later task"
@@ -122,5 +122,5 @@ Record the decision as the next free `ADR-nnn` in `docs/DECISIONS.md` and tick t
 9. `just lint`, `just test`; CI green ([ci.md](./ci.md)).
 
 ---
-**Sources:** `src/routes/docs.rs:L116-L153`, `L377-L380`, `src/routes/riot.rs:L21-L84`, `src/routes/lol.rs:L37-L112`, `L217-L229`, `src/routes/passthrough.rs:L17-L89`, `L94-L167`, `src/routes/mod.rs:L3-L15`, `src/routes/statics.rs:L71`, `src/http/validate.rs:L21-L31`, `L67-L253`, `src/app.rs:L71-L133`, `src/riot/endpoints.rs:L125-L335`, `L560-L600`, `src/cli/mod.rs:L73-L82`, `src/ui/showcase.html:L231-L241`, `tests/ui.rs:L427-L471`, `tests/openapi.rs:L9-L60`, `tests/lol_routes.rs:L22-L80`, `tests/riot_routes.rs:L16-L80`, `L243-L245`, `docs/design/11-showcase.md:L117-L131`, `docs/IMPLEMENTATION.md:L18`, `L22-L24`, `L94`, `PROGRESS.md:L389-L390`, `L392`, `.github/PULL_REQUEST_TEMPLATE.md:L21`
-**Last verified:** 2026-11-21 against commit `f254678`
+**Sources:** `src/routes/docs.rs:L116-L153`, `L377-L380`, `src/routes/riot.rs:L21-L84`, `src/routes/lol.rs:L37-L112`, `L217-L229`, `src/routes/passthrough.rs:L17-L89`, `L94-L167`, `src/routes/mod.rs:L3-L15`, `src/routes/statics.rs:L71`, `src/http/validate.rs:L21-L31`, `L67-L253`, `src/app.rs:L71-L133`, `src/riot/endpoints.rs:L125-L335`, `L560-L600`, `src/cli/mod.rs:L73-L82`, `src/ui/showcase.html:L232-L242`, `tests/ui.rs:L427-L471`, `tests/openapi.rs:L9-L60`, `tests/lol_routes.rs:L22-L80`, `tests/riot_routes.rs:L16-L80`, `L243-L245`, `docs/design/11-showcase.md:L117-L131`, `docs/IMPLEMENTATION.md:L18`, `L22-L24`, `L94`, `PROGRESS.md:L389-L390`, `L392`, `.github/PULL_REQUEST_TEMPLATE.md:L21`
+**Last verified:** 2026-11-21 against commit `65ccdc9`

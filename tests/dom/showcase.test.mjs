@@ -760,6 +760,61 @@ test('matchups: most games first, filtered by lane', async () => {
   assert.ok(rows()[0].includes('Top') && rows()[0].includes('100.0%'));
 });
 
+// ---------- MU-01: how much a matchup's win rate can be trusted
+
+const muRows = (p) => p.$$('#cMatchups tbody tr').map((r) => [r.cells[2].textContent, r.cells[1].textContent]);
+const muOrder = (p) => p.$$('#cMatchups [data-msort]').map((b) => [b.textContent, b.classList.contains('on')]);
+
+test('matchups under SMALL_SAMPLE games are dimmed and say why; exactly ten are not (MU-01)', async () => {
+  const p = await page({ hash: '#/champion/1', tenGames: true });
+  assert.deepEqual(p.$$('#cMatchups tbody tr').map((r) => [r.cells[2].textContent, r.className, r.title]), [
+    ['10', '', ''], ['9', 'small', 'fewer than 10 games'], ['5', 'small', 'fewer than 10 games'], ['2', 'small', 'fewer than 10 games'],
+  ]);
+  assert.equal(p.w.getComputedStyle(p.$('#cMatchups tr.small')).opacity, '0.55');
+  assert.ok(p.text('#cMatchups .note').includes('Rows of fewer than 10 games are dimmed.'));
+  // winRateLow orders the rows but is never shown as a number: 31.3%, 12.1%, 23.1%, 34.2%.
+  for (const low of ['31.3', '12.1', '23.1', '34.2']) assert.ok(!p.text('#cMatchups').includes(low), low);
+  assert.deepEqual(p.errors, []);
+});
+
+test('Most reliable re-sorts the matchups the page holds, without a call; the order stays across lanes, champions and slices (MU-01)', async () => {
+  const p = await page({ hash: '#/champion/1' });
+  assert.deepEqual(muOrder(p), [['Most played', true], ['Most reliable', false]]);
+  assert.ok(p.text('#cMatchups .note').includes('most games first. Most reliable ranks by the low end of each win rate'));
+  const calls = p.calls.length;
+  await p.click('#cMatchups [data-msort="confidence"]');
+  assert.equal(p.calls.length, calls, 'the rows already held, re-sorted');
+  assert.deepEqual(muRows(p), [['2', 'Top'], ['5', 'Middle'], ['9', 'Middle']], 'by winRateLow: 2/2, 3/5, 3/9');
+  assert.deepEqual(muOrder(p), [['Most played', false], ['Most reliable', true]]);
+  assert.ok(p.text('#cMatchups .note').includes('most reliable first: ranked by the low end of each win rate'));
+  // A lane tab keeps the order.
+  await p.click('#cMatchups [data-role="MIDDLE"]');
+  assert.deepEqual(muRows(p), [['5', 'Middle'], ['9', 'Middle']]);
+  assert.deepEqual(muOrder(p)[1], ['Most reliable', true]);
+  // So do another champion and another slice; the route's `sort` is never sent.
+  p.w.location.hash = '#/champion/2';
+  await p.settle();
+  assert.deepEqual(muRows(p), [['2', 'Top'], ['5', 'Middle'], ['9', 'Middle']]);
+  await p.pick('#cHead [data-ctier]', 'MASTER');
+  assert.ok(p.calls.includes('/v1/lol/analytics/champions/2/matchups?queue=RANKED_SOLO_5x5&patch=all&limit=200&platform=oc1&tier=MASTER'));
+  assert.deepEqual(muRows(p), [['2', 'Top'], ['5', 'Middle'], ['9', 'Middle']]);
+  assert.deepEqual(p.calls.filter((c) => c.includes('sort=')), []);
+  // Back to most played.
+  await p.click('#cMatchups [data-msort="games"]');
+  assert.deepEqual(muRows(p), [['9', 'Middle'], ['5', 'Middle'], ['2', 'Top']]);
+  assert.deepEqual(p.errors, []);
+});
+
+test('the empty and failed Matchups cards have no order toggle (MU-01)', async () => {
+  const empty = await page({ hash: '#/champion/1', noAnalytics: true });
+  assert.ok(empty.text('#cMatchups').includes('No lane matchups'));
+  assert.equal(empty.$('#cMatchups [data-msort]'), null);
+  const failed = await page({ hash: '#/champion/1', matchupsFail: true });
+  assert.ok(failed.text('#cMatchups .err').includes('503'), failed.text('#cMatchups'));
+  assert.equal(failed.$('#cMatchups [data-msort]'), null);
+  assert.deepEqual([empty.errors, failed.errors], [[], []]);
+});
+
 test('the champion queue tabs refetch both calls for the other queue', async () => {
   const p = await page({ hash: '#/champion/1' });
   await p.click('#cHead [data-cqueue="RANKED_FLEX_SR"]');
