@@ -12,4 +12,4 @@
 
 ---
 **Sources:** `docs/DECISIONS.md:L132-L161,L1001-L1013,L1352-L1361`, `src/riot/limiter/mod.rs:L262-L300,L371-L440`, `src/riot/limiter/headers.rs:L30-L41`, `src/riot/limiter/persist.rs:L21-L25`, `docs/design/05-rate-limiter.md` §As built
-**Last verified:** 2026-11-21 against commit `9d288ff`
+**Last verified:** 2026-11-21 against commit `592dc88`

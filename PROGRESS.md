@@ -437,7 +437,7 @@ Staging is seeded from production's daily backup and reads production's packs fr
 
 ## RL — a 429 with a type we do not know (production finding 2026-11-20)
 Production (2.11.0) got 429s with `X-Rate-Limit-Type: server` and a `Retry-After` on timeline reads of EUW1 matches. The limiter knew the portal's three types and froze nothing; the fetcher took any type with a `Retry-After` for a freeze and called again at once, up to 8 times (IMPLEMENTATION.md §Post-release — RL, ADR-224).
-- [~] RL-01 a 429 of a type we do not know, with a `Retry-After`, freezes the scope as a `service`-typed one does: `RateLimitType::Unknown`, a `warn` and never the accountable-429 error; without a `Retry-After` it is still the untyped backoff, and `proxy_rl_429_total`'s `type` is still the header's value (owner decision 2026-11-21, option (a); `fix/RL-01-unknown-429-type`; ADR-224)
+- [~] RL-01 a 429 of a type we do not know, with a `Retry-After`, freezes the scope as a `service`-typed one does: `RateLimitType::Unknown`, a `warn` and never the accountable-429 error; without a `Retry-After` it is still the untyped backoff, and `proxy_rl_429_total`'s `type` is still the header's value (owner decision 2026-11-21, option (a); #296, `fix/RL-01-unknown-429-type`; ADR-224)
 
 ## AVL — available through restarts and busy writers (owner report 2026-11-08)
 A production restart on 2026-11-08 logged `listening` and accepted nothing for minutes while the boot tier check walked the archive for `ME1_` matches it cannot stamp (ME-02); profiles then waited behind a 243 s job write, and a SIGTERM in the gap ended in SIGKILL at 90 s (IMPLEMENTATION.md §Post-release — AVL, ADR-208). Order: 00, 01, 02, 06, 04, 03, 07, 05.

@@ -19,4 +19,4 @@ Decisions recorded here were evidenced from the code and the history on 2026-10-
 
 ---
 **Sources:** `docs/DECISIONS.md`, `docs/_meta/scratch/tests-tooling-history.md` §6
-**Last verified:** 2026-11-21 against commit `9d288ff`
+**Last verified:** 2026-11-21 against commit `592dc88`
