@@ -9,7 +9,7 @@ The human-readable reference for every route riot-proxy 2.7.0 serves. This page 
 | [endpoints-players-analytics.md](endpoints-players-analytics.md) | `/v1/players/*`, `/v1/lol/analytics/*` |
 | [endpoints-admin.md](endpoints-admin.md) | all 40 `/v1/admin/*` operations |
 
-The machine-readable contract is [openapi.json](openapi.json) (OpenAPI 3.1.0, `info.version` `2.11.0`, 73 paths, 77 operations). The server builds that document from the same router it serves, so the two cannot drift (`src/routes/docs.rs:L116-L153`). Errors are in [errors.md](errors.md); paging, filters, ETags and versioning in [pagination-filtering-and-versioning.md](pagination-filtering-and-versioning.md); copy-pasteable walkthroughs in [examples.md](examples.md).
+The machine-readable contract is [openapi.json](openapi.json) (OpenAPI 3.1.0, `info.version` `2.12.0`, 73 paths, 77 operations). The server builds that document from the same router it serves, so the two cannot drift (`src/routes/docs.rs:L116-L153`). Errors are in [errors.md](errors.md); paging, filters, ETags and versioning in [pagination-filtering-and-versioning.md](pagination-filtering-and-versioning.md); copy-pasteable walkthroughs in [examples.md](examples.md).
 
 ## Conventions
 
