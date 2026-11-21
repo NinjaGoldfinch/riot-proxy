@@ -9,10 +9,10 @@ One `Limiter` holds a map of scopes. A scope is a routing value on a Riot host: 
 | Aspect | Behaviour | Source |
 |---|---|---|
 | Bootstrap | A new scope starts with the personal-key app limits `20:1,100:120` and no method windows | `src/riot/limiter/headers.rs:30-41`, `mod.rs:307-310` |
-| Learning | After every upstream response, `X-App-Rate-Limit` and `X-Method-Rate-Limit` reconfigure the windows (same lengths keep their admissions) and the `-Count` headers pad usage upward, never down | `mod.rs:370-401`, `bucket.rs:100-105,140-162` |
+| Learning | After every upstream response, `X-App-Rate-Limit` and `X-Method-Rate-Limit` reconfigure the windows (same lengths keep their admissions) and the `-Count` headers pad usage upward, never down | `mod.rs:371-402`, `bucket.rs:100-105,140-162` |
 | Permit | A token once taken is spent whether or not the call succeeds | `mod.rs:50-56` |
 | Budget | `acquire` fails at once with `RATE_LIMITED` if the next free slot is beyond the caller's budget; it never waits out a budget it cannot meet (ADR-025) | `mod.rs:262-300` |
-| Freeze | A typed 429 (`application`, `method` or `service`) with a numeric `Retry-After` freezes the whole scope until then; freezes only extend | `mod.rs:396-431` |
+| Freeze | A typed 429 (`application`, `method`, `service`, or a type we do not know: production saw `server`, ADR-224) with a numeric `Retry-After` freezes the whole scope until then; freezes only extend | `mod.rs:397-440` |
 | Checkpoint | Every 10 s and at shutdown the windows are written to `limiter_state`; on boot a checkpoint older than 120 s restores every window as full | `src/riot/limiter/persist.rs:21-25,141-175` |
 
 Per-consumer quotas are separate: a 60 s sliding window of `quota_per_min` admissions per consumer id, answered with `429 QUOTA_EXCEEDED` and `X-RateLimit-*` headers (`src/http/quota.rs:320-431`). Being over quota is never reported as `RATE_LIMITED`.
@@ -72,7 +72,7 @@ A scope is never evicted (`src/riot/limiter/mod.rs`, no removal path). The resto
 ```mermaid
 flowchart TD
     R["Riot answers 429"] --> T{"X-Rate-Limit-Type and numeric Retry-After?"}
-    T -->|"yes: application / method / service"| F["observe: freeze the scope until Retry-After"]
+    T -->|"yes: application / method / service / unknown"| F["observe: freeze the scope until Retry-After"]
     F --> A["fetcher re-acquires (up to 8 attempts); account lookups move to another cluster"]
     A -->|"freeze fits the budget"| W["wait, then retry the call"]
     A -->|"freeze beyond the budget"| S["503 RATE_LIMITED or STALE copy"]
@@ -82,7 +82,7 @@ flowchart TD
     F --> M["metric proxy_rl_429_total{type}; application/method logged as 'accountable 429'"]
 ```
 
-An accountable 429 means the limiter's accounting diverged from Riot's and is logged at error level (`src/riot/limiter/mod.rs:416-430`); the Prometheus rule `AccountableRateLimit429` alerts on it (`ops/prometheus-alerts.yml`). The fetcher's loop is bounded by 8 attempts (`src/fetcher.rs:66,896-932`).
+An accountable 429 means the limiter's accounting diverged from Riot's and is logged at error level (`src/riot/limiter/mod.rs:418-439`); the Prometheus rule `AccountableRateLimit429` alerts on it (`ops/prometheus-alerts.yml`). The fetcher's loop is bounded by 8 attempts (`src/fetcher.rs:66,896-932`).
 
 ## Account clusters
 
@@ -90,7 +90,7 @@ Account-v1 is served by three clusters. A request without a region tries `asia`,
 
 ## The job queue
 
-Jobs live in the SQLite `jobs` table; there is no in-memory queue (ADR-047, ADR-137). `JOB_CONCURRENCY` workers (default 8) claim with one `UPDATE … RETURNING` statement that takes, per rate-limit lane, the best ready row, skipping lanes the limiter reports blocked, methods at their ceiling and kinds at their `JOB_KIND_LIMITS` cap (`src/db/store.rs:98-133`, `src/riot/limiter/mod.rs:532-606`; SCH-01, ADR-089).
+Jobs live in the SQLite `jobs` table; there is no in-memory queue (ADR-047, ADR-137). `JOB_CONCURRENCY` workers (default 8) claim with one `UPDATE … RETURNING` statement that takes, per rate-limit lane, the best ready row, skipping lanes the limiter reports blocked, methods at their ceiling and kinds at their `JOB_KIND_LIMITS` cap (`src/db/store.rs:98-133`, `src/riot/limiter/mod.rs:541-615`; SCH-01, ADR-089).
 
 | Concept | Rule | Source |
 |---|---|---|
@@ -121,5 +121,5 @@ Every job kind, its trigger, priority and tables is tabulated in `docs/_meta/scr
 | Request body | 1 MiB | `src/app.rs:30-31` |
 
 ---
-**Sources:** `src/riot/limiter/mod.rs:L50-L175,L229-L300,L307-L431,L532-L606`, `src/riot/limiter/bucket.rs:L15-L162`, `src/riot/limiter/headers.rs:L30-L41`, `src/riot/limiter/persist.rs:L21-L25,L141-L175`, `src/http/quota.rs:L320-L431`, `src/fetcher.rs:L65-L70,L201-L230,L557-L568,L896-L932,L995-L1033`, `src/riot/routing.rs:L160-L196`, `src/cache/keys.rs:L81-L88`, `src/jobs/scheduler.rs:L40-L42,L124-L171,L225-L306,L467-L487,L996-L1058,L1103-L1117`, `src/jobs/archive.rs:L116-L162`, `src/jobs/lanes.rs:L440-L483`, `src/jobs/mod.rs:L74-L94`, `src/db/store.rs:L98-L133`, `src/db/mod.rs:L46-L47,L87-L94,L208-L248`, `src/cli/serve.rs:L103-L109`, `ops/prometheus-alerts.yml`, `docs/design/05-rate-limiter.md`, `docs/design/06-jobs-and-realtime.md`
-**Last verified:** 2026-11-21 against commit `5655af7`
+**Sources:** `src/riot/limiter/mod.rs:L50-L175,L229-L300,L307-L440,L541-L615`, `src/riot/limiter/bucket.rs:L15-L162`, `src/riot/limiter/headers.rs:L30-L41`, `src/riot/limiter/persist.rs:L21-L25,L141-L175`, `src/http/quota.rs:L320-L431`, `src/fetcher.rs:L65-L70,L201-L230,L557-L568,L896-L932,L995-L1033`, `src/riot/routing.rs:L160-L196`, `src/cache/keys.rs:L81-L88`, `src/jobs/scheduler.rs:L40-L42,L124-L171,L225-L306,L467-L487,L996-L1058,L1103-L1117`, `src/jobs/archive.rs:L116-L162`, `src/jobs/lanes.rs:L440-L483`, `src/jobs/mod.rs:L74-L94`, `src/db/store.rs:L98-L133`, `src/db/mod.rs:L46-L47,L87-L94,L208-L248`, `src/cli/serve.rs:L103-L109`, `ops/prometheus-alerts.yml`, `docs/design/05-rate-limiter.md`, `docs/design/06-jobs-and-realtime.md`
+**Last verified:** 2026-11-21 against commit `592dc88`

@@ -7,7 +7,7 @@ The decisions that shape riot-proxy, one file each, in the Context / Decision / 
 | [ADR-single-process.md](./ADR-single-process.md) | One process, one static binary, no horizontal scaling | 001, 003 |
 | [ADR-sqlite-only-store.md](./ADR-sqlite-only-store.md) | SQLite in WAL mode as the only default store; Postgres as a compile-only seam | 002, 004, 005, 062 |
 | [ADR-consumer-keys.md](./ADR-consumer-keys.md) | Consumer keys with scopes and per-minute quotas; the no-auth dev mode | 012, 033, 034, 068 |
-| [ADR-sliding-log-limiter.md](./ADR-sliding-log-limiter.md) | Header-driven sliding-log limiter, interactive over bulk, freeze on typed 429 | 021, 023, 024, 025, 026, 089, 126 |
+| [ADR-sliding-log-limiter.md](./ADR-sliding-log-limiter.md) | Header-driven sliding-log limiter, interactive over bulk, freeze on typed 429 | 021, 023, 024, 025, 026, 089, 126, 224 |
 | [ADR-timelines-always-archived.md](./ADR-timelines-always-archived.md) | Fetch and archive a match's timeline by default, together with the match | 085, 098, 118, 133 |
 | [ADR-packs-in-object-storage.md](./ADR-packs-in-object-storage.md) | Raw bodies packed into an S3 bucket after a 14-day local window; R2 as the replica | 146, 162, 163, 164, 165 |
 | [ADR-bare-metal-systemd.md](./ADR-bare-metal-systemd.md) | Production runs the static binary under systemd on one VPS behind a Cloudflare Tunnel; no Docker, no built-in TLS | 067, 142, 144 |
@@ -19,4 +19,4 @@ Decisions recorded here were evidenced from the code and the history on 2026-10-
 
 ---
 **Sources:** `docs/DECISIONS.md`, `docs/_meta/scratch/tests-tooling-history.md` §6
-**Last verified:** 2026-10-19 against commit `52fa67d`
+**Last verified:** 2026-11-21 against commit `592dc88`

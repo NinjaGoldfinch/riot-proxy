@@ -448,6 +448,110 @@ async fn a_typed_429_freezes_then_retries() {
     assert_eq!(upstream_calls(&s.server).await, 2);
 }
 
+/// RL-01 (ADR-224): a 429 whose type we do not know, with a `Retry-After`,
+/// freezes the scope as a `service`-typed one does, so the retry waits it
+/// out. Before, nothing froze and the loop called Riot again at once, up to
+/// 8 times. Synthetic: production saw `X-Rate-Limit-Type: server` on
+/// 2026-11-20 (timeline reads of EUW1 matches); the `Retry-After` it came
+/// with is not on record, and the 1 here is this test's.
+#[tokio::test]
+async fn a_429_of_an_unknown_type_freezes_then_retries() {
+    let s = setup(&[]).await;
+    Mock::given(path(SUMMONER))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .insert_header("x-rate-limit-type", "server")
+                .insert_header("retry-after", "1"),
+        )
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&s.server)
+        .await;
+    mount(&s.server, SUMMONER, ok(r#"{"after":"freeze"}"#)).await;
+    let started = Instant::now();
+    let r = s
+        .fetcher
+        .fetch(summoner(Platform::Euw1), INTERACTIVE)
+        .await
+        .unwrap();
+    assert_eq!(r.x_cache, XCache::Miss);
+    // The retry is the second call and the last, and it was not sent before
+    // the freeze ended: Riot's 1 s, less the time the 429 took to come back.
+    assert!(
+        started.elapsed() >= Duration::from_millis(950),
+        "waited out the freeze: {:?}",
+        started.elapsed()
+    );
+    assert_eq!(
+        upstream_calls(&s.server).await,
+        2,
+        "one 429, one retry, nothing in between"
+    );
+}
+
+/// RL-01: the freeze is real, so one that outlasts the interactive budget
+/// (`CLIENT_WAIT_BUDGET_MS`, 2 s) fails the re-acquire at once with
+/// `RATE_LIMITED` and Riot's wait as the hint, after a single upstream call.
+#[tokio::test]
+async fn a_429_of_an_unknown_type_past_the_budget_is_rate_limited_after_one_call() {
+    let s = setup(&[]).await;
+    mount(
+        &s.server,
+        SUMMONER,
+        ResponseTemplate::new(429)
+            .insert_header("x-rate-limit-type", "server")
+            .insert_header("retry-after", "30"),
+    )
+    .await;
+    let started = Instant::now();
+    let e = s
+        .fetcher
+        .fetch(summoner(Platform::Euw1), INTERACTIVE)
+        .await
+        .unwrap_err();
+    assert_eq!(e.api.code, ErrorCode::RateLimited);
+    assert!(
+        matches!(e.api.retry_after, Some(29 | 30)),
+        "{:?}",
+        e.api.retry_after
+    );
+    assert_eq!(
+        upstream_calls(&s.server).await,
+        1,
+        "no second call into the freeze"
+    );
+    assert!(
+        started.elapsed() < Duration::from_millis(1500),
+        "refused at once, not after the budget: {:?}",
+        started.elapsed()
+    );
+    let frozen = s.limiter.frozen_for("euw1").expect("the scope is frozen");
+    assert!(frozen > Duration::from_secs(28), "{frozen:?}");
+}
+
+/// RL-01 changes nothing without a `Retry-After`: an unknown type alone is
+/// the untyped path, backed off without touching the buckets (ADR-021).
+#[tokio::test]
+async fn an_unknown_type_without_retry_after_backs_off_as_before() {
+    let s = setup(&[]).await;
+    Mock::given(path(SUMMONER))
+        .respond_with(ResponseTemplate::new(429).insert_header("x-rate-limit-type", "server"))
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&s.server)
+        .await;
+    mount(&s.server, SUMMONER, ok(r#"{"after":"backoff"}"#)).await;
+    let started = Instant::now();
+    s.fetcher
+        .fetch(summoner(Platform::Euw1), INTERACTIVE)
+        .await
+        .unwrap();
+    let waited = started.elapsed();
+    assert!(waited >= Duration::from_millis(390), "500 ms − 20 %: {waited:?}");
+    assert_eq!(s.limiter.frozen_for("euw1"), None);
+    assert_eq!(upstream_calls(&s.server).await, 2);
+}
+
 /// An untyped (service) 429 backs off without touching the buckets (ADR-021).
 #[tokio::test]
 async fn a_service_429_backs_off_and_retries() {
