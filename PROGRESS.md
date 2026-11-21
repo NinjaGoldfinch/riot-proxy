@@ -298,7 +298,7 @@ The site's backfill question (item 3) needs no task: the unbounded lookup backfi
 - [x] BLD-06 Udyr's skill order ranks R with Q, W and E (`"RWEQ"`); `BUILDS_VERSION` 3; golden fixture OC1_706102889 (Udyr, 21 points at level 20) (#160, ADR-132)
 
 ## MU — matchups worth reading (owner request 2026-10-09)
-- [ ] MU-01 show how much a matchup's win rate can be trusted: `winRateLow` (Wilson 95% lower bound), `sort=confidence`, small samples dimmed in the showcase (IMPLEMENTATION.md §Post-release — MU)
+- [~] MU-01 show how much a matchup's win rate can be trusted: `winRateLow` (Wilson 95% lower bound), `sort=confidence`, small samples dimmed in the showcase (IMPLEMENTATION.md §Post-release — MU). `feat/MU-01-matchup-confidence`: the route half (`winRateLow` on the matchups and the detail, `sort=games|confidence`, sorted before `limit`; `STATS_SHAPE` `tier-side-range-opponent-matches-low`; ADR-225, plan in docs/mu/MU-01-plan.md). The showcase half (dimming, the *Most played · Most reliable* toggle) is not on the branch: with it the diff passes the plan's ~600-line split point (plan §9), so MU-01b is the owner's call
 - [ ] MU-02 win rate against what the two champions would be expected to do: `delta` from each champion's lane baseline, a *vs expected* column in the showcase; after DEV-28 (IMPLEMENTATION.md §Post-release — MU)
 
 ## INC — the riot-proxy-dev outage of 2026-10-09 (ninjagoldfinch.lol report)

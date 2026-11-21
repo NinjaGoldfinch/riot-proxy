@@ -234,9 +234,9 @@ async fn before_any_recompute_the_routes_answer_empty_documents() {
         json!([])
     );
 
-    // SITE-12 changed the shape marker in every analytics tag, so a
-    // validator a client kept from before `totalMatches` existed gets the new
-    // body, not a 304. The tag is rebuilt here as `routes::analytics::etag`
+    // MU-01 changed the shape marker in every analytics tag (SITE-12 did
+    // before it), so a validator a client kept from before `winRateLow`
+    // existed gets the new body, not a 304. The tag is rebuilt here as `routes::analytics::etag`
     // builds it, checked against the one served, then with the old marker.
     // When this fails after a change to `STATS_SHAPE` or to the tag's
     // parts, update `material` here and the example tag in the three docs
@@ -271,11 +271,12 @@ async fn before_any_recompute_the_routes_answer_empty_documents() {
         )
     };
     let now = e.get(uri).await;
-    assert_eq!(tag(&now), tag_with("tier-side-range-opponent-matches"));
-    let before = tag_with("tier-side-range-opponent");
-    let r = e.call("GET", uri, &e.reader, Some(&before), None).await;
-    assert_eq!(r.status, StatusCode::OK, "a tag from before totalMatches");
-    assert_eq!(r.json()["totalMatches"], 0);
+    assert_eq!(tag(&now), tag_with("tier-side-range-opponent-matches-low"));
+    for before in ["tier-side-range-opponent-matches", "tier-side-range-opponent"] {
+        let r = e.call("GET", uri, &e.reader, Some(&tag_with(before)), None).await;
+        assert_eq!(r.status, StatusCode::OK, "a tag with the marker {before}");
+        assert_eq!(r.json()["totalMatches"], 0);
+    }
 }
 
 /// `tier=UNKNOWN` (ADR-105) is the players no ladder or lookup placed:
@@ -462,8 +463,8 @@ async fn the_recompute_feeds_v1s_routes_and_remakes_are_opt_in() {
         .json();
     assert_eq!(
         matchups["matchups"],
-        json!([{"role": "MIDDLE", "opponentId": 13, "games": 1, "wins": 0, "winRate": 0},
-               {"role": "MIDDLE", "opponentId": 157, "games": 1, "wins": 1, "winRate": 1}])
+        json!([{"role": "MIDDLE", "opponentId": 13, "games": 1, "wins": 0, "winRate": 0, "winRateLow": 0},
+               {"role": "MIDDLE", "opponentId": 157, "games": 1, "wins": 1, "winRate": 1, "winRateLow": 0.2065}])
     );
 }
 
@@ -553,6 +554,11 @@ async fn analytics_routes_validate_as_v1_did() {
         (
             "/v1/lol/analytics/champions/1?limit=51",
             "querystring/limit must be <= 50",
+        ),
+        // MU-01: `games` or `confidence`.
+        (
+            "/v1/lol/analytics/champions/1/matchups?sort=bogus",
+            "querystring/sort must be equal to one of the allowed values",
         ),
     ] {
         assert_eq!(
@@ -2651,6 +2657,248 @@ async fn two_opponents_are_two_entries() {
     // Another opponent's validator is no match.
     let other = e.call("GET", SYNDRA, &e.reader, Some(&tags[0]), None).await;
     assert_eq!(other.status, StatusCode::OK);
+}
+
+// ── MU-01: how much a matchup's win rate can be trusted ────────────────────
+
+const ANNIE_MATCHUPS: &str = "/v1/lol/analytics/champions/1/matchups";
+
+/// The lower bound of the 95 % Wilson score interval (z = 1.96), worked out
+/// here from the formula rather than by the route's helper, to 4 places.
+#[allow(clippy::cast_precision_loss)]
+fn wilson_low(wins: i64, games: i64) -> f64 {
+    if games == 0 {
+        return 0.0;
+    }
+    let (n, z) = (games as f64, 1.96_f64);
+    let p = wins as f64 / n;
+    let centre = p + z * z / (2.0 * n);
+    let spread = z * ((p * (1.0 - p) + z * z / (4.0 * n)) / n).sqrt();
+    (((centre - spread) / (1.0 + z * z / n)).max(0.0) * 1e4).round() / 1e4
+}
+
+/// `(opponentId, winRateLow)` of each row of a matchups list, in order.
+fn bounds(rows: &Value) -> Vec<(i64, f64)> {
+    rows.as_array()
+        .unwrap()
+        .iter()
+        .map(|m| {
+            (
+                m["opponentId"].as_i64().unwrap(),
+                m["winRateLow"].as_f64().unwrap(),
+            )
+        })
+        .collect()
+}
+
+fn opponents(rows: &Value) -> Vec<i64> {
+    bounds(rows).into_iter().map(|(o, _)| o).collect()
+}
+
+/// Annie's (champion 1, in neither fixture) MIDDLE rows as `(opponent,
+/// wins, games)`: written into `champion_matchups` after a rebuild, in the
+/// slice the fixtures' rebuild made (kr, 16.19, MASTER, blue), so each bound
+/// is picked by hand. Most played first: 30/100 (0.2189), 40/60 (0.5406),
+/// 3/9 (0.1206), 0/5 (0), 3/3 (0.4385), 0/3 (0).
+const ANNIE_ROWS: [(i64, i64, i64); 6] = [
+    (13, 30, 100),
+    (10, 40, 60),
+    (12, 3, 9),
+    (15, 0, 5),
+    (11, 3, 3),
+    (14, 0, 3),
+];
+
+impl Env {
+    async fn seed_annie_matchups(&self) {
+        self.seed().await;
+        self.aggregate().await;
+        let scope = self.scope.clone();
+        self.state
+            .db
+            .write(move |c| {
+                for (opponent, wins, games) in ANNIE_ROWS {
+                    c.execute(
+                        "INSERT INTO champion_matchups (key_scope, platform, queue, patch, champion_id, role,
+                           opponent_id, remake, tier, side, games, wins, computed_at)
+                         VALUES (?1, 'kr', 'RANKED_SOLO_5x5', '16.19', 1, 'MIDDLE', ?2, 0, 'MASTER', 'blue', ?3, ?4, 1)",
+                        rusqlite::params![scope, opponent, games, wins],
+                    )?;
+                }
+                Ok::<_, DbError>(())
+            })
+            .await
+            .unwrap();
+    }
+}
+
+/// MU-01 (ADR-225): every matchup row carries `winRateLow`, the Wilson
+/// bound of its own `wins` in `games`, on the matchups route and in the
+/// champion detail; the fixtures' one-game rows included.
+#[tokio::test]
+async fn every_matchup_row_carries_its_wilson_lower_bound() {
+    let e = env().await;
+    e.seed_annie_matchups().await;
+    for uri in [
+        ANNIE_MATCHUPS.to_string(),
+        "/v1/lol/analytics/champions/1".to_string(),
+        "/v1/lol/analytics/champions/134/matchups?remakes=include".to_string(),
+        "/v1/lol/analytics/champions/134?remakes=include".to_string(),
+    ] {
+        let r = e.get(&uri).await;
+        assert_eq!(r.status, StatusCode::OK, "{uri}");
+        let rows = r.json()["matchups"].clone();
+        assert!(!rows.as_array().unwrap().is_empty(), "{uri}");
+        for m in rows.as_array().unwrap() {
+            let (wins, games) = (m["wins"].as_i64().unwrap(), m["games"].as_i64().unwrap());
+            let low = m["winRateLow"].as_f64().unwrap_or_else(|| panic!("{uri}: {m}"));
+            assert!((low - wilson_low(wins, games)).abs() < 1e-9, "{uri}: {m}");
+            assert!(low <= m["winRate"].as_f64().unwrap(), "{uri}: {m}");
+        }
+    }
+    // The hand-picked rows' bounds (MU-01's spec and plan).
+    let all = e.get(ANNIE_MATCHUPS).await.json();
+    assert_eq!(
+        bounds(&all["matchups"]),
+        [
+            (13, 0.2189),
+            (10, 0.5406),
+            (12, 0.1206),
+            (15, 0.0),
+            (11, 0.4385),
+            (14, 0.0)
+        ]
+    );
+}
+
+/// `sort=confidence` orders by `winRateLow`, then games, over every row the
+/// filters let through, and only then applies `limit` (ADR-225 decisions 1
+/// and 2); `sort=games` is the omitted `sort`.
+#[tokio::test]
+async fn sort_confidence_ranks_every_row_by_its_lower_bound_before_the_limit() {
+    let e = env().await;
+    e.seed_annie_matchups().await;
+    let get = |q: &'static str| {
+        let e = &e;
+        async move { e.get(&format!("{ANNIE_MATCHUPS}{q}")).await }
+    };
+
+    // Today's order: most played first, ties by lane and opponent.
+    let plain = get("").await;
+    assert_eq!(opponents(&plain.json()["matchups"]), [13, 10, 12, 15, 11, 14]);
+    // `sort=games` is the same request: the same bytes and the same tag.
+    let games = get("?sort=games").await;
+    assert_eq!((games.status, &games.body), (StatusCode::OK, &plain.body));
+    assert_eq!(tag(&games), tag(&plain));
+
+    // 40/60 ahead of 3/3 ahead of 30/100; two bounds of 0 by games.
+    let sure = get("?sort=confidence").await;
+    assert_eq!(sure.status, StatusCode::OK);
+    assert_eq!(opponents(&sure.json()["matchups"]), [10, 11, 13, 12, 15, 14]);
+    assert_ne!(tag(&sure), tag(&plain), "another order, another validator");
+    let mut a = sure.json();
+    let mut b = plain.json();
+    a["matchups"] = json!(null);
+    b["matchups"] = json!(null);
+    assert_eq!(a, b, "only the order of the rows differs");
+
+    // Sorted, then cut: 40/60 leads with fewer games than 30/100, and 3/3,
+    // the least played, is second, though the two most played rows are
+    // 30/100 and 40/60.
+    assert_eq!(
+        opponents(&get("?sort=confidence&limit=1").await.json()["matchups"]),
+        [10]
+    );
+    assert_eq!(
+        opponents(&get("?sort=confidence&limit=2").await.json()["matchups"]),
+        [10, 11]
+    );
+    assert_eq!(opponents(&get("?limit=2").await.json()["matchups"]), [13, 10]);
+    // The filters come first: minGames leaves out 3/3 and 0/3.
+    assert_eq!(
+        opponents(&get("?sort=confidence&minGames=5").await.json()["matchups"]),
+        [10, 13, 12, 15]
+    );
+    assert_eq!(
+        get("?sort=confidence&role=TOP").await.json()["matchups"],
+        json!([])
+    );
+
+    // Each order is its own cache entry and validator.
+    assert_eq!(x_cache(&get("?sort=confidence").await), Some("HIT"));
+    let stale = e
+        .call(
+            "GET",
+            &format!("{ANNIE_MATCHUPS}?sort=confidence"),
+            &e.reader,
+            Some(&tag(&plain)),
+            None,
+        )
+        .await;
+    assert_eq!(stale.status, StatusCode::OK, "the games order's tag is no match");
+    let same = e
+        .call(
+            "GET",
+            &format!("{ANNIE_MATCHUPS}?sort=confidence"),
+            &e.reader,
+            Some(&tag(&sure)),
+            None,
+        )
+        .await;
+    assert_eq!(same.status, StatusCode::NOT_MODIFIED);
+}
+
+/// Only the matchups route takes `sort` (ADR-225 decision 4): the detail
+/// ignores it, as it ignores any parameter it doesn't know.
+#[tokio::test]
+async fn the_detail_ignores_sort() {
+    let e = env().await;
+    e.seed_annie_matchups().await;
+    let plain = e.get("/v1/lol/analytics/champions/1").await;
+    for q in ["sort=confidence", "sort=bogus"] {
+        let r = e.get(&format!("/v1/lol/analytics/champions/1?{q}")).await;
+        assert_eq!((r.status, &r.body), (StatusCode::OK, &plain.body), "{q}");
+        assert_eq!(tag(&r), tag(&plain), "{q}");
+    }
+    assert_eq!(opponents(&plain.json()["matchups"]), [13, 10, 12, 15, 11, 14]);
+}
+
+/// `sort` is validated after every other parameter, as `opponentId` is, so
+/// no 400 that came before moves.
+#[tokio::test]
+async fn sort_is_validated_after_the_other_parameters() {
+    let e = env().await;
+    for (q, message) in [
+        (
+            "sort=bogus",
+            "querystring/sort must be equal to one of the allowed values",
+        ),
+        (
+            "sort=",
+            "querystring/sort must be equal to one of the allowed values",
+        ),
+        (
+            "sort=CONFIDENCE",
+            "querystring/sort must be equal to one of the allowed values",
+        ),
+        ("sort=bogus&limit=201", "querystring/limit must be <= 200"),
+        (
+            "sort=bogus&role=SUPPORT",
+            "querystring/role must be equal to one of the allowed values",
+        ),
+    ] {
+        let r = e.get(&format!("{ANNIE_MATCHUPS}?{q}")).await;
+        assert_eq!(error(&r), (StatusCode::BAD_REQUEST, message.into()), "{q}");
+        assert_eq!(r.json()["error"]["code"], "VALIDATION", "{q}");
+        assert!(r.headers.get("x-cache").is_none(), "{q}");
+    }
+    for q in ["sort=games", "sort=confidence"] {
+        assert_eq!(
+            e.get(&format!("{ANNIE_MATCHUPS}?{q}")).await.status,
+            StatusCode::OK,
+            "{q}"
+        );
+    }
 }
 
 // ── THR-03: aggregate:delta ────────────────────────────────────────────────

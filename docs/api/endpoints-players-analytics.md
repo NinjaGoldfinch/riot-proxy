@@ -112,33 +112,33 @@ Routes and their own parameters:
 
 | Method | Path | Specific params | Handler |
 |---|---|---|---|
-| GET | `/v1/lol/analytics/champions` | `role` team positions; `limit` 1 to 500 (default 200) | `src/routes/analytics.rs:L1049` |
-| GET | `/v1/lol/analytics/champions/{championId}` | `championId` integer ≥ 1; `limit` 1 to 50 (default 10) per section | `src/routes/analytics.rs:L1259` |
-| GET | `/v1/lol/analytics/champions/{championId}/matchups` | `role` lanes only (no `""`); `limit` 1 to 200 (default 50) | `src/routes/analytics.rs:L1153` |
-| GET | `/v1/lol/analytics/champions/{championId}/builds` | `limit` 1 to 10 (default 3); `opponentId` integer ≥ 1; `role` lanes when `opponentId` is set, else team positions | `src/routes/analytics.rs:L1531` |
-| GET | `/v1/lol/analytics/patches` | only `platform`, `queue`, `championId`, `side`, `remakes` | `src/routes/analytics.rs:L1670` |
+| GET | `/v1/lol/analytics/champions` | `role` team positions; `limit` 1 to 500 (default 200) | `src/routes/analytics.rs:L1105` |
+| GET | `/v1/lol/analytics/champions/{championId}` | `championId` integer ≥ 1; `limit` 1 to 50 (default 10) per section | `src/routes/analytics.rs:L1334` |
+| GET | `/v1/lol/analytics/champions/{championId}/matchups` | `role` lanes only (no `""`); `limit` 1 to 200 (default 50); `sort` `games` (default, most played first) or `confidence` (highest `winRateLow` first, then most played, sorted before `limit` cuts) | `src/routes/analytics.rs:L1211` |
+| GET | `/v1/lol/analytics/champions/{championId}/builds` | `limit` 1 to 10 (default 3); `opponentId` integer ≥ 1; `role` lanes when `opponentId` is set, else team positions | `src/routes/analytics.rs:L1606` |
+| GET | `/v1/lol/analytics/patches` | only `platform`, `queue`, `championId`, `side`, `remakes` | `src/routes/analytics.rs:L1745` |
 
 ### Response headers
 
-Every 200 carries a weak `ETag` and `Cache-Control: private, max-age=300`; `If-None-Match` (a list or `*`) that matches is a `304` with the same headers (`src/routes/analytics.rs:L52`, `L588-L625`). On every route but `/patches` the tag includes the newest `computed_at` of the slice's `analytics_match_totals` rows, so it changes whenever a rebuild or an `aggregate:delta` run counts a match in the slice (THR-03, ADR-182; `L766-L782`). `X-Cache: HIT` means the in-memory response cache (`ANALYTICS_CACHE_ENTRIES`, default 512, cleared on every rebuild, on every delta that counted something and on a Data Dragon version change); `MISS` means computed now. There is **no** `X-Cache-Age` on these routes. Captured:
+Every 200 carries a weak `ETag` and `Cache-Control: private, max-age=300`; `If-None-Match` (a list or `*`) that matches is a `304` with the same headers (`src/routes/analytics.rs:L52`, `L593-L630`). On every route but `/patches` the tag includes the newest `computed_at` of the slice's `analytics_match_totals` rows, so it changes whenever a rebuild or an `aggregate:delta` run counts a match in the slice (THR-03, ADR-182; `L783-L799`). `X-Cache: HIT` means the in-memory response cache (`ANALYTICS_CACHE_ENTRIES`, default 512, cleared on every rebuild, on every delta that counted something and on a Data Dragon version change); `MISS` means computed now. There is **no** `X-Cache-Age` on these routes. Captured:
 
 ```text
 GET /v1/lol/analytics/champions?queue=RANKED_SOLO_5x5&limit=2
 HTTP/1.1 200 OK
 content-type: application/json; charset=utf-8
 cache-control: private, max-age=300
-etag: W/"SauT-iinG0trDNmv8WIWuqtq65wUCmDNzmGSJk97mRE"
+etag: W/"PQe9frKTKbYA0ltag_TJzMqZKt4_LC5uXdZTprSW164"
 x-cache: MISS
 
 {"platform":null,"queue":"RANKED_SOLO_5x5","tier":null,"minTier":null,"side":null,"patch":null,"role":null,"computedAt":null,"totalGames":0,"totalMatches":0,"champions":[]}
 
-GET … with If-None-Match: W/"SauT-iinG0trDNmv8WIWuqtq65wUCmDNzmGSJk97mRE"
+GET … with If-None-Match: W/"PQe9frKTKbYA0ltag_TJzMqZKt4_LC5uXdZTprSW164"
 HTTP/1.1 304 Not Modified
-etag: W/"SauT-iinG0trDNmv8WIWuqtq65wUCmDNzmGSJk97mRE"
+etag: W/"PQe9frKTKbYA0ltag_TJzMqZKt4_LC5uXdZTprSW164"
 x-cache: HIT
 ```
 
-A read failure is `500 INTERNAL` (`L638`).
+A read failure is `500 INTERNAL` (`L643`).
 
 ### Bodies
 
@@ -153,14 +153,16 @@ A read failure is `500 INTERNAL` (`L638`).
 
 `totalGames` sums the games of the rows returned, so it moves with `limit` and `minGames` and counts a match once for each of its players in them (ten for a full slice). `totalMatches` (SITE-12, ADR-218) counts the slice's matches once each: the denominator of every row's `pickRate` and `banRate`, which is every match in the slice without `tier`, those with a player at or above `minTier`, or those with a player at `tier`; every role and side; 0 when no patch is aggregated.
 
-`champions/{championId}` (`ChampionDetailResponse`, `L240-L277`) adds `championName`, `stats[]` (the summed row, or the named tier's), `byTier[]` (one row per tier), `matchups[]` (`{opponentId, role, games, wins, winRate}`), `items[]` (`{itemId, games, wins, winRate}`), `runes[]` (`{keystoneId, subStyleId, …}`), `spells[]` (`{spellA, spellB, …}`) and `sectionsComputedAt{stats,matchups,items,runes,spells}` (`tests/snapshots/it__analytics__analytics_champion_detail.snap`).
+`champions/{championId}` (`ChampionDetailResponse`, `L244-L281`) adds `championName`, `stats[]` (the summed row, or the named tier's), `byTier[]` (one row per tier), `matchups[]` (`{opponentId, role, games, wins, winRate, winRateLow}`, MU-01), `items[]` (`{itemId, games, wins, winRate}`), `runes[]` (`{keystoneId, subStyleId, …}`), `spells[]` (`{spellA, spellB, …}`) and `sectionsComputedAt{stats,matchups,items,runes,spells}` (`tests/snapshots/it__analytics__analytics_champion_detail.snap`).
 
-`champions/{championId}/builds` (`ChampionBuildsResponse`, `L362-L400`) returns `builds[]` of set builds: `{core: [6655, 3157], games, wins, winRate, winRateLow, pickRate, starter[], boots[], next[[…],[…],[…]], runes[], spells[], skillOrder[{order: "QEW", …}]}`; `winRateLow` is the Wilson lower bound (`L660-L669`). `role` is always set in the response (`tests/snapshots/it__analytics__analytics_champion_builds.snap`).
+`champions/{championId}/matchups` (`ChampionMatchupsResponse`, `L167-L192`) returns the same `matchups[]` rows (`ChampionMatchupEntry`, `L146-L162`), most played first, or with `sort=confidence` by `winRateLow` then games (MU-01, ADR-225; `L766-L772`, `L1226-L1306`). The detail ignores `sort`.
 
-`patches` (`AnalyticsPatchesResponse`, `L418-L431`): `{"platform":null,"queue":"RANKED_SOLO_5x5","championId":null,"side":null,"patches":[…]}`.
+`champions/{championId}/builds` (`ChampionBuildsResponse`, `L366-L404`) returns `builds[]` of set builds: `{core: [6655, 3157], games, wins, winRate, winRateLow, pickRate, starter[], boots[], next[[…],[…],[…]], runes[], spells[], skillOrder[{order: "QEW", …}]}`; `winRateLow` is the Wilson lower bound (`L665-L674`), as on the matchups. `role` is always set in the response (`tests/snapshots/it__analytics__analytics_champion_builds.snap`).
+
+`patches` (`AnalyticsPatchesResponse`, `L422-L435`): `{"platform":null,"queue":"RANKED_SOLO_5x5","championId":null,"side":null,"patches":[…]}`.
 
 What ninjagoldfinch.lol sends: `queue=RANKED_SOLO_5x5`, optional `patch` and `role`, `minGames=0`, `limit=500` on the list, `limit=10` on the detail, `limit=200` on matchups; never `tier`, `side` or `minTier` (`docs/_meta/scratch/siblings.md` §1.5).
 
 ---
-**Sources:** `src/routes/players.rs:L5-L7,L73-L174,L225-L272,L283-L302,L398-L414,L445-L537,L592-L661,L687-L735,L891-L911,L961,L989-L1003,L1082-L1162`, `src/routes/summary.rs:L14-L43`, `src/http/refresh.rs:L18-L71`, `src/http/validate.rs:L185-L250`, `src/routes/analytics.rs:L1-L3,L52-L56,L111-L144,L163-L188,L240-L277,L336-L431,L497-L640,L660-L669,L766-L782,L784-L789,L920-L1000,L1049,L1153,L1259,L1531,L1670`, `src/routes/analytics/cache.rs:L1-L19,L89-L137,L181-L264`, `tests/snapshots/it__players_routes__*.snap`, `tests/snapshots/it__analytics__*.snap`, `docs/DECISIONS.md` ADR-065, ADR-123, `docs/_meta/scratch/routes.md` §1.4-1.5, `docs/_meta/scratch/siblings.md` §1.5, live capture against `target/debug/riot-proxy` 2.7.0
-**Last verified:** 2026-11-21 against commit `72fcd7a`
+**Sources:** `src/routes/players.rs:L5-L7,L73-L174,L225-L272,L283-L302,L398-L414,L445-L537,L592-L661,L687-L735,L891-L911,L961,L989-L1003,L1082-L1162`, `src/routes/summary.rs:L14-L43`, `src/http/refresh.rs:L18-L71`, `src/http/validate.rs:L185-L250`, `src/routes/analytics.rs:L1-L3,L52-L56,L111-L144,L146-L192,L244-L281,L340-L435,L502-L645,L665-L674,L750-L772,L783-L799,L801-L806,L905-L929,L963-L1056,L1105,L1211,L1226-L1306,L1334,L1606,L1745`, `src/routes/analytics/cache.rs:L1-L19,L89-L137,L181-L264`, `tests/snapshots/it__players_routes__*.snap`, `tests/snapshots/it__analytics__*.snap`, `docs/DECISIONS.md` ADR-065, ADR-123, `docs/_meta/scratch/routes.md` §1.4-1.5, `docs/_meta/scratch/siblings.md` §1.5, live capture against `target/debug/riot-proxy` 2.7.0
+**Last verified:** 2026-11-21 against commit `65ccdc9`

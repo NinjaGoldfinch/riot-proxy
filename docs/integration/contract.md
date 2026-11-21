@@ -56,7 +56,7 @@ Source: `src/http/error.rs:15-67,158-193`; the complete list with causes is [../
 | `X-Cache-Fetched-Age` | passthrough and composites when known, the status summary | seconds since the body was last fetched from Riot; absent on `ARCHIVE`. On `GET /v1/lol/status`, the stalest available platform's, absent when none is available |
 | `ETag`, `Cache-Control: private, max-age=300` | analytics | weak ETag; `If-None-Match` answers 304 |
 
-Source: `src/http/request_id.rs:287-338`, `src/http/quota.rs:332-336`, `src/routes/passthrough.rs:127-166`, `src/routes/analytics.rs:588-625`.
+Source: `src/http/request_id.rs:287-338`, `src/http/quota.rs:332-336`, `src/routes/passthrough.rs:127-166`, `src/routes/analytics.rs:593-630`.
 
 ## Operations the site depends on
 
@@ -73,9 +73,9 @@ These fourteen operations are the contract the site is built against (its client
 | `GET /v1/lol/matches/{region}/{matchId}/timeline` | as above | Riot timeline untouched |
 | `GET /v1/lol/analytics/champions` | `queue`, `patch` (`all` or `major.minor`), `role`, `tier` or `minTier`, `side`, `minGames`, `limit` 1–500, `remakes` | `patch`, `totalGames`, `totalMatches`, `computedAt`, `champions[]` |
 | `GET /v1/lol/analytics/patches` | `queue`, `championId`, `platform`, `side`, `remakes` | `patches[]` |
-| `GET /v1/lol/analytics/champions/{championId}` | as champions plus `limit` 1–50 | `stats`, `byTier`, `matchups`, `items`, `runes`, `spells`, `sectionsComputedAt` |
+| `GET /v1/lol/analytics/champions/{championId}` | as champions plus `limit` 1–50 | `stats`, `byTier`, `matchups` (each with `winRateLow`), `items`, `runes`, `spells`, `sectionsComputedAt` |
 | `GET /v1/lol/analytics/champions/{championId}/builds` | as above, `limit` 1–10, `opponentId` | `role`, `totalGames`, `builds[]` with `winRateLow` |
-| `GET /v1/lol/analytics/champions/{championId}/matchups` | `limit` 1–200, lane roles | `matchups[]` |
+| `GET /v1/lol/analytics/champions/{championId}/matchups` | `limit` 1–200, lane roles, `sort` (`games` or `confidence`) | `matchups[]` with `winRateLow` |
 | `GET /v1/lol/analytics/patches?championId=` | as patches | `patches[]` |
 | `GET /v1/lol/status` (SITE-14, RP-1; the front page's status card) | none | `platforms[]`: `platform`, `available`, `error`, `incidents`, `maintenances`, `worstSeverity`, `maintenanceInProgress`, `fetchedAgeSeconds`; never calls Riot; an entry whose last 200 is older than about two poll intervals is `available: false` |
 
@@ -102,5 +102,5 @@ The server reports its version in the OpenAPI document's `info.version` (`/opena
 `GET /v1/ws` with `?token=` or the bearer header. First frame `{"op":"ready","consumer":"…"}`; `{"op":"subscribe","topics":["player:<puuid>","patch"]}` answers `{"op":"subscribed","topics":[…]}`; events arrive as `{"op":"event","event":"game.started","topic":"player:…","at":1760000000000,"data":{…}}`. The site does not use it. Protocol details in [../api/endpoints.md](../api/endpoints.md#v1ws-the-realtime-socket).
 
 ---
-**Sources:** `src/http/error.rs:L15-L67,L158-L193`, `src/http/request_id.rs:L287-L338`, `src/http/quota.rs:L332-L336`, `src/routes/passthrough.rs:L127-L166,L470-L476`, `src/routes/analytics.rs:L588-L625`, `src/routes/players.rs:L66-L147`, `src/routes/players/refresh.rs:L18-L71`, `src/routes/lol.rs:L417-L480`, `src/status/poll/summary.rs:L1-L287`, `src/riot/endpoints.rs:L121-L329`, `docs/api/openapi.json`, `docs/_meta/scratch/siblings.md` §1.5, `docs/_meta/scratch/routes.md` §1-§4
-**Last verified:** 2026-11-21 against commit `8f606c8`
+**Sources:** `src/http/error.rs:L15-L67,L158-L193`, `src/http/request_id.rs:L287-L338`, `src/http/quota.rs:L332-L336`, `src/routes/passthrough.rs:L127-L166,L470-L476`, `src/routes/analytics.rs:L593-L630`, `src/routes/players.rs:L66-L147`, `src/routes/players/refresh.rs:L18-L71`, `src/routes/lol.rs:L417-L480`, `src/status/poll/summary.rs:L1-L287`, `src/riot/endpoints.rs:L121-L329`, `docs/api/openapi.json`, `docs/_meta/scratch/siblings.md` §1.5, `docs/_meta/scratch/routes.md` §1-§4
+**Last verified:** 2026-11-21 against commit `65ccdc9`

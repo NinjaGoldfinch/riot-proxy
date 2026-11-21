@@ -67,6 +67,7 @@ expression: redact(detail.json())
       "opponentId": 157,
       "role": "MIDDLE",
       "winRate": 1,
+      "winRateLow": 0.2065,
       "wins": 1
     }
   ],

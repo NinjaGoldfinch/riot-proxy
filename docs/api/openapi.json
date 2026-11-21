@@ -7437,7 +7437,7 @@
           "lol"
         ],
         "summary": "A champion's lane matchups",
-        "description": "Sends an `ETag`; a matching `If-None-Match` gets 304. Kept in memory until the next recompute: `X-Cache: HIT` from memory, `MISS` read from the tables. Every lane matchup this champion has archived data for, at the tier and side of this champion's player (`tier`, `side`); the opponent may have been in another tier. Mirror lanes are excluded — their win rate is 50% by construction. Every archived lane is recorded from both sides, so the opposite champion's view of the same lane mirrors this one.",
+        "description": "Sends an `ETag`; a matching `If-None-Match` gets 304. Kept in memory until the next recompute: `X-Cache: HIT` from memory, `MISS` read from the tables. Every lane matchup this champion has archived data for, at the tier and side of this champion's player (`tier`, `side`); the opponent may have been in another tier. Mirror lanes are excluded — their win rate is 50% by construction. Every archived lane is recorded from both sides, so the opposite champion's view of the same lane mirrors this one. Each row's `winRateLow` is the lower bound of its win rate's 95% Wilson interval: a row of few games sits far below its `winRate`, so `sort=confidence` ranks a well-sampled row above a lucky handful.",
         "operationId": "champion_matchups",
         "parameters": [
           {
@@ -7541,11 +7541,20 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "`games` (default): most played first. `confidence`: highest `winRateLow` first, then most played, over every row the other parameters let through; `limit` applies after the sort",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "The matchups, most played first",
+            "description": "The matchups, in the order `sort` names",
             "headers": {
               "X-Cache": {
                 "$ref": "#/components/headers/X-Cache"
@@ -14533,7 +14542,8 @@
           "opponentId",
           "games",
           "wins",
-          "winRate"
+          "winRate",
+          "winRateLow"
         ],
         "properties": {
           "role": {
@@ -14560,6 +14570,11 @@
           "winRate": {
             "type": "number",
             "format": "double"
+          },
+          "winRateLow": {
+            "type": "number",
+            "format": "double",
+            "description": "The lower bound of `winRate`'s 95 % Wilson interval: how low it may\ntruly be, given how few games it rests on. 0 for no games."
           }
         }
       },

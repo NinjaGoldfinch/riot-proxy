@@ -40,7 +40,7 @@ Apex tiers (`MASTER`, `GRANDMASTER`, `CHALLENGER`) are not paged: `GET /v1/lol/l
 
 ## Analytics filters
 
-All five `/v1/lol/analytics/*` routes parse the same query (`src/routes/analytics.rs:L497-L572`, `L917-L962`); each route then accepts a subset.
+All five `/v1/lol/analytics/*` routes parse the same query (`src/routes/analytics.rs:L502-L577`, `L960-L1012`); each route then accepts a subset.
 
 | Filter | Values | Default | Notes |
 |---|---|---|---|
@@ -55,22 +55,23 @@ All five `/v1/lol/analytics/*` routes parse the same query (`src/routes/analytic
 | `limit` | `champions` 1 to 500 (200); detail 1 to 50 (10) per section; `matchups` 1 to 200 (50); `builds` 1 to 10 (3) | | counts champions on the list route, so `limit=200` is 200 champions (ADR-123) |
 | `remakes` | `exclude`, `include` | `exclude` | `src/http/validate.rs:L248-L250` |
 | `opponentId` | integer ≥ 1 | none | `builds` only: builds against that champion in a lane |
+| `sort` | `games`, `confidence` | `games` | `matchups` only (MU-01): `confidence` orders every row the other filters keep by `winRateLow` descending, then games, and `limit` cuts after the sort; validated after every other parameter; the other routes ignore it |
 | `championId` | integer ≥ 1 | | path on three routes, query on `patches`; `params/championId must be integer` / `must be >= 1` |
 
-`patches` takes only `platform`, `queue`, `championId`, `side` and `remakes` (`L950-L960`).
+`patches` takes only `platform`, `queue`, `championId`, `side` and `remakes` (`L1000-L1010`).
 
 ## ETags and conditional requests
 
-Analytics responses carry a weak validator `ETag: W/"<base64url sha256 of the row parts and a shape marker>"` and `Cache-Control: private, max-age=300` (`src/routes/analytics.rs:L52`, `L585-L599`, `L618`). Send it back as `If-None-Match` (a list or `*` are accepted) and an unchanged document is a `304 Not Modified` with the same `ETag`, `Cache-Control` and `X-Cache` headers and no body (`L601-L627`). Captured:
+Analytics responses carry a weak validator `ETag: W/"<base64url sha256 of the row parts and a shape marker>"` and `Cache-Control: private, max-age=300` (`src/routes/analytics.rs:L52`, `L590-L604`, `L623`). Send it back as `If-None-Match` (a list or `*` are accepted) and an unchanged document is a `304 Not Modified` with the same `ETag`, `Cache-Control` and `X-Cache` headers and no body (`L606-L632`). Captured:
 
 ```text
 HTTP/1.1 304 Not Modified
 cache-control: private, max-age=300
-etag: W/"SauT-iinG0trDNmv8WIWuqtq65wUCmDNzmGSJk97mRE"
+etag: W/"PQe9frKTKbYA0ltag_TJzMqZKt4_LC5uXdZTprSW164"
 x-cache: HIT
 ```
 
-The validator changes when the `aggregate:analytics` job rewrites the slice (its `computedAt`); on every analytics route but `/patches`, when a rebuild or an `aggregate:delta` run adds a match anywhere in the slice, because one part is the newest `computed_at` of the slice's `analytics_match_totals` rows (THR-03, ADR-182; `src/routes/analytics.rs:L766-L782`), so every tag changed once at that deploy; and when the document's shape changes (ADR-123 added the marker so a per-tier document could not revalidate as a summed one). `private` because the body is per-consumer scoped by key; `max-age=300` matches the in-memory response cache's intent. ninjagoldfinch.lol sends no conditional headers at all (`docs/_meta/scratch/siblings.md` §1.3), so in production the 304 path is unused; ADR-166 records that the ETag saved nothing.
+The validator changes when the `aggregate:analytics` job rewrites the slice (its `computedAt`); on every analytics route but `/patches`, when a rebuild or an `aggregate:delta` run adds a match anywhere in the slice, because one part is the newest `computed_at` of the slice's `analytics_match_totals` rows (THR-03, ADR-182; `src/routes/analytics.rs:L783-L799`), so every tag changed once at that deploy; and when the document's shape changes (ADR-123 added the marker so a per-tier document could not revalidate as a summed one; MU-01's `winRateLow` moved it again). `private` because the body is per-consumer scoped by key; `max-age=300` matches the in-memory response cache's intent. ninjagoldfinch.lol sends no conditional headers at all (`docs/_meta/scratch/siblings.md` §1.3), so in production the 304 path is unused; ADR-166 records that the ETag saved nothing.
 
 `/dashboard` uses a strong `ETag` and `Cache-Control: no-cache` the same way (`src/routes/ui.rs:L113-L131`). No other route emits a validator; passthrough bodies are described by `X-Cache*` instead (see [endpoints.md](endpoints.md#shared-passthrough-behaviour-v1riot-v1lol)).
 
@@ -93,5 +94,5 @@ The validator changes when the `aggregate:analytics` job rewrites the slice (its
 `/healthz` and `/readyz` carry no version. There is no `Server` header.
 
 ---
-**Sources:** `src/routes/lol.rs:L162-L163,L180-L187,L217-L243`, `src/routes/players.rs:L551,L654-L692,L846-L866`, `src/routes/admin.rs:L775-L780,L1337-L1356,L1848-L1857,L1953-L1995,L2038-L2041,L2323-L2327,L2564-L2574`, `src/routes/analytics.rs:L52-L56,L497-L572,L585-L627,L766-L782,L917-L962`, `src/routes/ui.rs:L113-L131`, `src/http/validate.rs:L211-L250`, `src/http/recent.rs:L111-L113`, `src/riot/ladder.rs:L14-L26`, `tests/snapshots/it__lol_routes__lol_routes_upstream_calls.snap`, `docs/DECISIONS.md` ADR-065, ADR-066, ADR-123, ADR-143, ADR-166, `docs/api/openapi.json`, `README.md`, `docs/_meta/scratch/siblings.md` §1.3-1.5, §5-6, live capture against `target/debug/riot-proxy` 2.7.0
-**Last verified:** 2026-11-21 against commit `72fcd7a`
+**Sources:** `src/routes/lol.rs:L162-L163,L180-L187,L217-L243`, `src/routes/players.rs:L551,L654-L692,L846-L866`, `src/routes/admin.rs:L775-L780,L1337-L1356,L1848-L1857,L1953-L1995,L2038-L2041,L2323-L2327,L2564-L2574`, `src/routes/analytics.rs:L52-L56,L502-L577,L590-L632,L783-L799,L960-L1012`, `src/routes/ui.rs:L113-L131`, `src/http/validate.rs:L211-L250`, `src/http/recent.rs:L111-L113`, `src/riot/ladder.rs:L14-L26`, `tests/snapshots/it__lol_routes__lol_routes_upstream_calls.snap`, `docs/DECISIONS.md` ADR-065, ADR-066, ADR-123, ADR-143, ADR-166, `docs/api/openapi.json`, `README.md`, `docs/_meta/scratch/siblings.md` §1.3-1.5, §5-6, live capture against `target/debug/riot-proxy` 2.7.0
+**Last verified:** 2026-11-21 against commit `65ccdc9`

@@ -155,6 +155,10 @@ pub struct ChampionMatchupEntry {
     wins: i64,
     #[serde(serialize_with = "js_number")]
     win_rate: f64,
+    /// The lower bound of `winRate`'s 95 % Wilson interval: how low it may
+    /// truly be, given how few games it rests on. 0 for no games.
+    #[serde(serialize_with = "js_number")]
+    win_rate_low: f64,
 }
 
 /// v1 `ChampionMatchupsResponse`.
@@ -440,8 +444,9 @@ const ALL_PATCHES: &str = "all";
 /// matchups, builds and detail sections honour `tier`, which they ignored,
 /// and added `side` to every body; FLT-03 added `minTier` to the same four;
 /// FLT-04 added `opponentId` and `winRateLow` to the builds; SITE-12 added
-/// `totalMatches` to the champions list.
-const STATS_SHAPE: &str = "tier-side-range-opponent-matches";
+/// `totalMatches` to the champions list; MU-01 added `winRateLow` to the
+/// matchups and the detail's matchups.
+const STATS_SHAPE: &str = "tier-side-range-opponent-matches-low";
 
 /// What the analytics reads need, built once at boot and shared by the
 /// routes and the rebuild's warm (PERF-03).
@@ -751,7 +756,19 @@ fn matchup(r: &FacetRow, names: &HashMap<i64, String>) -> ChampionMatchupEntry {
         games: r.games,
         wins: r.wins,
         win_rate: rate(r.wins, r.games),
+        win_rate_low: win_rate_low(r.wins, r.games),
     }
+}
+
+/// `rows` most reliable first (MU-01, ADR-225): by the `winRateLow` the body
+/// carries, then games, both descending; the read's own order (lane, then
+/// opponent) breaks what is left, as the sort is stable.
+fn by_confidence(rows: &mut [FacetRow]) {
+    rows.sort_by(|a, b| {
+        win_rate_low(b.wins, b.games)
+            .total_cmp(&win_rate_low(a.wins, a.games))
+            .then(b.games.cmp(&a.games))
+    });
 }
 
 fn newest(stamps: impl IntoIterator<Item = i64>) -> Option<String> {
@@ -885,6 +902,32 @@ impl Route {
     }
 }
 
+/// The matchups route's order (MU-01): `games`, the default, most played
+/// first; `confidence`, most reliable first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchupSort {
+    Games,
+    Confidence,
+}
+
+impl MatchupSort {
+    pub const ALL: [&'static str; 2] = ["games", "confidence"];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Games => "games",
+            Self::Confidence => "confidence",
+        }
+    }
+}
+
+/// The matchups route's query (MU-01): every route's, and the order.
+#[derive(Debug)]
+pub struct MatchupsQuery {
+    common: Common,
+    sort: MatchupSort,
+}
+
 /// The builds route's query (FLT-04): every route's, and the lane opponent.
 #[derive(Debug)]
 pub struct BuildsQuery {
@@ -909,7 +952,7 @@ pub struct PatchesQuery {
 pub enum Request {
     Champions(Common),
     Detail(i64, Common),
-    Matchups(i64, Common),
+    Matchups(i64, MatchupsQuery),
     Builds(i64, BuildsQuery),
     Patches(PatchesQuery),
 }
@@ -932,7 +975,14 @@ impl Request {
             }
             Route::Matchups => {
                 let id = id()?;
-                Self::Matchups(id, common(reads, query, &LANE_POSITIONS, (1, 200, 50))?)
+                let common = common(reads, query, &LANE_POSITIONS, (1, 200, 50))?;
+                // After every other parameter, as the builds' opponent is,
+                // so no 400 that came before moves (ADR-225).
+                let sort = match validate::query_one_of("sort", q(query, "sort"), &MatchupSort::ALL)? {
+                    Some("confidence") => MatchupSort::Confidence,
+                    _ => MatchupSort::Games,
+                };
+                Self::Matchups(id, MatchupsQuery { common, sort })
             }
             Route::Builds => {
                 let id = id()?;
@@ -968,7 +1018,13 @@ impl Request {
         let (route, id, parts): (Route, Option<i64>, Vec<Option<String>>) = match self {
             Self::Champions(c) => (Route::Champions, None, c.parts()),
             Self::Detail(id, c) => (Route::Detail, Some(*id), c.parts()),
-            Self::Matchups(id, c) => (Route::Matchups, Some(*id), c.parts()),
+            // The order last, as the builds' opponent: an omitted `sort` is
+            // `games`, one key.
+            Self::Matchups(id, m) => {
+                let mut parts = m.common.parts();
+                parts.push(some(m.sort.as_str()));
+                (Route::Matchups, Some(*id), parts)
+            }
             // The opponent last, so the other routes' keys don't move.
             Self::Builds(id, b) => {
                 let mut parts = b.common.parts();
@@ -1007,7 +1063,7 @@ pub(crate) async fn compute(reads: &Reads, query: &Request) -> Result<Entry, Fai
     let (etag, body) = match query {
         Request::Champions(c) => champions_doc(reads, c, version.clone()).await,
         Request::Detail(id, c) => detail_doc(reads, *id, c, version.clone()).await,
-        Request::Matchups(id, c) => matchups_doc(reads, *id, c, version.clone()).await,
+        Request::Matchups(id, m) => matchups_doc(reads, *id, m, version.clone()).await,
         Request::Builds(id, b) => builds_doc(reads, *id, b, version.clone()).await,
         Request::Patches(p) => patches_doc(reads, p).await,
     }?;
@@ -1133,7 +1189,8 @@ async fn champions_doc(
         data for, at the tier and side of this champion's player (`tier`, `side`); the opponent may have been in \
         another tier. Mirror lanes are excluded — their win rate is 50% by construction. \
         Every archived lane is recorded from both sides, so the opposite champion's view of the same lane mirrors \
-        this one.",
+        this one. Each row's `winRateLow` is the lower bound of its win rate's 95% Wilson interval: a row of few \
+        games sits far below its `winRate`, so `sort=confidence` ranks a well-sampled row above a lucky handful.",
     params(
         ("championId" = i64, Path, description = "Champion id, ≥ 1"),
         ("platform" = Option<String>, Query, description = "Only this platform's ladder. Omitted sums every platform"),
@@ -1146,8 +1203,9 @@ async fn champions_doc(
         ("minGames" = Option<i64>, Query, description = "≥ 0; default 0, every row"),
         ("limit" = Option<i64>, Query, description = "1–200, default 50"),
         ("remakes" = Option<String>, Query, description = "`exclude` (default) or `include`"),
+        ("sort" = Option<String>, Query, description = "`games` (default): most played first. `confidence`: highest `winRateLow` first, then most played, over every row the other parameters let through; `limit` applies after the sort"),
     ),
-    responses((status = 200, description = "The matchups, most played first", body = ChampionMatchupsResponse),
+    responses((status = 200, description = "The matchups, in the order `sort` names", body = ChampionMatchupsResponse),
         (status = 304, description = "Not modified"), LocalErrors),
 )]
 async fn champion_matchups(
@@ -1168,22 +1226,38 @@ async fn champion_matchups(
 async fn matchups_doc(
     reads: &Reads,
     id: i64,
-    c: &Common,
+    m: &MatchupsQuery,
     version: Option<String>,
 ) -> Result<(String, Vec<u8>), Failed> {
+    let c = &m.common;
     let patch = match patch_or_latest(reads, c).await {
         Ok(p) => p,
         Err(e) => return Err(failed(&e)),
     };
     let rows = match &patch {
         Some(p) => {
+            // By confidence, every row the filters let through is read and
+            // sorted, then cut to `limit`: the most played rows alone would
+            // make `limit` decide which rows count as reliable (ADR-225).
+            // The Wilson bound needs `sqrt`, so the sort is here, not in SQL.
+            let limit = match m.sort {
+                MatchupSort::Games => c.limit,
+                MatchupSort::Confidence => i64::MAX,
+            };
             let read = Read {
                 champion_id: Some(id),
                 min_games: c.min_games.unwrap_or(0),
+                limit,
                 ..c.read(reads, p)
             };
             match analytics::facet(&reads.db, Facet::Matchups, read).await {
-                Ok(r) => r,
+                Ok(mut r) => {
+                    if m.sort == MatchupSort::Confidence {
+                        by_confidence(&mut r);
+                        r.truncate(usize::try_from(c.limit).unwrap_or(usize::MAX));
+                    }
+                    r
+                }
                 Err(e) => return Err(failed(&e)),
             }
         }
@@ -1211,6 +1285,7 @@ async fn matchups_doc(
         c.min_games.map(|n| n.to_string()),
         some(c.limit),
         c.remakes_part(),
+        some(m.sort.as_str()),
     ]);
     document(
         tag,
@@ -1953,9 +2028,29 @@ mod tests {
             site.key("aaaa")
         );
         // The matchups tag tells an omitted minGames from 0, so the key does too.
+        let matchups = |min_games, sort| {
+            Request::Matchups(
+                103,
+                MatchupsQuery {
+                    common: common_of(None, min_games),
+                    sort,
+                },
+            )
+            .key("aaaa")
+        };
         assert_ne!(
-            Request::Matchups(103, common_of(None, None)).key("aaaa"),
-            Request::Matchups(103, common_of(None, Some(0))).key("aaaa")
+            matchups(None, MatchupSort::Games),
+            matchups(Some(0), MatchupSort::Games)
+        );
+        // The order comes last (MU-01): an omitted `sort` parses to `games`,
+        // so the two spellings are one key; `confidence` is another.
+        assert_eq!(
+            matchups(Some(0), MatchupSort::Games).as_str(),
+            "matchups|aaaa|103|~|RANKED_SOLO_5x5|~|~|~|all|~|0|500|exclude|games"
+        );
+        assert_eq!(
+            matchups(Some(0), MatchupSort::Confidence).as_str(),
+            "matchups|aaaa|103|~|RANKED_SOLO_5x5|~|~|~|all|~|0|500|exclude|confidence"
         );
         assert_eq!(
             Request::Detail(103, common_of(None, Some(0)))
@@ -2003,6 +2098,48 @@ mod tests {
             assert!((got - want).abs() < 1e-4, "{wins}/{games}: {got}");
             assert!(got <= rate(wins, games), "{wins}/{games}");
         }
+    }
+
+    fn facet_row(opponent: i64, wins: i64, games: i64) -> FacetRow {
+        FacetRow {
+            role: "MIDDLE".into(),
+            ids: vec![opponent],
+            games,
+            wins,
+            computed_at: 1,
+        }
+    }
+
+    /// MU-01: a matchup carries its Wilson bound beside its win rate.
+    #[test]
+    fn a_matchup_carries_its_win_rate_low() {
+        let names = HashMap::from([(10, "Annie".to_string())]);
+        let m = matchup(&facet_row(10, 40, 60), &names);
+        assert_eq!((m.win_rate, m.win_rate_low), (0.6667, 0.5406));
+        let v = serde_json::to_value(&m).unwrap();
+        assert_eq!(v["winRateLow"], serde_json::json!(0.5406));
+        assert_eq!(v["opponentName"], "Annie");
+        let none = serde_json::to_value(matchup(&facet_row(11, 0, 3), &names)).unwrap();
+        assert_eq!(none["winRateLow"], serde_json::json!(0), "a JS number, not 0.0");
+    }
+
+    /// MU-01 (ADR-225): `winRateLow` descending, then games descending, then
+    /// the read's order.
+    #[test]
+    fn by_confidence_ranks_the_lower_bound_then_games_then_the_read() {
+        // As the read returns them: most played first.
+        let mut rows = vec![
+            facet_row(13, 30, 100), // 0.2189
+            facet_row(10, 40, 60),  // 0.5406
+            facet_row(12, 3, 9),    // 0.1206
+            facet_row(15, 0, 5),    // 0
+            facet_row(11, 3, 3),    // 0.4385
+            facet_row(14, 0, 3),    // 0
+            facet_row(16, 0, 3),    // 0, the read's order breaks the tie
+        ];
+        by_confidence(&mut rows);
+        let order: Vec<i64> = rows.iter().map(|r| r.ids[0]).collect();
+        assert_eq!(order, [10, 11, 13, 12, 15, 14, 16]);
     }
 
     #[test]
